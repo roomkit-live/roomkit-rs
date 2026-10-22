@@ -141,10 +141,14 @@ impl<S: ConversationStore> RoomKit<S> {
     pub fn register_channel(&self, channel: impl Channel) -> Result<(), KitError> {
         let declaration = Channel::declaration(&channel);
         let channel_id = declaration.channel_id.clone();
-        self.inner
-            .try_change_config(|config| config.register_channel(declaration))?;
-        write(&self.inner.channels).insert(channel_id, Arc::new(channel));
-        Ok(())
+        let channel: Arc<dyn DynChannel> = Arc::new(channel);
+        self.inner.try_change_config(|config| {
+            config.register_channel(declaration)?;
+            // The channel is in place before an operation can see its
+            // declaration.
+            write(&self.inner.channels).insert(channel_id, channel);
+            Ok::<(), KitError>(())
+        })
     }
 
     /// Registers a hook with its handler (RFC §9.1).
@@ -226,7 +230,9 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Attaches a registered channel to a room, with the binding `configure`
-    /// adjusts from the default: its access, mute, visibility, metadata.
+    /// adjusts from the default: its access, mute, visibility, category,
+    /// capabilities and metadata. The channel, the room, and the channel's
+    /// type and direction stay what they are.
     ///
     /// # Errors
     ///
@@ -252,6 +258,12 @@ impl<S: ConversationStore> RoomKit<S> {
         );
         binding.capabilities = declaration.capabilities.clone();
         configure(&mut binding);
+        // `configure` adjusts the binding's permissions and data, never which
+        // channel it binds to which room, nor what the channel is.
+        binding.channel_id = channel_id.clone();
+        binding.room_id = room_id.clone();
+        binding.channel_type = declaration.channel_type;
+        binding.direction = declaration.direction;
         let attached = driver::run(&self.inner, AttachChannel::new(config, binding)).await?;
         Ok(attached?)
     }

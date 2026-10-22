@@ -260,6 +260,26 @@ async fn a_muted_agent_is_asked_and_its_answer_stored_blocked() {
 }
 
 #[tokio::test]
+async fn configuring_a_binding_cannot_move_it_to_another_room() {
+    let kit = RoomKit::new();
+    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+    kit.register_channel(sms.clone()).unwrap();
+    let other = RoomId::new("room_2").unwrap();
+    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(&other).await.unwrap();
+    kit.attach_with(&room_id(), sms.id(), |binding| {
+        binding.room_id = other.clone();
+    })
+    .await
+    .unwrap();
+    let bound = (
+        kit.store().list_bindings(&room_id()).await.unwrap().len(),
+        kit.store().list_bindings(&other).await.unwrap().len(),
+    );
+    assert_eq!(bound, (1, 0));
+}
+
+#[tokio::test]
 async fn registering_a_channel_twice_is_refused() {
     let kit = RoomKit::new();
     let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);

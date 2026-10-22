@@ -59,7 +59,10 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Stores a new room.
     fn create_room(&self, room: Room) -> impl Future<Output = Result<(), StoreError>> + Send;
 
-    /// Replaces a room's record.
+    /// Replaces a room's record, its counters included. The operations call
+    /// it under the room's lock with a record read under that lock, so no
+    /// commit can fall between the read and the write; a caller off the
+    /// lock would lose the counters of the events committed meanwhile.
     fn update_room(&self, room: Room) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// The room `room_id`, if it exists.

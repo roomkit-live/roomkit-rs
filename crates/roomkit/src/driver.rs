@@ -7,13 +7,13 @@ use std::sync::Arc;
 use roomkit_core::model::{ChannelId, ChannelOutput, ErrorRecord, RoomId};
 use roomkit_core::ops::{Effect, EffectId, Next, Notice, Operation, Outcome, Request};
 use roomkit_core::rules::hook_chain::HookOutcome;
-use tokio::sync::OwnedMutexGuard;
 use tokio::task::JoinSet;
 
 use crate::channel::{ChannelError, EventDraft};
 use crate::error::KitError;
 use crate::hooks;
 use crate::kit::Inner;
+use crate::locks::RoomGuard;
 use crate::store::ConversationStore;
 
 /// Runs `operation` until it is ready.
@@ -24,7 +24,7 @@ pub(crate) async fn run<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     mut operation: O,
 ) -> Result<O::Output, KitError> {
-    let mut locks: HashMap<RoomId, OwnedMutexGuard<()>> = HashMap::new();
+    let mut locks: HashMap<RoomId, RoomGuard<'_>> = HashMap::new();
     loop {
         let step = {
             let mut environment = inner.environment();
@@ -48,9 +48,9 @@ pub(crate) async fn run<S: ConversationStore, O: Operation>(
 /// Executes one step's effects. The room lock is taken and released in
 /// place; the other calls run concurrently, and their outcomes come back in
 /// the order they finish.
-async fn execute<S: ConversationStore>(
-    inner: &Arc<Inner<S>>,
-    locks: &mut HashMap<RoomId, OwnedMutexGuard<()>>,
+async fn execute<'kit, S: ConversationStore>(
+    inner: &'kit Arc<Inner<S>>,
+    locks: &mut HashMap<RoomId, RoomGuard<'kit>>,
     effects: Vec<Effect>,
 ) -> Vec<(EffectId, Outcome)> {
     let mut outcomes = Vec::with_capacity(effects.len());
@@ -89,12 +89,22 @@ async fn execute<S: ConversationStore>(
         let (task, outcome) = match joined {
             Ok(finished) => finished,
             Err(failure) => {
-                let panicked = ErrorRecord::new("Panic", "the call panicked");
-                (failure.id(), Outcome::Failed(panicked))
+                let error = if failure.is_panic() {
+                    ErrorRecord::new("Panic", "the call panicked")
+                } else {
+                    ErrorRecord::new("Cancelled", "the call was cancelled")
+                };
+                (failure.id(), Outcome::Failed(error))
             }
         };
         if let Some(id) = effect_of_task.get(&task) {
             outcomes.push((*id, outcome));
+        } else {
+            tracing::error!(
+                target: "roomkit::driver",
+                ?task,
+                "a finished call matches no effect; the operation will not hear of it"
+            );
         }
     }
     outcomes
