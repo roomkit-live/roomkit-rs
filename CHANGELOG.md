@@ -12,3 +12,7 @@ publishes a release.
 - Repository foundation: the `roomkit-core` and `roomkit` crates, workspace
   lints, the `make all` gate, CI, and the architecture, roadmap, step 1 and
   RFC gap documents.
+- `roomkit_core::model`: the data model of RFC §5 (rooms, events and every
+  content type, bindings and permissions, capabilities, participants, tasks,
+  observations, inbound messages, channel outputs, hook results), with its
+  invariants checked at construction and its JSON form.

@@ -9,6 +9,15 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Behind `Timestamp` only, so its version never reaches the public API. No
+# default features: they read the system time zone.
+jiff.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
 
 [lints]
 workspace = true

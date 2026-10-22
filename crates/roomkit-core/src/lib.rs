@@ -4,3 +4,7 @@
 //! none of it: it never reads a store, calls a channel or runs a hook itself.
 //! A driver executes what the core asks for and hands back the outcome. See
 //! `docs/architecture.md` in the repository for the design.
+//!
+//! - [`model`]: the data types of the RoomKit RFC, §5.
+
+pub mod model;

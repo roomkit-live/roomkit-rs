@@ -1,0 +1,718 @@
+//! What an event says (RFC §5.3).
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use super::{EventId, Metadata, ModelError};
+
+/// How deep composite contents may nest (RFC §5.3). The outermost composite
+/// is level 1 (gap G-006).
+pub const MAX_COMPOSITE_DEPTH: usize = 5;
+
+/// An event's payload: exactly one content type, tagged by `type` with the
+/// names of RFC §5.3.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EventContent {
+    /// Plain text.
+    Text(TextContent),
+    /// Formatted text with interactive elements.
+    Rich(RichContent),
+    /// A file, an image or a document.
+    Media(MediaContent),
+    /// Geographic coordinates.
+    Location(LocationContent),
+    /// An audio message or voice note.
+    Audio(AudioContent),
+    /// A video message.
+    Video(VideoContent),
+    /// Several parts in order.
+    Composite(CompositeContent),
+    /// A framework-generated message.
+    System(SystemContent),
+    /// A pre-approved template.
+    Template(TemplateContent),
+    /// An edit of a previous message.
+    Edit(EditContent),
+    /// A deletion of a previous message.
+    Delete(DeleteContent),
+    /// A tool call, on `TOOL_CALL_START` and `TOOL_CALL_END` events.
+    ToolCall(ToolCallContent),
+}
+
+impl EventContent {
+    /// Plain text content.
+    pub fn text(body: impl Into<String>) -> Self {
+        Self::Text(TextContent::new(body))
+    }
+
+    /// How many composite levels this content holds, counting through the
+    /// new content of an edit (gap G-006): 0 for any other content.
+    pub fn composite_depth(&self) -> usize {
+        match self {
+            Self::Composite(composite) => composite.depth(),
+            Self::Edit(edit) => edit.new_content.composite_depth(),
+            Self::Text(_)
+            | Self::Rich(_)
+            | Self::Media(_)
+            | Self::Location(_)
+            | Self::Audio(_)
+            | Self::Video(_)
+            | Self::System(_)
+            | Self::Template(_)
+            | Self::Delete(_)
+            | Self::ToolCall(_) => 0,
+        }
+    }
+}
+
+/// Plain text (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextContent {
+    /// The message text.
+    pub body: String,
+    /// An ISO 639-1 language code.
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+impl TextContent {
+    /// Text with no declared language.
+    pub fn new(body: impl Into<String>) -> Self {
+        Self {
+            body: body.into(),
+            language: None,
+        }
+    }
+}
+
+/// The markup of a rich content's body.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RichFormat {
+    /// HTML.
+    Html,
+    /// Markdown, the default.
+    #[default]
+    Markdown,
+}
+
+/// Formatted text with interactive elements (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RichContent {
+    /// The primary text, in `format`.
+    pub body: String,
+    /// The markup of `body`.
+    #[serde(default)]
+    pub format: RichFormat,
+    /// The plain-text fallback.
+    #[serde(default)]
+    pub plain_text: Option<String>,
+    /// Interactive buttons.
+    #[serde(default)]
+    pub buttons: Vec<Metadata>,
+    /// Structured card elements.
+    #[serde(default)]
+    pub cards: Vec<Metadata>,
+    /// Suggested quick responses.
+    #[serde(default)]
+    pub quick_replies: Vec<String>,
+}
+
+/// A file, an image or a document (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaContent {
+    /// A link, a `data:` URI, or a reference the application resolves.
+    pub url: String,
+    /// The MIME type.
+    pub mime_type: String,
+    /// The original file name.
+    #[serde(default)]
+    pub filename: Option<String>,
+    /// A text caption.
+    #[serde(default)]
+    pub caption: Option<String>,
+    /// The file size in bytes.
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+}
+
+/// Geographic coordinates (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LocationContent {
+    /// The latitude.
+    pub latitude: Latitude,
+    /// The longitude.
+    pub longitude: Longitude,
+    /// The location's name.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The street address.
+    #[serde(default)]
+    pub address: Option<String>,
+}
+
+/// A latitude in degrees, from -90 to 90.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "f64", into = "f64")]
+pub struct Latitude(f64);
+
+impl Latitude {
+    /// Builds a latitude.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::OutOfRange`] outside -90..=90, `NaN` included.
+    pub fn new(degrees: f64) -> Result<Self, ModelError> {
+        in_range("latitude", degrees, 90.0).map(Self)
+    }
+
+    /// The latitude in degrees.
+    pub fn degrees(self) -> f64 {
+        self.0
+    }
+}
+
+impl TryFrom<f64> for Latitude {
+    type Error = ModelError;
+
+    fn try_from(degrees: f64) -> Result<Self, Self::Error> {
+        Self::new(degrees)
+    }
+}
+
+impl From<Latitude> for f64 {
+    fn from(latitude: Latitude) -> Self {
+        latitude.0
+    }
+}
+
+/// A longitude in degrees, from -180 to 180.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "f64", into = "f64")]
+pub struct Longitude(f64);
+
+impl Longitude {
+    /// Builds a longitude.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::OutOfRange`] outside -180..=180, `NaN` included.
+    pub fn new(degrees: f64) -> Result<Self, ModelError> {
+        in_range("longitude", degrees, 180.0).map(Self)
+    }
+
+    /// The longitude in degrees.
+    pub fn degrees(self) -> f64 {
+        self.0
+    }
+}
+
+impl TryFrom<f64> for Longitude {
+    type Error = ModelError;
+
+    fn try_from(degrees: f64) -> Result<Self, Self::Error> {
+        Self::new(degrees)
+    }
+}
+
+impl From<Longitude> for f64 {
+    fn from(longitude: Longitude) -> Self {
+        longitude.0
+    }
+}
+
+fn in_range(name: &'static str, value: f64, bound: f64) -> Result<f64, ModelError> {
+    if (-bound..=bound).contains(&value) {
+        Ok(value)
+    } else {
+        Err(ModelError::OutOfRange {
+            name,
+            value,
+            min: -bound,
+            max: bound,
+        })
+    }
+}
+
+/// An audio message or voice note (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AudioContent {
+    /// The audio URL, or a `data:` URI.
+    pub url: String,
+    /// The duration in seconds.
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    /// The MIME type, `audio/ogg` by default.
+    #[serde(default = "default_audio_mime_type")]
+    pub mime_type: String,
+    /// The speech-to-text transcript, when available.
+    #[serde(default)]
+    pub transcript: Option<String>,
+}
+
+fn default_audio_mime_type() -> String {
+    "audio/ogg".to_owned()
+}
+
+/// A video message (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VideoContent {
+    /// The video URL, or a `data:` URI.
+    pub url: String,
+    /// The duration in seconds.
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    /// The MIME type.
+    pub mime_type: String,
+    /// A preview image URL.
+    #[serde(default)]
+    pub thumbnail_url: Option<String>,
+}
+
+/// Several parts in order (RFC §5.3): at least one, nesting at most
+/// [`MAX_COMPOSITE_DEPTH`] levels.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "RawCompositeContent")]
+pub struct CompositeContent {
+    parts: Vec<EventContent>,
+}
+
+impl CompositeContent {
+    /// Builds a composite of `parts`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::EmptyComposite`] without a part, and
+    /// [`ModelError::CompositeTooDeep`] when the composite would nest more
+    /// than [`MAX_COMPOSITE_DEPTH`] levels.
+    pub fn new(parts: Vec<EventContent>) -> Result<Self, ModelError> {
+        let deepest_part = parts
+            .iter()
+            .map(EventContent::composite_depth)
+            .max()
+            .ok_or(ModelError::EmptyComposite)?;
+        let depth = deepest_part + 1;
+        if depth > MAX_COMPOSITE_DEPTH {
+            return Err(ModelError::CompositeTooDeep {
+                depth,
+                max: MAX_COMPOSITE_DEPTH,
+            });
+        }
+        Ok(Self { parts })
+    }
+
+    /// The parts, in order.
+    pub fn parts(&self) -> &[EventContent] {
+        &self.parts
+    }
+
+    /// The parts, taken out of the composite.
+    pub fn into_parts(self) -> Vec<EventContent> {
+        self.parts
+    }
+
+    fn depth(&self) -> usize {
+        1 + self
+            .parts
+            .iter()
+            .map(EventContent::composite_depth)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+#[derive(Deserialize)]
+struct RawCompositeContent {
+    parts: Vec<EventContent>,
+}
+
+impl TryFrom<RawCompositeContent> for CompositeContent {
+    type Error = ModelError;
+
+    fn try_from(raw: RawCompositeContent) -> Result<Self, Self::Error> {
+        Self::new(raw.parts)
+    }
+}
+
+/// A framework-generated message (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SystemContent {
+    /// A human-readable description.
+    pub body: String,
+    /// A machine-readable code.
+    #[serde(default)]
+    pub code: Option<String>,
+    /// A structured payload.
+    #[serde(default)]
+    pub data: Metadata,
+}
+
+impl SystemContent {
+    /// A system message with no code and no data.
+    pub fn new(body: impl Into<String>) -> Self {
+        Self {
+            body: body.into(),
+            code: None,
+            data: Metadata::new(),
+        }
+    }
+}
+
+/// A pre-approved template (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TemplateContent {
+    /// The template's id.
+    pub template_id: String,
+    /// The template's language, `en` by default.
+    #[serde(default = "default_template_language")]
+    pub language: String,
+    /// The variable substitutions.
+    #[serde(default)]
+    pub parameters: BTreeMap<String, String>,
+    /// The text for channels without template support.
+    #[serde(default)]
+    pub body: Option<String>,
+}
+
+fn default_template_language() -> String {
+    "en".to_owned()
+}
+
+/// Who made an edit (RFC §5.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditSource {
+    /// The message's sender.
+    Sender,
+    /// The system, for example auto-moderation.
+    System,
+}
+
+/// An edit of a previous message (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EditContent {
+    /// The edited event.
+    pub target_event_id: EventId,
+    /// The replacement content.
+    pub new_content: Box<EventContent>,
+    /// Who made the edit.
+    #[serde(default)]
+    pub edit_source: Option<EditSource>,
+}
+
+/// Who deleted a message (RFC §5.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeleteType {
+    /// The message's author deleted it.
+    #[default]
+    Sender,
+    /// An automated deletion: moderation, policy.
+    System,
+    /// An administrator or operator deleted it.
+    Admin,
+}
+
+/// A deletion of a previous message (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteContent {
+    /// The deleted event.
+    pub target_event_id: EventId,
+    /// Who deleted it.
+    #[serde(default)]
+    pub delete_type: DeleteType,
+    /// Why.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Where a tool call stands (RFC §5.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallStatus {
+    /// On the start row.
+    #[default]
+    Pending,
+    /// On an end row: the call completed.
+    Completed,
+    /// On an end row: the call failed.
+    Failed,
+}
+
+/// How a tool call ended (RFC §5.3, §6.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallOutcome {
+    /// A handler served the call.
+    Served,
+    /// The call was refused before execution.
+    Refused,
+    /// The call failed during execution.
+    Failed,
+    /// A hook blocked the call's result.
+    Blocked,
+    /// Nothing served the call.
+    Unserved,
+    /// The call was cut before its outcome.
+    Cancelled,
+}
+
+/// A tool call (RFC §5.3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ToolCallContent {
+    /// The tool called.
+    pub tool_name: String,
+    /// The call's id.
+    pub tool_id: String,
+    /// The call's arguments.
+    #[serde(default)]
+    pub arguments: Metadata,
+    /// The call's result, on an end row; `null` otherwise.
+    #[serde(default)]
+    pub result: Value,
+    /// Where the call stands.
+    #[serde(default)]
+    pub status: ToolCallStatus,
+    /// The execution time, on an end row.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    /// The error of a failed call.
+    #[serde(default)]
+    pub error: Option<String>,
+    /// A structured copy of the result for UI surfaces.
+    #[serde(default)]
+    pub structured_content: Option<Metadata>,
+    /// How the call ended, on an end row.
+    #[serde(default)]
+    pub outcome: Option<ToolCallOutcome>,
+    /// The call ran although RoomKit refused it (RFC §9.3).
+    #[serde(default)]
+    pub refused_but_ran: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use super::*;
+
+    fn composite_of_depth(depth: usize) -> EventContent {
+        let mut content = EventContent::text("innermost");
+        for _ in 0..depth {
+            content = EventContent::Composite(CompositeContent::new(vec![content]).unwrap());
+        }
+        content
+    }
+
+    fn tag_of(content: &EventContent) -> String {
+        serde_json::to_value(content).unwrap()["type"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    #[test]
+    fn each_content_is_tagged_with_its_rfc_name() {
+        let id = EventId::new("evt_1").unwrap();
+        let contents = [
+            EventContent::text("hello"),
+            EventContent::Rich(RichContent {
+                body: "**hello**".to_owned(),
+                format: RichFormat::Markdown,
+                plain_text: None,
+                buttons: Vec::new(),
+                cards: Vec::new(),
+                quick_replies: Vec::new(),
+            }),
+            EventContent::Media(MediaContent {
+                url: "https://example.com/a.pdf".to_owned(),
+                mime_type: "application/pdf".to_owned(),
+                filename: None,
+                caption: None,
+                size_bytes: None,
+            }),
+            EventContent::Location(LocationContent {
+                latitude: Latitude::new(45.5).unwrap(),
+                longitude: Longitude::new(-73.6).unwrap(),
+                label: None,
+                address: None,
+            }),
+            EventContent::Audio(AudioContent {
+                url: "https://example.com/a.ogg".to_owned(),
+                duration_seconds: None,
+                mime_type: default_audio_mime_type(),
+                transcript: None,
+            }),
+            EventContent::Video(VideoContent {
+                url: "https://example.com/a.mp4".to_owned(),
+                duration_seconds: None,
+                mime_type: "video/mp4".to_owned(),
+                thumbnail_url: None,
+            }),
+            composite_of_depth(1),
+            EventContent::System(SystemContent::new("room created")),
+            EventContent::Template(TemplateContent {
+                template_id: "welcome".to_owned(),
+                language: default_template_language(),
+                parameters: BTreeMap::new(),
+                body: None,
+            }),
+            EventContent::Edit(EditContent {
+                target_event_id: id.clone(),
+                new_content: Box::new(EventContent::text("fixed")),
+                edit_source: None,
+            }),
+            EventContent::Delete(DeleteContent {
+                target_event_id: id,
+                delete_type: DeleteType::Sender,
+                reason: None,
+            }),
+            EventContent::ToolCall(ToolCallContent {
+                tool_name: "lookup".to_owned(),
+                tool_id: "call_1".to_owned(),
+                arguments: Metadata::new(),
+                result: Value::Null,
+                status: ToolCallStatus::Pending,
+                duration_ms: None,
+                error: None,
+                structured_content: None,
+                outcome: None,
+                refused_but_ran: false,
+            }),
+        ];
+        let tags: Vec<String> = contents.iter().map(tag_of).collect();
+        assert_eq!(
+            tags,
+            [
+                "text",
+                "rich",
+                "media",
+                "location",
+                "audio",
+                "video",
+                "composite",
+                "system",
+                "template",
+                "edit",
+                "delete",
+                "tool_call"
+            ]
+        );
+    }
+
+    #[test]
+    fn text_content_serializes_with_its_tag() {
+        assert_eq!(
+            serde_json::to_value(EventContent::text("Bonjour")).unwrap(),
+            json!({ "type": "text", "body": "Bonjour", "language": null })
+        );
+    }
+
+    #[test]
+    fn a_composite_without_parts_is_refused() {
+        assert_eq!(
+            CompositeContent::new(Vec::new()),
+            Err(ModelError::EmptyComposite)
+        );
+    }
+
+    #[test]
+    fn a_composite_may_nest_five_levels() {
+        assert_eq!(composite_of_depth(5).composite_depth(), 5);
+    }
+
+    #[test]
+    fn a_sixth_composite_level_is_refused() {
+        let five_levels = composite_of_depth(5);
+        assert_eq!(
+            CompositeContent::new(vec![five_levels]),
+            Err(ModelError::CompositeTooDeep { depth: 6, max: 5 })
+        );
+    }
+
+    #[test]
+    fn composite_depth_counts_through_an_edit() {
+        let edit = EventContent::Edit(EditContent {
+            target_event_id: EventId::new("evt_1").unwrap(),
+            new_content: Box::new(composite_of_depth(5)),
+            edit_source: Some(EditSource::Sender),
+        });
+        assert!(matches!(
+            CompositeContent::new(vec![edit]),
+            Err(ModelError::CompositeTooDeep { depth: 6, .. })
+        ));
+    }
+
+    #[test]
+    fn deserialization_enforces_the_composite_depth() {
+        let mut json = json!({ "type": "text", "body": "innermost" });
+        for _ in 0..6 {
+            json = json!({ "type": "composite", "parts": [json] });
+        }
+        assert!(serde_json::from_value::<EventContent>(json).is_err());
+    }
+
+    #[test]
+    fn a_composite_round_trips_through_json() {
+        let content = composite_of_depth(3);
+        let json = serde_json::to_value(&content).unwrap();
+        assert_eq!(
+            serde_json::from_value::<EventContent>(json).unwrap(),
+            content
+        );
+    }
+
+    #[test]
+    fn a_latitude_beyond_ninety_degrees_is_refused() {
+        assert!(matches!(
+            Latitude::new(90.5),
+            Err(ModelError::OutOfRange {
+                name: "latitude",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_nan_longitude_is_refused() {
+        assert!(Longitude::new(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn deserialization_enforces_the_coordinate_ranges() {
+        let json = json!({ "type": "location", "latitude": 0.0, "longitude": 200.0 });
+        assert!(serde_json::from_value::<EventContent>(json).is_err());
+    }
+
+    #[test]
+    fn audio_content_defaults_its_mime_type_to_ogg() {
+        let parsed: EventContent =
+            serde_json::from_value(json!({ "type": "audio", "url": "https://example.com/a" }))
+                .unwrap();
+        let EventContent::Audio(audio) = parsed else {
+            panic!("expected audio content, got {parsed:?}");
+        };
+        assert_eq!(audio.mime_type, "audio/ogg");
+    }
+
+    #[test]
+    fn template_content_defaults_its_language_to_english() {
+        let parsed: EventContent =
+            serde_json::from_value(json!({ "type": "template", "template_id": "welcome" }))
+                .unwrap();
+        let EventContent::Template(template) = parsed else {
+            panic!("expected template content, got {parsed:?}");
+        };
+        assert_eq!(template.language, "en");
+    }
+
+    #[test]
+    fn an_unknown_content_type_does_not_deserialize() {
+        let json = json!({ "type": "hologram", "body": "hi" });
+        assert!(serde_json::from_value::<EventContent>(json).is_err());
+    }
+}

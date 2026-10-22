@@ -7,4 +7,4 @@ allow-dbg-in-tests = true
 allow-print-in-tests = true
 
 # Product names read as words in documentation, not as code.
-doc-valid-idents = ["RoomKit", "PyO3", ".."]
+doc-valid-idents = ["RoomKit", "PyO3", "WhatsApp", ".."]
