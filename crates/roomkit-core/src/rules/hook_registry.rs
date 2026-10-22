@@ -15,9 +15,9 @@ use crate::model::{ChannelId, ChannelType, EventDirection, EventSource};
 
 /// When a hook fires (RFC §9.2).
 ///
-/// The values the steps implemented so far fire, and the three triggers
-/// that fail closed (RFC §9.3), which later steps fire. The RFC's list
-/// grows here step by step (gap G-003).
+/// The triggers the implemented steps fire, and the three that fail closed
+/// (RFC §9.3), which the voice and AI steps fire. The RFC's list grows here
+/// step by step (gap G-003).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookTrigger {
@@ -31,10 +31,6 @@ pub enum HookTrigger {
     OnRoomClosed,
     /// A channel was attached to a room.
     OnChannelAttached,
-    /// A channel was detached from a room.
-    OnChannelDetached,
-    /// A task was created.
-    OnTaskCreated,
     /// A turn failed.
     OnError,
     /// After a speech-to-text transcription; can modify it.
@@ -58,8 +54,6 @@ impl HookTrigger {
             | Self::OnRoomCreated
             | Self::OnRoomClosed
             | Self::OnChannelAttached
-            | Self::OnChannelDetached
-            | Self::OnTaskCreated
             | Self::OnError => HookExecution::Async,
         }
     }
@@ -74,8 +68,6 @@ impl HookTrigger {
             | Self::OnRoomCreated
             | Self::OnRoomClosed
             | Self::OnChannelAttached
-            | Self::OnChannelDetached
-            | Self::OnTaskCreated
             | Self::OnError => false,
         }
     }
@@ -235,6 +227,14 @@ impl HookRegistry {
             return Err(error);
         }
         Ok(id)
+    }
+
+    /// The registration named `name`.
+    pub fn find(&self, name: &str) -> Option<&HookSpec> {
+        self.hooks
+            .iter()
+            .find(|(_, spec)| spec.name == name)
+            .map(|(_, spec)| spec)
     }
 
     /// The registration of `id`.

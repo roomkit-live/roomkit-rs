@@ -58,10 +58,10 @@ pub struct HookIncident {
 }
 
 /// What the chain decided on its payload.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ChainDecision<P> {
-    /// The payload goes on, as the last modify left it.
-    Allowed(P),
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChainDecision {
+    /// The payload goes on.
+    Allowed,
     /// A hook stopped it.
     Blocked {
         /// The hook that blocked: the RFC's `blocked_by`.
@@ -76,8 +76,11 @@ pub enum ChainDecision<P> {
 /// Everything a finished chain produced.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChainVerdict<P> {
-    /// Allowed with the payload, or blocked.
-    pub decision: ChainDecision<P>,
+    /// Allowed or blocked.
+    pub decision: ChainDecision,
+    /// The payload as the last modify before the end or the block left it:
+    /// what goes on when allowed, what is stored when blocked.
+    pub payload: P,
     /// The events the hooks injected, in hook order (gap G-017).
     pub injected_events: Vec<InjectedEvent>,
     /// The tasks the hooks created, always collected.
@@ -143,10 +146,11 @@ impl<P> HookChain<P> {
     pub fn finish(self) -> ChainVerdict<P> {
         let decision = match self.block {
             Some((by, reason)) => ChainDecision::Blocked { by, reason },
-            None => ChainDecision::Allowed(self.payload),
+            None => ChainDecision::Allowed,
         };
         ChainVerdict {
             decision,
+            payload: self.payload,
             injected_events: self.injected_events,
             tasks: self.tasks,
             observations: self.observations,
@@ -207,8 +211,13 @@ mod tests {
         HookChain::new(HookTrigger::BeforeBroadcast, "original".to_owned())
     }
 
-    fn decision(chain: HookChain<String>) -> ChainDecision<String> {
+    fn decision(chain: HookChain<String>) -> ChainDecision {
         chain.finish().decision
+    }
+
+    fn allowed_payload(chain: HookChain<String>) -> Option<String> {
+        let verdict = chain.finish();
+        (verdict.decision == ChainDecision::Allowed).then_some(verdict.payload)
     }
 
     fn task(id: &str) -> Task {
@@ -239,10 +248,7 @@ mod tests {
     fn a_chain_of_allows_keeps_the_payload() {
         let mut chain = chain();
         chain.apply(&hook("audit"), HookOutcome::Returned(HookResult::allow()));
-        assert_eq!(
-            decision(chain),
-            ChainDecision::Allowed("original".to_owned())
-        );
+        assert_eq!(allowed_payload(chain).as_deref(), Some("original"));
     }
 
     #[test]
@@ -250,10 +256,7 @@ mod tests {
         let mut chain = chain();
         let modify = HookResult::modify("redacted".to_owned());
         chain.apply(&hook("pii"), HookOutcome::Returned(modify));
-        assert_eq!(
-            decision(chain),
-            ChainDecision::Allowed("redacted".to_owned())
-        );
+        assert_eq!(allowed_payload(chain).as_deref(), Some("redacted"));
     }
 
     #[test]
@@ -263,7 +266,7 @@ mod tests {
             &hook("pii"),
             HookOutcome::Returned(HookResult::modify(String::new())),
         );
-        assert_eq!(decision(chain), ChainDecision::Allowed(String::new()));
+        assert_eq!(allowed_payload(chain).as_deref(), Some(""));
     }
 
     #[test]
@@ -291,6 +294,18 @@ mod tests {
     }
 
     #[test]
+    fn a_blocked_verdict_carries_the_payload_the_earlier_hooks_left() {
+        let mut chain = chain();
+        let modify = HookResult::modify("redacted".to_owned());
+        chain.apply(&hook("pii"), HookOutcome::Returned(modify));
+        chain.apply(
+            &hook("policy"),
+            HookOutcome::Returned(HookResult::block("no")),
+        );
+        assert_eq!(chain.finish().payload, "redacted");
+    }
+
+    #[test]
     fn a_block_stops_the_chain() {
         let mut chain = chain();
         chain.apply(
@@ -314,10 +329,7 @@ mod tests {
             &hook("broken_logger"),
             HookOutcome::Raised(ErrorRecord::new("ValueError", "boom")),
         );
-        assert_eq!(
-            decision(chain),
-            ChainDecision::Allowed("original".to_owned())
-        );
+        assert_eq!(allowed_payload(chain).as_deref(), Some("original"));
     }
 
     #[test]

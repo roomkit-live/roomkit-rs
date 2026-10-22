@@ -1,0 +1,144 @@
+//! The commit of a record the room refused before any hook (RFC §8.3).
+//!
+//! A channel not asked at the chain-depth limit, a response past its
+//! cascade's reentry budget, a response a transport returned at the limit:
+//! each is stored `BLOCKED`, under the room's lock, with the next index, and
+//! runs no hook. A room that no longer accepts events refuses the record, as
+//! it refuses any write (RFC §5.1).
+
+use std::mem;
+
+use crate::model::{EventStatus, RoomEvent};
+use crate::ops::protocol::{EffectId, Outcome, Request, RoomCounters};
+use crate::ops::{Abort, Cx, Progress};
+
+/// What became of a record.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum RecordResult {
+    /// Stored, with its index.
+    Committed(Box<RoomEvent>),
+    /// The room no longer accepts events: nothing was stored.
+    Refused,
+}
+
+/// The commit of one blocked record.
+#[derive(Debug)]
+pub(super) struct RecordPass {
+    record: RoomEvent,
+    state: State,
+}
+
+#[derive(Debug)]
+enum State {
+    Start,
+    Locking(EffectId),
+    LoadingRoom(EffectId),
+    Committing(EffectId),
+    Releasing {
+        effect: EffectId,
+        result: Result<RecordResult, Abort>,
+    },
+    Finished(Result<RecordResult, Abort>),
+    Reported,
+}
+
+impl State {
+    fn awaits(&self) -> Option<EffectId> {
+        match self {
+            Self::Locking(effect)
+            | Self::LoadingRoom(effect)
+            | Self::Committing(effect)
+            | Self::Releasing { effect, .. } => Some(*effect),
+            Self::Start | Self::Finished(_) | Self::Reported => None,
+        }
+    }
+}
+
+impl RecordPass {
+    /// The commit of `record`, which already carries its `blocked_by`.
+    pub(super) fn new(mut record: RoomEvent) -> Self {
+        record.status = EventStatus::Blocked;
+        Self {
+            record,
+            state: State::Start,
+        }
+    }
+
+    /// Takes the room's lock.
+    pub(super) fn start(&mut self, cx: &mut Cx<'_>) {
+        if matches!(self.state, State::Start) {
+            let room_id = self.record.room_id.clone();
+            self.state = State::Locking(cx.io.issue(Request::AcquireLock { room_id }));
+        }
+    }
+
+    /// Takes the driver's answer to the pass's outstanding effect.
+    pub(super) fn accept(
+        &mut self,
+        cx: &mut Cx<'_>,
+        effect: EffectId,
+        outcome: Outcome,
+    ) -> Progress<Result<RecordResult, Abort>> {
+        if self.state.awaits() != Some(effect) {
+            debug_assert!(false, "record pass received {effect:?} in {:?}", self.state);
+            return Progress::Waiting;
+        }
+        self.state = match mem::replace(&mut self.state, State::Reported) {
+            State::Locking(_) => match outcome.into_locked() {
+                Ok(()) => State::LoadingRoom(cx.io.issue(Request::LoadContext {
+                    room_id: self.record.room_id.clone(),
+                    recent_events: 0,
+                })),
+                Err(error) => State::Finished(Err(Abort::Lock(error))),
+            },
+            State::LoadingRoom(_) => self.on_room(cx, outcome),
+            State::Committing(_) => match outcome.into_committed() {
+                Ok(()) => {
+                    let committed = RecordResult::Committed(Box::new(self.record.clone()));
+                    self.release(cx, Ok(committed))
+                }
+                Err(error) => self.release(cx, Err(Abort::Store(error))),
+            },
+            State::Releasing { result, .. } => match outcome.into_released() {
+                Ok(()) => State::Finished(result),
+                Err(error) => State::Finished(Err(Abort::Lock(error))),
+            },
+            state @ (State::Start | State::Finished(_) | State::Reported) => state,
+        };
+        if !matches!(self.state, State::Finished(_)) {
+            return Progress::Waiting;
+        }
+        let State::Finished(result) = mem::replace(&mut self.state, State::Reported) else {
+            return Progress::Waiting;
+        };
+        Progress::Done(result)
+    }
+
+    fn on_room(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
+        let context = match outcome.into_context() {
+            Ok(Some(context)) => context,
+            Ok(None) => return self.release(cx, Err(Abort::RoomNotFound)),
+            Err(error) => return self.release(cx, Err(Abort::Store(error))),
+        };
+        if !context.room.status.accepts_events() {
+            return self.release(cx, Ok(RecordResult::Refused));
+        }
+        self.record.index = context.room.event_count;
+        let counters = RoomCounters {
+            event_count: context.room.event_count.saturating_add(1),
+            latest_index: self.record.index,
+            last_activity_at: context.room.timers.last_activity_at,
+        };
+        State::Committing(cx.io.issue(Request::Commit {
+            event: self.record.clone(),
+            counters,
+        }))
+    }
+
+    fn release(&mut self, cx: &mut Cx<'_>, result: Result<RecordResult, Abort>) -> State {
+        let effect = cx.io.issue(Request::ReleaseLock {
+            room_id: self.record.room_id.clone(),
+        });
+        State::Releasing { effect, result }
+    }
+}

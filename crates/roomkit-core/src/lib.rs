@@ -8,6 +8,9 @@
 //! - [`model`]: the data types of the RoomKit RFC, §5.
 //! - [`rules`]: the RFC's rules as pure functions: permissions, transcoding,
 //!   chain depth, hooks.
+//! - [`ops`]: the pipeline operations, run by a driver through the effect
+//!   protocol.
 
 pub mod model;
+pub mod ops;
 pub mod rules;

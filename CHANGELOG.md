@@ -21,3 +21,8 @@ publishes a release.
   the visibility of what a source writes (§7.3), transcoding (§6.6), the
   chain-depth limit and reentry budget (§8.3), hook registration checks and
   the SYNC hook chain (§9.1–9.4).
+- `roomkit_core::ops`: the effect protocol (`Operation`, `Effect`, `Outcome`,
+  `Notice`) and the operations run through it: `Inbound` (RFC §10.1 and
+  §10.2: the locked commit pass, hooks, permissions, broadcast, reentry,
+  chain depth, injected events, framework events), `CreateRoom`,
+  `AttachChannel` and `CloseRoom`.

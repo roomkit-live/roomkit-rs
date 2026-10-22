@@ -142,6 +142,22 @@ identifier!(
     channel_id_rules
 );
 
+impl EventId {
+    /// An event id the crate generated and knows to be valid.
+    pub(crate) fn generated(value: String) -> Self {
+        debug_assert!(!value.is_empty(), "generated an empty event id");
+        Self(value)
+    }
+}
+
+impl ObservationId {
+    /// An observation id the crate generated and knows to be valid.
+    pub(crate) fn generated(value: String) -> Self {
+        debug_assert!(!value.is_empty(), "generated an empty observation id");
+        Self(value)
+    }
+}
+
 fn channel_id_rules(value: &str) -> Result<(), ModelError> {
     let refuse = |reason| {
         Err(ModelError::InvalidChannelId {

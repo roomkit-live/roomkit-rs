@@ -13,6 +13,7 @@
 mod binding;
 mod channel;
 mod content;
+mod context;
 mod delivery;
 mod error;
 mod event;
@@ -37,6 +38,7 @@ pub use content::{
     RichContent, RichFormat, SystemContent, TemplateContent, TextContent, ToolCallContent,
     ToolCallOutcome, ToolCallStatus, VideoContent,
 };
+pub use context::RoomContext;
 pub use delivery::{DeliveryError, DeliveryResult, DeliveryStatus, ProviderResult};
 pub use error::ModelError;
 pub use event::{

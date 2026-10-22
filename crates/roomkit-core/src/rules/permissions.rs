@@ -2,7 +2,8 @@
 //! §19.3).
 
 use crate::model::{
-    AgentResponsePolicy, ChannelBinding, ChannelCategory, EventStatus, RoomEvent, Visibility,
+    AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelId, EventStatus, RoomEvent,
+    Visibility,
 };
 use crate::rules::chain_depth;
 
@@ -159,6 +160,33 @@ pub fn plan_delivery(
                     plan.agents.push(reader.clone());
                 }
             }
+        }
+    }
+    plan
+}
+
+/// The plan of an event delivered to named channels only, such as an event
+/// a hook injects (RFC §9.4): each named channel bound to the room that reads,
+/// in channel id order; `None` names no channel. An intelligence channel is
+/// told; the event answers nothing, so its turn's output is not read (RFC
+/// §10.6.1).
+pub fn plan_targets(targets: Option<&[ChannelId]>, bindings: &[ChannelBinding]) -> DeliveryPlan {
+    let mut plan = DeliveryPlan::default();
+    let Some(targets) = targets else {
+        return plan;
+    };
+    let mut readers: Vec<&ChannelBinding> = bindings
+        .iter()
+        .filter(|binding| targets.contains(&binding.channel_id) && binding.access.reads())
+        .collect();
+    readers.sort_by(|first, second| first.channel_id.cmp(&second.channel_id));
+    for reader in readers {
+        match reader.category {
+            ChannelCategory::Transport => plan.transports.push(TransportTarget {
+                binding: reader.clone(),
+                delivers: reader.direction.sends(),
+            }),
+            ChannelCategory::Intelligence => plan.agents.push(reader.clone()),
         }
     }
     plan
@@ -391,6 +419,40 @@ mod tests {
                 effective_visibility(&Visibility::Transport, &source, &bindings).to_string(),
                 "ws_advisor"
             );
+        }
+    }
+
+    mod plan_targets {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn reaches_the_named_channels_only() {
+            let bindings = [transport("sms"), transport("ws"), agent("ai")];
+            let plan = plan_targets(Some(&[channel("ws")]), &bindings);
+            assert_eq!(transport_ids(&plan), ["ws"]);
+        }
+
+        #[test]
+        fn reaches_nobody_when_no_channel_is_named() {
+            let bindings = [transport("sms")];
+            assert_eq!(plan_targets(None, &bindings), DeliveryPlan::default());
+        }
+
+        #[test]
+        fn skips_a_named_channel_that_does_not_read() {
+            let write_only = ChannelBinding {
+                access: Access::WriteOnly,
+                ..transport("ws")
+            };
+            let plan = plan_targets(Some(&[channel("ws")]), &[write_only]);
+            assert_eq!(transport_ids(&plan), Vec::<&str>::new());
+        }
+
+        #[test]
+        fn tells_a_named_intelligence_channel() {
+            let plan = plan_targets(Some(&[channel("ai")]), &[agent("ai")]);
+            assert_eq!(ids(&plan.agents), ["ai"]);
         }
     }
 
