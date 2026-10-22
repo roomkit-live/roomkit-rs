@@ -1,0 +1,10 @@
+# Tests may unwrap, panic, index and print: a failing test is the point.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+
+# Product names read as words in documentation, not as code.
+doc-valid-idents = ["RoomKit", "PyO3", ".."]

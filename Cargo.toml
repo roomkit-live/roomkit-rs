@@ -1,0 +1,61 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+repository = "https://github.com/roomkit-live/roomkit-rs"
+# Nothing is published before the first usable step.
+publish = false
+
+[workspace.dependencies]
+roomkit-core = { path = "crates/roomkit-core" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+let_underscore_drop = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Module paths already name the domain (`hook_chain::Outcome` reads better than
+# `hook_chain::HookChainOutcome`), and `#[must_use]` is put where ignoring a
+# value is a bug rather than on every pure function.
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+# Library code never panics on input: no unwrap, expect, panic, indexing or
+# string slicing outside tests (clippy.toml allows them in tests).
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+indexing_slicing = "warn"
+string_slice = "warn"
+todo = "warn"
+unimplemented = "warn"
+# Output goes through `tracing`; examples opt out explicitly.
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+# A silenced lint states why, and `expect` fails once the reason is gone.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+# Adding a variant to an RFC enumeration must force every match to decide.
+wildcard_enum_match_arm = "warn"
+clone_on_ref_ptr = "warn"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "warn"
+private_intra_doc_links = "warn"
+missing_crate_level_docs = "warn"
+bare_urls = "warn"

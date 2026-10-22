@@ -1,0 +1,41 @@
+# roomkit-core performs no I/O (docs/architecture.md). Clippy reads the nearest
+# clippy.toml only, so this file repeats the workspace's test allowances.
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+
+# Product names read as words in documentation, not as code.
+doc-valid-idents = ["RoomKit", "PyO3", ".."]
+
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "the core reads the clock from its Environment" },
+    { path = "std::time::Instant::now", reason = "the core reads the clock from its Environment" },
+    { path = "std::thread::spawn", reason = "concurrency belongs to the driver" },
+    { path = "std::thread::sleep", reason = "waiting belongs to the driver" },
+    { path = "std::env::var", reason = "configuration is passed in, never read from the process" },
+    { path = "std::env::var_os", reason = "configuration is passed in, never read from the process" },
+    { path = "std::env::vars", reason = "configuration is passed in, never read from the process" },
+    { path = "std::fs::read", reason = "the core performs no I/O" },
+    { path = "std::fs::read_to_string", reason = "the core performs no I/O" },
+    { path = "std::fs::write", reason = "the core performs no I/O" },
+    { path = "std::fs::read_dir", reason = "the core performs no I/O" },
+    { path = "std::io::stdin", reason = "the core performs no I/O" },
+    { path = "std::io::stdout", reason = "the core performs no I/O" },
+    { path = "std::io::stderr", reason = "the core performs no I/O" },
+    { path = "std::process::exit", reason = "the core returns errors, the host decides" },
+]
+
+disallowed-types = [
+    { path = "std::fs::File", reason = "the core performs no I/O" },
+    { path = "std::fs::OpenOptions", reason = "the core performs no I/O" },
+    { path = "std::net::TcpStream", reason = "the core performs no I/O" },
+    { path = "std::net::TcpListener", reason = "the core performs no I/O" },
+    { path = "std::net::UdpSocket", reason = "the core performs no I/O" },
+    { path = "std::process::Command", reason = "the core performs no I/O" },
+    { path = "std::sync::Mutex", reason = "the core holds no lock; room locks are effects" },
+    { path = "std::sync::RwLock", reason = "the core holds no lock; room locks are effects" },
+]

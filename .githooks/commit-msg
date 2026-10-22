@@ -1,0 +1,8 @@
+#!/bin/sh
+# The repository is public: commit messages name RoomKit's own tickets
+# (RMK-...), never a downstream application or its board. CI re-checks pushed
+# messages for commits made without this hook (`make hooks` installs it).
+if grep -v '^#' "$1" | grep -iqE '\bluge\b|\bLUG-[0-9]+'; then
+    echo "commit-msg: the message names a downstream application (CONTRIBUTING.md)" >&2
+    exit 1
+fi

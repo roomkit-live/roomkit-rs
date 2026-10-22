@@ -1,0 +1,23 @@
+# cargo-deny: what the dependency graph may contain (CONTRIBUTING.md,
+# "Dependencies").
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+# A license joins this list in the change that adds the dependency needing it.
+allow = ["MIT"]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace crates depend on each other by path.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
