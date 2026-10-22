@@ -2,7 +2,10 @@
 //! firing of observer hooks (RFC §9.3).
 
 use super::delivery::SetOutcome;
-use crate::model::{ChannelBinding, RoomContext, RoomEvent};
+use crate::model::{
+    ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType,
+    Metadata, RoomContext, RoomEvent, SystemContent, Task,
+};
 use crate::ops::{ChainDepthData, Cx, FrameworkEvent, Notice};
 use crate::rules::hook_chain::{HookIncident, HookProblem};
 use crate::rules::hook_registry::HookTrigger;
@@ -72,6 +75,54 @@ pub(super) fn after_broadcast(cx: &mut Cx<'_>, event: &RoomEvent, context: &Room
     });
 }
 
+/// Fires the `ON_TASK_CREATED` observers of each stored task (RFC §9.2),
+/// its payload a system event naming the task.
+pub(super) fn tasks_created(cx: &mut Cx<'_>, tasks: &[Task], context: &RoomContext) {
+    for task in tasks {
+        let payload = task_payload(cx, task);
+        let hooks = cx
+            .config
+            .hooks
+            .observers(HookTrigger::OnTaskCreated, &payload.source);
+        if hooks.is_empty() {
+            return;
+        }
+        cx.io.notify(Notice::AsyncHooks {
+            trigger: HookTrigger::OnTaskCreated,
+            hooks,
+            event: Box::new(payload),
+            context: Box::new(context.clone()),
+        });
+    }
+}
+
+/// The payload of `ON_TASK_CREATED`: a system event whose data names the
+/// task, as a lifecycle hook's names the change.
+fn task_payload(cx: &mut Cx<'_>, task: &Task) -> RoomEvent {
+    let source = EventSource::new(
+        ChannelId::system(),
+        ChannelType::System,
+        EventDirection::Outbound,
+    );
+    let mut data = Metadata::new();
+    data.insert("task_id".to_owned(), task.id.as_str().into());
+    data.insert("title".to_owned(), task.title.clone().into());
+    let content = EventContent::System(SystemContent {
+        body: "task created".to_owned(),
+        code: Some("task_created".to_owned()),
+        data,
+    });
+    let now = cx.env.now();
+    RoomEvent::new(
+        cx.env.new_event_id(),
+        task.room_id.clone(),
+        EventType::TaskCreated,
+        source,
+        content,
+        now,
+    )
+}
+
 /// Reports the record of a channel not asked at the chain-depth limit (RFC
 /// §8.3).
 pub(super) fn chain_depth_exceeded(cx: &mut Cx<'_>, record: &RoomEvent, agent: &ChannelBinding) {
@@ -104,31 +155,38 @@ pub(super) fn hook_incidents(cx: &mut Cx<'_>, event: &RoomEvent, incidents: &[Ho
             "a BEFORE_BROADCAST hook produced no usable result"
         );
         let room_id = event.room_id.clone();
-        let reported = match &incident.problem {
-            HookProblem::TimedOut => FrameworkEvent::HookTimeout {
-                room_id,
-                hook_name: incident.hook.clone(),
-                trigger: HookTrigger::BeforeBroadcast,
-                timeout: cx
+        let error = match &incident.problem {
+            HookProblem::TimedOut => {
+                let timeout = cx
                     .config
                     .hooks
                     .find(&incident.hook)
-                    .map_or(0.0, |spec| spec.timeout.as_secs_f64()),
-            },
-            HookProblem::Raised(error) => FrameworkEvent::HookError {
-                room_id,
-                event_id: event.id.clone(),
-                hook: incident.hook.clone(),
-                error: error.message.clone(),
-            },
-            HookProblem::Invalid(what) => FrameworkEvent::HookError {
-                room_id,
-                event_id: event.id.clone(),
-                hook: incident.hook.clone(),
-                error: what.clone(),
-            },
+                    .map_or(0.0, |spec| spec.timeout.as_secs_f64());
+                notify(
+                    cx,
+                    FrameworkEvent::HookTimeout {
+                        room_id: room_id.clone(),
+                        hook_name: incident.hook.clone(),
+                        trigger: HookTrigger::BeforeBroadcast,
+                        timeout,
+                    },
+                );
+                format!("timed out after {timeout}s")
+            }
+            HookProblem::Raised(error) => error.message.clone(),
+            HookProblem::Invalid(what) => what.clone(),
         };
-        notify(cx, reported);
+        // Whatever made the result unusable, the commit gate reports it as
+        // a hook error (RFC §8.2), a timeout as a timeout as well.
+        notify(
+            cx,
+            FrameworkEvent::HookError {
+                room_id,
+                event_id: event.id.clone(),
+                hook: incident.hook.clone(),
+                error,
+            },
+        );
     }
 }
 

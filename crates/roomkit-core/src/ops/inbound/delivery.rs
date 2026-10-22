@@ -27,9 +27,9 @@ pub(super) enum SetKind {
     Root,
     /// A response that re-entered.
     Response,
-    /// An event a hook injected. It asks no agent (gap G-021), and what its
-    /// transport targets return is not read: an injected event answers
-    /// nothing (RFC §10.6.1).
+    /// An event a hook injected. It asks no agent (RFC §9.4); its transport
+    /// targets' tasks and observations are collected, as at any delivery,
+    /// and the events they return do not re-enter (gap G-033).
     Injected,
 }
 
@@ -187,6 +187,8 @@ impl DeliverySet {
             return;
         };
         if self.kind == SetKind::Injected {
+            self.outcome.tasks.extend(output.tasks);
+            self.outcome.observations.extend(output.observations);
             self.deliver_if_transport(cx, index);
             return;
         }
@@ -288,10 +290,8 @@ impl DeliverySet {
         self.outcome
             .delivery_results
             .insert(channel_id.clone(), result);
-        if self.kind != SetKind::Injected {
-            self.outcome.tasks.extend(output.tasks);
-            self.outcome.observations.extend(output.observations);
-        }
+        self.outcome.tasks.extend(output.tasks);
+        self.outcome.observations.extend(output.observations);
         match refusal {
             Some(message) => self.fail(index, message),
             None => self.outcome.delivered.push(channel_id),

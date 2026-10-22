@@ -12,12 +12,14 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::model::{ChannelId, ChannelType, EventDirection, EventSource};
+use crate::rules::chain_depth::{CHAIN_DEPTH_LIMIT, REENTRY_LOOP_CAP};
+use crate::rules::permissions::WriteRefusal;
 
 /// When a hook fires (RFC §9.2).
 ///
-/// The triggers the implemented steps fire, and the three that fail closed
-/// (RFC §9.3), which the voice and AI steps fire. The RFC's list grows here
-/// step by step (gap G-003).
+/// The triggers the implemented operations fire (the Level 0 ones of RFC
+/// §26.1 among them), and the three that fail closed (RFC §9.3), which the
+/// voice and AI steps fire. The list grows with each step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookTrigger {
@@ -33,6 +35,9 @@ pub enum HookTrigger {
     OnChannelAttached,
     /// A turn failed.
     OnError,
+    /// A task a hook or a channel filed was stored (RFC §10.1 steps 10, 11
+    /// and 15).
+    OnTaskCreated,
     /// After a speech-to-text transcription; can modify it.
     OnTranscription,
     /// Before text-to-speech synthesis; can block or modify the text.
@@ -54,7 +59,8 @@ impl HookTrigger {
             | Self::OnRoomCreated
             | Self::OnRoomClosed
             | Self::OnChannelAttached
-            | Self::OnError => HookExecution::Async,
+            | Self::OnError
+            | Self::OnTaskCreated => HookExecution::Async,
         }
     }
 
@@ -68,7 +74,8 @@ impl HookTrigger {
             | Self::OnRoomCreated
             | Self::OnRoomClosed
             | Self::OnChannelAttached
-            | Self::OnError => false,
+            | Self::OnError
+            | Self::OnTaskCreated => false,
         }
     }
 }
@@ -172,6 +179,13 @@ pub enum RegistrationError {
         /// The name.
         name: String,
     },
+    /// The name is a value the framework writes in `blocked_by`: the hook's
+    /// block would read as the framework's refusal.
+    #[error("a hook cannot be named {name:?}, which the framework writes in blocked_by")]
+    ReservedName {
+        /// The name.
+        name: String,
+    },
     /// `needs_lock = false` outside a SYNC `BEFORE_BROADCAST` hook.
     #[error("hook {hook:?}: only a SYNC BEFORE_BROADCAST hook may run off the room lock")]
     OffLockOutsideBeforeBroadcast {
@@ -255,7 +269,8 @@ impl HookRegistry {
             .matching(trigger, source)
             .filter(|(_, spec)| spec.execution == HookExecution::Sync)
             .collect();
-        chain.sort_by_key(|(id, spec)| (spec.priority, **id));
+        // At equal priority an off-lock hook runs first (RFC §9.3).
+        chain.sort_by_key(|(id, spec)| (spec.priority, spec.needs_lock, **id));
         chain.into_iter().map(|(id, _)| *id).collect()
     }
 
@@ -281,8 +296,9 @@ impl HookRegistry {
             .map(|(id, spec)| (id, spec))
     }
 
-    /// No SYNC `BEFORE_BROADCAST` hook that needs the lock may be ordered
-    /// before one that does not (RFC §9.1).
+    /// No SYNC `BEFORE_BROADCAST` hook that needs the lock may have a lower
+    /// priority than one that does not (RFC §9.1); at equal priority the
+    /// off-lock hook runs first.
     fn check_lock_ordering(&self) -> Result<(), RegistrationError> {
         let mut chain: Vec<&(HookId, HookSpec)> = self
             .hooks
@@ -292,7 +308,7 @@ impl HookRegistry {
                     && spec.execution == HookExecution::Sync
             })
             .collect();
-        chain.sort_by_key(|(id, spec)| (spec.priority, *id));
+        chain.sort_by_key(|(id, spec)| (spec.priority, spec.needs_lock, *id));
         let mut first_locked: Option<&HookSpec> = None;
         for (_, spec) in chain {
             match (spec.needs_lock, first_locked) {
@@ -310,8 +326,26 @@ impl HookRegistry {
     }
 }
 
+/// Whether `name` is a value the framework writes in `blocked_by` (RFC
+/// §9.1).
+fn is_reserved(name: &str) -> bool {
+    [
+        WriteRefusal::ReadOnly,
+        WriteRefusal::Muted,
+        WriteRefusal::Unbound,
+    ]
+    .iter()
+    .any(|refusal| refusal.blocked_by() == name)
+        || [CHAIN_DEPTH_LIMIT, REENTRY_LOOP_CAP].contains(&name)
+}
+
 /// The rules a registration obeys on its own (RFC §9.1).
 fn check_alone(spec: &HookSpec) -> Result<(), RegistrationError> {
+    if is_reserved(&spec.name) {
+        return Err(RegistrationError::ReservedName {
+            name: spec.name.clone(),
+        });
+    }
     let sync_before_broadcast =
         spec.trigger == HookTrigger::BeforeBroadcast && spec.execution == HookExecution::Sync;
     if !spec.needs_lock && !sync_before_broadcast {
@@ -513,10 +547,31 @@ mod tests {
     }
 
     #[test]
-    fn an_off_lock_hook_sharing_a_locked_hook_s_priority_after_it_is_refused() {
+    fn an_off_lock_hook_sharing_a_locked_hook_s_priority_runs_first() {
         let mut registry = HookRegistry::new();
         registry.register(sync_hook("router", 0)).unwrap();
-        assert!(registry.register(off_lock_hook("pii_scan", 0)).is_err());
+        registry.register(off_lock_hook("pii_scan", 0)).unwrap();
+        let chain = registry.chain(HookTrigger::BeforeBroadcast, &sms_source());
+        assert_eq!(names(&registry, &chain), ["pii_scan", "router"]);
+    }
+
+    #[test]
+    fn a_hook_named_after_a_framework_refusal_is_refused() {
+        for name in [
+            "source_read_only",
+            "source_muted",
+            "source_unbound",
+            "event_chain_depth_limit",
+            "reentry_loop_cap",
+        ] {
+            assert_eq!(
+                HookRegistry::new().register(sync_hook(name, 0)),
+                Err(RegistrationError::ReservedName {
+                    name: name.to_owned()
+                }),
+                "{name}"
+            );
+        }
     }
 
     #[test]

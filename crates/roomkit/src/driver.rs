@@ -117,17 +117,15 @@ async fn call<S: ConversationStore>(inner: &Inner<S>, request: Request) -> Outco
             channel_id,
             message,
             context,
+            id,
         } => {
             let Some(channel) = inner.channel(&channel_id) else {
                 return unknown_channel(&channel_id);
             };
-            let draft = {
-                let mut environment = inner.environment();
-                EventDraft {
-                    id: environment.new_event_id(),
-                    room_id: context.room.id.clone(),
-                    now: environment.now(),
-                }
+            let draft = EventDraft {
+                id,
+                room_id: context.room.id.clone(),
+                now: inner.environment().now(),
             };
             match channel.handle_inbound(message, *context, draft).await {
                 Ok(event) => Outcome::Parsed(Box::new(event)),

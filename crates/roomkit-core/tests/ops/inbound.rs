@@ -155,8 +155,8 @@ mod an_allowed_message {
         );
     }
 
-    #[test]
-    fn persists_the_side_effects_its_hooks_produced() {
+    /// A room whose hook files a task for every event it reads.
+    fn triaging_room() -> Sim {
         let mut sim = room();
         sim.before_broadcast(
             "triage",
@@ -170,8 +170,31 @@ mod an_allowed_message {
                 HookOutcome::Returned(HookResult::allow().with_task(task))
             }),
         );
+        sim
+    }
+
+    #[test]
+    fn persists_the_side_effects_its_hooks_produced() {
+        let mut sim = triaging_room();
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(sim.traced("persist"), ["persist 2 tasks, 0 observations"]);
+    }
+
+    #[test]
+    fn fires_on_task_created_for_each_task_once_they_are_stored() {
+        let mut sim = triaging_room();
+        sim.observer("audit", HookTrigger::AfterBroadcast);
+        sim.observer("follow_up", HookTrigger::OnTaskCreated);
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            sim.async_triggers(),
+            [
+                HookTrigger::AfterBroadcast,
+                HookTrigger::AfterBroadcast,
+                HookTrigger::OnTaskCreated,
+                HookTrigger::OnTaskCreated,
+            ]
+        );
     }
 }
 
@@ -416,6 +439,116 @@ mod an_injected_event {
         let mut sim = injecting_room(from_sms, "sms");
         sim.send(trigger_at_depth(0)).unwrap();
         assert_eq!(sim.traced("on_event sms"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn collects_the_tasks_its_transport_target_files() {
+        let mut sim = injecting_room(notice_event("inj_1", "Heads up"), "desk");
+        sim.transport_with(
+            "desk",
+            Box::new(|_, _| {
+                let task = Task::new(
+                    TaskId::new("task_1").unwrap(),
+                    room_id(),
+                    "Read it",
+                    Timestamp::UNIX_EPOCH,
+                );
+                Ok(ChannelOutput {
+                    tasks: vec![task],
+                    ..ChannelOutput::default()
+                })
+            }),
+        );
+        sim.send(trigger_at_depth(0)).unwrap();
+        assert_eq!(sim.traced("persist"), ["persist 1 tasks, 0 observations"]);
+    }
+}
+
+/// RFC §9.4: an injected event is committed after its cause however the
+/// cause ends, as a pass of its own.
+mod an_injected_event_s_pass {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// A room whose hook lets every event through, injecting a notice for
+    /// the advisor with the message "hello" (with every event when
+    /// `always`).
+    fn notifying_room(always: bool) -> Sim {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.transport("ws");
+        sim.before_broadcast(
+            "notify",
+            Box::new(move |event| {
+                let text = roomkit_core::rules::transcoding::text_of(&event.content);
+                if !always && text != "hello" {
+                    return HookOutcome::Returned(HookResult::allow());
+                }
+                HookOutcome::Returned(HookResult::allow().inject(InjectedEvent::to_channels(
+                    notice_event("inj_1", "Heads up"),
+                    vec![channel("ws")],
+                )))
+            }),
+        );
+        sim
+    }
+
+    #[test]
+    fn follows_an_allowed_message() {
+        let mut sim = notifying_room(false);
+        sim.send(Sim::message("sms", "hello")).unwrap();
+        assert_eq!(
+            sim.timeline_lines(),
+            [
+                "#0 sms delivered \"hello\"",
+                "#1 system delivered \"Heads up\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn follows_a_message_its_source_may_not_send() {
+        let mut sim = notifying_room(false);
+        sim.bindings[0].muted = true;
+        sim.send(Sim::message("sms", "hello")).unwrap();
+        assert_eq!(
+            sim.timeline_lines(),
+            [
+                "#0 sms blocked:source_muted \"hello\"",
+                "#1 system delivered \"Heads up\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn may_be_blocked_by_a_hook_of_its_own_chain() {
+        let mut sim = notifying_room(false);
+        sim.before_broadcast(
+            "quiet",
+            Box::new(|event| {
+                if roomkit_core::rules::transcoding::text_of(&event.content) == "Heads up" {
+                    return HookOutcome::Returned(HookResult::block("no notices"));
+                }
+                HookOutcome::Returned(HookResult::allow())
+            }),
+        );
+        sim.send(Sim::message("sms", "hello")).unwrap();
+        assert_eq!(
+            sim.timeline_lines()[1],
+            "#1 system blocked:quiet \"Heads up\""
+        );
+    }
+
+    #[test]
+    fn past_the_reentry_budget_is_stored_capped_without_its_hooks() {
+        let mut sim = notifying_room(true);
+        sim.config.max_chain_depth = 1;
+        sim.send(Sim::message("sms", "hello")).unwrap();
+        let lines = sim.timeline_lines();
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some("#11 system blocked:reentry_loop_cap \"Heads up\"")
+        );
     }
 }
 
@@ -756,6 +889,21 @@ mod an_unusable_hook {
                     error: "boom".to_owned(),
                 })
         );
+    }
+
+    #[test]
+    fn that_times_out_emits_hook_timeout_and_hook_error() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.before_broadcast("pii", Box::new(|_| HookOutcome::TimedOut));
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        let names = sim.framework_event_names();
+        let reported: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| name.starts_with("hook_"))
+            .collect();
+        assert_eq!(reported, ["hook_timeout", "hook_error"]);
     }
 
     #[test]

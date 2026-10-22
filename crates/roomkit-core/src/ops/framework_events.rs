@@ -8,13 +8,22 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Access, ChannelId, EventId, EventType, RoomId, RoomStatus, Visibility};
+use crate::model::{
+    Access, ChannelId, ChannelType, EventId, EventType, RoomId, RoomStatus, Visibility,
+};
 use crate::rules::hook_registry::HookTrigger;
 
 /// A framework event (RFC §8.2), tagged by its RFC name under `event`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum FrameworkEvent {
+    /// A channel was registered with the kit.
+    ChannelRegistered {
+        /// The channel.
+        channel_id: ChannelId,
+        /// Its type.
+        channel_type: ChannelType,
+    },
     /// A room was created.
     RoomCreated {
         /// The room.
@@ -117,7 +126,7 @@ pub enum FrameworkEvent {
         data: ChainDepthData,
     },
     /// A SYNC `BEFORE_BROADCAST` hook failed at an event's commit gate: it
-    /// raised or returned an unusable result.
+    /// raised, timed out or returned an unusable result.
     HookError {
         /// The room.
         room_id: RoomId,

@@ -52,6 +52,8 @@ pub(super) enum PassResult {
         event: Box<RoomEvent>,
         /// Why it was blocked.
         reason: Option<String>,
+        /// The room's context its hooks read.
+        context: Box<RoomContext>,
     },
     /// Refused by the room's status: nothing was stored (RFC §5.1).
     Refused {
@@ -498,6 +500,7 @@ fn commit_blocked(
         result: PassResult::Blocked {
             event: Box::new(event),
             reason,
+            context: Box::new(context.clone()),
         },
     }
 }

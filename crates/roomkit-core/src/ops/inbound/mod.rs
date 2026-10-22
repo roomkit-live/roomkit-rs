@@ -33,7 +33,7 @@ use super::io::Io;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Request, Step};
 use super::{Abort, ChannelDeclaration, Cx, Environment, KitConfig};
 use crate::model::{
-    ChannelCategory, ErrorRecord, EventContent, EventStatus, EventType, InboundMessage,
+    ChannelCategory, ErrorRecord, EventContent, EventId, EventStatus, EventType, InboundMessage,
     InjectedEvent, Observation, RoomContext, RoomEvent, RoomId, Task,
 };
 use crate::rules::chain_depth::{self, ReentryBudget};
@@ -77,6 +77,7 @@ impl Inbound {
                 result: InboundResult::default(),
                 tasks: Vec::new(),
                 observations: Vec::new(),
+                task_context: None,
                 outcome: None,
             },
         }
@@ -120,6 +121,9 @@ struct Machine {
     result: InboundResult,
     tasks: Vec<Task>,
     observations: Vec<Observation>,
+    /// The context of the last pass or delivery set that filed tasks, which
+    /// their `ON_TASK_CREATED` observers read.
+    task_context: Option<Box<RoomContext>>,
     outcome: Option<Result<InboundResult, InboundError>>,
 }
 
@@ -135,9 +139,13 @@ enum Stage {
         effect: EffectId,
         message: Box<InboundMessage>,
         channel: Box<ChannelDeclaration>,
+        id: EventId,
     },
     Cascade,
-    Persisting(EffectId),
+    Persisting {
+        effect: EffectId,
+        tasks: Vec<Task>,
+    },
     Done,
 }
 
@@ -186,8 +194,12 @@ impl Machine {
                 effect: expected,
                 message,
                 channel,
-            } if expected == effect => self.on_parsed(&message, &channel, outcome),
-            Stage::Persisting(expected) if expected == effect => self.on_persisted(outcome),
+                id,
+            } if expected == effect => self.on_parsed(&message, &channel, id, outcome),
+            Stage::Persisting {
+                effect: expected,
+                tasks,
+            } if expected == effect => self.on_persisted(cx, outcome, &tasks),
             Stage::Cascade => {
                 self.stage = Stage::Cascade;
                 self.dispatch_to_job(cx, effect, outcome);
@@ -195,7 +207,7 @@ impl Machine {
             stage @ (Stage::Start(_)
             | Stage::LoadingContext { .. }
             | Stage::Parsing { .. }
-            | Stage::Persisting(_)
+            | Stage::Persisting { .. }
             | Stage::Done) => {
                 debug_assert!(false, "inbound received {effect:?} in {stage:?}");
                 self.stage = stage;
@@ -231,15 +243,18 @@ impl Machine {
                 ..*context
             },
         });
+        let id = cx.env.new_event_id();
         let effect = cx.io.issue(Request::HandleInbound {
             channel_id: message.channel_id.clone(),
             message: (*message).clone(),
             context,
+            id: id.clone(),
         });
         self.stage = Stage::Parsing {
             effect,
             message,
             channel,
+            id,
         };
     }
 
@@ -248,6 +263,7 @@ impl Machine {
         &mut self,
         message: &InboundMessage,
         channel: &ChannelDeclaration,
+        id: EventId,
         outcome: Outcome,
     ) {
         let parsed = match outcome.into_parsed() {
@@ -259,7 +275,7 @@ impl Machine {
                 });
             }
         };
-        let mut event = stamp::stamp_trigger(parsed, message, channel);
+        let mut event = stamp::stamp_trigger(parsed, message, channel, id);
         event.room_id = self.room_id.clone();
         self.lane.push_back(Job::Pass(
             Box::new(CommitPass::new(PassOrigin::Trigger, event)),
@@ -304,6 +320,16 @@ impl Machine {
     }
 
     fn on_pass(&mut self, cx: &mut Cx<'_>, report: PassReport, origin: &PassOrigin) {
+        if !report.tasks.is_empty() {
+            self.task_context = match &report.result {
+                PassResult::Delivered { context, .. } | PassResult::Blocked { context, .. } => {
+                    Some(context.clone())
+                }
+                PassResult::Refused { .. } | PassResult::Duplicate { .. } => {
+                    self.task_context.take()
+                }
+            };
+        }
         self.tasks.extend(report.tasks);
         self.observations.extend(report.observations);
         self.note_error(report.release_error);
@@ -343,7 +369,7 @@ impl Machine {
                 self.committed = true;
                 self.result.event = Some((**event).clone());
             }
-            PassResult::Blocked { event, reason } => {
+            PassResult::Blocked { event, reason, .. } => {
                 // The result carries the stored record (gap G-026).
                 self.committed = true;
                 self.result.blocked = true;
@@ -423,6 +449,9 @@ impl Machine {
         if set.kind() == SetKind::Root {
             self.settle_root(cx, event, &outcome);
         }
+        if !outcome.tasks.is_empty() {
+            self.task_context = Some(Box::new(set.context().clone()));
+        }
         self.tasks.extend(outcome.tasks);
         self.observations.extend(outcome.observations);
         for agent in outcome.not_asked {
@@ -490,16 +519,26 @@ impl Machine {
         if self.tasks.is_empty() && self.observations.is_empty() {
             return self.finish();
         }
+        let tasks = std::mem::take(&mut self.tasks);
         let effect = cx.io.issue(Request::PersistSideEffects {
             room_id: self.room_id.clone(),
-            tasks: std::mem::take(&mut self.tasks),
+            tasks: tasks.clone(),
             observations: std::mem::take(&mut self.observations),
         });
-        self.stage = Stage::Persisting(effect);
+        self.stage = Stage::Persisting { effect, tasks };
     }
 
-    fn on_persisted(&mut self, outcome: Outcome) {
-        self.note_error(outcome.into_persisted().err());
+    /// The side effects are stored: each task's `ON_TASK_CREATED` observers
+    /// run (RFC §10.1 step 15).
+    fn on_persisted(&mut self, cx: &mut Cx<'_>, outcome: Outcome, tasks: &[Task]) {
+        match outcome.into_persisted() {
+            Ok(()) => {
+                if let Some(context) = &self.task_context {
+                    report::tasks_created(cx, tasks, context);
+                }
+            }
+            Err(error) => self.note_error(Some(error)),
+        }
         self.finish();
     }
 

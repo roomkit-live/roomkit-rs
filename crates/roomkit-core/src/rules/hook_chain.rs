@@ -18,8 +18,26 @@ pub enum HookOutcome<P> {
     /// The hook ran past its timeout.
     TimedOut,
     /// The hook returned something unusable: not a hook result, or a modify
-    /// whose payload is not of the trigger's type. The text says what.
-    Invalid(String),
+    /// with no payload or one not of the trigger's type (RFC §9.3).
+    Invalid {
+        /// What was unusable.
+        what: String,
+        /// The tasks the result carried, collected all the same.
+        tasks: Vec<Task>,
+        /// The observations it carried, collected all the same.
+        observations: Vec<Observation>,
+    },
+}
+
+impl<P> HookOutcome<P> {
+    /// An unusable outcome that carried no side effect.
+    pub fn invalid(what: impl Into<String>) -> Self {
+        Self::Invalid {
+            what: what.into(),
+            tasks: Vec::new(),
+            observations: Vec::new(),
+        }
+    }
 }
 
 /// What went wrong with a hook that produced no usable result (RFC §9.3).
@@ -138,7 +156,17 @@ impl<P> HookChain<P> {
             HookOutcome::Returned(result) => self.apply_result(hook, result),
             HookOutcome::Raised(error) => self.apply_problem(hook, HookProblem::Raised(error)),
             HookOutcome::TimedOut => self.apply_problem(hook, HookProblem::TimedOut),
-            HookOutcome::Invalid(what) => self.apply_problem(hook, HookProblem::Invalid(what)),
+            HookOutcome::Invalid {
+                what,
+                tasks,
+                observations,
+            } => {
+                // Its tasks and observations are kept, its injected events
+                // are not (RFC §9.3).
+                self.tasks.extend(tasks);
+                self.observations.extend(observations);
+                self.apply_problem(hook, HookProblem::Invalid(what));
+            }
         }
     }
 
@@ -377,15 +405,24 @@ mod tests {
     fn an_invalid_result_on_a_fail_closed_trigger_blocks() {
         let mut chain = HookChain::new(HookTrigger::BeforeTts, "say this".to_owned());
         let redactor = HookSpec::new("redactor", HookTrigger::BeforeTts, HookExecution::Sync);
-        chain.apply(
-            &redactor,
-            HookOutcome::Invalid("returned a number".to_owned()),
-        );
+        chain.apply(&redactor, HookOutcome::invalid("returned a number"));
         assert!(matches!(
             decision(chain),
             ChainDecision::Blocked { reason: Some(reason), .. }
                 if reason == "hook_invalid_result:redactor"
         ));
+    }
+
+    #[test]
+    fn the_tasks_of_an_unusable_result_are_collected() {
+        let mut chain = chain();
+        let unusable = HookOutcome::Invalid {
+            what: "a modify with no payload".to_owned(),
+            tasks: vec![task("task_1")],
+            observations: Vec::new(),
+        };
+        chain.apply(&hook("triage"), unusable);
+        assert_eq!(chain.finish().tasks, [task("task_1")]);
     }
 
     #[test]

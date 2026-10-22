@@ -469,11 +469,11 @@ impl Sim {
                 channel_id,
                 message,
                 context,
+                id,
             } => {
                 self.trace.push(format!("handle_inbound {channel_id}"));
                 self.parse_contexts.push(*context);
                 let declaration = self.config.channel(&channel_id).unwrap().clone();
-                let id = self.env.new_event_id();
                 let now = self.env.now();
                 let event = default_inbound_event(&message, &declaration, room_id(), id, now);
                 return Outcome::Parsed(Box::new(event));

@@ -143,6 +143,14 @@ identifier!(
     channel_id_rules
 );
 
+impl ChannelId {
+    /// The source of the records the framework writes itself, a lifecycle
+    /// change or a task's creation.
+    pub fn system() -> Self {
+        Self("system".to_owned())
+    }
+}
+
 impl EventId {
     /// The event id written from a random 128-bit value, as the 32 hex digits
     /// of a UUID's simple form. It cannot fail: the text is never empty.

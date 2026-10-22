@@ -152,8 +152,7 @@ pub enum ChannelMediaType {
 /// What a channel supports (RFC §5.8).
 ///
 /// The RFC gives no default; [`Default`] is a text-only channel with no
-/// limit and no optional feature. The RFC's `delivery_mode` is not modeled:
-/// the RFC does not define its values (gap G-011).
+/// limit and no optional feature.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[expect(

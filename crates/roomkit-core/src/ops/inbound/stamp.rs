@@ -35,7 +35,7 @@ pub fn default_inbound_event(
         .provider_message_id
         .clone_from(&message.provider_message_id);
     let mut event = RoomEvent::new(
-        id,
+        id.clone(),
         room_id,
         message.event_type,
         source,
@@ -43,18 +43,20 @@ pub fn default_inbound_event(
         now,
     );
     event.metadata.clone_from(&message.metadata);
-    stamp_trigger(event, message, channel)
+    stamp_trigger(event, message, channel, id)
 }
 
 /// Writes the pipeline's fields on the event a channel parsed from
-/// `message`: the type, depth, visibility, address, thread and idempotency
-/// key the message asked for, and the receiving channel as its inbound
-/// source.
+/// `message`: the id the pipeline gives it (RFC §8.1), the type, depth,
+/// visibility, address, thread and idempotency key the message asked for,
+/// and the receiving channel as its inbound source.
 pub(crate) fn stamp_trigger(
     mut event: RoomEvent,
     message: &InboundMessage,
     channel: &ChannelDeclaration,
+    id: EventId,
 ) -> RoomEvent {
+    event.id = id;
     event.event_type = message.event_type;
     event.chain_depth = message.chain_depth;
     event.visibility = message.visibility.clone();
@@ -127,9 +129,9 @@ pub(crate) fn stamp_injected(
 }
 
 /// Keeps the identity and the bookkeeping of `original` on a payload a
-/// `BEFORE_BROADCAST` hook replaced (gap G-020): a hook may change what an
+/// `BEFORE_BROADCAST` hook replaced (RFC §9.4): a hook may change what an
 /// event says, where it is addressed and who may see it, never which event it
-/// is, where it came from or how deep it is.
+/// is, where it came from, how deep it is or what became of it.
 pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> RoomEvent {
     modified.id = original.id.clone();
     modified.room_id = original.room_id.clone();
@@ -144,6 +146,10 @@ pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> Ro
     modified.created_at = original.created_at;
     modified.status = original.status;
     modified.blocked_by.clone_from(&original.blocked_by);
+    modified.consumption.clone_from(&original.consumption);
+    modified
+        .delivery_results
+        .clone_from(&original.delivery_results);
     modified
 }
 
@@ -276,8 +282,16 @@ mod tests {
     fn a_parsed_event_is_sourced_from_the_receiving_channel() {
         let mut parsed = trigger();
         parsed.source.channel_id = ChannelId::new("other").unwrap();
-        let stamped = stamp_trigger(parsed, &message(), &sms());
+        let stamped = stamp_trigger(parsed, &message(), &sms(), fresh());
         assert_eq!(stamped.source.channel_id.as_str(), "sms");
+    }
+
+    #[test]
+    fn a_parsed_event_takes_the_id_the_pipeline_gives_it() {
+        let mut parsed = trigger();
+        parsed.id = EventId::new("SM1").unwrap();
+        let stamped = stamp_trigger(parsed, &message(), &sms(), fresh());
+        assert_eq!(stamped.id, fresh());
     }
 
     #[test]
@@ -342,6 +356,16 @@ mod tests {
             (kept.source.channel_id.as_str(), kept.content),
             ("sms", EventContent::text("[redacted]"))
         );
+    }
+
+    #[test]
+    fn a_modified_payload_keeps_the_original_s_delivery_results() {
+        let mut modified = trigger();
+        modified
+            .delivery_results
+            .insert("sms".to_owned(), "delivered".into());
+        let kept = keep_identity(&trigger(), modified);
+        assert!(kept.delivery_results.is_empty());
     }
 
     #[test]

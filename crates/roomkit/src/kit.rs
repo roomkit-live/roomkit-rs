@@ -140,6 +140,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// already.
     pub fn register_channel(&self, channel: impl Channel) -> Result<(), KitError> {
         let declaration = Channel::declaration(&channel);
+        let registered = FrameworkEvent::ChannelRegistered {
+            channel_id: declaration.channel_id.clone(),
+            channel_type: declaration.channel_type,
+        };
         let channel_id = declaration.channel_id.clone();
         let channel: Arc<dyn DynChannel> = Arc::new(channel);
         self.inner.try_change_config(|config| {
@@ -148,7 +152,9 @@ impl<S: ConversationStore> RoomKit<S> {
             // declaration.
             write(&self.inner.channels).insert(channel_id, channel);
             Ok::<(), KitError>(())
-        })
+        })?;
+        self.inner.publish(registered);
+        Ok(())
     }
 
     /// Registers a hook with its handler (RFC §9.1).
@@ -353,7 +359,7 @@ impl<S> Inner<S> {
                 error = %error.message,
                 "an observer hook raised"
             ),
-            HookOutcome::Invalid(what) => tracing::warn!(
+            HookOutcome::Invalid { what, .. } => tracing::warn!(
                 target: "roomkit::hooks",
                 hook = %spec.name,
                 %what,

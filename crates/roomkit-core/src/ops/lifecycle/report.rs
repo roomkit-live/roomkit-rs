@@ -99,12 +99,16 @@ fn payload(
         HookTrigger::BeforeBroadcast
         | HookTrigger::AfterBroadcast
         | HookTrigger::OnError
+        | HookTrigger::OnTaskCreated
         | HookTrigger::OnTranscription
         | HookTrigger::BeforeTts
         | HookTrigger::BeforeToolUse => return None,
     };
-    let system = ChannelId::new("system").ok()?;
-    let source = EventSource::new(system, ChannelType::System, EventDirection::Outbound);
+    let source = EventSource::new(
+        ChannelId::system(),
+        ChannelType::System,
+        EventDirection::Outbound,
+    );
     let mut data = Metadata::new();
     data.insert("room_id".to_owned(), room_id.as_str().into());
     if let Some(channel_id) = channel_id {

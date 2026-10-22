@@ -14,8 +14,8 @@ use thiserror::Error;
 
 use super::{Environment, FrameworkEvent};
 use crate::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, InboundMessage, Observation, Room,
-    RoomContext, RoomEvent, RoomId, Task, Timestamp,
+    ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventId, InboundMessage, Observation,
+    Room, RoomContext, RoomEvent, RoomId, Task, Timestamp,
 };
 use crate::rules::hook_chain::HookOutcome;
 use crate::rules::hook_registry::{HookId, HookTrigger};
@@ -130,6 +130,9 @@ pub enum Request {
         message: InboundMessage,
         /// The room's context.
         context: Box<RoomContext>,
+        /// The id the pipeline gives the event, whatever id the channel
+        /// builds it with (RFC §8.1, §10.1 step 4).
+        id: EventId,
     },
     /// Call the channel's `on_event()` (RFC §6.1). For an intelligence
     /// channel this is a turn (RFC §10.6). Answer [`Outcome::Output`].

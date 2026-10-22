@@ -14,14 +14,16 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, EventContent, EventStatus, HookResult, InboundMessage, RoomContext,
-    RoomEvent, RoomId, Timestamp,
+    ChannelOutput, ChannelType, EventContent, EventId, EventStatus, HookResult, InboundMessage,
+    RoomContext, RoomEvent, RoomId, Timestamp,
 };
-use roomkit::ops::{ChannelDeclaration, FrameworkEvent, SequentialEnvironment};
+use roomkit::ops::{
+    ChannelDeclaration, FrameworkEvent, SequentialEnvironment, default_inbound_event,
+};
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
-    Channel, ChannelError, ConversationStore, HookExecution, HookSpec, HookTrigger, KitError,
-    RoomKit,
+    Channel, ChannelError, ConversationStore, EventDraft, HookExecution, HookSpec, HookTrigger,
+    KitError, RoomKit,
 };
 use tokio::sync::mpsc;
 
@@ -204,6 +206,64 @@ impl Channel for Panicking {
     }
 }
 
+/// A transport that parses every message under its provider's id.
+struct ProviderIds {
+    declaration: ChannelDeclaration,
+}
+
+impl Channel for ProviderIds {
+    fn declaration(&self) -> ChannelDeclaration {
+        self.declaration.clone()
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        _context: RoomContext,
+        draft: EventDraft,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        let event = default_inbound_event(
+            &message,
+            &self.declaration,
+            draft.room_id,
+            EventId::new("SM1").unwrap(),
+            draft.now,
+        );
+        ready(Ok(event))
+    }
+}
+
+#[tokio::test]
+async fn an_inbound_event_is_committed_under_an_id_of_the_pipeline() {
+    let (kit, _) = sms_and_agent().await;
+    kit.register_channel(ProviderIds {
+        declaration: ChannelDeclaration {
+            channel_id: channel("whatsapp"),
+            channel_type: ChannelType::Whatsapp,
+            category: ChannelCategory::Transport,
+            direction: ChannelDirection::Bidirectional,
+            capabilities: ChannelCapabilities::default(),
+            provider_name: None,
+        },
+    })
+    .unwrap();
+    kit.attach(&room_id(), &channel("whatsapp")).await.unwrap();
+    let mut ids = Vec::new();
+    for text in ["one", "two"] {
+        let sent = InboundMessage::new(
+            channel("whatsapp"),
+            "+15551234567",
+            EventContent::text(text),
+        );
+        let result = kit.process_inbound(&room_id(), sent).await.unwrap();
+        ids.push(result.event.unwrap().id.to_string());
+    }
+    assert!(
+        ids[0] != ids[1] && !ids.contains(&"SM1".to_owned()),
+        "{ids:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_channel_that_panics_fails_its_delivery_and_the_kit_goes_on() {
     let (kit, sms) = sms_and_agent().await;
@@ -277,6 +337,21 @@ async fn configuring_a_binding_cannot_move_it_to_another_room() {
         kit.store().list_bindings(&other).await.unwrap().len(),
     );
     assert_eq!(bound, (1, 0));
+}
+
+#[tokio::test]
+async fn registering_a_channel_is_announced_to_subscribers() {
+    let kit = RoomKit::new();
+    let mut events = kit.subscribe();
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+        .unwrap();
+    assert_eq!(
+        events.recv().await.unwrap(),
+        FrameworkEvent::ChannelRegistered {
+            channel_id: channel("sms"),
+            channel_type: ChannelType::Sms,
+        }
+    );
 }
 
 #[tokio::test]

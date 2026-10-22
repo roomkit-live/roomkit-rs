@@ -69,8 +69,9 @@ pub trait Channel: Send + Sync + 'static {
     fn declaration(&self) -> ChannelDeclaration;
 
     /// Converts a message the channel received into a room event (RFC §6.1).
-    /// The pipeline then writes the fields it owns: the type, depth,
-    /// visibility, address and source the message decides.
+    /// The pipeline then writes the fields it owns: the id of `draft`
+    /// (RFC §8.1), and the type, depth, visibility, address and source the
+    /// message decides.
     fn handle_inbound(
         &self,
         message: InboundMessage,

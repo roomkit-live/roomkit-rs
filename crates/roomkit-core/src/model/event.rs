@@ -92,10 +92,7 @@ pub enum EventStatus {
     Blocked,
 }
 
-/// The direction an event travelled (RFC §5.2).
-///
-/// The RFC types the field as a channel direction while allowing only these
-/// two values (gap G-013).
+/// The direction an event travelled (RFC §5.2): one way, never both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventDirection {
