@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{ChannelId, ModelError};
+use super::{ChannelCategory, ChannelId, ModelError};
 
 /// Which channels may see an event (RFC §7.3).
 ///
@@ -45,6 +45,57 @@ impl Visibility {
     /// Returns [`ModelError::InvalidVisibility`] when `ids` is empty.
     pub fn channels(ids: impl IntoIterator<Item = ChannelId>) -> Result<Self, ModelError> {
         ChannelSet::new(ids).map(Self::Channels)
+    }
+
+    /// Whether the channel `channel`, of `category`, may see an event of
+    /// this visibility (RFC §7.3).
+    pub fn admits(&self, channel: &ChannelId, category: ChannelCategory) -> bool {
+        match self {
+            Self::All => true,
+            Self::None => false,
+            Self::Transport => category == ChannelCategory::Transport,
+            Self::Intelligence => category == ChannelCategory::Intelligence,
+            Self::Channels(channels) => channels.contains(channel),
+        }
+    }
+
+    /// The visibility admitting exactly the channels both admit (gap G-009).
+    ///
+    /// `all` is neutral and `none` absorbs; `transport` and `intelligence`
+    /// exclude each other; two lists intersect. A category intersected with a
+    /// list keeps the listed channels of that category, which
+    /// `category_of` tells; a channel it does not know matches nothing.
+    #[must_use]
+    pub fn intersect(
+        &self,
+        other: &Self,
+        category_of: impl Fn(&ChannelId) -> Option<ChannelCategory>,
+    ) -> Self {
+        match (self, other) {
+            (Self::All, kept) | (kept, Self::All) => kept.clone(),
+            (Self::None, _) | (_, Self::None) => Self::None,
+            (Self::Transport, Self::Transport) => Self::Transport,
+            (Self::Intelligence, Self::Intelligence) => Self::Intelligence,
+            (Self::Transport, Self::Intelligence) | (Self::Intelligence, Self::Transport) => {
+                Self::None
+            }
+            (Self::Transport, Self::Channels(listed))
+            | (Self::Channels(listed), Self::Transport) => {
+                Self::listing(listed.of_category(ChannelCategory::Transport, &category_of))
+            }
+            (Self::Intelligence, Self::Channels(listed))
+            | (Self::Channels(listed), Self::Intelligence) => {
+                Self::listing(listed.of_category(ChannelCategory::Intelligence, &category_of))
+            }
+            (Self::Channels(first), Self::Channels(second)) => {
+                Self::listing(first.0.intersection(&second.0).cloned())
+            }
+        }
+    }
+
+    /// The list form of `ids`, or `none` when there is no id.
+    fn listing(ids: impl IntoIterator<Item = ChannelId>) -> Self {
+        ChannelSet::new(ids).map_or(Self::None, Self::Channels)
     }
 }
 
@@ -137,6 +188,19 @@ impl ChannelSet {
     pub fn iter(&self) -> impl Iterator<Item = &ChannelId> {
         self.0.iter()
     }
+
+    /// The channels of the set that `category_of` puts in `category`.
+    fn of_category(
+        &self,
+        category: ChannelCategory,
+        category_of: impl Fn(&ChannelId) -> Option<ChannelCategory>,
+    ) -> Vec<ChannelId> {
+        self.0
+            .iter()
+            .filter(|id| category_of(id) == Some(category))
+            .cloned()
+            .collect()
+    }
 }
 
 impl fmt::Display for ChannelSet {
@@ -172,6 +236,78 @@ mod tests {
 
     fn channel(id: &str) -> ChannelId {
         ChannelId::new(id).unwrap()
+    }
+
+    /// The categories of a room binding `sms` and `ws` (transports) and `ai`.
+    fn category_of(id: &ChannelId) -> Option<ChannelCategory> {
+        match id.as_str() {
+            "sms" | "ws" => Some(ChannelCategory::Transport),
+            "ai" => Some(ChannelCategory::Intelligence),
+            _ => None,
+        }
+    }
+
+    fn intersect(first: &str, second: &str) -> String {
+        parse(first)
+            .unwrap()
+            .intersect(&parse(second).unwrap(), category_of)
+            .to_string()
+    }
+
+    #[test]
+    fn transport_visibility_admits_a_transport_channel() {
+        assert!(Visibility::Transport.admits(&channel("sms"), ChannelCategory::Transport));
+    }
+
+    #[test]
+    fn transport_visibility_does_not_admit_an_intelligence_channel() {
+        assert!(!Visibility::Transport.admits(&channel("ai"), ChannelCategory::Intelligence));
+    }
+
+    #[test]
+    fn a_list_admits_only_its_channels() {
+        let visibility = parse("ws").unwrap();
+        assert!(!visibility.admits(&channel("sms"), ChannelCategory::Transport));
+    }
+
+    #[test]
+    fn none_admits_no_channel() {
+        assert!(!Visibility::None.admits(&channel("ws"), ChannelCategory::Transport));
+    }
+
+    #[test]
+    fn all_is_neutral_in_an_intersection() {
+        assert_eq!(intersect("all", "sms,ai"), "ai,sms");
+    }
+
+    #[test]
+    fn none_absorbs_an_intersection() {
+        assert_eq!(intersect("none", "all"), "none");
+    }
+
+    #[test]
+    fn transport_and_intelligence_intersect_to_none() {
+        assert_eq!(intersect("transport", "intelligence"), "none");
+    }
+
+    #[test]
+    fn a_category_keeps_the_listed_channels_of_that_category() {
+        assert_eq!(intersect("transport", "sms,ai"), "sms");
+    }
+
+    #[test]
+    fn a_category_drops_a_listed_channel_the_room_does_not_bind() {
+        assert_eq!(intersect("intelligence", "ai,gone"), "ai");
+    }
+
+    #[test]
+    fn two_lists_intersect() {
+        assert_eq!(intersect("sms,ws", "ws,ai"), "ws");
+    }
+
+    #[test]
+    fn disjoint_lists_intersect_to_none() {
+        assert_eq!(intersect("sms", "ai"), "none");
     }
 
     #[test]

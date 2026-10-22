@@ -314,6 +314,17 @@ impl CompositeContent {
         self.parts
     }
 
+    /// Rebuilds a composite from the parts of a valid one, each replaced by a
+    /// part that nests no deeper (a transcoding, a truncation). The caller
+    /// keeps the invariant, so it is only checked in debug builds.
+    pub(crate) fn from_derived_parts(parts: Vec<EventContent>) -> Self {
+        debug_assert!(
+            Self::new(parts.clone()).is_ok(),
+            "derived parts must keep the composite invariant"
+        );
+        Self { parts }
+    }
+
     fn depth(&self) -> usize {
         1 + self
             .parts

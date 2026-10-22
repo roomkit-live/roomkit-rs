@@ -6,5 +6,8 @@
 //! `docs/architecture.md` in the repository for the design.
 //!
 //! - [`model`]: the data types of the RoomKit RFC, §5.
+//! - [`rules`]: the RFC's rules as pure functions: permissions, transcoding,
+//!   chain depth, hooks.
 
 pub mod model;
+pub mod rules;
