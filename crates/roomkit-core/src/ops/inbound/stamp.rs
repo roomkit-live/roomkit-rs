@@ -97,6 +97,9 @@ pub(crate) fn stamp_response(
     if response.responds_to.is_none() {
         response.responds_to = Some(trigger.id.clone());
     }
+    // Only an inbound message carries an idempotency key (RFC §13.4, gap
+    // G-023): a response's key could otherwise shadow a later message's.
+    response.idempotency_key = None;
     reset_commit_fields(response)
 }
 
@@ -111,6 +114,7 @@ pub(crate) fn stamp_injected(injected: InjectedEvent, trigger: &RoomEvent) -> Ro
         .target_channel_ids
         .and_then(|targets| Visibility::channels(targets).ok())
         .unwrap_or(Visibility::None);
+    event.idempotency_key = None;
     reset_commit_fields(event)
 }
 

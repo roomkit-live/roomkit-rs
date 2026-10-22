@@ -37,6 +37,7 @@ use crate::model::{
     Observation, RoomEvent, RoomId, Task,
 };
 use crate::rules::chain_depth::{self, ReentryBudget};
+use crate::rules::permissions;
 
 /// The inbound pipeline for one message (RFC §10.1).
 ///
@@ -216,16 +217,18 @@ impl Machine {
             Ok(None) => return self.fail(InboundError::RoomNotFound(self.room_id.clone())),
             Err(error) => return self.fail(InboundError::Store(error)),
         };
-        let bound = context
+        let Some(receiver) = context
             .bindings
             .iter()
-            .any(|binding| binding.channel_id == message.channel_id);
-        if !bound {
+            .find(|binding| binding.channel_id == message.channel_id)
+        else {
             return self.fail(InboundError::ChannelNotBound {
                 channel_id: message.channel_id.clone(),
                 room_id: self.room_id.clone(),
             });
-        }
+        };
+        // The receiving channel sees only what it may (RFC §7.5 rule 8).
+        let context = Box::new(permissions::context_for(receiver, &context));
         let effect = cx.io.issue(Request::HandleInbound {
             channel_id: message.channel_id.clone(),
             message: (*message).clone(),

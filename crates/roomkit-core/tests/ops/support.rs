@@ -54,6 +54,8 @@ pub(crate) struct Sim {
     pub(crate) room_exists: bool,
     /// A channel the hooks mute while they run, as a moderation hook would.
     pub(crate) hooks_mute: Option<ChannelId>,
+    /// The contexts the receiving channels parsed messages with.
+    pub(crate) parse_contexts: Vec<RoomContext>,
 }
 
 pub(crate) fn channel(id: &str) -> ChannelId {
@@ -84,6 +86,7 @@ impl Sim {
             lock_held: false,
             room_exists: true,
             hooks_mute: None,
+            parse_contexts: Vec::new(),
         }
     }
 
@@ -229,6 +232,15 @@ impl Sim {
         Arc::new(self.config.clone())
     }
 
+    /// Commits `event` to the timeline before the test runs, at the next
+    /// index.
+    pub(crate) fn seed(&mut self, mut event: RoomEvent) {
+        event.index = self.room.event_count;
+        self.room.event_count += 1;
+        self.room.latest_index = Some(event.index);
+        self.timeline.push(event);
+    }
+
     /// The trace lines matching `prefix`.
     pub(crate) fn traced(&self, prefix: &str) -> Vec<&str> {
         self.trace
@@ -345,12 +357,17 @@ impl Sim {
                 self.trace.push(format!("load_bindings {room_id}"));
                 Outcome::Bindings(self.bindings.clone())
             }
-            Request::FindByIdempotencyKey { key, .. } => {
+            Request::FindByIdempotencyKey {
+                channel_id, key, ..
+            } => {
                 self.trace.push(format!("find_key {key}"));
                 let found = self
                     .timeline
                     .iter()
-                    .find(|event| event.idempotency_key.as_deref() == Some(key.as_str()))
+                    .find(|event| {
+                        event.idempotency_key.as_deref() == Some(key.as_str())
+                            && event.source.channel_id == channel_id
+                    })
                     .cloned()
                     .map(Box::new);
                 Outcome::Idempotent(found)
@@ -414,9 +431,10 @@ impl Sim {
             Request::HandleInbound {
                 channel_id,
                 message,
-                ..
+                context,
             } => {
                 self.trace.push(format!("handle_inbound {channel_id}"));
+                self.parse_contexts.push(*context);
                 let declaration = self.config.channel(&channel_id).unwrap().clone();
                 let id = self.env.new_event_id();
                 let now = self.env.now();

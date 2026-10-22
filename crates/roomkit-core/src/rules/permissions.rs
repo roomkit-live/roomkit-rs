@@ -2,8 +2,8 @@
 //! §19.3).
 
 use crate::model::{
-    AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelId, EventStatus, RoomEvent,
-    Visibility,
+    AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelId, EventStatus, RoomContext,
+    RoomEvent, Visibility,
 };
 use crate::rules::chain_depth;
 
@@ -72,6 +72,21 @@ pub fn history_for<'timeline>(
                     && event.visibility.admits(&reader.channel_id, reader.category))
         })
         .collect()
+}
+
+/// The context a channel receives: the room as it is, with only the events
+/// it may see (RFC §7.5 rule 8). Every context the pipeline hands a channel
+/// goes through here; hooks, which are host code, receive the room whole.
+pub fn context_for(reader: &ChannelBinding, whole: &RoomContext) -> RoomContext {
+    RoomContext {
+        room: whole.room.clone(),
+        bindings: whole.bindings.clone(),
+        participants: whole.participants.clone(),
+        recent_events: history_for(reader, &whole.recent_events)
+            .into_iter()
+            .cloned()
+            .collect(),
+    }
 }
 
 /// The visibility an event is committed with: what its sender asked,

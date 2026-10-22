@@ -143,6 +143,12 @@ identifier!(
 );
 
 impl EventId {
+    /// The event id written from a random 128-bit value, as the 32 hex digits
+    /// of a UUID's simple form. It cannot fail: the text is never empty.
+    pub fn from_u128(value: u128) -> Self {
+        Self(format!("{value:032x}"))
+    }
+
     /// An event id the crate generated and knows to be valid.
     pub(crate) fn generated(value: String) -> Self {
         debug_assert!(!value.is_empty(), "generated an empty event id");
@@ -151,6 +157,12 @@ impl EventId {
 }
 
 impl ObservationId {
+    /// The observation id written from a random 128-bit value, as the 32 hex
+    /// digits of a UUID's simple form. It cannot fail: the text is never empty.
+    pub fn from_u128(value: u128) -> Self {
+        Self(format!("{value:032x}"))
+    }
+
     /// An observation id the crate generated and knows to be valid.
     pub(crate) fn generated(value: String) -> Self {
         debug_assert!(!value.is_empty(), "generated an empty observation id");
@@ -183,6 +195,14 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn an_id_from_a_u128_is_its_32_hex_digits() {
+        assert_eq!(
+            EventId::from_u128(0xff).as_str(),
+            "000000000000000000000000000000ff"
+        );
+    }
 
     #[test]
     fn an_empty_identifier_is_refused() {

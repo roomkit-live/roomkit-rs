@@ -437,6 +437,37 @@ mod a_duplicate_message {
     }
 
     #[test]
+    fn the_same_key_from_another_channel_is_a_new_message() {
+        let mut sim = room();
+        sim.send(keyed("Bonjour")).unwrap();
+        let mut from_ws = Sim::message("ws", "Hello");
+        from_ws.idempotency_key = Some("SM123".to_owned());
+        let result = sim.send(from_ws).unwrap();
+        assert_eq!(
+            result
+                .event
+                .map(|event| event.source.channel_id.to_string()),
+            Some("ws".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_response_never_carries_an_idempotency_key() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.agent(
+            "ai",
+            Box::new(|event, _| {
+                let mut reply = response("ai", event, "Hello back");
+                reply.idempotency_key = Some("SM123".to_owned());
+                Ok(ChannelOutput::respond(vec![reply]))
+            }),
+        );
+        sim.send(keyed("Bonjour")).unwrap();
+        assert_eq!(sim.timeline[1].idempotency_key, None);
+    }
+
+    #[test]
     fn checks_the_key_under_the_lock_and_releases_it() {
         let mut sim = room();
         sim.send(keyed("Bonjour")).unwrap();
@@ -453,6 +484,34 @@ mod a_duplicate_message {
                 "release room_1",
             ]
         );
+    }
+}
+
+/// RFC §7.5 rule 8: what a channel parsing a message may read.
+mod the_receiving_channel {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parses_with_only_the_events_it_may_see() {
+        let mut sim = room();
+        let mut whispered = notice_event("whisper", "advisor only");
+        whispered.status = roomkit_core::model::EventStatus::Delivered;
+        whispered.visibility = Visibility::channels([channel("ws")]).unwrap();
+        let mut refused = notice_event("refused", "blocked text");
+        refused.status = roomkit_core::model::EventStatus::Blocked;
+        let mut seen = notice_event("seen", "for everyone");
+        seen.status = roomkit_core::model::EventStatus::Delivered;
+        sim.seed(whispered);
+        sim.seed(refused);
+        sim.seed(seen);
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        let read: Vec<&str> = sim.parse_contexts[0]
+            .recent_events
+            .iter()
+            .map(|event| event.id.as_str())
+            .collect();
+        assert_eq!(read, ["seen"]);
     }
 }
 

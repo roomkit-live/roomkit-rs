@@ -347,7 +347,7 @@ fn targets_of(plan: &DeliveryPlan, event: &RoomEvent, context: &RoomContext) -> 
                 event,
                 transcoding::transcode(&event.content, &binding.capabilities),
             ),
-            context: Box::new(context_for(binding, context)),
+            context: Box::new(permissions::context_for(binding, context)),
             binding: binding.clone(),
             role,
         })
@@ -388,18 +388,4 @@ fn delivery_result(
         provider_result,
     };
     (result, refusal)
-}
-
-/// The context `reader` receives: the room as it is, the events it may see
-/// (RFC §7.5 rule 8).
-fn context_for(reader: &ChannelBinding, whole: &RoomContext) -> RoomContext {
-    RoomContext {
-        room: whole.room.clone(),
-        bindings: whole.bindings.clone(),
-        participants: whole.participants.clone(),
-        recent_events: permissions::history_for(reader, &whole.recent_events)
-            .into_iter()
-            .cloned()
-            .collect(),
-    }
 }

@@ -74,11 +74,14 @@ pub enum Request {
         /// The room.
         room_id: RoomId,
     },
-    /// Find the event the room committed with an idempotency key (RFC
-    /// §13.4). Answer [`Outcome::Idempotent`].
+    /// Find the event the room committed from `channel_id` with an
+    /// idempotency key (RFC §13.4, scoped to the channel by gap G-023).
+    /// Answer [`Outcome::Idempotent`].
     FindByIdempotencyKey {
         /// The room.
         room_id: RoomId,
+        /// The channel the event came from.
+        channel_id: ChannelId,
         /// The key.
         key: String,
     },

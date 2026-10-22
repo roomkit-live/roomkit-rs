@@ -233,6 +233,7 @@ impl CommitPass {
             (PassOrigin::Trigger, Some(key)) => State::CheckingKey {
                 effect: cx.io.issue(Request::FindByIdempotencyKey {
                     room_id: self.event.room_id.clone(),
+                    channel_id: self.event.source.channel_id.clone(),
                     key,
                 }),
                 context,
