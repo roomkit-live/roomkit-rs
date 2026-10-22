@@ -7,8 +7,8 @@
 //! name or at another depth.
 
 use crate::model::{
-    ChannelBinding, EventContent, EventDirection, EventSource, EventStatus, EventType,
-    InboundMessage, InjectedEvent, Metadata, RoomEvent, RoomId, Timestamp, Visibility,
+    ChannelBinding, ErrorRecord, EventContent, EventDirection, EventId, EventSource, EventStatus,
+    EventType, InboundMessage, InjectedEvent, Metadata, RoomEvent, RoomId, Timestamp, Visibility,
 };
 use crate::ops::ChannelDeclaration;
 use crate::rules::chain_depth;
@@ -20,7 +20,7 @@ pub fn default_inbound_event(
     message: &InboundMessage,
     channel: &ChannelDeclaration,
     room_id: RoomId,
-    id: crate::model::EventId,
+    id: EventId,
     now: Timestamp,
 ) -> RoomEvent {
     let mut source = EventSource::new(
@@ -72,13 +72,14 @@ pub(crate) fn stamp_trigger(
 }
 
 /// Writes the pipeline's fields on a response of `responder` to `trigger`:
-/// the responder as its outbound source, one hop deeper than the trigger
-/// (RFC §8.3), answering the trigger unless the channel named the event it
-/// answers (RFC §8.5).
+/// a fresh id (gap G-024), the responder as its outbound source, one hop
+/// deeper than the trigger (RFC §8.3), answering the trigger unless the
+/// channel named the event it answers (RFC §8.5).
 pub(crate) fn stamp_response(
     mut response: RoomEvent,
     responder: &ChannelBinding,
     trigger: &RoomEvent,
+    id: EventId,
 ) -> RoomEvent {
     if response.source.channel_id != responder.channel_id {
         tracing::warn!(
@@ -89,6 +90,7 @@ pub(crate) fn stamp_response(
             "a response named another channel as its source; the responder is its source (gap G-022)"
         );
     }
+    response.id = id;
     response.room_id = trigger.room_id.clone();
     response.source.channel_id = responder.channel_id.clone();
     response.source.channel_type = responder.channel_type;
@@ -104,10 +106,16 @@ pub(crate) fn stamp_response(
 }
 
 /// Writes the pipeline's fields on an event a hook injected while deciding
-/// on `trigger` (gap G-021): the trigger's room and depth, and a visibility
-/// naming its targets only, `none` when it is stored only.
-pub(crate) fn stamp_injected(injected: InjectedEvent, trigger: &RoomEvent) -> RoomEvent {
+/// on `trigger` (gap G-021): a fresh id (gap G-024), the trigger's room and
+/// depth, and a visibility naming its targets only, `none` when it is stored
+/// only.
+pub(crate) fn stamp_injected(
+    injected: InjectedEvent,
+    trigger: &RoomEvent,
+    id: EventId,
+) -> RoomEvent {
     let mut event = injected.event;
+    event.id = id;
     event.room_id = trigger.room_id.clone();
     event.chain_depth = trigger.chain_depth;
     event.visibility = injected
@@ -143,10 +151,10 @@ pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> Ro
 /// `trigger` (RFC §9.2): never stored, one hop deeper than the trigger, its
 /// text the error's message.
 pub(crate) fn error_event(
-    id: crate::model::EventId,
+    id: EventId,
     channel: &ChannelBinding,
     trigger: &RoomEvent,
-    error: &crate::model::ErrorRecord,
+    error: &ErrorRecord,
     now: Timestamp,
 ) -> RoomEvent {
     let source = EventSource::new(
@@ -230,6 +238,16 @@ mod tests {
         message
     }
 
+    fn fresh() -> EventId {
+        EventId::new("evt_9").unwrap()
+    }
+
+    #[test]
+    fn a_response_takes_the_id_the_pipeline_gives_it() {
+        let response = stamp_response(trigger(), &ai(), &trigger(), fresh());
+        assert_eq!(response.id, fresh());
+    }
+
     fn trigger() -> RoomEvent {
         default_inbound_event(
             &message(),
@@ -264,13 +282,13 @@ mod tests {
 
     #[test]
     fn a_response_is_one_hop_deeper_than_its_trigger() {
-        let response = stamp_response(trigger(), &ai(), &trigger());
+        let response = stamp_response(trigger(), &ai(), &trigger(), fresh());
         assert_eq!(response.chain_depth, 3);
     }
 
     #[test]
     fn a_response_answers_its_trigger() {
-        let response = stamp_response(trigger(), &ai(), &trigger());
+        let response = stamp_response(trigger(), &ai(), &trigger(), fresh());
         assert_eq!(response.responds_to, Some(trigger().id));
     }
 
@@ -278,7 +296,7 @@ mod tests {
     fn a_response_keeps_the_event_its_channel_says_it_answers() {
         let mut response = trigger();
         response.responds_to = Some(EventId::new("evt_0").unwrap());
-        let stamped = stamp_response(response, &ai(), &trigger());
+        let stamped = stamp_response(response, &ai(), &trigger(), fresh());
         assert_eq!(
             stamped.responds_to.map(|id| id.to_string()),
             Some("evt_0".to_owned())
@@ -287,7 +305,7 @@ mod tests {
 
     #[test]
     fn a_response_is_sourced_from_its_responder_whatever_it_claims() {
-        let stamped = stamp_response(trigger(), &ai(), &trigger());
+        let stamped = stamp_response(trigger(), &ai(), &trigger(), fresh());
         assert_eq!(
             (stamped.source.channel_id.as_str(), stamped.source.direction),
             ("ai", EventDirection::Outbound)
@@ -298,7 +316,9 @@ mod tests {
     fn an_injected_event_is_visible_to_its_targets_only() {
         let injected = InjectedEvent::to_channels(trigger(), vec![ChannelId::new("sms").unwrap()]);
         assert_eq!(
-            stamp_injected(injected, &trigger()).visibility.to_string(),
+            stamp_injected(injected, &trigger(), fresh())
+                .visibility
+                .to_string(),
             "sms"
         );
     }
@@ -307,7 +327,7 @@ mod tests {
     fn a_stored_only_injected_event_is_visible_to_no_channel() {
         let injected = InjectedEvent::stored_only(trigger());
         assert_eq!(
-            stamp_injected(injected, &trigger()).visibility,
+            stamp_injected(injected, &trigger(), fresh()).visibility,
             Visibility::None
         );
     }

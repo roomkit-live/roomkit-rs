@@ -58,10 +58,10 @@ mod an_allowed_message {
                 "load_bindings room_1",
                 "commit #1 ai delivered \"Hello back\"",
                 "release room_1",
-                "on_event sms <- ai_re_evt_1",
-                "on_event ws <- ai_re_evt_1",
-                "deliver sms <- ai_re_evt_1",
-                "deliver ws <- ai_re_evt_1",
+                "on_event sms <- evt_2",
+                "on_event ws <- evt_2",
+                "deliver sms <- evt_2",
+                "deliver ws <- evt_2",
             ]
         );
     }
@@ -98,6 +98,23 @@ mod an_allowed_message {
             ),
             (1, Some("evt_1"))
         );
+    }
+
+    #[test]
+    fn gives_a_response_its_own_id_whatever_the_channel_wrote() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.agent(
+            "ai",
+            Box::new(|event, _| {
+                let mut reply = response("ai", event, "Hello back");
+                reply.id = event.id.clone();
+                Ok(ChannelOutput::respond(vec![reply]))
+            }),
+        );
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        let ids: Vec<&str> = sim.timeline.iter().map(|event| event.id.as_str()).collect();
+        assert_eq!(ids, ["evt_1", "evt_2"]);
     }
 
     #[test]
@@ -220,7 +237,7 @@ mod a_blocked_message {
             .unwrap();
         assert_eq!(
             sim.traced("deliver"),
-            ["deliver sms <- inj_1", "deliver ws <- inj_2"]
+            ["deliver sms <- evt_2", "deliver ws <- evt_3"]
         );
     }
 
@@ -581,10 +598,7 @@ mod targets {
         sim.send(Sim::message("sms", "Which plan?")).unwrap();
         assert_eq!(
             sim.traced("deliver"),
-            [
-                "deliver ws_advisor <- evt_1",
-                "deliver ws_advisor <- assistant_re_evt_1"
-            ]
+            ["deliver ws_advisor <- evt_1", "deliver ws_advisor <- evt_2"]
         );
     }
 

@@ -47,7 +47,7 @@ macro_rules! identifier {
 
         impl fmt::Display for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str(&self.0)
+                formatter.pad(&self.0)
             }
         }
 
@@ -202,6 +202,11 @@ mod tests {
             EventId::from_u128(0xff).as_str(),
             "000000000000000000000000000000ff"
         );
+    }
+
+    #[test]
+    fn an_identifier_honours_the_requested_width() {
+        assert_eq!(format!("{:<5}|", RoomId::new("r1").unwrap()), "r1   |");
     }
 
     #[test]

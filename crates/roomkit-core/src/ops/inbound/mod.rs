@@ -294,14 +294,14 @@ impl Machine {
 
     fn settle(&mut self, cx: &mut Cx<'_>, finished: Finished) {
         match finished {
-            Finished::Pass(Ok(report), origin) => self.on_pass(report, &origin),
+            Finished::Pass(Ok(report), origin) => self.on_pass(cx, report, &origin),
             Finished::Record(Ok(result), note) => self.on_record(cx, result, note),
             Finished::Set(outcome, set) => self.on_set(cx, outcome, &set),
             Finished::Pass(Err(abort), _) | Finished::Record(Err(abort), _) => self.abort(abort),
         }
     }
 
-    fn on_pass(&mut self, report: PassReport, origin: &PassOrigin) {
+    fn on_pass(&mut self, cx: &mut Cx<'_>, report: PassReport, origin: &PassOrigin) {
         self.tasks.extend(report.tasks);
         self.observations.extend(report.observations);
         let trigger = match &report.result {
@@ -329,7 +329,7 @@ impl Machine {
             ))));
         }
         if let Some(trigger) = trigger {
-            self.queue_injected(report.injected_events, &trigger);
+            self.queue_injected(cx, report.injected_events, &trigger);
         }
     }
 
@@ -358,10 +358,15 @@ impl Machine {
 
     /// Queues the events a pass's hooks injected, each a pass of the
     /// cascade within its reentry budget (gap G-021).
-    fn queue_injected(&mut self, injected: Vec<InjectedEvent>, trigger: &RoomEvent) {
+    fn queue_injected(
+        &mut self,
+        cx: &mut Cx<'_>,
+        injected: Vec<InjectedEvent>,
+        trigger: &RoomEvent,
+    ) {
         for injected in injected {
             let targets = injected.target_channel_ids.clone();
-            let event = stamp::stamp_injected(injected, trigger);
+            let event = stamp::stamp_injected(injected, trigger, cx.env.new_event_id());
             if self.budget.take() {
                 self.lane.push_back(Job::Pass(
                     Box::new(CommitPass::new(
@@ -441,11 +446,11 @@ impl Machine {
 
     /// Queues one channel's responses to `trigger`: each re-enters as a pass,
     /// unless the room refuses it first (RFC §8.3).
-    fn queue_response(&mut self, cx: &Cx<'_>, response: Response, trigger: &RoomEvent) {
+    fn queue_response(&mut self, cx: &mut Cx<'_>, response: Response, trigger: &RoomEvent) {
         let Response { responder, events } = response;
         let at_limit = chain_depth::reaches_limit(trigger.chain_depth, cx.config.max_chain_depth);
         for event in events {
-            let event = stamp::stamp_response(event, &responder, trigger);
+            let event = stamp::stamp_response(event, &responder, trigger, cx.env.new_event_id());
             if at_limit && responder.category == ChannelCategory::Transport {
                 // Only a transport is asked at the limit; what it answers is
                 // stored refused (RFC §8.3).

@@ -10,6 +10,13 @@ publish.workspace = true
 
 [dependencies]
 roomkit-core.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
 
 [lints]
 workspace = true

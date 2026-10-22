@@ -26,3 +26,10 @@ publishes a release.
   §10.2: the locked commit pass, hooks, permissions, broadcast, reentry,
   chain depth, injected events, framework events), `CreateRoom`,
   `AttachChannel` and `CloseRoom`.
+- `roomkit`: the tokio runtime. `RoomKit` registers channels and hooks,
+  creates, attaches and closes rooms, and runs inbound messages; the
+  `Channel` and `ConversationStore` traits, `InMemoryStore`, framework
+  event subscription, and `roomkit::testing` (`RecordingTransport`,
+  `EchoAgent`).
+- Examples `echo_room`, `block_and_inject` and `agent_chain`, after the RFC's
+  Appendix B.1, B.2 and B.4.
