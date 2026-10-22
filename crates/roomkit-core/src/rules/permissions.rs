@@ -14,6 +14,9 @@ pub enum WriteRefusal {
     ReadOnly,
     /// The binding is muted.
     Muted,
+    /// The source has no binding in the room, such as a channel the
+    /// integrator detached (RFC §7.5 rule 7, gap G-015).
+    Unbound,
 }
 
 impl WriteRefusal {
@@ -22,6 +25,7 @@ impl WriteRefusal {
         match self {
             Self::ReadOnly => "source_read_only",
             Self::Muted => "source_muted",
+            Self::Unbound => "source_unbound",
         }
     }
 }
@@ -29,9 +33,8 @@ impl WriteRefusal {
 /// Why `source` may not have its events broadcast, `None` when it may (RFC
 /// §7.5 rule 2).
 ///
-/// An access without writing is reported before a mute, and an access of
-/// `none` is reported as read-only, the RFC naming no other reason (gap
-/// G-015).
+/// An access without writing, `none` included, is reported before a mute:
+/// it is the lasting cause (gap G-015).
 pub fn write_refusal(source: &ChannelBinding) -> Option<WriteRefusal> {
     if !source.access.writes() {
         Some(WriteRefusal::ReadOnly)
@@ -181,43 +184,39 @@ pub fn plan_delivery(
 }
 
 /// The plan of `event` delivered to named channels only, such as an event a
-/// hook injects (RFC §9.4): each named channel bound to the room that reads,
-/// other than the event's own source (RFC §7.5 rule 5), in channel id order;
-/// `None` names no channel.
+/// hook injects (RFC §9.4): each named transport channel bound to the room
+/// that reads, other than the event's own source (RFC §7.5 rule 5), in
+/// channel id order; `None` names no channel.
 ///
-/// A named intelligence channel is asked to act; the event answers nothing,
-/// so its turn's output is not read (RFC §10.6.1). One whose response would
-/// reach `max_chain_depth` is not asked (RFC §8.3).
+/// A named intelligence channel is not asked: an injected event asks no
+/// agent (gap G-021). Its visibility names the agent, which reads it in its
+/// history at its next turn.
 pub fn plan_targets(
     event: &RoomEvent,
     targets: Option<&[ChannelId]>,
     bindings: &[ChannelBinding],
-    max_chain_depth: u32,
 ) -> DeliveryPlan {
     let mut plan = DeliveryPlan::default();
     let Some(targets) = targets else {
         return plan;
     };
-    let at_limit = chain_depth::reaches_limit(event.chain_depth, max_chain_depth);
     let mut readers: Vec<&ChannelBinding> = bindings
         .iter()
         .filter(|binding| {
             targets.contains(&binding.channel_id)
+                && binding.category == ChannelCategory::Transport
                 && binding.access.reads()
                 && binding.channel_id != event.source.channel_id
         })
         .collect();
     readers.sort_by(|first, second| first.channel_id.cmp(&second.channel_id));
-    for reader in readers {
-        match reader.category {
-            ChannelCategory::Transport => plan.transports.push(TransportTarget {
-                binding: reader.clone(),
-                delivers: reader.direction.sends(),
-            }),
-            ChannelCategory::Intelligence if at_limit => plan.not_asked.push(reader.clone()),
-            ChannelCategory::Intelligence => plan.agents.push(reader.clone()),
-        }
-    }
+    plan.transports = readers
+        .into_iter()
+        .map(|reader| TransportTarget {
+            binding: reader.clone(),
+            delivers: reader.direction.sends(),
+        })
+        .collect();
     plan
 }
 
@@ -468,7 +467,7 @@ mod tests {
             targets: &[ChannelId],
             bindings: &[ChannelBinding],
         ) -> DeliveryPlan {
-            plan_targets(event, Some(targets), bindings, 5)
+            plan_targets(event, Some(targets), bindings)
         }
 
         #[test]
@@ -482,7 +481,7 @@ mod tests {
         fn reaches_nobody_when_no_channel_is_named() {
             let bindings = [transport("sms")];
             assert_eq!(
-                plan_targets(&injected(0), None, &bindings, 5),
+                plan_targets(&injected(0), None, &bindings),
                 DeliveryPlan::default()
             );
         }
@@ -505,17 +504,18 @@ mod tests {
         }
 
         #[test]
-        fn asks_a_named_intelligence_channel_below_the_limit() {
-            let plan = plan(&injected(3), &[channel("ai")], &[agent("ai")]);
-            assert_eq!(ids(&plan.agents), ["ai"]);
+        fn asks_no_named_intelligence_channel() {
+            let plan = plan(&injected(0), &[channel("ai")], &[agent("ai")]);
+            assert_eq!(plan, DeliveryPlan::default());
         }
 
         #[test]
-        fn does_not_ask_a_named_intelligence_channel_at_the_limit() {
-            let plan = plan(&injected(4), &[channel("ai")], &[agent("ai")]);
+        fn reaches_a_named_transport_beside_a_named_agent() {
+            let bindings = [agent("ai"), transport("ws")];
+            let plan = plan(&injected(0), &[channel("ai"), channel("ws")], &bindings);
             assert_eq!(
-                (ids(&plan.agents), ids(&plan.not_asked)),
-                (vec![], vec!["ai"])
+                (transport_ids(&plan), ids(&plan.agents)),
+                (vec!["ws"], vec![])
             );
         }
 

@@ -34,7 +34,7 @@ use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Request, Step
 use super::{Abort, ChannelDeclaration, Cx, Environment, KitConfig};
 use crate::model::{
     ChannelCategory, ErrorRecord, EventContent, EventStatus, EventType, InboundMessage,
-    InjectedEvent, Observation, RoomEvent, RoomId, Task,
+    InjectedEvent, Observation, RoomContext, RoomEvent, RoomId, Task,
 };
 use crate::rules::chain_depth::{self, ReentryBudget};
 use crate::rules::permissions;
@@ -217,18 +217,20 @@ impl Machine {
             Ok(None) => return self.fail(InboundError::RoomNotFound(self.room_id.clone())),
             Err(error) => return self.fail(InboundError::Store(error)),
         };
-        let Some(receiver) = context
+        // The receiving channel sees only what it may (RFC §7.5 rule 8). One
+        // with no binding in the room sees no event; its pass stores the
+        // message refused (gap G-015).
+        let receiver = context
             .bindings
             .iter()
-            .find(|binding| binding.channel_id == message.channel_id)
-        else {
-            return self.fail(InboundError::ChannelNotBound {
-                channel_id: message.channel_id.clone(),
-                room_id: self.room_id.clone(),
-            });
-        };
-        // The receiving channel sees only what it may (RFC §7.5 rule 8).
-        let context = Box::new(permissions::context_for(receiver, &context));
+            .find(|binding| binding.channel_id == message.channel_id);
+        let context = Box::new(match receiver {
+            Some(receiver) => permissions::context_for(receiver, &context),
+            None => RoomContext {
+                recent_events: Vec::new(),
+                ..*context
+            },
+        });
         let effect = cx.io.issue(Request::HandleInbound {
             channel_id: message.channel_id.clone(),
             message: (*message).clone(),
@@ -342,23 +344,24 @@ impl Machine {
                 self.result.event = Some((**event).clone());
             }
             PassResult::Blocked { event, reason } => {
+                // The result carries the stored record (gap G-026).
                 self.committed = true;
                 self.result.blocked = true;
                 self.result.reason = reason.clone().or_else(|| event.blocked_by.clone());
+                self.result.event = Some((**event).clone());
             }
             PassResult::Refused { .. } => {
                 self.result.blocked = true;
                 self.result.reason = Some("room_closed".to_owned());
             }
             PassResult::Duplicate { event } => {
-                // The replay answers what the first delivery did (RFC §13.4,
-                // gap G-026).
+                // The replay answers what the first delivery did, the stored
+                // record included (RFC §13.4, gap G-026).
                 if event.status == EventStatus::Blocked {
                     self.result.blocked = true;
                     self.result.reason.clone_from(&event.blocked_by);
-                } else {
-                    self.result.event = Some((**event).clone());
                 }
+                self.result.event = Some((**event).clone());
                 self.lane.clear();
             }
         }

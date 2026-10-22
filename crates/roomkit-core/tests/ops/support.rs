@@ -56,6 +56,8 @@ pub(crate) struct Sim {
     pub(crate) hooks_mute: Option<ChannelId>,
     /// The contexts the receiving channels parsed messages with.
     pub(crate) parse_contexts: Vec<RoomContext>,
+    /// The contexts `on_event()` was called with, by channel, in order.
+    on_event_contexts: Vec<(ChannelId, RoomContext)>,
     /// Whether releasing the room lock fails. The lock is let go all the
     /// same, as a lease that expires would be.
     pub(crate) release_fails: bool,
@@ -90,6 +92,7 @@ impl Sim {
             room_exists: true,
             hooks_mute: None,
             parse_contexts: Vec::new(),
+            on_event_contexts: Vec::new(),
             release_fails: false,
         }
     }
@@ -243,6 +246,22 @@ impl Sim {
         self.room.event_count += 1;
         self.room.latest_index = Some(event.index);
         self.timeline.push(event);
+    }
+
+    /// The texts of the history `channel` was last handed by `on_event()`.
+    pub(crate) fn history_seen_by(&self, channel: &str) -> Vec<String> {
+        self.on_event_contexts
+            .iter()
+            .rev()
+            .find(|(id, _)| id.as_str() == channel)
+            .map(|(_, context)| {
+                context
+                    .recent_events
+                    .iter()
+                    .map(|event| text_of(&event.content))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The trace lines matching `prefix`.
@@ -466,6 +485,8 @@ impl Sim {
             } => {
                 self.trace
                     .push(format!("on_event {} <- {}", binding.channel_id, event.id));
+                self.on_event_contexts
+                    .push((binding.channel_id.clone(), (*context).clone()));
                 let channel = self.channels.get_mut(&binding.channel_id).unwrap();
                 (channel.on_event)(&event, &context)
             }

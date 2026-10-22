@@ -14,7 +14,8 @@ use super::ModelError;
 
 /// The keywords of the visibility grammar (RFC §7.3). No channel id may be
 /// one, or a visibility naming it would read as the keyword (gap G-002).
-pub(crate) const VISIBILITY_KEYWORDS: [&str; 4] = ["all", "none", "transport", "intelligence"];
+pub(crate) const VISIBILITY_KEYWORDS: [&str; 5] =
+    ["all", "none", "internal", "transport", "intelligence"];
 
 macro_rules! identifier {
     ($(#[$doc:meta])* $name:ident, $kind:literal $(, $extra_rules:path)?) => {

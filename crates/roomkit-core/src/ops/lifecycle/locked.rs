@@ -148,9 +148,11 @@ impl LockedChange {
 
     fn on_locked(&mut self, outcome: Outcome) -> State {
         match outcome.into_locked() {
+            // The change's hooks receive the room's recent events, as every
+            // hook does (gap G-027).
             Ok(()) => State::Loading(self.io.issue(Request::LoadContext {
                 room_id: self.room_id.clone(),
-                recent_events: 0,
+                recent_events: self.config.context_window,
             })),
             Err(error) => State::Finished(Err(LifecycleError::Lock(error))),
         }

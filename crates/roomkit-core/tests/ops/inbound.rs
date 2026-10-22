@@ -256,8 +256,25 @@ mod a_blocked_message {
             .send(Sim::message("sms", "Mon NAS est 123-456-789"))
             .unwrap();
         assert_eq!(
-            (result.blocked, result.reason.as_deref(), result.event),
-            (true, Some("SIN detected"), None)
+            (result.blocked, result.reason.as_deref()),
+            (true, Some("SIN detected"))
+        );
+    }
+
+    #[test]
+    fn returns_the_stored_record() {
+        let mut sim = scanning_room();
+        let result = sim
+            .send(Sim::message("sms", "Mon NAS est 123-456-789"))
+            .unwrap();
+        let record = result.event.unwrap();
+        assert_eq!(
+            (
+                record.id.as_str(),
+                record.index,
+                record.blocked_by.as_deref()
+            ),
+            ("evt_1", 0, Some("sensitivity_scanner"))
         );
     }
 
@@ -315,8 +332,8 @@ mod a_blocked_message {
     }
 }
 
-/// RFC §9.4: an injected event reaches its targets under the rules any
-/// delivery follows (§7.5 rule 5, §8.3).
+/// RFC §9.4, gap G-021: an injected event reaches its transport targets
+/// under the rules any delivery follows (§7.5 rule 5), and asks no agent.
 mod an_injected_event {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -347,40 +364,45 @@ mod an_injected_event {
     }
 
     #[test]
-    fn asks_a_named_agent_below_the_limit_and_discards_its_answer() {
+    fn does_not_ask_a_named_agent() {
         let mut sim = injecting_room(notice_event("inj_1", "Heads up"), "ai");
-        sim.send(trigger_at_depth(3)).unwrap();
-        assert_eq!(
-            (sim.traced("on_event ai").len(), sim.timeline_lines()),
-            (
-                1,
-                vec![
-                    "#0 sms blocked:gate \"trigger\"".to_owned(),
-                    "#1 system delivered \"Heads up\"".to_owned(),
-                ]
-            )
-        );
-    }
-
-    #[test]
-    fn does_not_ask_a_named_agent_at_the_limit() {
-        let mut sim = injecting_room(notice_event("inj_1", "Heads up"), "ai");
-        sim.send(trigger_at_depth(4)).unwrap();
+        sim.send(trigger_at_depth(0)).unwrap();
         assert_eq!(sim.traced("on_event ai"), Vec::<&str>::new());
     }
 
     #[test]
-    fn stores_a_record_for_the_agent_not_asked_at_the_limit() {
+    fn is_stored_for_the_named_agent_to_read() {
         let mut sim = injecting_room(notice_event("inj_1", "Heads up"), "ai");
-        sim.send(trigger_at_depth(4)).unwrap();
+        sim.send(trigger_at_depth(0)).unwrap();
         assert_eq!(
             sim.timeline_lines(),
             [
                 "#0 sms blocked:gate \"trigger\"",
                 "#1 system delivered \"Heads up\"",
-                "#2 ai blocked:event_chain_depth_limit \"\"",
             ]
         );
+    }
+
+    #[test]
+    fn is_in_the_named_agent_s_history_at_its_next_turn() {
+        let mut sim = injecting_room(notice_event("inj_1", "Heads up"), "ai");
+        sim.send(trigger_at_depth(0)).unwrap();
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert!(sim.history_seen_by("ai").contains(&"Heads up".to_owned()));
+    }
+
+    #[test]
+    fn stores_no_depth_record_for_a_named_agent_at_the_limit() {
+        let mut sim = injecting_room(notice_event("inj_1", "Heads up"), "ai");
+        sim.send(trigger_at_depth(4)).unwrap();
+        assert_eq!(sim.timeline_lines().len(), 2);
+    }
+
+    #[test]
+    fn reaches_a_named_transport() {
+        let mut sim = injecting_room(notice_event("inj_1", "Heads up"), "ws");
+        sim.send(trigger_at_depth(0)).unwrap();
+        assert_eq!(sim.traced("on_event ws").len(), 1);
     }
 
     #[test]
@@ -420,6 +442,31 @@ mod a_source_that_cannot_write {
                 "release room_1",
             ]
         );
+    }
+
+    #[test]
+    fn a_source_with_no_binding_commits_its_message_blocked_as_unbound() {
+        let mut sim = room();
+        sim.bindings
+            .retain(|binding| binding.channel_id.as_str() != "sms");
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (result.reason.as_deref(), sim.timeline_lines()),
+            (
+                Some("source_unbound"),
+                vec!["#0 sms blocked:source_unbound \"Bonjour\"".to_owned()]
+            )
+        );
+    }
+
+    #[test]
+    fn a_channel_with_no_binding_parses_its_message_seeing_no_event() {
+        let mut sim = room();
+        sim.send(Sim::message("sms", "Earlier")).unwrap();
+        sim.bindings
+            .retain(|binding| binding.channel_id.as_str() != "sms");
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(sim.parse_contexts.last().unwrap().recent_events, []);
     }
 
     #[test]
@@ -619,8 +666,12 @@ mod a_duplicate_message {
         sim.send(keyed("Bonjour")).unwrap();
         let result = sim.send(keyed("Bonjour")).unwrap();
         assert_eq!(
-            (result.blocked, result.reason.as_deref(), result.event),
-            (true, Some("policy"), None)
+            (
+                result.blocked,
+                result.reason.as_deref(),
+                result.event.map(|event| event.id.to_string())
+            ),
+            (true, Some("policy"), Some("evt_1".to_owned()))
         );
     }
 
@@ -845,7 +896,7 @@ mod a_chain_of_agents {
             .iter()
             .map(|observation| observation.category.as_deref())
             .collect();
-        assert_eq!(categories, [Some("chain_depth_exceeded")]);
+        assert_eq!(categories, [Some("event_chain_depth_exceeded")]);
     }
 
     #[test]
@@ -978,20 +1029,6 @@ mod a_refused_operation {
         assert_eq!(
             (result, sim.trace.len()),
             (Err(InboundError::UnknownChannel(channel("telegram"))), 0)
-        );
-    }
-
-    #[test]
-    fn a_channel_not_bound_to_the_room_fails() {
-        let mut sim = room();
-        sim.bindings
-            .retain(|binding| binding.channel_id.as_str() != "sms");
-        assert_eq!(
-            sim.send(Sim::message("sms", "Bonjour")),
-            Err(InboundError::ChannelNotBound {
-                channel_id: channel("sms"),
-                room_id: room_id(),
-            })
         );
     }
 

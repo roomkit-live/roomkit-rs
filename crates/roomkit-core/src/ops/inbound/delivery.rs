@@ -27,8 +27,9 @@ pub(super) enum SetKind {
     Root,
     /// A response that re-entered.
     Response,
-    /// An event a hook injected: its targets' outputs are discarded, since an
-    /// injected event answers nothing (RFC §10.6.1).
+    /// An event a hook injected. It asks no agent (gap G-021), and what its
+    /// transport targets return is not read: an injected event answers
+    /// nothing (RFC §10.6.1).
     Injected,
 }
 

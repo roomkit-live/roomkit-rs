@@ -19,7 +19,8 @@ use crate::model::{
 /// - System and tool-call contents have no row in the RFC's table and are
 ///   delivered unchanged (gap G-019).
 /// - Text is then cut to the channel's `max_length`, counted in Unicode code
-///   points (gap G-008).
+///   points; a cut text ends with `...` within the limit, unless the limit
+///   is below 4 code points (gap G-008).
 pub fn transcode(content: &EventContent, capabilities: &ChannelCapabilities) -> EventContent {
     let transcoded = transcode_content(content, capabilities);
     match capabilities.max_length {
@@ -154,15 +155,23 @@ fn truncate(content: EventContent, max_length: u64) -> EventContent {
     }
 }
 
+/// What ends a cut text: three ASCII dots, since U+2026 would turn an SMS
+/// into UCS-2 and shrink its segments (gap G-008).
+const CUT_MARKER: &str = "...";
+
 fn truncate_text(text: TextContent, max_length: u64) -> TextContent {
     let max_length = usize::try_from(max_length).unwrap_or(usize::MAX);
     if text.body.chars().count() <= max_length {
         return text;
     }
-    TextContent {
-        body: text.body.chars().take(max_length).collect(),
-        ..text
-    }
+    let marker_length = CUT_MARKER.chars().count();
+    let body = if max_length > marker_length {
+        let kept: String = text.body.chars().take(max_length - marker_length).collect();
+        kept + CUT_MARKER
+    } else {
+        text.body.chars().take(max_length).collect()
+    };
+    TextContent { body, ..text }
 }
 
 fn link_or_type<'content>(url: &'content str, mime_type: &'content str) -> &'content str {
@@ -486,14 +495,27 @@ mod tests {
         assert_eq!(transcode(&content, &text_only()), content);
     }
 
-    #[test]
-    fn text_is_cut_to_the_max_length_in_code_points() {
+    fn cut_to(max_length: u64, body: &str) -> String {
         let capabilities = ChannelCapabilities {
-            max_length: Some(4),
+            max_length: Some(max_length),
             ..text_only()
         };
-        let cut = transcode(&EventContent::text("élève!"), &capabilities);
-        assert_eq!(body_of(&cut), "élèv");
+        body_of(&transcode(&EventContent::text(body), &capabilities)).to_owned()
+    }
+
+    #[test]
+    fn a_cut_text_ends_with_the_marker_within_the_limit() {
+        assert_eq!(cut_to(6, "élèves présents"), "élè...");
+    }
+
+    #[test]
+    fn a_cut_counts_code_points() {
+        assert_eq!(cut_to(4, "élève!").chars().count(), 4);
+    }
+
+    #[test]
+    fn a_limit_below_four_cuts_without_the_marker() {
+        assert_eq!(cut_to(3, "élève!"), "élè");
     }
 
     #[test]
@@ -512,7 +534,7 @@ mod tests {
             max_length: Some(7),
             ..text_only()
         };
-        assert_eq!(body_of(&transcode(&delete(), &capabilities)), "[Messag");
+        assert_eq!(body_of(&transcode(&delete(), &capabilities)), "[Mes...");
     }
 
     #[test]
@@ -525,7 +547,7 @@ mod tests {
         };
         assert_eq!(
             transcode(&content, &capabilities),
-            composite(vec![EventContent::text("Receipt"), photo])
+            composite(vec![EventContent::text("Rece..."), photo])
         );
     }
 }

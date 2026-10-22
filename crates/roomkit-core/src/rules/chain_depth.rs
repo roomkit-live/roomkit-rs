@@ -82,7 +82,19 @@ pub fn not_asked_observation(
         content,
         now,
     );
-    observation.category = Some("chain_depth_exceeded".to_owned());
+    // The category and the fields are the ones the Python implementation
+    // stores, which consumers already read (gap G-016).
+    observation.category = Some("event_chain_depth_exceeded".to_owned());
+    observation
+        .metadata
+        .insert("chain_depth".to_owned(), response_depth(trigger).into());
+    observation
+        .metadata
+        .insert("max_chain_depth".to_owned(), max_chain_depth.into());
+    observation.metadata.insert(
+        "source_channel".to_owned(),
+        agent.channel_id.as_str().into(),
+    );
     observation
 }
 
@@ -208,18 +220,33 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_not_asked_observation_is_categorized_as_chain_depth_exceeded() {
-        let observation = not_asked_observation(
+    fn observation_at_limit() -> Observation {
+        not_asked_observation(
             ObservationId::new("obs_1").unwrap(),
             &trigger(4),
             &writer(),
             DEFAULT_MAX_CHAIN_DEPTH,
             Timestamp::UNIX_EPOCH,
-        );
+        )
+    }
+
+    #[test]
+    fn the_not_asked_observation_is_categorized_as_event_chain_depth_exceeded() {
         assert_eq!(
-            observation.category.as_deref(),
-            Some("chain_depth_exceeded")
+            observation_at_limit().category.as_deref(),
+            Some("event_chain_depth_exceeded")
+        );
+    }
+
+    #[test]
+    fn the_not_asked_observation_carries_the_depth_the_limit_and_the_channel() {
+        assert_eq!(
+            serde_json::Value::Object(observation_at_limit().metadata),
+            serde_json::json!({
+                "chain_depth": 5,
+                "max_chain_depth": 5,
+                "source_channel": "writer",
+            })
         );
     }
 

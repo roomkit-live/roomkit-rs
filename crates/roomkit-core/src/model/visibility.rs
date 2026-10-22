@@ -10,10 +10,11 @@ use super::{ChannelCategory, ChannelId, ModelError};
 
 /// Which channels may see an event (RFC §7.3).
 ///
-/// Written as the RFC writes it: `all`, `none`, `transport`, `intelligence`,
-/// or a comma-separated list of channel ids. Parsing follows the grammar
-/// decided in gap G-002: whitespace around an id is ignored, an empty
-/// visibility or an empty item is refused, and a duplicated id counts once.
+/// Written as the RFC writes it: `all`, `none`, `internal`, `transport`,
+/// `intelligence`, or a comma-separated list of channel ids. Parsing follows
+/// the grammar decided in gap G-002: whitespace around an id is ignored, an
+/// empty visibility or an empty item is refused, and a duplicated id counts
+/// once.
 ///
 /// ```
 /// use roomkit_core::model::Visibility;
@@ -29,6 +30,9 @@ pub enum Visibility {
     All,
     /// No channel: the event is stored in the timeline only.
     None,
+    /// No channel, as `none`, on a record the framework wrote (RFC §6.4, gap
+    /// G-002).
+    Internal,
     /// Transport channels only.
     Transport,
     /// Intelligence channels only.
@@ -52,7 +56,7 @@ impl Visibility {
     pub fn admits(&self, channel: &ChannelId, category: ChannelCategory) -> bool {
         match self {
             Self::All => true,
-            Self::None => false,
+            Self::None | Self::Internal => false,
             Self::Transport => category == ChannelCategory::Transport,
             Self::Intelligence => category == ChannelCategory::Intelligence,
             Self::Channels(channels) => channels.contains(channel),
@@ -61,8 +65,9 @@ impl Visibility {
 
     /// The visibility admitting exactly the channels both admit (gap G-009).
     ///
-    /// `all` is neutral and `none` absorbs; `transport` and `intelligence`
-    /// exclude each other; two lists intersect. A category intersected with a
+    /// `all` is neutral; `internal` absorbs, keeping the mark of a framework
+    /// record, then `none` absorbs; `transport` and `intelligence` exclude
+    /// each other; two lists intersect. A category intersected with a
     /// list keeps the listed channels of that category, which
     /// `category_of` tells; a channel it does not know matches nothing.
     #[must_use]
@@ -73,6 +78,7 @@ impl Visibility {
     ) -> Self {
         match (self, other) {
             (Self::All, kept) | (kept, Self::All) => kept.clone(),
+            (Self::Internal, _) | (_, Self::Internal) => Self::Internal,
             (Self::None, _) | (_, Self::None) => Self::None,
             (Self::Transport, Self::Transport) => Self::Transport,
             (Self::Intelligence, Self::Intelligence) => Self::Intelligence,
@@ -104,6 +110,7 @@ impl fmt::Display for Visibility {
         match self {
             Self::All => formatter.write_str("all"),
             Self::None => formatter.write_str("none"),
+            Self::Internal => formatter.write_str("internal"),
             Self::Transport => formatter.write_str("transport"),
             Self::Intelligence => formatter.write_str("intelligence"),
             Self::Channels(channels) => fmt::Display::fmt(channels, formatter),
@@ -118,6 +125,7 @@ impl FromStr for Visibility {
         match value.trim() {
             "all" => Ok(Self::All),
             "none" => Ok(Self::None),
+            "internal" => Ok(Self::Internal),
             "transport" => Ok(Self::Transport),
             "intelligence" => Ok(Self::Intelligence),
             _ => parse_channel_list(value).map(Self::Channels),
@@ -276,6 +284,19 @@ mod tests {
     }
 
     #[test]
+    fn internal_admits_no_channel() {
+        assert!(!Visibility::Internal.admits(&channel("ai"), ChannelCategory::Intelligence));
+    }
+
+    #[test]
+    fn internal_absorbs_an_intersection_and_keeps_its_mark() {
+        assert_eq!(
+            [intersect("internal", "all"), intersect("none", "internal")],
+            ["internal", "internal"]
+        );
+    }
+
+    #[test]
     fn all_is_neutral_in_an_intersection() {
         assert_eq!(intersect("all", "sms,ai"), "ai,sms");
     }
@@ -312,7 +333,7 @@ mod tests {
 
     #[test]
     fn each_keyword_parses_to_its_variant() {
-        let parsed: Vec<_> = ["all", "none", "transport", "intelligence"]
+        let parsed: Vec<_> = ["all", "none", "internal", "transport", "intelligence"]
             .into_iter()
             .map(|keyword| parse(keyword).unwrap())
             .collect();
@@ -321,6 +342,7 @@ mod tests {
             [
                 Visibility::All,
                 Visibility::None,
+                Visibility::Internal,
                 Visibility::Transport,
                 Visibility::Intelligence
             ]

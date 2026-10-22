@@ -6,7 +6,7 @@ use roomkit_core::model::{
 use roomkit_core::ops::{AttachChannel, CloseRoom, CreateRoom, FrameworkEvent, LifecycleError};
 use roomkit_core::rules::hook_registry::HookTrigger;
 
-use crate::support::{Sim, channel, room_id};
+use crate::support::{Sim, channel, notice_event, room_id};
 
 fn sms_binding() -> ChannelBinding {
     ChannelBinding::new(
@@ -167,6 +167,17 @@ mod close_room {
             (context.room.status, context.bindings.len()),
             (RoomStatus::Closed, 1)
         );
+    }
+
+    #[test]
+    fn fires_on_room_closed_with_the_recent_events() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.seed(notice_event("evt_1", "Goodbye"));
+        sim.observer("summarizer", HookTrigger::OnRoomClosed);
+        sim.run(CloseRoom::new(sim.shared_config(), room_id()))
+            .unwrap();
+        assert_eq!(sim.async_contexts()[0].recent_events.len(), 1);
     }
 
     #[test]

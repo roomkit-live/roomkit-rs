@@ -378,20 +378,18 @@ impl CommitPass {
         context: &RoomContext,
     ) -> Result<DeliveryPlan, WriteRefusal> {
         // An injected event is the hook's, not a channel's: it takes no source
-        // check and reaches its targets only (gap G-021).
+        // check and reaches its transport targets only (gap G-021).
         if let PassOrigin::Injected { targets } = &self.origin {
             return Ok(permissions::plan_targets(
                 event,
                 targets.as_deref(),
                 bindings,
-                cx.config.max_chain_depth,
             ));
         }
         let source = bindings
             .iter()
             .find(|binding| binding.channel_id == event.source.channel_id)
-            // A source no longer bound cannot write (gap G-015).
-            .ok_or(WriteRefusal::ReadOnly)?;
+            .ok_or(WriteRefusal::Unbound)?;
         if let Some(refusal) = permissions::write_refusal(source) {
             return Err(refusal);
         }

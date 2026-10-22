@@ -19,9 +19,9 @@ pub(super) enum Reported<'change> {
 }
 
 /// Emits the change's framework event and fires its trigger's hooks, which
-/// receive `context`: the room as the change left it, with its bindings and
-/// participants and no events, since a lifecycle change reads none (gap
-/// G-027).
+/// receive `context`: the room as the change left it, with its bindings,
+/// participants and recent events, as any hook's context has them (gap
+/// G-027). A room just created has the bindings its creation made.
 pub(super) fn report(
     io: &mut Io,
     config: &KitConfig,

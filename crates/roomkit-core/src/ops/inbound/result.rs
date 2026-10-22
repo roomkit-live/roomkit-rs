@@ -9,13 +9,16 @@ use crate::model::{ChannelId, DeliveryResult, ErrorRecord, Metadata, RoomEvent, 
 /// What became of an inbound message (RFC §10.1 `InboundResult`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InboundResult {
-    /// The committed event; `None` when the message was blocked.
+    /// The committed event: delivered, or the record stored `BLOCKED` when a
+    /// hook or the source's permissions refused it (gap G-026). `None` when
+    /// nothing was committed, as when the room refused the message.
     pub event: Option<RoomEvent>,
     /// Whether the message was blocked: refused by the room, a hook or its
     /// source's permissions.
     pub blocked: bool,
     /// Why it was blocked: `room_closed`, a hook's reason, `source_muted`,
-    /// `source_read_only`.
+    /// `source_read_only`, `source_unbound`. A replay gives the record's
+    /// `blocked_by`, the hook's reason not being stored.
     pub reason: Option<String>,
     /// The first error met once the message was decided: a turn's, a
     /// later commit's, or the room lock's release (gap G-025). What was
@@ -39,14 +42,6 @@ pub enum InboundError {
     /// The named room does not exist.
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
-    /// The message's channel is not bound to the room.
-    #[error("channel {channel_id} is not bound to room {room_id}")]
-    ChannelNotBound {
-        /// The channel.
-        channel_id: ChannelId,
-        /// The room.
-        room_id: RoomId,
-    },
     /// `standalone` belongs to instructions only (RFC §10.1.1 rule 7).
     #[error("only an instruction may stand alone")]
     StandaloneOutsideInstruction,
