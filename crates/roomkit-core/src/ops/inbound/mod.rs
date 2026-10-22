@@ -26,15 +26,15 @@ use std::sync::Arc;
 use self::delivery::{DeliverySet, Response, SetKind, SetOutcome};
 use self::job::{Finished, Job, RecordNote, Run};
 use self::pass::{CommitPass, PassOrigin, PassReport, PassResult};
-use self::record::{RecordPass, RecordResult};
+use self::record::{RecordPass, RecordReport, RecordResult};
 pub use self::result::{InboundError, InboundResult};
 pub use self::stamp::default_inbound_event;
 use super::io::Io;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Request, Step};
 use super::{Abort, ChannelDeclaration, Cx, Environment, KitConfig};
 use crate::model::{
-    ChannelCategory, ErrorRecord, EventContent, EventType, InboundMessage, InjectedEvent,
-    Observation, RoomEvent, RoomId, Task,
+    ChannelCategory, ErrorRecord, EventContent, EventStatus, EventType, InboundMessage,
+    InjectedEvent, Observation, RoomEvent, RoomId, Task,
 };
 use crate::rules::chain_depth::{self, ReentryBudget};
 use crate::rules::permissions;
@@ -295,7 +295,7 @@ impl Machine {
     fn settle(&mut self, cx: &mut Cx<'_>, finished: Finished) {
         match finished {
             Finished::Pass(Ok(report), origin) => self.on_pass(cx, report, &origin),
-            Finished::Record(Ok(result), note) => self.on_record(cx, result, note),
+            Finished::Record(Ok(report), note) => self.on_record(cx, report, note),
             Finished::Set(outcome, set) => self.on_set(cx, outcome, &set),
             Finished::Pass(Err(abort), _) | Finished::Record(Err(abort), _) => self.abort(abort),
         }
@@ -304,6 +304,7 @@ impl Machine {
     fn on_pass(&mut self, cx: &mut Cx<'_>, report: PassReport, origin: &PassOrigin) {
         self.tasks.extend(report.tasks);
         self.observations.extend(report.observations);
+        self.note_error(report.release_error);
         let trigger = match &report.result {
             PassResult::Delivered { event, .. } | PassResult::Blocked { event, .. } => {
                 Some(event.clone())
@@ -350,7 +351,14 @@ impl Machine {
                 self.result.reason = Some("room_closed".to_owned());
             }
             PassResult::Duplicate { event } => {
-                self.result.event = Some((**event).clone());
+                // The replay answers what the first delivery did (RFC §13.4,
+                // gap G-026).
+                if event.status == EventStatus::Blocked {
+                    self.result.blocked = true;
+                    self.result.reason.clone_from(&event.blocked_by);
+                } else {
+                    self.result.event = Some((**event).clone());
+                }
                 self.lane.clear();
             }
         }
@@ -383,9 +391,10 @@ impl Machine {
         }
     }
 
-    fn on_record(&mut self, cx: &mut Cx<'_>, result: RecordResult, note: RecordNote) {
+    fn on_record(&mut self, cx: &mut Cx<'_>, report: RecordReport, note: RecordNote) {
+        self.note_error(report.release_error);
         let (RecordResult::Committed(record), RecordNote::NotAsked { agent, trigger }) =
-            (result, note)
+            (report.result, note)
         else {
             return;
         };
@@ -439,9 +448,7 @@ impl Machine {
         self.result
             .response_metadata
             .clone_from(&outcome.response_metadata);
-        if self.result.error.is_none() {
-            self.result.error.clone_from(&outcome.error);
-        }
+        self.note_error(outcome.error.clone());
     }
 
     /// Queues one channel's responses to `trigger`: each re-enters as a pass,
@@ -489,12 +496,16 @@ impl Machine {
     }
 
     fn on_persisted(&mut self, outcome: Outcome) {
-        if let Err(error) = outcome.into_persisted()
-            && self.result.error.is_none()
-        {
-            self.result.error = Some(error);
-        }
+        self.note_error(outcome.into_persisted().err());
         self.finish();
+    }
+
+    /// Keeps the first error met once the trigger was decided: the result
+    /// reports one (RFC §13.6).
+    fn note_error(&mut self, error: Option<ErrorRecord>) {
+        if self.result.error.is_none() {
+            self.result.error = error;
+        }
     }
 
     /// A pass or a record failed. Before the trigger's commit nothing was
@@ -510,12 +521,10 @@ impl Machine {
             };
             return self.fail(error);
         }
-        if self.result.error.is_none() {
-            self.result.error = Some(match abort {
-                Abort::RoomNotFound => ErrorRecord::new("RoomNotFound", "the room disappeared"),
-                Abort::Store(error) | Abort::Lock(error) => error,
-            });
-        }
+        self.note_error(Some(match abort {
+            Abort::RoomNotFound => ErrorRecord::new("RoomNotFound", "the room disappeared"),
+            Abort::Store(error) | Abort::Lock(error) => error,
+        }));
     }
 
     fn finish(&mut self) {

@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use super::LifecycleError;
 use super::report::{self, Reported};
-use crate::model::{ChannelBinding, ErrorRecord, Room, RoomId, RoomStatus};
+use crate::model::{ChannelBinding, ErrorRecord, Room, RoomContext, RoomId, RoomStatus};
 use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Request, Step};
-use crate::ops::{Environment, KitConfig};
+use crate::ops::{self, Environment, KitConfig};
 
 /// A change made under a room's lock.
 #[derive(Clone, Debug)]
@@ -18,11 +18,15 @@ pub(super) enum Change {
     Close,
 }
 
-/// What a locked change did.
+/// What a locked change did. A change made carries the room as it left it,
+/// which its hooks receive.
 #[derive(Clone, Debug)]
 pub(super) enum Changed {
-    Attached(Box<ChannelBinding>),
-    Closed(Box<Room>),
+    Attached {
+        binding: Box<ChannelBinding>,
+        context: Box<RoomContext>,
+    },
+    Closed(Box<RoomContext>),
     /// The room was already closed: nothing was written.
     Unchanged(Box<Room>),
 }
@@ -154,31 +158,34 @@ impl LockedChange {
 
     /// Decides the write from the room as the lock found it.
     fn on_loaded(&mut self, environment: &mut dyn Environment, outcome: Outcome) -> State {
-        let room = match outcome.into_context() {
-            Ok(Some(room_context)) => room_context.room,
+        let mut context = match outcome.into_context() {
+            Ok(Some(context)) => context,
             Ok(None) => {
                 return self.release(Err(LifecycleError::RoomNotFound(self.room_id.clone())));
             }
             Err(error) => return self.release(Err(LifecycleError::Store(error))),
         };
         let (request, changed) = match &self.change {
-            Change::Attach(binding) => (
-                Request::StoreBinding {
+            Change::Attach(binding) => {
+                attached(&mut context, binding);
+                let request = Request::StoreBinding {
                     binding: (**binding).clone(),
-                },
-                Changed::Attached(binding.clone()),
-            ),
-            Change::Close if !room.status.accepts_events() => {
-                return self.release(Ok(Changed::Unchanged(Box::new(room))));
+                };
+                let changed = Changed::Attached {
+                    binding: binding.clone(),
+                    context,
+                };
+                (request, changed)
+            }
+            Change::Close if !context.room.status.accepts_events() => {
+                return self.release(Ok(Changed::Unchanged(Box::new(context.room))));
             }
             Change::Close => {
-                let closed = closed(room, environment);
-                (
-                    Request::UpdateRoom {
-                        room: closed.clone(),
-                    },
-                    Changed::Closed(Box::new(closed)),
-                )
+                close(&mut context.room, environment);
+                let request = Request::UpdateRoom {
+                    room: context.room.clone(),
+                };
+                (request, Changed::Closed(context))
             }
         };
         State::Writing {
@@ -187,23 +194,25 @@ impl LockedChange {
         }
     }
 
-    /// Reports the change once the lock is released.
+    /// Reports the change once the lock is released. A failed release
+    /// changes nothing the change did; a lifecycle operation reports no error
+    /// beside its result, so the failure is only logged (gap G-025).
     fn on_released(
         &mut self,
         environment: &mut dyn Environment,
         result: Result<Changed, LifecycleError>,
         outcome: Outcome,
     ) -> State {
-        if let Err(error) = outcome.into_released() {
-            return State::Finished(Err(LifecycleError::Lock(error)));
-        }
+        let (result, _logged) = ops::after_release(&self.room_id, result, outcome.into_released());
         let reported = match &result {
-            Ok(Changed::Attached(binding)) => Some(Reported::ChannelAttached(binding)),
-            Ok(Changed::Closed(room)) => Some(Reported::RoomClosed(room)),
+            Ok(Changed::Attached { binding, context }) => {
+                Some((Reported::ChannelAttached(binding), context))
+            }
+            Ok(Changed::Closed(context)) => Some((Reported::RoomClosed, context)),
             Ok(Changed::Unchanged(_)) | Err(_) => None,
         };
-        if let Some(reported) = reported {
-            report::report(&mut self.io, &self.config, environment, reported);
+        if let Some((reported, context)) = reported {
+            report::report(&mut self.io, &self.config, environment, reported, context);
         }
         State::Finished(result)
     }
@@ -216,11 +225,19 @@ impl LockedChange {
     }
 }
 
-/// `room`, closed now.
-fn closed(mut room: Room, environment: &mut dyn Environment) -> Room {
+/// Puts `binding` in `context` in place of the room's binding of the same
+/// channel, as storing it does.
+fn attached(context: &mut RoomContext, binding: &ChannelBinding) {
+    context
+        .bindings
+        .retain(|bound| bound.channel_id != binding.channel_id);
+    context.bindings.push(binding.clone());
+}
+
+/// Closes `room` now.
+fn close(room: &mut Room, environment: &mut dyn Environment) {
     let now = environment.now();
     room.status = RoomStatus::Closed;
     room.closed_at = Some(now);
     room.updated_at = now;
-    room
 }

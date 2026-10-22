@@ -2,7 +2,7 @@
 
 use super::delivery::{DeliverySet, SetOutcome};
 use super::pass::{CommitPass, PassOrigin, PassReport};
-use super::record::{RecordPass, RecordResult};
+use super::record::{RecordPass, RecordReport};
 use crate::model::{ChannelBinding, RoomEvent};
 use crate::ops::protocol::{EffectId, Outcome};
 use crate::ops::{Abort, Cx, Progress};
@@ -40,7 +40,7 @@ pub(super) enum Run {
 /// What a finished job produced.
 pub(super) enum Finished {
     Pass(Result<PassReport, Abort>, PassOrigin),
-    Record(Result<RecordResult, Abort>, RecordNote),
+    Record(Result<RecordReport, Abort>, RecordNote),
     Set(SetOutcome, Box<DeliverySet>),
 }
 

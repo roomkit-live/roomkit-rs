@@ -17,7 +17,7 @@ use self::report::Reported;
 use super::io::Io;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Request, Step};
 use super::{Environment, KitConfig};
-use crate::model::{ChannelBinding, ErrorRecord, Room, RoomId};
+use crate::model::{ChannelBinding, ErrorRecord, Room, RoomContext, RoomId};
 
 /// Why a lifecycle operation failed. Nothing was changed.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
@@ -29,7 +29,8 @@ pub enum LifecycleError {
     /// The store refused or failed the change.
     #[error("the store failed: {0:?}")]
     Store(ErrorRecord),
-    /// The room's lock could not be taken or released.
+    /// The room's lock could not be taken. A failed release is no error:
+    /// what was decided under the lock stands (gap G-025).
     #[error("the room lock failed: {0:?}")]
     Lock(ErrorRecord),
 }
@@ -75,8 +76,9 @@ impl Operation for CreateRoom {
             self.creating = None;
             result = Some(match outcome.into_stored() {
                 Ok(()) => {
-                    let created = Reported::RoomCreated(&self.room);
-                    report::report(&mut self.io, &self.config, environment, created);
+                    let context = RoomContext::new(self.room.clone());
+                    let created = Reported::RoomCreated;
+                    report::report(&mut self.io, &self.config, environment, created, &context);
                     Ok(self.room.clone())
                 }
                 Err(error) => Err(LifecycleError::Store(error)),
@@ -113,7 +115,7 @@ impl Operation for AttachChannel {
 
     fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
         self.change.poll(environment, |changed| match changed {
-            Changed::Attached(binding) => Some(*binding),
+            Changed::Attached { binding, .. } => Some(*binding),
             Changed::Closed(_) | Changed::Unchanged(_) => None,
         })
     }
@@ -145,8 +147,9 @@ impl Operation for CloseRoom {
 
     fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
         self.change.poll(environment, |changed| match changed {
-            Changed::Closed(room) | Changed::Unchanged(room) => Some(*room),
-            Changed::Attached(_) => None,
+            Changed::Closed(context) => Some(context.room),
+            Changed::Unchanged(room) => Some(*room),
+            Changed::Attached { .. } => None,
         })
     }
 

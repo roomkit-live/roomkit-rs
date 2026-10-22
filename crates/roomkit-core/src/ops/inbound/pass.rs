@@ -11,11 +11,11 @@ use std::mem;
 
 use super::stamp;
 use crate::model::{
-    ChannelBinding, ChannelId, EventStatus, InjectedEvent, Observation, RoomContext, RoomEvent,
-    RoomStatus, Task,
+    ChannelBinding, ChannelId, ErrorRecord, EventStatus, InjectedEvent, Observation, RoomContext,
+    RoomEvent, RoomStatus, Task,
 };
 use crate::ops::protocol::{EffectId, Outcome, Request, RoomCounters};
-use crate::ops::{Abort, Cx, FrameworkEvent, Notice, Progress, RefusedOperation};
+use crate::ops::{self, Abort, Cx, FrameworkEvent, Notice, Progress, RefusedOperation};
 use crate::rules::hook_chain::{ChainDecision, ChainVerdict, HookChain};
 use crate::rules::hook_registry::{HookId, HookTrigger};
 use crate::rules::permissions::{self, DeliveryPlan, WriteRefusal};
@@ -72,6 +72,9 @@ pub(super) struct PassReport {
     pub(super) injected_events: Vec<InjectedEvent>,
     pub(super) tasks: Vec<Task>,
     pub(super) observations: Vec<Observation>,
+    /// The failure of the lock's release, which changes nothing the pass
+    /// decided (gap G-025).
+    pub(super) release_error: Option<ErrorRecord>,
 }
 
 /// One event's pass through the locked section.
@@ -83,6 +86,7 @@ pub(super) struct CommitPass {
     injected_events: Vec<InjectedEvent>,
     tasks: Vec<Task>,
     observations: Vec<Observation>,
+    release_error: Option<ErrorRecord>,
 }
 
 #[derive(Debug)]
@@ -144,6 +148,7 @@ impl CommitPass {
             injected_events: Vec::new(),
             tasks: Vec::new(),
             observations: Vec::new(),
+            release_error: None,
         }
     }
 
@@ -181,10 +186,12 @@ impl CommitPass {
                 payload, context, ..
             } => self.on_bindings(cx, *payload, context, outcome),
             State::Committing { result, .. } => self.on_committed(cx, result, outcome),
-            State::Releasing { result, .. } => match outcome.into_released() {
-                Ok(()) => State::Finished(result),
-                Err(error) => State::Finished(Err(Abort::Lock(error))),
-            },
+            State::Releasing { result, .. } => {
+                let (result, release_error) =
+                    ops::after_release(&self.event.room_id, result, outcome.into_released());
+                self.release_error = release_error;
+                State::Finished(result)
+            }
             state @ (State::Start | State::Finished(_) | State::Reported) => state,
         };
         self.report()
@@ -202,6 +209,7 @@ impl CommitPass {
             injected_events: mem::take(&mut self.injected_events),
             tasks: mem::take(&mut self.tasks),
             observations: mem::take(&mut self.observations),
+            release_error: self.release_error.take(),
         }))
     }
 
@@ -372,7 +380,12 @@ impl CommitPass {
         // An injected event is the hook's, not a channel's: it takes no source
         // check and reaches its targets only (gap G-021).
         if let PassOrigin::Injected { targets } = &self.origin {
-            return Ok(permissions::plan_targets(targets.as_deref(), bindings));
+            return Ok(permissions::plan_targets(
+                event,
+                targets.as_deref(),
+                bindings,
+                cx.config.max_chain_depth,
+            ));
         }
         let source = bindings
             .iter()

@@ -48,7 +48,7 @@ pub use protocol::{
     Effect, EffectId, Next, Notice, Operation, Outcome, ProtocolError, Request, RoomCounters, Step,
 };
 
-use crate::model::ErrorRecord;
+use crate::model::{ErrorRecord, RoomId};
 
 /// What a sub-machine reads and writes while it advances.
 pub(crate) struct Cx<'op> {
@@ -72,4 +72,30 @@ pub(crate) enum Abort {
     RoomNotFound,
     Store(ErrorRecord),
     Lock(ErrorRecord),
+}
+
+/// Settles a locked section once its lock's release answered (gap G-025).
+///
+/// A failed release changes nothing the section decided or wrote, and an
+/// earlier failure stays the one reported, so `result` comes back as it
+/// went. The release's failure is logged, and handed back when the section
+/// had succeeded, for an operation that reports what failed after its
+/// decision.
+pub(crate) fn after_release<T, E>(
+    room_id: &RoomId,
+    result: Result<T, E>,
+    released: Result<(), ErrorRecord>,
+) -> (Result<T, E>, Option<ErrorRecord>) {
+    let Err(error) = released else {
+        return (result, None);
+    };
+    tracing::warn!(
+        target: "roomkit::core::locks",
+        room_id = %room_id,
+        error_type = %error.error_type,
+        message = %error.message,
+        "releasing the room lock failed; what was decided under it stands"
+    );
+    let reported = result.is_ok().then_some(error);
+    (result, reported)
 }

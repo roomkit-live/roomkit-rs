@@ -4,7 +4,7 @@
 
 use crate::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType,
-    Metadata, Room, RoomContext, RoomEvent, RoomId, SystemContent,
+    Metadata, RoomContext, RoomEvent, RoomId, SystemContent,
 };
 use crate::ops::io::Io;
 use crate::ops::{Environment, FrameworkEvent, KitConfig, Notice};
@@ -13,49 +13,51 @@ use crate::rules::hook_registry::HookTrigger;
 /// A lifecycle change to report.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Reported<'change> {
-    RoomCreated(&'change Room),
-    RoomClosed(&'change Room),
+    RoomCreated,
+    RoomClosed,
     ChannelAttached(&'change ChannelBinding),
 }
 
-/// Emits the change's framework event and fires its trigger's hooks.
+/// Emits the change's framework event and fires its trigger's hooks, which
+/// receive `context`: the room as the change left it, with its bindings and
+/// participants and no events, since a lifecycle change reads none (gap
+/// G-027).
 pub(super) fn report(
     io: &mut Io,
     config: &KitConfig,
     environment: &mut dyn Environment,
     reported: Reported<'_>,
+    context: &RoomContext,
 ) {
-    let (event, trigger, room_id, channel_id) = match reported {
-        Reported::RoomCreated(room) => (
+    let room_id = &context.room.id;
+    let (event, trigger, channel_id) = match reported {
+        Reported::RoomCreated => (
             FrameworkEvent::RoomCreated {
-                room_id: room.id.clone(),
+                room_id: room_id.clone(),
             },
             HookTrigger::OnRoomCreated,
-            &room.id,
             None,
         ),
-        Reported::RoomClosed(room) => (
+        Reported::RoomClosed => (
             FrameworkEvent::RoomClosed {
-                room_id: room.id.clone(),
+                room_id: room_id.clone(),
             },
             HookTrigger::OnRoomClosed,
-            &room.id,
             None,
         ),
         Reported::ChannelAttached(binding) => (
             FrameworkEvent::RoomChannelAttached {
-                room_id: binding.room_id.clone(),
+                room_id: room_id.clone(),
                 channel_id: binding.channel_id.clone(),
                 access: binding.access,
                 visibility: binding.visibility.clone(),
             },
             HookTrigger::OnChannelAttached,
-            &binding.room_id,
             Some(&binding.channel_id),
         ),
     };
     io.notify(Notice::FrameworkEvent(event));
-    fire_hooks(io, config, environment, trigger, room_id, channel_id);
+    fire_hooks(io, config, environment, trigger, context, channel_id);
 }
 
 /// Fires `trigger`'s hooks, if it has any, with the change as their payload.
@@ -64,22 +66,21 @@ fn fire_hooks(
     config: &KitConfig,
     environment: &mut dyn Environment,
     trigger: HookTrigger,
-    room_id: &RoomId,
+    context: &RoomContext,
     channel_id: Option<&ChannelId>,
 ) {
-    let Some(payload) = payload(environment, trigger, room_id, channel_id) else {
+    let Some(payload) = payload(environment, trigger, &context.room.id, channel_id) else {
         return;
     };
     let hooks = config.hooks.observers(trigger, &payload.source);
     if hooks.is_empty() {
         return;
     }
-    let context = RoomContext::new(Room::new(room_id.clone(), payload.created_at));
     io.notify(Notice::AsyncHooks {
         trigger,
         hooks,
         event: Box::new(payload),
-        context: Box::new(context),
+        context: Box::new(context.clone()),
     });
 }
 

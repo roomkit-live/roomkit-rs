@@ -81,6 +81,41 @@ mod attach_channel {
     }
 
     #[test]
+    fn fires_on_channel_attached_with_the_room_as_the_attach_left_it() {
+        let mut sim = Sim::new();
+        sim.transport("ws");
+        sim.observer("greeter", HookTrigger::OnChannelAttached);
+        sim.run(AttachChannel::new(sim.shared_config(), sms_binding()))
+            .unwrap();
+        let bound: Vec<String> = sim.async_contexts()[0]
+            .bindings
+            .iter()
+            .map(|binding| binding.channel_id.to_string())
+            .collect();
+        assert_eq!(bound, ["ws", "sms"]);
+    }
+
+    #[test]
+    fn whose_lock_release_fails_still_attaches_and_reports() {
+        let mut sim = Sim::new();
+        sim.release_fails = true;
+        let attached = sim.run(AttachChannel::new(sim.shared_config(), sms_binding()));
+        assert_eq!(
+            (attached, sim.framework_event_names()),
+            (Ok(sms_binding()), vec!["room_channel_attached".to_owned()])
+        );
+    }
+
+    #[test]
+    fn to_a_missing_room_reports_the_room_when_the_release_fails_too() {
+        let mut sim = Sim::new();
+        sim.room_exists = false;
+        sim.release_fails = true;
+        let attached = sim.run(AttachChannel::new(sim.shared_config(), sms_binding()));
+        assert_eq!(attached, Err(LifecycleError::RoomNotFound(room_id())));
+    }
+
+    #[test]
     fn to_a_missing_room_fails_and_releases_the_lock() {
         let mut sim = Sim::new();
         sim.room_exists = false;
@@ -117,6 +152,20 @@ mod close_room {
                 vec!["room_closed".to_owned()],
                 vec![HookTrigger::OnRoomClosed]
             )
+        );
+    }
+
+    #[test]
+    fn fires_on_room_closed_with_the_closed_room() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.observer("archive", HookTrigger::OnRoomClosed);
+        sim.run(CloseRoom::new(sim.shared_config(), room_id()))
+            .unwrap();
+        let context = sim.async_contexts()[0];
+        assert_eq!(
+            (context.room.status, context.bindings.len()),
+            (RoomStatus::Closed, 1)
         );
     }
 

@@ -56,6 +56,9 @@ pub(crate) struct Sim {
     pub(crate) hooks_mute: Option<ChannelId>,
     /// The contexts the receiving channels parsed messages with.
     pub(crate) parse_contexts: Vec<RoomContext>,
+    /// Whether releasing the room lock fails. The lock is let go all the
+    /// same, as a lease that expires would be.
+    pub(crate) release_fails: bool,
 }
 
 pub(crate) fn channel(id: &str) -> ChannelId {
@@ -87,6 +90,7 @@ impl Sim {
             room_exists: true,
             hooks_mute: None,
             parse_contexts: Vec::new(),
+            release_fails: false,
         }
     }
 
@@ -287,6 +291,17 @@ impl Sim {
             .collect()
     }
 
+    /// The contexts the ASYNC hooks were fired with, in order.
+    pub(crate) fn async_contexts(&self) -> Vec<&RoomContext> {
+        self.notices
+            .iter()
+            .filter_map(|notice| match notice {
+                Notice::AsyncHooks { context, .. } => Some(&**context),
+                Notice::FrameworkEvent(_) => None,
+            })
+            .collect()
+    }
+
     /// The timeline as `index:source:status[:blocked_by]:text` lines.
     pub(crate) fn timeline_lines(&self) -> Vec<String> {
         self.timeline.iter().map(describe).collect()
@@ -337,6 +352,9 @@ impl Sim {
         );
         self.lock_held = false;
         self.trace.push(format!("release {}", room_id()));
+        if self.release_fails {
+            return Outcome::Failed(ErrorRecord::new("LockLost", "the lock's lease was lost"));
+        }
         Outcome::Released
     }
 

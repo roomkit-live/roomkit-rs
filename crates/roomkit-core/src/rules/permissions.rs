@@ -180,19 +180,32 @@ pub fn plan_delivery(
     plan
 }
 
-/// The plan of an event delivered to named channels only, such as an event
-/// a hook injects (RFC §9.4): each named channel bound to the room that reads,
-/// in channel id order; `None` names no channel. An intelligence channel is
-/// told; the event answers nothing, so its turn's output is not read (RFC
-/// §10.6.1).
-pub fn plan_targets(targets: Option<&[ChannelId]>, bindings: &[ChannelBinding]) -> DeliveryPlan {
+/// The plan of `event` delivered to named channels only, such as an event a
+/// hook injects (RFC §9.4): each named channel bound to the room that reads,
+/// other than the event's own source (RFC §7.5 rule 5), in channel id order;
+/// `None` names no channel.
+///
+/// A named intelligence channel is asked to act; the event answers nothing,
+/// so its turn's output is not read (RFC §10.6.1). One whose response would
+/// reach `max_chain_depth` is not asked (RFC §8.3).
+pub fn plan_targets(
+    event: &RoomEvent,
+    targets: Option<&[ChannelId]>,
+    bindings: &[ChannelBinding],
+    max_chain_depth: u32,
+) -> DeliveryPlan {
     let mut plan = DeliveryPlan::default();
     let Some(targets) = targets else {
         return plan;
     };
+    let at_limit = chain_depth::reaches_limit(event.chain_depth, max_chain_depth);
     let mut readers: Vec<&ChannelBinding> = bindings
         .iter()
-        .filter(|binding| targets.contains(&binding.channel_id) && binding.access.reads())
+        .filter(|binding| {
+            targets.contains(&binding.channel_id)
+                && binding.access.reads()
+                && binding.channel_id != event.source.channel_id
+        })
         .collect();
     readers.sort_by(|first, second| first.channel_id.cmp(&second.channel_id));
     for reader in readers {
@@ -201,6 +214,7 @@ pub fn plan_targets(targets: Option<&[ChannelId]>, bindings: &[ChannelBinding]) 
                 binding: reader.clone(),
                 delivers: reader.direction.sends(),
             }),
+            ChannelCategory::Intelligence if at_limit => plan.not_asked.push(reader.clone()),
             ChannelCategory::Intelligence => plan.agents.push(reader.clone()),
         }
     }
@@ -441,17 +455,36 @@ mod tests {
         use super::*;
         use pretty_assertions::assert_eq;
 
+        /// An event from the unbound `system` source, at `depth`.
+        fn injected(depth: u32) -> RoomEvent {
+            RoomEvent {
+                chain_depth: depth,
+                ..event_from(&transport("system"))
+            }
+        }
+
+        fn plan(
+            event: &RoomEvent,
+            targets: &[ChannelId],
+            bindings: &[ChannelBinding],
+        ) -> DeliveryPlan {
+            plan_targets(event, Some(targets), bindings, 5)
+        }
+
         #[test]
         fn reaches_the_named_channels_only() {
             let bindings = [transport("sms"), transport("ws"), agent("ai")];
-            let plan = plan_targets(Some(&[channel("ws")]), &bindings);
+            let plan = plan(&injected(0), &[channel("ws")], &bindings);
             assert_eq!(transport_ids(&plan), ["ws"]);
         }
 
         #[test]
         fn reaches_nobody_when_no_channel_is_named() {
             let bindings = [transport("sms")];
-            assert_eq!(plan_targets(None, &bindings), DeliveryPlan::default());
+            assert_eq!(
+                plan_targets(&injected(0), None, &bindings, 5),
+                DeliveryPlan::default()
+            );
         }
 
         #[test]
@@ -460,14 +493,36 @@ mod tests {
                 access: Access::WriteOnly,
                 ..transport("ws")
             };
-            let plan = plan_targets(Some(&[channel("ws")]), &[write_only]);
+            let plan = plan(&injected(0), &[channel("ws")], &[write_only]);
             assert_eq!(transport_ids(&plan), Vec::<&str>::new());
         }
 
         #[test]
-        fn tells_a_named_intelligence_channel() {
-            let plan = plan_targets(Some(&[channel("ai")]), &[agent("ai")]);
+        fn skips_the_event_s_own_source() {
+            let sms = transport("sms");
+            let plan = plan(&event_from(&sms), &[channel("sms")], &[sms]);
+            assert_eq!(transport_ids(&plan), Vec::<&str>::new());
+        }
+
+        #[test]
+        fn asks_a_named_intelligence_channel_below_the_limit() {
+            let plan = plan(&injected(3), &[channel("ai")], &[agent("ai")]);
             assert_eq!(ids(&plan.agents), ["ai"]);
+        }
+
+        #[test]
+        fn does_not_ask_a_named_intelligence_channel_at_the_limit() {
+            let plan = plan(&injected(4), &[channel("ai")], &[agent("ai")]);
+            assert_eq!(
+                (ids(&plan.agents), ids(&plan.not_asked)),
+                (vec![], vec!["ai"])
+            );
+        }
+
+        #[test]
+        fn reaches_a_named_transport_at_the_limit() {
+            let plan = plan(&injected(4), &[channel("ws")], &[transport("ws")]);
+            assert_eq!(transport_ids(&plan), ["ws"]);
         }
     }
 

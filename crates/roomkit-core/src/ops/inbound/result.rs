@@ -17,8 +17,9 @@ pub struct InboundResult {
     /// Why it was blocked: `room_closed`, a hook's reason, `source_muted`,
     /// `source_read_only`.
     pub reason: Option<String>,
-    /// The first error a turn met, or one met after the commit; the event
-    /// stays delivered (RFC §13.6).
+    /// The first error met once the message was decided: a turn's, a
+    /// later commit's, or the room lock's release (gap G-025). What was
+    /// decided stands (RFC §13.6).
     pub error: Option<ErrorRecord>,
     /// The merged response metadata of the turns the message asked for.
     pub response_metadata: Metadata,
@@ -63,7 +64,8 @@ pub enum InboundError {
     /// The store failed before the message was committed.
     #[error("the store failed: {0:?}")]
     Store(ErrorRecord),
-    /// The room's lock could not be taken or released.
+    /// The room's lock could not be taken. A failed release is no error:
+    /// what was decided under the lock stands (gap G-025).
     #[error("the room lock failed: {0:?}")]
     Lock(ErrorRecord),
 }

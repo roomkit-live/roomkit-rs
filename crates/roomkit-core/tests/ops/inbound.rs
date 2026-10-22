@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use roomkit_core::model::{
     ChannelOutput, DeliveryStatus, ErrorRecord, EventId, EventType, HookResult, InjectedEvent,
-    Observation, ObservationId, RoomStatus, Task, TaskId, Timestamp, Visibility,
+    Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId, Timestamp, Visibility,
 };
 use roomkit_core::ops::{
     FrameworkEvent, Inbound, InboundError, KitConfig, Next, Operation, Outcome, ProtocolError,
@@ -315,6 +315,88 @@ mod a_blocked_message {
     }
 }
 
+/// RFC §9.4: an injected event reaches its targets under the rules any
+/// delivery follows (§7.5 rule 5, §8.3).
+mod an_injected_event {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// A room whose hook blocks the message "trigger" and injects `injected`
+    /// for `target`.
+    fn injecting_room(injected: RoomEvent, target: &str) -> Sim {
+        let mut sim = room();
+        let target = channel(target);
+        sim.before_broadcast(
+            "gate",
+            Box::new(move |event| {
+                if roomkit_core::rules::transcoding::text_of(&event.content) != "trigger" {
+                    return HookOutcome::Returned(HookResult::allow());
+                }
+                HookOutcome::Returned(HookResult::block("gated").inject(
+                    InjectedEvent::to_channels(injected.clone(), vec![target.clone()]),
+                ))
+            }),
+        );
+        sim
+    }
+
+    fn trigger_at_depth(depth: u32) -> roomkit_core::model::InboundMessage {
+        let mut message = Sim::message("sms", "trigger");
+        message.chain_depth = depth;
+        message
+    }
+
+    #[test]
+    fn asks_a_named_agent_below_the_limit_and_discards_its_answer() {
+        let mut sim = injecting_room(notice_event("inj_1", "Heads up"), "ai");
+        sim.send(trigger_at_depth(3)).unwrap();
+        assert_eq!(
+            (sim.traced("on_event ai").len(), sim.timeline_lines()),
+            (
+                1,
+                vec![
+                    "#0 sms blocked:gate \"trigger\"".to_owned(),
+                    "#1 system delivered \"Heads up\"".to_owned(),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn does_not_ask_a_named_agent_at_the_limit() {
+        let mut sim = injecting_room(notice_event("inj_1", "Heads up"), "ai");
+        sim.send(trigger_at_depth(4)).unwrap();
+        assert_eq!(sim.traced("on_event ai"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn stores_a_record_for_the_agent_not_asked_at_the_limit() {
+        let mut sim = injecting_room(notice_event("inj_1", "Heads up"), "ai");
+        sim.send(trigger_at_depth(4)).unwrap();
+        assert_eq!(
+            sim.timeline_lines(),
+            [
+                "#0 sms blocked:gate \"trigger\"",
+                "#1 system delivered \"Heads up\"",
+                "#2 ai blocked:event_chain_depth_limit \"\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn never_reaches_its_own_source() {
+        let mut from_sms = notice_event("inj_1", "Echo");
+        from_sms.source = roomkit_core::model::EventSource::new(
+            channel("sms"),
+            roomkit_core::model::ChannelType::Sms,
+            roomkit_core::model::EventDirection::Outbound,
+        );
+        let mut sim = injecting_room(from_sms, "sms");
+        sim.send(trigger_at_depth(0)).unwrap();
+        assert_eq!(sim.traced("on_event sms"), Vec::<&str>::new());
+    }
+}
+
 /// RFC §7.5 rule 2: a source that cannot write commits its event blocked.
 mod a_source_that_cannot_write {
     use super::*;
@@ -371,6 +453,49 @@ mod a_source_that_cannot_write {
         assert_eq!(
             sim.timeline_lines()[1],
             "#1 ai blocked:source_muted \"Hello back\""
+        );
+    }
+}
+
+/// Gap G-025: a lock release that fails changes nothing the locked section
+/// decided.
+mod a_failed_lock_release {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn keeps_the_committed_event_and_reports_the_failure() {
+        let mut sim = room();
+        sim.release_fails = true;
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                result.event.map(|event| event.id.to_string()),
+                result.error.map(|error| error.error_type)
+            ),
+            (Some("evt_1".to_owned()), Some("LockLost".to_owned()))
+        );
+    }
+
+    #[test]
+    fn changes_nothing_the_cascade_does() {
+        let mut failing = room();
+        failing.release_fails = true;
+        failing.send(Sim::message("sms", "Bonjour")).unwrap();
+        let mut releasing = room();
+        releasing.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(failing.trace, releasing.trace);
+    }
+
+    #[test]
+    fn keeps_a_blocked_message_blocked() {
+        let mut sim = room();
+        sim.release_fails = true;
+        sim.bindings[0].muted = true;
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (result.blocked, result.reason.as_deref()),
+            (true, Some("source_muted"))
         );
     }
 }
@@ -482,6 +607,21 @@ mod a_duplicate_message {
         );
         sim.send(keyed("Bonjour")).unwrap();
         assert_eq!(sim.timeline[1].idempotency_key, None);
+    }
+
+    #[test]
+    fn a_replay_of_a_blocked_message_is_reported_blocked() {
+        let mut sim = room();
+        sim.before_broadcast(
+            "policy",
+            Box::new(|_| HookOutcome::Returned(HookResult::block("not allowed"))),
+        );
+        sim.send(keyed("Bonjour")).unwrap();
+        let result = sim.send(keyed("Bonjour")).unwrap();
+        assert_eq!(
+            (result.blocked, result.reason.as_deref(), result.event),
+            (true, Some("policy"), None)
+        );
     }
 
     #[test]

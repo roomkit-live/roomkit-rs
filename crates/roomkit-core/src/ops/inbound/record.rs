@@ -8,9 +8,9 @@
 
 use std::mem;
 
-use crate::model::{EventStatus, RoomEvent};
+use crate::model::{ErrorRecord, EventStatus, RoomEvent};
 use crate::ops::protocol::{EffectId, Outcome, Request, RoomCounters};
-use crate::ops::{Abort, Cx, Progress};
+use crate::ops::{self, Abort, Cx, Progress};
 
 /// What became of a record.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,11 +21,21 @@ pub(super) enum RecordResult {
     Refused,
 }
 
+/// Everything a record's commit produced.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct RecordReport {
+    pub(super) result: RecordResult,
+    /// The failure of the lock's release, which changes nothing the commit
+    /// decided (gap G-025).
+    pub(super) release_error: Option<ErrorRecord>,
+}
+
 /// The commit of one blocked record.
 #[derive(Debug)]
 pub(super) struct RecordPass {
     record: RoomEvent,
     state: State,
+    release_error: Option<ErrorRecord>,
 }
 
 #[derive(Debug)]
@@ -61,6 +71,7 @@ impl RecordPass {
         Self {
             record,
             state: State::Start,
+            release_error: None,
         }
     }
 
@@ -78,7 +89,7 @@ impl RecordPass {
         cx: &mut Cx<'_>,
         effect: EffectId,
         outcome: Outcome,
-    ) -> Progress<Result<RecordResult, Abort>> {
+    ) -> Progress<Result<RecordReport, Abort>> {
         if self.state.awaits() != Some(effect) {
             debug_assert!(false, "record pass received {effect:?} in {:?}", self.state);
             return Progress::Waiting;
@@ -99,10 +110,12 @@ impl RecordPass {
                 }
                 Err(error) => self.release(cx, Err(Abort::Store(error))),
             },
-            State::Releasing { result, .. } => match outcome.into_released() {
-                Ok(()) => State::Finished(result),
-                Err(error) => State::Finished(Err(Abort::Lock(error))),
-            },
+            State::Releasing { result, .. } => {
+                let (result, release_error) =
+                    ops::after_release(&self.record.room_id, result, outcome.into_released());
+                self.release_error = release_error;
+                State::Finished(result)
+            }
             state @ (State::Start | State::Finished(_) | State::Reported) => state,
         };
         if !matches!(self.state, State::Finished(_)) {
@@ -111,7 +124,10 @@ impl RecordPass {
         let State::Finished(result) = mem::replace(&mut self.state, State::Reported) else {
             return Progress::Waiting;
         };
-        Progress::Done(result)
+        Progress::Done(result.map(|result| RecordReport {
+            result,
+            release_error: self.release_error.take(),
+        }))
     }
 
     fn on_room(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
