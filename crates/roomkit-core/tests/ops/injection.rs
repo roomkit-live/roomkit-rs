@@ -1619,8 +1619,10 @@ mod a_call_no_operation_adopts {
         sim
     }
 
-    /// A call into another room holds that room's lane for itself, while
-    /// the section whose hook made it waits for it.
+    /// A call into another room is an operation of its own, and the
+    /// section whose hook made it, holding `room_1`'s lock, waits for its
+    /// end, its delivery included: `room_1`'s commit waits for
+    /// `room_2`'s delivery (decision 5 of milestone R6).
     #[test]
     fn into_another_room_runs_within_its_caller_s_section() {
         let mut sim = relayed();
