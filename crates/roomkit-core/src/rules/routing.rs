@@ -8,17 +8,17 @@
 //! default strategy reads the rooms the channel reaches, each a
 //! [`Candidate`], and returns:
 //!
-//! 1. the newest ACTIVE or PAUSED room whose binding of the channel names
-//!    the sender, else the newest where a participant the sender is was
-//!    reached through the channel ([`conversation`]): a conversation its
-//!    timer paused is the sender's still, and their message resumes it (gap
-//!    G-045);
-//! 2. else the one room bound to the channel, ACTIVE or PAUSED with its
-//!    binding declared `group` (gap G-045), when it admits the sender
-//!    ([`admits`]): its binding is declared `group`, or it names no one
-//!    else, delivers to no one else, and the room has neither a member nor
-//!    a message of anyone else on the channel;
-//! 3. else none: the framework creates a room.
+//! - step 1: the newest ACTIVE or PAUSED room whose binding of the channel
+//!   names the sender, else the newest where a participant the sender is
+//!   was reached through the channel ([`conversation`]): a conversation its
+//!   timer paused is the sender's still, and their message resumes it (gap
+//!   G-045);
+//! - step 3: else the one room bound to the channel, ACTIVE or PAUSED with
+//!   its binding declared `group` (gap G-045), when it admits the sender
+//!   ([`admits`]): its binding is declared `group`, or it names no one
+//!   else, delivers to no one else, and the room has neither a member nor
+//!   a message of anyone else on the channel;
+//! - step 4: else none: the framework creates a room.
 //!
 //! The strategy never guesses: two rooms bound to the channel give none at
 //! step 3 (RFC §10.4 "A router MUST NOT guess"). Its answer depends on the
