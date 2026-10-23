@@ -51,6 +51,20 @@ standard library API.
 - Operations are tested by their trace: scripted outcomes in, expected effects
   and result out.
 
+## Examples
+
+- An example is one file, `examples/<name>.rs`, declared in
+  `examples/Cargo.toml`. It takes the name of the Python example that
+  covers the same, when one does.
+- It shows the roomkit calls first: what is not roomkit, the kit's clock,
+  stand-in agents and transports, waiting and printing, lives in
+  `examples/shared/`.
+- It checks what it shows with `shared::Checks` and returns its exit code,
+  so `make examples` fails when it no longer holds. It needs no network and
+  no key.
+- Its header comment says what it shows, the RFC sections, and how to run
+  it.
+
 ## Dependencies
 
 Ask before adding a production dependency. `roomkit-core` may depend only on

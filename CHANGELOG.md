@@ -249,6 +249,13 @@ publishes a release.
   moved from one identity to another by an unlink, then a link, since
   `link_address` refuses an address another identity of the organization
   uses (RFC §5.6, §14.1, gap G-060).
+- Examples, beside the RFC's Appendix B flows, each checking what it
+  shows: `room_lifecycle`, `channel_mute_unmute` and `room_membership` for
+  rooms and channels; `hook_moderation`, `hook_inject_welcome` and
+  `hook_off_lock_check` for hooks; `instruction_event`,
+  `response_visibility` and `send_event` for the pipeline;
+  `shared_sms_number`, `paused_conversation` and `identity_addresses` for
+  routing and identities.
 
 ### Changed
 

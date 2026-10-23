@@ -52,16 +52,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The examples run the RFC's Appendix B flows and check their own result:
+## Examples
+
+[`examples/`](examples/) holds one runnable file per example. Each checks
+what it shows and exits non-zero when a check fails. Run one from the
+repository root, or all of them with `make examples`:
 
 ```sh
-cargo run --example echo_room             # B.1: an agent answers on SMS
-cargo run --example new_conversation      # B.1: two senders on one number, a room each
-cargo run --example block_and_inject      # B.2: a hook blocks and injects
-cargo run --example agent_chain           # B.4: the chain-depth limit
-cargo run --example advisor_joins         # B.5: mute, whisper to an advisor, unmute
-cargo run --example edit_delete_messages  # B.6, B.7: an edit and a delete, native or as text
+cargo run --example room_lifecycle
 ```
+
+What they share, a kit on a clock that moves only when told, a scripted
+agent, an SMS number and the checks, is the `shared` library in
+[`examples/shared/`](examples/shared/), so that each example reads as the
+roomkit calls it shows.
+
+The RFC's Appendix B flows:
+
+- `echo_room`: B.1, an agent answers a customer on SMS.
+- `new_conversation`: B.1, two senders on one number, a room each.
+- `block_and_inject`: B.2, a hook blocks a message and injects notices.
+- `agent_chain`: B.4, two agents answer each other up to the chain-depth limit.
+- `advisor_joins`: B.5, mute an agent, make it whisper to an advisor, unmute it.
+- `edit_delete_messages`: B.6 and B.7, an edit and a delete, native or as text.
+
+Rooms and channels:
+
+- `room_lifecycle`: pause, resume, close, reopen and archive, and the timers `check_timers` applies.
+- `channel_mute_unmute`: a muted agent still reads, and its answers are stored blocked.
+- `room_membership`: participants and their roles, a member who leaves, an agent banned.
+
+Hooks:
+
+- `hook_moderation`: `BEFORE_BROADCAST` hooks in priority order block and redact.
+- `hook_inject_welcome`: a hook injects a welcome for each newcomer.
+- `hook_off_lock_check`: a slow check off the room lock, bounded by `process_timeout`.
+
+The pipeline:
+
+- `instruction_event`: an instruction directs one agent and is never stored.
+- `response_visibility`: who sees what, by the event's visibility and its binding's.
+- `send_event`: direct injection, from the host and from an agent's turn.
+
+Routing and identities:
+
+- `shared_sms_number`: one number, several correspondents, and a group's room.
+- `paused_conversation`: a sender returns to the conversation its timer paused.
+- `identity_addresses`: addresses linked to identities route to their person's room.
 
 ## Documentation
 
