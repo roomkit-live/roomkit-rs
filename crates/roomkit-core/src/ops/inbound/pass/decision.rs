@@ -15,7 +15,7 @@
 use super::super::commit::{self, Committing};
 use super::super::stamp;
 use super::{CommitPass, PassOrigin, PassResult, State, Verdict};
-use crate::model::{ChannelBinding, RoomContext, RoomEvent};
+use crate::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, Visibility};
 use crate::ops::protocol::{Outcome, Request};
 use crate::ops::{Abort, Cx};
 use crate::rules::edits::EditRefusal;
@@ -216,17 +216,35 @@ impl CommitPass {
 
     /// The visibility a record the pass stores blocked keeps: what step 12
     /// would have given it, its own intersected with its source binding's,
-    /// when its source is bound; its own otherwise, and for an event a hook
-    /// injected, which is no channel's (gap G-036).
-    fn stored_visibility(
+    /// when its source is bound; its own otherwise. An event a hook
+    /// injected is no channel's: it keeps the targets the room binds, as
+    /// its hooks narrowed them (gaps G-031, G-036).
+    fn stored_visibility(&self, event: &RoomEvent, bindings: &[ChannelBinding]) -> Visibility {
+        match &self.origin {
+            PassOrigin::Injected { targets } => {
+                self.injected_visibility(event, targets.as_deref(), bindings)
+            }
+            PassOrigin::Trigger | PassOrigin::Adopted(_) | PassOrigin::Response => {
+                commit::stored_visibility(event, bindings)
+            }
+        }
+    }
+
+    /// The visibility of `event`, a hook's injected event for `targets`, as
+    /// its hooks left it: within the targets the room bound when they were
+    /// given it, and binds now (RFC §9.4, gap G-031).
+    fn injected_visibility(
         &self,
         event: &RoomEvent,
+        targets: Option<&[ChannelId]>,
         bindings: &[ChannelBinding],
-    ) -> crate::model::Visibility {
-        if matches!(self.origin, PassOrigin::Injected { .. }) {
-            return event.visibility.clone();
-        }
-        commit::stored_visibility(event, bindings)
+    ) -> Visibility {
+        permissions::injected_visibility(
+            &event.visibility,
+            &self.event.visibility,
+            targets,
+            bindings,
+        )
     }
 
     /// Whom the event reaches, once its source may write; the event is
@@ -241,14 +259,18 @@ impl CommitPass {
     ) -> Result<DeliveryPlan, WriteRefusal> {
         let bindings = &context.bindings;
         // An injected event is the hook's, not a channel's: it takes no source
-        // check and reaches its transport targets only (gap G-021).
+        // check and reaches the transport targets its visibility admits only
+        // (gaps G-021, G-031).
         if let PassOrigin::Injected { targets } = &self.origin {
-            let mut plan = permissions::plan_targets(event, targets.as_deref(), bindings);
+            event.visibility = self.injected_visibility(event, targets.as_deref(), bindings);
             if let Some(accepted) = &self.accepted {
                 accepted.narrow(event, bindings);
-                accepted.narrow_plan(&mut plan);
             }
-            return Ok(plan);
+            return Ok(permissions::plan_targets(
+                event,
+                targets.as_deref(),
+                bindings,
+            ));
         }
         let source = bindings
             .iter()

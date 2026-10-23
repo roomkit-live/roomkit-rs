@@ -5,7 +5,8 @@
 //! an entry adopted past it, an injected event past it: each is stored
 //! `BLOCKED`, under the room's lock, with the next index, and runs no hook.
 //! A channel's record keeps the visibility step 12 would have given it when
-//! its source is bound, a hook's injected event its own (gap G-036). The
+//! its source is bound (gap G-036), a hook's injected event the targets the
+//! room binds (gap G-031). The
 //! room's due timer transitions apply first (gap G-045), and a room that no
 //! longer accepts events refuses the record, as it refuses any write, with
 //! `room_refused_event`: `reentry` for the framework's records, `inbound`
@@ -14,10 +15,11 @@
 use std::mem;
 
 use super::{commit, report};
-use crate::model::{ErrorRecord, EventStatus, RoomContext, RoomEvent, RoomUpdates};
+use crate::model::{ChannelId, ErrorRecord, EventStatus, RoomContext, RoomEvent, RoomUpdates};
 use crate::ops::lifecycle::gate::{self, Gate, Pending};
 use crate::ops::protocol::{EffectId, Outcome, Request, RoomCounters};
 use crate::ops::{self, Abort, Cx, Progress, RefusedOperation};
+use crate::rules::permissions;
 
 /// What became of a record.
 #[derive(Clone, Debug, PartialEq)]
@@ -43,12 +45,22 @@ pub(super) struct RecordPass {
     record: RoomEvent,
     /// What a refusal of the record by the room's status reports it as.
     refused_as: RefusedOperation,
-    /// Whether the record is a channel's, whose visibility step 12 would
-    /// have narrowed to its source binding's (gap G-036); a hook's injected
-    /// event keeps its own.
-    narrowed: bool,
+    /// What the record's visibility is narrowed to at its commit.
+    narrowing: Narrowing,
     state: State,
     release_error: Option<ErrorRecord>,
+}
+
+/// What a record's visibility is narrowed to at its commit, on the room as
+/// the lock finds it.
+#[derive(Debug)]
+enum Narrowing {
+    /// A channel's record: what its source binding allows, as step 12 would
+    /// have narrowed it (gap G-036).
+    SourceBinding,
+    /// A hook's injected event for these targets, `None` stored only: the
+    /// targets the room binds (gap G-031).
+    Targets(Option<Vec<ChannelId>>),
 }
 
 #[derive(Debug)]
@@ -98,17 +110,17 @@ impl RecordPass {
         Self {
             record,
             refused_as,
-            narrowed: true,
+            narrowing: Narrowing::SourceBinding,
             state: State::Start,
             release_error: None,
         }
     }
 
-    /// The commit of `record`, an event a hook injected, which keeps its own
-    /// visibility (gap G-036).
-    pub(super) fn injected(record: RoomEvent) -> Self {
+    /// The commit of `record`, an event a hook injected for `targets`,
+    /// visible to the targets the room binds (gap G-031).
+    pub(super) fn injected(record: RoomEvent, targets: Option<Vec<ChannelId>>) -> Self {
         Self {
-            narrowed: false,
+            narrowing: Narrowing::Targets(targets),
             ..Self::new(record)
         }
     }
@@ -201,9 +213,12 @@ impl RecordPass {
             return self.release(cx, Ok(RecordResult::Refused));
         }
         self.record.index = context.room.event_count;
-        if self.narrowed {
-            self.record.visibility = commit::stored_visibility(&self.record, &context.bindings);
-        }
+        self.record.visibility = match &self.narrowing {
+            Narrowing::SourceBinding => commit::stored_visibility(&self.record, &context.bindings),
+            Narrowing::Targets(targets) => {
+                permissions::targets_visibility(targets.as_deref(), &context.bindings)
+            }
+        };
         let counters = RoomCounters {
             event_count: context.room.event_count.saturating_add(1),
             latest_index: self.record.index,

@@ -251,6 +251,16 @@ publishes a release.
   (it was `teams_conversation_id`), `group_jid` for WhatsApp Personal (it
   had none), so a WhatsApp Personal group message is routed by its group
   (gap G-051).
+- A hook's injected event is visible to the targets the room binds only,
+  `none` when it binds none (it named every target the hook gave); the hooks
+  of its own pass may narrow that visibility, never widen it, and its
+  delivery reaches only the targets it admits. A blocked one, or one stored
+  past the reentry budget, keeps that visibility (gaps G-031, G-036).
+  `rules::permissions::targets_visibility` and `injected_visibility`.
+- A response that claims another channel's source gets a fresh source, the
+  responder's, keeping nothing of the claimed one (participant, provider,
+  ids, raw payload, verification); one under its own source keeps its other
+  fields (gap G-035).
 - The `roomkit` driver completes each effect as it finishes and polls the
   operation between completions, a lock, a lane or a ticket's turn waited
   for beside the calls, instead of waiting for a step's every effect.
@@ -262,8 +272,8 @@ publishes a release.
   hook decides on its gate's read. `Request::LoadBindings` and
   `Outcome::Bindings` are removed.
 - A record stored `BLOCKED` keeps the visibility step 12 would have given it
-  when its source is bound, a hook's injected event its own (gap G-036); a
-  record a closed room refuses emits `room_refused_event` (gap G-043).
+  when its source is bound (gap G-036); a record a closed room refuses
+  emits `room_refused_event` (gap G-043).
 - An inbound message carrying the visibility `internal` is refused,
   `InboundError::InternalVisibility`, and a hook's modify that writes it is
   put back to the original's (gap G-041).

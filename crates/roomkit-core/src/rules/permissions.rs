@@ -239,10 +239,52 @@ pub fn plan_delivery(
     plan
 }
 
+/// The visibility of an event a hook injected for `targets` (RFC §9.4, gap
+/// G-031): the targets the room binds, among its `bindings`; `none` when it
+/// binds none of them, or when the event is stored only (`None`).
+pub fn targets_visibility(
+    targets: Option<&[ChannelId]>,
+    bindings: &[ChannelBinding],
+) -> Visibility {
+    let bound = targets
+        .unwrap_or_default()
+        .iter()
+        .filter(|target| {
+            bindings
+                .iter()
+                .any(|binding| &binding.channel_id == *target)
+        })
+        .cloned();
+    Visibility::channels(bound).unwrap_or(Visibility::None)
+}
+
+/// The visibility an event a hook injected for `targets` is committed with
+/// (RFC §9.4, gap G-031): `requested`, what the hooks of its own pass left,
+/// within `given`, the visibility they were given, and within the targets
+/// the room binds now, among its `bindings`. A hook may narrow it, never
+/// widen it.
+pub fn injected_visibility(
+    requested: &Visibility,
+    given: &Visibility,
+    targets: Option<&[ChannelId]>,
+    bindings: &[ChannelBinding],
+) -> Visibility {
+    let category_of = |channel: &ChannelId| {
+        bindings
+            .iter()
+            .find(|binding| &binding.channel_id == channel)
+            .map(|binding| binding.category)
+    };
+    requested
+        .intersect(given, category_of)
+        .intersect(&targets_visibility(targets, bindings), category_of)
+}
+
 /// The plan of `event` delivered to named channels only, such as an event a
 /// hook injects (RFC §9.4): each named transport channel bound to the room
-/// that reads, other than the event's own source (RFC §7.5 rule 5), in
-/// channel id order; `None` names no channel.
+/// that reads and that the event's visibility admits, other than the event's
+/// own source (RFC §7.5 rule 5), in channel id order; `None` names no
+/// channel.
 ///
 /// A named intelligence channel is not asked: an injected event asks no
 /// agent (gap G-021). Its visibility names the agent, which reads it in its
@@ -263,6 +305,9 @@ pub fn plan_targets(
                 && binding.category == ChannelCategory::Transport
                 && binding.access.reads()
                 && binding.channel_id != event.source.channel_id
+                && event
+                    .visibility
+                    .admits(&binding.channel_id, binding.category)
         })
         .collect();
     readers.sort_by(|first, second| first.channel_id.cmp(&second.channel_id));
@@ -768,6 +813,88 @@ mod tests {
         fn reaches_a_named_transport_at_the_limit() {
             let plan = plan(&injected(4), &[channel("ws")], &[transport("ws")]);
             assert_eq!(transport_ids(&plan), ["ws"]);
+        }
+
+        /// Gap G-031: a target the event's visibility no longer admits, a
+        /// hook of its pass having narrowed it, is not reached.
+        #[test]
+        fn skips_a_named_channel_its_visibility_does_not_admit() {
+            let narrowed = RoomEvent {
+                visibility: Visibility::channels([channel("ws")]).unwrap(),
+                ..injected(0)
+            };
+            let bindings = [transport("sms"), transport("ws")];
+            let plan = plan(&narrowed, &[channel("sms"), channel("ws")], &bindings);
+            assert_eq!(transport_ids(&plan), ["ws"]);
+        }
+    }
+
+    /// RFC §9.4, gap G-031: the visibility of an event a hook injects.
+    mod an_injected_event_s_visibility {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        fn listed(ids: &[&str]) -> Visibility {
+            Visibility::channels(ids.iter().map(|id| channel(id))).unwrap()
+        }
+
+        #[test]
+        fn names_the_targets_the_room_binds_only() {
+            let bindings = [transport("sms"), transport("ws")];
+            let targets = [channel("ws"), channel("desk")];
+            assert_eq!(
+                targets_visibility(Some(&targets), &bindings),
+                listed(&["ws"])
+            );
+        }
+
+        #[test]
+        fn is_none_when_the_room_binds_no_target() {
+            let targets = [channel("desk")];
+            assert_eq!(
+                targets_visibility(Some(&targets), &[transport("sms")]),
+                Visibility::None
+            );
+        }
+
+        #[test]
+        fn is_none_when_it_is_stored_only() {
+            assert_eq!(
+                targets_visibility(None, &[transport("sms")]),
+                Visibility::None
+            );
+        }
+
+        #[test]
+        fn may_be_narrowed_by_a_hook_of_its_pass() {
+            let bindings = [transport("sms"), transport("ws")];
+            let targets = [channel("sms"), channel("ws")];
+            let given = listed(&["sms", "ws"]);
+            assert_eq!(
+                injected_visibility(&listed(&["ws"]), &given, Some(&targets), &bindings),
+                listed(&["ws"])
+            );
+        }
+
+        #[test]
+        fn is_never_widened_by_a_hook_of_its_pass() {
+            let bindings = [transport("sms"), transport("ws"), agent("ai")];
+            let targets = [channel("ws")];
+            let given = listed(&["ws"]);
+            assert_eq!(
+                injected_visibility(&Visibility::All, &given, Some(&targets), &bindings),
+                listed(&["ws"])
+            );
+        }
+
+        #[test]
+        fn loses_a_target_detached_since_its_hooks_were_given_it() {
+            let targets = [channel("sms"), channel("ws")];
+            let given = listed(&["sms", "ws"]);
+            assert_eq!(
+                injected_visibility(&given, &given, Some(&targets), &[transport("ws")]),
+                listed(&["ws"])
+            );
         }
     }
 

@@ -121,6 +121,33 @@ mod an_allowed_message {
         assert_eq!(ids, ["evt_1", "evt_2"]);
     }
 
+    /// RFC §8.5, gap G-035: a response claiming the sender's source keeps
+    /// none of its fields, its provider message id included.
+    #[test]
+    fn commits_a_response_claiming_the_sender_s_source_with_a_source_of_its_own() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.agent(
+            "ai",
+            Box::new(|event, _| {
+                let mut reply = response("ai", event, "Hello back");
+                reply.source = event.source.clone();
+                reply.source.provider_message_id = Some("SM42".to_owned());
+                Ok(ChannelOutput::respond(vec![reply]))
+            }),
+        );
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        let source = &sim.timeline[1].source;
+        assert_eq!(
+            (
+                source.channel_id.as_str(),
+                source.participant_id.is_some(),
+                source.provider_message_id.as_deref()
+            ),
+            ("ai", false, None)
+        );
+    }
+
     #[test]
     fn moves_the_room_s_counters_with_each_commit() {
         let mut sim = room();
@@ -575,6 +602,201 @@ mod an_injected_event_s_pass {
         assert_eq!(
             lines.last().map(String::as_str),
             Some("#11 system blocked:reentry_loop_cap \"Heads up\"")
+        );
+    }
+}
+
+/// RFC §9.4, gap G-031: an injected event's visibility names the targets
+/// the room binds, which the hooks of its own pass may narrow, never widen.
+mod an_injected_event_s_visibility {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use roomkit_core::rules::transcoding::text_of;
+
+    /// A room binding `sms`, `ws` and `desk`, whose hook lets "hello"
+    /// through, injecting the notice "Heads up" for `targets`.
+    fn notifying(targets: &'static [&'static str]) -> Sim {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.transport("ws");
+        sim.transport("desk");
+        sim.before_broadcast(
+            "notify",
+            Box::new(move |event| {
+                if text_of(&event.content) != "hello" {
+                    return HookOutcome::Returned(HookResult::allow());
+                }
+                let targets = targets.iter().map(|id| channel(id)).collect();
+                HookOutcome::Returned(HookResult::allow().inject(InjectedEvent::to_channels(
+                    notice_event("inj_1", "Heads up"),
+                    targets,
+                )))
+            }),
+        );
+        sim
+    }
+
+    /// A hook of the notice's own pass that rewrites its visibility to
+    /// `visibility`.
+    fn rewriting(sim: &mut Sim, visibility: &'static str) {
+        sim.before_broadcast(
+            "rewrite",
+            Box::new(move |event| {
+                if text_of(&event.content) != "Heads up" {
+                    return HookOutcome::Returned(HookResult::allow());
+                }
+                let mut modified = event.clone();
+                modified.visibility = visibility.parse().unwrap();
+                HookOutcome::Returned(HookResult::modify(modified))
+            }),
+        );
+    }
+
+    /// The stored notice's visibility.
+    fn stored(sim: &Sim) -> String {
+        sim.timeline
+            .iter()
+            .find(|event| text_of(&event.content) == "Heads up")
+            .map(|event| event.visibility.to_string())
+            .unwrap_or_default()
+    }
+
+    /// The channels the notice was delivered to.
+    fn reached(sim: &Sim) -> Vec<String> {
+        let Some(notice) = sim
+            .timeline
+            .iter()
+            .find(|event| text_of(&event.content) == "Heads up")
+        else {
+            return Vec::new();
+        };
+        let suffix = format!(" <- {}", notice.id);
+        sim.traced("deliver ")
+            .into_iter()
+            .filter_map(|line| line.strip_suffix(suffix.as_str()))
+            .filter_map(|line| line.strip_prefix("deliver "))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn hello(sim: &mut Sim) {
+        sim.send(Sim::message("sms", "hello")).unwrap();
+    }
+
+    #[test]
+    fn names_the_targets_the_room_binds_only() {
+        let mut sim = notifying(&["ws", "billing"]);
+        hello(&mut sim);
+        assert_eq!(stored(&sim), "ws");
+    }
+
+    #[test]
+    fn is_none_when_the_room_binds_no_target() {
+        let mut sim = notifying(&["billing"]);
+        hello(&mut sim);
+        assert_eq!(stored(&sim), "none");
+    }
+
+    #[test]
+    fn is_given_to_its_hooks_naming_the_targets_the_room_binds() {
+        let mut sim = notifying(&["ws", "billing"]);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seeing = Rc::clone(&seen);
+        sim.before_broadcast(
+            "watch",
+            Box::new(move |event| {
+                if text_of(&event.content) == "Heads up" {
+                    seeing.borrow_mut().push(event.visibility.to_string());
+                }
+                HookOutcome::Returned(HookResult::allow())
+            }),
+        );
+        hello(&mut sim);
+        assert_eq!(*seen.borrow(), ["ws"]);
+    }
+
+    #[test]
+    fn may_be_narrowed_by_a_hook_of_its_own_pass() {
+        let mut sim = notifying(&["ws", "desk"]);
+        rewriting(&mut sim, "desk");
+        hello(&mut sim);
+        assert_eq!(
+            (stored(&sim), reached(&sim)),
+            ("desk".to_owned(), vec!["desk".to_owned()])
+        );
+    }
+
+    #[test]
+    fn is_never_widened_by_a_hook_of_its_own_pass() {
+        let mut sim = notifying(&["ws"]);
+        rewriting(&mut sim, "all");
+        hello(&mut sim);
+        assert_eq!(
+            (stored(&sim), reached(&sim)),
+            ("ws".to_owned(), vec!["ws".to_owned()])
+        );
+    }
+
+    /// A target a hook of its pass detaches is no longer bound: the
+    /// visibility drops it, and the event does not reach it.
+    #[test]
+    fn loses_a_target_a_hook_of_its_own_pass_detaches() {
+        let mut sim = notifying(&["ws", "desk"]);
+        sim.hooks_change = Some(HookChange::DetachOn("Heads up", channel("ws")));
+        hello(&mut sim);
+        assert_eq!(
+            (stored(&sim), reached(&sim)),
+            ("desk".to_owned(), vec!["desk".to_owned()])
+        );
+    }
+
+    /// Gap G-036: a blocked injected event is stored as its commit would
+    /// have stored it.
+    #[test]
+    fn blocked_by_a_hook_of_its_own_pass_is_never_widened() {
+        let mut sim = notifying(&["ws"]);
+        rewriting(&mut sim, "all");
+        sim.before_broadcast(
+            "quiet",
+            Box::new(|event| {
+                if text_of(&event.content) == "Heads up" {
+                    return HookOutcome::Returned(HookResult::block("no notices"));
+                }
+                HookOutcome::Returned(HookResult::allow())
+            }),
+        );
+        hello(&mut sim);
+        assert_eq!(stored(&sim), "ws");
+    }
+
+    /// Gap G-023: past its cascade's reentry budget it is stored with no
+    /// pass, naming the targets the room binds all the same.
+    #[test]
+    fn past_the_reentry_budget_names_the_targets_the_room_binds_only() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.transport("ws");
+        sim.config.max_chain_depth = 1;
+        sim.before_broadcast(
+            "notify",
+            Box::new(|_| {
+                HookOutcome::Returned(HookResult::allow().inject(InjectedEvent::to_channels(
+                    notice_event("inj_1", "Heads up"),
+                    vec![channel("ws"), channel("billing")],
+                )))
+            }),
+        );
+        hello(&mut sim);
+        let capped = sim
+            .timeline
+            .last()
+            .map(|event| (event.blocked_by.clone(), event.visibility.to_string()));
+        assert_eq!(
+            capped,
+            Some((Some("reentry_loop_cap".to_owned()), "ws".to_owned()))
         );
     }
 }

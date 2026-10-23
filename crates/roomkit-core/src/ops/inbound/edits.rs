@@ -12,7 +12,6 @@ use super::pass::PassOrigin;
 use crate::model::{ChannelBinding, EventId, Participant, RoomEvent};
 use crate::ops::protocol::TargetUpdate;
 use crate::rules::edits::{self, EditRefusal, Origin};
-use crate::rules::permissions::DeliveryPlan;
 
 /// An edit or a delete step 8a accepted, with its target as read under the
 /// room lock.
@@ -71,20 +70,6 @@ impl Accepted {
                 .find(|binding| &binding.channel_id == channel)
                 .map(|binding| binding.category)
         });
-    }
-
-    /// Keeps the targets of `plan` that may see the event's target: an
-    /// injected event's plan names its targets, whatever its visibility
-    /// says (gap G-062).
-    pub(super) fn narrow_plan(&self, plan: &mut DeliveryPlan) {
-        let visibility = &self.target.visibility;
-        plan.transports.retain(|target| {
-            visibility.admits(&target.binding.channel_id, target.binding.category)
-        });
-        plan.agents
-            .retain(|agent| visibility.admits(&agent.channel_id, agent.category));
-        plan.not_asked
-            .retain(|agent| visibility.admits(&agent.channel_id, agent.category));
     }
 
     /// What the commit of `event` writes on the target, and the target as it

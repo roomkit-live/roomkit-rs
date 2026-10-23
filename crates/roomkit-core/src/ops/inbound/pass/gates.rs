@@ -2,11 +2,12 @@
 //! the lock finds it, its due timers applied, its status, the idempotency
 //! key, the provisional index, and an edit's or a delete's target.
 
-use super::{CommitPass, PassResult, State};
+use super::{CommitPass, PassOrigin, PassResult, State};
 use crate::model::RoomContext;
 use crate::ops::lifecycle::gate::{self, Gate};
 use crate::ops::protocol::{Outcome, Request};
 use crate::ops::{Abort, Cx};
+use crate::rules::permissions;
 
 impl CommitPass {
     pub(super) fn on_locked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
@@ -43,6 +44,8 @@ impl CommitPass {
     /// the idempotency check of an entry's key (RFC §13.4, gap G-023), step
     /// 8a or the hooks (RFC §10.1 steps 6 to 8). The index given here is
     /// the one the hooks see; the pass takes it again once they are over.
+    /// An event a hook injected is given the visibility of the targets the
+    /// room binds, which its own hooks may narrow (gap G-031).
     pub(super) fn on_gate(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
         let status = context.room.status;
         if !status.accepts_events() {
@@ -50,6 +53,10 @@ impl CommitPass {
             return self.release(cx, Ok(PassResult::Refused { status }));
         }
         self.event.index = context.room.event_count;
+        if let PassOrigin::Injected { targets } = &self.origin {
+            self.event.visibility =
+                permissions::targets_visibility(targets.as_deref(), &context.bindings);
+        }
         match self.event.idempotency_key.clone() {
             Some(key) if self.origin.is_entry() => State::CheckingKey {
                 effect: self.issue(

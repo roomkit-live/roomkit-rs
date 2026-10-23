@@ -119,6 +119,8 @@ pub(crate) enum HookChange {
     CloseRoom,
     /// They close the room when they run on the event of this text.
     CloseRoomOn(&'static str),
+    /// They detach the channel when they run on the event of this text.
+    DetachOn(&'static str, ChannelId),
 }
 
 struct Channel {
@@ -1227,7 +1229,10 @@ impl Sim {
             Some(HookChange::CloseRoomOn(text)) if text_of(&event.content) == *text => {
                 self.room.status = RoomStatus::Closed;
             }
-            Some(HookChange::CloseRoomOn(_)) | None => {}
+            Some(HookChange::DetachOn(text, detached)) if text_of(&event.content) == *text => {
+                self.bindings.retain(|bound| &bound.channel_id != detached);
+            }
+            Some(HookChange::CloseRoomOn(_) | HookChange::DetachOn(..)) | None => {}
         }
         Outcome::Hook(Box::new(outcome))
     }

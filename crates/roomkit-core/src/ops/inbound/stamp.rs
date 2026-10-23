@@ -126,26 +126,38 @@ pub(crate) fn stamp_direct(
 /// channel named the event it answers (RFC §8.5), and the fingerprint of
 /// the instruction that produced it (RFC §10.1.1 rule 6), or no
 /// `instruction` key at all when the trigger is not one (gap G-065).
+///
+/// A response under its own source keeps the source's other fields. One
+/// that claims another channel's source keeps nothing of it, its
+/// participant, provider, ids, raw payload and verification included: its
+/// source is the responder's alone (gap G-035), so another channel's
+/// provider message id is never acted on as the response's.
 pub(crate) fn stamp_response(
     mut response: RoomEvent,
     responder: &ChannelBinding,
     trigger: &RoomEvent,
     id: EventId,
 ) -> RoomEvent {
-    if response.source.channel_id != responder.channel_id {
+    if response.source.channel_id == responder.channel_id {
+        response.source.channel_type = responder.channel_type;
+        response.source.direction = EventDirection::Outbound;
+    } else {
         tracing::warn!(
             target: "roomkit::core::inbound",
             room_id = %trigger.room_id,
             responder = %responder.channel_id,
             claimed = %response.source.channel_id,
-            "a response named another channel as its source; the responder is its source (gap G-022)"
+            "a response named another channel as its source; the responder is its source, \
+             and nothing of the claimed one is kept (gaps G-022, G-035)"
+        );
+        response.source = EventSource::new(
+            responder.channel_id.clone(),
+            responder.channel_type,
+            EventDirection::Outbound,
         );
     }
     response.id = id;
     response.room_id = trigger.room_id.clone();
-    response.source.channel_id = responder.channel_id.clone();
-    response.source.channel_type = responder.channel_type;
-    response.source.direction = EventDirection::Outbound;
     response.chain_depth = chain_depth::response_depth(trigger);
     if response.responds_to.is_none() {
         response.responds_to = Some(trigger.id.clone());
@@ -160,7 +172,8 @@ pub(crate) fn stamp_response(
 /// Writes the pipeline's fields on an event a hook injected while deciding
 /// on `trigger` (gap G-021): a fresh id (gap G-024), the trigger's room and
 /// depth, and a visibility naming its targets only, `none` when it is stored
-/// only. It records no instruction (gap G-065).
+/// only, which its commit narrows to the targets the room binds (gap
+/// G-031). It records no instruction (gap G-065).
 pub(crate) fn stamp_injected(
     injected: InjectedEvent,
     trigger: &RoomEvent,
@@ -494,6 +507,48 @@ mod tests {
             (stamped.source.channel_id.as_str(), stamped.source.direction),
             ("ai", EventDirection::Outbound)
         );
+    }
+
+    /// A response of the `ai` channel claiming the SMS sender's source, with
+    /// all its fields.
+    fn claiming_the_sender_s_source() -> RoomEvent {
+        let mut response = trigger();
+        response.source.verification = Some(crate::model::VerificationStatus::Verified);
+        response.source.external_id = Some("crm_7".to_owned());
+        response.source.provider_message_id = Some("SM42".to_owned());
+        response
+            .source
+            .raw_payload
+            .insert("MessageSid".to_owned(), "SM42".into());
+        response
+    }
+
+    /// Gap G-035.
+    #[test]
+    fn a_response_claiming_another_source_keeps_nothing_of_it() {
+        let stamped = stamp_response(claiming_the_sender_s_source(), &ai(), &trigger(), fresh());
+        assert_eq!(
+            stamped.source,
+            EventSource::new(
+                ChannelId::new("ai").unwrap(),
+                ChannelType::Ai,
+                EventDirection::Outbound
+            )
+        );
+    }
+
+    /// Gap G-035.
+    #[test]
+    fn a_response_under_its_own_source_keeps_its_other_fields() {
+        let mut response = claiming_the_sender_s_source();
+        response.source.channel_id = ChannelId::new("ai").unwrap();
+        let stamped = stamp_response(response.clone(), &ai(), &trigger(), fresh());
+        let expected = EventSource {
+            channel_type: ChannelType::Ai,
+            direction: EventDirection::Outbound,
+            ..response.source
+        };
+        assert_eq!(stamped.source, expected);
     }
 
     #[test]

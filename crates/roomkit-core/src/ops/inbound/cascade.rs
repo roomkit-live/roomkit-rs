@@ -141,7 +141,7 @@ impl Machine {
                 let mut event = event;
                 event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
                 self.queue(Job::Record(
-                    Box::new(RecordPass::injected(event)),
+                    Box::new(RecordPass::injected(event, targets)),
                     RecordNote::Refused,
                 ));
             }
