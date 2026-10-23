@@ -12,9 +12,9 @@
 //! as the change left it (gap G-027).
 
 mod bindings;
-mod change;
+pub(crate) mod change;
 pub(crate) mod gate;
-mod locked;
+pub(crate) mod locked;
 pub(crate) mod report;
 mod status;
 

@@ -11,6 +11,8 @@ use crate::rules::hook_chain::HookOutcome;
 pub(crate) enum RequestKind {
     AcquireLock,
     ReleaseLock,
+    EnterLane,
+    LeaveLane,
     LoadContext,
     LoadBindings,
     FindByIdempotencyKey,
@@ -20,6 +22,7 @@ pub(crate) enum RequestKind {
     HandleInbound,
     ChannelCall,
     RunHook,
+    RunObservers,
 }
 
 impl Request {
@@ -27,6 +30,8 @@ impl Request {
         match self {
             Self::AcquireLock { .. } => RequestKind::AcquireLock,
             Self::ReleaseLock { .. } => RequestKind::ReleaseLock,
+            Self::EnterLane { .. } => RequestKind::EnterLane,
+            Self::LeaveLane { .. } => RequestKind::LeaveLane,
             Self::LoadContext { .. } => RequestKind::LoadContext,
             Self::LoadBindings { .. } => RequestKind::LoadBindings,
             Self::FindByIdempotencyKey { .. } => RequestKind::FindByIdempotencyKey,
@@ -39,6 +44,7 @@ impl Request {
             Self::HandleInbound { .. } => RequestKind::HandleInbound,
             Self::OnEvent { .. } | Self::Deliver { .. } => RequestKind::ChannelCall,
             Self::RunHook { .. } => RequestKind::RunHook,
+            Self::RunObservers { .. } => RequestKind::RunObservers,
         }
     }
 }
@@ -49,6 +55,8 @@ impl RequestKind {
         match self {
             Self::AcquireLock => "Locked",
             Self::ReleaseLock => "Released",
+            Self::EnterLane => "Entered",
+            Self::LeaveLane => "Left",
             Self::LoadContext => "Context or RoomNotFound",
             Self::LoadBindings => "Bindings",
             Self::FindByIdempotencyKey => "Idempotent",
@@ -58,6 +66,7 @@ impl RequestKind {
             Self::HandleInbound => "Parsed",
             Self::ChannelCall => "Output",
             Self::RunHook => "Hook",
+            Self::RunObservers => "Observed",
         }
     }
 
@@ -67,6 +76,8 @@ impl RequestKind {
             (_, Outcome::Failed(_))
             | (Self::AcquireLock, Outcome::Locked)
             | (Self::ReleaseLock, Outcome::Released)
+            | (Self::EnterLane, Outcome::Entered)
+            | (Self::LeaveLane, Outcome::Left)
             | (Self::LoadContext, Outcome::Context(_) | Outcome::RoomNotFound)
             | (Self::LoadBindings, Outcome::Bindings(_))
             | (Self::FindByIdempotencyKey, Outcome::Idempotent(_))
@@ -75,10 +86,13 @@ impl RequestKind {
             | (Self::Store, Outcome::Stored)
             | (Self::HandleInbound, Outcome::Parsed(_))
             | (Self::ChannelCall, Outcome::Output(_))
-            | (Self::RunHook, Outcome::Hook(_)) => true,
+            | (Self::RunHook, Outcome::Hook(_))
+            | (Self::RunObservers, Outcome::Observed) => true,
             (
                 Self::AcquireLock
                 | Self::ReleaseLock
+                | Self::EnterLane
+                | Self::LeaveLane
                 | Self::LoadContext
                 | Self::LoadBindings
                 | Self::FindByIdempotencyKey
@@ -87,7 +101,8 @@ impl RequestKind {
                 | Self::Store
                 | Self::HandleInbound
                 | Self::ChannelCall
-                | Self::RunHook,
+                | Self::RunHook
+                | Self::RunObservers,
                 _,
             ) => false,
         };
@@ -124,6 +139,27 @@ impl Outcome {
     pub(crate) fn into_released(self) -> Result<(), ErrorRecord> {
         match self {
             Self::Released => Ok(()),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    pub(crate) fn into_entered(self) -> Result<(), ErrorRecord> {
+        match self {
+            Self::Entered => Ok(()),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    pub(crate) fn into_left(self) -> Result<(), ErrorRecord> {
+        match self {
+            Self::Left => Ok(()),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    pub(crate) fn into_observed(self) -> Result<(), ErrorRecord> {
+        match self {
+            Self::Observed => Ok(()),
             other => Err(other.into_failure()),
         }
     }
@@ -216,6 +252,8 @@ impl Outcome {
         match self {
             Self::Locked => "Locked",
             Self::Released => "Released",
+            Self::Entered => "Entered",
+            Self::Left => "Left",
             Self::Context(_) => "Context",
             Self::RoomNotFound => "RoomNotFound",
             Self::Bindings(_) => "Bindings",
@@ -226,6 +264,7 @@ impl Outcome {
             Self::Parsed(_) => "Parsed",
             Self::Output(_) => "Output",
             Self::Hook(_) => "Hook",
+            Self::Observed => "Observed",
             Self::Failed(_) => "Failed",
         }
     }

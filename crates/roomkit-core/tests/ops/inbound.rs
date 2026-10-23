@@ -7,8 +7,8 @@ use roomkit_core::model::{
     Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId, Timestamp, Visibility,
 };
 use roomkit_core::ops::{
-    FrameworkEvent, Inbound, InboundError, KitConfig, Next, Operation, Outcome, ProtocolError,
-    RefusedOperation, SequentialEnvironment,
+    FrameworkEvent, Inbound, InboundError, InboundTarget, KitConfig, Next, Operation, Outcome,
+    ProtocolError, RefusedOperation, SequentialEnvironment,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
@@ -43,6 +43,7 @@ mod an_allowed_message {
         assert_eq!(
             sim.trace,
             [
+                "enter lane room_1",
                 "load_context room_1",
                 "handle_inbound sms",
                 "lock room_1",
@@ -64,6 +65,7 @@ mod an_allowed_message {
                 "on_event ws <- evt_2",
                 "deliver sms <- evt_2",
                 "deliver ws <- evt_2",
+                "leave lane room_1",
             ]
         );
     }
@@ -610,10 +612,16 @@ mod metadata_updates {
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             (
-                sim.trace.last().map(String::as_str),
+                sim.trace[sim.trace.len() - 2..].to_vec(),
                 sim.room.metadata.get("tier")
             ),
-            (Some("update room room_1 Active"), Some(&json!("gold")))
+            (
+                vec![
+                    "update room room_1 Active".to_owned(),
+                    "leave lane room_1".to_owned()
+                ],
+                Some(&json!("gold"))
+            )
         );
     }
 
@@ -655,21 +663,23 @@ mod a_source_that_cannot_write {
         );
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
-            sim.trace[4..],
+            sim.trace[5..],
             [
                 "hook audit",
                 "load_bindings room_1",
                 "commit #0 sms blocked:source_muted \"Bonjour\"",
                 "release room_1",
+                "leave lane room_1",
             ]
         );
     }
 
+    /// Gap G-015: since step 2 attaches an unbound channel, a source with no
+    /// binding is one the room's integrator detached.
     #[test]
-    fn a_source_with_no_binding_commits_its_message_blocked_as_unbound() {
+    fn a_detached_source_commits_its_message_blocked_as_unbound() {
         let mut sim = room();
-        sim.bindings
-            .retain(|binding| binding.channel_id.as_str() != "sms");
+        sim.detach("sms");
         let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             (result.reason.as_deref(), sim.timeline_lines()),
@@ -681,11 +691,10 @@ mod a_source_that_cannot_write {
     }
 
     #[test]
-    fn a_channel_with_no_binding_parses_its_message_seeing_no_event() {
+    fn a_detached_channel_parses_its_message_seeing_no_event() {
         let mut sim = room();
         sim.send(Sim::message("sms", "Earlier")).unwrap();
-        sim.bindings
-            .retain(|binding| binding.channel_id.as_str() != "sms");
+        sim.detach("sms");
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(sim.parse_contexts.last().unwrap().recent_events, []);
     }
@@ -779,12 +788,13 @@ mod a_closed_room {
         sim.room.status = RoomStatus::Closed;
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
-            (sim.trace[2..].to_vec(), sim.timeline.len()),
+            (sim.trace[3..].to_vec(), sim.timeline.len()),
             (
                 vec![
                     "lock room_1".to_owned(),
                     "load_context room_1".to_owned(),
-                    "release room_1".to_owned()
+                    "release room_1".to_owned(),
+                    "leave lane room_1".to_owned()
                 ],
                 0
             )
@@ -905,12 +915,14 @@ mod a_duplicate_message {
         assert_eq!(
             sim.trace,
             [
+                "enter lane room_1",
                 "load_context room_1",
                 "handle_inbound sms",
                 "lock room_1",
                 "load_context room_1",
                 "find_key SM123",
                 "release room_1",
+                "leave lane room_1",
             ]
         );
     }
@@ -1269,16 +1281,6 @@ mod a_refused_operation {
     }
 
     #[test]
-    fn a_missing_room_fails() {
-        let mut sim = room();
-        sim.room_exists = false;
-        assert_eq!(
-            sim.send(Sim::message("sms", "Bonjour")),
-            Err(InboundError::RoomNotFound(room_id()))
-        );
-    }
-
-    #[test]
     fn an_instruction_is_refused_until_its_step() {
         let mut sim = room();
         let mut message = Sim::message("sms", "Introduce yourself");
@@ -1300,31 +1302,37 @@ mod a_refused_operation {
         );
     }
 
+    /// Polls `inbound`, which must ask for one effect, and answers it with
+    /// `outcome`.
+    fn answer(inbound: &mut Inbound, environment: &mut SequentialEnvironment, outcome: Outcome) {
+        let Next::Effects(effects) = inbound.poll(environment).next else {
+            panic!("expected an effect");
+        };
+        inbound
+            .complete(effects.first().unwrap().id, outcome)
+            .unwrap();
+    }
+
     #[test]
-    fn a_channel_that_cannot_parse_the_message_fails_it() {
-        let mut sim = room();
-        sim.room_exists = true;
+    fn a_channel_that_cannot_parse_the_message_fails_it_and_leaves_the_lane() {
+        let sim = room();
         let mut config = KitConfig::new();
         config
             .register_channel(sim.config.channel(&channel("sms")).unwrap().clone())
             .unwrap();
-        let mut inbound = Inbound::new(Arc::new(config), room_id(), Sim::message("sms", "Hi"));
+        let target = InboundTarget::Room(room_id());
+        let mut inbound = Inbound::new(Arc::new(config), target, None, Sim::message("sms", "Hi"));
         let mut environment = SequentialEnvironment::default();
-        let Next::Effects(effects) = inbound.poll(&mut environment).next else {
-            panic!("expected the context read");
-        };
         let context = Outcome::Context(Box::new(roomkit_core::model::RoomContext {
             room: sim.room.clone(),
             bindings: sim.bindings.clone(),
             participants: Vec::new(),
             recent_events: Vec::new(),
         }));
-        inbound.complete(effects[0].id, context).unwrap();
-        let Next::Effects(effects) = inbound.poll(&mut environment).next else {
-            panic!("expected the channel call");
-        };
         let failure = Outcome::Failed(ErrorRecord::new("ParseError", "bad payload"));
-        inbound.complete(effects[0].id, failure).unwrap();
+        for outcome in [Outcome::Entered, context, failure, Outcome::Left] {
+            answer(&mut inbound, &mut environment, outcome);
+        }
         assert!(matches!(
             inbound.poll(&mut environment).next,
             Next::Ready(Err(InboundError::ChannelFailed { .. }))
@@ -1340,10 +1348,11 @@ mod the_protocol {
     fn started() -> (Inbound, roomkit_core::ops::EffectId) {
         let mut sim = room();
         let config = Arc::new(std::mem::take(&mut sim.config));
-        let mut inbound = Inbound::new(config, room_id(), Sim::message("sms", "Hi"));
+        let target = InboundTarget::Room(room_id());
+        let mut inbound = Inbound::new(config, target, None, Sim::message("sms", "Hi"));
         let Next::Effects(effects) = inbound.poll(&mut SequentialEnvironment::default()).next
         else {
-            panic!("expected the context read");
+            panic!("expected the lane's entry");
         };
         (inbound, effects.first().unwrap().id)
     }
@@ -1360,9 +1369,9 @@ mod the_protocol {
     #[test]
     fn an_effect_completed_twice_is_refused() {
         let (mut inbound, effect) = started();
-        inbound.complete(effect, Outcome::RoomNotFound).unwrap();
+        inbound.complete(effect, Outcome::Entered).unwrap();
         assert_eq!(
-            inbound.complete(effect, Outcome::RoomNotFound),
+            inbound.complete(effect, Outcome::Entered),
             Err(ProtocolError::UnknownEffect(effect))
         );
     }

@@ -42,7 +42,7 @@ mod protocol;
 pub use config::{ChannelDeclaration, ConfigError, DEFAULT_CONTEXT_WINDOW, KitConfig};
 pub use environment::{Environment, SequentialEnvironment};
 pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation, TransitionReason};
-pub use inbound::{Inbound, InboundError, InboundResult, default_inbound_event};
+pub use inbound::{Inbound, InboundError, InboundResult, InboundTarget, default_inbound_event};
 pub use lifecycle::{
     ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, LifecycleError,
     PauseRoom, ReopenRoom, ResumeRoom, TimersChecked, UpdateBinding,

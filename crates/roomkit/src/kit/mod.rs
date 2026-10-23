@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use roomkit_core::model::{ChannelId, InboundMessage, RoomEvent, RoomId};
-use roomkit_core::ops::{Environment, FrameworkEvent, Inbound, InboundResult, KitConfig};
+use roomkit_core::ops::{
+    Environment, FrameworkEvent, Inbound, InboundResult, InboundTarget, KitConfig,
+};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookTrigger};
 use tokio::sync::broadcast;
@@ -72,7 +74,7 @@ pub(crate) struct Inner<S> {
     hooks: RwLock<HashMap<HookId, Arc<dyn HookHandler>>>,
     pub(crate) store: S,
     pub(crate) locks: RoomMutexes,
-    lanes: RoomMutexes,
+    pub(crate) lanes: RoomMutexes,
     environment: Mutex<Box<dyn Environment + Send>>,
     events: broadcast::Sender<FrameworkEvent>,
 }
@@ -137,12 +139,23 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Runs `message` into the room `room_id` through the inbound pipeline
-    /// (RFC §10.1), and the whole cascade it starts.
+    /// (RFC §10.1), and the whole cascade it starts. The call reads rooms
+    /// unscoped, whatever their organization (RFC §17.2).
+    ///
+    /// The sender is written in the channel's form first: a phone number in
+    /// E.164, an email address lower-case (RFC §5.7). A room that does not
+    /// exist is created with the id: `ON_ROOM_CREATED`'s hooks run, and
+    /// finish, before the channel is attached with a binding naming the
+    /// sender (RFC §10.1 step 2). A room that exists has the channel attached
+    /// when it does not bind it, unless it was detached from the room (RFC
+    /// §7.5 rule 7).
     ///
     /// Inbound messages of one room run one at a time, which keeps each
     /// event's delivery set ahead of the next one's (RFC §10.2). A hook or a
-    /// channel must not send into the same room while it runs: it would wait
-    /// for itself (RFC §13.5 reentrancy comes with direct injection, step 2).
+    /// channel must not send into the same room while it runs, an
+    /// `ON_ROOM_CREATED` hook included: it would wait for itself, a hook
+    /// until its timeout (RFC §13.5 reentrancy comes with direct injection,
+    /// step 2).
     ///
     /// # Errors
     ///
@@ -153,8 +166,38 @@ impl<S: ConversationStore> RoomKit<S> {
         room_id: &RoomId,
         message: InboundMessage,
     ) -> Result<InboundResult, KitError> {
-        let _lane = self.inner.lanes.lock(room_id).await;
-        let inbound = Inbound::new(self.config(), room_id.clone(), message);
+        self.run_inbound(room_id, None, message).await
+    }
+
+    /// Runs `message` into the room `room_id` as
+    /// [`process_inbound`](Self::process_inbound) does, for a caller acting
+    /// for `organization_id` (RFC §17.2): a room of another organization, or
+    /// of none, fails the message with nothing written, and a room the call
+    /// creates belongs to the organization.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KitError::Inbound`] when the pipeline refused or failed the
+    /// message before committing it, the room belonging to another
+    /// organization among others.
+    pub async fn process_inbound_for(
+        &self,
+        organization_id: &str,
+        room_id: &RoomId,
+        message: InboundMessage,
+    ) -> Result<InboundResult, KitError> {
+        self.run_inbound(room_id, Some(organization_id.to_owned()), message)
+            .await
+    }
+
+    async fn run_inbound(
+        &self,
+        room_id: &RoomId,
+        organization_id: Option<String>,
+        message: InboundMessage,
+    ) -> Result<InboundResult, KitError> {
+        let target = InboundTarget::Room(room_id.clone());
+        let inbound = Inbound::new(self.config(), target, organization_id, message);
         let processed = driver::run(&self.inner, inbound).await?;
         Ok(processed?)
     }

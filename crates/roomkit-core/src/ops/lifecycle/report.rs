@@ -6,8 +6,9 @@ use crate::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType,
     Metadata, RoomContext, RoomEvent, RoomId, SystemContent,
 };
+use crate::ops::protocol::{EffectId, Request};
 use crate::ops::{Cx, FrameworkEvent, Notice, TransitionReason};
-use crate::rules::hook_registry::HookTrigger;
+use crate::rules::hook_registry::{HookId, HookTrigger};
 
 /// A lifecycle change to report.
 #[derive(Clone, Copy, Debug)]
@@ -22,6 +23,12 @@ pub(crate) enum Reported<'change> {
     ChannelDetached(&'change ChannelBinding),
     ChannelMuted(&'change ChannelBinding),
     ChannelUnmuted(&'change ChannelBinding),
+    /// The inbound pipeline created the room for a message on this channel
+    /// (RFC §10.1 step 2).
+    SessionStarted {
+        channel_id: &'change ChannelId,
+        channel_type: ChannelType,
+    },
 }
 
 impl Reported<'_> {
@@ -47,6 +54,14 @@ impl Reported<'_> {
                 channel_id: binding.channel_id.clone(),
             }),
             Self::ChannelMuted(_) | Self::ChannelUnmuted(_) => None,
+            Self::SessionStarted {
+                channel_id,
+                channel_type,
+            } => Some(FrameworkEvent::SessionStarted {
+                room_id,
+                channel_id: channel_id.clone(),
+                channel_type,
+            }),
         }
     }
 
@@ -62,6 +77,7 @@ impl Reported<'_> {
             Self::ChannelDetached(_) => Some(HookTrigger::OnChannelDetached),
             Self::ChannelMuted(_) => Some(HookTrigger::OnChannelMuted),
             Self::ChannelUnmuted(_) => Some(HookTrigger::OnChannelUnmuted),
+            Self::SessionStarted { .. } => Some(HookTrigger::OnSessionStarted),
         }
     }
 
@@ -76,6 +92,7 @@ impl Reported<'_> {
             Self::ChannelDetached(_) => "channel_detached",
             Self::ChannelMuted(_) => "channel_muted",
             Self::ChannelUnmuted(_) => "channel_unmuted",
+            Self::SessionStarted { .. } => "session_started",
         }
     }
 
@@ -86,9 +103,25 @@ impl Reported<'_> {
             | Self::ChannelDetached(binding)
             | Self::ChannelMuted(binding)
             | Self::ChannelUnmuted(binding) => Some(&binding.channel_id),
+            Self::SessionStarted { channel_id, .. } => Some(*channel_id),
             Self::RoomCreated | Self::RoomPaused(_) | Self::RoomClosed(_) | Self::RoomArchived => {
                 None
             }
+        }
+    }
+
+    /// The type of the channel a session started on.
+    fn channel_type(self) -> Option<ChannelType> {
+        match self {
+            Self::SessionStarted { channel_type, .. } => Some(channel_type),
+            Self::RoomCreated
+            | Self::RoomPaused(_)
+            | Self::RoomClosed(_)
+            | Self::RoomArchived
+            | Self::ChannelAttached(_)
+            | Self::ChannelDetached(_)
+            | Self::ChannelMuted(_)
+            | Self::ChannelUnmuted(_) => None,
         }
     }
 
@@ -101,9 +134,17 @@ impl Reported<'_> {
             | Self::ChannelAttached(_)
             | Self::ChannelDetached(_)
             | Self::ChannelMuted(_)
-            | Self::ChannelUnmuted(_) => None,
+            | Self::ChannelUnmuted(_)
+            | Self::SessionStarted { .. } => None,
         }
     }
+}
+
+/// The hooks a change's trigger runs, with their payload.
+struct Observers {
+    trigger: HookTrigger,
+    hooks: Vec<HookId>,
+    payload: RoomEvent,
 }
 
 /// Emits the change's framework event and fires its trigger's hooks, which
@@ -111,23 +152,64 @@ impl Reported<'_> {
 /// participants and recent events, as any hook's context has them (gap
 /// G-027). A room just created has the bindings its creation made.
 pub(crate) fn report(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) {
-    if let Some(event) = reported.framework_event(&context.room.id) {
-        cx.io.notify(Notice::FrameworkEvent(event));
-    }
-    let Some(trigger) = reported.trigger() else {
+    announce(cx, reported, context);
+    let Some(Observers {
+        trigger,
+        hooks,
+        payload,
+    }) = observers(cx, reported, context)
+    else {
         return;
     };
-    let payload = payload(cx, reported, &context.room.id);
-    let hooks = cx.config.hooks.observers(trigger, &payload.source);
-    if hooks.is_empty() {
-        return;
-    }
     cx.io.notify(Notice::AsyncHooks {
         trigger,
         hooks,
         event: Box::new(payload),
         context: Box::new(context.clone()),
     });
+}
+
+/// Emits the change's framework event, then asks for its trigger's hooks to
+/// be run and awaited, as the inbound pipeline's creation of a room does
+/// (gap G-050). Returns the effect to wait for, `None` when no hook observes
+/// the trigger.
+pub(crate) fn report_awaited(
+    cx: &mut Cx<'_>,
+    reported: Reported<'_>,
+    context: &RoomContext,
+) -> Option<EffectId> {
+    announce(cx, reported, context);
+    let Observers {
+        trigger,
+        hooks,
+        payload,
+    } = observers(cx, reported, context)?;
+    Some(cx.io.issue(Request::RunObservers {
+        trigger,
+        hooks,
+        event: Box::new(payload),
+        context: Box::new(context.clone()),
+    }))
+}
+
+/// Emits the change's framework event, if it has one.
+fn announce(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) {
+    if let Some(event) = reported.framework_event(&context.room.id) {
+        cx.io.notify(Notice::FrameworkEvent(event));
+    }
+}
+
+/// The hooks the change's trigger runs and their payload; `None` when it
+/// fires no trigger or no hook observes it.
+fn observers(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) -> Option<Observers> {
+    let trigger = reported.trigger()?;
+    let payload = payload(cx, reported, &context.room.id);
+    let hooks = cx.config.hooks.observers(trigger, &payload.source);
+    (!hooks.is_empty()).then_some(Observers {
+        trigger,
+        hooks,
+        payload,
+    })
 }
 
 /// The payload of a lifecycle hook: a system event whose code names the
@@ -143,6 +225,12 @@ fn payload(cx: &mut Cx<'_>, reported: Reported<'_>, room_id: &RoomId) -> RoomEve
     data.insert("room_id".to_owned(), room_id.as_str().into());
     if let Some(channel_id) = reported.channel_id() {
         data.insert("channel_id".to_owned(), channel_id.as_str().into());
+    }
+    if let Some(channel_type) = reported.channel_type() {
+        data.insert(
+            "channel_type".to_owned(),
+            serde_json::to_value(channel_type).unwrap_or_default(),
+        );
     }
     if let Some(TransitionReason::Timer) = reported.reason() {
         data.insert("reason".to_owned(), "timer".into());

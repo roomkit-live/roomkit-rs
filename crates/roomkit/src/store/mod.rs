@@ -9,8 +9,8 @@ mod memory;
 use std::future::Future;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ErrorRecord, Observation, Room, RoomContext, RoomEvent, RoomId,
-    RoomStatus, RoomUpdates, Task,
+    ChannelBinding, ChannelId, ErrorRecord, Observation, Participant, ParticipantId, Room,
+    RoomContext, RoomEvent, RoomId, RoomStatus, RoomUpdates, Task,
 };
 use roomkit_core::ops::RoomCounters;
 use roomkit_core::rules::timers;
@@ -28,6 +28,22 @@ pub enum StoreError {
     /// No room has the id.
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
+    /// The room has a participant with the id already (RFC §5.5).
+    #[error("room {room_id} has a participant {participant_id} already")]
+    ParticipantExists {
+        /// The room.
+        room_id: RoomId,
+        /// The participant.
+        participant_id: ParticipantId,
+    },
+    /// The room has no participant with the id.
+    #[error("room {room_id} has no participant {participant_id}")]
+    ParticipantNotFound {
+        /// The room.
+        room_id: RoomId,
+        /// The participant.
+        participant_id: ParticipantId,
+    },
     /// The room's timeline holds the index already (RFC §8.1): another
     /// writer committed first.
     #[error("room {room_id} holds index {index} already")]
@@ -48,6 +64,8 @@ impl StoreError {
         let error_type = match self {
             Self::RoomExists(_) => "RoomExists",
             Self::RoomNotFound(_) => "RoomNotFound",
+            Self::ParticipantExists { .. } => "ParticipantExists",
+            Self::ParticipantNotFound { .. } => "ParticipantNotFound",
             Self::IndexTaken { .. } => "IndexTaken",
             Self::Unavailable(_) => "StoreUnavailable",
         };
@@ -134,13 +152,54 @@ pub trait ConversationStore: Send + Sync + 'static {
         room_id: &RoomId,
     ) -> impl Future<Output = Result<Vec<ChannelBinding>, StoreError>> + Send;
 
-    /// The room with its bindings, participants and latest `recent_events`
-    /// events, refused ones included; `None` when the room does not exist.
+    /// The room with its bindings, its participants and its latest
+    /// `recent_events` events, refused ones included (RFC §10.1 step 3);
+    /// `None` when the room does not exist.
     fn load_context(
         &self,
         room_id: &RoomId,
         recent_events: usize,
     ) -> impl Future<Output = Result<Option<RoomContext>, StoreError>> + Send;
+
+    /// Stores a new participant of its room (RFC §14.1
+    /// `create_participant`). A participant is one record per room and id
+    /// (RFC §5.5): an id the room has is refused with
+    /// [`StoreError::ParticipantExists`].
+    fn create_participant(
+        &self,
+        participant: Participant,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The room's participant `participant_id`, if it has one (RFC §14.1
+    /// `get_participant`, named within its room by gap G-054).
+    fn get_participant(
+        &self,
+        room_id: &RoomId,
+        participant_id: &ParticipantId,
+    ) -> impl Future<Output = Result<Option<Participant>, StoreError>> + Send;
+
+    /// Writes `participant` whole, in place of its room's record of its id
+    /// (RFC §14.1 `update_participant`, gap G-054). A participant the room
+    /// does not have is refused with [`StoreError::ParticipantNotFound`].
+    fn update_participant(
+        &self,
+        participant: Participant,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Removes the room's participant `participant_id`; removing one the
+    /// room does not have changes nothing (RFC §14.1 `delete_participant`).
+    fn delete_participant(
+        &self,
+        room_id: &RoomId,
+        participant_id: &ParticipantId,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The room's participants, in the order they were created (RFC §14.1
+    /// `list_participants`).
+    fn list_participants(
+        &self,
+        room_id: &RoomId,
+    ) -> impl Future<Output = Result<Vec<Participant>, StoreError>> + Send;
 
     /// The event the room committed from `channel_id` with idempotency
     /// `key` (RFC §13.4, gap G-023).

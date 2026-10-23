@@ -14,8 +14,9 @@ pub enum WriteRefusal {
     ReadOnly,
     /// The binding is muted.
     Muted,
-    /// The source has no binding in the room, such as a channel the
-    /// integrator detached (RFC §7.5 rule 7, gap G-015).
+    /// The source has no binding in the room: a channel the integrator
+    /// detached, which step 2 leaves unbound (RFC §7.5 rule 7, §10.1 step 2,
+    /// gap G-015).
     Unbound,
 }
 

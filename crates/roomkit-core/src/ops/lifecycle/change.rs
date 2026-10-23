@@ -12,8 +12,13 @@ use crate::rules::lifecycle::{self, Transition};
 
 /// A change made under a room's lock.
 #[derive(Clone, Debug)]
-pub(super) enum Change {
+pub(crate) enum Change {
+    /// The integrator's attach, which replaces the room's binding of the
+    /// channel and clears its revocation (RFC §7.5 rule 7).
     Attach(Box<ChannelBinding>),
+    /// The framework's own attach for a message arriving on the channel
+    /// (RFC §10.1 step 2), made only where rule 7 allows it (gap G-053).
+    AttachAutomatically(Box<ChannelBinding>),
     Detach(ChannelId),
     UpdateBinding {
         channel_id: ChannelId,
@@ -27,7 +32,7 @@ pub(super) enum Change {
 /// What a change did. A change made carries the room as it left it, which
 /// its hooks receive.
 #[derive(Clone, Debug)]
-pub(super) enum Changed {
+pub(crate) enum Changed {
     Attached {
         binding: Box<ChannelBinding>,
         context: Box<RoomContext>,
@@ -53,21 +58,22 @@ pub(super) enum Changed {
 /// The writes a change makes, in order, and what it did once they are
 /// stored.
 #[derive(Debug)]
-pub(super) struct Decision {
-    pub(super) writes: VecDeque<Request>,
-    pub(super) changed: Changed,
+pub(crate) struct Decision {
+    pub(crate) writes: VecDeque<Request>,
+    pub(crate) changed: Changed,
 }
 
 impl Change {
     /// Decides the change on `context`, the room as the gate left it, at
     /// `now`.
-    pub(super) fn decide(
+    pub(crate) fn decide(
         &self,
         context: Box<RoomContext>,
         now: Timestamp,
     ) -> Result<Decision, LifecycleError> {
         match self {
             Self::Attach(binding) => Ok(attach(binding, context, now)),
+            Self::AttachAutomatically(binding) => Ok(attach_automatically(binding, context)),
             Self::Detach(channel_id) => detach(channel_id, context, now),
             Self::UpdateBinding { channel_id, update } => {
                 update_binding(channel_id, update, context)
@@ -84,7 +90,7 @@ impl Change {
 impl Changed {
     /// What the change reports after the release, and the context its hooks
     /// receive; `None` for a change that reports nothing.
-    pub(super) fn reported(&self) -> Option<(Reported<'_>, &RoomContext)> {
+    pub(crate) fn reported(&self) -> Option<(Reported<'_>, &RoomContext)> {
         match self {
             Self::Attached { binding, context } => {
                 Some((Reported::ChannelAttached(binding), context.as_ref()))
@@ -111,7 +117,7 @@ impl Changed {
     }
 
     /// The room as the change left it.
-    pub(super) fn into_context(self) -> Box<RoomContext> {
+    pub(crate) fn into_context(self) -> Box<RoomContext> {
         match self {
             Self::Attached { context, .. }
             | Self::Detached { context, .. }
@@ -150,6 +156,28 @@ fn attach(binding: &ChannelBinding, mut context: Box<RoomContext>, now: Timestam
     context.bindings.push(binding.clone());
     Decision {
         writes,
+        changed: Changed::Attached {
+            binding: Box::new(binding.clone()),
+            context,
+        },
+    }
+}
+
+/// Stores the binding, unless the room binds the channel, revoked it or
+/// refuses the message the attach is for (RFC §7.5 rule 7, gap G-053): the
+/// framework never replaces a binding, and never undoes a detach.
+fn attach_automatically(binding: &ChannelBinding, mut context: Box<RoomContext>) -> Decision {
+    if !attachment::may_attach_automatically(&context, &binding.channel_id) {
+        return Decision {
+            writes: VecDeque::new(),
+            changed: Changed::Unchanged(context),
+        };
+    }
+    context.bindings.push(binding.clone());
+    Decision {
+        writes: VecDeque::from([Request::StoreBinding {
+            binding: binding.clone(),
+        }]),
         changed: Changed::Attached {
             binding: Box::new(binding.clone()),
             context,

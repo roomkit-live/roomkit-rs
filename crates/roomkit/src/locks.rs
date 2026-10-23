@@ -11,18 +11,25 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 /// no room) leave nothing behind.
 ///
 /// The kit keeps two sets of them: the room locks the operations ask for
-/// through `AcquireLock`, and the room lanes that run one inbound operation
-/// per room at a time (RFC §10.2). Both hold within one process only; a
-/// store shared across processes needs a distributed lock (RFC §13.5).
+/// through `AcquireLock`, and the room lanes they ask for through
+/// `EnterLane`, which run one inbound operation per room at a time (RFC
+/// §10.2). Both hold within one process only; a store shared across
+/// processes needs a distributed lock (RFC §13.5).
 #[derive(Debug, Default)]
 pub(crate) struct RoomMutexes {
     rooms: Mutex<HashMap<RoomId, Arc<AsyncMutex<()>>>>,
 }
 
 /// A held room mutex; dropping it releases the mutex.
+///
+/// The guard exists from the moment its caller starts waiting, holding a
+/// handle on the mutex, so a wait that is cancelled before it holds the
+/// mutex goes through the same drop and leaves nothing behind.
 #[derive(Debug)]
 pub(crate) struct RoomGuard<'mutexes> {
     guard: Option<OwnedMutexGuard<()>>,
+    /// The waiter's handle on the mutex, until it holds it.
+    waiting: Option<Arc<AsyncMutex<()>>>,
     room_id: RoomId,
     mutexes: &'mutexes RoomMutexes,
 }
@@ -31,11 +38,18 @@ impl RoomMutexes {
     /// Waits for the room's mutex and returns its guard.
     pub(crate) async fn lock(&self, room_id: &RoomId) -> RoomGuard<'_> {
         let mutex = Arc::clone(self.rooms().entry(room_id.clone()).or_default());
-        RoomGuard {
-            guard: Some(mutex.lock_owned().await),
+        let mut guard = RoomGuard {
+            guard: None,
+            waiting: Some(Arc::clone(&mutex)),
             room_id: room_id.clone(),
             mutexes: self,
-        }
+        };
+        // Cancelled during this wait, the pending lock future, declared after
+        // `guard`, is dropped first, then `guard`, which finds the mutex held
+        // by the map alone when nobody else uses it.
+        guard.guard = Some(mutex.lock_owned().await);
+        guard.waiting = None;
+        guard
     }
 
     fn rooms(&self) -> MutexGuard<'_, HashMap<RoomId, Arc<AsyncMutex<()>>>> {
@@ -45,8 +59,10 @@ impl RoomMutexes {
 
 impl Drop for RoomGuard<'_> {
     fn drop(&mut self) {
-        // Release the mutex first: its guard holds a reference to it.
+        // Release the mutex first, and a waiter's handle on it: each holds a
+        // reference to it.
         drop(self.guard.take());
+        drop(self.waiting.take());
         let mut rooms = self.mutexes.rooms();
         // A waiter cloned the mutex under this same lock before waiting, so a
         // mutex only the map still holds has neither holder nor waiter.
@@ -94,6 +110,29 @@ mod tests {
         assert!(
             mutexes.rooms().is_empty(),
             "the last holder removes the mutex"
+        );
+    }
+
+    /// The holder lets the mutex go while a waiter still holds its handle;
+    /// the waiter is then cancelled before it ever holds the mutex.
+    #[tokio::test]
+    async fn a_waiter_cancelled_before_it_holds_the_mutex_leaves_nothing_behind() {
+        let mutexes = Arc::new(RoomMutexes::default());
+        let held = mutexes.lock(&room_id()).await;
+        let waiter = {
+            let mutexes = Arc::clone(&mutexes);
+            tokio::spawn(async move {
+                drop(mutexes.lock(&room_id()).await);
+            })
+        };
+        // Let the waiter clone the mutex and start waiting.
+        tokio::task::yield_now().await;
+        drop(held);
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        assert!(
+            mutexes.rooms().is_empty(),
+            "the cancelled waiter removes the mutex"
         );
     }
 

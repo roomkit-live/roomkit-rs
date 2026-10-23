@@ -1,6 +1,10 @@
 //! The shape every change of a room shares: take the room's lock, read the
 //! room, apply its due timers, write the change, release the lock, then
 //! report it.
+//!
+//! [`LockedSection`] is that shape as a sub-machine: a lifecycle operation
+//! runs one as its whole work ([`LockedChange`]), and the inbound pipeline
+//! runs one for the attach of its step 2 (RFC §10.1 step 2).
 
 use std::mem;
 use std::sync::Arc;
@@ -12,19 +16,95 @@ use super::report;
 use crate::model::{ErrorRecord, RoomContext, RoomId};
 use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Request, Step};
-use crate::ops::{self, Cx, Environment, KitConfig};
+use crate::ops::{self, Cx, Environment, KitConfig, Progress};
 use crate::rules::timers::DueTransition;
 
-/// One change of a room, made under its lock.
+/// One change of a room, made under its lock, as an operation's whole work.
 #[derive(Debug)]
 pub(super) struct LockedChange {
     config: Arc<KitConfig>,
     io: Io,
-    section: Section,
+    section: LockedSection,
+    result: Option<Result<Changed, LifecycleError>>,
 }
 
+impl LockedChange {
+    pub(super) fn new(config: Arc<KitConfig>, room_id: RoomId, change: Change) -> Self {
+        Self {
+            config,
+            io: Io::new(),
+            section: LockedSection::new(room_id, change),
+            result: None,
+        }
+    }
+
+    /// A change refused before anything is read: it ends at once with
+    /// `error`, taking no lock.
+    pub(super) fn refused(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        change: Change,
+        error: LifecycleError,
+    ) -> Self {
+        let mut section = LockedSection::new(room_id, change);
+        section.state = State::Reported;
+        Self {
+            config,
+            io: Io::new(),
+            section,
+            result: Some(Err(error)),
+        }
+    }
+
+    /// Advances the change; `output` reads the operation's result from what
+    /// the change did and the timer transitions the gate applied.
+    pub(super) fn poll<T>(
+        &mut self,
+        environment: &mut dyn Environment,
+        output: impl Fn(Changed, &[DueTransition]) -> Option<T>,
+    ) -> Step<Result<T, LifecycleError>> {
+        let Self {
+            config,
+            io,
+            section,
+            result,
+        } = self;
+        let mut cx = Cx {
+            config,
+            env: environment,
+            io,
+        };
+        section.start(&mut cx);
+        while let Some((effect, outcome)) = cx.io.next_outcome() {
+            if let Progress::Done(done) = section.accept(&mut cx, effect, outcome) {
+                *result = Some(done);
+            }
+        }
+        let ready = result.take().map(|result| {
+            result.and_then(|changed| {
+                output(changed, section.transitions()).ok_or_else(|| {
+                    LifecycleError::Store(ErrorRecord::new(
+                        "Internal",
+                        "the change produced another kind of result",
+                    ))
+                })
+            })
+        });
+        self.io.step(ready)
+    }
+
+    pub(super) fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
+        self.io.complete(id, outcome)
+    }
+}
+
+/// One change of a room under its lock, as a sub-machine: started once, then
+/// handed the outcome of each of its effects until it is done.
+///
+/// Every path that took the lock releases it before the section is done,
+/// and a change made is reported after the release (gap G-027).
 #[derive(Debug)]
-struct Section {
+pub(crate) struct LockedSection {
     room_id: RoomId,
     change: Change,
     state: State,
@@ -66,90 +146,51 @@ impl State {
     }
 }
 
-impl LockedChange {
-    pub(super) fn new(config: Arc<KitConfig>, room_id: RoomId, change: Change) -> Self {
-        Self::with_state(config, room_id, change, State::Start)
-    }
-
-    /// A change refused before anything is read: it ends at once with
-    /// `error`, taking no lock.
-    pub(super) fn refused(
-        config: Arc<KitConfig>,
-        room_id: RoomId,
-        change: Change,
-        error: LifecycleError,
-    ) -> Self {
-        Self::with_state(config, room_id, change, State::Finished(Err(error)))
-    }
-
-    fn with_state(config: Arc<KitConfig>, room_id: RoomId, change: Change, state: State) -> Self {
+impl LockedSection {
+    /// The section making `change` in `room_id`.
+    pub(crate) fn new(room_id: RoomId, change: Change) -> Self {
         Self {
-            config,
-            io: Io::new(),
-            section: Section {
-                room_id,
-                change,
-                state,
-                timers: Vec::new(),
-            },
+            room_id,
+            change,
+            state: State::Start,
+            timers: Vec::new(),
         }
     }
 
-    /// Advances the change; `output` reads the operation's result from what
-    /// the change did and the timer transitions the gate applied.
-    pub(super) fn poll<T>(
-        &mut self,
-        environment: &mut dyn Environment,
-        output: impl Fn(Changed, &[DueTransition]) -> Option<T>,
-    ) -> Step<Result<T, LifecycleError>> {
-        let Self {
-            config,
-            io,
-            section,
-        } = self;
-        let mut cx = Cx {
-            config,
-            env: environment,
-            io,
-        };
-        section.advance(&mut cx);
-        let result = section.take_result().map(|result| {
-            result.and_then(|changed| {
-                output(changed, &section.timers).ok_or_else(|| {
-                    LifecycleError::Store(ErrorRecord::new(
-                        "Internal",
-                        "the change produced another kind of result",
-                    ))
-                })
-            })
-        });
-        self.io.step(result)
-    }
-
-    pub(super) fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
-        self.io.complete(id, outcome)
-    }
-}
-
-impl Section {
-    fn advance(&mut self, cx: &mut Cx<'_>) {
+    /// Takes the room's lock, once.
+    pub(crate) fn start(&mut self, cx: &mut Cx<'_>) {
         if matches!(self.state, State::Start) {
             let room_id = self.room_id.clone();
             self.state = State::Locking(cx.io.issue(Request::AcquireLock { room_id }));
         }
-        while let Some((effect, outcome)) = cx.io.next_outcome() {
-            self.accept(cx, effect, outcome);
-        }
     }
 
-    fn accept(&mut self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) {
-        if self.state.awaits() != Some(effect) {
+    /// Whether the section waits for `effect`.
+    pub(crate) fn awaits(&self, effect: EffectId) -> bool {
+        self.state.awaits() == Some(effect)
+    }
+
+    /// The timer transitions the gate applied.
+    pub(crate) fn transitions(&self) -> &[DueTransition] {
+        &self.timers
+    }
+
+    /// Takes the driver's answer to the section's outstanding effect. The
+    /// section is done once the lock is released, or could not be taken,
+    /// with what the change did.
+    pub(crate) fn accept(
+        &mut self,
+        cx: &mut Cx<'_>,
+        effect: EffectId,
+        outcome: Outcome,
+    ) -> Progress<Result<Changed, LifecycleError>> {
+        if !self.awaits(effect) {
             debug_assert!(
                 false,
                 "lifecycle change received {effect:?} in {:?}",
                 self.state
             );
-            return;
+            return Progress::Waiting;
         }
         self.state = match mem::replace(&mut self.state, State::Reported) {
             State::Locking(_) => self.on_locked(cx, outcome),
@@ -159,16 +200,19 @@ impl Section {
             State::Releasing { result, .. } => self.on_released(cx, result, outcome),
             state @ (State::Start | State::Finished(_) | State::Reported) => state,
         };
-    }
-
-    fn take_result(&mut self) -> Option<Result<Changed, LifecycleError>> {
-        if !matches!(self.state, State::Finished(_)) {
-            return None;
+        match mem::replace(&mut self.state, State::Reported) {
+            State::Finished(result) => Progress::Done(result),
+            state @ (State::Start
+            | State::Locking(_)
+            | State::Loading(_)
+            | State::ApplyingTimers { .. }
+            | State::Writing { .. }
+            | State::Releasing { .. }
+            | State::Reported) => {
+                self.state = state;
+                Progress::Waiting
+            }
         }
-        let State::Finished(result) = mem::replace(&mut self.state, State::Reported) else {
-            return None;
-        };
-        Some(result)
     }
 
     fn on_locked(&self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
@@ -213,7 +257,7 @@ impl Section {
     }
 
     /// Decides the change on the room as the gate left it.
-    fn decide(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
+    fn decide(&self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
         let now = cx.env.now();
         match self.change.decide(context, now) {
             Ok(decision) => self.write_next(cx, decision),
@@ -241,7 +285,7 @@ impl Section {
     }
 
     /// Reports the change once the lock is released. A failed release
-    /// changes nothing the change did; a lifecycle operation reports no error
+    /// changes nothing the change did; a lifecycle change reports no error
     /// beside its result, so the failure is only logged (gap G-025).
     fn on_released(
         &self,

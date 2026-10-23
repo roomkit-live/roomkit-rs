@@ -41,6 +41,9 @@ pub enum HookTrigger {
     OnChannelMuted,
     /// A channel was unmuted in a room (RFC §7.2).
     OnChannelUnmuted,
+    /// A session started: the inbound pipeline created a room for a
+    /// channel other than `VOICE` and `REALTIME_VOICE` (RFC §10.1 step 2).
+    OnSessionStarted,
     /// A turn failed.
     OnError,
     /// A task a hook or a channel filed was stored (RFC §10.1 steps 10, 11
@@ -71,6 +74,7 @@ impl HookTrigger {
             | Self::OnChannelDetached
             | Self::OnChannelMuted
             | Self::OnChannelUnmuted
+            | Self::OnSessionStarted
             | Self::OnError
             | Self::OnTaskCreated => HookExecution::Async,
         }
@@ -90,6 +94,7 @@ impl HookTrigger {
             | Self::OnChannelDetached
             | Self::OnChannelMuted
             | Self::OnChannelUnmuted
+            | Self::OnSessionStarted
             | Self::OnError
             | Self::OnTaskCreated => false,
         }

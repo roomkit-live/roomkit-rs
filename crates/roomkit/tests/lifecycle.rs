@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, EventContent, EventId, InboundMessage, Metadata, ObservationId,
-    RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, Timestamp,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    EventContent, EventId, InboundMessage, Metadata, ObservationId, RoomContext, RoomEvent, RoomId,
+    RoomStatus, RoomTimers, Timestamp,
 };
 use roomkit::ops::{
     ChannelDeclaration, Environment, FrameworkEvent, InboundError, LifecycleError,
@@ -364,14 +364,12 @@ struct Tagger {
 impl Tagger {
     fn new() -> Self {
         Self {
-            declaration: ChannelDeclaration {
-                channel_id: channel("crm"),
-                channel_type: ChannelType::Webhook,
-                category: ChannelCategory::Transport,
-                direction: ChannelDirection::Inbound,
-                capabilities: ChannelCapabilities::default(),
-                provider_name: None,
-            },
+            declaration: ChannelDeclaration::new(
+                channel("crm"),
+                ChannelType::Webhook,
+                ChannelCategory::Transport,
+                ChannelDirection::Inbound,
+            ),
         }
     }
 }

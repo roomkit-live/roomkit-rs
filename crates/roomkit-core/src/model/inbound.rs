@@ -14,6 +14,8 @@ pub struct InboundMessage {
     /// The registered channel the message arrived on.
     pub channel_id: ChannelId,
     /// The sender's address: a phone number, an email address, a user id.
+    /// The pipeline writes it in its channel's form before anything reads it
+    /// (RFC §5.7, §10.1 step 1).
     pub sender_id: String,
     /// The parsed content.
     pub content: EventContent,

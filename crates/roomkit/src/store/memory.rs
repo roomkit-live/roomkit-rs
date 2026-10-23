@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, EventStatus, Observation, Room, RoomContext, RoomEvent, RoomId,
-    RoomUpdates, Task,
+    ChannelBinding, ChannelId, EventStatus, Observation, Participant, ParticipantId, Room,
+    RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
 };
 use roomkit_core::ops::RoomCounters;
 
@@ -25,9 +25,19 @@ pub struct InMemoryStore {
 struct Record {
     room: Room,
     bindings: Vec<ChannelBinding>,
+    participants: Vec<Participant>,
     events: Vec<RoomEvent>,
     tasks: Vec<Task>,
     observations: Vec<Observation>,
+}
+
+impl Record {
+    /// Whether the room has a participant with the id.
+    fn has_participant(&self, participant_id: &ParticipantId) -> bool {
+        self.participants
+            .iter()
+            .any(|participant| &participant.id == participant_id)
+    }
 }
 
 impl InMemoryStore {
@@ -80,6 +90,7 @@ impl ConversationStore for InMemoryStore {
             Record {
                 room,
                 bindings: Vec::new(),
+                participants: Vec::new(),
                 events: Vec::new(),
                 tasks: Vec::new(),
                 observations: Vec::new(),
@@ -153,10 +164,73 @@ impl ConversationStore for InMemoryStore {
             RoomContext {
                 room: record.room.clone(),
                 bindings: record.bindings.clone(),
-                participants: Vec::new(),
+                participants: record.participants.clone(),
                 recent_events: record.events.iter().skip(skip).cloned().collect(),
             }
         }))
+    }
+
+    async fn create_participant(&self, participant: Participant) -> Result<(), StoreError> {
+        let room_id = participant.room_id.clone();
+        self.write(&room_id, |record| {
+            if record.has_participant(&participant.id) {
+                return Err(StoreError::ParticipantExists {
+                    room_id: room_id.clone(),
+                    participant_id: participant.id,
+                });
+            }
+            record.participants.push(participant);
+            Ok(())
+        })
+    }
+
+    async fn get_participant(
+        &self,
+        room_id: &RoomId,
+        participant_id: &ParticipantId,
+    ) -> Result<Option<Participant>, StoreError> {
+        self.read(room_id, |record| {
+            record
+                .participants
+                .iter()
+                .find(|participant| &participant.id == participant_id)
+                .cloned()
+        })
+    }
+
+    async fn update_participant(&self, participant: Participant) -> Result<(), StoreError> {
+        let room_id = participant.room_id.clone();
+        self.write(&room_id, |record| {
+            let Some(stored) = record
+                .participants
+                .iter_mut()
+                .find(|stored| stored.id == participant.id)
+            else {
+                return Err(StoreError::ParticipantNotFound {
+                    room_id: room_id.clone(),
+                    participant_id: participant.id,
+                });
+            };
+            *stored = participant;
+            Ok(())
+        })
+    }
+
+    async fn delete_participant(
+        &self,
+        room_id: &RoomId,
+        participant_id: &ParticipantId,
+    ) -> Result<(), StoreError> {
+        self.write(room_id, |record| {
+            record
+                .participants
+                .retain(|participant| &participant.id != participant_id);
+            Ok(())
+        })
+    }
+
+    async fn list_participants(&self, room_id: &RoomId) -> Result<Vec<Participant>, StoreError> {
+        self.read(room_id, |record| record.participants.clone())
     }
 
     async fn find_by_idempotency_key(
@@ -425,6 +499,81 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.list_bindings(&room_id()).await.unwrap(), []);
+    }
+
+    fn jean() -> Participant {
+        Participant::new(
+            ParticipantId::new("p_jean").unwrap(),
+            room_id(),
+            ChannelId::new("sms").unwrap(),
+            Timestamp::UNIX_EPOCH,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_context_holds_the_room_s_participants() {
+        let store = store_with_room().await;
+        store.create_participant(jean()).await.unwrap();
+        let context = store.load_context(&room_id(), 10).await.unwrap().unwrap();
+        assert_eq!(context.participants, [jean()]);
+    }
+
+    #[tokio::test]
+    async fn a_participant_id_cannot_be_created_twice_in_a_room() {
+        let store = store_with_room().await;
+        store.create_participant(jean()).await.unwrap();
+        assert_eq!(
+            store.create_participant(jean()).await,
+            Err(StoreError::ParticipantExists {
+                room_id: room_id(),
+                participant_id: jean().id,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_participant_is_found_within_its_room() {
+        let store = store_with_room().await;
+        store.create_participant(jean()).await.unwrap();
+        assert_eq!(
+            store.get_participant(&room_id(), &jean().id).await,
+            Ok(Some(jean()))
+        );
+    }
+
+    #[tokio::test]
+    async fn an_updated_participant_is_written_whole() {
+        let store = store_with_room().await;
+        store.create_participant(jean()).await.unwrap();
+        let renamed = Participant {
+            display_name: Some("Jean Tremblay".to_owned()),
+            ..jean()
+        };
+        store.update_participant(renamed.clone()).await.unwrap();
+        assert_eq!(store.list_participants(&room_id()).await, Ok(vec![renamed]));
+    }
+
+    #[tokio::test]
+    async fn updating_a_participant_the_room_does_not_have_is_refused() {
+        let store = store_with_room().await;
+        assert_eq!(
+            store.update_participant(jean()).await,
+            Err(StoreError::ParticipantNotFound {
+                room_id: room_id(),
+                participant_id: jean().id,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deleted_participant_is_gone() {
+        let store = store_with_room().await;
+        store.create_participant(jean()).await.unwrap();
+        store
+            .delete_participant(&room_id(), &jean().id)
+            .await
+            .unwrap();
+        assert_eq!(store.list_participants(&room_id()).await, Ok(Vec::new()));
     }
 
     #[tokio::test]

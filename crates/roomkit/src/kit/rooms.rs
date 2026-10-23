@@ -81,6 +81,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// clears the channel's revocation if the channel was detached from the
     /// room (RFC §7.5 rule 7).
     ///
+    /// A transport that delivers to a recipient finds it in the binding's
+    /// metadata, under the key its declaration names (`phone_number`,
+    /// `email_address`, ...): a delivery to a binding without one is refused
+    /// `no_recipient` (RFC §10.2 step 3d).
+    ///
     /// # Errors
     ///
     /// Returns [`KitError::UnknownChannel`] for a channel not registered, and
@@ -97,15 +102,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let declaration = config
             .channel(channel_id)
             .ok_or_else(|| KitError::UnknownChannel(channel_id.clone()))?;
-        let mut binding = ChannelBinding::new(
-            channel_id.clone(),
-            room_id.clone(),
-            declaration.channel_type,
-            declaration.category,
-            declaration.direction,
-            self.inner.environment().now(),
-        );
-        binding.capabilities = declaration.capabilities.clone();
+        let mut binding = declaration.binding(room_id.clone(), self.inner.environment().now());
         configure(&mut binding);
         // `configure` adjusts the binding's permissions and data, never which
         // channel it binds to which room, nor what the channel is.

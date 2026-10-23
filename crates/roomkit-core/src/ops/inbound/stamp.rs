@@ -8,14 +8,17 @@
 
 use crate::model::{
     ChannelBinding, ErrorRecord, EventContent, EventDirection, EventId, EventSource, EventStatus,
-    EventType, InboundMessage, InjectedEvent, Metadata, RoomEvent, RoomId, Timestamp, Visibility,
+    EventType, InboundMessage, InjectedEvent, Metadata, ParticipantId, RoomEvent, RoomId,
+    Timestamp, Visibility,
 };
 use crate::ops::ChannelDeclaration;
 use crate::rules::chain_depth;
 
 /// The event a channel that keeps no data of its own parses from `message`:
-/// its content, its provider data, its sender as the source's participant
-/// address. A driver's default `handle_inbound()` (RFC §6.1).
+/// its content, its provider data, and its sender, in the channel's form
+/// (RFC §10.1 step 1), named on the source as its `participant_id`, as the
+/// binding a room is created for names it (RFC §5.7, §10.1 step 2). A
+/// driver's default `handle_inbound()` (RFC §6.1).
 pub fn default_inbound_event(
     message: &InboundMessage,
     channel: &ChannelDeclaration,
@@ -29,6 +32,7 @@ pub fn default_inbound_event(
         EventDirection::Inbound,
     );
     source.provider.clone_from(&channel.provider_name);
+    source.participant_id = ParticipantId::new(message.sender_id.clone()).ok();
     source.external_id.clone_from(&message.external_id);
     source.raw_payload.clone_from(&message.raw_payload);
     source
@@ -207,18 +211,17 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::model::{
-        ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventId,
-    };
+    use crate::model::{ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventId};
 
     fn sms() -> ChannelDeclaration {
         ChannelDeclaration {
-            channel_id: ChannelId::new("sms").unwrap(),
-            channel_type: ChannelType::Sms,
-            category: ChannelCategory::Transport,
-            direction: ChannelDirection::Bidirectional,
-            capabilities: ChannelCapabilities::default(),
             provider_name: Some("TwilioSMS".to_owned()),
+            ..ChannelDeclaration::new(
+                ChannelId::new("sms").unwrap(),
+                ChannelType::Sms,
+                ChannelCategory::Transport,
+                ChannelDirection::Bidirectional,
+            )
         }
     }
 
@@ -270,6 +273,14 @@ mod tests {
         assert_eq!(
             (event.chain_depth, event.idempotency_key.as_deref()),
             (2, Some("SM1"))
+        );
+    }
+
+    #[test]
+    fn the_default_inbound_event_names_its_sender_as_the_source_s_participant() {
+        assert_eq!(
+            trigger().source.participant_id.map(String::from),
+            Some("+15551234567".to_owned())
         );
     }
 

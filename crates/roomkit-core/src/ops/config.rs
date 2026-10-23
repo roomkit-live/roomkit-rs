@@ -5,8 +5,10 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::model::{
-    ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId, ChannelType,
+    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId, ChannelType,
+    RoomId, Timestamp,
 };
+use crate::rules::addresses::{self, Addressing, CountryCode};
 use crate::rules::chain_depth::DEFAULT_MAX_CHAIN_DEPTH;
 use crate::rules::hook_registry::HookRegistry;
 
@@ -29,6 +31,61 @@ pub struct ChannelDeclaration {
     pub capabilities: ChannelCapabilities,
     /// The provider or backend behind it, for event attribution (RFC §5.2).
     pub provider_name: Option<String>,
+    /// The binding metadata key it delivers to (RFC §5.7, Appendix A):
+    /// `phone_number`, `email_address`, ... A transport delivery whose
+    /// binding holds no recipient under it is refused before any send (RFC
+    /// §10.2 step 3d). `None` for a channel that delivers to a destination of
+    /// its own, a webhook's URL or a WebSocket's connections, which needs no
+    /// recipient.
+    pub recipient_key: Option<String>,
+    /// The country code a phone number written without one takes (RFC
+    /// §5.7); `None` keeps such a number as written.
+    pub country_code: Option<CountryCode>,
+}
+
+impl ChannelDeclaration {
+    /// A channel of `channel_type` with the RFC's defaults: the default
+    /// capabilities, no provider name, no country code, and the recipient
+    /// key Appendix A gives its type (gap G-051).
+    pub fn new(
+        channel_id: ChannelId,
+        channel_type: ChannelType,
+        category: ChannelCategory,
+        direction: ChannelDirection,
+    ) -> Self {
+        Self {
+            channel_id,
+            channel_type,
+            category,
+            direction,
+            capabilities: ChannelCapabilities::default(),
+            provider_name: None,
+            recipient_key: addresses::recipient_key(channel_type).map(str::to_owned),
+            country_code: None,
+        }
+    }
+
+    /// How its senders are addressed, which their type decides (RFC §5.7,
+    /// gap G-051).
+    pub fn addressing(&self) -> Addressing {
+        Addressing::of(self.channel_type)
+    }
+
+    /// Its binding to `room_id` at the RFC's defaults: read-write, unmuted,
+    /// visible to all, naming no correspondent and no recipient, with the
+    /// channel's capabilities (RFC §5.7).
+    pub fn binding(&self, room_id: RoomId, attached_at: Timestamp) -> ChannelBinding {
+        let mut binding = ChannelBinding::new(
+            self.channel_id.clone(),
+            room_id,
+            self.channel_type,
+            self.category,
+            self.direction,
+            attached_at,
+        );
+        binding.capabilities = self.capabilities.clone();
+        binding
+    }
 }
 
 /// Why a kit configuration change was refused.

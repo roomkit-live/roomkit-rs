@@ -59,7 +59,7 @@ mod create_room {
 
     #[test]
     fn stores_the_room_and_emits_room_created() {
-        let mut sim = Sim::new();
+        let mut sim = Sim::without_rooms();
         let room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
         let created = sim.run(CreateRoom::new(sim.shared_config(), room.clone()));
         assert_eq!(
@@ -70,7 +70,7 @@ mod create_room {
 
     #[test]
     fn fires_on_room_created() {
-        let mut sim = Sim::new();
+        let mut sim = Sim::without_rooms();
         sim.observer("welcome", HookTrigger::OnRoomCreated);
         let room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
         sim.run(CreateRoom::new(sim.shared_config(), room)).unwrap();
@@ -925,12 +925,13 @@ mod the_status_gate {
         sim.env.advance(Duration::from_secs(121));
         sim.send(Sim::message("sms", "Still there?")).unwrap();
         assert_eq!(
-            sim.trace[2..],
+            sim.trace[3..],
             [
                 "lock room_1",
                 "load_context room_1",
                 "update room room_1 Closed",
                 "release room_1",
+                "leave lane room_1",
             ]
         );
     }
@@ -1044,7 +1045,7 @@ mod the_status_gate {
             (
                 sim.timeline_lines(),
                 sim.framework_event_names(),
-                sim.trace[sim.trace.len() - 4..].to_vec()
+                sim.trace[sim.trace.len() - 5..].to_vec()
             ),
             (
                 vec!["#0 sms delivered \"Go deeper\"".to_owned()],
@@ -1060,7 +1061,8 @@ mod the_status_gate {
                     "lock room_1",
                     "load_context room_1",
                     "update room room_1 Closed",
-                    "release room_1"
+                    "release room_1",
+                    "leave lane room_1"
                 ]
                 .map(str::to_owned)
                 .to_vec()
@@ -1236,7 +1238,7 @@ mod a_failed_store_write {
     fn in_the_gate_fails_the_timer_check() {
         let mut sim = timed_room();
         sim.observer("on_paused", HookTrigger::OnRoomPaused);
-        sim.failing_write = Some("update room");
+        sim.failing_effect = Some("update room");
         sim.env.advance(Duration::from_secs(90));
         let checked = sim.run(CheckTimers::new(sim.shared_config(), room_id()));
         assert_eq!(
@@ -1260,13 +1262,13 @@ mod a_failed_store_write {
     #[test]
     fn in_the_gate_fails_a_message_before_anything_is_committed() {
         let mut sim = paused_room();
-        sim.failing_write = Some("update room");
+        sim.failing_effect = Some("update room");
         sim.env.advance(Duration::from_secs(121));
         let sent = sim.send(Sim::message("sms", "Still there?"));
         assert_eq!(
             (
                 sent,
-                sim.trace[2..].to_vec(),
+                sim.trace[3..].to_vec(),
                 sim.notices,
                 sim.timeline.len()
             ),
@@ -1276,7 +1278,8 @@ mod a_failed_store_write {
                     "lock room_1",
                     "load_context room_1",
                     "update room room_1 failed",
-                    "release room_1"
+                    "release room_1",
+                    "leave lane room_1"
                 ]
                 .map(str::to_owned)
                 .to_vec(),
@@ -1291,7 +1294,7 @@ mod a_failed_store_write {
         let mut sim = Sim::new();
         sim.transport("sms");
         sim.observer("audit", HookTrigger::OnChannelDetached);
-        sim.failing_write = Some("delete binding");
+        sim.failing_effect = Some("delete binding");
         let detached = sim.run(DetachChannel::new(
             sim.shared_config(),
             room_id(),

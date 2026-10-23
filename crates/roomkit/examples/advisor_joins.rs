@@ -23,8 +23,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    Access, BindingUpdate, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection,
-    ChannelId, ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType,
+    Access, BindingUpdate, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId,
+    ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType,
     InboundMessage, RoomContext, RoomEvent, RoomId, Timestamp, Visibility,
 };
 use roomkit::ops::{ChannelDeclaration, FrameworkEvent, SequentialEnvironment};
@@ -61,12 +61,13 @@ impl Assistant {
     fn new(channel_id: ChannelId) -> Self {
         Self {
             declaration: ChannelDeclaration {
-                channel_id,
-                channel_type: ChannelType::Ai,
-                category: ChannelCategory::Intelligence,
-                direction: ChannelDirection::Bidirectional,
-                capabilities: ChannelCapabilities::default(),
                 provider_name: Some("Assistant".to_owned()),
+                ..ChannelDeclaration::new(
+                    channel_id,
+                    ChannelType::Ai,
+                    ChannelCategory::Intelligence,
+                    ChannelDirection::Bidirectional,
+                )
             },
         }
     }

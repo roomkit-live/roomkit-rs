@@ -60,6 +60,18 @@ pub enum Request {
         /// The room.
         room_id: RoomId,
     },
+    /// Enter the room's delivery lane, which one operation holds at a time,
+    /// so that one event's delivery set completes before the next one's
+    /// begins (RFC §10.2). Answer [`Outcome::Entered`] once it is held.
+    EnterLane {
+        /// The room.
+        room_id: RoomId,
+    },
+    /// Leave the room's delivery lane. Answer [`Outcome::Left`].
+    LeaveLane {
+        /// The room.
+        room_id: RoomId,
+    },
     /// Read the room with its bindings, its participants and its latest
     /// events, refused ones included (RFC §10.1 step 3). Answer
     /// [`Outcome::Context`], or [`Outcome::RoomNotFound`].
@@ -181,6 +193,20 @@ pub enum Request {
         /// The hook's timeout.
         timeout: Duration,
     },
+    /// Run these hooks concurrently as observers of `event`, each within
+    /// its timeout, and answer once every one has finished (gap G-050):
+    /// what they return is discarded and what they raise is logged, as for
+    /// [`Notice::AsyncHooks`]. Answer [`Outcome::Observed`].
+    RunObservers {
+        /// The trigger.
+        trigger: HookTrigger,
+        /// The hooks to run.
+        hooks: Vec<HookId>,
+        /// Their payload.
+        event: Box<RoomEvent>,
+        /// The room's context, whole.
+        context: Box<RoomContext>,
+    },
 }
 
 /// The room's counters after a commit (RFC §10.1 step 12).
@@ -204,6 +230,10 @@ pub enum Outcome {
     Locked,
     /// The room's lock is released.
     Released,
+    /// The room's delivery lane is held.
+    Entered,
+    /// The room's delivery lane is left.
+    Left,
     /// The room's context.
     Context(Box<RoomContext>),
     /// No room has the requested id.
@@ -224,6 +254,8 @@ pub enum Outcome {
     Output(Box<ChannelOutput>),
     /// What the hook produced.
     Hook(Box<HookOutcome<RoomEvent>>),
+    /// Every observer has finished.
+    Observed,
     /// The driver could not carry the request out.
     Failed(ErrorRecord),
 }

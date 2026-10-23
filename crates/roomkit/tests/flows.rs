@@ -13,9 +13,9 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, EventContent, EventId, EventStatus, HookResult, InboundMessage,
-    RoomContext, RoomEvent, RoomId, Timestamp,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    EventContent, EventId, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    Timestamp,
 };
 use roomkit::ops::{
     ChannelDeclaration, FrameworkEvent, SequentialEnvironment, default_inbound_event,
@@ -237,14 +237,12 @@ impl Channel for ProviderIds {
 async fn an_inbound_event_is_committed_under_an_id_of_the_pipeline() {
     let (kit, _) = sms_and_agent().await;
     kit.register_channel(ProviderIds {
-        declaration: ChannelDeclaration {
-            channel_id: channel("whatsapp"),
-            channel_type: ChannelType::Whatsapp,
-            category: ChannelCategory::Transport,
-            direction: ChannelDirection::Bidirectional,
-            capabilities: ChannelCapabilities::default(),
-            provider_name: None,
-        },
+        declaration: ChannelDeclaration::new(
+            channel("whatsapp"),
+            ChannelType::Whatsapp,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        ),
     })
     .unwrap();
     kit.attach(&room_id(), &channel("whatsapp")).await.unwrap();
@@ -268,14 +266,12 @@ async fn an_inbound_event_is_committed_under_an_id_of_the_pipeline() {
 async fn a_channel_that_panics_fails_its_delivery_and_the_kit_goes_on() {
     let (kit, sms) = sms_and_agent().await;
     kit.register_channel(Panicking {
-        declaration: ChannelDeclaration {
-            channel_id: channel("broken"),
-            channel_type: ChannelType::Webhook,
-            category: ChannelCategory::Transport,
-            direction: ChannelDirection::Outbound,
-            capabilities: ChannelCapabilities::default(),
-            provider_name: None,
-        },
+        declaration: ChannelDeclaration::new(
+            channel("broken"),
+            ChannelType::Webhook,
+            ChannelCategory::Transport,
+            ChannelDirection::Outbound,
+        ),
     })
     .unwrap();
     kit.attach(&room_id(), &channel("broken")).await.unwrap();

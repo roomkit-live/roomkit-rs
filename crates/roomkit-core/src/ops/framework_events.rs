@@ -88,6 +88,17 @@ pub enum FrameworkEvent {
         /// The channel.
         channel_id: ChannelId,
     },
+    /// `ON_SESSION_STARTED` fired: the inbound pipeline created a room for a
+    /// message on a channel other than `VOICE` and `REALTIME_VOICE` (RFC §10.1
+    /// step 2). A voice session's start is the voice step's.
+    SessionStarted {
+        /// The room.
+        room_id: RoomId,
+        /// The channel the message came in on.
+        channel_id: ChannelId,
+        /// Its type.
+        channel_type: ChannelType,
+    },
     /// An event that entered through the inbound pipeline finished its
     /// delivery set and its `AFTER_BROADCAST` hooks.
     EventProcessed {

@@ -39,9 +39,13 @@ pub enum InboundError {
     /// step 1).
     #[error("no channel {0} is registered")]
     UnknownChannel(ChannelId),
-    /// The named room does not exist.
+    /// The room disappeared while the message was processed.
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
+    /// The named room belongs to another organization than the one the
+    /// caller acts for (RFC §17.2, gap G-051). Nothing was written.
+    #[error("room {0} belongs to another organization")]
+    OtherOrganization(RoomId),
     /// `standalone` belongs to instructions only (RFC §10.1.1 rule 7).
     #[error("only an instruction may stand alone")]
     StandaloneOutsideInstruction,
@@ -63,4 +67,8 @@ pub enum InboundError {
     /// what was decided under the lock stands (gap G-025).
     #[error("the room lock failed: {0:?}")]
     Lock(ErrorRecord),
+    /// The room's delivery lane could not be entered. A failed leave is no
+    /// error: what the call decided stands.
+    #[error("the room's delivery lane failed: {0:?}")]
+    Lane(ErrorRecord),
 }

@@ -1,25 +1,30 @@
-//! A driver for the trace tests: one room in memory, channels and hooks as
+//! A driver for the trace tests: rooms in memory, channels and hooks as
 //! closures, and a trace of every effect it executes.
 //!
 //! It also checks what every driver must hold for the protocol: a commit
-//! happens under the room's lock, the lock is never taken twice, and it is
-//! released when the operation ends.
+//! happens under its room's lock, a lock or a lane is never taken twice,
+//! and every lock and lane taken is let go when the operation ends. For an
+//! inbound operation it checks that the room's lane is held whenever the
+//! room's lock is taken, an event committed or a channel called, and that
+//! the lock is free while awaited observers run, so that they may take it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit_core::model::{
     Access, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelMediaType, ChannelOutput, ChannelType, ErrorRecord, EventContent, EventDirection,
-    EventId, EventSource, EventStatus, EventType, InboundMessage, Observation, Room, RoomContext,
-    RoomEvent, RoomId, RoomStatus, Task, Timestamp,
+    EventId, EventSource, EventStatus, EventType, InboundMessage, Observation, Participant, Room,
+    RoomContext, RoomEvent, RoomId, RoomStatus, Task, Timestamp,
 };
 use roomkit_core::ops::{
     ChannelDeclaration, Environment, FrameworkEvent, Inbound, InboundError, InboundResult,
-    KitConfig, Next, Notice, Operation, Outcome, Request, SequentialEnvironment,
-    default_inbound_event,
+    InboundTarget, KitConfig, Next, Notice, Operation, Outcome, Request, RoomCounters,
+    SequentialEnvironment, default_inbound_event,
 };
+use roomkit_core::rules::attachment;
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
 use roomkit_core::rules::transcoding::text_of;
@@ -45,39 +50,86 @@ struct Channel {
     deliver: Deliver,
 }
 
-/// The room, its channels and hooks, and what the driver did.
+/// A room of the store other than `room_1`.
+struct StoredRoom {
+    room: Room,
+    exists: bool,
+    bindings: Vec<ChannelBinding>,
+    participants: Vec<Participant>,
+    timeline: Vec<RoomEvent>,
+}
+
+impl StoredRoom {
+    /// The record of a room the store does not hold.
+    fn missing(room_id: RoomId) -> Self {
+        Self {
+            room: Room::new(room_id, Timestamp::UNIX_EPOCH),
+            exists: false,
+            bindings: Vec::new(),
+            participants: Vec::new(),
+            timeline: Vec::new(),
+        }
+    }
+}
+
+/// The rooms, their channels and hooks, and what the driver did.
+///
+/// The room the tests act on, `room_1`, is held in the fields below; the
+/// store keeps any other room apart and answers for each alike.
 pub(crate) struct Sim {
     pub(crate) env: SequentialEnvironment,
     pub(crate) config: KitConfig,
     pub(crate) room: Room,
     pub(crate) bindings: Vec<ChannelBinding>,
+    pub(crate) participants: Vec<Participant>,
     pub(crate) timeline: Vec<RoomEvent>,
     pub(crate) tasks: Vec<Task>,
     pub(crate) observations: Vec<Observation>,
+    /// Every effect executed, in order.
     pub(crate) trace: Vec<String>,
+    /// The effects executed and the notices performed, in the order the
+    /// driver met them: a notice reads `emit <framework event>` or
+    /// `fire <trigger>`.
+    pub(crate) journal: Vec<String>,
     pub(crate) notices: Vec<Notice>,
     channels: BTreeMap<ChannelId, Channel>,
     hooks: BTreeMap<HookId, Hook>,
-    lock_held: bool,
-    /// Whether the store finds the room.
+    /// The channel each awaited observer attaches to its room as it runs.
+    observer_attaches: BTreeMap<HookId, ChannelId>,
+    others: BTreeMap<RoomId, StoredRoom>,
+    locks_held: BTreeSet<RoomId>,
+    lanes_held: BTreeSet<RoomId>,
+    /// The room an inbound operation running must hold the lane of.
+    inbound_room: Option<RoomId>,
+    /// Whether the store finds `room_1`.
     pub(crate) room_exists: bool,
     /// What the hooks change in the room while they run.
     pub(crate) hooks_change: Option<HookChange>,
     /// The contexts the receiving channels parsed messages with.
     pub(crate) parse_contexts: Vec<RoomContext>,
+    /// The contexts the awaited observers ran with.
+    pub(crate) awaited_contexts: Vec<RoomContext>,
+    /// The room another call creates between a read that misses it and
+    /// the creation that follows, which then fails: the id is taken.
+    pub(crate) created_meanwhile: Option<Room>,
+    /// The messages the receiving channels parsed.
+    pub(crate) parsed_messages: Vec<InboundMessage>,
     /// The contexts `on_event()` was called with, by channel, in order.
     on_event_contexts: Vec<(ChannelId, RoomContext)>,
     /// Whether releasing the room lock fails. The lock is let go all the
     /// same, as a lease that expires would be.
     pub(crate) release_fails: bool,
+    /// Whether leaving a room's lane fails. The lane is let go all the same.
+    pub(crate) leave_fails: bool,
     /// How long each delivery call (`on_event()`, `deliver()`) takes on the
     /// simulated clock, as a slow turn or provider would: the clock moves
     /// while a cascade runs.
     pub(crate) delivery_duration: Duration,
-    /// The store write that fails, named by the start of its trace line
-    /// (`update room`, `delete binding sms`): it is answered `Failed` and
-    /// changes nothing.
-    pub(crate) failing_write: Option<&'static str>,
+    /// The effect that fails, named by the start of its trace line: a store
+    /// write (`update room`, `delete binding sms`, `store room`), a room
+    /// lock (`lock room_1`) or awaited observers (`await on_room_created`).
+    /// It is answered `Failed` and changes nothing.
+    pub(crate) failing_effect: Option<&'static str>,
 }
 
 /// The instant the simulated clock starts at, 2026-10-22T14:03:00Z.
@@ -96,6 +148,14 @@ pub(crate) fn room_id() -> RoomId {
     RoomId::new("room_1").unwrap()
 }
 
+/// The capabilities of every channel the simulated driver registers: text.
+fn text_only() -> ChannelCapabilities {
+    ChannelCapabilities {
+        media_types: [ChannelMediaType::Text].into(),
+        ..ChannelCapabilities::default()
+    }
+}
+
 impl Sim {
     /// An active, empty room `room_1`.
     pub(crate) fn new() -> Self {
@@ -104,21 +164,39 @@ impl Sim {
             config: KitConfig::new(),
             room: Room::new(room_id(), Timestamp::UNIX_EPOCH),
             bindings: Vec::new(),
+            participants: Vec::new(),
             timeline: Vec::new(),
             tasks: Vec::new(),
             observations: Vec::new(),
             trace: Vec::new(),
+            journal: Vec::new(),
             notices: Vec::new(),
             channels: BTreeMap::new(),
             hooks: BTreeMap::new(),
-            lock_held: false,
+            observer_attaches: BTreeMap::new(),
+            others: BTreeMap::new(),
+            locks_held: BTreeSet::new(),
+            lanes_held: BTreeSet::new(),
+            inbound_room: None,
             room_exists: true,
             hooks_change: None,
             parse_contexts: Vec::new(),
+            awaited_contexts: Vec::new(),
+            created_meanwhile: None,
+            parsed_messages: Vec::new(),
             on_event_contexts: Vec::new(),
             release_fails: false,
+            leave_fails: false,
             delivery_duration: Duration::ZERO,
-            failing_write: None,
+            failing_effect: None,
+        }
+    }
+
+    /// A store that holds no room yet.
+    pub(crate) fn without_rooms() -> Self {
+        Self {
+            room_exists: false,
+            ..Self::new()
         }
     }
 
@@ -149,11 +227,63 @@ impl Sim {
 
     /// An agent that answers every event it is asked with `reply`.
     pub(crate) fn echo_agent(&mut self, id: &str, reply: &'static str) -> &mut ChannelBinding {
-        let id_owned = id.to_owned();
-        self.agent(
-            id,
-            Box::new(move |event, _| Ok(respond(&id_owned, event, reply))),
-        )
+        let on_event = echo(id, reply);
+        self.agent(id, on_event)
+    }
+
+    /// Registers a transport that no room binds, declared as `declaration`
+    /// says, with text capabilities; it answers nothing and delivers.
+    pub(crate) fn declare(&mut self, declaration: ChannelDeclaration) {
+        self.register(
+            ChannelDeclaration {
+                capabilities: text_only(),
+                ..declaration
+            },
+            Box::new(|_, _| Ok(ChannelOutput::default())),
+        );
+    }
+
+    /// Registers a text transport of `channel_type` that no room binds, with
+    /// its type's defaults.
+    pub(crate) fn unbound_transport(&mut self, id: &str, channel_type: ChannelType) {
+        self.declare(ChannelDeclaration::new(
+            channel(id),
+            channel_type,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        ));
+    }
+
+    /// Registers an agent that no room binds, answering every event it is
+    /// asked with `reply`.
+    pub(crate) fn unbound_agent(&mut self, id: &str, reply: &'static str) {
+        let declaration = ChannelDeclaration {
+            capabilities: text_only(),
+            ..ChannelDeclaration::new(
+                channel(id),
+                ChannelType::Ai,
+                ChannelCategory::Intelligence,
+                ChannelDirection::Bidirectional,
+            )
+        };
+        self.register(declaration, echo(id, reply));
+    }
+
+    /// Binds the registered channel `id` to `room_1`, at its defaults.
+    pub(crate) fn attach(&mut self, id: &str) -> &mut ChannelBinding {
+        let declaration = self.config.channel(&channel(id)).unwrap();
+        let binding = declaration.binding(room_id(), Timestamp::UNIX_EPOCH);
+        self.bindings.push(binding);
+        self.bindings.last_mut().unwrap()
+    }
+
+    /// Detaches the channel `id` from `room_1` before the test runs, as the
+    /// integrator does: its binding goes, and the room keeps its revocation
+    /// (RFC §7.5 rule 7).
+    pub(crate) fn detach(&mut self, id: &str) {
+        self.bindings
+            .retain(|binding| binding.channel_id.as_str() != id);
+        attachment::revoke(&self.room, &channel(id), Timestamp::UNIX_EPOCH).apply(&mut self.room);
     }
 
     /// Replaces how a bound channel delivers.
@@ -170,38 +300,29 @@ impl Sim {
         category: ChannelCategory,
         on_event: OnEvent,
     ) -> &mut ChannelBinding {
-        let capabilities = ChannelCapabilities {
-            media_types: [ChannelMediaType::Text].into(),
-            ..ChannelCapabilities::default()
-        };
-        self.config
-            .register_channel(ChannelDeclaration {
-                channel_id: channel(id),
+        let declaration = ChannelDeclaration {
+            capabilities: text_only(),
+            ..ChannelDeclaration::new(
+                channel(id),
                 channel_type,
                 category,
-                direction: ChannelDirection::Bidirectional,
-                capabilities: capabilities.clone(),
-                provider_name: None,
-            })
-            .unwrap();
+                ChannelDirection::Bidirectional,
+            )
+        };
+        self.register(declaration, on_event);
+        self.attach(id)
+    }
+
+    fn register(&mut self, declaration: ChannelDeclaration, on_event: OnEvent) {
+        let id = declaration.channel_id.clone();
+        self.config.register_channel(declaration).unwrap();
         self.channels.insert(
-            channel(id),
+            id,
             Channel {
                 on_event,
                 deliver: Box::new(|_| Ok(ChannelOutput::default())),
             },
         );
-        let mut binding = ChannelBinding::new(
-            channel(id),
-            room_id(),
-            channel_type,
-            category,
-            ChannelDirection::Bidirectional,
-            Timestamp::UNIX_EPOCH,
-        );
-        binding.capabilities = capabilities;
-        self.bindings.push(binding);
-        self.bindings.last_mut().unwrap()
     }
 
     /// Registers a SYNC `BEFORE_BROADCAST` hook.
@@ -223,6 +344,20 @@ impl Sim {
         self.config.hooks.register(spec).unwrap()
     }
 
+    /// Registers an ASYNC observer on `trigger` that attaches the registered
+    /// channel `channel_id` to its room when the driver runs it awaited, as
+    /// a hook on `ON_ROOM_CREATED` attaches an agent (RFC Appendix B.1).
+    pub(crate) fn observer_attaching(
+        &mut self,
+        name: &str,
+        trigger: HookTrigger,
+        channel_id: &str,
+    ) -> HookId {
+        let id = self.observer(name, trigger);
+        self.observer_attaches.insert(id, channel(channel_id));
+        id
+    }
+
     /// A text message from `+15551234567` on `channel_id`.
     pub(crate) fn message(channel_id: &str, text: &str) -> InboundMessage {
         InboundMessage::new(
@@ -232,26 +367,67 @@ impl Sim {
         )
     }
 
-    /// Runs `message` into the room through the inbound operation.
+    /// Runs `message` into `room_1` through the inbound operation, for a
+    /// caller that names no organization.
     pub(crate) fn send(&mut self, message: InboundMessage) -> Result<InboundResult, InboundError> {
+        self.send_to("room_1", None, message)
+    }
+
+    /// Runs `message` into the room `room`, for a caller acting for
+    /// `organization`.
+    pub(crate) fn send_to(
+        &mut self,
+        room: &str,
+        organization: Option<&str>,
+        message: InboundMessage,
+    ) -> Result<InboundResult, InboundError> {
         let config = Arc::new(self.config.clone());
-        self.run(Inbound::new(config, room_id(), message))
+        let room_id = RoomId::new(room).unwrap();
+        let target = InboundTarget::Room(room_id.clone());
+        let organization = organization.map(str::to_owned);
+        self.inbound_room = Some(room_id);
+        let result = self.run(Inbound::new(config, target, organization, message));
+        self.inbound_room = None;
+        result
+    }
+
+    /// Checks that an inbound operation holds the lane of `room_id` before
+    /// it does `what` there: the lane comes before the lock (RFC §10.2).
+    fn assert_in_lane(&self, room_id: &RoomId, what: &str) {
+        if self.inbound_room.as_ref() == Some(room_id) {
+            assert!(
+                self.lanes_held.contains(room_id),
+                "an inbound operation {what} outside the room's lane"
+            );
+        }
     }
 
     /// Runs `operation` to its end, executing every effect it asks for.
     pub(crate) fn run<O: Operation>(&mut self, mut operation: O) -> O::Output {
         loop {
             let step = operation.poll(&mut self.env);
+            self.journal.extend(step.notices.iter().map(journal_line));
             self.notices.extend(step.notices);
             match step.next {
                 Next::Ready(output) => {
-                    assert!(!self.lock_held, "the operation ended holding the room lock");
+                    assert!(
+                        self.locks_held.is_empty(),
+                        "the operation ended holding the lock of {:?}",
+                        self.locks_held
+                    );
+                    assert!(
+                        self.lanes_held.is_empty(),
+                        "the operation ended holding the lane of {:?}",
+                        self.lanes_held
+                    );
                     return output;
                 }
                 Next::Waiting => panic!("a driver that completes every effect never waits"),
                 Next::Effects(effects) => {
                     for effect in effects {
+                        let traced = self.trace.len();
                         let outcome = self.execute(effect.request);
+                        self.journal.extend(self.trace.iter().skip(traced).cloned());
                         operation.complete(effect.id, outcome).unwrap();
                     }
                 }
@@ -271,6 +447,30 @@ impl Sim {
         self.room.event_count += 1;
         self.room.latest_index = Some(event.index);
         self.timeline.push(event);
+    }
+
+    /// Stores `room`, apart from `room_1`, before the test runs.
+    pub(crate) fn seed_room(&mut self, room: Room) {
+        let mut stored = StoredRoom::missing(room.id.clone());
+        stored.room = room;
+        stored.exists = true;
+        self.others.insert(stored.room.id.clone(), stored);
+    }
+
+    /// The room `id` the store holds apart from `room_1`, if any.
+    pub(crate) fn other_room(&self, id: &str) -> Option<&Room> {
+        self.others
+            .get(&RoomId::new(id).unwrap())
+            .filter(|stored| stored.exists)
+            .map(|stored| &stored.room)
+    }
+
+    /// The bindings of the room `id` the store holds apart from `room_1`.
+    pub(crate) fn other_bindings(&self, id: &str) -> Vec<ChannelBinding> {
+        self.others
+            .get(&RoomId::new(id).unwrap())
+            .map(|stored| stored.bindings.clone())
+            .unwrap_or_default()
     }
 
     /// The texts of the history `channel` was last handed by `on_event()`.
@@ -313,14 +513,7 @@ impl Sim {
     pub(crate) fn framework_event_names(&self) -> Vec<String> {
         self.framework_events()
             .into_iter()
-            .map(|event| {
-                serde_json::to_value(event)
-                    .unwrap()
-                    .get("event")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap()
-                    .to_owned()
-            })
+            .map(event_name)
             .collect()
     }
 
@@ -363,28 +556,35 @@ impl Sim {
     }
 
     fn execute(&mut self, request: Request) -> Outcome {
+        if let Some(refused) = self.refused(&request) {
+            return refused;
+        }
         match request {
-            Request::AcquireLock { .. } | Request::ReleaseLock { .. } => self.execute_lock(request),
-            Request::HandleInbound { .. } | Request::OnEvent { .. } | Request::Deliver { .. } => {
-                self.execute_channel(request)
-            }
-            Request::RunHook { hook, event, .. } => {
-                let name = self.config.hooks.get(hook).unwrap().name.clone();
-                self.trace.push(format!("hook {name}"));
-                let hook = self.hooks.get_mut(&hook).unwrap();
-                let outcome = hook(&event);
-                match &self.hooks_change {
-                    Some(HookChange::Mute(muted)) => {
-                        let binding = self
-                            .bindings
-                            .iter_mut()
-                            .find(|bound| &bound.channel_id == muted);
-                        binding.unwrap().muted = true;
-                    }
-                    Some(HookChange::CloseRoom) => self.room.status = RoomStatus::Closed,
-                    None => {}
-                }
-                Outcome::Hook(Box::new(outcome))
+            Request::AcquireLock { room_id } => self.acquire(room_id),
+            Request::ReleaseLock { room_id } => self.release(&room_id),
+            Request::EnterLane { room_id } => self.enter_lane(room_id),
+            Request::LeaveLane { room_id } => self.leave_lane(&room_id),
+            Request::HandleInbound {
+                channel_id,
+                message,
+                context,
+                id,
+            } => self.handle_inbound(&channel_id, message, *context, id),
+            Request::OnEvent {
+                binding,
+                event,
+                context,
+            } => self.on_event(&binding, &event, *context),
+            Request::Deliver { binding, event, .. } => self.deliver(&binding, &event),
+            Request::RunHook { hook, event, .. } => self.execute_hook(hook, &event),
+            Request::RunObservers {
+                trigger,
+                hooks,
+                event,
+                context,
+            } => {
+                self.awaited_contexts.push(*context);
+                self.execute_observers(trigger, &hooks, &event)
             }
             Request::LoadContext { .. }
             | Request::LoadBindings { .. }
@@ -394,28 +594,99 @@ impl Sim {
             | Request::CreateRoom { .. }
             | Request::UpdateRoom { .. }
             | Request::StoreBinding { .. }
-            | Request::DeleteBinding { .. } => match self.refused_write(&request) {
-                Some(outcome) => outcome,
-                None => self.execute_store(request),
-            },
+            | Request::DeleteBinding { .. } => {
+                let room = store_room(&request).clone();
+                self.on_room(&room, |sim| sim.execute_store(request))
+            }
         }
     }
 
-    /// The failure of the write `failing_write` names, traced as failed.
-    fn refused_write(&mut self, request: &Request) -> Option<Outcome> {
-        let failing = self.failing_write?;
-        let target = match request {
-            Request::UpdateRoom { room_id, .. } => format!("update room {room_id}"),
-            Request::StoreBinding { binding } => format!("store binding {}", binding.channel_id),
-            Request::DeleteBinding { channel_id, .. } => format!("delete binding {channel_id}"),
-            Request::Commit { .. } => "commit".to_owned(),
-            Request::AcquireLock { .. }
-            | Request::ReleaseLock { .. }
+    /// A SYNC hook, and the change the hooks make in the room as they run.
+    fn execute_hook(&mut self, hook: HookId, event: &RoomEvent) -> Outcome {
+        let name = self.config.hooks.get(hook).unwrap().name.clone();
+        self.trace.push(format!("hook {name}"));
+        let hook = self.hooks.get_mut(&hook).unwrap();
+        let outcome = hook(event);
+        match &self.hooks_change {
+            Some(HookChange::Mute(muted)) => {
+                let binding = self
+                    .bindings
+                    .iter_mut()
+                    .find(|bound| &bound.channel_id == muted);
+                binding.unwrap().muted = true;
+            }
+            Some(HookChange::CloseRoom) => self.room.status = RoomStatus::Closed,
+            None => {}
+        }
+        Outcome::Hook(Box::new(outcome))
+    }
+
+    /// Observers run to their end, awaited: each attaches its channel to the
+    /// payload's room, if it was registered to.
+    fn execute_observers(
+        &mut self,
+        trigger: HookTrigger,
+        hooks: &[HookId],
+        event: &RoomEvent,
+    ) -> Outcome {
+        let names: Vec<String> = hooks
+            .iter()
+            .map(|hook| self.config.hooks.get(*hook).unwrap().name.clone())
+            .collect();
+        self.trace.push(format!(
+            "await {} {}",
+            trigger_name(trigger),
+            names.join(",")
+        ));
+        assert!(
+            !self.locks_held.contains(&event.room_id),
+            "awaited observers ran under the room lock, which they may need"
+        );
+        self.assert_in_lane(&event.room_id, "awaited observers");
+        for hook in hooks {
+            let Some(attached) = self.observer_attaches.get(hook).cloned() else {
+                continue;
+            };
+            let declaration = self.config.channel(&attached).unwrap();
+            let binding = declaration.binding(event.room_id.clone(), Timestamp::UNIX_EPOCH);
+            self.on_room(&event.room_id, |sim| {
+                sim.bindings.retain(|bound| bound.channel_id != attached);
+                sim.bindings.push(binding);
+            });
+        }
+        Outcome::Observed
+    }
+
+    /// The failure of the effect `failing_effect` names, traced as failed.
+    fn refused(&mut self, request: &Request) -> Option<Outcome> {
+        let failing = self.failing_effect?;
+        let store_down = || ErrorRecord::new("StoreUnavailable", "the store is down");
+        let (target, error) = match request {
+            Request::UpdateRoom { room_id, .. } => (format!("update room {room_id}"), store_down()),
+            Request::StoreBinding { binding } => (
+                format!("store binding {}", binding.channel_id),
+                store_down(),
+            ),
+            Request::DeleteBinding { channel_id, .. } => {
+                (format!("delete binding {channel_id}"), store_down())
+            }
+            Request::CreateRoom { room } => (format!("store room {}", room.id), store_down()),
+            Request::Commit { .. } => ("commit".to_owned(), store_down()),
+            Request::AcquireLock { room_id } => (
+                format!("lock {room_id}"),
+                ErrorRecord::new("LockUnavailable", "the lock manager is down"),
+            ),
+            Request::RunObservers { trigger, .. } => (
+                format!("await {}", trigger_name(*trigger)),
+                ErrorRecord::new("HooksUnavailable", "the observers could not be run"),
+            ),
+            Request::ReleaseLock { .. }
+            | Request::EnterLane { .. }
+            | Request::LeaveLane { .. }
             | Request::LoadContext { .. }
             | Request::LoadBindings { .. }
             | Request::FindByIdempotencyKey { .. }
             | Request::PersistSideEffects { .. }
-            | Request::CreateRoom { .. }
             | Request::HandleInbound { .. }
             | Request::OnEvent { .. }
             | Request::Deliver { .. }
@@ -425,33 +696,87 @@ impl Sim {
             return None;
         }
         self.trace.push(format!("{target} failed"));
-        Some(Outcome::Failed(ErrorRecord::new(
-            "StoreUnavailable",
-            "the store is down",
-        )))
+        Some(Outcome::Failed(error))
     }
 
-    /// The room lock: never taken twice, released only when held.
-    fn execute_lock(&mut self, request: Request) -> Outcome {
-        if let Request::AcquireLock { room_id } = request {
-            assert!(!self.lock_held, "the room lock was taken twice");
-            self.lock_held = true;
-            self.trace.push(format!("lock {room_id}"));
-            return Outcome::Locked;
-        }
+    /// Takes a room's lock, which is never taken twice.
+    fn acquire(&mut self, room_id: RoomId) -> Outcome {
+        self.trace.push(format!("lock {room_id}"));
+        self.assert_in_lane(&room_id, "took the room lock");
         assert!(
-            self.lock_held,
+            self.locks_held.insert(room_id),
+            "the room lock was taken twice"
+        );
+        Outcome::Locked
+    }
+
+    /// Releases a room's lock, which must be held.
+    fn release(&mut self, room_id: &RoomId) -> Outcome {
+        self.trace.push(format!("release {room_id}"));
+        assert!(
+            self.locks_held.remove(room_id),
             "the room lock was released without being held"
         );
-        self.lock_held = false;
-        self.trace.push(format!("release {}", room_id()));
         if self.release_fails {
             return Outcome::Failed(ErrorRecord::new("LockLost", "the lock's lease was lost"));
         }
         Outcome::Released
     }
 
-    /// The store: one room, its bindings, its timeline and side effects.
+    /// Enters a room's delivery lane, which is never entered twice.
+    fn enter_lane(&mut self, room_id: RoomId) -> Outcome {
+        self.trace.push(format!("enter lane {room_id}"));
+        assert!(
+            self.lanes_held.insert(room_id),
+            "the room's lane was entered twice"
+        );
+        Outcome::Entered
+    }
+
+    /// Leaves a room's delivery lane, which must be held.
+    fn leave_lane(&mut self, room_id: &RoomId) -> Outcome {
+        self.trace.push(format!("leave lane {room_id}"));
+        assert!(
+            self.lanes_held.remove(room_id),
+            "the room's lane was left without being held"
+        );
+        if self.leave_fails {
+            return Outcome::Failed(ErrorRecord::new("LaneLost", "the lane was lost"));
+        }
+        Outcome::Left
+    }
+
+    /// Runs `execute` on the room `id`. `room_1` is the room the fields
+    /// hold; another room is swapped into them for the call, so that the
+    /// store answers for every room alike.
+    fn on_room<T>(&mut self, id: &RoomId, execute: impl FnOnce(&mut Self) -> T) -> T {
+        if *id == room_id() {
+            return execute(self);
+        }
+        let mut other = self
+            .others
+            .remove(id)
+            .unwrap_or_else(|| StoredRoom::missing(id.clone()));
+        self.swap(&mut other);
+        let result = execute(self);
+        self.swap(&mut other);
+        if other.exists {
+            self.others.insert(id.clone(), other);
+        }
+        result
+    }
+
+    /// Swaps the room the fields hold with `other`.
+    fn swap(&mut self, other: &mut StoredRoom) {
+        mem::swap(&mut self.room, &mut other.room);
+        mem::swap(&mut self.room_exists, &mut other.exists);
+        mem::swap(&mut self.bindings, &mut other.bindings);
+        mem::swap(&mut self.participants, &mut other.participants);
+        mem::swap(&mut self.timeline, &mut other.timeline);
+    }
+
+    /// The store, for the room the fields hold: its bindings, participants,
+    /// timeline and side effects.
     fn execute_store(&mut self, request: Request) -> Outcome {
         match request {
             Request::LoadContext {
@@ -483,23 +808,7 @@ impl Sim {
                     .map(Box::new);
                 Outcome::Idempotent(found)
             }
-            Request::Commit { event, counters } => {
-                assert!(
-                    self.lock_held,
-                    "an event was committed outside the room lock"
-                );
-                assert_eq!(
-                    event.index, self.room.event_count,
-                    "the index is the room's count"
-                );
-                self.room.event_count = counters.event_count;
-                self.room.latest_index = Some(counters.latest_index);
-                self.room.timers.last_activity_at = counters.last_activity_at;
-                counters.room.apply(&mut self.room);
-                self.trace.push(format!("commit {}", describe(&event)));
-                self.timeline.push(event);
-                Outcome::Committed
-            }
+            Request::Commit { event, counters } => self.commit(event, &counters),
             Request::PersistSideEffects {
                 tasks,
                 observations,
@@ -514,15 +823,10 @@ impl Sim {
                 self.observations.extend(observations);
                 Outcome::Persisted
             }
-            Request::CreateRoom { room } => {
-                self.trace
-                    .push(format!("store room {} {:?}", room.id, room.status));
-                self.room = room;
-                Outcome::Stored
-            }
+            Request::CreateRoom { room } => self.create_room(room),
             Request::UpdateRoom { room_id, updates } => {
                 assert!(
-                    self.lock_held || updates.status.is_none(),
+                    self.locks_held.contains(&room_id) || updates.status.is_none(),
                     "a status was written outside the room lock"
                 );
                 updates.apply(&mut self.room);
@@ -545,66 +849,100 @@ impl Sim {
             }
             Request::AcquireLock { .. }
             | Request::ReleaseLock { .. }
+            | Request::EnterLane { .. }
+            | Request::LeaveLane { .. }
             | Request::HandleInbound { .. }
             | Request::OnEvent { .. }
             | Request::Deliver { .. }
-            | Request::RunHook { .. } => panic!("not a store request"),
+            | Request::RunHook { .. }
+            | Request::RunObservers { .. } => panic!("not a store request"),
         }
     }
 
-    /// The channels: the default parser, and each channel's closures.
-    fn execute_channel(&mut self, request: Request) -> Outcome {
-        let answer = match request {
-            Request::HandleInbound {
-                channel_id,
-                message,
-                context,
-                id,
-            } => {
-                self.trace.push(format!("handle_inbound {channel_id}"));
-                self.parse_contexts.push(*context);
-                let declaration = self.config.channel(&channel_id).unwrap().clone();
-                let now = self.env.now();
-                let event = default_inbound_event(&message, &declaration, room_id(), id, now);
-                return Outcome::Parsed(Box::new(event));
-            }
-            Request::OnEvent {
-                binding,
-                event,
-                context,
-            } => {
-                self.env.advance(self.delivery_duration);
-                self.trace
-                    .push(format!("on_event {} <- {}", binding.channel_id, event.id));
-                self.on_event_contexts
-                    .push((binding.channel_id.clone(), (*context).clone()));
-                let channel = self.channels.get_mut(&binding.channel_id).unwrap();
-                (channel.on_event)(&event, &context)
-            }
-            Request::Deliver { binding, event, .. } => {
-                self.env.advance(self.delivery_duration);
-                self.trace
-                    .push(format!("deliver {} <- {}", binding.channel_id, event.id));
-                let channel = self.channels.get_mut(&binding.channel_id).unwrap();
-                (channel.deliver)(&event)
-            }
-            Request::AcquireLock { .. }
-            | Request::ReleaseLock { .. }
-            | Request::LoadContext { .. }
-            | Request::LoadBindings { .. }
-            | Request::FindByIdempotencyKey { .. }
-            | Request::Commit { .. }
-            | Request::PersistSideEffects { .. }
-            | Request::CreateRoom { .. }
-            | Request::UpdateRoom { .. }
-            | Request::StoreBinding { .. }
-            | Request::DeleteBinding { .. }
-            | Request::RunHook { .. } => panic!("not a channel request"),
-        };
-        match answer {
-            Ok(output) => Outcome::Output(Box::new(output)),
-            Err(error) => Outcome::Failed(error),
+    /// Commits `event` with the room's counters, under the room's lock.
+    fn commit(&mut self, event: RoomEvent, counters: &RoomCounters) -> Outcome {
+        assert!(
+            self.locks_held.contains(&event.room_id),
+            "an event was committed outside the room lock"
+        );
+        self.assert_in_lane(&event.room_id, "committed an event");
+        assert_eq!(
+            event.index, self.room.event_count,
+            "the index is the room's count"
+        );
+        self.room.event_count = counters.event_count;
+        self.room.latest_index = Some(counters.latest_index);
+        self.room.timers.last_activity_at = counters.last_activity_at;
+        counters.room.apply(&mut self.room);
+        self.trace.push(format!("commit {}", describe(&event)));
+        self.timeline.push(event);
+        Outcome::Committed
+    }
+
+    /// Creates the room, unless its id is taken, by another call meanwhile
+    /// among others.
+    fn create_room(&mut self, room: Room) -> Outcome {
+        self.trace
+            .push(format!("store room {} {:?}", room.id, room.status));
+        if let Some(created) = self.created_meanwhile.take() {
+            self.room = created;
+            self.room_exists = true;
         }
+        if self.room_exists {
+            return Outcome::Failed(ErrorRecord::new(
+                "RoomExists",
+                "a room with the id exists already",
+            ));
+        }
+        self.room = room;
+        self.room_exists = true;
+        Outcome::Stored
+    }
+
+    /// The default parser, for every channel.
+    fn handle_inbound(
+        &mut self,
+        channel_id: &ChannelId,
+        message: InboundMessage,
+        context: RoomContext,
+        id: EventId,
+    ) -> Outcome {
+        self.trace.push(format!("handle_inbound {channel_id}"));
+        let room_id = context.room.id.clone();
+        self.parse_contexts.push(context);
+        let declaration = self.config.channel(channel_id).unwrap().clone();
+        let now = self.env.now();
+        let event = default_inbound_event(&message, &declaration, room_id, id, now);
+        self.parsed_messages.push(message);
+        Outcome::Parsed(Box::new(event))
+    }
+
+    /// A channel's `on_event()`, as its closure answers.
+    fn on_event(
+        &mut self,
+        binding: &ChannelBinding,
+        event: &RoomEvent,
+        context: RoomContext,
+    ) -> Outcome {
+        self.env.advance(self.delivery_duration);
+        self.trace
+            .push(format!("on_event {} <- {}", binding.channel_id, event.id));
+        self.assert_in_lane(&binding.room_id, "called on_event()");
+        let channel = self.channels.get_mut(&binding.channel_id).unwrap();
+        let answer = (channel.on_event)(event, &context);
+        self.on_event_contexts
+            .push((binding.channel_id.clone(), context));
+        output(answer)
+    }
+
+    /// A channel's `deliver()`, as its closure answers.
+    fn deliver(&mut self, binding: &ChannelBinding, event: &RoomEvent) -> Outcome {
+        self.env.advance(self.delivery_duration);
+        self.trace
+            .push(format!("deliver {} <- {}", binding.channel_id, event.id));
+        self.assert_in_lane(&binding.room_id, "called deliver()");
+        let channel = self.channels.get_mut(&binding.channel_id).unwrap();
+        output((channel.deliver)(event))
     }
 
     fn context(&self, recent_events: usize) -> RoomContext {
@@ -612,10 +950,75 @@ impl Sim {
         RoomContext {
             room: self.room.clone(),
             bindings: self.bindings.clone(),
-            participants: Vec::new(),
+            participants: self.participants.clone(),
             recent_events: self.timeline.iter().skip(skip).cloned().collect(),
         }
     }
+}
+
+/// The room a store request reads or writes.
+fn store_room(request: &Request) -> &RoomId {
+    match request {
+        Request::LoadContext { room_id, .. }
+        | Request::LoadBindings { room_id }
+        | Request::FindByIdempotencyKey { room_id, .. }
+        | Request::PersistSideEffects { room_id, .. }
+        | Request::UpdateRoom { room_id, .. }
+        | Request::DeleteBinding { room_id, .. } => room_id,
+        Request::Commit { event, .. } => &event.room_id,
+        Request::CreateRoom { room } => &room.id,
+        Request::StoreBinding { binding } => &binding.room_id,
+        Request::AcquireLock { .. }
+        | Request::ReleaseLock { .. }
+        | Request::EnterLane { .. }
+        | Request::LeaveLane { .. }
+        | Request::HandleInbound { .. }
+        | Request::OnEvent { .. }
+        | Request::Deliver { .. }
+        | Request::RunHook { .. }
+        | Request::RunObservers { .. } => panic!("not a store request"),
+    }
+}
+
+/// A channel's answer as the driver completes its call with it.
+fn output(answer: Result<ChannelOutput, ErrorRecord>) -> Outcome {
+    match answer {
+        Ok(output) => Outcome::Output(Box::new(output)),
+        Err(error) => Outcome::Failed(error),
+    }
+}
+
+/// A notice as the journal shows it.
+fn journal_line(notice: &Notice) -> String {
+    match notice {
+        Notice::FrameworkEvent(event) => format!("emit {}", event_name(event)),
+        Notice::AsyncHooks { trigger, .. } => format!("fire {}", trigger_name(*trigger)),
+    }
+}
+
+/// A framework event's RFC name, read from its JSON form.
+fn event_name(event: &FrameworkEvent) -> String {
+    serde_json::to_value(event)
+        .unwrap()
+        .get("event")
+        .and_then(serde_json::Value::as_str)
+        .unwrap()
+        .to_owned()
+}
+
+/// A trigger's RFC name, read from its JSON form.
+fn trigger_name(trigger: HookTrigger) -> String {
+    serde_json::to_value(trigger)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// An agent's answer to every event it is asked: `reply`.
+fn echo(id: &str, reply: &'static str) -> OnEvent {
+    let id_owned = id.to_owned();
+    Box::new(move |event, _| Ok(respond(&id_owned, event, reply)))
 }
 
 /// An output answering `event` with one text response from `channel_id`,

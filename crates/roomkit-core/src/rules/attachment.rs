@@ -7,6 +7,11 @@
 //! "a detach's revocation"); no integrator write may touch that namespace
 //! (gap G-049).
 //!
+//! The framework attaches a channel itself for a message arriving on it
+//! (RFC §10.1 step 2): never once it was detached, never over a binding the
+//! room has, and never to a room whose status refuses the message anyway
+//! (gap G-053).
+//!
 //! The record maps each revoked channel to the instant it was detached:
 //!
 //! ```json
@@ -44,14 +49,15 @@ pub fn revoked(room: &Room, channel: &ChannelId) -> bool {
 }
 
 /// Whether the framework may attach `channel` to the room on its own, for a
-/// message arriving on it: never once the channel was detached from the
-/// room, and never over a binding the room has (RFC §7.5 rule 7).
+/// message arriving on it (RFC §10.1 step 2): never once the channel was
+/// detached from the room, never over a binding the room has (RFC §7.5 rule
+/// 7), and never to a room whose status refuses the message (gap G-053).
 pub fn may_attach_automatically(context: &RoomContext, channel: &ChannelId) -> bool {
     let bound = context
         .bindings
         .iter()
         .any(|binding| &binding.channel_id == channel);
-    !bound && !revoked(&context.room, channel)
+    !bound && !revoked(&context.room, channel) && context.room.status.accepts_events()
 }
 
 /// The write that records `channel`'s revocation as of `at`, keeping the
@@ -156,6 +162,13 @@ mod tests {
             ChannelDirection::Bidirectional,
             Timestamp::UNIX_EPOCH,
         ));
+        assert!(!may_attach_automatically(&context, &sms()));
+    }
+
+    #[test]
+    fn a_closed_room_takes_no_automatic_attach() {
+        let mut context = RoomContext::new(room());
+        context.room.status = crate::model::RoomStatus::Closed;
         assert!(!may_attach_automatically(&context, &sms()));
     }
 

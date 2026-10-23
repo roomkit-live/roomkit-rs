@@ -16,10 +16,10 @@ use crate::model::{
 };
 use crate::ops::protocol::{EffectId, Notice, Outcome, Request};
 use crate::ops::{Cx, Progress};
-use crate::rules::attachment;
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::{self, DeliveryPlan};
 use crate::rules::transcoding;
+use crate::rules::{addresses, attachment};
 
 /// Which event a delivery set broadcasts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,13 +218,17 @@ impl DeliverySet {
         self.deliver_if_transport(cx, index);
     }
 
-    /// A transport that sends is delivered to once told (RFC §10.2 step 3d).
+    /// A transport that sends is delivered to once told, when its binding
+    /// has a recipient (RFC §10.2 step 3d).
     fn deliver_if_transport(&mut self, cx: &mut Cx<'_>, index: usize) {
         let Some(target) = self.targets.get(index) else {
             return;
         };
         if target.role != (Role::Transport { delivers: true }) {
             return;
+        }
+        if let Some(key) = missing_recipient(cx, &target.binding) {
+            return self.refuse_without_recipient(index, &key);
         }
         let effect = cx.io.issue(Request::Deliver {
             binding: target.binding.clone(),
@@ -296,6 +300,39 @@ impl DeliverySet {
         }
     }
 
+    /// A transport whose binding has no recipient under `key` is refused
+    /// before any send: `no_recipient`, not retried (RFC §10.2 step 3d).
+    fn refuse_without_recipient(&mut self, index: usize, key: &str) {
+        let Some(target) = self.targets.get(index) else {
+            return;
+        };
+        let channel_id = target.binding.channel_id.clone();
+        tracing::warn!(
+            target: "roomkit::core::delivery",
+            room_id = %self.event.room_id,
+            event_id = %self.event.id,
+            channel_id = %channel_id,
+            recipient_key = %key,
+            "the binding has no recipient; the delivery is refused before any send"
+        );
+        self.outcome.delivery_results.insert(
+            channel_id.clone(),
+            DeliveryResult {
+                channel_id,
+                status: DeliveryStatus::Failed,
+                provider_message_id: None,
+                error: Some(DeliveryError {
+                    code: NO_RECIPIENT.to_owned(),
+                    message: format!("the binding has no recipient under {key:?}"),
+                    retryable: false,
+                }),
+                retry_after: None,
+                provider_result: None,
+            },
+        );
+        self.fail(index, NO_RECIPIENT.to_owned());
+    }
+
     /// A transport's `deliver()` raised.
     fn on_delivery_failed(&mut self, index: usize, error: &ErrorRecord) {
         let Some(target) = self.targets.get(index) else {
@@ -347,6 +384,23 @@ impl DeliverySet {
                 .insert(target.binding.channel_id.clone(), message);
         }
     }
+}
+
+/// The error of a delivery refused for want of a recipient (RFC §10.2 step
+/// 3d).
+const NO_RECIPIENT: &str = "no_recipient";
+
+/// The recipient key the channel of `binding` delivers to, when the binding
+/// holds no recipient under it (RFC §10.2 step 3d, gap G-051). A channel that
+/// delivers to a destination of its own declares no key; an unregistered
+/// channel's call fails on its own (gap G-048).
+fn missing_recipient(cx: &Cx<'_>, binding: &ChannelBinding) -> Option<String> {
+    let key = cx
+        .config
+        .channel(&binding.channel_id)?
+        .recipient_key
+        .as_deref()?;
+    (!addresses::has_recipient(binding, key)).then(|| key.to_owned())
 }
 
 /// The set's targets, transports first then agents, each with the event

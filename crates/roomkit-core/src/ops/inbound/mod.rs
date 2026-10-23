@@ -2,18 +2,26 @@
 //! commits (RFC §10.2).
 //!
 //! [`Inbound`] runs one message into a room the caller names, and the whole
-//! cascade it starts: the trigger's pass, its delivery set, the responses
+//! cascade it starts. The message's arrival comes first (steps 1 to 4): its
+//! sender in the channel's form, the room it names, created or attached to
+//! when it must be, the room's context and the event the channel parses.
+//! Then the cascade: the trigger's pass, its delivery set, the responses
 //! that re-enter as passes of their own, the events hooks inject, and the
-//! records the room stores in place of responses it refuses. The room's
-//! delivery lane is a FIFO of that work, so one event's delivery set
-//! completes before the next one's begins.
+//! records the room stores in place of responses it refuses.
+//!
+//! The operation holds the room's delivery lane from the moment the room is
+//! known to its end, on every path: the lane is a FIFO of the cascade's
+//! work, so one event's delivery set completes before the next one's
+//! begins, and the next call into the room waits for it (RFC §10.2).
 //!
 //! Not covered yet, and refused rather than half done: routing a message to a
 //! room the caller does not name (RFC §10.4), instructions (RFC §10.1.1),
 //! edits and deletes (RFC §10.3), off-lock hooks (RFC §9.5.1).
 
+mod arrival;
 mod delivery;
 mod job;
+mod named_room;
 mod pass;
 mod record;
 mod report;
@@ -23,6 +31,8 @@ mod stamp;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use self::arrival::Arrival;
+pub use self::arrival::InboundTarget;
 use self::delivery::{DeliverySet, Response, SetKind, SetOutcome};
 use self::job::{Finished, Job, RecordNote, Run};
 use self::pass::{CommitPass, PassOrigin, PassReport, PassResult};
@@ -31,23 +41,23 @@ pub use self::result::{InboundError, InboundResult};
 pub use self::stamp::default_inbound_event;
 use super::io::Io;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Request, Step};
-use super::{Abort, ChannelDeclaration, Cx, Environment, KitConfig};
+use super::{Abort, Cx, Environment, KitConfig, Progress};
 use crate::model::{
-    ChannelCategory, ErrorRecord, EventContent, EventId, EventStatus, EventType, InboundMessage,
+    ChannelCategory, ErrorRecord, EventContent, EventStatus, EventType, InboundMessage,
     InjectedEvent, Metadata, Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
 };
 use crate::rules::chain_depth::{self, ReentryBudget};
-use crate::rules::permissions;
 
 /// The inbound pipeline for one message (RFC §10.1).
 ///
 /// ```
 /// # use std::sync::Arc;
 /// # use roomkit_core::model::{ChannelId, EventContent, InboundMessage, RoomId};
-/// # use roomkit_core::ops::{Inbound, KitConfig, Next, Operation, SequentialEnvironment};
+/// # use roomkit_core::ops::{Inbound, InboundTarget, KitConfig, Next, Operation, SequentialEnvironment};
 /// let config = Arc::new(KitConfig::new());
 /// let message = InboundMessage::new(ChannelId::new("sms")?, "+15551234567", EventContent::text("Hi"));
-/// let mut inbound = Inbound::new(config, RoomId::new("room_1")?, message);
+/// let room = InboundTarget::Room(RoomId::new("room_1")?);
+/// let mut inbound = Inbound::new(config, room, None, message);
 /// let step = inbound.poll(&mut SequentialEnvironment::default());
 /// // No channel `sms` is registered: the operation ends at once.
 /// assert!(matches!(step.next, Next::Ready(Err(_))));
@@ -61,14 +71,26 @@ pub struct Inbound {
 }
 
 impl Inbound {
-    /// The pipeline for `message`, into `room_id`.
-    pub fn new(config: Arc<KitConfig>, room_id: RoomId, message: InboundMessage) -> Self {
+    /// The pipeline for `message`, into the room `target` names, for a caller
+    /// acting for `organization_id` (RFC §17.2): a room of another
+    /// organization fails the message, and a room the call creates is that
+    /// organization's. A call that names no organization reads rooms
+    /// unscoped (gap G-051).
+    pub fn new(
+        config: Arc<KitConfig>,
+        target: InboundTarget,
+        organization_id: Option<String>,
+        message: InboundMessage,
+    ) -> Self {
         let budget = ReentryBudget::new(config.max_chain_depth);
         Self {
             config,
             io: Io::new(),
             machine: Machine {
-                room_id,
+                room_id: target.room_id().clone(),
+                target,
+                organization_id,
+                holds_lane: false,
                 stage: Stage::Start(Box::new(message)),
                 lane: VecDeque::new(),
                 active: None,
@@ -112,6 +134,12 @@ impl Operation for Inbound {
 #[derive(Debug)]
 struct Machine {
     room_id: RoomId,
+    target: InboundTarget,
+    /// The organization the caller acts for (RFC §17.2).
+    organization_id: Option<String>,
+    /// Whether the operation holds the room's delivery lane, which it
+    /// leaves before it ends.
+    holds_lane: bool,
     stage: Stage,
     lane: VecDeque<Job>,
     active: Option<Job>,
@@ -133,22 +161,23 @@ struct Machine {
 #[derive(Debug)]
 enum Stage {
     Start(Box<InboundMessage>),
-    LoadingContext {
+    /// Step 1 is done; the room's lane is being entered.
+    EnteringLane {
         effect: EffectId,
-        message: Box<InboundMessage>,
-        channel: Box<ChannelDeclaration>,
+        arrival: Box<Arrival>,
     },
-    Parsing {
-        effect: EffectId,
-        message: Box<InboundMessage>,
-        channel: Box<ChannelDeclaration>,
-        id: EventId,
-    },
+    /// Steps 2 to 4.
+    Arriving(Box<Arrival>),
     Cascade,
     /// Step 15's writes, each outstanding until answered.
     Persisting {
         side_effects: Option<(EffectId, Vec<Task>)>,
         metadata: Option<EffectId>,
+    },
+    /// The operation's outcome waits for the lane to be left.
+    LeavingLane {
+        effect: EffectId,
+        outcome: Box<Result<InboundResult, InboundError>>,
     },
     Done,
 }
@@ -164,42 +193,37 @@ impl Machine {
         self.run_lane(cx);
     }
 
-    /// Resolves the channel and refuses what this step does not provide
-    /// (RFC §10.1 step 1), then reads the room (step 3).
+    /// Resolves the channel and the sender's form, and refuses what this
+    /// step does not provide (RFC §10.1 step 1), then enters the room's
+    /// lane: the room is known.
     fn begin(&mut self, cx: &mut Cx<'_>) {
         let Stage::Start(message) = std::mem::replace(&mut self.stage, Stage::Done) else {
             return;
         };
-        let Some(channel) = cx.config.channel(&message.channel_id).cloned() else {
-            return self.fail(InboundError::UnknownChannel(message.channel_id.clone()));
+        let (channel, message) = match arrival::resolve(cx.config, *message) {
+            Ok(resolved) => resolved,
+            Err(error) => return self.end(cx, Err(error)),
         };
         if let Err(error) = check_supported(&message) {
-            return self.fail(error);
+            return self.end(cx, Err(error));
         }
-        let effect = cx.io.issue(Request::LoadContext {
+        let arrival = Arrival::new(&self.target, self.organization_id.clone(), channel, message);
+        let effect = cx.io.issue(Request::EnterLane {
             room_id: self.room_id.clone(),
-            recent_events: cx.config.context_window,
         });
-        self.stage = Stage::LoadingContext {
+        self.stage = Stage::EnteringLane {
             effect,
-            message,
-            channel: Box::new(channel),
+            arrival: Box::new(arrival),
         };
     }
 
     fn dispatch(&mut self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) {
         match std::mem::replace(&mut self.stage, Stage::Done) {
-            Stage::LoadingContext {
+            Stage::EnteringLane {
                 effect: expected,
-                message,
-                channel,
-            } if expected == effect => self.on_context(cx, message, channel, outcome),
-            Stage::Parsing {
-                effect: expected,
-                message,
-                channel,
-                id,
-            } if expected == effect => self.on_parsed(&message, &channel, id, outcome),
+                arrival,
+            } if expected == effect => self.on_lane(cx, arrival, outcome),
+            Stage::Arriving(arrival) => self.on_arrival(cx, arrival, effect, outcome),
             Stage::Persisting {
                 side_effects,
                 metadata,
@@ -208,9 +232,13 @@ impl Machine {
                 self.stage = Stage::Cascade;
                 self.dispatch_to_job(cx, effect, outcome);
             }
+            Stage::LeavingLane {
+                effect: expected,
+                outcome: result,
+            } if expected == effect => self.on_left(*result, outcome),
             stage @ (Stage::Start(_)
-            | Stage::LoadingContext { .. }
-            | Stage::Parsing { .. }
+            | Stage::EnteringLane { .. }
+            | Stage::LeavingLane { .. }
             | Stage::Done) => {
                 debug_assert!(false, "inbound received {effect:?} in {stage:?}");
                 self.stage = stage;
@@ -218,73 +246,37 @@ impl Machine {
         }
     }
 
-    /// Hands the room's context to the channel's `handle_inbound()` (RFC
-    /// §10.1 step 4).
-    fn on_context(
-        &mut self,
-        cx: &mut Cx<'_>,
-        message: Box<InboundMessage>,
-        channel: Box<ChannelDeclaration>,
-        outcome: Outcome,
-    ) {
-        let context = match outcome.into_context() {
-            Ok(Some(context)) => context,
-            Ok(None) => return self.fail(InboundError::RoomNotFound(self.room_id.clone())),
-            Err(error) => return self.fail(InboundError::Store(error)),
-        };
-        // The receiving channel sees only what it may (RFC §7.5 rule 8). One
-        // with no binding in the room sees no event; its pass stores the
-        // message refused (gap G-015).
-        let receiver = context
-            .bindings
-            .iter()
-            .find(|binding| binding.channel_id == message.channel_id);
-        let context = Box::new(match receiver {
-            Some(receiver) => permissions::context_for(receiver, &context),
-            None => RoomContext {
-                recent_events: Vec::new(),
-                ..*context
-            },
-        });
-        let id = cx.env.new_event_id();
-        let effect = cx.io.issue(Request::HandleInbound {
-            channel_id: message.channel_id.clone(),
-            message: (*message).clone(),
-            context,
-            id: id.clone(),
-        });
-        self.stage = Stage::Parsing {
-            effect,
-            message,
-            channel,
-            id,
-        };
+    /// The room's lane is held: the message arrives (RFC §10.1 steps 2 to
+    /// 4).
+    fn on_lane(&mut self, cx: &mut Cx<'_>, mut arrival: Box<Arrival>, outcome: Outcome) {
+        if let Err(error) = outcome.into_entered() {
+            return self.end(cx, Err(InboundError::Lane(error)));
+        }
+        self.holds_lane = true;
+        arrival.start(cx);
+        self.stage = Stage::Arriving(arrival);
     }
 
-    /// Stamps the parsed event and starts the cascade with its pass.
-    fn on_parsed(
+    /// Takes an answer of the arrival; once it hands the event, the cascade
+    /// starts with its pass.
+    fn on_arrival(
         &mut self,
-        message: &InboundMessage,
-        channel: &ChannelDeclaration,
-        id: EventId,
+        cx: &mut Cx<'_>,
+        mut arrival: Box<Arrival>,
+        effect: EffectId,
         outcome: Outcome,
     ) {
-        let parsed = match outcome.into_parsed() {
-            Ok(event) => *event,
-            Err(error) => {
-                return self.fail(InboundError::ChannelFailed {
-                    channel_id: message.channel_id.clone(),
-                    error,
-                });
+        match arrival.accept(cx, effect, outcome) {
+            Progress::Waiting => self.stage = Stage::Arriving(arrival),
+            Progress::Done(Ok(event)) => {
+                self.lane.push_back(Job::Pass(
+                    Box::new(CommitPass::new(PassOrigin::Trigger, event)),
+                    PassOrigin::Trigger,
+                ));
+                self.stage = Stage::Cascade;
             }
-        };
-        let mut event = stamp::stamp_trigger(parsed, message, channel, id);
-        event.room_id = self.room_id.clone();
-        self.lane.push_back(Job::Pass(
-            Box::new(CommitPass::new(PassOrigin::Trigger, event)),
-            PassOrigin::Trigger,
-        ));
-        self.stage = Stage::Cascade;
+            Progress::Done(Err(error)) => self.end(cx, Err(error)),
+        }
     }
 
     fn dispatch_to_job(&mut self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) {
@@ -318,7 +310,9 @@ impl Machine {
             Finished::Pass(Ok(report), origin) => self.on_pass(cx, report, &origin),
             Finished::Record(Ok(report), note) => self.on_record(cx, report, note),
             Finished::Set(outcome, set) => self.on_set(cx, outcome, &set),
-            Finished::Pass(Err(abort), _) | Finished::Record(Err(abort), _) => self.abort(abort),
+            Finished::Pass(Err(abort), _) | Finished::Record(Err(abort), _) => {
+                self.abort(cx, abort);
+            }
         }
     }
 
@@ -525,7 +519,7 @@ impl Machine {
     fn persist_side_effects(&mut self, cx: &mut Cx<'_>) {
         let side_effects = self.issue_side_effects(cx);
         let metadata = self.issue_metadata_updates(cx);
-        self.await_persisted(side_effects, metadata);
+        self.await_persisted(cx, side_effects, metadata);
     }
 
     /// Asks for the collected tasks and observations to be stored, if any.
@@ -569,13 +563,13 @@ impl Machine {
         match (side_effects, metadata) {
             (Some((expected, tasks)), metadata) if expected == effect => {
                 self.on_persisted(cx, outcome, &tasks);
-                self.await_persisted(None, metadata);
+                self.await_persisted(cx, None, metadata);
             }
             (side_effects, Some(expected)) if expected == effect => {
                 if let Err(error) = outcome.into_stored() {
                     self.note_error(Some(error));
                 }
-                self.await_persisted(side_effects, None);
+                self.await_persisted(cx, side_effects, None);
             }
             (side_effects, metadata) => {
                 debug_assert!(false, "inbound received {effect:?} while persisting");
@@ -590,11 +584,13 @@ impl Machine {
     /// Waits for step 15's outstanding writes, or ends once none is left.
     fn await_persisted(
         &mut self,
+        cx: &mut Cx<'_>,
         side_effects: Option<(EffectId, Vec<Task>)>,
         metadata: Option<EffectId>,
     ) {
         if side_effects.is_none() && metadata.is_none() {
-            return self.finish();
+            let result = std::mem::take(&mut self.result);
+            return self.end(cx, Ok(result));
         }
         self.stage = Stage::Persisting {
             side_effects,
@@ -626,7 +622,7 @@ impl Machine {
     /// A pass or a record failed. Before the trigger's commit nothing was
     /// written and the message fails; after it, the event stands, the
     /// cascade stops, and the result carries the error (RFC §13.6).
-    fn abort(&mut self, abort: Abort) {
+    fn abort(&mut self, cx: &mut Cx<'_>, abort: Abort) {
         self.lane.clear();
         if !self.committed {
             let error = match abort {
@@ -634,7 +630,7 @@ impl Machine {
                 Abort::Store(error) => InboundError::Store(error),
                 Abort::Lock(error) => InboundError::Lock(error),
             };
-            return self.fail(error);
+            return self.end(cx, Err(error));
         }
         self.note_error(Some(match abort {
             Abort::RoomNotFound => ErrorRecord::new("RoomNotFound", "the room disappeared"),
@@ -642,16 +638,48 @@ impl Machine {
         }));
     }
 
-    fn finish(&mut self) {
-        self.stage = Stage::Done;
-        self.outcome = Some(Ok(std::mem::take(&mut self.result)));
-    }
-
-    fn fail(&mut self, error: InboundError) {
-        self.stage = Stage::Done;
+    /// Ends the operation with `outcome`, once the room's lane is left when
+    /// the operation holds it: every path that entered the lane leaves it.
+    fn end(&mut self, cx: &mut Cx<'_>, outcome: Result<InboundResult, InboundError>) {
         self.lane.clear();
         self.active = None;
-        self.outcome = Some(Err(error));
+        if !self.holds_lane {
+            self.stage = Stage::Done;
+            self.outcome = Some(outcome);
+            return;
+        }
+        let effect = cx.io.issue(Request::LeaveLane {
+            room_id: self.room_id.clone(),
+        });
+        self.stage = Stage::LeavingLane {
+            effect,
+            outcome: Box::new(outcome),
+        };
+    }
+
+    /// The lane is left. A failed leave changes nothing the call decided: it
+    /// is logged, and a result carries it when no earlier error was met, as
+    /// a failed release of the room lock (gap G-025).
+    fn on_left(&mut self, outcome: Result<InboundResult, InboundError>, left: Outcome) {
+        self.holds_lane = false;
+        self.stage = Stage::Done;
+        let outcome = match (left.into_left(), outcome) {
+            (Ok(()), outcome) => outcome,
+            (Err(error), outcome) => {
+                tracing::warn!(
+                    target: "roomkit::core::inbound",
+                    room_id = %self.room_id,
+                    error_type = %error.error_type,
+                    message = %error.message,
+                    "leaving the room's delivery lane failed; what the call decided stands"
+                );
+                outcome.map(|mut result| {
+                    result.error.get_or_insert(error);
+                    result
+                })
+            }
+        };
+        self.outcome = Some(outcome);
     }
 }
 

@@ -4,9 +4,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use roomkit_core::model::{ChannelId, ChannelOutput, ErrorRecord, RoomId};
+use roomkit_core::model::{ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId};
 use roomkit_core::ops::{Effect, EffectId, Next, Notice, Operation, Outcome, Request};
 use roomkit_core::rules::hook_chain::HookOutcome;
+use roomkit_core::rules::hook_registry::{HookId, HookTrigger};
 use tokio::task::JoinSet;
 
 use crate::channel::{ChannelError, EventDraft};
@@ -16,15 +17,20 @@ use crate::kit::Inner;
 use crate::locks::RoomGuard;
 use crate::store::ConversationStore;
 
+/// The room locks and lanes a run holds, released when the operation asks,
+/// or when the run ends, whatever ends it.
+#[derive(Default)]
+struct Held<'kit> {
+    locks: HashMap<RoomId, RoomGuard<'kit>>,
+    lanes: HashMap<RoomId, RoomGuard<'kit>>,
+}
+
 /// Runs `operation` until it is ready.
-///
-/// The room locks it takes are held here and released when it asks, or when
-/// the run ends, whatever ends it.
 pub(crate) async fn run<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     mut operation: O,
 ) -> Result<O::Output, KitError> {
-    let mut locks: HashMap<RoomId, RoomGuard<'_>> = HashMap::new();
+    let mut held = Held::default();
     loop {
         let step = {
             let mut environment = inner.environment();
@@ -39,18 +45,18 @@ pub(crate) async fn run<S: ConversationStore, O: Operation>(
             Next::Waiting => return Err(KitError::Stalled),
             Next::Effects(effects) => effects,
         };
-        for (id, outcome) in execute(inner, &mut locks, effects).await {
+        for (id, outcome) in execute(inner, &mut held, effects).await {
             operation.complete(id, outcome)?;
         }
     }
 }
 
-/// Executes one step's effects. The room lock is taken and released in
-/// place; the other calls run concurrently, and their outcomes come back in
-/// the order they finish.
+/// Executes one step's effects. A room's lock and lane are taken and let go
+/// in place; the other calls run concurrently, and their outcomes come back
+/// in the order they finish.
 async fn execute<'kit, S: ConversationStore>(
     inner: &'kit Arc<Inner<S>>,
-    locks: &mut HashMap<RoomId, RoomGuard<'kit>>,
+    held: &mut Held<'kit>,
     effects: Vec<Effect>,
 ) -> Vec<(EffectId, Outcome)> {
     let mut outcomes = Vec::with_capacity(effects.len());
@@ -60,12 +66,21 @@ async fn execute<'kit, S: ConversationStore>(
         match request {
             Request::AcquireLock { room_id } => {
                 let guard = inner.locks.lock(&room_id).await;
-                locks.insert(room_id, guard);
+                held.locks.insert(room_id, guard);
                 outcomes.push((id, Outcome::Locked));
             }
             Request::ReleaseLock { room_id } => {
-                locks.remove(&room_id);
+                held.locks.remove(&room_id);
                 outcomes.push((id, Outcome::Released));
+            }
+            Request::EnterLane { room_id } => {
+                let guard = inner.lanes.lock(&room_id).await;
+                held.lanes.insert(room_id, guard);
+                outcomes.push((id, Outcome::Entered));
+            }
+            Request::LeaveLane { room_id } => {
+                held.lanes.remove(&room_id);
+                outcomes.push((id, Outcome::Left));
             }
             request @ (Request::LoadContext { .. }
             | Request::LoadBindings { .. }
@@ -79,7 +94,8 @@ async fn execute<'kit, S: ConversationStore>(
             | Request::HandleInbound { .. }
             | Request::OnEvent { .. }
             | Request::Deliver { .. }
-            | Request::RunHook { .. }) => {
+            | Request::RunHook { .. }
+            | Request::RunObservers { .. }) => {
                 let inner = Arc::clone(inner);
                 let task = calls.spawn(async move { call(&inner, request).await });
                 effect_of_task.insert(task.id(), id);
@@ -112,7 +128,7 @@ async fn execute<'kit, S: ConversationStore>(
 }
 
 /// Carries out a request on the store, a channel or a hook.
-async fn call<S: ConversationStore>(inner: &Inner<S>, request: Request) -> Outcome {
+async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: Request) -> Outcome {
     match request {
         Request::HandleInbound {
             channel_id,
@@ -168,6 +184,15 @@ async fn call<S: ConversationStore>(inner: &Inner<S>, request: Request) -> Outco
             };
             Outcome::Hook(Box::new(outcome))
         }
+        Request::RunObservers {
+            trigger,
+            hooks,
+            event,
+            context,
+        } => {
+            run_observers(inner, trigger, hooks, *event, *context).await;
+            Outcome::Observed
+        }
         Request::LoadContext { .. }
         | Request::LoadBindings { .. }
         | Request::FindByIdempotencyKey { .. }
@@ -177,9 +202,13 @@ async fn call<S: ConversationStore>(inner: &Inner<S>, request: Request) -> Outco
         | Request::UpdateRoom { .. }
         | Request::StoreBinding { .. }
         | Request::DeleteBinding { .. } => store_call(&inner.store, request).await,
-        Request::AcquireLock { .. } | Request::ReleaseLock { .. } => Outcome::Failed(
-            ErrorRecord::new("Internal", "a lock request reached the call executor"),
-        ),
+        Request::AcquireLock { .. }
+        | Request::ReleaseLock { .. }
+        | Request::EnterLane { .. }
+        | Request::LeaveLane { .. } => Outcome::Failed(ErrorRecord::new(
+            "Internal",
+            "a lock or lane request reached the call executor",
+        )),
     }
 }
 
@@ -236,10 +265,13 @@ async fn store_call<S: ConversationStore>(store: &S, request: Request) -> Outcom
             .map(|()| Outcome::Stored),
         Request::AcquireLock { .. }
         | Request::ReleaseLock { .. }
+        | Request::EnterLane { .. }
+        | Request::LeaveLane { .. }
         | Request::HandleInbound { .. }
         | Request::OnEvent { .. }
         | Request::Deliver { .. }
-        | Request::RunHook { .. } => {
+        | Request::RunHook { .. }
+        | Request::RunObservers { .. } => {
             return Outcome::Failed(ErrorRecord::new(
                 "Internal",
                 "a request reached the store that is not the store's",
@@ -261,19 +293,59 @@ fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notice) {
             context,
         } => {
             for hook in hooks {
-                let Some((handler, spec)) = inner.hook_with_spec(hook) else {
+                let Some(observing) = observe(inner, trigger, hook, &event, &context) else {
                     continue;
                 };
-                let inner = Arc::clone(inner);
-                let (event, context) = ((*event).clone(), (*context).clone());
-                tokio::spawn(async move {
-                    let room_id = event.room_id.clone();
-                    let outcome = hooks::run(handler, event, context, spec.timeout).await;
-                    inner.report_observer(&spec, trigger, room_id, &outcome);
-                });
+                tokio::spawn(observing);
             }
         }
     }
+}
+
+/// Runs observer hooks concurrently and returns once every one has
+/// finished or timed out, what they raise logged (RFC §9.3, gap G-050).
+async fn run_observers<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    trigger: HookTrigger,
+    hooks: Vec<HookId>,
+    event: RoomEvent,
+    context: RoomContext,
+) {
+    let mut observers = JoinSet::new();
+    for hook in hooks {
+        if let Some(observing) = observe(inner, trigger, hook, &event, &context) {
+            observers.spawn(observing);
+        }
+    }
+    while let Some(joined) = observers.join_next().await {
+        if let Err(failure) = joined {
+            tracing::warn!(
+                target: "roomkit::hooks",
+                ?trigger,
+                panicked = failure.is_panic(),
+                "an awaited observer hook did not finish"
+            );
+        }
+    }
+}
+
+/// One observer's run on `event`, within its timeout, reporting what it
+/// raised; `None` for a hook with no handler.
+fn observe<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    trigger: HookTrigger,
+    hook: HookId,
+    event: &RoomEvent,
+    context: &RoomContext,
+) -> Option<impl Future<Output = ()> + Send + 'static> {
+    let (handler, spec) = inner.hook_with_spec(hook)?;
+    let inner = Arc::clone(inner);
+    let (event, context) = (event.clone(), context.clone());
+    Some(async move {
+        let room_id = event.room_id.clone();
+        let outcome = hooks::run(handler, event, context, spec.timeout).await;
+        inner.report_observer(&spec, trigger, room_id, &outcome);
+    })
 }
 
 fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {

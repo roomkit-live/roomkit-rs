@@ -1,0 +1,349 @@
+//! A message into a room its caller names, on the tokio runtime (RFC §10.1
+//! step 2, §10.2 step 3d, §17.2): a missing room created once however many
+//! messages name it, the `ON_ROOM_CREATED` hooks awaited before the channel
+//! is attached and bounded by their timeout, the recipient an SMS delivery
+//! needs, the caller's organization, and the participants the host stores.
+
+#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+
+use std::future::{Future, ready};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use pretty_assertions::assert_eq;
+use roomkit::model::{
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    EventContent, HookResult, InboundMessage, Participant, ParticipantId, RoomContext, RoomEvent,
+    RoomId, Timestamp,
+};
+use roomkit::ops::{ChannelDeclaration, FrameworkEvent, InboundError, SequentialEnvironment};
+use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::{
+    Channel, ChannelError, ConversationStore, HookExecution, HookSpec, HookTrigger, KitError,
+    RoomFilter, RoomKit,
+};
+use tokio::sync::{broadcast, mpsc};
+
+fn channel(id: &str) -> ChannelId {
+    ChannelId::new(id).unwrap()
+}
+
+fn room_id() -> RoomId {
+    RoomId::new("room_1").unwrap()
+}
+
+fn message(from: &RecordingTransport, text: &str) -> InboundMessage {
+    InboundMessage::new(from.id().clone(), "+15551234567", EventContent::text(text))
+}
+
+/// A kit with no room, an SMS transport and an echo agent registered.
+fn kit_without_rooms() -> (RoomKit, RecordingTransport) {
+    let kit = RoomKit::new();
+    kit.set_environment(SequentialEnvironment::new(
+        Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
+    ));
+    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+    kit.register_channel(sms.clone()).unwrap();
+    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
+        .unwrap();
+    (kit, sms)
+}
+
+/// How many `room_created` events `events` holds.
+fn rooms_created(events: &mut broadcast::Receiver<FrameworkEvent>) -> usize {
+    let mut created = 0;
+    while let Ok(event) = events.try_recv() {
+        created += usize::from(matches!(event, FrameworkEvent::RoomCreated { .. }));
+    }
+    created
+}
+
+/// The room's lane runs one message at a time: the second finds the room
+/// the first created.
+#[tokio::test]
+async fn two_messages_naming_one_missing_room_create_it_once() {
+    let (kit, sms) = kit_without_rooms();
+    let mut events = kit.subscribe();
+    let room = room_id();
+    let (first, second) = tokio::join!(
+        kit.process_inbound(&room, message(&sms, "one")),
+        kit.process_inbound(&room, message(&sms, "two")),
+    );
+    first.unwrap();
+    second.unwrap();
+    let indexes: Vec<u64> = kit
+        .store()
+        .list_events(&room, true)
+        .await
+        .unwrap()
+        .iter()
+        .map(|event| event.index)
+        .collect();
+    let rooms = kit
+        .store()
+        .list_rooms(&RoomFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        (rooms.len(), rooms_created(&mut events), indexes),
+        (1, 1, vec![0, 1])
+    );
+}
+
+/// RFC Appendix B.1, gap G-050: a hook on `ON_ROOM_CREATED` attaches the
+/// agent, and the step waits for it, so the agent answers the first
+/// message.
+#[tokio::test]
+async fn an_agent_attached_by_an_on_room_created_hook_answers_the_first_message() {
+    let (kit, sms) = kit_without_rooms();
+    let attaching = kit.clone();
+    kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
+        let kit = attaching.clone();
+        async move {
+            // Slow enough that an attach not awaited would come too late.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            kit.attach(&event.room_id, &channel("ai")).await.unwrap();
+        }
+    })
+    .unwrap();
+    kit.process_inbound(&room_id(), message(&sms, "Bonjour"))
+        .await
+        .unwrap();
+    assert_eq!(sms.texts(), ["You said: Bonjour"]);
+}
+
+#[tokio::test]
+async fn a_room_created_for_an_organization_belongs_to_it() {
+    let (kit, sms) = kit_without_rooms();
+    kit.process_inbound_for("bank", &room_id(), message(&sms, "Bonjour"))
+        .await
+        .unwrap();
+    let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+    assert_eq!(room.organization_id.as_deref(), Some("bank"));
+}
+
+/// RFC §17.2: another organization's room fails the message, with nothing
+/// written.
+#[tokio::test]
+async fn a_room_of_another_organization_is_refused_with_nothing_written() {
+    let (kit, sms) = kit_without_rooms();
+    kit.create_room_with(&room_id(), |room| {
+        room.organization_id = Some("bank".to_owned());
+    })
+    .await
+    .unwrap();
+    let refused = kit
+        .process_inbound_for("clinic", &room_id(), message(&sms, "Bonjour"))
+        .await;
+    assert_eq!(
+        (
+            refused,
+            kit.store().list_bindings(&room_id()).await.unwrap().len()
+        ),
+        (
+            Err(KitError::Inbound(
+                InboundError::OtherOrganization(room_id())
+            )),
+            0
+        )
+    );
+}
+
+/// RFC §10.1 step 3: the participants the host stores are in the context.
+#[tokio::test]
+async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
+    let (kit, sms) = kit_without_rooms();
+    kit.create_room(&room_id()).await.unwrap();
+    let jean = Participant::new(
+        ParticipantId::new("+15551234567").unwrap(),
+        room_id(),
+        channel("sms"),
+        Timestamp::UNIX_EPOCH,
+    );
+    kit.store().create_participant(jean.clone()).await.unwrap();
+    let (seen, mut read) = mpsc::unbounded_channel();
+    kit.before_broadcast("roster", move |_: RoomEvent, context: RoomContext| {
+        let seen = seen.clone();
+        async move {
+            seen.send(context.participants).unwrap();
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    kit.process_inbound(&room_id(), message(&sms, "Bonjour"))
+        .await
+        .unwrap();
+    assert_eq!(read.recv().await, Some(vec![jean]));
+}
+
+/// An `ON_ROOM_CREATED` hook that never returns holds step 2 up to its
+/// timeout only: the channel is attached, the message delivered, and the
+/// timeout reported (gap G-050).
+#[tokio::test]
+async fn an_on_room_created_hook_that_hangs_is_bounded_by_its_timeout() {
+    let (kit, sms) = kit_without_rooms();
+    let mut events = kit.subscribe();
+    let spec = HookSpec {
+        timeout: Duration::from_millis(50),
+        ..HookSpec::new("stuck", HookTrigger::OnRoomCreated, HookExecution::Async)
+    };
+    kit.hook(spec, |_: RoomEvent, _: RoomContext| async {
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        Ok(HookResult::allow())
+    })
+    .unwrap();
+    let room = room_id();
+    let sent = tokio::time::timeout(
+        Duration::from_secs(5),
+        kit.process_inbound(&room, message(&sms, "Bonjour")),
+    )
+    .await;
+    let mut timed_out = false;
+    while let Ok(event) = events.try_recv() {
+        timed_out |= matches!(event, FrameworkEvent::HookTimeout { .. });
+    }
+    assert_eq!(
+        (
+            sent.map(|result| result.map(|result| result.blocked)),
+            timed_out,
+            kit.store().list_bindings(&room).await.unwrap().len()
+        ),
+        (Ok(Ok(false)), true, 1)
+    );
+}
+
+/// An SMS channel as a provider is: it delivers to the number its binding
+/// names under its declaration's recipient key, `phone_number` by default
+/// for its type (RFC Appendix A.1), and records where it sent.
+#[derive(Clone)]
+struct Sms {
+    declaration: ChannelDeclaration,
+    sent_to: Arc<Mutex<Vec<String>>>,
+}
+
+impl Sms {
+    fn new() -> Self {
+        Self {
+            declaration: ChannelDeclaration::new(
+                channel("sms"),
+                ChannelType::Sms,
+                ChannelCategory::Transport,
+                ChannelDirection::Bidirectional,
+            ),
+            sent_to: Arc::default(),
+        }
+    }
+
+    fn sent_to(&self) -> Vec<String> {
+        self.sent_to
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Channel for Sms {
+    fn declaration(&self) -> ChannelDeclaration {
+        self.declaration.clone()
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let to = match binding.metadata.get("phone_number") {
+            Some(number) => number.as_str().unwrap_or_default().to_owned(),
+            None => String::new(),
+        };
+        self.sent_to
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(to);
+        ready(Ok(ChannelOutput::default()))
+    }
+}
+
+/// A kit with the SMS channel and an echo agent, and a room the agent is
+/// attached to; the SMS channel too, when `attach_sms` names the number its
+/// binding delivers to.
+async fn sms_room(attach_sms: Option<&str>) -> (RoomKit, Sms) {
+    let kit = RoomKit::new();
+    let sms = Sms::new();
+    kit.register_channel(sms.clone()).unwrap();
+    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
+        .unwrap();
+    kit.create_room(&room_id()).await.unwrap();
+    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    if let Some(number) = attach_sms {
+        kit.attach_with(&room_id(), &channel("sms"), |binding| {
+            binding
+                .metadata
+                .insert("phone_number".to_owned(), number.into());
+        })
+        .await
+        .unwrap();
+    }
+    (kit, sms)
+}
+
+fn customer(text: &str) -> InboundMessage {
+    InboundMessage::new(
+        channel("sms"),
+        "+1 (555) 123-4567",
+        EventContent::text(text),
+    )
+}
+
+/// RFC §10.1 step 2: with a room id given, only a room step 2 creates
+/// records its sender. The SMS channel attached to an existing room names
+/// no recipient, and the agent's answer is refused before any send.
+#[tokio::test]
+async fn an_sms_channel_attached_to_an_existing_room_names_no_recipient_and_sends_nothing() {
+    let (kit, sms) = sms_room(None).await;
+    kit.process_inbound(&room_id(), customer("Bonjour"))
+        .await
+        .unwrap();
+    let bound = kit.store().list_bindings(&room_id()).await.unwrap();
+    let sms_binding = bound
+        .iter()
+        .find(|binding| binding.channel_id == channel("sms"))
+        .unwrap();
+    assert_eq!(
+        (sms_binding.metadata.len(), sms.sent_to()),
+        (0, Vec::<String>::new())
+    );
+}
+
+#[tokio::test]
+async fn an_sms_binding_the_integrator_addresses_receives_the_answer() {
+    let (kit, sms) = sms_room(Some("+15551234567")).await;
+    kit.process_inbound(&room_id(), customer("Bonjour"))
+        .await
+        .unwrap();
+    assert_eq!(sms.sent_to(), ["+15551234567"]);
+}
+
+/// RFC §5.7, §10.1 step 2: a room step 2 creates addresses its SMS binding
+/// to the sender, in E.164, and the agent its hook attaches answers there.
+#[tokio::test]
+async fn a_room_created_for_an_sms_sender_answers_at_their_number() {
+    let kit = RoomKit::new();
+    let sms = Sms::new();
+    kit.register_channel(sms.clone()).unwrap();
+    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
+        .unwrap();
+    let attaching = kit.clone();
+    kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
+        let kit = attaching.clone();
+        async move {
+            kit.attach(&event.room_id, &channel("ai")).await.unwrap();
+        }
+    })
+    .unwrap();
+    kit.process_inbound(&room_id(), customer("Bonjour"))
+        .await
+        .unwrap();
+    assert_eq!(sms.sent_to(), ["+15551234567"]);
+}

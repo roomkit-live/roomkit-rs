@@ -5,9 +5,8 @@ use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType, RoomContext,
-    RoomEvent,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    EventContent, EventDirection, EventSource, EventType, RoomContext, RoomEvent,
 };
 use roomkit_core::ops::ChannelDeclaration;
 use roomkit_core::rules::transcoding::text_of;
@@ -26,7 +25,10 @@ pub struct Delivery {
 /// A text transport that records every event delivered to it.
 ///
 /// Cloning it shares the record, so a test keeps a clone to read what the
-/// registered one delivered.
+/// registered one delivered. Its destination is its record, so it needs no
+/// recipient: its declaration names no recipient key, whatever its type
+/// (RFC §10.2 step 3d). It addresses its senders as its type does: an SMS
+/// recording transport writes them in E.164 (RFC §5.7).
 #[derive(Clone, Debug)]
 pub struct RecordingTransport {
     declaration: ChannelDeclaration,
@@ -36,14 +38,17 @@ pub struct RecordingTransport {
 impl RecordingTransport {
     /// A bidirectional text transport of `channel_type` named `channel_id`.
     pub fn new(channel_id: ChannelId, channel_type: ChannelType) -> Self {
+        let declaration = ChannelDeclaration::new(
+            channel_id,
+            channel_type,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        );
         Self {
             declaration: ChannelDeclaration {
-                channel_id,
-                channel_type,
-                category: ChannelCategory::Transport,
-                direction: ChannelDirection::Bidirectional,
-                capabilities: ChannelCapabilities::default(),
                 provider_name: Some("RecordingTransport".to_owned()),
+                recipient_key: None,
+                ..declaration
             },
             deliveries: Arc::default(),
         }
@@ -103,14 +108,16 @@ pub struct EchoAgent {
 impl EchoAgent {
     /// An agent named `channel_id` answering `reply`.
     pub fn new(channel_id: ChannelId, reply: impl Into<String>) -> Self {
+        let declaration = ChannelDeclaration::new(
+            channel_id,
+            ChannelType::Ai,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+        );
         Self {
             declaration: ChannelDeclaration {
-                channel_id,
-                channel_type: ChannelType::Ai,
-                category: ChannelCategory::Intelligence,
-                direction: ChannelDirection::Bidirectional,
-                capabilities: ChannelCapabilities::default(),
                 provider_name: Some("EchoAgent".to_owned()),
+                ..declaration
             },
             reply: reply.into(),
             quote: false,
