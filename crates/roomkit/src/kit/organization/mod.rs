@@ -1,5 +1,11 @@
 //! The kit acting for one organization (RFC §17.2, decision 2 of step 2b):
 //! a handle whose every call is scoped to the organization.
+//!
+//! - this module: the handle and its calls, the kit's made for the
+//!   organization;
+//! - `reads`: what the organization reads of its own rooms.
+
+mod reads;
 
 use roomkit_core::model::{
     BindingOptions, BindingUpdate, ChannelBinding, ChannelId, DirectEvent, EventId, EventUpdates,
@@ -22,7 +28,11 @@ use crate::store::{ConversationStore, InMemoryStore};
 /// stored event finds no event in it, and a message or an injected event
 /// is refused, each with nothing written, the room's due timers included.
 /// A message is routed among the organization's rooms and identities only,
-/// and a room a call creates belongs to the organization.
+/// and a room a call creates belongs to the organization. Its reads, of a
+/// room, its timeline, its bindings and its participants, find the
+/// organization's rooms only, another's reading as a room that does not
+/// exist. The handle never hands back the kit, which reads every room:
+/// code given the handle reaches the organization's rooms and no other.
 ///
 /// Cloning the handle is cheap; it shares its kit.
 ///
@@ -73,11 +83,6 @@ impl<S> OrganizationKit<S> {
     /// The organization the handle acts for.
     pub fn organization_id(&self) -> &str {
         &self.organization_id
-    }
-
-    /// The kit the handle acts through.
-    pub fn kit(&self) -> &RoomKit<S> {
-        &self.kit
     }
 
     fn scope(&self) -> Scope<'_, S> {

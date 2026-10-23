@@ -17,7 +17,7 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     ConversationStore, InboundError, KitError, LifecycleError, MutationError, OrganizationKit,
-    RoomKit, SequentialEnvironment,
+    RoomFilter, RoomKit, SequentialEnvironment, StoreError,
 };
 
 const START_MILLIS: i64 = 1_792_677_780_000;
@@ -240,6 +240,65 @@ async fn an_organization_s_calls_reach_its_own_rooms() {
             vec![("sms".to_owned(), true), ("ws".to_owned(), false)]
         )
     );
+}
+
+/// RFC §17.2: an organization reads its own rooms, their timelines,
+/// bindings and participants; another organization's room, or one of none,
+/// reads as a room that does not exist.
+#[tokio::test]
+async fn an_organization_reads_its_own_rooms_only() {
+    for (reader, own) in [("bank", true), ("clinic", false)] {
+        let (kit, _clock) = room_of(Some("bank")).await;
+        let committed = kit.commit_event(&room_id(), record("Note")).await.unwrap();
+        let reader = kit.for_organization(reader);
+        let room = room_id();
+        let not_found = || KitError::Store(StoreError::RoomNotFound(room_id()));
+        let read = (
+            reader.get_room(&room).await.unwrap().map(|room| room.id),
+            reader
+                .list_rooms(&RoomFilter::default())
+                .await
+                .unwrap()
+                .len(),
+            reader
+                .get_event(&committed.id)
+                .await
+                .unwrap()
+                .map(|event| event.id),
+            reader
+                .list_events(&room, true)
+                .await
+                .map(|events| events.len()),
+            reader
+                .list_bindings(&room)
+                .await
+                .map(|bindings| bindings.len()),
+            reader
+                .list_participants(&room)
+                .await
+                .map(|people| people.len()),
+        );
+        let expected = if own {
+            (
+                Some(room_id()),
+                1,
+                Some(committed.id.clone()),
+                Ok(1),
+                Ok(1),
+                Ok(0),
+            )
+        } else {
+            (
+                None,
+                0,
+                None,
+                Err(not_found()),
+                Err(not_found()),
+                Err(not_found()),
+            )
+        };
+        assert_eq!(read, expected, "read by {}", reader.organization_id());
+    }
 }
 
 /// RFC §17.2: the kit acts for no organization, and reaches every room.

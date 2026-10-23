@@ -620,7 +620,10 @@ publishes a release.
   organization, or of none (`RoomNotFound`); its updates and deletes of a
   stored event find no event there; its messages and injected events are
   refused `OtherOrganization`; a room it creates belongs to the
-  organization. The kit itself acts for no organization: its calls read
+  organization. Its reads (`get_room`, `list_rooms`, `get_event`,
+  `list_events`, `list_bindings`, `list_participants`, `get_participant`)
+  see the organization's rooms only, another's reading as a room that does
+  not exist; the handle never hands back the kit, which reads every room. The kit itself acts for no organization: its calls read
   rooms unscoped, and a room they create belongs to none, its organization
   no option of `create_room_with`.
   `RoomKit::process_inbound_for` and `send_event_for` are gone, and
