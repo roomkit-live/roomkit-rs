@@ -334,6 +334,23 @@ pub trait ConversationStore: Send + Sync + 'static {
         organization_id: Option<&str>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
+    /// Removes `address` on channels of `channel_type` from the identity
+    /// `identity_id` of `organization_id` (RFC §14.1 `unlink_address`,
+    /// §5.6). An identity of another organization is refused with
+    /// [`StoreError::IdentityNotFound`], as by [`link_address`]; an address
+    /// the identity does not use changes nothing. Moving an address is an
+    /// unlink, then a link: the rooms, bindings and participants that named
+    /// it are left as they are.
+    ///
+    /// [`link_address`]: ConversationStore::link_address
+    fn unlink_address(
+        &self,
+        identity_id: &IdentityId,
+        channel_type: ChannelType,
+        address: &str,
+        organization_id: Option<&str>,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
     /// The event the room committed from `channel_id` with idempotency
     /// `key` (RFC §13.4, gap G-023).
     fn find_by_idempotency_key(

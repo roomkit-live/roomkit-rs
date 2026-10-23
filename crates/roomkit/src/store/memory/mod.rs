@@ -330,6 +330,17 @@ impl ConversationStore for InMemoryStore {
             .link(identity_id, channel_type, address, organization_id)
     }
 
+    async fn unlink_address(
+        &self,
+        identity_id: &IdentityId,
+        channel_type: ChannelType,
+        address: &str,
+        organization_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.identities()
+            .unlink(identity_id, channel_type, address, organization_id)
+    }
+
     async fn find_by_idempotency_key(
         &self,
         room_id: &RoomId,

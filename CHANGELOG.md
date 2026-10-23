@@ -237,6 +237,10 @@ publishes a release.
 - `roomkit::keep_context(future)`: a task a hook or a turn spawns and
   awaits as its own keeps the call's execution context (RFC §13.5).
   `KitError::Reentrant` and `KitError::Abandoned`.
+- `ConversationStore::unlink_address` and `Identity::unlink`: an address is
+  moved from one identity to another by an unlink, then a link, since
+  `link_address` refuses an address another identity of the organization
+  uses (RFC §5.6, §14.1, gap G-060).
 
 ### Changed
 

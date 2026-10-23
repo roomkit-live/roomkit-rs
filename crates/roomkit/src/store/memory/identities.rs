@@ -57,18 +57,44 @@ impl Identities {
         address: &str,
         organization: Option<&str>,
     ) -> Result<(), StoreError> {
-        let in_organization = self
-            .by_id
-            .get(identity_id)
-            .is_some_and(|identity| identity.organization_id.as_deref() == organization);
-        if !in_organization {
-            return Err(StoreError::IdentityNotFound(identity_id.clone()));
-        }
+        self.check_in(identity_id, organization)?;
         self.check_free(organization, channel_type, address, identity_id)?;
         if let Some(identity) = self.by_id.get_mut(identity_id) {
             identity.link(channel_type, address);
         }
         Ok(())
+    }
+
+    /// Removes `address` from the identity `identity_id` of `organization`.
+    pub(super) fn unlink(
+        &mut self,
+        identity_id: &IdentityId,
+        channel_type: ChannelType,
+        address: &str,
+        organization: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.check_in(identity_id, organization)?;
+        if let Some(identity) = self.by_id.get_mut(identity_id) {
+            identity.unlink(channel_type, address);
+        }
+        Ok(())
+    }
+
+    /// Refuses `identity_id` unless it is an identity of `organization`.
+    fn check_in(
+        &self,
+        identity_id: &IdentityId,
+        organization: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let in_organization = self
+            .by_id
+            .get(identity_id)
+            .is_some_and(|identity| identity.organization_id.as_deref() == organization);
+        if in_organization {
+            Ok(())
+        } else {
+            Err(StoreError::IdentityNotFound(identity_id.clone()))
+        }
     }
 
     /// Refuses `address` when an identity of `organization` other than
@@ -204,6 +230,59 @@ mod tests {
         assert_eq!(
             book.link(&id, ChannelType::Sms, ALICE, Some("clinic")),
             Err(StoreError::IdentityNotFound(id))
+        );
+    }
+
+    /// RFC §5.6: moving an address is an unlink, then a link.
+    #[test]
+    fn an_unlinked_address_can_be_linked_to_another_identity() {
+        let mut book = Identities::default();
+        book.create(identity("id_one", None)).unwrap();
+        let one = IdentityId::new("id_one").unwrap();
+        let two = IdentityId::new("id_two").unwrap();
+        book.create(Identity::new(two.clone(), None)).unwrap();
+        book.unlink(&one, ChannelType::Sms, ALICE, None).unwrap();
+        book.link(&two, ChannelType::Sms, ALICE, None).unwrap();
+        assert_eq!(resolved(&book, None), Some("id_two".to_owned()));
+    }
+
+    #[test]
+    fn an_unlinked_address_resolves_to_no_one() {
+        let mut book = Identities::default();
+        book.create(identity("id_one", None)).unwrap();
+        let one = IdentityId::new("id_one").unwrap();
+        book.unlink(&one, ChannelType::Sms, ALICE, None).unwrap();
+        assert_eq!(resolved(&book, None), None);
+    }
+
+    #[test]
+    fn unlinking_an_address_the_identity_does_not_use_changes_nothing() {
+        let mut book = Identities::default();
+        book.create(identity("id_one", None)).unwrap();
+        let one = IdentityId::new("id_one").unwrap();
+        book.unlink(&one, ChannelType::Whatsapp, ALICE, None)
+            .unwrap();
+        assert_eq!(resolved(&book, None), Some("id_one".to_owned()));
+    }
+
+    #[test]
+    fn unlinking_from_an_identity_of_another_organization_is_refused() {
+        let mut book = Identities::default();
+        book.create(identity("id_bank", Some("bank"))).unwrap();
+        let bank = IdentityId::new("id_bank").unwrap();
+        assert_eq!(
+            book.unlink(&bank, ChannelType::Sms, ALICE, Some("clinic")),
+            Err(StoreError::IdentityNotFound(bank))
+        );
+    }
+
+    #[test]
+    fn unlinking_from_an_unknown_identity_is_refused() {
+        let mut book = Identities::default();
+        let ghost = IdentityId::new("id_ghost").unwrap();
+        assert_eq!(
+            book.unlink(&ghost, ChannelType::Sms, ALICE, None),
+            Err(StoreError::IdentityNotFound(ghost))
         );
     }
 

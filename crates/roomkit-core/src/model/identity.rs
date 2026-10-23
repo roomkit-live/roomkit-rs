@@ -66,6 +66,19 @@ impl Identity {
             .or_default()
             .push(address.to_owned());
     }
+
+    /// Removes `address` on channels of `channel_type` from the identity;
+    /// an address it does not use changes nothing. A channel type left
+    /// with no address is dropped.
+    pub fn unlink(&mut self, channel_type: ChannelType, address: &str) {
+        let Some(addresses) = self.channel_addresses.get_mut(&channel_type) else {
+            return;
+        };
+        addresses.retain(|linked| linked != address);
+        if addresses.is_empty() {
+            self.channel_addresses.remove(&channel_type);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -100,6 +113,29 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&identity.channel_addresses).unwrap(),
             json!({ "sms": ["+15551234567"] })
+        );
+    }
+
+    #[test]
+    fn an_unlinked_address_leaves_the_other_addresses_of_its_type() {
+        let mut identity = jean();
+        identity.link(ChannelType::Sms, "+15551234567");
+        identity.link(ChannelType::Sms, "+15557654321");
+        identity.unlink(ChannelType::Sms, "+15551234567");
+        assert_eq!(
+            serde_json::to_value(&identity.channel_addresses).unwrap(),
+            json!({ "sms": ["+15557654321"] })
+        );
+    }
+
+    #[test]
+    fn a_channel_type_left_with_no_address_is_dropped() {
+        let mut identity = jean();
+        identity.link(ChannelType::Sms, "+15551234567");
+        identity.unlink(ChannelType::Sms, "+15551234567");
+        assert_eq!(
+            serde_json::to_value(&identity.channel_addresses).unwrap(),
+            json!({})
         );
     }
 }

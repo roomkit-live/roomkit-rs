@@ -240,6 +240,48 @@ async fn a_member_is_found_by_an_address_linked_to_their_identity() {
     );
 }
 
+/// RFC §5.6: an address moved from one identity to another, an unlink then
+/// a link, routes to its new person's room; the rooms are left as they are.
+#[tokio::test]
+async fn an_address_moved_to_another_identity_routes_to_its_new_person() {
+    let (kit, _sms) = kit_with_agent();
+    let jeans = open_room(&kit, "jean_room").await;
+    let maries = open_room(&kit, "marie_room").await;
+    for (room_id, person) in [(&jeans, "jean"), (&maries, "marie")] {
+        let identity_id = IdentityId::new(format!("id_{person}")).unwrap();
+        let mut member = Participant::new(
+            ParticipantId::new(format!("p_{person}")).unwrap(),
+            room_id.clone(),
+            channel("sms"),
+            Timestamp::UNIX_EPOCH,
+        );
+        member.identity_id = Some(identity_id.clone());
+        kit.store().create_participant(member).await.unwrap();
+        kit.store()
+            .create_identity(Identity::new(identity_id, None))
+            .await
+            .unwrap();
+    }
+    let (jean, marie) = (
+        IdentityId::new("id_jean").unwrap(),
+        IdentityId::new("id_marie").unwrap(),
+    );
+    let store = kit.store();
+    store
+        .link_address(&jean, ChannelType::Sms, ALICE, None)
+        .await
+        .unwrap();
+    store
+        .unlink_address(&jean, ChannelType::Sms, ALICE, None)
+        .await
+        .unwrap();
+    store
+        .link_address(&marie, ChannelType::Sms, ALICE, None)
+        .await
+        .unwrap();
+    assert_eq!(routed(&kit, message(ALICE, "Bonjour")).await, maries);
+}
+
 /// RFC §10.4 step 3: a room opened naming no one admits its first sender,
 /// records them, and refuses the next one, who gets a room of their own.
 #[tokio::test]
