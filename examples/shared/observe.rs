@@ -11,6 +11,10 @@ use tokio::sync::{broadcast, watch};
 /// hook above all: far longer than it takes.
 const PATIENCE: Duration = Duration::from_secs(1);
 
+/// How long nothing new is noted before an example takes it that nothing
+/// more will be.
+const QUIET: Duration = Duration::from_millis(100);
+
 /// What the example's hooks and channels note while it runs, in the order
 /// they note it. Cloning it shares it: the example keeps a clone and gives
 /// another to the callback that writes to it.
@@ -53,6 +57,14 @@ impl<T: Clone> Log<T> {
             Ok(Ok(entries)) => entries,
             Ok(Err(_)) | Err(_) => self.entries(),
         }
+    }
+
+    /// What was noted, once nothing new was for a tenth of a second: for a
+    /// check that nothing more fires.
+    pub async fn settled(&self) -> Vec<T> {
+        let mut changes = self.entries.subscribe();
+        while let Ok(Ok(())) = tokio::time::timeout(QUIET, changes.changed()).await {}
+        self.entries()
     }
 }
 

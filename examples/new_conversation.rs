@@ -12,86 +12,17 @@
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
 
 use std::error::Error;
-use std::future::{Future, ready};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex, PoisonError};
 
-use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, InboundMessage, RoomContext, RoomEvent, RoomId,
-};
-use roomkit::ops::{ChannelDeclaration, FrameworkEvent};
+use roomkit::model::{ChannelId, EventContent, InboundMessage, RoomId};
+use roomkit::ops::FrameworkEvent;
 use roomkit::testing::EchoAgent;
-use roomkit::{Channel, ChannelError, ConversationStore, HookTrigger, RoomKit, text_of};
+use roomkit::{ConversationStore, HookTrigger, RoomKit, text_of};
 
-use shared::Checks;
+use shared::{Checks, SmsNumber};
 
 const JEAN: &str = "+15551234567";
 const MARIE: &str = "+15557654321";
-
-/// The kit's SMS number, as a provider sends from it: to the number the
-/// binding names under `phone_number` (RFC Appendix A.1). It records what
-/// it sent where.
-#[derive(Clone)]
-struct SmsNumber {
-    declaration: ChannelDeclaration,
-    sent: Arc<Mutex<Vec<(String, String)>>>,
-}
-
-impl SmsNumber {
-    fn new(channel_id: ChannelId) -> Self {
-        Self {
-            declaration: ChannelDeclaration::new(
-                channel_id,
-                ChannelType::Sms,
-                ChannelCategory::Transport,
-                ChannelDirection::Bidirectional,
-            ),
-            sent: Arc::default(),
-        }
-    }
-
-    fn id(&self) -> &ChannelId {
-        &self.declaration.channel_id
-    }
-
-    /// What was sent to `number`, in order.
-    fn sent_to(&self, number: &str) -> Vec<String> {
-        self.sent
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .filter(|(to, _)| to == number)
-            .map(|(_, text)| text.clone())
-            .collect()
-    }
-}
-
-impl Channel for SmsNumber {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
-    }
-
-    fn deliver(
-        &self,
-        event: RoomEvent,
-        binding: ChannelBinding,
-        _context: RoomContext,
-    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let to = binding
-            .metadata
-            .get("phone_number")
-            .and_then(|number| number.as_str())
-            .unwrap_or_default()
-            .to_owned();
-        println!("  SMS to {to}: {:?}", text_of(&event.content));
-        self.sent
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push((to, text_of(&event.content)));
-        ready(Ok(ChannelOutput::default()))
-    }
-}
 
 /// A customer's message, routed: it names no room.
 async fn customer_says(
@@ -161,7 +92,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         println!("{who}'s room {room}:");
         shared::print_timeline(&shared::timeline(&kit, room).await?);
     }
-    let created = std::iter::from_fn(|| events.try_recv().ok())
+    let created = shared::framework_events(&mut events)
+        .iter()
         .filter(|event| matches!(event, FrameworkEvent::RoomCreated { .. }))
         .count();
     let jeans_timeline = shared::timeline(&kit, &jeans).await?;

@@ -48,12 +48,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     let timeline = shared::timeline(&kit, &room).await?;
     shared::print_timeline(&timeline);
-    let mut exceeded = 0;
-    while let Ok(event) = events.try_recv() {
-        if matches!(event, FrameworkEvent::ChainDepthExceeded { .. }) {
-            exceeded += 1;
-        }
-    }
+    let exceeded = shared::framework_events(&mut events)
+        .iter()
+        .filter(|event| matches!(event, FrameworkEvent::ChainDepthExceeded { .. }))
+        .count();
 
     let mut checks = Checks::default();
     checks.expect(

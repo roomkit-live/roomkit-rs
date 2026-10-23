@@ -13,23 +13,17 @@
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
 
 use std::error::Error;
-use std::future::{Future, ready};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, DeleteContent, DeleteType, EditContent, EditSource, EventContent,
-    EventId, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    ChannelCapabilities, ChannelId, ChannelType, DeleteContent, DeleteType, EditContent,
+    EditSource, EventContent, EventId, EventType, HookResult, InboundMessage, RoomEvent, RoomId,
 };
-use roomkit::ops::ChannelDeclaration;
 use roomkit::rules::edits;
 use roomkit::testing::RecordingTransport;
-use roomkit::{Channel, ChannelError, ConversationStore, HookTrigger, RoomKit, text_of};
-use tokio::sync::mpsc;
+use roomkit::{ConversationStore, HookTrigger, RoomKit, text_of};
 
-use shared::Checks;
+use shared::{Checks, Log, ScriptedAgent};
 
 /// The customer's number.
 const CUSTOMER: &str = "+15551234567";
@@ -54,67 +48,6 @@ fn edits_natively() -> ChannelCapabilities {
     }
 }
 
-/// What the agent read: an event's type, and the texts of the history it
-/// was handed.
-type Reading = (EventType, Vec<String>);
-
-/// An agent that reads what it is asked and answers nothing: it keeps, for
-/// each event, its type and the history it was handed.
-#[derive(Clone)]
-struct Notetaker {
-    id: ChannelId,
-    read: Arc<Mutex<Vec<Reading>>>,
-}
-
-impl Notetaker {
-    fn new(id: ChannelId) -> Self {
-        Self {
-            id,
-            read: Arc::default(),
-        }
-    }
-
-    fn read(&self) -> Vec<Reading> {
-        self.read
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-}
-
-impl Channel for Notetaker {
-    fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration {
-            provider_name: Some("Notetaker".to_owned()),
-            capabilities: edits_natively(),
-            ..ChannelDeclaration::new(
-                self.id.clone(),
-                ChannelType::Ai,
-                ChannelCategory::Intelligence,
-                ChannelDirection::Bidirectional,
-            )
-        }
-    }
-
-    fn on_event(
-        &self,
-        event: RoomEvent,
-        _binding: ChannelBinding,
-        context: RoomContext,
-    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let history = context
-            .recent_events
-            .iter()
-            .map(|event| text_of(&event.content))
-            .collect();
-        self.read
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push((event.event_type, history));
-        ready(Ok(ChannelOutput::default()))
-    }
-}
-
 /// The room of the flow, with its channels and what the example observes.
 struct Conversation {
     kit: RoomKit,
@@ -122,11 +55,12 @@ struct Conversation {
     customer: RecordingTransport,
     advisor: RecordingTransport,
     sms: RecordingTransport,
-    agent: Notetaker,
+    /// An agent that reads what it is asked and answers nothing.
+    agent: ScriptedAgent,
     /// The ids of [`MESSAGES`], in order.
     sent: Vec<EventId>,
-    /// The targets the mutation triggers fired with, as they fire.
-    changed: mpsc::UnboundedReceiver<(HookTrigger, RoomEvent)>,
+    /// The mutation triggers that fired, with their targets, as they fire.
+    changed: Log<(HookTrigger, RoomEvent)>,
 }
 
 impl Conversation {
@@ -138,19 +72,21 @@ impl Conversation {
             RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::Websocket)
                 .with_capabilities(edits_natively());
         let sms = RecordingTransport::new(ChannelId::new("sms_copy")?, ChannelType::Sms);
-        let agent = Notetaker::new(ChannelId::new("ai")?);
+        let agent =
+            ScriptedAgent::new(ChannelId::new("ai")?, &[]).with_capabilities(edits_natively());
         kit.register_channel(customer.clone())?;
         kit.register_channel(advisor.clone())?;
         kit.register_channel(sms.clone())?;
         kit.register_channel(agent.clone())?;
-        let changed = observe_changes(&kit)?;
+        let changed = Log::new();
+        observe_changes(&kit, &changed)?;
         moderate_edits(&kit)?;
         let room = RoomId::new("room_1")?;
         kit.create_room(&room).await?;
         for channel_id in [customer.id(), advisor.id(), sms.id()] {
             kit.attach(&room, channel_id).await?;
         }
-        kit.attach(&room, &agent.id).await?;
+        kit.attach(&room, agent.id()).await?;
         Ok(Self {
             kit,
             room,
@@ -225,36 +161,25 @@ impl Conversation {
         let id = self.sent.get(index).ok_or("no such message")?;
         Ok(self.kit.store().get_event(id).await?)
     }
-
-    /// The next mutation trigger to fire, waiting a moment for it.
-    async fn next_change(&mut self, wait: Duration) -> Option<(HookTrigger, RoomEvent)> {
-        tokio::time::timeout(wait, self.changed.recv())
-            .await
-            .ok()
-            .flatten()
-    }
 }
 
-/// Registers observers of `ON_EVENT_UPDATED` and `ON_EVENT_DELETED`; the
-/// receiver gets each one's trigger and payload as it fires.
+/// Registers observers of `ON_EVENT_UPDATED` and `ON_EVENT_DELETED`, which
+/// note each one's trigger and payload in `changed`.
 fn observe_changes(
     kit: &RoomKit,
-) -> Result<mpsc::UnboundedReceiver<(HookTrigger, RoomEvent)>, Box<dyn Error>> {
-    let (fired, receiver) = mpsc::unbounded_channel();
+    changed: &Log<(HookTrigger, RoomEvent)>,
+) -> Result<(), Box<dyn Error>> {
     for (name, trigger) in [
         ("projection_updated", HookTrigger::OnEventUpdated),
         ("projection_deleted", HookTrigger::OnEventDeleted),
     ] {
-        let fired = fired.clone();
+        let changed = changed.clone();
         kit.observe(name, trigger, move |event, _| {
-            let fired = fired.clone();
-            async move {
-                // Once the example stops listening, there is no one to tell.
-                let _told = fired.send((trigger, event));
-            }
+            let changed = changed.clone();
+            async move { changed.push((trigger, event)) }
         })?;
     }
-    Ok(receiver)
+    Ok(())
 }
 
 /// A card number: four groups of four digits.
@@ -303,8 +228,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let edited = conversation.send(edit).await?;
     let target = conversation.stored(3).await?;
     let to_advisor = last_delivered(&conversation.advisor);
-    let read = conversation.agent.read().last().cloned();
-    let updated = conversation.next_change(Duration::from_secs(1)).await;
+    let read = conversation.agent.turns().last().cloned();
+    let updated = conversation.changed.wait_for(1).await.last().cloned();
     checks.expect(
         "the edit is stored after its target, which now reads \"I need 50000$\" and is marked edited",
         edited.event.is_some_and(|event| event.index == 6)
@@ -321,8 +246,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "the agent reads the edit, its history corrected",
-        read.is_some_and(|(event_type, history)| {
-            event_type == EventType::Edit && history.contains(&"I need 50000$".to_owned())
+        read.is_some_and(|turn| {
+            turn.event.event_type == EventType::Edit
+                && turn.history.contains(&"I need 50000$".to_owned())
         }),
     );
     checks.expect(
@@ -337,7 +263,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let deleted = conversation.send(delete).await?;
     let target = conversation.stored(5).await?;
     let to_advisor = last_delivered(&conversation.advisor);
-    let removed = conversation.next_change(Duration::from_secs(1)).await;
+    let removed = conversation.changed.wait_for(2).await.last().cloned();
     checks.expect(
         "the delete is stored after its target, which is marked deleted",
         deleted.event.is_some_and(|event| event.index == 7)
@@ -359,7 +285,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let blocked = conversation.edit(4, "To card 4242 4242 4242 4242")?;
     let refused = conversation.send(blocked).await?;
     let target = conversation.stored(4).await?;
-    let fired = conversation.next_change(Duration::from_millis(100)).await;
+    let fired = conversation.changed.settled().await;
     checks.expect(
         "the edit is blocked by the scanner, and its target still reads \"To my savings account\"",
         refused.blocked
@@ -371,7 +297,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "no mutation trigger fires for the blocked edit",
-        fired.is_none(),
+        fired.len() == 2,
     );
     checks.expect(
         "the card number reaches no channel",

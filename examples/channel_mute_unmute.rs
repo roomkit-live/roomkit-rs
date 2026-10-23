@@ -118,7 +118,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     let timeline = shared::timeline(&kit, &room).await?;
     shared::print_timeline(&timeline);
-    let mut fired = changes.wait_for(2).await;
+    // The hooks run in the background: two are waited for, then a moment
+    // for any other.
+    changes.wait_for(2).await;
+    let mut fired = changes.settled().await;
     fired.sort();
 
     let mut checks = Checks::default();

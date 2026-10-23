@@ -16,25 +16,21 @@
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
 
 use std::error::Error;
-use std::future::{Future, ready};
 use std::process::ExitCode;
-use std::time::Duration;
 
 use roomkit::model::{
-    Access, BindingUpdate, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType,
-    InboundMessage, RoomContext, RoomEvent, RoomId, Visibility,
+    Access, BindingUpdate, ChannelId, ChannelType, EventContent, InboundMessage, RoomId, Visibility,
 };
-use roomkit::ops::{ChannelDeclaration, FrameworkEvent};
+use roomkit::ops::FrameworkEvent;
 use roomkit::testing::RecordingTransport;
-use roomkit::{Channel, ChannelError, HookTrigger, RoomKit, text_of};
-use tokio::sync::{broadcast, mpsc};
+use roomkit::{HookTrigger, RoomKit, text_of};
+use tokio::sync::broadcast;
 
-use shared::Checks;
+use shared::{Checks, Log, Script, ScriptedAgent};
 
 /// What the agent answers, by what it reads. It stays silent on anything
 /// else, the advisor's own messages among them.
-const SCRIPT: [(&str, &str); 4] = [
+const SCRIPT: Script = &[
     ("Bonjour", "Bonjour! How can I help?"),
     (
         "I need help with my mortgage",
@@ -50,65 +46,6 @@ const SCRIPT: [(&str, &str); 4] = [
     ),
 ];
 
-/// An agent answering from [`SCRIPT`].
-struct Assistant {
-    declaration: ChannelDeclaration,
-}
-
-impl Assistant {
-    fn new(channel_id: ChannelId) -> Self {
-        Self {
-            declaration: ChannelDeclaration {
-                provider_name: Some("Assistant".to_owned()),
-                ..ChannelDeclaration::new(
-                    channel_id,
-                    ChannelType::Ai,
-                    ChannelCategory::Intelligence,
-                    ChannelDirection::Bidirectional,
-                )
-            },
-        }
-    }
-
-    fn answer(&self, event: &RoomEvent) -> Option<RoomEvent> {
-        let read = text_of(&event.content);
-        let (_, reply) = SCRIPT.iter().find(|(prompt, _)| *prompt == read)?;
-        let source = EventSource::new(
-            self.declaration.channel_id.clone(),
-            ChannelType::Ai,
-            EventDirection::Outbound,
-        );
-        // The pipeline gives the response its own id, room and depth.
-        Some(RoomEvent::new(
-            event.id.clone(),
-            event.room_id.clone(),
-            EventType::Message,
-            source,
-            EventContent::text(*reply),
-            event.created_at,
-        ))
-    }
-}
-
-impl Channel for Assistant {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
-    }
-
-    fn on_event(
-        &self,
-        event: RoomEvent,
-        _binding: ChannelBinding,
-        _context: RoomContext,
-    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let output = match self.answer(&event) {
-            Some(answer) => ChannelOutput::respond(vec![answer]),
-            None => ChannelOutput::default(),
-        };
-        ready(Ok(output))
-    }
-}
-
 /// The room of the flow, with its channels and what the example observes.
 struct Conversation {
     kit: RoomKit,
@@ -117,7 +54,7 @@ struct Conversation {
     advisor: RecordingTransport,
     agent: ChannelId,
     /// The payloads of the mute and unmute hooks, as they fire.
-    mute_hooks: mpsc::UnboundedReceiver<String>,
+    mute_hooks: Log<String>,
     events: broadcast::Receiver<FrameworkEvent>,
 }
 
@@ -132,8 +69,9 @@ impl Conversation {
         let agent = ChannelId::new("ai_support")?;
         kit.register_channel(customer.clone())?;
         kit.register_channel(advisor.clone())?;
-        kit.register_channel(Assistant::new(agent.clone()))?;
-        let mute_hooks = observe_mutes(&kit)?;
+        kit.register_channel(ScriptedAgent::new(agent.clone(), SCRIPT))?;
+        let mute_hooks = Log::new();
+        observe_mutes(&kit, &mute_hooks)?;
         let events = kit.subscribe();
         let room = RoomId::new("room_1")?;
         kit.create_room(&room).await?;
@@ -205,15 +143,9 @@ impl Conversation {
 
     /// The mute and unmute hooks that fired. They run as observers, in the
     /// background: two are waited for, then a moment for any other.
-    async fn mute_hooks_fired(&mut self) -> Vec<String> {
-        let mut fired = Vec::new();
-        for wait in [1000, 1000, 100] {
-            let next = tokio::time::timeout(Duration::from_millis(wait), self.mute_hooks.recv());
-            match next.await {
-                Ok(Some(hook)) => fired.push(hook),
-                Ok(None) | Err(_) => break,
-            }
-        }
+    async fn mute_hooks_fired(&self) -> Vec<String> {
+        self.mute_hooks.wait_for(2).await;
+        let mut fired = self.mute_hooks.settled().await;
         fired.sort();
         fired
     }
@@ -221,19 +153,20 @@ impl Conversation {
     /// The advisor's `room_channel_attached` event, if it was emitted.
     fn advisor_attached(&mut self) -> Option<FrameworkEvent> {
         let advisor = self.advisor.id().clone();
-        std::iter::from_fn(|| self.events.try_recv().ok()).find(|event| {
-            matches!(
-                event,
-                FrameworkEvent::RoomChannelAttached { channel_id, .. } if *channel_id == advisor
-            )
-        })
+        shared::framework_events(&mut self.events)
+            .into_iter()
+            .find(|event| {
+                matches!(
+                    event,
+                    FrameworkEvent::RoomChannelAttached { channel_id, .. } if *channel_id == advisor
+                )
+            })
     }
 }
 
-/// Registers observers of `ON_CHANNEL_MUTED` and `ON_CHANNEL_UNMUTED`; the
-/// receiver gets each one's payload text as it fires.
-fn observe_mutes(kit: &RoomKit) -> Result<mpsc::UnboundedReceiver<String>, Box<dyn Error>> {
-    let (fired, receiver) = mpsc::unbounded_channel();
+/// Registers observers of `ON_CHANNEL_MUTED` and `ON_CHANNEL_UNMUTED`,
+/// which note each one's payload text in `fired`.
+fn observe_mutes(kit: &RoomKit, fired: &Log<String>) -> Result<(), Box<dyn Error>> {
     for (name, trigger) in [
         ("on_muted", HookTrigger::OnChannelMuted),
         ("on_unmuted", HookTrigger::OnChannelUnmuted),
@@ -241,13 +174,10 @@ fn observe_mutes(kit: &RoomKit) -> Result<mpsc::UnboundedReceiver<String>, Box<d
         let fired = fired.clone();
         kit.observe(name, trigger, move |event, _| {
             let fired = fired.clone();
-            async move {
-                // Once the example stops listening, there is no one to tell.
-                let _told = fired.send(text_of(&event.content));
-            }
+            async move { fired.push(text_of(&event.content)) }
         })?;
     }
-    Ok(receiver)
+    Ok(())
 }
 
 /// Whether one of `texts` is the agent's suggestion.
