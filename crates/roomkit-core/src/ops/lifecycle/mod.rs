@@ -15,6 +15,7 @@ mod bindings;
 pub(crate) mod change;
 pub(crate) mod gate;
 pub(crate) mod locked;
+mod payload;
 pub(crate) mod report;
 mod status;
 
@@ -23,6 +24,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 pub use self::bindings::{AttachChannel, DetachChannel, UpdateBinding};
+pub use self::payload::{LifecycleChange, LifecyclePayload};
 pub use self::status::{
     ArchiveRoom, CheckTimers, CloseRoom, PauseRoom, ReopenRoom, ResumeRoom, TimersChecked,
 };

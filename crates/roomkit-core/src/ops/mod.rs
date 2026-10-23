@@ -54,8 +54,9 @@ pub use events::{CommitRecord, DeleteEvent, MutationError, UpdateEvent};
 pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation, TransitionReason};
 pub use inbound::{Inbound, InboundError, InboundResult, InboundTarget, default_inbound_event};
 pub use lifecycle::{
-    ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, LifecycleError,
-    PauseRoom, ReopenRoom, ResumeRoom, TimersChecked, UpdateBinding,
+    ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, LifecycleChange,
+    LifecycleError, LifecyclePayload, PauseRoom, ReopenRoom, ResumeRoom, TimersChecked,
+    UpdateBinding,
 };
 pub use protocol::{
     CHANNEL_NOT_REGISTERED, Decided, Effect, EffectId, Entry, EntryId, Next, Notice, Operation,

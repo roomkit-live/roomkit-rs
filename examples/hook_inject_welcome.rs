@@ -1,6 +1,7 @@
 //! A hook that injects a welcome (RFC §9.2, §9.4). An observer of
-//! `ON_CHANNEL_ATTACHED` notes each channel attached to the room; an
-//! observer's result is discarded, so it cannot inject anything itself.
+//! `ON_CHANNEL_ATTACHED` notes each channel attached to the room, which it
+//! reads from its payload; an observer's result is discarded, so it cannot
+//! inject anything itself.
 //! When a newcomer's first message goes through, a SYNC `BEFORE_BROADCAST`
 //! hook lets it pass and injects a system welcome addressed to that newcomer
 //! only. The welcome is stored in the timeline, and the newcomer's message
@@ -19,6 +20,7 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType, HookResult,
     InboundMessage, InjectedEvent, RoomEvent, RoomId, SystemContent,
 };
+use roomkit::ops::LifecyclePayload;
 use roomkit::testing::RecordingTransport;
 use roomkit::{HookTrigger, RoomKit};
 
@@ -62,10 +64,8 @@ fn welcome_newcomers(
         move |event, _| {
             let noted = noted.clone();
             async move {
-                if let EventContent::System(attach) = &event.content
-                    && let Some(channel_id) =
-                        attach.data.get("channel_id").and_then(|id| id.as_str())
-                    && let Ok(channel_id) = ChannelId::new(channel_id)
+                if let Some(channel_id) =
+                    LifecyclePayload::of(&event).and_then(|attached| attached.channel_id)
                 {
                     noted.push(channel_id);
                 }

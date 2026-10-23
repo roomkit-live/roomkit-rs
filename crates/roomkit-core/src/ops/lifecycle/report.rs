@@ -2,9 +2,10 @@
 //! trigger's hooks (RFC §9.2), as the table of RFC §26.1 pairs them. The
 //! transition's own record is not subject to the status gate (RFC §5.1).
 
+use super::payload::{LifecycleChange, LifecyclePayload};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType,
-    Metadata, RoomContext, RoomEvent, RoomId, SystemContent,
+    RoomContext, RoomEvent, RoomId,
 };
 use crate::ops::protocol::{EffectId, Request};
 use crate::ops::{Cx, FrameworkEvent, Notice, TransitionReason};
@@ -81,18 +82,18 @@ impl Reported<'_> {
         }
     }
 
-    /// The code of the change's hook payload.
-    fn code(self) -> &'static str {
+    /// The change the hook payload names.
+    fn change(self) -> LifecycleChange {
         match self {
-            Self::RoomCreated => "room_created",
-            Self::RoomPaused(_) => "room_paused",
-            Self::RoomClosed(_) => "room_closed",
-            Self::RoomArchived => "room_archived",
-            Self::ChannelAttached(_) => "channel_attached",
-            Self::ChannelDetached(_) => "channel_detached",
-            Self::ChannelMuted(_) => "channel_muted",
-            Self::ChannelUnmuted(_) => "channel_unmuted",
-            Self::SessionStarted { .. } => "session_started",
+            Self::RoomCreated => LifecycleChange::RoomCreated,
+            Self::RoomPaused(_) => LifecycleChange::RoomPaused,
+            Self::RoomClosed(_) => LifecycleChange::RoomClosed,
+            Self::RoomArchived => LifecycleChange::RoomArchived,
+            Self::ChannelAttached(_) => LifecycleChange::ChannelAttached,
+            Self::ChannelDetached(_) => LifecycleChange::ChannelDetached,
+            Self::ChannelMuted(_) => LifecycleChange::ChannelMuted,
+            Self::ChannelUnmuted(_) => LifecycleChange::ChannelUnmuted,
+            Self::SessionStarted { .. } => LifecycleChange::SessionStarted,
         }
     }
 
@@ -212,35 +213,24 @@ fn observers(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) -> 
     })
 }
 
-/// The payload of a lifecycle hook: a system event whose code names the
-/// change and whose data names the room, the channel, and the reason of a
-/// transition its timer made.
+/// The payload of a lifecycle hook: a system event from the framework,
+/// whose content's code names the change and whose data names the room, the
+/// channel, and the reason of a transition its timer made, as
+/// [`LifecyclePayload`] writes and reads them.
 fn payload(cx: &mut Cx<'_>, reported: Reported<'_>, room_id: &RoomId) -> RoomEvent {
     let source = EventSource::new(
         ChannelId::system(),
         ChannelType::System,
         EventDirection::Outbound,
     );
-    let mut data = Metadata::new();
-    data.insert("room_id".to_owned(), room_id.as_str().into());
-    if let Some(channel_id) = reported.channel_id() {
-        data.insert("channel_id".to_owned(), channel_id.as_str().into());
-    }
-    if let Some(channel_type) = reported.channel_type() {
-        data.insert(
-            "channel_type".to_owned(),
-            serde_json::to_value(channel_type).unwrap_or_default(),
-        );
-    }
-    if let Some(TransitionReason::Timer) = reported.reason() {
-        data.insert("reason".to_owned(), "timer".into());
-    }
-    let code = reported.code();
-    let content = EventContent::System(SystemContent {
-        body: code.replace('_', " "),
-        code: Some(code.to_owned()),
-        data,
-    });
+    let lifecycle = LifecyclePayload {
+        change: reported.change(),
+        room_id: room_id.clone(),
+        channel_id: reported.channel_id().cloned(),
+        channel_type: reported.channel_type(),
+        reason: reported.reason(),
+    };
+    let content = EventContent::System(lifecycle.content());
     let now = cx.env.now();
     RoomEvent::new(
         cx.env.new_event_id(),

@@ -11,13 +11,14 @@ use std::time::Duration;
 
 use roomkit_core::model::{
     Access, BindingUpdate, ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput,
-    ChannelType, ErrorRecord, EventContent, EventType, HookResult, InjectedEvent, Room, RoomStatus,
-    RoomTimers, Timestamp, Visibility,
+    ChannelType, ErrorRecord, EventType, HookResult, InjectedEvent, Room, RoomStatus, RoomTimers,
+    Timestamp, Visibility,
 };
 use roomkit_core::ops::{
     ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, FrameworkEvent,
-    InboundError, LifecycleError, Next, Operation, PauseRoom, RefusedOperation, ReopenRoom,
-    ResumeRoom, SequentialEnvironment, TimersChecked, TransitionReason, UpdateBinding,
+    InboundError, LifecycleChange, LifecycleError, LifecyclePayload, Next, Operation, PauseRoom,
+    RefusedOperation, ReopenRoom, ResumeRoom, SequentialEnvironment, TimersChecked,
+    TransitionReason, UpdateBinding,
 };
 use roomkit_core::rules::attachment;
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -175,6 +176,25 @@ mod attach_channel {
         sim.run(AttachChannel::new(sim.shared_config(), sms_binding()))
             .unwrap();
         assert_eq!(bound(&sim.async_contexts()[0].bindings), ["ws", "sms"]);
+    }
+
+    /// RFC §9.2: a hook reads the channel attached from its payload.
+    #[test]
+    fn fires_on_channel_attached_with_a_payload_naming_the_channel() {
+        let mut sim = Sim::new();
+        sim.observer("greeter", HookTrigger::OnChannelAttached);
+        sim.run(AttachChannel::new(sim.shared_config(), sms_binding()))
+            .unwrap();
+        assert_eq!(
+            LifecyclePayload::of(sim.async_payloads()[0]),
+            Some(LifecyclePayload {
+                change: LifecycleChange::ChannelAttached,
+                room_id: room_id(),
+                channel_id: Some(channel("sms")),
+                channel_type: None,
+                reason: None,
+            })
+        );
     }
 
     #[test]
@@ -878,12 +898,10 @@ mod check_timers {
         sim.observer("on_closed", HookTrigger::OnRoomClosed);
         sim.env.advance(Duration::from_secs(120));
         check(&mut sim);
-        let EventContent::System(content) = &sim.async_payloads()[0].content else {
-            panic!("a lifecycle hook's payload is a system event");
-        };
+        let payload = LifecyclePayload::of(sim.async_payloads()[0]);
         assert_eq!(
-            content.data.get("reason"),
-            Some(&serde_json::json!("timer"))
+            payload.map(|payload| (payload.change, payload.reason)),
+            Some((LifecycleChange::RoomClosed, Some(TransitionReason::Timer)))
         );
     }
 

@@ -100,7 +100,10 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Registers an ASYNC observer on `trigger` (RFC §9.3): it runs after the
-    /// fact, and what it raises is logged.
+    /// fact, and what it raises is logged. An observer of a lifecycle
+    /// trigger reads the change its payload reports, the room, the channel
+    /// and the timer's reason, with
+    /// [`LifecyclePayload::of`](roomkit_core::ops::LifecyclePayload::of).
     ///
     /// # Errors
     ///

@@ -249,6 +249,13 @@ publishes a release.
   moved from one identity to another by an unlink, then a link, since
   `link_address` refuses an address another identity of the organization
   uses (RFC §5.6, §14.1, gap G-060).
+- `ops::LifecyclePayload` and `ops::LifecycleChange`: what a lifecycle
+  hook's payload says of its change, the room, the channel a channel's
+  change is about, the type of the channel a session started on and the
+  reason of a transition its timer made, read with
+  `LifecyclePayload::of(&event)` from the type the framework writes the
+  payload with, so a hook no longer digs them out of the `SystemContent`'s
+  JSON `data` (RFC §9.2, §26.1).
 - Examples, beside the RFC's Appendix B flows, each checking what it
   shows: `room_lifecycle`, `channel_mute_unmute` and `room_membership` for
   rooms and channels; `hook_moderation`, `hook_inject_welcome` and
