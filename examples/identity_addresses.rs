@@ -1,12 +1,22 @@
-//! Identities and their addresses (RFC §5.6, §14.1, §10.4 step 1, §17.2). A
-//! bank knows its clients as identities of its organization, each with the
-//! addresses they use, and records each one as the member of their own
-//! room. Both rooms are bound to the bank's one SMS number, so the router
-//! finds a room by who the sender is: an address linked to an identity
-//! brings its person's messages to their room, whatever way the number is
-//! written. An address belongs to one identity of an organization; moving
-//! it to another is an unlink, then a link. Identities are the
-//! organization's: another organization knows no one by the same number.
+//! Identities and their addresses (RFC §5.6, §14.1, §10.4 steps 1 and 2,
+//! §17.2). A bank knows its clients as identities of its organization,
+//! each with the addresses they use, and gives each one a room bound to its
+//! one SMS number, so the router finds a room by who the sender is: an
+//! address linked to an identity brings its person's messages to their
+//! room, whatever way the number is written. An address belongs to one
+//! identity of an organization; moving it to another is an unlink, then a
+//! link. Identities are the organization's: another organization knows no
+//! one by the same number.
+//!
+//! A binding not declared `group` is one correspondent's conversation, and
+//! its answers go to that correspondent (RFC §10.4). Marie's room records
+//! her as its member: her first text is taken in, and the binding then
+//! names the number it came from, so a text from another of her numbers
+//! gets a room of its own. To keep one room for all of a client's numbers,
+//! the bank opens it naming the identity as the binding's correspondent,
+//! as Jean's room does: every number linked to him reaches it, and its
+//! answers go to the number the binding delivers to, the one he first
+//! wrote from unless the bank names one.
 //!
 //! ```sh
 //! cargo run --example identity_addresses
@@ -18,8 +28,8 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, Identity, IdentityId, InboundMessage, Participant,
-    ParticipantId, RoomId,
+    ChannelBinding, ChannelId, ChannelType, EventContent, Identity, IdentityId, InboundMessage,
+    Participant, ParticipantId, RoomId,
 };
 use roomkit::testing::EchoAgent;
 use roomkit::{ConversationStore, RoomKit, StoreError};
@@ -78,12 +88,12 @@ impl Bank {
         Ok(identity_id)
     }
 
-    /// A room of the bank, bound to its number and its agent, with the
-    /// client `identity_id` recorded as its member on SMS.
-    async fn room_of(
+    /// A room of the bank, bound to its agent and to its number with the
+    /// binding `configure` adjusts.
+    async fn open(
         &self,
-        identity_id: &IdentityId,
         room: &str,
+        configure: impl FnOnce(&mut ChannelBinding),
     ) -> Result<RoomId, Box<dyn Error>> {
         let room_id = RoomId::new(room)?;
         self.kit
@@ -91,8 +101,22 @@ impl Bank {
                 room.organization_id = Some(BANK.to_owned());
             })
             .await?;
-        self.kit.attach(&room_id, self.sms.id()).await?;
+        self.kit
+            .attach_with(&room_id, self.sms.id(), configure)
+            .await?;
         self.kit.attach(&room_id, self.agent.id()).await?;
+        Ok(room_id)
+    }
+
+    /// A room of the bank with the client `identity_id` recorded as its
+    /// member on SMS: its binding names no one until the client's first
+    /// text, whose number it then names.
+    async fn room_of(
+        &self,
+        identity_id: &IdentityId,
+        room: &str,
+    ) -> Result<RoomId, Box<dyn Error>> {
+        let room_id = self.open(room, |_| {}).await?;
         let member = Participant {
             identity_id: Some(identity_id.clone()),
             ..Participant::new(
@@ -104,6 +128,21 @@ impl Bank {
         };
         self.kit.store().create_participant(member).await?;
         Ok(room_id)
+    }
+
+    /// A room of the bank whose SMS binding names the client `identity_id`
+    /// as its correspondent: every number linked to the identity is the
+    /// room's conversation.
+    async fn room_naming(
+        &self,
+        identity_id: &IdentityId,
+        room: &str,
+    ) -> Result<RoomId, Box<dyn Error>> {
+        let correspondent = ParticipantId::new(identity_id.as_str())?;
+        self.open(room, |binding| {
+            binding.participant_id = Some(correspondent);
+        })
+        .await
     }
 
     /// A text from `number` to the SMS number of `organization`'s rooms;
@@ -130,7 +169,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     println!("The bank knows Jean, on his phone and his work phone, and Marie.");
     let jean = bank.client("id_jean", "Jean", &[JEAN, JEAN_WORK]).await?;
     let marie = bank.client("id_marie", "Marie", &[MARIE]).await?;
-    let jeans_room = bank.room_of(&jean, "jean_room").await?;
+    let jeans_room = bank.room_naming(&jean, "jean_room").await?;
     let maries_room = bank.room_of(&marie, "marie_room").await?;
     let found = store
         .resolve_identity(ChannelType::Sms, JEAN, Some(BANK))
@@ -147,6 +186,13 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     checks.expect(
         "Jean's text, his number written his own way, reaches his room through his identity",
         landed == jeans_room && bank.sms.sent_to(JEAN) == ["You said: Bonjour"],
+    );
+    let from_work = bank.text_from(BANK, JEAN_WORK).await?;
+    checks.expect(
+        "his work phone reaches the same room, which names his identity, answered at his phone",
+        from_work == jeans_room
+            && bank.sms.sent_to(JEAN).len() == 2
+            && bank.sms.sent_to(JEAN_WORK).is_empty(),
     );
 
     let taken = store
@@ -168,6 +214,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     checks.expect(
         "a text from the number moved reaches Marie's room, and is answered there",
         landed == maries_room && bank.sms.sent_to(JEAN_WORK) == ["You said: Bonjour"],
+    );
+    let from_her_own = bank.text_from(BANK, MARIE).await?;
+    checks.expect(
+        "Marie's room names the number she first wrote from: her own number gets a room of its own",
+        from_her_own != maries_room && from_her_own != jeans_room,
     );
 
     let landed = bank.text_from("clinic", JEAN).await?;

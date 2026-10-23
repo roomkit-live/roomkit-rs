@@ -98,7 +98,7 @@ Routing and identities:
 
 - `shared_sms_number`: one number, several correspondents, and a group's room.
 - `paused_conversation`: a sender returns to the conversation its timer paused.
-- `identity_addresses`: addresses linked to identities route to their person's room.
+- `identity_addresses`: addresses linked to identities route to their person's room, and a room naming the identity keeps all its numbers.
 
 ## Documentation
 
