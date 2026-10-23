@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use roomkit_core::model::{EventId, RoomId, Timestamp};
 use roomkit_core::ops::{
     ChannelRequest, Decided, Effect, EffectId, Entry, EntryId, Environment, HoldOutcome, Inbound,
-    InboundTarget, Next, Operation, Outcome, Request, Settled,
+    InboundTarget, Next, Notice, Operation, Outcome, Request, Settled,
 };
 use roomkit_core::rules::chain_depth::ReentryBudget;
 
@@ -300,6 +300,12 @@ impl Sim {
         }
         let step = operation.poll(&self.env);
         self.journal.extend(step.notices.iter().map(journal_line));
+        for notice in &step.notices {
+            if let Notice::AsyncHooks { trigger, event, .. } = notice {
+                let locked = self.state(run).locks.contains(&event.room_id);
+                self.fired.push((*trigger, locked));
+            }
+        }
         self.notices.extend(step.notices);
         for settled in step.settled {
             self.answer_settled(settled);

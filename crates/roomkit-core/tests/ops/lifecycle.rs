@@ -1222,6 +1222,45 @@ mod the_status_gate {
     }
 }
 
+/// RFC §5.1 When (amended by 0871aec), gap G-045: a timer transition's
+/// framework event is emitted once its write is stored, before what the
+/// section decides next; its trigger's hooks fire once the room lock is
+/// released, as an ASYNC trigger's do.
+mod a_timer_transition_s_report {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn fires_its_hooks_once_a_refused_message_s_lock_is_released() {
+        let mut sim = paused_room();
+        sim.observer("on_closed", HookTrigger::OnRoomClosed);
+        sim.env.advance(Duration::from_secs(120));
+        let result = sim.send(Sim::message("sms", "Hello?")).unwrap();
+        assert_eq!(
+            (
+                result.reason.as_deref(),
+                sim.framework_event_names(),
+                sim.fired.clone()
+            ),
+            (
+                Some("room_closed"),
+                vec!["room_closed".to_owned(), "room_refused_event".to_owned()],
+                vec![(HookTrigger::OnRoomClosed, false)]
+            )
+        );
+    }
+
+    #[test]
+    fn fires_its_hooks_once_a_lifecycle_change_s_lock_is_released() {
+        let mut sim = timed_room();
+        sim.observer("on_paused", HookTrigger::OnRoomPaused);
+        sim.env.advance(Duration::from_secs(90));
+        sim.run(PauseRoom::new(sim.shared_config(), room_id(), None))
+            .unwrap();
+        assert_eq!(sim.fired, vec![(HookTrigger::OnRoomPaused, false)]);
+    }
+}
+
 /// Gap G-045: an explicit change decides on the room as its due timers
 /// left it.
 mod an_explicit_change_on_a_room_whose_timer_is_due {

@@ -135,8 +135,9 @@ as it stands.
   `LifecycleChange`). A change that changes nothing writes and fires
   nothing (gap G-047); a transition from a status it does not leave from is
   refused (gap G-074). Every locked section applies the timer transitions
-  that fell due, each at its instant; a delivered event resumes a paused
-  room (gap G-045).
+  that fell due, each at its instant, its framework event emitted at once
+  and its trigger fired once the room's lock is released; a delivered event
+  resumes a paused room (gap G-045).
 - **Organizations** (§17.2, decision 2 of step 2b, gap G-077): every room
   operation acts for an organization or for none.
   `RoomKit::for_organization(organization_id)` returns an `OrganizationKit`

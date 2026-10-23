@@ -39,7 +39,7 @@ use crate::model::{
     ChannelId, ErrorRecord, InjectedEvent, Observation, RoomContext, RoomEvent, RoomStatus, Task,
 };
 use crate::ops::io::Bound;
-use crate::ops::lifecycle::gate::Pending;
+use crate::ops::lifecycle::gate::{Pending, TimerHooks};
 use crate::ops::protocol::{EffectId, EntryId, HoldRequest, Outcome, StoreRequest};
 use crate::ops::{self, Abort, Cx, Progress};
 use crate::rules::edits::EditRefusal;
@@ -159,6 +159,9 @@ pub(super) struct CommitPass {
     release_error: Option<ErrorRecord>,
     /// Whether the event took its place in the room's delivery lane.
     placed: bool,
+    /// The hooks of the timer transitions its gate applied, fired once the
+    /// lock is released (RFC §5.1 When).
+    timer_hooks: TimerHooks,
 }
 
 /// What the hooks decided, which the pass applies once it has read the room
@@ -260,6 +263,7 @@ impl CommitPass {
             observations: Vec::new(),
             release_error: None,
             placed: false,
+            timer_hooks: TimerHooks::default(),
         }
     }
 
@@ -324,7 +328,10 @@ impl CommitPass {
             State::Locking(_) => self.on_locked(cx, outcome),
             State::LoadingContext(_) => self.on_context(cx, outcome),
             State::ApplyingTimers { pending, .. } => match pending.stored(cx, outcome) {
-                Ok(opened) => self.on_gate(cx, opened.context),
+                Ok(opened) => {
+                    self.timer_hooks = opened.hooks;
+                    self.on_gate(cx, opened.context)
+                }
                 Err(error) => self.release(cx, Err(Abort::Store(error))),
             },
             State::CheckingKey { context, .. } => self.on_key(cx, context, outcome),
@@ -340,6 +347,7 @@ impl CommitPass {
                 let (result, release_error) =
                     ops::after_release(&self.event.room_id, result, outcome.into_released());
                 self.release_error = release_error;
+                mem::take(&mut self.timer_hooks).fire(cx);
                 State::Finished(result)
             }
             state @ (State::Start | State::Finished(_) | State::Reported) => state,

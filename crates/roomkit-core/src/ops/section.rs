@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::mem;
 
 use super::io::Bound;
-use super::lifecycle::gate::{self, Gate, Opened, Pending};
+use super::lifecycle::gate::{self, Gate, Opened, Pending, TimerHooks};
 use super::protocol::{EffectId, HoldRequest, Outcome, StoreRequest};
 use super::{Cx, Progress};
 use crate::model::{ErrorRecord, Room, RoomContext, RoomId};
@@ -103,6 +103,8 @@ pub(crate) struct Section<W: SectionWork> {
     state: State<W>,
     /// The timer transitions the gate applied.
     timers: Vec<DueTransition>,
+    /// Their hooks, fired once the lock is released (RFC §5.1 When).
+    timer_hooks: TimerHooks,
 }
 
 #[derive(Debug)]
@@ -144,6 +146,7 @@ impl<W: SectionWork> Section<W> {
             work,
             state: State::Start,
             timers: Vec::new(),
+            timer_hooks: TimerHooks::default(),
         }
     }
 
@@ -223,8 +226,10 @@ impl<W: SectionWork> Section<W> {
                 Ok(Opened {
                     context,
                     transitions,
+                    hooks,
                 }) => {
                     self.timers = transitions;
+                    self.timer_hooks = hooks;
                     let begun = self.work.begin(cx, context);
                     self.working(cx, begun)
                 }
@@ -237,6 +242,7 @@ impl<W: SectionWork> Section<W> {
             State::Releasing { result, .. } => {
                 let (result, release_error) =
                     super::after_release(&self.room_id, result, outcome.into_released());
+                mem::take(&mut self.timer_hooks).fire(cx);
                 self.work.report(cx, &result);
                 return Progress::Done(Ended {
                     result,

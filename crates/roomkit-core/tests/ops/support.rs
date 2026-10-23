@@ -179,6 +179,9 @@ pub(crate) struct Sim {
     /// `fire <trigger>`.
     pub(crate) journal: Vec<String>,
     pub(crate) notices: Vec<Notice>,
+    /// Each trigger whose hooks an operation fired, with whether its run
+    /// held the room's lock as it did.
+    pub(crate) fired: Vec<(HookTrigger, bool)>,
     channels: BTreeMap<ChannelId, Channel>,
     hooks: BTreeMap<HookId, Hook>,
     /// The channel each awaited observer attaches to its room as it runs.
@@ -318,6 +321,7 @@ impl Sim {
             trace: Vec::new(),
             journal: Vec::new(),
             notices: Vec::new(),
+            fired: Vec::new(),
             channels: BTreeMap::new(),
             hooks: BTreeMap::new(),
             observer_attaches: BTreeMap::new(),

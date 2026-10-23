@@ -3,14 +3,16 @@
 //!
 //! A locked section reads its room under the lock, then opens the gate.
 //! When a timer transition fell due, the gate writes it, every due one in a
-//! single write, each at the instant it fell due, and reports each as soon
-//! as the write is stored, before the section decides anything else: a
-//! message refused because its room's close fell due reports `room_closed`
-//! before `room_refused_event`. The section then decides on the room as the
-//! transitions left it, so a late message is refused exactly.
+//! single write, each at the instant it fell due, and emits each one's
+//! framework event as soon as the write is stored, before the section
+//! decides anything else: a message refused because its room's close fell
+//! due reports `room_closed` before `room_refused_event`. Each one's trigger
+//! fires once the section releases the room's lock, as an ASYNC trigger
+//! does (RFC §5.1 When, [`TimerHooks`]). The section then decides on the
+//! room as the transitions left it, so a late message is refused exactly.
 
 use crate::model::{ErrorRecord, Room, RoomContext, RoomUpdates};
-use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
+use crate::ops::protocol::{EffectId, Notice, Outcome, StoreRequest};
 use crate::ops::{Cx, TransitionReason};
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::timers::{self, DueTransition};
@@ -46,6 +48,23 @@ pub(crate) struct Opened {
     pub(crate) context: Box<RoomContext>,
     /// The transitions applied, in the order they fell due.
     pub(crate) transitions: Vec<DueTransition>,
+    /// Their triggers' hooks, which the section fires once it released the
+    /// room's lock.
+    pub(crate) hooks: TimerHooks,
+}
+
+/// The hooks of the timer transitions a gate applied, which fire once the
+/// section that holds the room's lock released it (RFC §5.1 When).
+#[derive(Debug, Default)]
+pub(crate) struct TimerHooks(Vec<Notice>);
+
+impl TimerHooks {
+    /// Fires the hooks, the room's lock released.
+    pub(crate) fn fire(self, cx: &mut Cx<'_>) {
+        for notice in self.0 {
+            cx.io.notify(notice);
+        }
+    }
 }
 
 /// Opens the gate on `context`, read under the room's lock.
@@ -74,10 +93,12 @@ pub(crate) fn open(cx: &mut Cx<'_>, context: Box<RoomContext>) -> Gate {
 }
 
 impl Pending {
-    /// Takes the write's outcome. Stored, each transition is reported, its
-    /// hooks receiving the room as that transition left it (gap G-027).
+    /// Takes the write's outcome. Stored, each transition's framework event
+    /// is emitted, and its hooks, which receive the room as that transition
+    /// left it (gap G-027), are handed back to fire after the release.
     pub(crate) fn stored(self, cx: &mut Cx<'_>, outcome: Outcome) -> Result<Opened, ErrorRecord> {
         outcome.into_stored()?;
+        let mut hooks = Vec::new();
         for (due, room) in &self.applied {
             let Some(reported) = reported(due.transition) else {
                 continue;
@@ -86,11 +107,12 @@ impl Pending {
                 room: room.clone(),
                 ..(*self.context).clone()
             };
-            report::report(cx, reported, &context);
+            hooks.extend(report::report_after_release(cx, reported, &context));
         }
         Ok(Opened {
             context: self.context,
             transitions: self.applied.into_iter().map(|(due, _)| due).collect(),
+            hooks: TimerHooks(hooks),
         })
     }
 }

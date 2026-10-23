@@ -161,6 +161,29 @@ pub(crate) fn report(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomCont
     cx.fire_observers(trigger, &payload, context);
 }
 
+/// Emits the change's framework event now, and hands back its trigger's
+/// hooks to fire once the room's lock is released, as an ASYNC trigger
+/// fires (RFC §5.1 When): a timer transition the gate applies under the
+/// lock reports so. `None` when no hook observes the trigger.
+pub(crate) fn report_after_release(
+    cx: &mut Cx<'_>,
+    reported: Reported<'_>,
+    context: &RoomContext,
+) -> Option<Notice> {
+    announce(cx, reported, &context.room.id);
+    let Observers {
+        trigger,
+        hooks,
+        payload,
+    } = observers(cx, reported, context)?;
+    Some(Notice::AsyncHooks {
+        trigger,
+        hooks,
+        event: Box::new(payload),
+        context: Box::new(context.clone()),
+    })
+}
+
 /// Asks for the change's trigger's hooks to be run and awaited, as every
 /// creation of a room does (gap G-050). The change's framework event comes
 /// once they are over ([`announce`]), as RFC §10.1 step 2 orders a
