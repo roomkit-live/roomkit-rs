@@ -13,12 +13,19 @@ pub struct InboundResult {
     /// hook or the source's permissions refused it (gap G-026). `None` when
     /// nothing was committed, as when the room refused the message or step
     /// 8a refused an edit or a delete.
+    ///
+    /// An instruction, which is never committed, is the exception (RFC
+    /// §10.1.1 rule 5): once its pass decided it, the result carries it
+    /// uncommitted, `DELIVERED` or `BLOCKED` with its `blocked_by`, at the
+    /// index its hooks were shown, which the next event takes (gap G-065).
     pub event: Option<RoomEvent>,
     /// Whether the message was blocked: refused by the room, step 8a, a hook
-    /// or its source's permissions.
+    /// or its source's permissions, or an instruction refused before
+    /// anything was read.
     pub blocked: bool,
-    /// Why it was blocked: `room_closed`; one of step 8a's
-    /// `target_event_not_found`, `identity_required_for_edit`,
+    /// Why it was blocked: `instruction_unaddressed` or
+    /// `instruction_not_idempotent` (RFC §10.1.1); `room_closed`; one of step
+    /// 8a's `target_event_not_found`, `identity_required_for_edit`,
     /// `not_authorized`, `not_original_author` (RFC §10.1 step 8a); a hook's
     /// reason; `source_muted`, `source_read_only`, `source_unbound`. A replay
     /// gives the record's `blocked_by`, the hook's reason not being stored.
@@ -56,9 +63,6 @@ pub enum InboundError {
     /// `standalone` belongs to instructions only (RFC §10.1.1 rule 7).
     #[error("only an instruction may stand alone")]
     StandaloneOutsideInstruction,
-    /// The message needs a part of the pipeline this step does not provide.
-    #[error("{0} is not supported yet")]
-    Unsupported(&'static str),
     /// The channel's `handle_inbound()` failed.
     #[error("channel {channel_id} could not parse the message: {error:?}")]
     ChannelFailed {

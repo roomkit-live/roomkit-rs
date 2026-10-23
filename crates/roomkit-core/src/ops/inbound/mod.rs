@@ -21,16 +21,23 @@
 //! or `ON_EVENT_DELETED` with the target as the commit left it, once the lock
 //! is released.
 //!
-//! Not covered yet, and refused rather than half done: instructions (RFC
-//! §10.1.1), off-lock hooks (RFC §9.5.1).
+//! An instruction (RFC §10.1.1) takes the same way without being stored:
+//! refused before anything is read when it names no agent or carries a key,
+//! decided by its pass without a commit, delivered to the agents it names,
+//! and fingerprinted on every response it produces (`instructions`).
+//!
+//! Not covered yet: off-lock hooks (RFC §9.5.1), which run under the lock
+//! with the others, in the chain's order.
 
 mod arrival;
 mod commit;
 mod delivery;
 mod edits;
+mod instructions;
 mod job;
 mod named_room;
 mod pass;
+mod persist;
 mod record;
 mod report;
 mod result;
@@ -42,6 +49,7 @@ use std::sync::Arc;
 use self::arrival::Arrival;
 pub use self::arrival::InboundTarget;
 use self::delivery::{DeliverySet, Response, SetKind, SetOutcome};
+use self::instructions::Admission;
 use self::job::{Finished, Job, RecordNote, Run};
 use self::pass::{CommitPass, PassOrigin, PassReport, PassResult};
 use self::record::{RecordPass, RecordReport, RecordResult};
@@ -51,8 +59,8 @@ use super::io::Io;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Request, Step};
 use super::{Abort, Cx, Environment, KitConfig, Progress};
 use crate::model::{
-    ChannelCategory, ErrorRecord, EventStatus, EventType, InboundMessage, InjectedEvent, Metadata,
-    Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    ChannelCategory, ErrorRecord, EventStatus, InboundMessage, InjectedEvent, Metadata,
+    Observation, RoomContext, RoomEvent, RoomId, Task,
 };
 use crate::rules::chain_depth::{self, ReentryBudget};
 
@@ -104,7 +112,7 @@ impl Inbound {
                 lane: VecDeque::new(),
                 active: None,
                 budget,
-                committed: false,
+                decided: false,
                 result: InboundResult::default(),
                 tasks: Vec::new(),
                 observations: Vec::new(),
@@ -154,9 +162,10 @@ struct Machine {
     lane: VecDeque<Job>,
     active: Option<Job>,
     budget: ReentryBudget,
-    /// Whether the trigger is committed: a failure after it no longer
-    /// voids the result (RFC §13.6).
-    committed: bool,
+    /// Whether the trigger is decided: committed or, for an instruction,
+    /// which is never committed, delivered or blocked by its pass. A failure
+    /// after it no longer voids the result (RFC §13.6, gap G-065).
+    decided: bool,
     result: InboundResult,
     tasks: Vec<Task>,
     observations: Vec<Observation>,
@@ -198,9 +207,10 @@ impl Machine {
         self.run_lane(cx);
     }
 
-    /// Resolves the channel and the sender's form, and refuses what this
-    /// step does not provide (RFC §10.1 step 1), then starts the arrival,
-    /// which enters the room's lane once the room is known.
+    /// Resolves the channel and the sender's form (RFC §10.1 step 1), and
+    /// refuses an instruction that cannot be one before anything is read
+    /// (RFC §10.1.1), then starts the arrival, which enters the room's lane
+    /// once the room is known.
     fn begin(&mut self, cx: &mut Cx<'_>) {
         let Stage::Start(message) = std::mem::replace(&mut self.stage, Stage::Done) else {
             return;
@@ -209,8 +219,12 @@ impl Machine {
             Ok(resolved) => resolved,
             Err(error) => return self.end(cx, Err(error)),
         };
-        if let Err(error) = check_supported(&message) {
-            return self.end(cx, Err(error));
+        match instructions::admit(cx.config, &message) {
+            Ok(Admission::Admitted) => {}
+            Ok(Admission::Refused(refusal)) => {
+                return self.end(cx, Ok(instructions::refused(refusal)));
+            }
+            Err(error) => return self.end(cx, Err(error)),
         }
         let mut arrival = Box::new(Arrival::new(
             self.target.clone(),
@@ -358,16 +372,19 @@ impl Machine {
         }
     }
 
-    /// Writes what the trigger's pass decided into the result (RFC §10.1).
+    /// Writes what the trigger's pass decided into the result (RFC §10.1):
+    /// the committed event, or the uncommitted instruction (RFC §10.1.1
+    /// rule 5).
     fn settle_trigger(&mut self, result: &PassResult) {
         match result {
             PassResult::Delivered { event, .. } => {
-                self.committed = true;
+                self.decided = true;
                 self.result.event = Some((**event).clone());
             }
             PassResult::Blocked { event, reason, .. } => {
-                // The result carries the stored record (gap G-026).
-                self.committed = true;
+                // The result carries the stored record (gap G-026), or the
+                // blocked instruction, which is not stored (gap G-065).
+                self.decided = true;
                 self.result.blocked = true;
                 self.result.reason = reason.clone().or_else(|| event.blocked_by.clone());
                 self.result.event = Some((**event).clone());
@@ -396,14 +413,15 @@ impl Machine {
     }
 
     /// Queues the events a pass's hooks injected, each a pass of the
-    /// cascade within its reentry budget (gap G-021).
+    /// cascade within its reentry budget (gap G-021), but an instruction
+    /// (gap G-042).
     fn queue_injected(
         &mut self,
         cx: &mut Cx<'_>,
         injected: Vec<InjectedEvent>,
         trigger: &RoomEvent,
     ) {
-        for injected in injected {
+        for injected in instructions::without_instructions(injected, trigger) {
             let targets = injected.target_channel_ids.clone();
             let event = stamp::stamp_injected(injected, trigger, cx.env.new_event_id());
             if self.budget.take() {
@@ -487,11 +505,15 @@ impl Machine {
     }
 
     /// Queues one channel's responses to `trigger`: each re-enters as a pass,
-    /// unless the room refuses it first (RFC §8.3).
+    /// unless the room refuses it first (RFC §8.3). An instruction does not
+    /// re-enter (gap G-066).
     fn queue_response(&mut self, cx: &mut Cx<'_>, response: Response, trigger: &RoomEvent) {
         let Response { responder, events } = response;
         let at_limit = chain_depth::reaches_limit(trigger.chain_depth, cx.config.max_chain_depth);
-        for event in events {
+        let reentering = events
+            .into_iter()
+            .filter(|event| instructions::reenters(event, &responder.channel_id, trigger));
+        for event in reentering {
             let event = stamp::stamp_response(event, &responder, trigger, cx.env.new_event_id());
             if at_limit && responder.category == ChannelCategory::Transport {
                 // Only a transport is asked at the limit; what it answers is
@@ -516,108 +538,6 @@ impl Machine {
         ));
     }
 
-    /// Stores the side effects every pass and set collected, and applies the
-    /// room metadata updates the channels returned (RFC §10.1 step 15, gap
-    /// G-049), then ends. The update names its keys only, so it needs no
-    /// lock: it never overwrites the counters of an event committed
-    /// meanwhile.
-    fn persist_side_effects(&mut self, cx: &mut Cx<'_>) {
-        let side_effects = self.issue_side_effects(cx);
-        let metadata = self.issue_metadata_updates(cx);
-        self.await_persisted(cx, side_effects, metadata);
-    }
-
-    /// Asks for the collected tasks and observations to be stored, if any.
-    fn issue_side_effects(&mut self, cx: &mut Cx<'_>) -> Option<(EffectId, Vec<Task>)> {
-        if self.tasks.is_empty() && self.observations.is_empty() {
-            return None;
-        }
-        let room_id = self.room_id.clone()?;
-        let tasks = std::mem::take(&mut self.tasks);
-        let effect = cx.io.issue(Request::PersistSideEffects {
-            room_id,
-            tasks: tasks.clone(),
-            observations: std::mem::take(&mut self.observations),
-        });
-        Some((effect, tasks))
-    }
-
-    /// Asks for the collected room metadata updates to be written, if any.
-    fn issue_metadata_updates(&mut self, cx: &mut Cx<'_>) -> Option<EffectId> {
-        if self.metadata_updates.is_empty() {
-            return None;
-        }
-        let room_id = self.room_id.clone()?;
-        Some(cx.io.issue(Request::UpdateRoom {
-            room_id,
-            updates: RoomUpdates {
-                updated_at: Some(cx.env.now()),
-                metadata: std::mem::take(&mut self.metadata_updates),
-                ..RoomUpdates::default()
-            },
-        }))
-    }
-
-    /// Takes the answer of one of step 15's writes.
-    fn on_persisting(
-        &mut self,
-        cx: &mut Cx<'_>,
-        side_effects: Option<(EffectId, Vec<Task>)>,
-        metadata: Option<EffectId>,
-        effect: EffectId,
-        outcome: Outcome,
-    ) {
-        match (side_effects, metadata) {
-            (Some((expected, tasks)), metadata) if expected == effect => {
-                self.on_persisted(cx, outcome, &tasks);
-                self.await_persisted(cx, None, metadata);
-            }
-            (side_effects, Some(expected)) if expected == effect => {
-                if let Err(error) = outcome.into_stored() {
-                    self.note_error(Some(error));
-                }
-                self.await_persisted(cx, side_effects, None);
-            }
-            (side_effects, metadata) => {
-                debug_assert!(false, "inbound received {effect:?} while persisting");
-                self.stage = Stage::Persisting {
-                    side_effects,
-                    metadata,
-                };
-            }
-        }
-    }
-
-    /// Waits for step 15's outstanding writes, or ends once none is left.
-    fn await_persisted(
-        &mut self,
-        cx: &mut Cx<'_>,
-        side_effects: Option<(EffectId, Vec<Task>)>,
-        metadata: Option<EffectId>,
-    ) {
-        if side_effects.is_none() && metadata.is_none() {
-            let result = std::mem::take(&mut self.result);
-            return self.end(cx, Ok(result));
-        }
-        self.stage = Stage::Persisting {
-            side_effects,
-            metadata,
-        };
-    }
-
-    /// The side effects are stored: each task's `ON_TASK_CREATED` observers
-    /// run (RFC §10.1 step 15).
-    fn on_persisted(&mut self, cx: &mut Cx<'_>, outcome: Outcome, tasks: &[Task]) {
-        match outcome.into_persisted() {
-            Ok(()) => {
-                if let Some(context) = &self.task_context {
-                    report::tasks_created(cx, tasks, context);
-                }
-            }
-            Err(error) => self.note_error(Some(error)),
-        }
-    }
-
     /// Keeps the first error met once the trigger was decided: the result
     /// reports one (RFC §13.6).
     fn note_error(&mut self, error: Option<ErrorRecord>) {
@@ -626,12 +546,12 @@ impl Machine {
         }
     }
 
-    /// A pass or a record failed. Before the trigger's commit nothing was
+    /// A pass or a record failed. Before the trigger was decided nothing was
     /// written and the message fails; after it, the event stands, the
     /// cascade stops, and the result carries the error (RFC §13.6).
     fn abort(&mut self, cx: &mut Cx<'_>, abort: Abort) {
         self.lane.clear();
-        if !self.committed {
+        if !self.decided {
             let error = match (abort, self.room_id.clone()) {
                 (Abort::RoomNotFound, Some(room_id)) => InboundError::RoomNotFound(room_id),
                 (Abort::RoomNotFound, None) => {
@@ -690,15 +610,4 @@ impl Machine {
         };
         self.outcome = Some(outcome);
     }
-}
-
-/// Refuses what this step does not provide yet, before anything is read.
-fn check_supported(message: &InboundMessage) -> Result<(), InboundError> {
-    if message.standalone && message.event_type != EventType::Instruction {
-        return Err(InboundError::StandaloneOutsideInstruction);
-    }
-    if message.event_type == EventType::Instruction {
-        return Err(InboundError::Unsupported("an instruction (RFC §10.1.1)"));
-    }
-    Ok(())
 }

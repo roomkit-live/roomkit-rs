@@ -9,6 +9,7 @@
 
 mod edits;
 mod inbound;
+mod instructions;
 mod lifecycle;
 mod named_room;
 mod routing;

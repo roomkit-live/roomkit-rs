@@ -149,6 +149,25 @@ publishes a release.
   `HookTrigger::OnEventDeleted`; `rules::edits::is_edited`, `is_deleted` and `holds_change`;
   `RecordingTransport::with_capabilities`.
 - Example `edit_and_delete`, after the RFC's Appendix B.6 and B.7.
+- Instructions (RFC §10.1.1): a message of type `INSTRUCTION` makes the
+  agents it names speak without being stored. It is refused before anything
+  is read, `blocked` with `instruction_unaddressed` when its address names no
+  registered intelligence channel and `instruction_not_idempotent` when it
+  carries an idempotency key. It is visible to intelligence channels only
+  and carries the caller's metadata and `metadata.standalone`, the typed
+  field's word. Its hooks may block it or change its text, never its
+  visibility, its address or its `standalone` word. Its pass commits
+  nothing: no index is consumed and no counter moves; a blocked instruction
+  is not stored, and `event_blocked` is emitted. `InboundResult.event` is
+  the uncommitted instruction. Every response it produces records
+  `metadata.instruction = {sha256, length}`, never the text, which the
+  response's hooks cannot remove or replace, and a standalone instruction's
+  turn is handed no history. A hook's injected
+  instruction and a channel's response typed as one are dropped with a
+  warning (gaps G-042, G-066).
+- `rules::instructions`: the refusals (`InstructionRefusal`), the stamp,
+  what a modify keeps, a standalone turn's context, and the responses'
+  `Fingerprint`. `roomkit-core` depends on `sha2` for it.
 
 ### Changed
 
@@ -165,6 +184,9 @@ publishes a release.
 - `RoomFilter::matches` takes the room's bindings and participants.
 - An `EDIT` or a `DELETE` message is processed instead of refused
   `InboundError::Unsupported`.
+- An `INSTRUCTION` message is processed instead of refused
+  `InboundError::Unsupported`, which is removed: nothing returns it any
+  more.
 - `ConversationStore::commit(event, counters, target)` and `Request::Commit`
   carry what an accepted edit or delete writes on its target, in the same
   transaction. `InMemoryStore` refuses an index below the room's

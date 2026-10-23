@@ -9,8 +9,8 @@
 
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelType, DeliveryStatus, ErrorRecord,
-    EventContent, EventType, InboundMessage, Participant, ParticipantId, Room, RoomId, RoomStatus,
-    Timestamp, Visibility,
+    EventContent, InboundMessage, Participant, ParticipantId, Room, RoomId, RoomStatus, Timestamp,
+    Visibility,
 };
 use roomkit_core::ops::{ChannelDeclaration, FrameworkEvent, InboundError};
 use roomkit_core::rules::addresses::CountryCode;
@@ -807,8 +807,8 @@ mod the_lane {
     fn is_never_entered_for_a_message_refused_before_anything_is_read() {
         let mut sim = Sim::new();
         sim.transport("sms");
-        let mut message = Sim::message("sms", "Introduce yourself");
-        message.event_type = EventType::Instruction;
+        let mut message = Sim::message("sms", "Bonjour");
+        message.standalone = true;
         let sent = sim.send(message);
         assert_eq!((sent.is_err(), sim.trace.len()), (true, 0));
     }

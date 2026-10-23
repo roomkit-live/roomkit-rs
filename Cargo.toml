@@ -17,6 +17,7 @@ roomkit-core = { path = "crates/roomkit-core" }
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = { version = "0.10", default-features = false }
 thiserror = "2"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }

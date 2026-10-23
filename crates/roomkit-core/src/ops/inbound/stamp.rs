@@ -12,7 +12,7 @@ use crate::model::{
     RoomEvent, RoomId, Timestamp, Visibility,
 };
 use crate::ops::ChannelDeclaration;
-use crate::rules::{chain_depth, edits};
+use crate::rules::{chain_depth, edits, instructions};
 
 /// The event a channel that keeps no data of its own parses from `message`:
 /// its content, its provider data, and its sender, in the channel's form
@@ -53,7 +53,9 @@ pub fn default_inbound_event(
 /// Writes the pipeline's fields on the event a channel parsed from
 /// `message`: the id the pipeline gives it (RFC §8.1), the type, depth,
 /// visibility, address, thread and idempotency key the message asked for,
-/// and the receiving channel as its inbound source.
+/// and the receiving channel as its inbound source. An instruction is
+/// visible to intelligence channels only, and carries the caller's
+/// metadata and its `standalone` word (RFC §10.1.1 rules 3 and 4).
 pub(crate) fn stamp_trigger(
     mut event: RoomEvent,
     message: &InboundMessage,
@@ -74,13 +76,17 @@ pub(crate) fn stamp_trigger(
     if event.source.provider.is_none() {
         event.source.provider.clone_from(&channel.provider_name);
     }
+    if message.event_type == EventType::Instruction {
+        instructions::stamp(&mut event, &message.metadata, message.standalone);
+    }
     reset_commit_fields(event)
 }
 
 /// Writes the pipeline's fields on a response of `responder` to `trigger`:
 /// a fresh id (gap G-024), the responder as its outbound source, one hop
 /// deeper than the trigger (RFC §8.3), answering the trigger unless the
-/// channel named the event it answers (RFC §8.5).
+/// channel named the event it answers (RFC §8.5), and the fingerprint of
+/// the instruction that produced it (RFC §10.1.1 rule 6).
 pub(crate) fn stamp_response(
     mut response: RoomEvent,
     responder: &ChannelBinding,
@@ -108,6 +114,7 @@ pub(crate) fn stamp_response(
     // Only an inbound message carries an idempotency key (RFC §13.4, gap
     // G-023): a response's key could otherwise shadow a later message's.
     response.idempotency_key = None;
+    instructions::mark_response(&mut response, trigger);
     reset_commit_fields(response)
 }
 
@@ -136,9 +143,12 @@ pub(crate) fn stamp_injected(
 /// `BEFORE_BROADCAST` hook replaced (RFC §9.4): a hook may change what an
 /// event says, where it is addressed and who may see it, never which event it
 /// is, where it came from, how deep it is or what became of it. Nor what step
-/// 8a checked on an edit or a delete ([`kept_change`]).
+/// 8a checked on an edit or a delete ([`kept_change`]), nor an instruction's
+/// visibility, address and `standalone` word, nor the fingerprint a
+/// response to one records (RFC §10.1.1, gaps G-020 and G-065).
 pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> RoomEvent {
     modified.content = kept_change(&original.content, modified.content);
+    instructions::keep_checked(original, &mut modified);
     modified.id = original.id.clone();
     modified.room_id = original.room_id.clone();
     modified.event_type = original.event_type;
@@ -341,6 +351,27 @@ mod tests {
         parsed.id = EventId::new("SM1").unwrap();
         let stamped = stamp_trigger(parsed, &message(), &sms(), fresh());
         assert_eq!(stamped.id, fresh());
+    }
+
+    /// RFC §10.1.1 rule 4: the caller's metadata rides the instruction,
+    /// whatever its parser kept.
+    #[test]
+    fn a_parsed_instruction_carries_the_caller_s_metadata() {
+        let mut instruction = message();
+        instruction.event_type = EventType::Instruction;
+        instruction.idempotency_key = None;
+        instruction
+            .metadata
+            .insert("task_id".to_owned(), "t_7".into());
+        let parsed = RoomEvent {
+            metadata: Metadata::new(),
+            ..trigger()
+        };
+        let stamped = stamp_trigger(parsed, &instruction, &sms(), fresh());
+        assert_eq!(
+            serde_json::Value::Object(stamped.metadata),
+            serde_json::json!({ "task_id": "t_7", "standalone": false })
+        );
     }
 
     #[test]

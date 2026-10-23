@@ -1,17 +1,23 @@
 //! The commit of a pass (RFC §10.1 steps 10 to 12, §14.3): the event and
 //! the room's counters in one write, with what an accepted edit or delete
 //! writes on its target (RFC §10.3).
+//!
+//! An instruction is never committed (RFC §10.1.1 rules 4 and 5): its pass
+//! decides it, blocked or delivered, with no commit, so it consumes no index
+//! and moves no counter, and a paused room stays paused until an event is
+//! committed (gap G-065).
 
 use super::pass::PassResult;
-use crate::model::{EventStatus, RoomContext, RoomEvent, RoomUpdates, Timestamp};
+use crate::model::{EventStatus, EventType, RoomContext, RoomEvent, RoomUpdates, Timestamp};
 use crate::ops::protocol::{EffectId, Request, RoomCounters, TargetUpdate};
 use crate::ops::{Cx, FrameworkEvent, Notice};
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::permissions::DeliveryPlan;
 
-/// A commit asked for, and what the pass did once it is durable.
+/// A commit asked for, and what the pass did once it is durable; no effect
+/// for an instruction, which the pass decides without writing.
 pub(super) struct Committing {
-    pub(super) effect: EffectId,
+    pub(super) effect: Option<EffectId>,
     pub(super) result: PassResult,
 }
 
@@ -31,6 +37,19 @@ pub(super) fn delivered(
     written: Option<(TargetUpdate, RoomEvent)>,
 ) -> Committing {
     event.status = EventStatus::Delivered;
+    if event.event_type == EventType::Instruction {
+        // Delivered to the agents it names, with the index step 8 showed its
+        // hooks, which the next event takes (RFC §10.1.1 rule 5).
+        return Committing {
+            effect: None,
+            result: PassResult::Delivered {
+                event: Box::new(event),
+                plan,
+                context,
+                target: None,
+            },
+        };
+    }
     let now = cx.env.now();
     let counters = RoomCounters {
         event_count: context.room.event_count.saturating_add(1),
@@ -55,7 +74,7 @@ pub(super) fn delivered(
         target,
     });
     Committing {
-        effect,
+        effect: Some(effect),
         result: PassResult::Delivered {
             event: Box::new(event),
             plan,
@@ -68,7 +87,8 @@ pub(super) fn delivered(
 /// Commits `event` blocked by `blocked_by` (RFC §10.1 steps 10 and 11): the
 /// record takes its index and counts in the room, without moving its
 /// activity. An edit or a delete blocked leaves its target as it is (RFC
-/// §10.3).
+/// §10.3). A blocked instruction is not stored, and `event_blocked` is
+/// emitted all the same (RFC §10.1.1 rule 4).
 pub(super) fn blocked(
     cx: &mut Cx<'_>,
     mut event: RoomEvent,
@@ -86,6 +106,17 @@ pub(super) fn blocked(
             reason: reason.clone(),
             blocked_by,
         }));
+    let result = PassResult::Blocked {
+        event: Box::new(event.clone()),
+        reason,
+        context: Box::new(context.clone()),
+    };
+    if event.event_type == EventType::Instruction {
+        return Committing {
+            effect: None,
+            result,
+        };
+    }
     let counters = RoomCounters {
         event_count: context.room.event_count.saturating_add(1),
         latest_index: event.index,
@@ -93,17 +124,13 @@ pub(super) fn blocked(
         room: RoomUpdates::default(),
     };
     let effect = cx.io.issue(Request::Commit {
-        event: event.clone(),
+        event,
         counters,
         target: None,
     });
     Committing {
-        effect,
-        result: PassResult::Blocked {
-            event: Box::new(event),
-            reason,
-            context: Box::new(context.clone()),
-        },
+        effect: Some(effect),
+        result,
     }
 }
 

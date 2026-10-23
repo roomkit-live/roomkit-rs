@@ -1265,7 +1265,7 @@ mod a_failure_after_the_commit {
     }
 }
 
-/// RFC §10.1 step 1 and the parts this step does not provide.
+/// RFC §10.1 steps 1 and 4: a message that fails before its pass.
 mod a_refused_operation {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -1277,28 +1277,6 @@ mod a_refused_operation {
         assert_eq!(
             (result, sim.trace.len()),
             (Err(InboundError::UnknownChannel(channel("telegram"))), 0)
-        );
-    }
-
-    #[test]
-    fn an_instruction_is_refused_until_its_step() {
-        let mut sim = room();
-        let mut message = Sim::message("sms", "Introduce yourself");
-        message.event_type = EventType::Instruction;
-        assert!(matches!(
-            sim.send(message),
-            Err(InboundError::Unsupported(_))
-        ));
-    }
-
-    #[test]
-    fn a_standalone_message_that_is_no_instruction_is_refused() {
-        let mut sim = room();
-        let mut message = Sim::message("sms", "Bonjour");
-        message.standalone = true;
-        assert_eq!(
-            sim.send(message),
-            Err(InboundError::StandaloneOutsideInstruction)
         );
     }
 

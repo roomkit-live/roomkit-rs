@@ -19,7 +19,7 @@ use crate::ops::{Cx, Progress};
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::{self, DeliveryPlan};
 use crate::rules::transcoding;
-use crate::rules::{addresses, attachment};
+use crate::rules::{addresses, attachment, instructions};
 
 /// Which event a delivery set broadcasts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -404,7 +404,9 @@ fn missing_recipient(cx: &Cx<'_>, binding: &ChannelBinding) -> Option<String> {
 }
 
 /// The set's targets, transports first then agents, each with the event
-/// transcoded for it and the context it may see.
+/// transcoded for it and the context it may see: none of the room's
+/// history for the turn of an instruction that stands alone (RFC §10.1.1
+/// rule 7).
 fn targets_of(plan: &DeliveryPlan, event: &RoomEvent, context: &RoomContext) -> Vec<Target> {
     let transports = plan.transports.iter().map(|target| {
         let role = Role::Transport {
@@ -420,7 +422,10 @@ fn targets_of(plan: &DeliveryPlan, event: &RoomEvent, context: &RoomContext) -> 
                 event,
                 transcoding::transcode(&event.content, &binding.capabilities),
             ),
-            context: Box::new(permissions::context_for(binding, context)),
+            context: Box::new(instructions::turn_context(
+                event,
+                permissions::context_for(binding, context),
+            )),
             binding: binding.clone(),
             role,
         })

@@ -6,8 +6,9 @@
 //! assigns the index, checks an edit or a delete against its target (step
 //! 8a), runs the `BEFORE_BROADCAST` chain, checks the source may write,
 //! commits the event with the room's counters, resuming a paused room and
-//! updating an edit's or a delete's target, and plans its broadcast. Every
-//! path that took the lock releases it.
+//! updating an edit's or a delete's target, and plans its broadcast. An
+//! instruction takes every step but the write: it is decided, never
+//! committed (RFC §10.1.1). Every path that took the lock releases it.
 
 use std::collections::VecDeque;
 use std::mem;
@@ -44,9 +45,10 @@ pub(super) enum PassOrigin {
 /// What a pass did with its event.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum PassResult {
-    /// Committed delivered, with its broadcast planned.
+    /// Committed delivered, with its broadcast planned; an instruction is
+    /// delivered without being committed (RFC §10.1.1 rule 5).
     Delivered {
-        /// The committed event.
+        /// The committed event, or the uncommitted instruction.
         event: Box<RoomEvent>,
         /// Whom its broadcast reaches.
         plan: DeliveryPlan,
@@ -57,9 +59,11 @@ pub(super) enum PassResult {
         /// §10.3), for its mutation trigger.
         target: Option<Box<RoomEvent>>,
     },
-    /// Committed blocked, by a hook or by a source that cannot write.
+    /// Committed blocked, by a hook or by a source that cannot write; an
+    /// instruction is blocked without being stored (RFC §10.1.1 rule 4).
     Blocked {
-        /// The committed record, with its `blocked_by`.
+        /// The committed record, or the blocked instruction, with its
+        /// `blocked_by`.
         event: Box<RoomEvent>,
         /// Why it was blocked.
         reason: Option<String>,
@@ -412,7 +416,8 @@ impl CommitPass {
         let payload = stamp::keep_identity(&self.event, verdict.payload);
         match verdict.decision {
             ChainDecision::Blocked { by, reason } => {
-                committing(commit::blocked(cx, payload, by, reason, &context))
+                let blocked = commit::blocked(cx, payload, by, reason, &context);
+                self.committing(cx, blocked)
             }
             ChainDecision::Allowed => State::LoadingBindings {
                 effect: cx.io.issue(Request::LoadBindings {
@@ -446,13 +451,14 @@ impl CommitPass {
                     Some(Some(written)) => Some(written),
                     None => None,
                 };
-                committing(commit::delivered(cx, event, plan, context, written))
+                let delivered = commit::delivered(cx, event, plan, context, written);
+                self.committing(cx, delivered)
             }
             Err(refusal) => {
                 let blocked_by = refusal.blocked_by().to_owned();
                 let blocked =
                     commit::blocked(cx, event, blocked_by.clone(), Some(blocked_by), &context);
-                committing(blocked)
+                self.committing(cx, blocked)
             }
         }
     }
@@ -497,6 +503,18 @@ impl CommitPass {
         ))
     }
 
+    /// Waits for the commit to be durable; an instruction, which writes
+    /// nothing, releases the lock at once (RFC §10.1.1 rule 5).
+    fn committing(&mut self, cx: &mut Cx<'_>, committing: Committing) -> State {
+        match committing.effect {
+            Some(effect) => State::Committing {
+                effect,
+                result: committing.result,
+            },
+            None => self.release(cx, Ok(committing.result)),
+        }
+    }
+
     fn on_committed(&mut self, cx: &mut Cx<'_>, result: PassResult, outcome: Outcome) -> State {
         match outcome.into_committed() {
             Ok(()) => self.release(cx, Ok(result)),
@@ -529,9 +547,4 @@ impl CommitPass {
                 event_type: self.event.event_type,
             }));
     }
-}
-
-/// The state that waits for a commit to be durable.
-fn committing(Committing { effect, result }: Committing) -> State {
-    State::Committing { effect, result }
 }

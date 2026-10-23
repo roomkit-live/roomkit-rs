@@ -14,6 +14,9 @@ publish.workspace = true
 jiff.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The fingerprint of an instruction its responses carry (RFC §10.1.1 rule
+# 6). No default features: the standard library is not needed for a hash.
+sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

@@ -9,8 +9,8 @@ for conversations between humans, AI agents and programs.
 > chain-depth limit, on a tokio runtime and an in-memory store. Step 2, the
 > rest of Level 0, is in progress: the room lifecycle and its timers, a
 > message naming its room, routing a message that names no room to its
-> conversation, and edits and deletes are done. No provider yet, and the API
-> will change.
+> conversation, edits and deletes, and instructions are done. No provider
+> yet, and the API will change.
 
 ## Why a Rust implementation
 
