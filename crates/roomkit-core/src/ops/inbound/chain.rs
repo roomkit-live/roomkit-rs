@@ -51,8 +51,8 @@ impl HookRun {
 
     /// Asks for the next hook on the payload as the previous hooks left
     /// it, with `original`'s identity (RFC §9.4), within its own timeout and
-    /// `deadline`, under the lock of `locked` when its caller holds it (RFC
-    /// §13.5); `None` once a hook blocked or none is left.
+    /// the call's `bound`, under the lock of `locked` when its caller holds
+    /// it (RFC §13.5); `None` once a hook blocked or none is left.
     pub(super) fn ask_next(
         &mut self,
         cx: &mut Cx<'_>,

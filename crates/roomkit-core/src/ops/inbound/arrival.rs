@@ -174,7 +174,7 @@ type Arriving = Progress<Result<Arrived, Stopped>>;
 impl Arrival {
     /// The arrival of `message`, resolved on `channel` (step 1), into the
     /// room `target` names, for a caller acting for `organization_id`,
-    /// within the call's `deadline`.
+    /// within the call's `bound`.
     pub(super) fn new(
         target: InboundTarget,
         organization_id: Option<String>,

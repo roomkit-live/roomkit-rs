@@ -90,7 +90,7 @@ impl DirectRead {
         }
     }
 
-    /// Reads the room, within the call's `deadline`.
+    /// Reads the room, within the call's `bound`.
     pub(super) fn start(&mut self, cx: &mut Cx<'_>, bound: Bound) {
         let request = StoreRequest::LoadContext {
             room_id: self.event.room_id.clone(),

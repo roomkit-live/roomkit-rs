@@ -263,7 +263,7 @@ impl CommitPass {
         }
     }
 
-    /// The trigger's pass of `event`, bounded by the call's `deadline` up
+    /// The trigger's pass of `event`, bounded by the call's `bound` up
     /// to its commit (RFC §13.6), going on with the chain its off-lock check
     /// left, if it ran one (RFC §9.5.1).
     pub(super) fn trigger(

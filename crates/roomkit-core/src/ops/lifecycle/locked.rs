@@ -141,8 +141,8 @@ pub(crate) struct LockedSection<C: SectionChange> {
     /// room's organization on its own read already.
     organization_id: Option<String>,
     change: C,
-    /// The deadline of the wait for the lock, the inbound call's (RFC
-    /// §10.4, §13.6); `None` for a lifecycle change.
+    /// What bounds the wait for the lock: the inbound call's bound (RFC
+    /// §10.4, §13.6), `Bound::Unbounded` for a lifecycle change.
     bound: Bound,
     state: State<C>,
     /// The timer transitions the gate applied.
@@ -196,9 +196,10 @@ impl<C: SectionChange> LockedSection<C> {
         }
     }
 
-    /// The section waiting for the lock until `deadline` at most: past it,
-    /// the driver answers `DeadlinePassed`, which the section's caller takes
-    /// before handing it the outcome, since no lock is held then.
+    /// The section waiting for the lock within `bound` at most: past the
+    /// call's deadline, or once its caller is gone, the wait is answered
+    /// `DeadlinePassed`, which the section's caller takes before handing it
+    /// the outcome, since no lock is held then.
     pub(crate) fn waiting_within(mut self, bound: Bound) -> Self {
         self.bound = bound;
         self

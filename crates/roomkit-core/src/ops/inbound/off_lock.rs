@@ -71,7 +71,7 @@ type Checking = Progress<Result<Checked, Stopped>>;
 
 impl OffLockCheck {
     /// The check of the event that `arrived`, running `hooks`, the
-    /// off-lock hooks that fire for it, within the call's `deadline`.
+    /// off-lock hooks that fire for it, within the call's `bound`.
     pub(super) fn new(hooks: Vec<HookId>, arrived: Arrived, bound: Bound) -> Self {
         let run = Box::new(HookRun::of(hooks, &arrived.event));
         Self {

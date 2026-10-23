@@ -123,7 +123,7 @@ enum State {
 impl NamedRoom {
     /// Step 2 into `room_id`, named as `mode` says, for a caller acting for
     /// `organization_id`, of a message on `channel` from `sender`, within
-    /// the call's `deadline`.
+    /// the call's `bound`.
     pub(super) fn new(
         room_id: RoomId,
         mode: Mode,
