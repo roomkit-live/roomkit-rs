@@ -545,6 +545,10 @@ publishes a release.
   first (gap G-076). The runtime aborted the call wherever it stood, which
   left an event stored and never delivered. `Operation::expire` expires an
   operation whose caller is gone.
+- A call's admission ticket is released once no section of the call holds
+  the room's lock or waits for it (RFC §9.5.1): a call whose trigger stops,
+  its caller gone or its deadline passed, while an entry it adopted works
+  under the lock released its ticket under that lock.
 - The kit tracks the work it runs in the background: the observer hooks it
   runs after the fact and every inbound call, those that go on detached
   included; they were bare tokio tasks. `RoomKit::idle()` waits until none

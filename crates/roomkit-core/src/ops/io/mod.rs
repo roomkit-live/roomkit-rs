@@ -290,9 +290,8 @@ impl Io {
             .collect();
         for id in &given_up {
             self.outstanding.remove(id);
-            if let Some(next) = self.locks.answered(*id, &Outcome::DeadlinePassed) {
-                self.issued.push(next);
-            }
+            let next = self.locks.answered(*id, &Outcome::DeadlinePassed);
+            self.issued.extend(next);
             self.inbox.push_back((*id, Outcome::DeadlinePassed));
         }
         given_up
@@ -332,9 +331,8 @@ impl Io {
             .ok_or(ProtocolError::UnknownEffect(id))?;
         outstanding.kind.check(id, &outcome, outstanding.bounded)?;
         self.outstanding.remove(&id);
-        if let Some(next) = self.locks.answered(id, &outcome) {
-            self.issued.push(next);
-        }
+        let next = self.locks.answered(id, &outcome);
+        self.issued.extend(next);
         self.inbox.push_back((id, outcome));
         Ok(())
     }

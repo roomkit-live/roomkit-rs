@@ -10,7 +10,9 @@
 //!
 //! The ticket is released once the trigger's pass is over, the room lock
 //! released already: committed, blocked, refused, a duplicate, an edit
-//! refused, failed or past the call's deadline. A call that ends before its
+//! refused, failed or past the call's deadline. `Io` holds the release
+//! back while another section of the call, an entry it adopted, holds the
+//! room's lock or waits for it (RFC §9.5.1). A call that ends before its
 //! pass releases it as it ends, before it waits for the sets of the entries
 //! it adopted: those may wait in the room's lane behind another call's set,
 //! whose turn may wait for a later ticket of the room. A failed release

@@ -320,12 +320,21 @@ impl Sim {
                 );
             }
             Next::Effects(effects) => {
+                // An effect of this step the expiry gave up on is skipped; one
+                // given up on at an earlier step never comes again.
+                let mut expired_now = false;
                 for effect in effects {
                     if run == ROOT && self.caller_leaves_before(&effect.request) {
                         let given_up = operation.expire();
                         self.drop_given_up(run, &given_up);
+                        expired_now = true;
                     }
                     if self.state(run).given_up.contains(&effect.id) {
+                        assert!(
+                            expired_now,
+                            "the operation issued {:?}, which it gave up on",
+                            effect.request
+                        );
                         continue;
                     }
                     self.state_mut(run).outstanding.insert(effect.id);

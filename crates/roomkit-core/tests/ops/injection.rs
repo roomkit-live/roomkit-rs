@@ -1353,6 +1353,49 @@ mod two_sections_of_one_operation {
     }
 }
 
+/// Gap G-076: the caller gone while the trigger's pass waits, held back,
+/// for the lock the entry's pass holds: the request never goes out, the
+/// entry is committed and delivered, and nothing of the trigger is written.
+mod a_caller_gone_while_its_second_section_waits {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn withdraws_the_held_back_lock_and_delivers_the_entry() {
+        let mut sim = room();
+        scanning(
+            &mut sim,
+            Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+        );
+        sim.leaves_before = Some("commit");
+        let result = sim.send(hello()).unwrap();
+        let locked: Vec<&str> = sim
+            .trace
+            .iter()
+            .map(String::as_str)
+            .filter(|line| {
+                line.starts_with("lock")
+                    || line.starts_with("release room")
+                    || line.starts_with("commit")
+                    || *line == "caller gone"
+            })
+            .collect();
+        assert_eq!(
+            (result.reason.as_deref(), locked, sim.timeline_lines()),
+            (
+                Some("process_timeout"),
+                vec![
+                    "lock room_1",
+                    "caller gone",
+                    "commit #0 ws delivered \"Scanned\"",
+                    "release room_1",
+                ],
+                vec!["#0 ws delivered \"Scanned\"".to_owned()]
+            )
+        );
+    }
+}
+
 /// Gap G-070: an entry whose caller did not wait for it is settled all the
 /// same, and the call ends only once it is: its event is delivered before
 /// the call's end.

@@ -8,6 +8,13 @@
 //! driver never sees an operation ask for a lock it holds, nor wait for its
 //! own lock. A section nested under a section that holds the lock asks
 //! nothing of the driver at all: `Io` answers it.
+//!
+//! The room's admission ticket is released after the room's lock (RFC
+//! §9.5.1 "Release"): a release of the ticket asked for while one of the
+//! operation's sections holds the room's lock, or waits for it, is held
+//! back until the last of them lets the lock go. A call whose trigger stops
+//! while an entry it adopted works under the lock so keeps its place in
+//! the room's admission order until the entry's section is over.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -28,15 +35,28 @@ pub(super) struct RoomLocks {
     /// Each room the operation holds, or waits for, through the driver: the
     /// acquires held back until the lock is free again.
     rooms: BTreeMap<RoomId, VecDeque<Effect>>,
+    /// The releases of a room's admission ticket held back until the
+    /// operation lets the room's lock go for good.
+    tickets: BTreeMap<RoomId, Vec<Effect>>,
     /// The room and the step of each lock request not answered yet.
     requests: BTreeMap<EffectId, (RoomId, Step)>,
 }
 
 impl RoomLocks {
     /// Admits `effect` towards the driver: an acquire of a room the
-    /// operation holds or waits for already is held back and `None` comes
-    /// back; anything else goes out at once.
+    /// operation holds or waits for already, and a release of that room's
+    /// ticket, are held back and `None` comes back; anything else goes out
+    /// at once.
     pub(super) fn admit(&mut self, effect: Effect) -> Option<Effect> {
+        if let Request::Hold(HoldRequest::ReleaseTicket { room_id }) = &effect.request
+            && self.rooms.contains_key(room_id)
+        {
+            self.tickets
+                .entry(room_id.clone())
+                .or_default()
+                .push(effect);
+            return None;
+        }
         let Some((room_id, step)) = lock_request(&effect.request) else {
             return Some(effect);
         };
@@ -69,21 +89,26 @@ impl RoomLocks {
         true
     }
 
-    /// The driver answered `effect` with `outcome`. When it let the room's
-    /// lock go (a release, answered whatever way, or an acquire that did
-    /// not take it), the acquire held back first goes out now.
-    pub(super) fn answered(&mut self, effect: EffectId, outcome: &Outcome) -> Option<Effect> {
-        let (room_id, step) = self.requests.remove(&effect)?;
+    /// The driver answered `effect` with `outcome`; what goes out now. When
+    /// it let the room's lock go (a release, answered whatever way, or an
+    /// acquire that did not take it), the acquire held back first goes out;
+    /// with none left, the releases of the room's ticket held back do.
+    pub(super) fn answered(&mut self, effect: EffectId, outcome: &Outcome) -> Vec<Effect> {
+        let Some((room_id, step)) = self.requests.remove(&effect) else {
+            return Vec::new();
+        };
         let let_go = step == Step::Release || *outcome != Outcome::Hold(HoldOutcome::Locked);
         if !let_go {
-            return None;
+            return Vec::new();
         }
-        let held_back = self.rooms.get_mut(&room_id)?;
-        let next = held_back.pop_front();
-        if next.is_none() {
-            self.rooms.remove(&room_id);
+        let Some(held_back) = self.rooms.get_mut(&room_id) else {
+            return Vec::new();
+        };
+        if let Some(next) = held_back.pop_front() {
+            return vec![next];
         }
-        next
+        self.rooms.remove(&room_id);
+        self.tickets.remove(&room_id).unwrap_or_default()
     }
 }
 
@@ -151,7 +176,7 @@ mod tests {
         locks.answered(acquire(0).id, &HoldOutcome::Locked.into());
         locks.admit(release(2));
         let after_release = locks.answered(release(2).id, &HoldOutcome::Released.into());
-        assert_eq!((held_back, after_release), (None, Some(acquire(1))));
+        assert_eq!((held_back, after_release), (None, vec![acquire(1)]));
     }
 
     #[test]
@@ -161,7 +186,7 @@ mod tests {
         locks.admit(acquire(1));
         assert_eq!(
             locks.answered(acquire(0).id, &Outcome::DeadlinePassed),
-            Some(acquire(1))
+            vec![acquire(1)]
         );
     }
 
@@ -175,7 +200,7 @@ mod tests {
         locks.admit(acquire(2));
         let withdrawn = locks.withdraw(acquire(1).id);
         let next = locks.answered(acquire(0).id, &Outcome::DeadlinePassed);
-        assert_eq!((withdrawn, next), (true, Some(acquire(2))));
+        assert_eq!((withdrawn, next), (true, vec![acquire(2)]));
     }
 
     #[test]
@@ -186,5 +211,20 @@ mod tests {
         locks.admit(release(1));
         locks.answered(release(1).id, &HoldOutcome::Released.into());
         assert_eq!(locks.admit(acquire(2)), Some(acquire(2)));
+    }
+
+    /// RFC §9.5.1: the ticket is released after the room's lock, so a
+    /// release asked for while a section holds the lock waits for its
+    /// release.
+    #[test]
+    fn a_ticket_s_release_waits_for_the_lock_s() {
+        let ticket = effect(2, HoldRequest::ReleaseTicket { room_id: room_id() }.into());
+        let mut locks = RoomLocks::default();
+        locks.admit(acquire(0));
+        locks.answered(acquire(0).id, &HoldOutcome::Locked.into());
+        let under_the_lock = locks.admit(ticket.clone());
+        locks.admit(release(1));
+        let after_release = locks.answered(release(1).id, &HoldOutcome::Released.into());
+        assert_eq!((under_the_lock, after_release), (None, vec![ticket]));
     }
 }
