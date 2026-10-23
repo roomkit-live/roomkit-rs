@@ -610,8 +610,8 @@ publishes a release.
   stored event find no event there; its messages and injected events are
   refused `OtherOrganization`; a room it creates belongs to the
   organization. The kit itself acts for no organization: its calls read
-  rooms unscoped, a room they create belongs to none, and
-  `create_room_with`'s `configure` no longer sets the organization.
+  rooms unscoped, and a room they create belongs to none, its organization
+  no option of `create_room_with`.
   `RoomKit::process_inbound_for` and `send_event_for` are gone, and
   `commit_event` takes no organization: an organization's handle makes
   each of them. The core's lifecycle and event operations take the
