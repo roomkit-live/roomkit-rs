@@ -241,13 +241,15 @@ pub(crate) fn stamp_injected(
 /// visibility, address and `standalone` word, nor the key `instruction`,
 /// the fingerprint a response to one records and no other event holds (RFC
 /// §10.1.1, gaps G-020 and G-065). Nor may it write the visibility
-/// `internal`, which only the framework writes (gap G-041).
+/// `internal`, which only the framework writes, nor change it on an event
+/// the framework marked so (gap G-041).
 pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> RoomEvent {
     modified.content = kept_change(&original.content, modified.content);
     instructions::keep_checked(original, &mut modified);
-    if modified.visibility == Visibility::Internal {
-        // Only the framework writes `internal`, on its own records: a hook's
-        // modify that writes it is put back to the original's (gap G-041).
+    if modified.visibility == Visibility::Internal || original.visibility == Visibility::Internal {
+        // Only the framework writes `internal`, on its own records, and only
+        // it unmarks them: a hook's modify that writes it, or changes it, is
+        // put back to the original's (gap G-041).
         modified.visibility.clone_from(&original.visibility);
     }
     modified.id = original.id.clone();
@@ -635,6 +637,35 @@ mod tests {
         assert_eq!(
             (kept.source.channel_id.as_str(), kept.content),
             ("sms", EventContent::text("[redacted]"))
+        );
+    }
+
+    /// Gap G-041: an event the framework marked `internal` stays so,
+    /// whatever visibility a hook's modify writes, as a modify writing
+    /// `internal` gets the original's back.
+    #[test]
+    fn an_internal_event_stays_internal_whatever_a_modify_writes() {
+        let mut internal = trigger();
+        internal.visibility = Visibility::Internal;
+        let widened = [
+            Visibility::All,
+            Visibility::None,
+            Visibility::channels([ChannelId::new("ws").unwrap()]).unwrap(),
+        ]
+        .map(|visibility| {
+            let modified = RoomEvent {
+                visibility,
+                ..internal.clone()
+            };
+            keep_identity(&internal, modified).visibility
+        });
+        assert_eq!(
+            widened,
+            [
+                Visibility::Internal,
+                Visibility::Internal,
+                Visibility::Internal
+            ]
         );
     }
 

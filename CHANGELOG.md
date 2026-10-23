@@ -560,3 +560,7 @@ publishes a release.
   says whether a source may write, and why not. `RoomContext::binding(channel_id)`
   reads a room's binding of a channel, and `rules::routing::kept_by_status`
   whether a routed room's status, as its lock finds it, keeps the message.
+- A hook's modify of an event marked `internal` keeps `internal`, whatever
+  visibility it writes; it could widen the framework's record to channels
+  (gap G-041). A modify writing `internal` on another event still gets the
+  original's visibility back.
