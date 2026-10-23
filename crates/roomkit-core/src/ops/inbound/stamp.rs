@@ -127,8 +127,9 @@ pub(crate) fn stamp_direct(
 /// the instruction that produced it (RFC §10.1.1 rule 6), or no
 /// `instruction` key at all when the trigger is not one (gap G-065).
 ///
-/// A response under its own source keeps the source's other fields. One
-/// that claims another channel's source keeps nothing of it, its
+/// A response under its own source keeps the fields its channel wrote but
+/// its verification, which the pipeline clears on every response (RFC
+/// §8.5). One that claims another channel's source keeps nothing of it, its
 /// participant, provider, ids, raw payload and verification included: its
 /// source is the responder's alone (gap G-035), so another channel's
 /// provider message id is never acted on as the response's. A response
@@ -143,6 +144,9 @@ pub(crate) fn stamp_response(
     if response.source.channel_id == responder.channel_id {
         response.source.channel_type = responder.channel_type;
         response.source.direction = EventDirection::Outbound;
+        // A verification is a received sender's (RFC §5.2, §11.7), and a
+        // response is no message received (RFC §8.5).
+        response.source.verification = None;
     } else {
         tracing::warn!(
             target: "roomkit::core::inbound",
@@ -594,7 +598,9 @@ mod tests {
         );
     }
 
-    /// Gap G-035.
+    /// Gap G-035, RFC §8.5: a response under its own source keeps the
+    /// fields its channel wrote, but its verification, which is a received
+    /// sender's.
     #[test]
     fn a_response_under_its_own_source_keeps_its_other_fields() {
         let mut response = claiming_the_sender_s_source();
@@ -603,6 +609,7 @@ mod tests {
         let expected = EventSource {
             channel_type: ChannelType::Ai,
             direction: EventDirection::Outbound,
+            verification: None,
             ..response.source
         };
         assert_eq!(stamped.source, expected);

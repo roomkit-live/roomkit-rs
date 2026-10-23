@@ -82,9 +82,10 @@ as it stands.
   the room's delivery lane. Delivery sets run in index order, one at a
   time per room; a transport delivery with no recipient is refused
   `no_recipient`, a target whose channel is no longer registered skipped
-  or reported (gap G-048); responses re-enter with their own source (gap
-  G-035) and within their message's answers (gap G-073), injected events
-  and records past the reentry budget are stored, a refused record emits
+  or reported (gap G-048); responses re-enter with their own source, their
+  verification cleared (gap G-035), and within their message's answers
+  (gap G-073), injected events and records past the reentry budget are
+  stored, a refused record emits
   `room_refused_event` (gap G-043), and step 15 stores the cascade's side
   effects and applies the room metadata updates channels return (gap
   G-049). An `INSTRUCTION` is decided without being stored, delivered to
