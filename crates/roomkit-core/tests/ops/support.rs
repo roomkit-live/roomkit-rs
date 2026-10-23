@@ -2,13 +2,13 @@
 //! closures, and a trace of every effect it executes.
 //!
 //! It also checks what every driver must hold for the protocol: a commit
-//! happens under its room's lock, a lock or a lane is never taken twice,
-//! and every lock and lane taken is let go when the operation ends. For an
-//! inbound operation it checks that the room's lane is held whenever the
-//! room's lock is taken, an event committed or a channel called, and that
-//! the lock is free while awaited observers run, so that they may take it.
-//! An inbound operation never holds two lanes at once, the lane of a room
-//! it was routed to included.
+//! happens under its room's lock, an operation never asks for a lock or a
+//! lane it holds, and every lock and lane taken is let go when the
+//! operation ends. For an inbound operation it checks that the room's lane
+//! is held whenever the room's lock is taken, an event committed or a
+//! channel called, and that the lock is free while awaited observers run,
+//! so that they may take it. An inbound operation never holds two lanes at
+//! once, the lane of a room it was routed to included.
 //!
 //! An admission ticket (RFC §9.5.1) is taken in the room's lane and before
 //! the room lock, its turn awaited before the lock is taken, and it is
@@ -23,19 +23,24 @@
 //! The router is scripted: each `Route` takes the next answer of `routes`,
 //! a new room once they are spent.
 //!
-//! A hook or a channel may call into its own room (RFC §13.5): it is
-//! scripted as a [`Reentry`], the entry it makes from the event it runs on
-//! and what it answers. The driver hands the entry to the running operation
-//! (`Operation::adopt`), keeps the hook's or the channel's effect
-//! outstanding, executes the operation's next effects, and completes the
-//! effect once the entry is settled, out of order; a caller that does not
-//! wait answers at once. The trace reads `<effect> calls <entry>` where the
-//! call is made, `<effect> settled` where its entry is settled, and
-//! `<effect> returns` where the effect completes. Every entry must be
-//! settled before the operation ends. A request made under a room's lock
+//! A hook or a channel may call into a room (RFC §13.5): it is scripted as
+//! a [`Reentry`], the entries it makes from the event it runs on and what it
+//! answers. The driver hands a call to the run of its context that holds
+//! the room's lane (`Operation::adopt`); a call no run takes, or one its
+//! run declines, runs as an operation of its own, an arrival, within the
+//! caller's context (`runs`). Either way it keeps the hook's or the
+//! channel's effect outstanding, executes the next effects, and completes
+//! the effect once the entry is settled or the arrival is over, out of
+//! order; a caller that does not wait answers at once. The trace reads
+//! `<effect> calls <entry>` where the call is made, `<effect> settled` where
+//! its entry is settled, and `<effect> returns` where the effect completes;
+//! an arrival's effects are traced as any. Every entry must be settled
+//! before the operation ends. A request made under a room's lock
 //! (`Effect::locked`) is checked to be made while the room's lock is held.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+mod runs;
+
+use std::collections::{BTreeMap, VecDeque};
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,10 +53,10 @@ use roomkit_core::model::{
     RoomEvent, RoomId, RoomStatus, Task, Timestamp,
 };
 use roomkit_core::ops::{
-    ChannelDeclaration, CommitRecord, DeleteEvent, Effect, EffectId, Entry, EntryId, Environment,
+    ChannelDeclaration, CommitRecord, DeleteEvent, Effect, EffectId, Entry, Environment,
     FrameworkEvent, Inbound, InboundError, InboundResult, InboundTarget, KitConfig, MutationError,
-    Next, Notice, Operation, Outcome, Request, RoomCounters, SequentialEnvironment, Settled,
-    TargetUpdate, UpdateEvent, default_inbound_event,
+    Notice, Outcome, Request, RoomCounters, SequentialEnvironment, Settled, TargetUpdate,
+    UpdateEvent, default_inbound_event,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
@@ -88,27 +93,31 @@ pub(crate) fn calling(mut call: impl FnMut(&RoomEvent) -> Option<Entry> + 'stati
 
 /// What a caller answers once it made its call.
 pub(crate) enum Answer<T> {
-    /// It awaits the entry's result and answers from it.
+    /// It awaits the call's result and answers from it.
     Awaits(Box<dyn FnMut(&Called) -> T>),
     /// It does not wait for the result, and answers this at once.
     AtOnce(Box<dyn FnMut() -> T>),
-}
-
-/// An effect kept outstanding while the entry its call made runs, or an
-/// entry nobody waits for.
-struct Deferred {
-    /// `None` for an entry whose caller did not wait.
-    effect: Option<EffectId>,
-    entry: EntryId,
-    label: String,
-    caller: Caller,
+    /// It makes the call from a task of its own, outside its execution
+    /// context, as code that spawns a task without `keep_context` does, and
+    /// answers this at once.
+    Apart(Box<dyn FnMut() -> T>),
 }
 
 /// Who made a call into the room.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Caller {
     Hook(HookId),
     Channel(ChannelId),
+}
+
+/// How a caller goes on once it made its calls.
+enum Then {
+    /// It waits for its call's result.
+    Waits,
+    /// It answers this at once, its call made within its context.
+    AtOnce(Outcome),
+    /// It answers this at once, its call made outside its context.
+    Apart(Outcome),
 }
 
 /// A change the hooks make in the room while they run.
@@ -130,7 +139,7 @@ struct Channel {
 
 /// What the driver runs: an inbound operation holds a lane for what it
 /// does in a room, another operation holds none.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Running {
     Inbound,
     Other,
@@ -183,12 +192,15 @@ pub(crate) struct Sim {
     /// The channel each awaited observer attaches to its room as it runs.
     observer_attaches: BTreeMap<HookId, ChannelId>,
     others: BTreeMap<RoomId, StoredRoom>,
-    locks_held: BTreeSet<RoomId>,
-    lanes_held: BTreeSet<RoomId>,
-    /// The rooms whose admission ticket the operation holds.
-    tickets_held: BTreeSet<RoomId>,
-    /// The rooms whose ticket's turn came.
-    admitted: BTreeSet<RoomId>,
+    /// The operation the test runs, then the arrivals its calls make.
+    runs: Vec<runs::RunState>,
+    /// The run whose effects the driver executes now.
+    current: runs::RunId,
+    /// The arrivals started since the driver last polled a run.
+    spawned: Vec<Inbound>,
+    /// The locks, lanes and tickets the runs hold, and the requests that
+    /// wait for them.
+    holders: runs::Holders,
     /// How long each effect takes on the simulated clock, named by the start
     /// of its trace line (`hook pii_scan`, `lock room_1`, `await ticket
     /// room_1`, `handle_inbound sms`); the first match counts.
@@ -200,8 +212,8 @@ pub(crate) struct Sim {
     pub(crate) bounded: Vec<String>,
     /// The contexts the SYNC hooks ran with, by hook name, in order.
     pub(crate) hook_contexts: Vec<(String, RoomContext)>,
-    /// What runs: an inbound operation must hold the lane of every room it
-    /// acts in.
+    /// What the test runs: an inbound operation must hold the lane of every
+    /// room it acts in.
     running: Running,
     /// The identities the store resolves addresses to (RFC §14.1).
     pub(crate) identities: Vec<Identity>,
@@ -244,8 +256,6 @@ pub(crate) struct Sim {
     reentrant_channels: BTreeMap<ChannelId, Reentry<Result<ChannelOutput, ErrorRecord>>>,
     /// The entries the operations settled, in order.
     pub(crate) settled: Vec<Settled>,
-    /// How many adopted entries are not settled yet.
-    adopting: usize,
     /// The effect that fails, named by the start of its trace line: a store
     /// write (`update room`, `delete binding sms`, `store room`), a room
     /// lock (`lock room_1`), a room's lane (`enter lane room_1`), the
@@ -301,10 +311,10 @@ impl Sim {
             hooks: BTreeMap::new(),
             observer_attaches: BTreeMap::new(),
             others: BTreeMap::new(),
-            locks_held: BTreeSet::new(),
-            lanes_held: BTreeSet::new(),
-            tickets_held: BTreeSet::new(),
-            admitted: BTreeSet::new(),
+            runs: Vec::new(),
+            current: runs::ROOT,
+            spawned: Vec::new(),
+            holders: runs::Holders::default(),
             durations: Vec::new(),
             nth_durations: Vec::new(),
             bounded: Vec::new(),
@@ -327,7 +337,6 @@ impl Sim {
             reentrant_hooks: BTreeMap::new(),
             reentrant_channels: BTreeMap::new(),
             settled: Vec::new(),
-            adopting: 0,
             failing_effect: None,
         }
     }
@@ -670,119 +679,6 @@ impl Sim {
             .push_back(Ok(room.map(|room| RoomId::new(room).unwrap())));
     }
 
-    /// Checks that an inbound operation holds the lane of `room_id` before
-    /// it does `what` there: the lane comes before the lock (RFC §10.2).
-    fn assert_in_lane(&self, room_id: &RoomId, what: &str) {
-        if self.running == Running::Inbound {
-            assert!(
-                self.lanes_held.contains(room_id),
-                "an inbound operation {what} outside the room's lane"
-            );
-        }
-    }
-
-    /// Runs `operation` to its end, executing every effect it asks for,
-    /// and completing an effect whose call made an entry once the entry is
-    /// settled.
-    pub(crate) fn run<O: Operation>(&mut self, mut operation: O) -> O::Output {
-        let mut deferred: Vec<Deferred> = Vec::new();
-        loop {
-            let step = operation.poll(&mut self.env);
-            self.journal.extend(step.notices.iter().map(journal_line));
-            self.notices.extend(step.notices);
-            let answered = !step.settled.is_empty();
-            for settled in step.settled {
-                self.answer(&mut operation, &mut deferred, settled);
-            }
-            self.adopting = deferred.len();
-            match step.next {
-                Next::Ready(output) => {
-                    assert!(
-                        deferred.is_empty(),
-                        "the operation ended with an entry unsettled"
-                    );
-                    self.assert_nothing_held();
-                    return output;
-                }
-                Next::Waiting => {
-                    assert!(answered, "the operation waits for nothing the driver does");
-                }
-                Next::Effects(effects) => {
-                    for effect in effects {
-                        self.execute_effect(&mut operation, &mut deferred, effect);
-                        self.adopting = deferred.len();
-                    }
-                }
-            }
-        }
-    }
-
-    fn assert_nothing_held(&self) {
-        assert!(
-            self.locks_held.is_empty(),
-            "the operation ended holding the lock of {:?}",
-            self.locks_held
-        );
-        assert!(
-            self.lanes_held.is_empty(),
-            "the operation ended holding the lane of {:?}",
-            self.lanes_held
-        );
-        assert!(
-            self.tickets_held.is_empty(),
-            "the operation ended holding the ticket of {:?}",
-            self.tickets_held
-        );
-    }
-
-    /// Executes `effect`, or, for a hook or a channel that calls into its
-    /// room, hands the operation the entry and keeps the effect outstanding.
-    fn execute_effect<O: Operation>(
-        &mut self,
-        operation: &mut O,
-        deferred: &mut Vec<Deferred>,
-        effect: Effect,
-    ) {
-        if let Some(room) = &effect.locked {
-            assert!(
-                self.locks_held.contains(room),
-                "a request made under the lock of {room} while the lock is free"
-            );
-        }
-        let traced = self.trace.len();
-        if let Some((caller, entries)) = self.reentry(&effect) {
-            let label = self.label(&effect.request);
-            let at_once = self.answer_at_once(&caller);
-            assert!(
-                at_once.is_some() || entries.len() == 1,
-                "a caller that waits makes one call"
-            );
-            for entry in entries {
-                self.trace
-                    .push(format!("{label} calls {}", entry_name(&entry)));
-                let id = operation
-                    .adopt(entry, effect.id)
-                    .unwrap_or_else(|_| panic!("the operation refused the call of {label}"));
-                deferred.push(Deferred {
-                    effect: at_once.is_none().then_some(effect.id),
-                    entry: id,
-                    label: label.clone(),
-                    caller: caller.clone(),
-                });
-            }
-            self.journal.extend(self.trace.iter().skip(traced).cloned());
-            if let Some(outcome) = at_once {
-                self.trace.push(format!("{label} returns"));
-                self.journal.push(format!("{label} returns"));
-                operation.complete(effect.id, outcome).unwrap();
-            }
-            return;
-        }
-        let outcome = self.execute_timed(effect.request, effect.deadline);
-        self.journal.extend(self.trace.iter().skip(traced).cloned());
-        operation.complete(effect.id, outcome).unwrap();
-    }
-
     /// The entries a hook or a channel makes into its room on `effect`, if
     /// it is one that calls.
     fn reentry(&mut self, effect: &Effect) -> Option<(Caller, Vec<Entry>)> {
@@ -813,62 +709,49 @@ impl Sim {
         None
     }
 
-    /// What a caller that does not wait for its entry's result answers at
-    /// once; `None` for a caller that waits.
-    fn answer_at_once(&mut self, caller: &Caller) -> Option<Outcome> {
+    /// How `caller` goes on once it made its calls.
+    fn then_of(&mut self, caller: &Caller) -> Then {
+        let at_once = |answer: Outcome, apart: bool| {
+            if apart {
+                Then::Apart(answer)
+            } else {
+                Then::AtOnce(answer)
+            }
+        };
         match caller {
-            Caller::Hook(hook) => match &mut self.reentrant_hooks.get_mut(hook)?.answer {
-                Answer::AtOnce(answer) => Some(Outcome::Hook(Box::new(answer()))),
-                Answer::Awaits(_) => None,
+            Caller::Hook(hook) => match &mut self.reentrant_hooks.get_mut(hook).unwrap().answer {
+                Answer::Awaits(_) => Then::Waits,
+                Answer::AtOnce(answer) => at_once(Outcome::Hook(Box::new(answer())), false),
+                Answer::Apart(answer) => at_once(Outcome::Hook(Box::new(answer())), true),
             },
             Caller::Channel(channel_id) => {
-                match &mut self.reentrant_channels.get_mut(channel_id)?.answer {
-                    Answer::AtOnce(answer) => Some(output(answer())),
-                    Answer::Awaits(_) => None,
+                match &mut self.reentrant_channels.get_mut(channel_id).unwrap().answer {
+                    Answer::Awaits(_) => Then::Waits,
+                    Answer::AtOnce(answer) => at_once(output(answer()), false),
+                    Answer::Apart(answer) => at_once(output(answer()), true),
                 }
             }
         }
     }
 
-    /// Answers the call that made `settled`'s entry, completing its effect
-    /// when the caller waits for it.
-    fn answer<O: Operation>(
-        &mut self,
-        operation: &mut O,
-        deferred: &mut Vec<Deferred>,
-        settled: Settled,
-    ) {
-        let index = deferred
-            .iter()
-            .position(|call| call.entry == settled.entry)
-            .unwrap_or_else(|| panic!("an entry settled that no call made: {settled:?}"));
-        let call = deferred.remove(index);
-        self.trace.push(format!("{} settled", call.label));
-        self.journal.push(format!("{} settled", call.label));
-        let Some(effect) = call.effect else {
-            self.settled.push(settled);
-            return;
-        };
-        let outcome = match &call.caller {
+    /// What `caller`, which awaits its call, answers from `result`.
+    fn answer_from(&mut self, caller: &Caller, result: &Called) -> Outcome {
+        match caller {
             Caller::Hook(hook) => {
                 let reentry = self.reentrant_hooks.get_mut(hook).unwrap();
                 let Answer::Awaits(then) = &mut reentry.answer else {
                     unreachable!("a caller that waits answers from the result");
                 };
-                Outcome::Hook(Box::new(then(&settled.result)))
+                Outcome::Hook(Box::new(then(result)))
             }
             Caller::Channel(channel_id) => {
                 let reentry = self.reentrant_channels.get_mut(channel_id).unwrap();
                 let Answer::Awaits(then) = &mut reentry.answer else {
                     unreachable!("a caller that waits answers from the result");
                 };
-                output(then(&settled.result))
+                output(then(result))
             }
-        };
-        self.settled.push(settled);
-        self.trace.push(format!("{} returns", call.label));
-        self.journal.push(format!("{} returns", call.label));
-        operation.complete(effect, outcome).unwrap();
+        }
     }
 
     /// The kit's configuration, as an operation receives it.
@@ -1007,10 +890,16 @@ impl Sim {
         self.timeline.iter().map(describe).collect()
     }
 
-    /// Runs `request` for as long as `durations` says, within `deadline`:
-    /// a request that would finish past it does nothing, and is answered
-    /// `DeadlinePassed` at the deadline (RFC §13.6).
-    fn execute_timed(&mut self, request: Request, deadline: Option<Timestamp>) -> Outcome {
+    /// Runs `request`, the current run's `effect`, for as long as
+    /// `durations` says, within `deadline`: a request that would finish past
+    /// it does nothing, and is answered `DeadlinePassed` at the deadline (RFC
+    /// §13.6). `None` for a request that waits for what another run holds.
+    fn execute_timed(
+        &mut self,
+        effect: EffectId,
+        request: Request,
+        deadline: Option<Timestamp>,
+    ) -> Option<Outcome> {
         let line = self.label(&request);
         let nth = |prefix: &str| {
             self.trace
@@ -1038,11 +927,11 @@ impl Sim {
                 self.env
                     .advance(deadline.duration_since(now).unwrap_or_default());
                 self.trace.push(format!("{line} deadline passed"));
-                return Outcome::DeadlinePassed;
+                return Some(Outcome::DeadlinePassed);
             }
         }
         self.env.advance(duration);
-        self.execute(request)
+        self.execute(effect, request, deadline)
     }
 
     /// How the trace names `request`, or the start of it for the requests
@@ -1087,17 +976,26 @@ impl Sim {
         }
     }
 
-    fn execute(&mut self, request: Request) -> Outcome {
+    /// Executes `request`, the current run's `effect`; `None` for a lock, a
+    /// lane or a ticket's turn another run holds, which waits.
+    fn execute(
+        &mut self,
+        effect: EffectId,
+        request: Request,
+        deadline: Option<Timestamp>,
+    ) -> Option<Outcome> {
         if let Some(refused) = self.refused(&request) {
-            return refused;
+            return Some(refused);
         }
-        match request {
-            Request::AcquireLock { room_id } => self.acquire(room_id),
+        let outcome = match request {
+            Request::AcquireLock { room_id } => return self.acquire(effect, room_id, deadline),
+            Request::EnterLane { room_id } => return self.enter_lane(effect, room_id, deadline),
+            Request::AwaitTicket { room_id } => {
+                return self.await_ticket(effect, room_id, deadline);
+            }
             Request::ReleaseLock { room_id } => self.release(&room_id),
-            Request::EnterLane { room_id } => self.enter_lane(room_id),
             Request::LeaveLane { room_id } => self.leave_lane(&room_id),
             Request::TakeTicket { room_id } => self.take_ticket(room_id),
-            Request::AwaitTicket { room_id } => self.await_ticket(&room_id),
             Request::ReleaseTicket { room_id } => self.release_ticket(&room_id),
             Request::HandleInbound {
                 channel_id,
@@ -1149,7 +1047,8 @@ impl Sim {
                 let room = store_room(&request).clone();
                 self.on_room(&room, |sim| sim.execute_store(request))
             }
-        }
+        };
+        Some(outcome)
     }
 
     /// The event `event_id`, whichever room holds it (RFC §14.1 `get_event`).
@@ -1212,7 +1111,10 @@ impl Sim {
         self.trace
             .push(format!("route {} {}", query.channel_id, query.sender_id));
         assert!(
-            self.locks_held.is_empty() && self.lanes_held.is_empty(),
+            {
+                let state = self.state(self.current);
+                state.locks.is_empty() && state.lanes.is_empty()
+            },
             "the router was asked holding a lock or a lane"
         );
         self.route_queries.push(query);
@@ -1268,10 +1170,10 @@ impl Sim {
             names.join(",")
         ));
         assert!(
-            !self.locks_held.contains(&event.room_id),
+            !self.state(self.current).locks.contains(&event.room_id),
             "awaited observers ran under the room lock, which they may need"
         );
-        self.assert_in_lane(&event.room_id, "awaited observers");
+        self.assert_in_lane(self.current, &event.room_id, "awaited observers");
         for hook in hooks {
             let Some(attached) = self.observer_attaches.get(hook).cloned() else {
                 continue;
@@ -1353,28 +1255,6 @@ impl Sim {
         Some(Outcome::Failed(error))
     }
 
-    /// Takes a room's lock, which is never taken twice. A sender recorded
-    /// meanwhile on the room is recorded just before the lock is granted, as
-    /// a concurrent message that held it first would have.
-    fn acquire(&mut self, room_id: RoomId) -> Outcome {
-        self.trace.push(format!("lock {room_id}"));
-        self.assert_in_lane(&room_id, "took the room lock");
-        // An entry adopted from the operation's own work takes no ticket and
-        // commits ahead of the event whose check emitted it (RFC §9.5.1).
-        assert!(
-            !self.tickets_held.contains(&room_id)
-                || self.admitted.contains(&room_id)
-                || self.adopting > 0,
-            "a ticketed event took the room lock before its turn"
-        );
-        self.record_meanwhile(&room_id);
-        assert!(
-            self.locks_held.insert(room_id),
-            "the room lock was taken twice"
-        );
-        Outcome::Locked
-    }
-
     /// Records the sender `recorded_meanwhile` names on its room's binding,
     /// once.
     fn record_meanwhile(&mut self, room_id: &RoomId) {
@@ -1398,41 +1278,31 @@ impl Sim {
         });
     }
 
-    /// Releases a room's lock, which must be held.
+    /// Releases the current run's lock of a room, which must be held.
     fn release(&mut self, room_id: &RoomId) -> Outcome {
         self.trace.push(format!("release {room_id}"));
-        assert!(
-            self.locks_held.remove(room_id),
-            "the room lock was released without being held"
-        );
+        self.let_lock_go(room_id);
         if self.release_fails {
             return Outcome::Failed(ErrorRecord::new("LockLost", "the lock's lease was lost"));
         }
         Outcome::Released
     }
 
-    /// Enters a room's delivery lane, which is never entered twice; an
-    /// inbound operation holds one lane at a time.
-    fn enter_lane(&mut self, room_id: RoomId) -> Outcome {
-        self.trace.push(format!("enter lane {room_id}"));
-        assert!(
-            self.running == Running::Other || self.lanes_held.is_empty(),
-            "an inbound operation entered a second lane"
-        );
-        assert!(
-            self.lanes_held.insert(room_id),
-            "the room's lane was entered twice"
-        );
-        Outcome::Entered
+    /// Enters a room's delivery lane for the current run, or waits for the
+    /// run that holds it.
+    fn enter_lane(
+        &mut self,
+        effect: EffectId,
+        room_id: RoomId,
+        deadline: Option<Timestamp>,
+    ) -> Option<Outcome> {
+        self.enter(effect, room_id, deadline)
     }
 
-    /// Leaves a room's delivery lane, which must be held.
+    /// Leaves the current run's lane of a room, which must be held.
     fn leave_lane(&mut self, room_id: &RoomId) -> Outcome {
         self.trace.push(format!("leave lane {room_id}"));
-        assert!(
-            self.lanes_held.remove(room_id),
-            "the room's lane was left without being held"
-        );
+        self.let_lane_go(room_id);
         if self.leave_fails {
             return Outcome::Failed(ErrorRecord::new("LaneLost", "the lane was lost"));
         }
@@ -1443,42 +1313,35 @@ impl Sim {
     /// lock (RFC §9.5.1).
     fn take_ticket(&mut self, room_id: RoomId) -> Outcome {
         self.trace.push(format!("take ticket {room_id}"));
-        self.assert_in_lane(&room_id, "took an admission ticket");
+        self.assert_in_lane(self.current, &room_id, "took an admission ticket");
         assert!(
-            !self.locks_held.contains(&room_id),
+            !self.state(self.current).locks.contains(&room_id),
             "an admission ticket was taken under the room lock"
         );
-        assert!(
-            self.tickets_held.insert(room_id),
-            "the room's ticket was taken twice"
-        );
+        self.take_a_ticket(room_id);
         Outcome::Ticketed
     }
 
-    /// The ticket's turn: no earlier ticket is held in the simulation, so it
-    /// comes at once, once `durations` says it waited.
-    fn await_ticket(&mut self, room_id: &RoomId) -> Outcome {
-        self.trace.push(format!("await ticket {room_id}"));
-        assert!(
-            self.tickets_held.contains(room_id),
-            "a ticket's turn was awaited without the ticket"
-        );
-        self.admitted.insert(room_id.clone());
-        Outcome::Admitted
+    /// The ticket's turn, once every earlier ticket of the room is
+    /// released, or once `durations` says it waited.
+    fn await_ticket(
+        &mut self,
+        effect: EffectId,
+        room_id: RoomId,
+        deadline: Option<Timestamp>,
+    ) -> Option<Outcome> {
+        self.turn(effect, room_id, deadline)
     }
 
-    /// Releases the room's ticket, once the room lock is let go.
+    /// Releases the current run's ticket of the room, once the room lock is
+    /// let go.
     fn release_ticket(&mut self, room_id: &RoomId) -> Outcome {
         self.trace.push(format!("release ticket {room_id}"));
         assert!(
-            !self.locks_held.contains(room_id),
+            !self.state(self.current).locks.contains(room_id),
             "the ticket was released under the room lock"
         );
-        assert!(
-            self.tickets_held.remove(room_id),
-            "the room's ticket was released without being held"
-        );
-        self.admitted.remove(room_id);
+        self.let_ticket_go(room_id);
         let line = format!("release ticket {room_id}");
         if self
             .failing_effect
@@ -1574,7 +1437,7 @@ impl Sim {
             Request::CreateRoom { room } => self.create_room(room),
             Request::UpdateRoom { room_id, updates } => {
                 assert!(
-                    self.locks_held.contains(&room_id) || updates.status.is_none(),
+                    self.state(self.current).locks.contains(&room_id) || updates.status.is_none(),
                     "a status was written outside the room lock"
                 );
                 updates.apply(&mut self.room);
@@ -1621,7 +1484,7 @@ impl Sim {
     fn delete_stored_event(&mut self, event_id: &EventId, cascade_replies: bool) -> Outcome {
         self.trace.push(format!("delete event {event_id}"));
         assert!(
-            self.locks_held.contains(&self.room.id),
+            self.state(self.current).locks.contains(&self.room.id),
             "an event was deleted outside the room lock"
         );
         let Some(at) = self.timeline.iter().position(|event| &event.id == event_id) else {
@@ -1657,10 +1520,10 @@ impl Sim {
         target: Option<&TargetUpdate>,
     ) -> Outcome {
         assert!(
-            self.locks_held.contains(&event.room_id),
+            self.state(self.current).locks.contains(&event.room_id),
             "an event was committed outside the room lock"
         );
-        self.assert_in_lane(&event.room_id, "committed an event");
+        self.assert_in_lane(self.current, &event.room_id, "committed an event");
         assert_eq!(
             event.index, self.room.event_count,
             "the index is the room's count"
@@ -1736,7 +1599,7 @@ impl Sim {
         self.env.advance(self.delivery_duration);
         self.trace
             .push(format!("on_event {} <- {}", binding.channel_id, event.id));
-        self.assert_in_lane(&binding.room_id, "called on_event()");
+        self.assert_in_lane(self.current, &binding.room_id, "called on_event()");
         let channel = self.channels.get_mut(&binding.channel_id).unwrap();
         let answer = (channel.on_event)(event, &context);
         self.on_event_contexts
@@ -1749,7 +1612,7 @@ impl Sim {
         self.env.advance(self.delivery_duration);
         self.trace
             .push(format!("deliver {} <- {}", binding.channel_id, event.id));
-        self.assert_in_lane(&binding.room_id, "called deliver()");
+        self.assert_in_lane(self.current, &binding.room_id, "called deliver()");
         let channel = self.channels.get_mut(&binding.channel_id).unwrap();
         output((channel.deliver)(event))
     }

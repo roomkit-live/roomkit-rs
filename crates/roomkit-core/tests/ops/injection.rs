@@ -1421,6 +1421,162 @@ fn an_off_lock_entry_is_delivered_when_its_caller_s_event_passes_its_deadline() 
     );
 }
 
+/// RFC §13.5, gap G-070: a call no operation adopts runs as an operation of
+/// its own, and waits for the room's lane as any call does.
+mod a_call_no_operation_adopts {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// The customer's "hello", relayed by a locked hook into `room_2`,
+    /// which the relayed message creates.
+    fn relayed() -> Sim {
+        let mut sim = room();
+        sim.reentrant_hook(
+            "relay",
+            true,
+            Reentry {
+                entries: calling(|event| {
+                    (event.room_id == room_id() && text_of(&event.content) == "hello").then(|| {
+                        Entry::Message {
+                            room_id: RoomId::new("room_2").unwrap(),
+                            organization_id: None,
+                            message: Box::new(Sim::message("sms", "Relayed")),
+                        }
+                    })
+                }),
+                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        sim
+    }
+
+    /// A call into another room holds that room's lane for itself, while
+    /// the section whose hook made it waits for it.
+    #[test]
+    fn into_another_room_runs_within_its_caller_s_section() {
+        let mut sim = relayed();
+        sim.send(hello()).unwrap();
+        let call: Vec<&str> = sim
+            .trace
+            .iter()
+            .map(String::as_str)
+            .skip_while(|line| !line.starts_with("hook relay calls"))
+            .take_while(|line| *line != "hook relay returns")
+            .collect();
+        assert_eq!(
+            (call, sim.other_timeline_lines("room_2")),
+            (
+                vec![
+                    "hook relay calls process_inbound room_2 \"Relayed\"",
+                    "enter lane room_2",
+                    "load_context room_2",
+                    "store room room_2 Active",
+                    "lock room_2",
+                    "load_context room_2",
+                    "store binding sms",
+                    "release room_2",
+                    "handle_inbound sms",
+                    "lock room_2",
+                    "load_context room_2",
+                    "hook relay",
+                    "load_context room_2",
+                    "commit #0 sms delivered \"Relayed\"",
+                    "release room_2",
+                    "leave lane room_2",
+                ],
+                vec!["#0 sms delivered \"Relayed\"".to_owned()]
+            )
+        );
+    }
+
+    /// A call made from a task outside its caller's context finds the
+    /// room's lane held by the call it was made from, waits for it, and
+    /// runs once that call is over.
+    #[test]
+    fn made_outside_its_caller_s_context_waits_for_the_lane() {
+        let mut sim = room();
+        sim.reentrant_hook(
+            "notifier",
+            true,
+            Reentry {
+                entries: calling(|event| {
+                    (event.source.channel_id.as_str() == "sms").then(|| send_event("Heads up"))
+                }),
+                answer: Answer::Apart(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        sim.send(hello()).unwrap();
+        let after: Vec<&str> = sim
+            .trace
+            .iter()
+            .map(String::as_str)
+            .skip_while(|line| !line.starts_with("hook notifier calls"))
+            .collect();
+        assert_eq!(
+            (after, sim.timeline_lines()),
+            (
+                vec![
+                    "hook notifier calls send_event room_1 \"Heads up\"",
+                    "hook notifier returns",
+                    "load_context room_1",
+                    "commit #0 sms delivered \"hello\"",
+                    "release room_1",
+                    "on_event ws <- evt_1",
+                    "deliver ws <- evt_1",
+                    "leave lane room_1",
+                    "enter lane room_1",
+                    "lock room_1",
+                    "load_context room_1",
+                    "hook notifier",
+                    "load_context room_1",
+                    "commit #1 ws delivered \"Heads up\"",
+                    "release room_1",
+                    "on_event sms <- evt_2",
+                    "deliver sms <- evt_2",
+                    "leave lane room_1",
+                ],
+                vec![
+                    "#0 sms delivered \"hello\"".to_owned(),
+                    "#1 ws delivered \"Heads up\"".to_owned()
+                ]
+            )
+        );
+    }
+
+    /// Gap G-068: the wait for the lane counts against the call's
+    /// `process_timeout`; past it, the lane is not taken and nothing is
+    /// written.
+    #[test]
+    fn made_outside_its_caller_s_context_is_refused_past_its_deadline() {
+        let mut sim = room();
+        sim.config.process_timeout = Some(std::time::Duration::from_secs(10));
+        sim.delivery_duration = std::time::Duration::from_secs(6);
+        sim.reentrant_hook(
+            "notifier",
+            true,
+            Reentry {
+                entries: calling(|event| {
+                    (event.source.channel_id.as_str() == "sms").then(|| send_event("Heads up"))
+                }),
+                answer: Answer::Apart(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            (
+                sim.trace.last().cloned(),
+                sim.timeline_lines(),
+                sim.framework_event_names().last().cloned()
+            ),
+            (
+                Some("enter lane room_1 deadline passed".to_owned()),
+                vec!["#0 sms delivered \"hello\"".to_owned()],
+                Some("process_timeout".to_owned())
+            )
+        );
+    }
+}
+
 /// The operation adopts a call into the room it holds the lane of, made by
 /// an effect still outstanding; any other is handed back.
 mod an_adoption {

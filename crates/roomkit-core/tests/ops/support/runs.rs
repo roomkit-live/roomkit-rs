@@ -1,0 +1,729 @@
+//! The runs of the simulated driver: the operation a test runs, and the
+//! calls its hooks and channels make that no run adopts, each run as an
+//! operation of its own, an arrival, as the runtime runs a call apart
+//! (docs/architecture.md, "Reentrancy").
+//!
+//! The driver polls one run at a time, the newest that has something to
+//! take in, and hands each the answers and the calls meant for it in the
+//! order they came. A call is handed to the run its context names, which
+//! adopts it or declines it; a declined call, or one no run of its context
+//! takes, becomes an arrival, which runs within the context of the call
+//! that made it.
+//!
+//! A request for a lock or a lane another run holds, or a ticket's turn
+//! behind another run's ticket, waits: it is granted once the holder lets
+//! it go, in the order the requests came, or given up on at its deadline
+//! once no run has anything left to do. Runs that all wait for each other,
+//! with no deadline to pass, fail the test: a deadlock never hangs it.
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use roomkit_core::model::{RoomId, Timestamp};
+use roomkit_core::ops::{
+    Effect, EffectId, Entry, EntryId, Environment, Inbound, InboundTarget, Next, Operation,
+    Outcome, Settled,
+};
+
+use super::{Called, Caller, Running, Sim, Then, journal_line};
+
+/// A run of the simulated driver, by the order it started in: the
+/// operation the test runs first.
+pub(super) type RunId = usize;
+
+/// The operation the test runs.
+pub(super) const ROOT: RunId = 0;
+
+/// One frame of a call's execution context: the run, and its effect whose
+/// call this is.
+#[derive(Clone, Debug)]
+pub(super) struct Frame {
+    pub(super) run: RunId,
+    pub(super) effect: EffectId,
+}
+
+impl Frame {
+    fn of(run: RunId, effect: &Effect) -> Self {
+        Self {
+            run,
+            effect: effect.id,
+        }
+    }
+}
+
+/// A call into a room a hook or a channel made, until its caller is
+/// answered.
+pub(super) struct Call {
+    /// The context the call is made within, the innermost frame last: the
+    /// caller's context and its own frame, or none for a call made outside
+    /// it.
+    pub(super) context: Vec<Frame>,
+    /// The frame of the effect whose call this is.
+    pub(super) frame: Frame,
+    /// Whether the caller waits for the call's result.
+    pub(super) waits: bool,
+    pub(super) label: String,
+    pub(super) caller: Caller,
+}
+
+/// What a run takes in before its next poll, in the order it came.
+enum Mail {
+    /// The answer to one of its effects.
+    Answer(EffectId, Outcome),
+    /// A call into its room, made within its effect `origin`, for it to
+    /// adopt.
+    Call {
+        entry: Entry,
+        origin: EffectId,
+        call: Call,
+    },
+}
+
+/// What the driver keeps of one run.
+pub(super) struct RunState {
+    pub(super) kind: Running,
+    /// The context the run is made within, the innermost frame last.
+    context: Vec<Frame>,
+    mail: VecDeque<Mail>,
+    /// Whether the run was polled yet.
+    started: bool,
+    done: bool,
+    /// Its effects not answered yet.
+    outstanding: BTreeSet<EffectId>,
+    /// The entries it adopted, until they are settled.
+    pub(super) adopted: Vec<(EntryId, Call)>,
+    /// The call an arrival is, until its caller is answered.
+    serves: Option<Call>,
+    pub(super) locks: BTreeSet<RoomId>,
+    pub(super) lanes: BTreeSet<RoomId>,
+    pub(super) tickets: BTreeSet<RoomId>,
+    /// The rooms whose ticket's turn came.
+    pub(super) admitted: BTreeSet<RoomId>,
+}
+
+impl RunState {
+    fn new(kind: Running, context: Vec<Frame>, serves: Option<Call>) -> Self {
+        Self {
+            kind,
+            context,
+            mail: VecDeque::new(),
+            started: false,
+            done: false,
+            outstanding: BTreeSet::new(),
+            adopted: Vec::new(),
+            serves,
+            locks: BTreeSet::new(),
+            lanes: BTreeSet::new(),
+            tickets: BTreeSet::new(),
+            admitted: BTreeSet::new(),
+        }
+    }
+
+    /// Whether the run has something to take in.
+    fn is_ready(&self) -> bool {
+        !self.done && (!self.started || !self.mail.is_empty())
+    }
+}
+
+/// What a request that waits waits for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Awaited {
+    Lock(RoomId),
+    Lane(RoomId),
+    /// The turn of the run's ticket of the room.
+    Turn(RoomId),
+}
+
+/// A request that waits for what another run holds.
+#[derive(Debug)]
+pub(super) struct Wait {
+    pub(super) run: RunId,
+    pub(super) effect: EffectId,
+    pub(super) deadline: Option<Timestamp>,
+    pub(super) awaited: Awaited,
+}
+
+impl Awaited {
+    /// The trace line of the request once it is answered.
+    fn line(&self) -> String {
+        match self {
+            Self::Lock(room_id) => format!("lock {room_id}"),
+            Self::Lane(room_id) => format!("enter lane {room_id}"),
+            Self::Turn(room_id) => format!("await ticket {room_id}"),
+        }
+    }
+}
+
+/// What the driver holds for the runs: the room locks and lanes by
+/// holder, each room's tickets in the order they were taken, and the
+/// requests waiting.
+#[derive(Debug, Default)]
+pub(super) struct Holders {
+    locks: BTreeMap<RoomId, RunId>,
+    lanes: BTreeMap<RoomId, RunId>,
+    tickets: BTreeMap<RoomId, Vec<RunId>>,
+    waits: Vec<Wait>,
+}
+
+impl Sim {
+    /// Runs `operation` to its end, and every arrival its calls make to
+    /// theirs, executing every effect they ask for, and completing an
+    /// effect whose call made an entry or an arrival once its caller is
+    /// answered.
+    pub(crate) fn run<O: Operation>(&mut self, operation: O) -> O::Output {
+        self.runs = vec![RunState::new(self.running, Vec::new(), None)];
+        self.holders = Holders::default();
+        let mut root = operation;
+        let mut arrivals: Vec<Inbound> = Vec::new();
+        let mut output = None;
+        while let Some(run) = self.next_run() {
+            self.current = run;
+            if let Some(index) = run.checked_sub(1) {
+                let arrival = arrivals.get_mut(index).unwrap();
+                if let Some(called) = self.advance(arrival) {
+                    self.arrived(run, &called);
+                }
+            } else if let Some(done) = self.advance(&mut root) {
+                output = Some(done);
+            }
+            arrivals.append(&mut self.spawned);
+        }
+        output.unwrap_or_else(|| panic!("the operation never ended"))
+    }
+
+    /// The state of the run `run`.
+    pub(super) fn state(&self, run: RunId) -> &RunState {
+        self.runs.get(run).unwrap()
+    }
+
+    pub(super) fn state_mut(&mut self, run: RunId) -> &mut RunState {
+        self.runs.get_mut(run).unwrap()
+    }
+
+    /// The newest run with something to take in; once none has, a request
+    /// waiting with a deadline is given up on; `None` once every run is over.
+    fn next_run(&mut self) -> Option<RunId> {
+        loop {
+            if let Some(run) = (0..self.runs.len())
+                .rev()
+                .find(|run| self.state(*run).is_ready())
+            {
+                return Some(run);
+            }
+            if self.runs.iter().all(|run| run.done) {
+                return None;
+            }
+            assert!(
+                self.expire_first_wait(),
+                "the runs wait for each other: {:?}",
+                self.holders.waits
+            );
+        }
+    }
+
+    /// Hands the current run what came for it, then polls it once and
+    /// executes the effects it asks for; its output once it is over.
+    fn advance<O: Operation>(&mut self, operation: &mut O) -> Option<O::Output> {
+        let run = self.current;
+        self.state_mut(run).started = true;
+        while let Some(mail) = self.state_mut(run).mail.pop_front() {
+            match mail {
+                Mail::Answer(effect, outcome) => {
+                    self.state_mut(run).outstanding.remove(&effect);
+                    operation.complete(effect, outcome).unwrap();
+                }
+                Mail::Call {
+                    entry,
+                    origin,
+                    call,
+                } => self.offer(operation, entry, origin, call),
+            }
+        }
+        let step = operation.poll(&mut self.env);
+        self.journal.extend(step.notices.iter().map(journal_line));
+        self.notices.extend(step.notices);
+        for settled in step.settled {
+            self.answer_settled(settled);
+        }
+        match step.next {
+            Next::Ready(output) => {
+                self.end_run();
+                return Some(output);
+            }
+            Next::Waiting => {
+                let state = self.state(run);
+                assert!(
+                    !state.mail.is_empty() || !state.outstanding.is_empty(),
+                    "the operation waits for nothing the driver does"
+                );
+            }
+            Next::Effects(effects) => {
+                for effect in effects {
+                    self.state_mut(run).outstanding.insert(effect.id);
+                    self.execute_effect(effect);
+                }
+            }
+        }
+        None
+    }
+
+    /// Posts `outcome`, the answer to `effect`, to the run `run`.
+    pub(super) fn post(&mut self, run: RunId, effect: EffectId, outcome: Outcome) {
+        self.state_mut(run)
+            .mail
+            .push_back(Mail::Answer(effect, outcome));
+    }
+
+    /// Hands `entry`, made by `call`, to the run its caller's context names
+    /// for its room, or runs it as an arrival when none does.
+    fn place_call(&mut self, entry: Entry, call: Call) {
+        match self.taker(&call.context, entry.room_id()) {
+            Some(frame) => self.state_mut(frame.run).mail.push_back(Mail::Call {
+                entry,
+                origin: frame.effect,
+                call,
+            }),
+            None => self.spawn(entry, call),
+        }
+    }
+
+    /// The frame of `context` whose run takes a call into `room_id`: the
+    /// innermost whose run holds the room's lane.
+    fn taker(&self, context: &[Frame], room_id: &RoomId) -> Option<Frame> {
+        context
+            .iter()
+            .rev()
+            .find(|frame| self.state(frame.run).lanes.contains(room_id))
+            .cloned()
+    }
+
+    /// The context a call made within `frame` runs in: its run's, then the
+    /// frame.
+    fn context_of(&self, frame: &Frame) -> Vec<Frame> {
+        let mut context = self.state(frame.run).context.clone();
+        context.push(frame.clone());
+        context
+    }
+
+    /// The current run adopts `entry`, or declines it, which then runs as
+    /// an arrival.
+    fn offer<O: Operation>(
+        &mut self,
+        operation: &mut O,
+        entry: Entry,
+        origin: EffectId,
+        call: Call,
+    ) {
+        match operation.adopt(entry, origin) {
+            Ok(id) => {
+                let run = self.current;
+                self.state_mut(run).adopted.push((id, call));
+            }
+            Err(entry) => self.spawn(*entry, call),
+        }
+    }
+
+    /// Starts `entry` as an inbound operation of its own, within the
+    /// context `call` was made in, answering `call` once it is over.
+    fn spawn(&mut self, entry: Entry, call: Call) {
+        let config = self.shared_config();
+        let operation = match entry {
+            Entry::Message {
+                room_id,
+                organization_id,
+                message,
+            } => Inbound::new(
+                config,
+                InboundTarget::Room(room_id),
+                organization_id,
+                *message,
+            ),
+            Entry::Direct {
+                room_id,
+                organization_id,
+                event,
+            } => Inbound::inject(config, room_id, organization_id, *event),
+        };
+        let context = call.context.clone();
+        self.runs
+            .push(RunState::new(Running::Inbound, context, Some(call)));
+        self.spawned.push(operation);
+    }
+
+    /// Answers the call that made `settled`'s entry, the current run's.
+    fn answer_settled(&mut self, settled: Settled) {
+        let run = self.current;
+        let index = self
+            .state(run)
+            .adopted
+            .iter()
+            .position(|(entry, _)| *entry == settled.entry)
+            .unwrap_or_else(|| panic!("an entry settled that no call made: {settled:?}"));
+        let (_, call) = self.state_mut(run).adopted.remove(index);
+        self.note(format!("{} settled", call.label));
+        if call.waits {
+            self.answer_call(&call, &settled.result);
+        }
+        self.settled.push(settled);
+    }
+
+    /// The arrival `run` is over: its caller is answered when it waits.
+    fn arrived(&mut self, run: RunId, called: &Called) {
+        let Some(call) = self.state_mut(run).serves.take() else {
+            return;
+        };
+        if call.waits {
+            self.answer_call(&call, called);
+        }
+    }
+
+    /// Completes the effect whose call is `call` with what its caller
+    /// answers from `called`.
+    fn answer_call(&mut self, call: &Call, called: &Called) {
+        let outcome = self.answer_from(&call.caller, called);
+        self.note(format!("{} returns", call.label));
+        self.post(call.frame.run, call.frame.effect, outcome);
+    }
+
+    /// Writes `line` to the trace and the journal.
+    pub(super) fn note(&mut self, line: String) {
+        self.trace.push(line.clone());
+        self.journal.push(line);
+    }
+
+    /// The current run is over: every entry it adopted is settled, and it
+    /// holds nothing.
+    fn end_run(&mut self) {
+        let run = self.current;
+        assert!(
+            self.state(run).adopted.is_empty(),
+            "the operation ended with an entry unsettled"
+        );
+        let state = self.state(run);
+        assert!(
+            state.locks.is_empty(),
+            "the operation ended holding the lock of {:?}",
+            state.locks
+        );
+        assert!(
+            state.lanes.is_empty(),
+            "the operation ended holding the lane of {:?}",
+            state.lanes
+        );
+        assert!(
+            state.tickets.is_empty(),
+            "the operation ended holding the ticket of {:?}",
+            state.tickets
+        );
+        self.state_mut(run).done = true;
+    }
+
+    /// Takes the room's lock for the current run, or makes `effect` wait
+    /// for the run that holds it.
+    pub(super) fn acquire(
+        &mut self,
+        effect: EffectId,
+        room_id: RoomId,
+        deadline: Option<Timestamp>,
+    ) -> Option<Outcome> {
+        let run = self.current;
+        let state = self.state(run);
+        assert!(
+            !state.locks.contains(&room_id),
+            "the room lock was taken twice"
+        );
+        // An entry adopted from the operation's own work takes no ticket and
+        // commits ahead of the event whose check emitted it (RFC §9.5.1).
+        assert!(
+            !state.tickets.contains(&room_id)
+                || state.admitted.contains(&room_id)
+                || !state.adopted.is_empty(),
+            "a ticketed event took the room lock before its turn"
+        );
+        if self.holders.locks.contains_key(&room_id) {
+            return self.wait(effect, deadline, Awaited::Lock(room_id));
+        }
+        self.take_lock(run, room_id);
+        Some(Outcome::Locked)
+    }
+
+    /// Gives `run` the room's lock. A sender recorded meanwhile on the room
+    /// is recorded just before the lock is granted, as a concurrent message
+    /// that held it first would have.
+    fn take_lock(&mut self, run: RunId, room_id: RoomId) {
+        self.trace.push(format!("lock {room_id}"));
+        self.assert_in_lane(run, &room_id, "took the room lock");
+        self.record_meanwhile(&room_id);
+        self.holders.locks.insert(room_id.clone(), run);
+        self.state_mut(run).locks.insert(room_id);
+    }
+
+    /// Lets the current run's lock of the room go, which it must hold.
+    pub(super) fn let_lock_go(&mut self, room_id: &RoomId) {
+        let run = self.current;
+        assert!(
+            self.state_mut(run).locks.remove(room_id),
+            "the room lock was released without being held"
+        );
+        self.holders.locks.remove(room_id);
+        self.grant_waits();
+    }
+
+    /// Enters the room's lane for the current run, or makes `effect` wait
+    /// for the run that holds it. An inbound operation holds one lane at a
+    /// time.
+    pub(super) fn enter(
+        &mut self,
+        effect: EffectId,
+        room_id: RoomId,
+        deadline: Option<Timestamp>,
+    ) -> Option<Outcome> {
+        let run = self.current;
+        let state = self.state(run);
+        assert!(
+            state.kind == Running::Other || state.lanes.is_empty(),
+            "an inbound operation entered a second lane"
+        );
+        assert!(
+            !state.lanes.contains(&room_id),
+            "the room's lane was entered twice"
+        );
+        if self.holders.lanes.contains_key(&room_id) {
+            return self.wait(effect, deadline, Awaited::Lane(room_id));
+        }
+        self.take_lane(run, room_id);
+        Some(Outcome::Entered)
+    }
+
+    fn take_lane(&mut self, run: RunId, room_id: RoomId) {
+        self.trace.push(format!("enter lane {room_id}"));
+        self.holders.lanes.insert(room_id.clone(), run);
+        self.state_mut(run).lanes.insert(room_id);
+    }
+
+    /// Lets the current run's lane of the room go, which it must hold.
+    pub(super) fn let_lane_go(&mut self, room_id: &RoomId) {
+        let run = self.current;
+        assert!(
+            self.state_mut(run).lanes.remove(room_id),
+            "the room's lane was left without being held"
+        );
+        self.holders.lanes.remove(room_id);
+        self.grant_waits();
+    }
+
+    /// Takes the room's next ticket for the current run: it never waits.
+    pub(super) fn take_a_ticket(&mut self, room_id: RoomId) {
+        let run = self.current;
+        assert!(
+            self.state_mut(run).tickets.insert(room_id.clone()),
+            "the room's ticket was taken twice"
+        );
+        self.holders.tickets.entry(room_id).or_default().push(run);
+    }
+
+    /// The turn of the current run's ticket of the room: at once when no
+    /// earlier ticket is held, once they are released otherwise.
+    pub(super) fn turn(
+        &mut self,
+        effect: EffectId,
+        room_id: RoomId,
+        deadline: Option<Timestamp>,
+    ) -> Option<Outcome> {
+        let run = self.current;
+        assert!(
+            self.state(run).tickets.contains(&room_id),
+            "a ticket's turn was awaited without the ticket"
+        );
+        if !self.is_first(run, &room_id) {
+            return self.wait(effect, deadline, Awaited::Turn(room_id));
+        }
+        self.admit(run, room_id);
+        Some(Outcome::Admitted)
+    }
+
+    fn admit(&mut self, run: RunId, room_id: RoomId) {
+        self.trace.push(format!("await ticket {room_id}"));
+        self.state_mut(run).admitted.insert(room_id);
+    }
+
+    /// Whether no ticket of the room taken before `run`'s is held.
+    fn is_first(&self, run: RunId, room_id: &RoomId) -> bool {
+        self.holders
+            .tickets
+            .get(room_id)
+            .and_then(|order| order.first())
+            .is_none_or(|first| *first == run)
+    }
+
+    /// Lets the current run's ticket of the room go, which it must hold.
+    pub(super) fn let_ticket_go(&mut self, room_id: &RoomId) {
+        let run = self.current;
+        let state = self.state_mut(run);
+        assert!(
+            state.tickets.remove(room_id),
+            "the room's ticket was released without being held"
+        );
+        state.admitted.remove(room_id);
+        if let Some(order) = self.holders.tickets.get_mut(room_id) {
+            order.retain(|holder| *holder != run);
+        }
+        self.grant_waits();
+    }
+
+    /// Makes `effect` of the current run wait for `awaited`.
+    fn wait(
+        &mut self,
+        effect: EffectId,
+        deadline: Option<Timestamp>,
+        awaited: Awaited,
+    ) -> Option<Outcome> {
+        self.holders.waits.push(Wait {
+            run: self.current,
+            effect,
+            deadline,
+            awaited,
+        });
+        None
+    }
+
+    /// Grants every waiting request whose holder let go of what it waits
+    /// for, in the order they came; one past its deadline is given up on.
+    fn grant_waits(&mut self) {
+        while let Some(index) = self
+            .holders
+            .waits
+            .iter()
+            .position(|wait| self.is_free(wait))
+        {
+            let wait = self.holders.waits.remove(index);
+            let now = self.env.now();
+            if wait.deadline.is_some_and(|deadline| now > deadline) {
+                self.give_up(&wait);
+                continue;
+            }
+            let outcome = match wait.awaited {
+                Awaited::Lock(room_id) => {
+                    self.take_lock(wait.run, room_id);
+                    Outcome::Locked
+                }
+                Awaited::Lane(room_id) => {
+                    self.take_lane(wait.run, room_id);
+                    Outcome::Entered
+                }
+                Awaited::Turn(room_id) => {
+                    self.admit(wait.run, room_id);
+                    Outcome::Admitted
+                }
+            };
+            self.post(wait.run, wait.effect, outcome);
+        }
+    }
+
+    /// Whether what `wait` waits for is free for it.
+    fn is_free(&self, wait: &Wait) -> bool {
+        match &wait.awaited {
+            Awaited::Lock(room_id) => !self.holders.locks.contains_key(room_id),
+            Awaited::Lane(room_id) => !self.holders.lanes.contains_key(room_id),
+            Awaited::Turn(room_id) => self.is_first(wait.run, room_id),
+        }
+    }
+
+    /// Gives up on the waiting request whose deadline comes first, the
+    /// clock moved to it (RFC §13.6); `false` when none has a deadline.
+    fn expire_first_wait(&mut self) -> bool {
+        let Some(index) = self
+            .holders
+            .waits
+            .iter()
+            .enumerate()
+            .filter_map(|(index, wait)| wait.deadline.map(|deadline| (deadline, index)))
+            .min()
+            .map(|(_, index)| index)
+        else {
+            return false;
+        };
+        let wait = self.holders.waits.remove(index);
+        if let Some(deadline) = wait.deadline {
+            let now = self.env.now();
+            self.env
+                .advance(deadline.duration_since(now).unwrap_or_default());
+        }
+        self.give_up(&wait);
+        true
+    }
+
+    /// Answers `wait` past its deadline: what it waited for is not taken.
+    fn give_up(&mut self, wait: &Wait) {
+        self.trace
+            .push(format!("{} deadline passed", wait.awaited.line()));
+        self.post(wait.run, wait.effect, Outcome::DeadlinePassed);
+    }
+
+    /// Executes `effect` for the current run, or, for a hook or a channel
+    /// that calls into its room, hands the call on and keeps the effect
+    /// outstanding until its caller is answered.
+    fn execute_effect(&mut self, effect: Effect) {
+        let run = self.current;
+        if let Some(room) = &effect.locked {
+            assert!(
+                self.state(run).locks.contains(room),
+                "a request made under the lock of {room} while the lock is free"
+            );
+        }
+        let traced = self.trace.len();
+        if let Some((caller, entries)) = self.reentry(&effect) {
+            self.make_calls(&effect, &caller, entries);
+            return;
+        }
+        let outcome = self.execute_timed(effect.id, effect.request, effect.deadline);
+        self.journal.extend(self.trace.iter().skip(traced).cloned());
+        if let Some(outcome) = outcome {
+            self.post(run, effect.id, outcome);
+        }
+    }
+
+    /// Hands on the calls a hook or a channel makes while it runs `effect`,
+    /// and answers `effect` at once for a caller that does not wait.
+    fn make_calls(&mut self, effect: &Effect, caller: &Caller, entries: Vec<Entry>) {
+        let run = self.current;
+        let label = self.label(&effect.request);
+        let frame = Frame::of(run, effect);
+        let (context, at_once) = match self.then_of(caller) {
+            Then::Waits => (self.context_of(&frame), None),
+            Then::AtOnce(outcome) => (self.context_of(&frame), Some(outcome)),
+            Then::Apart(outcome) => (Vec::new(), Some(outcome)),
+        };
+        assert!(
+            at_once.is_some() || entries.len() == 1,
+            "a caller that waits makes one call"
+        );
+        for entry in entries {
+            self.note(format!("{label} calls {}", super::entry_name(&entry)));
+            let call = Call {
+                context: context.clone(),
+                frame: frame.clone(),
+                waits: at_once.is_none(),
+                label: label.clone(),
+                caller: caller.clone(),
+            };
+            self.place_call(entry, call);
+        }
+        if let Some(outcome) = at_once {
+            self.note(format!("{label} returns"));
+            self.post(run, effect.id, outcome);
+        }
+    }
+
+    /// Checks that `run`, when it is an inbound operation, holds the lane
+    /// of `room_id` before it does `what` there: the lane comes before the
+    /// lock (RFC §10.2).
+    pub(super) fn assert_in_lane(&self, run: RunId, room_id: &RoomId, what: &str) {
+        let state = self.state(run);
+        if state.kind == Running::Inbound {
+            assert!(
+                state.lanes.contains(room_id),
+                "an inbound operation {what} outside the room's lane"
+            );
+        }
+    }
+}
