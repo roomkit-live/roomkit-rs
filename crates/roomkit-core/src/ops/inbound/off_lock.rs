@@ -19,8 +19,9 @@
 //! it on every path (`holds`). Within one process the room's lane already
 //! runs the room's calls one at a time (decision 4 of step 2), so two
 //! checks of one room do not overlap yet; their tickets are real effects
-//! all the same. A response, a hook's injected event and a refused record
-//! run every hook under the lock (RFC §9.5.1).
+//! all the same. A response, a hook's injected event, a refused record and
+//! an entry adopted from the room's own work run every hook under the lock,
+//! and take no ticket (RFC §9.5.1, gap G-070).
 
 use std::mem;
 
@@ -161,7 +162,7 @@ impl OffLockCheck {
     /// Runs the next off-lock hook or, once a hook blocked or none is
     /// left, waits for every earlier ticket of the room.
     fn next_hook(&mut self, cx: &mut Cx<'_>, mut run: Box<HookRun>) -> Checking {
-        if let Some(effect) = run.ask_next(cx, &self.event, &self.context, self.deadline) {
+        if let Some(effect) = run.ask_next(cx, &self.event, &self.context, self.deadline, None) {
             self.state = State::Running { effect, run };
             return Progress::Waiting;
         }

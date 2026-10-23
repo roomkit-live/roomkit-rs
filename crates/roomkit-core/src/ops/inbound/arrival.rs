@@ -99,6 +99,9 @@ pub(super) struct Arrival {
     routes: u8,
     /// The room whose lane the arrival holds.
     lane: Option<RoomId>,
+    /// The room of a message the operation adopted, whose lane the
+    /// operation holds already (gap G-070).
+    within: Option<RoomId>,
     state: State,
 }
 
@@ -162,7 +165,30 @@ impl Arrival {
             },
             routes: 0,
             lane: None,
+            within: None,
             state: State::Start,
+        }
+    }
+
+    /// The arrival of `message`, resolved on `channel`, into `room_id`,
+    /// whose lane the operation that adopted the message holds already (RFC
+    /// §13.5, gap G-070): step 2 runs at once, with no deadline, and the
+    /// arrival enters and leaves no lane.
+    pub(super) fn within_lane(
+        room_id: RoomId,
+        organization_id: Option<String>,
+        channel: ChannelDeclaration,
+        message: InboundMessage,
+    ) -> Self {
+        Self {
+            within: Some(room_id.clone()),
+            ..Self::new(
+                InboundTarget::Room(room_id),
+                organization_id,
+                channel,
+                message,
+                None,
+            )
         }
     }
 
@@ -183,6 +209,23 @@ impl Arrival {
             | State::Leaving(_)
             | State::Parsing { .. }
             | State::Done => self.lane.as_ref(),
+        }
+    }
+
+    /// Whether the arrival waits for `effect`.
+    pub(super) fn awaits(&self, effect: EffectId) -> bool {
+        match &self.state {
+            State::Resolving(awaited)
+            | State::Routing(awaited)
+            | State::Leaving(awaited)
+            | State::Entering {
+                effect: awaited, ..
+            }
+            | State::Parsing {
+                effect: awaited, ..
+            } => *awaited == effect,
+            State::Naming(step) => step.awaits(effect),
+            State::Start | State::Done => false,
         }
     }
 
@@ -310,9 +353,9 @@ impl Arrival {
     }
 
     /// Enters the lane of the room step 2 works on, before anything is read
-    /// of it.
+    /// of it; within a lane held already, step 2 starts at once.
     fn enter(&mut self, cx: &mut Cx<'_>, room_id: RoomId, mode: Mode) {
-        let step = Box::new(NamedRoom::new(
+        let mut step = Box::new(NamedRoom::new(
             room_id.clone(),
             mode,
             self.organization_id.clone(),
@@ -320,6 +363,11 @@ impl Arrival {
             self.sender.clone(),
             self.deadline,
         ));
+        if self.within.is_some() {
+            step.start(cx);
+            self.state = State::Naming(step);
+            return;
+        }
         let effect = cx
             .io
             .issue_within(Request::EnterLane { room_id }, self.deadline);
@@ -444,7 +492,7 @@ impl Arrival {
             })
         })?;
         let mut event = stamp::stamp_trigger(*parsed, &self.message, &self.channel, id);
-        if let Some(room_id) = &self.lane {
+        if let Some(room_id) = self.lane.as_ref().or(self.within.as_ref()) {
             event.room_id = room_id.clone();
         }
         Ok(Arrived { event, context })

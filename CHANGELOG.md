@@ -198,8 +198,70 @@ publishes a release.
 - `Effect::deadline` and `Outcome::DeadlinePassed`: an effect may carry the
   instant past which the driver gives up on it; the tokio driver waits for
   it on tokio's clock, whatever clock the kit has.
+- Direct injection (RFC §10.5): `RoomKit::send_event(room_id, DirectEvent)`
+  and `Inbound::inject` run an event through the inbound pipeline without a
+  channel's parse: its off-lock check and ticket, its hooks, its source's
+  permissions, an edit's or a delete's target, its idempotency key (per room
+  and channel), its commit, delivery and reentry passes. Its source is the
+  channel it names, `INBOUND`, or `OUTBOUND` for an intelligence channel. It
+  returns the committed event, a record stored `BLOCKED` included; a refusal
+  before the commit is raised with nothing written,
+  `InboundError::Refused { reason }` (`room_closed`, `process_timeout`, an
+  edit's or a delete's refusal, an instruction's). A missing room is not
+  created, and an unbound channel's event is stored `source_unbound` (gap
+  G-069). `model::DirectEvent`.
+- A record outside the pipeline (RFC §10.5): `RoomKit::commit_event(room_id,
+  event, organization_id)` and the core's `CommitRecord` commit a record
+  under the room lock with the next index, and nothing else: no hook, no
+  delivery, no framework event. It is refused for another room's id before
+  anything is read, not found in another organization's room, and refused
+  by a status that refuses events (`MutationError::OtherRoom`,
+  `MutationError::Refused`). It moves the room's counters, not its activity
+  (gap G-071).
+- The reentrant lock (RFC §13.5, §9.5.1 Reentrance, §10.1 step 18): code
+  that runs inside a room's own work calls into the room without waiting for
+  itself. A lifecycle change, a direct mutation or `commit_event` made from a
+  hook under the lock takes the lock again at once, within the hook's
+  execution context, a tokio task-local the driver scopes into every call it
+  makes. `send_event` or `process_inbound` naming the room, made by a hook, a
+  turn, a delivery or an awaited `ON_ROOM_CREATED` hook, is adopted by the
+  call that holds the room's lane: from a locked hook it commits ahead of the
+  event being decided, which takes the next index; from anywhere else it
+  commits beside the running work; either way its caller receives it at its
+  commit, and its delivery follows in the lane. A call that would wait for
+  what its own context holds fails with `KitError::Reentrant` (gap G-070).
+- The protocol's adoption: `Operation::adopt(entry, origin)`, `Entry`,
+  `EntryId`, `Step::settled` and `Settled`; `Effect::locked`, the room lock
+  an operation holds on a request's behalf.
+- `roomkit::keep_context(future)`: a task a hook or a turn spawns and
+  awaits as its own keeps the call's execution context (RFC §13.5).
+  `KitError::Reentrant` and `KitError::Abandoned`.
 
 ### Changed
+
+- The `roomkit` driver completes each effect as it finishes and polls the
+  operation between completions, a lock, a lane or a ticket's turn waited
+  for beside the calls, instead of waiting for a step's every effect.
+  `Next::Waiting` is answered by waiting for the next completion.
+- A pass that ran a hook under the room lock reads the room again once its
+  hooks are over (`LoadContext`): the event takes the room's next index then,
+  a room a hook closed refuses it with nothing stored, and the source is
+  checked on the bindings as the hooks left them. A pass that ran no such
+  hook decides on its gate's read. `Request::LoadBindings` and
+  `Outcome::Bindings` are removed.
+- A record stored `BLOCKED` keeps the visibility step 12 would have given it
+  when its source is bound, a hook's injected event its own (gap G-036); a
+  record a closed room refuses emits `room_refused_event` (gap G-043).
+- An inbound message carrying the visibility `internal` is refused,
+  `InboundError::InternalVisibility`, and a hook's modify that writes it is
+  put back to the original's (gap G-041).
+- A message whose idempotency key replays an event no longer clears the
+  lane, which may hold an adopted entry's delivery set.
+- A cascade that fails or passes its deadline still delivers every event it
+  committed: the delivery sets already queued run before the call ends
+  (RFC §13.6); no pass runs any more. They were dropped.
+- A pass that ran a hook under the room lock checks an edit's or a delete's
+  target again before its commit.
 
 - `metadata.instruction` is the pipeline's alone: a parser's, a caller's or
   a channel's key is stripped from an inbound, an injected event and a

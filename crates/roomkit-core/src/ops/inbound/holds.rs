@@ -3,6 +3,11 @@
 //! trigger's pass (RFC §9.5.1), and the room's delivery lane, from the
 //! moment the room is known to the call's end (RFC §10.2).
 //!
+//! A call ends once every entry it adopted is settled and every event it
+//! committed delivered (gap G-070): an adopted entry's caller is answered
+//! exactly once, and the lane is not left while an entry still works in the
+//! room or a committed event waits for its delivery set.
+//!
 //! The ticket is released once the trigger's pass is over, the room lock
 //! released already: committed, blocked, refused, a duplicate, an edit
 //! refused, failed or past the call's deadline. A call that ends before its
@@ -26,12 +31,32 @@ pub(super) enum AfterTicket {
 }
 
 impl Machine {
-    /// Ends the operation with `outcome`, once the ticket the call holds is
-    /// released and the room's lane is left: every path that took them lets
-    /// them go.
+    /// Ends the operation with `outcome`, once every entry it adopted is
+    /// settled, the ticket the call holds released and the room's lane
+    /// left: every path that took them lets them go.
     pub(super) fn end(&mut self, cx: &mut Cx<'_>, outcome: Result<InboundResult, InboundError>) {
-        self.lane.clear();
-        self.active = None;
+        self.stop_cascade();
+        if !self.adopted.is_idle() || !self.lane.is_empty() || self.active.is_some() {
+            self.stage = Stage::Ending(Box::new(outcome));
+            return;
+        }
+        self.let_go(cx, outcome);
+    }
+
+    /// Goes on ending once the last adopted entry is settled and the last
+    /// committed event delivered.
+    pub(super) fn end_once_settled(&mut self, cx: &mut Cx<'_>) {
+        let over = self.adopted.is_idle() && self.lane.is_empty() && self.active.is_none();
+        if !matches!(self.stage, Stage::Ending(_)) || !over {
+            return;
+        }
+        if let Stage::Ending(outcome) = std::mem::replace(&mut self.stage, Stage::Done) {
+            self.let_go(cx, *outcome);
+        }
+    }
+
+    /// Releases the ticket the call holds, then leaves the lane.
+    fn let_go(&mut self, cx: &mut Cx<'_>, outcome: Result<InboundResult, InboundError>) {
         if self.ticket.is_some() {
             return self.release_ticket(cx, AfterTicket::End(Box::new(outcome)));
         }

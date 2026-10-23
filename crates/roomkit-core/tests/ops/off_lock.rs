@@ -111,7 +111,7 @@ mod an_off_lock_hook {
                 "lock room_1",
                 "load_context room_1",
                 "hook policy",
-                "load_bindings room_1",
+                "load_context room_1",
                 "commit #0 sms delivered \"Bonjour\"",
                 "release room_1",
                 "release ticket room_1",
@@ -511,7 +511,7 @@ mod another_pass {
             "load_context room_1",
             "hook scanner",
             "hook policy",
-            "load_bindings room_1",
+            "load_context room_1",
         ]
     }
 
@@ -655,14 +655,15 @@ mod the_ticket {
             .trace
             .iter()
             .map(String::as_str)
-            .skip_while(|line| *line != "load_bindings room_1")
+            .skip_while(|line| *line != "hook policy")
+            .skip(1)
             .take(3)
             .collect();
         assert_eq!(
             (decided, ticket_lines(&sim)),
             (
                 vec![
-                    "load_bindings room_1",
+                    "load_context room_1",
                     "release room_1",
                     "release ticket room_1"
                 ],

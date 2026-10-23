@@ -1031,7 +1031,8 @@ mod the_status_gate {
     }
 
     /// RFC §8.3: the record of an agent not asked at the chain-depth limit
-    /// goes through the gate too, and a closed room stores nothing.
+    /// goes through the gate too, and a closed room stores nothing; the
+    /// refusal is reported as the framework's own re-injection (gap G-043).
     #[test]
     fn refuses_a_record_whose_room_s_close_fell_due_during_the_delivery() {
         let mut sim = timed_room();
@@ -1053,7 +1054,8 @@ mod the_status_gate {
                     "delivery_succeeded",
                     "event_processed",
                     "room_paused",
-                    "room_closed"
+                    "room_closed",
+                    "room_refused_event"
                 ]
                 .map(str::to_owned)
                 .to_vec(),

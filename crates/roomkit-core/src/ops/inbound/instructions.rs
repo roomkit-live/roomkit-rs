@@ -22,7 +22,8 @@
 
 use super::{InboundError, InboundResult};
 use crate::model::{
-    ChannelCategory, ChannelId, EventType, InboundMessage, InjectedEvent, RoomEvent,
+    ChannelCategory, ChannelId, DirectEvent, EventType, InboundMessage, InjectedEvent, RoomEvent,
+    Visibility,
 };
 use crate::ops::KitConfig;
 use crate::rules::instructions::{self, InstructionRefusal};
@@ -37,23 +38,60 @@ pub(super) enum Admission {
     Refused(InstructionRefusal),
 }
 
-/// Admits `message`, or refuses it, before anything is read (RFC §10.1.1
-/// rules 1, 2 and 7): an instruction must name a registered intelligence
-/// channel and carry no idempotency key (gap G-065).
+/// What an entry asks for that is checked before anything is read.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Asked<'entry> {
+    event_type: EventType,
+    standalone: bool,
+    visibility: &'entry Visibility,
+    addressed_to: Option<&'entry [ChannelId]>,
+    idempotency_key: Option<&'entry str>,
+}
+
+impl<'entry> From<&'entry InboundMessage> for Asked<'entry> {
+    fn from(message: &'entry InboundMessage) -> Self {
+        Self {
+            event_type: message.event_type,
+            standalone: message.standalone,
+            visibility: &message.visibility,
+            addressed_to: message.addressed_to.as_deref(),
+            idempotency_key: message.idempotency_key.as_deref(),
+        }
+    }
+}
+
+impl<'entry> From<&'entry DirectEvent> for Asked<'entry> {
+    fn from(event: &'entry DirectEvent) -> Self {
+        Self {
+            event_type: event.event_type,
+            standalone: event.standalone,
+            visibility: &event.visibility,
+            addressed_to: event.addressed_to.as_deref(),
+            idempotency_key: event.idempotency_key.as_deref(),
+        }
+    }
+}
+
+/// Admits an entry, a message or a directly injected event, or refuses it
+/// before anything is read (RFC §10.1.1 rules 1, 2 and 7): an instruction
+/// must name a registered intelligence channel and carry no idempotency key
+/// (gap G-065).
 ///
 /// # Errors
 ///
 /// Returns [`InboundError::StandaloneOutsideInstruction`] for `standalone`
 /// on any other event type: it is raised, since the event would otherwise
-/// land as a participant's line without the isolation it asked for.
-pub(super) fn admit(
-    config: &KitConfig,
-    message: &InboundMessage,
-) -> Result<Admission, InboundError> {
-    if message.standalone && !instructions::may_stand_alone(message.event_type) {
+/// land as a participant's line without the isolation it asked for; and
+/// [`InboundError::InternalVisibility`] for the visibility `internal`, which
+/// only the framework writes (gap G-041).
+pub(super) fn admit(config: &KitConfig, asked: Asked<'_>) -> Result<Admission, InboundError> {
+    if *asked.visibility == Visibility::Internal {
+        return Err(InboundError::InternalVisibility);
+    }
+    if asked.standalone && !instructions::may_stand_alone(asked.event_type) {
         return Err(InboundError::StandaloneOutsideInstruction);
     }
-    if message.event_type != EventType::Instruction {
+    if asked.event_type != EventType::Instruction {
         return Ok(Admission::Admitted);
     }
     let is_intelligence = |channel_id: &ChannelId| {
@@ -61,11 +99,7 @@ pub(super) fn admit(
             .channel(channel_id)
             .is_some_and(|channel| channel.category == ChannelCategory::Intelligence)
     };
-    let refusal = instructions::refusal(
-        message.addressed_to.as_deref(),
-        message.idempotency_key.as_deref(),
-        is_intelligence,
-    );
+    let refusal = instructions::refusal(asked.addressed_to, asked.idempotency_key, is_intelligence);
     Ok(refusal.map_or(Admission::Admitted, Admission::Refused))
 }
 

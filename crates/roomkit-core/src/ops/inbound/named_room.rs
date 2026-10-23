@@ -146,6 +146,22 @@ impl NamedRoom {
         &self.room_id
     }
 
+    /// Whether step 2 waits for `effect`.
+    pub(super) fn awaits(&self, effect: EffectId) -> bool {
+        match &self.state {
+            State::Reading(awaited)
+            | State::Observing(awaited)
+            | State::Creating {
+                effect: awaited, ..
+            }
+            | State::Rereading {
+                effect: awaited, ..
+            } => *awaited == effect,
+            State::Changing { section, .. } => section.awaits(effect),
+            State::Start | State::Done => false,
+        }
+    }
+
     /// Reads the room, or creates a new one at once. The read holds the
     /// room's recent events, since it is the context of step 3 when step 2
     /// writes nothing.

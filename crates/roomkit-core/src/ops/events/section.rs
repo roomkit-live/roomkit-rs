@@ -1,6 +1,6 @@
-//! The shape both direct calls share: take the room's lock, read the room,
-//! apply its due timers (gap G-045), change the event, release the lock,
-//! then report (RFC §10.3, §13.5).
+//! The shape the direct calls share: take the room's lock, read the room,
+//! apply its due timers (gap G-045), change the event or commit the record,
+//! release the lock, then report (RFC §10.3, §10.5, §13.5).
 
 use std::mem;
 use std::sync::Arc;
@@ -13,8 +13,9 @@ use crate::ops::lifecycle::gate::{self, Gate, Opened, Pending};
 use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Request, Step};
 use crate::ops::{self, Cx, Environment, KitConfig};
 
-/// The shape both calls share: take the lock, read the room, apply its due
-/// timers, change the event, release the lock, then report.
+/// The shape the direct calls share: take the lock, read the room, apply
+/// its due timers, change the event or commit the record, release the lock,
+/// then report.
 #[derive(Debug)]
 pub(super) struct EventSection {
     config: Arc<KitConfig>,
@@ -62,6 +63,20 @@ impl EventSection {
         }
     }
 
+    /// A call refused before anything is read: it ends at once with
+    /// `error`, taking no lock.
+    pub(super) fn refused(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        change: Change,
+        error: MutationError,
+    ) -> Self {
+        Self {
+            state: State::Finished(Err(error)),
+            ..Self::new(config, room_id, change)
+        }
+    }
+
     /// Hands the driver's answer to effect `id`.
     pub(super) fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.io.complete(id, outcome)
@@ -71,7 +86,7 @@ impl EventSection {
     pub(super) fn poll<T>(
         &mut self,
         environment: &mut dyn Environment,
-        output: impl FnOnce(Done) -> T,
+        output: impl FnOnce(Done) -> Result<T, MutationError>,
     ) -> Step<Result<T, MutationError>> {
         let Self {
             config,
@@ -101,7 +116,7 @@ impl EventSection {
         }
         let ready = if matches!(state, State::Finished(_)) {
             match mem::replace(state, State::Reported) {
-                State::Finished(result) => Some(result.map(|done| output(*done))),
+                State::Finished(result) => Some(result.and_then(|done| output(*done))),
                 State::Start
                 | State::Locking(_)
                 | State::Loading(_)

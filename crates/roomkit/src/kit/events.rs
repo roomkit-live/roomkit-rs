@@ -32,7 +32,7 @@ impl<S: ConversationStore> RoomKit<S> {
         updates: EventUpdates,
     ) -> Result<Option<RoomEvent>, KitError> {
         let operation = UpdateEvent::new(self.config(), room_id.clone(), event_id.clone(), updates);
-        Ok(driver::run(&self.inner, operation).await??)
+        Ok(driver::run(&self.inner, "update_event", operation).await??)
     }
 
     /// Deletes the room's stored event `event_id` for good, under the room
@@ -63,6 +63,6 @@ impl<S: ConversationStore> RoomKit<S> {
             event_id.clone(),
             cascade_replies,
         );
-        Ok(driver::run(&self.inner, operation).await??)
+        Ok(driver::run(&self.inner, "delete_event", operation).await??)
     }
 }

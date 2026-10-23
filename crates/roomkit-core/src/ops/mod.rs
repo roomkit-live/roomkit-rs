@@ -2,8 +2,10 @@
 //! protocol (docs/architecture.md, "Operations").
 //!
 //! A driver runs an operation in a loop: it polls it, performs the notices,
-//! executes the effects and completes each with its outcome, until the
-//! operation is ready.
+//! answers the callers of the entries it settled, executes the effects and
+//! completes each with its outcome as it finishes, polling between
+//! completions, until the operation is ready. A synchronous driver that
+//! executes every effect at once runs it so:
 //!
 //! ```no_run
 //! # use roomkit_core::ops::{Effect, Environment, Next, Notice, Operation, Outcome};
@@ -30,6 +32,11 @@
 //! # Ok(output)
 //! # }
 //! ```
+//!
+//! An asynchronous driver completes each effect as it finishes, and hands
+//! an operation that holds a room's lane the calls its own work makes into
+//! that room ([`Operation::adopt`]), answering each caller from
+//! [`Step::settled`] (docs/architecture.md, "Reentrancy").
 
 mod config;
 mod environment;
@@ -42,7 +49,7 @@ mod protocol;
 
 pub use config::{ChannelDeclaration, ConfigError, DEFAULT_CONTEXT_WINDOW, KitConfig};
 pub use environment::{Environment, SequentialEnvironment};
-pub use events::{DeleteEvent, MutationError, UpdateEvent};
+pub use events::{CommitRecord, DeleteEvent, MutationError, UpdateEvent};
 pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation, TransitionReason};
 pub use inbound::{Inbound, InboundError, InboundResult, InboundTarget, default_inbound_event};
 pub use lifecycle::{
@@ -50,8 +57,8 @@ pub use lifecycle::{
     PauseRoom, ReopenRoom, ResumeRoom, TimersChecked, UpdateBinding,
 };
 pub use protocol::{
-    Effect, EffectId, Next, Notice, Operation, Outcome, ProtocolError, Request, RoomCounters, Step,
-    TargetUpdate,
+    Effect, EffectId, Entry, EntryId, Next, Notice, Operation, Outcome, ProtocolError, Request,
+    RoomCounters, Settled, Step, TargetUpdate,
 };
 
 use crate::model::{ErrorRecord, EventId, RoomId};

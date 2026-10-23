@@ -1,20 +1,32 @@
 //! The inbound pipeline (RFC §10.1), with the broadcast of every event it
-//! commits (RFC §10.2).
+//! commits (RFC §10.2), for a message and for an event injected directly
+//! (RFC §10.5).
 //!
-//! [`Inbound`] runs one message into a room the caller names, or the room
-//! the kit's router finds for it (RFC §10.4), and the whole cascade it
-//! starts. The message's arrival comes first (steps 1 to 4): its sender in
-//! the channel's form, its room, named or routed, created, attached to or
-//! recorded on when it must be, the room's context and the event the
-//! channel parses.
-//! Then the cascade: the trigger's pass, its delivery set, the responses
-//! that re-enter as passes of their own, the events hooks inject, and the
-//! records the room stores in place of responses it refuses.
+//! [`Inbound`] runs one call into a room: a message into the room the
+//! caller names or the room the kit's router finds for it (RFC §10.4), or
+//! an event the integrator injects into a room ([`Inbound::inject`]), and
+//! the whole cascade it starts. A message arrives first (steps 1 to 4): its
+//! sender in the channel's form, its room, named or routed, created,
+//! attached to or recorded on when it must be, the room's context and the
+//! event the channel parses (`arrival`). A direct injection skips the
+//! channel's parse and step 2: it enters the room's lane at once (`direct`).
+//! Then the cascade: the call's pass, its delivery set, the responses that
+//! re-enter as passes of their own, the events hooks inject, and the
+//! records the room stores in place of responses it refuses (`cascade`).
 //!
 //! The operation holds the room's delivery lane from the moment the room is
 //! known to its end, on every path: the lane is a FIFO of the cascade's
 //! work, so one event's delivery set completes before the next one's
 //! begins, and the next call into the room waits for it (RFC §10.2).
+//!
+//! A call into the room that the operation's own work makes, a hook, a turn
+//! or a delivery calling `send_event` or `process_inbound` for the room, is
+//! adopted (`adoption`): the operation runs it as an entry of its own,
+//! beside its lane's work, or nested in the pass whose hook made it, so
+//! that it commits ahead of that pass's event; its caller receives its
+//! result at its commit, and its delivery set joins the back of the lane
+//! (RFC §13.5, §10.1 step 18, gap G-070). The lane thus carries several
+//! cascades: the call's, and one per adopted entry.
 //!
 //! Every pass checks an edit or a delete against its target (RFC §10.1 step
 //! 8a, §10.3), updates the target in its commit, and fires `ON_EVENT_UPDATED`
@@ -26,22 +38,27 @@
 //! decided by its pass without a commit, delivered to the agents it names,
 //! and fingerprinted on every response it produces (`instructions`).
 //!
-//! The trigger's off-lock hooks run before the room lock, ordered by the
+//! The call's off-lock hooks run before the room lock, ordered by the
 //! room's admission ticket, and step 9 applies their outcome (RFC §9.5.1,
 //! `off_lock`). The kit's `process_timeout` bounds the call from its start
 //! to its decision: past it, nothing of the event is written, what the call
 //! holds is released, and the call is refused `process_timeout` (RFC §13.6,
 //! `deadline`).
 
+mod adoption;
 mod arrival;
+mod cascade;
 mod chain;
 mod commit;
 mod deadline;
 mod delivery;
+mod direct;
 mod edits;
+mod entry;
 mod holds;
 mod instructions;
 mod job;
+mod lane;
 mod named_room;
 mod off_lock;
 mod pass;
@@ -54,29 +71,25 @@ mod stamp;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use self::adoption::Adoptions;
 use self::arrival::Arrival;
 pub use self::arrival::InboundTarget;
-use self::deadline::Stopped;
-use self::delivery::{DeliverySet, Response, SetKind, SetOutcome};
+use self::direct::DirectArrival;
 use self::holds::AfterTicket;
-use self::instructions::Admission;
-use self::job::{Finished, Job, RecordNote, Run};
+use self::job::Job;
 use self::off_lock::OffLockCheck;
-use self::pass::{CommitPass, PassOrigin, PassReport, PassResult};
-use self::record::{RecordPass, RecordReport, RecordResult};
 pub use self::result::{InboundError, InboundResult};
 pub use self::stamp::default_inbound_event;
 use super::io::Io;
-use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
-use super::{Abort, Cx, Environment, KitConfig, Progress};
+use super::protocol::{EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
+use super::{Cx, Environment, KitConfig};
 use crate::model::{
-    ChannelCategory, ChannelId, ErrorRecord, EventStatus, InboundMessage, InjectedEvent, Metadata,
-    Observation, RoomContext, RoomEvent, RoomId, Task, Timestamp,
+    ChannelId, DirectEvent, InboundMessage, Metadata, Observation, RoomContext, RoomId, Task,
+    Timestamp,
 };
-use crate::rules::chain_depth::{self, ReentryBudget};
-use crate::rules::hook_chain::HookChain;
+use crate::rules::chain_depth::ReentryBudget;
 
-/// The inbound pipeline for one message (RFC §10.1).
+/// The inbound pipeline for one call (RFC §10.1, §10.5).
 ///
 /// ```
 /// # use std::sync::Arc;
@@ -111,21 +124,54 @@ impl Inbound {
         organization_id: Option<String>,
         message: InboundMessage,
     ) -> Self {
+        let call = Call::Message {
+            target,
+            organization_id,
+            message: Box::new(message),
+        };
+        Self::calling(config, call)
+    }
+
+    /// The pipeline for `event`, injected directly into `room_id` (RFC
+    /// §10.5): the same pipeline as a message's from the room lock on, its
+    /// off-lock check included, without `handle_inbound()`, routing, the
+    /// room's creation or an attach (gap G-069).
+    ///
+    /// Its output is the committed event's result, a record stored
+    /// `BLOCKED` included, once its delivery set is over. A refusal before
+    /// the commit is an error with nothing written,
+    /// [`InboundError::Refused`]: a room whose status refuses events, the
+    /// call's `process_timeout`, a refused edit or delete, a refused
+    /// instruction.
+    pub fn inject(config: Arc<KitConfig>, room_id: RoomId, event: DirectEvent) -> Self {
+        let call = Call::Direct {
+            room_id,
+            event: Box::new(event),
+        };
+        Self::calling(config, call)
+    }
+
+    fn calling(config: Arc<KitConfig>, call: Call) -> Self {
         let budget = ReentryBudget::new(config.max_chain_depth);
+        let entry = match call {
+            Call::Message { .. } => EntryKind::Message,
+            Call::Direct { .. } => EntryKind::Direct,
+        };
         Self {
             config,
             io: Io::new(),
             machine: Machine {
                 room_id: None,
-                target,
-                organization_id,
+                entry,
                 channel_id: None,
                 deadline: None,
                 holds_lane: false,
                 ticket: None,
-                stage: Stage::Start(Box::new(message)),
+                stage: Stage::Start(Box::new(call)),
                 lane: VecDeque::new(),
                 active: None,
+                adopted: Adoptions::default(),
+                stopping: false,
                 budget,
                 decided: false,
                 result: InboundResult::default(),
@@ -154,23 +200,50 @@ impl Operation for Inbound {
             io,
         };
         machine.advance(&mut cx);
-        let outcome = machine.outcome.take();
+        let outcome = machine.take_outcome();
         self.io.step(outcome)
     }
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.io.complete(id, outcome)
     }
+
+    fn adopt(&mut self, entry: Entry, origin: EffectId) -> Result<EntryId, Box<Entry>> {
+        self.machine.adopt(&self.io, entry, origin)
+    }
+}
+
+/// What the call brings into the room.
+#[derive(Debug)]
+enum Call {
+    Message {
+        target: InboundTarget,
+        organization_id: Option<String>,
+        message: Box<InboundMessage>,
+    },
+    Direct {
+        room_id: RoomId,
+        event: Box<DirectEvent>,
+    },
+}
+
+/// The kind of the call's own entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EntryKind {
+    /// A message (RFC §10.1).
+    Message,
+    /// An event injected directly (RFC §10.5).
+    Direct,
 }
 
 #[derive(Debug)]
 struct Machine {
-    /// The message's room, once it arrived there.
+    /// The call's room, once it arrived there.
     room_id: Option<RoomId>,
-    target: InboundTarget,
-    /// The organization the caller acts for (RFC §17.2).
-    organization_id: Option<String>,
-    /// The message's channel, once resolved (RFC §10.1 step 1).
+    /// What the call brings: a direct injection's refusal before its commit
+    /// is an error (RFC §10.5).
+    entry: EntryKind,
+    /// The call's channel, once resolved (RFC §10.1 step 1).
     channel_id: Option<ChannelId>,
     /// The call's deadline, set at its start from `process_timeout` (RFC
     /// §13.6).
@@ -184,6 +257,13 @@ struct Machine {
     stage: Stage,
     lane: VecDeque<Job>,
     active: Option<Job>,
+    /// The entries adopted from the operation's own work (gap G-070).
+    adopted: Adoptions,
+    /// Whether the cascade stopped, failed or past its deadline: no pass
+    /// runs any more, committed events are still delivered.
+    stopping: bool,
+    /// The reentry budget every cascade of the operation draws on, an
+    /// adopted entry's on its caller's (RFC §8.3).
     budget: ReentryBudget,
     /// Whether the trigger is decided: committed or, for an instruction,
     /// which is never committed, delivered or blocked by its pass. A failure
@@ -202,9 +282,11 @@ struct Machine {
 
 #[derive(Debug)]
 enum Stage {
-    Start(Box<InboundMessage>),
-    /// Steps 2 to 4, which enter the room's lane.
+    Start(Box<Call>),
+    /// A message's steps 2 to 4, which enter the room's lane.
     Arriving(Box<Arrival>),
+    /// A direct injection's entry into the room's lane.
+    Entering(Box<DirectArrival>),
     /// Step 5a: the trigger's off-lock check, holding the room's ticket.
     Checking(Box<OffLockCheck>),
     Cascade,
@@ -218,6 +300,9 @@ enum Stage {
         side_effects: Option<(EffectId, Vec<Task>)>,
         metadata: Option<EffectId>,
     },
+    /// The call's outcome waits for every entry it adopted to be settled,
+    /// and every event committed to be delivered.
+    Ending(Box<Result<InboundResult, InboundError>>),
     /// The operation's outcome waits for the lane to be left.
     LeavingLane {
         effect: EffectId,
@@ -227,51 +312,49 @@ enum Stage {
 }
 
 impl Machine {
+    /// Takes every answer in, starts the entries adopted since, and runs
+    /// the lane, until nothing is left to take in: a section nested under a
+    /// lock is answered at once, without the driver.
     fn advance(&mut self, cx: &mut Cx<'_>) {
         if matches!(self.stage, Stage::Start(_)) {
             self.begin(cx);
         }
-        while let Some((effect, outcome)) = cx.io.next_outcome() {
-            self.dispatch(cx, effect, outcome);
-        }
-        self.run_lane(cx);
-    }
-
-    /// Sets the call's deadline (RFC §13.6), resolves the channel and the
-    /// sender's form (RFC §10.1 step 1), and refuses an instruction that
-    /// cannot be one before anything is read (RFC §10.1.1), then starts the
-    /// arrival, which enters the room's lane once the room is known.
-    fn begin(&mut self, cx: &mut Cx<'_>) {
-        let Stage::Start(message) = std::mem::replace(&mut self.stage, Stage::Done) else {
-            return;
-        };
-        self.deadline = deadline::of_call(cx.config, cx.env.now());
-        self.channel_id = Some(message.channel_id.clone());
-        let (channel, message) = match arrival::resolve(cx.config, *message) {
-            Ok(resolved) => resolved,
-            Err(error) => return self.end(cx, Err(error)),
-        };
-        match instructions::admit(cx.config, &message) {
-            Ok(Admission::Admitted) => {}
-            Ok(Admission::Refused(refusal)) => {
-                return self.end(cx, Ok(instructions::refused(refusal)));
+        loop {
+            while let Some((effect, outcome)) = cx.io.next_outcome() {
+                self.dispatch(cx, effect, outcome);
             }
-            Err(error) => return self.end(cx, Err(error)),
+            self.start_adopted(cx);
+            self.run_lane(cx);
+            self.end_once_settled(cx);
+            if !cx.io.has_outcomes() {
+                return;
+            }
         }
-        let mut arrival = Box::new(Arrival::new(
-            self.target.clone(),
-            self.organization_id.clone(),
-            channel,
-            message,
-            self.deadline,
-        ));
-        arrival.start(cx);
-        self.stage = Stage::Arriving(arrival);
     }
 
+    /// The operation's outcome once it is over, a direct injection's
+    /// refusal before its commit raised (RFC §10.5).
+    fn take_outcome(&mut self) -> Option<Result<InboundResult, InboundError>> {
+        let outcome = self.outcome.take()?;
+        Some(if self.entry == EntryKind::Direct {
+            outcome.and_then(result::committed)
+        } else {
+            outcome
+        })
+    }
+
+    /// Hands an answer to whoever waits for it: an adopted entry, or the
+    /// call's own stage.
     fn dispatch(&mut self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) {
+        if self.adopted.defers(effect) {
+            return self.adopted.defer(effect, outcome);
+        }
+        if self.adopted.awaits(effect) {
+            return self.on_adopted_outcome(cx, effect, outcome);
+        }
         match std::mem::replace(&mut self.stage, Stage::Done) {
             Stage::Arriving(arrival) => self.on_arrival(cx, arrival, effect, outcome),
+            Stage::Entering(entering) => self.on_entering(cx, entering, effect, outcome),
             Stage::Checking(check) => self.on_check(cx, check, effect, outcome),
             Stage::ReleasingTicket {
                 effect: expected,
@@ -283,6 +366,11 @@ impl Machine {
             } => self.on_persisting(cx, side_effects, metadata, effect, outcome),
             Stage::Cascade => {
                 self.stage = Stage::Cascade;
+                self.dispatch_to_job(cx, effect, outcome);
+            }
+            Stage::Ending(ending) => {
+                // A committed event's delivery set runs while the call ends.
+                self.stage = Stage::Ending(ending);
                 self.dispatch_to_job(cx, effect, outcome);
             }
             Stage::LeavingLane {
@@ -299,331 +387,20 @@ impl Machine {
         }
     }
 
-    /// Takes an answer of the arrival; once it hands the event, the
-    /// trigger's off-lock check or its pass starts, in the room whose lane
-    /// the arrival entered.
-    fn on_arrival(
-        &mut self,
-        cx: &mut Cx<'_>,
-        mut arrival: Box<Arrival>,
-        effect: EffectId,
-        outcome: Outcome,
-    ) {
-        let Progress::Done(arrived) = arrival.accept(cx, effect, outcome) else {
-            self.stage = Stage::Arriving(arrival);
-            return;
-        };
-        self.holds_lane = arrival.lane().is_some();
-        match arrived {
-            Ok(arrived) => {
-                self.room_id = Some(arrived.event.room_id.clone());
-                self.after_arrival(cx, arrived);
-            }
-            Err(stopped) => {
-                self.room_id = arrival.room().cloned();
-                match stopped {
-                    Stopped::Failed(error) => self.end(cx, Err(error)),
-                    Stopped::Expired => self.expire(cx, None),
-                }
-            }
+    /// The room whose lane the operation holds now: the arrival's while it
+    /// runs, the call's room once it arrived.
+    fn lane_room(&self) -> Option<&RoomId> {
+        match &self.stage {
+            Stage::Arriving(arrival) => arrival.lane(),
+            Stage::Entering(entering) => entering.lane(),
+            Stage::Start(_)
+            | Stage::Checking(_)
+            | Stage::Cascade
+            | Stage::ReleasingTicket { .. }
+            | Stage::Persisting { .. }
+            | Stage::Ending(_)
+            | Stage::LeavingLane { .. }
+            | Stage::Done => self.room_id.as_ref().filter(|_| self.holds_lane),
         }
-    }
-
-    /// Queues the trigger's pass, bounded by the call's deadline and going
-    /// on with the chain its off-lock check left, if any.
-    fn start_trigger(&mut self, event: RoomEvent, checked: Option<HookChain<RoomEvent>>) {
-        let pass = CommitPass::trigger(event, self.deadline, checked);
-        self.lane
-            .push_back(Job::Pass(Box::new(pass), PassOrigin::Trigger));
-        self.stage = Stage::Cascade;
-    }
-
-    fn dispatch_to_job(&mut self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) {
-        let Some(job) = self.active.take() else {
-            debug_assert!(false, "inbound received {effect:?} with no job running");
-            return;
-        };
-        match job.accept(cx, effect, outcome) {
-            Run::Running(job) => self.active = Some(job),
-            Run::Finished(finished) => self.settle(cx, *finished),
-        }
-    }
-
-    /// Starts the lane's next job while none runs; ends the cascade once the
-    /// lane is empty.
-    fn run_lane(&mut self, cx: &mut Cx<'_>) {
-        while matches!(self.stage, Stage::Cascade) && self.active.is_none() {
-            let Some(job) = self.lane.pop_front() else {
-                self.persist_side_effects(cx);
-                return;
-            };
-            match job.start(cx) {
-                Run::Running(job) => self.active = Some(job),
-                Run::Finished(finished) => self.settle(cx, *finished),
-            }
-        }
-    }
-
-    /// Settles a finished job; the trigger's pass once the call's ticket is
-    /// released (RFC §9.5.1).
-    fn settle(&mut self, cx: &mut Cx<'_>, finished: Finished) {
-        if self.ticket.is_some() && matches!(finished, Finished::Pass(_, PassOrigin::Trigger)) {
-            return self.release_ticket(cx, AfterTicket::Settle(Box::new(finished)));
-        }
-        match finished {
-            Finished::Pass(Ok(report), origin) => self.on_pass(cx, report, &origin),
-            Finished::Record(Ok(report), note) => self.on_record(cx, report, note),
-            Finished::Set(outcome, set) => self.on_set(cx, outcome, &set),
-            Finished::Pass(Err(abort), _) | Finished::Record(Err(abort), _) => {
-                self.abort(cx, abort);
-            }
-        }
-    }
-
-    fn on_pass(&mut self, cx: &mut Cx<'_>, report: PassReport, origin: &PassOrigin) {
-        if !report.tasks.is_empty() {
-            self.task_context = match &report.result {
-                PassResult::Delivered { context, .. } | PassResult::Blocked { context, .. } => {
-                    Some(context.clone())
-                }
-                PassResult::Refused { .. }
-                | PassResult::Duplicate { .. }
-                | PassResult::EditRefused { .. } => self.task_context.take(),
-            };
-        }
-        self.tasks.extend(report.tasks);
-        self.observations.extend(report.observations);
-        self.note_error(report.release_error);
-        let trigger = match &report.result {
-            PassResult::Delivered { event, .. } | PassResult::Blocked { event, .. } => {
-                Some(event.clone())
-            }
-            PassResult::Refused { .. }
-            | PassResult::Duplicate { .. }
-            | PassResult::EditRefused { .. } => None,
-        };
-        if *origin == PassOrigin::Trigger {
-            self.settle_trigger(&report.result);
-        }
-        if let PassResult::Delivered {
-            event,
-            plan,
-            context,
-            target,
-        } = report.result
-        {
-            if let Some(target) = &target {
-                report::target_changed(cx, &event, target, &context);
-            }
-            let kind = match origin {
-                PassOrigin::Trigger => SetKind::Root,
-                PassOrigin::Response => SetKind::Response,
-                PassOrigin::Injected { .. } => SetKind::Injected,
-            };
-            self.lane.push_back(Job::Set(Box::new(DeliverySet::new(
-                kind, *event, plan, context,
-            ))));
-        }
-        if let Some(trigger) = trigger {
-            self.queue_injected(cx, report.injected_events, &trigger);
-        }
-    }
-
-    /// Writes what the trigger's pass decided into the result (RFC §10.1):
-    /// the committed event, or the uncommitted instruction (RFC §10.1.1
-    /// rule 5).
-    fn settle_trigger(&mut self, result: &PassResult) {
-        match result {
-            PassResult::Delivered { event, .. } => {
-                self.decided = true;
-                self.result.event = Some((**event).clone());
-            }
-            PassResult::Blocked { event, reason, .. } => {
-                // The result carries the stored record (gap G-026), or the
-                // blocked instruction, which is not stored (gap G-065).
-                self.decided = true;
-                self.result.blocked = true;
-                self.result.reason = reason.clone().or_else(|| event.blocked_by.clone());
-                self.result.event = Some((**event).clone());
-            }
-            PassResult::Refused { .. } => {
-                self.result.blocked = true;
-                self.result.reason = Some("room_closed".to_owned());
-            }
-            PassResult::EditRefused { refusal } => {
-                // Nothing was stored: the result carries no event (RFC §10.1
-                // step 8a).
-                self.result.blocked = true;
-                self.result.reason = Some(refusal.reason().to_owned());
-            }
-            PassResult::Duplicate { event } => {
-                // The replay answers what the first delivery did, the stored
-                // record included (RFC §13.4, gap G-026).
-                if event.status == EventStatus::Blocked {
-                    self.result.blocked = true;
-                    self.result.reason.clone_from(&event.blocked_by);
-                }
-                self.result.event = Some((**event).clone());
-                self.lane.clear();
-            }
-        }
-    }
-
-    /// Queues the events a pass's hooks injected, each a pass of the
-    /// cascade within its reentry budget (gap G-021), but an instruction
-    /// (gap G-042).
-    fn queue_injected(
-        &mut self,
-        cx: &mut Cx<'_>,
-        injected: Vec<InjectedEvent>,
-        trigger: &RoomEvent,
-    ) {
-        for injected in instructions::without_instructions(injected, trigger) {
-            let targets = injected.target_channel_ids.clone();
-            let event = stamp::stamp_injected(injected, trigger, cx.env.new_event_id());
-            if self.budget.take() {
-                self.lane.push_back(Job::Pass(
-                    Box::new(CommitPass::new(
-                        PassOrigin::Injected {
-                            targets: targets.clone(),
-                        },
-                        event,
-                    )),
-                    PassOrigin::Injected { targets },
-                ));
-            } else {
-                self.queue_refused(event, chain_depth::REENTRY_LOOP_CAP);
-            }
-        }
-    }
-
-    fn on_record(&mut self, cx: &mut Cx<'_>, report: RecordReport, note: RecordNote) {
-        self.note_error(report.release_error);
-        let (RecordResult::Committed(record), RecordNote::NotAsked { agent, trigger }) =
-            (report.result, note)
-        else {
-            return;
-        };
-        let id = cx.env.new_observation_id();
-        let now = cx.env.now();
-        let max_chain_depth = cx.config.max_chain_depth;
-        self.observations.push(chain_depth::not_asked_observation(
-            id,
-            &trigger,
-            &agent,
-            max_chain_depth,
-            now,
-        ));
-        report::chain_depth_exceeded(cx, &record, &agent);
-    }
-
-    /// A delivery set finished: its observers run, its responses re-enter,
-    /// and the records of the channels not asked are queued (RFC §10.1 steps
-    /// 14 to 17).
-    fn on_set(&mut self, cx: &mut Cx<'_>, outcome: SetOutcome, set: &DeliverySet) {
-        let event = set.event();
-        report::after_broadcast(cx, event, set.context());
-        if set.kind() == SetKind::Root {
-            self.settle_root(cx, event, &outcome);
-        }
-        if !outcome.tasks.is_empty() {
-            self.task_context = Some(Box::new(set.context().clone()));
-        }
-        self.tasks.extend(outcome.tasks);
-        self.observations.extend(outcome.observations);
-        self.metadata_updates.extend(outcome.metadata_updates);
-        for agent in outcome.not_asked {
-            let id = cx.env.new_event_id();
-            let record = chain_depth::not_asked_record(id, event, &agent, cx.env.now());
-            self.lane.push_back(Job::Record(
-                Box::new(RecordPass::new(record)),
-                RecordNote::NotAsked {
-                    agent: Box::new(agent),
-                    trigger: Box::new(event.clone()),
-                },
-            ));
-        }
-        for response in outcome.responses {
-            self.queue_response(cx, response, event);
-        }
-    }
-
-    /// Reports the inbound event's deliveries and writes them into the
-    /// result (RFC §10.1 step 18).
-    fn settle_root(&mut self, cx: &mut Cx<'_>, event: &RoomEvent, outcome: &SetOutcome) {
-        report::root_deliveries(cx, event, outcome);
-        self.result
-            .delivery_results
-            .clone_from(&outcome.delivery_results);
-        self.result
-            .response_metadata
-            .clone_from(&outcome.response_metadata);
-        self.note_error(outcome.error.clone());
-    }
-
-    /// Queues one channel's responses to `trigger`: each re-enters as a pass,
-    /// unless the room refuses it first (RFC §8.3). An instruction does not
-    /// re-enter (gap G-066).
-    fn queue_response(&mut self, cx: &mut Cx<'_>, response: Response, trigger: &RoomEvent) {
-        let Response { responder, events } = response;
-        let at_limit = chain_depth::reaches_limit(trigger.chain_depth, cx.config.max_chain_depth);
-        let reentering = events
-            .into_iter()
-            .filter(|event| instructions::reenters(event, &responder.channel_id, trigger));
-        for event in reentering {
-            let event = stamp::stamp_response(event, &responder, trigger, cx.env.new_event_id());
-            if at_limit && responder.category == ChannelCategory::Transport {
-                // Only a transport is asked at the limit; what it answers is
-                // stored refused (RFC §8.3).
-                self.queue_refused(event, chain_depth::CHAIN_DEPTH_LIMIT);
-            } else if self.budget.take() {
-                self.lane.push_back(Job::Pass(
-                    Box::new(CommitPass::new(PassOrigin::Response, event)),
-                    PassOrigin::Response,
-                ));
-            } else {
-                self.queue_refused(event, chain_depth::REENTRY_LOOP_CAP);
-            }
-        }
-    }
-
-    fn queue_refused(&mut self, mut event: RoomEvent, blocked_by: &str) {
-        event.blocked_by = Some(blocked_by.to_owned());
-        self.lane.push_back(Job::Record(
-            Box::new(RecordPass::new(event)),
-            RecordNote::Refused,
-        ));
-    }
-
-    /// Keeps the first error met once the trigger was decided: the result
-    /// reports one (RFC §13.6).
-    fn note_error(&mut self, error: Option<ErrorRecord>) {
-        if self.result.error.is_none() {
-            self.result.error = error;
-        }
-    }
-
-    /// A pass or a record failed. Before the trigger was decided nothing was
-    /// written and the message fails, or is refused once past its deadline;
-    /// after it, the event stands, the cascade stops, and the result carries
-    /// the error (RFC §13.6).
-    fn abort(&mut self, cx: &mut Cx<'_>, abort: Abort) {
-        self.lane.clear();
-        if let Abort::DeadlinePassed(locked_event) = abort {
-            // Only the trigger's pass carries a deadline, and it is undecided.
-            return self.expire(cx, locked_event);
-        }
-        if self.decided {
-            return self.note_error(Some(abort.into_record()));
-        }
-        let error = match (abort, self.room_id.clone()) {
-            (Abort::RoomNotFound, Some(room_id)) => InboundError::RoomNotFound(room_id),
-            (Abort::Store(error), _) => InboundError::Store(error),
-            (Abort::Lock(error), _) => InboundError::Lock(error),
-            (abort @ (Abort::RoomNotFound | Abort::DeadlinePassed(_)), _) => {
-                InboundError::Store(abort.into_record())
-            }
-        };
-        self.end(cx, Err(error));
     }
 }

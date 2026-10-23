@@ -55,7 +55,12 @@ impl<S: ConversationStore> RoomKit<S> {
             metadata,
             ..Room::new(room_id.clone(), now)
         };
-        let created = driver::run(&self.inner, CreateRoom::new(self.config(), room)).await?;
+        let created = driver::run(
+            &self.inner,
+            "create_room",
+            CreateRoom::new(self.config(), room),
+        )
+        .await?;
         Ok(created?)
     }
 
@@ -110,7 +115,8 @@ impl<S: ConversationStore> RoomKit<S> {
         binding.room_id = room_id.clone();
         binding.channel_type = declaration.channel_type;
         binding.direction = declaration.direction;
-        let attached = driver::run(&self.inner, AttachChannel::new(config, binding)).await?;
+        let attached =
+            driver::run(&self.inner, "attach", AttachChannel::new(config, binding)).await?;
         Ok(attached?)
     }
 
@@ -128,7 +134,7 @@ impl<S: ConversationStore> RoomKit<S> {
         channel_id: &ChannelId,
     ) -> Result<ChannelBinding, KitError> {
         let detach = DetachChannel::new(self.config(), room_id.clone(), channel_id.clone());
-        Ok(driver::run(&self.inner, detach).await??)
+        Ok(driver::run(&self.inner, "detach", detach).await??)
     }
 
     /// Changes a channel's binding to a room: what `update` names changes,
@@ -148,7 +154,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<ChannelBinding, KitError> {
         let operation =
             UpdateBinding::new(self.config(), room_id.clone(), channel_id.clone(), update);
-        Ok(driver::run(&self.inner, operation).await??)
+        Ok(driver::run(&self.inner, "update_binding", operation).await??)
     }
 
     /// Mutes a channel in a room (RFC §7.2): it still reads the room's
@@ -190,7 +196,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Returns [`KitError::Lifecycle`] when the room does not exist.
     pub async fn pause_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let pause = PauseRoom::new(self.config(), room_id.clone());
-        Ok(driver::run(&self.inner, pause).await??)
+        Ok(driver::run(&self.inner, "pause_room", pause).await??)
     }
 
     /// Resumes a paused room (RFC §5.1), restarting its inactivity timer.
@@ -201,7 +207,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Returns [`KitError::Lifecycle`] when the room does not exist.
     pub async fn resume_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let resume = ResumeRoom::new(self.config(), room_id.clone());
-        Ok(driver::run(&self.inner, resume).await??)
+        Ok(driver::run(&self.inner, "resume_room", resume).await??)
     }
 
     /// Reopens a closed room: it accepts events again (RFC §5.1). Returns
@@ -212,7 +218,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Returns [`KitError::Lifecycle`] when the room does not exist.
     pub async fn reopen_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let reopen = ReopenRoom::new(self.config(), room_id.clone());
-        Ok(driver::run(&self.inner, reopen).await??)
+        Ok(driver::run(&self.inner, "reopen_room", reopen).await??)
     }
 
     /// Closes a room: it refuses every new event from now on (RFC §5.1).
@@ -223,7 +229,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Returns [`KitError::Lifecycle`] when the room does not exist.
     pub async fn close_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let close = CloseRoom::new(self.config(), room_id.clone());
-        Ok(driver::run(&self.inner, close).await??)
+        Ok(driver::run(&self.inner, "close_room", close).await??)
     }
 
     /// Archives a room: a terminal, read-only state it never leaves (RFC
@@ -234,6 +240,6 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Returns [`KitError::Lifecycle`] when the room does not exist.
     pub async fn archive_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let archive = ArchiveRoom::new(self.config(), room_id.clone());
-        Ok(driver::run(&self.inner, archive).await??)
+        Ok(driver::run(&self.inner, "archive_room", archive).await??)
     }
 }

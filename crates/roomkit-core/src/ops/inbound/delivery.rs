@@ -24,8 +24,13 @@ use crate::rules::{addresses, attachment, instructions};
 /// Which event a delivery set broadcasts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SetKind {
-    /// The inbound event itself: its deliveries are reported (RFC §8.2).
+    /// The call's own event, a message or a direct injection: its
+    /// deliveries are reported (RFC §8.2) and written into its result.
     Root,
+    /// The event of an entry the operation adopted (gap G-070): its
+    /// deliveries are reported, and its caller, answered at the commit,
+    /// reads none of them (RFC §10.1 step 18).
+    Adopted,
     /// A response that re-entered.
     Response,
     /// An event a hook injected. It asks no agent (RFC §9.4); its transport

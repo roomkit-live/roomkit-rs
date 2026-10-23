@@ -7,9 +7,9 @@
 //! name or at another depth.
 
 use crate::model::{
-    ChannelBinding, DeleteContent, EditContent, ErrorRecord, EventContent, EventDirection, EventId,
-    EventSource, EventStatus, EventType, InboundMessage, InjectedEvent, Metadata, ParticipantId,
-    RoomEvent, RoomId, Timestamp, Visibility,
+    ChannelBinding, ChannelCategory, DeleteContent, DirectEvent, EditContent, ErrorRecord,
+    EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, InboundMessage,
+    InjectedEvent, Metadata, ParticipantId, RoomEvent, RoomId, Timestamp, Visibility,
 };
 use crate::ops::ChannelDeclaration;
 use crate::rules::{chain_depth, edits, instructions};
@@ -85,6 +85,41 @@ pub(crate) fn stamp_trigger(
     reset_commit_fields(event)
 }
 
+/// The event the integrator injects directly as `direct` into `room_id`
+/// (RFC §10.5), with the id the pipeline gives it and the fields it owns:
+/// its source is the registered `channel`, `INBOUND` for a transport and
+/// `OUTBOUND` for an intelligence channel, whose event is its own words
+/// travelling out (gap G-069). An instruction is stamped as a message's is
+/// (RFC §10.1.1 rules 3 and 4).
+pub(crate) fn stamp_direct(
+    direct: DirectEvent,
+    channel: &ChannelDeclaration,
+    room_id: RoomId,
+    id: EventId,
+    now: Timestamp,
+) -> RoomEvent {
+    let direction = if channel.category == ChannelCategory::Intelligence {
+        EventDirection::Outbound
+    } else {
+        EventDirection::Inbound
+    };
+    let mut source = EventSource::new(direct.channel_id, channel.channel_type, direction);
+    source.provider.clone_from(&channel.provider_name);
+    source.participant_id = direct.participant_id;
+    let mut event = RoomEvent::new(id, room_id, direct.event_type, source, direct.content, now);
+    event.chain_depth = direct.chain_depth;
+    event.visibility = direct.visibility;
+    event.addressed_to = direct.addressed_to;
+    event.parent_event_id = direct.parent_event_id;
+    event.idempotency_key = direct.idempotency_key;
+    event.metadata.clone_from(&direct.metadata);
+    if event.event_type == EventType::Instruction {
+        instructions::stamp(&mut event, &direct.metadata, direct.standalone);
+    }
+    instructions::clear_fingerprint(&mut event);
+    reset_commit_fields(event)
+}
+
 /// Writes the pipeline's fields on a response of `responder` to `trigger`:
 /// a fresh id (gap G-024), the responder as its outbound source, one hop
 /// deeper than the trigger (RFC §8.3), answering the trigger unless the
@@ -151,10 +186,16 @@ pub(crate) fn stamp_injected(
 /// 8a checked on an edit or a delete ([`kept_change`]), nor an instruction's
 /// visibility, address and `standalone` word, nor the key `instruction`,
 /// the fingerprint a response to one records and no other event holds (RFC
-/// §10.1.1, gaps G-020 and G-065).
+/// §10.1.1, gaps G-020 and G-065). Nor may it write the visibility
+/// `internal`, which only the framework writes (gap G-041).
 pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> RoomEvent {
     modified.content = kept_change(&original.content, modified.content);
     instructions::keep_checked(original, &mut modified);
+    if modified.visibility == Visibility::Internal {
+        // Only the framework writes `internal`, on its own records: a hook's
+        // modify that writes it is put back to the original's (gap G-041).
+        modified.visibility.clone_from(&original.visibility);
+    }
     modified.id = original.id.clone();
     modified.room_id = original.room_id.clone();
     modified.event_type = original.event_type;

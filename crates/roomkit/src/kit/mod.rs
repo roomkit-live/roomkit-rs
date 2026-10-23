@@ -5,9 +5,12 @@
 //! - `registry`: registering and unregistering channels and hooks;
 //! - `rooms`: the room lifecycle and channel bindings;
 //! - `events`: the host's direct changes to stored events;
+//! - `inject`: direct injection and records committed outside the
+//!   pipeline;
 //! - `timers`: applying room timers, on demand or in the background.
 
 mod events;
+mod inject;
 mod registry;
 mod rooms;
 #[cfg(test)]
@@ -20,7 +23,7 @@ use std::time::Duration;
 
 use roomkit_core::model::{ChannelId, InboundMessage, RoomEvent, RoomId};
 use roomkit_core::ops::{
-    Environment, FrameworkEvent, Inbound, InboundResult, InboundTarget, KitConfig,
+    Entry, Environment, FrameworkEvent, Inbound, InboundResult, InboundTarget, KitConfig,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookTrigger};
@@ -40,6 +43,9 @@ use crate::tickets::RoomTickets;
 /// How many framework events a slow subscriber may fall behind before it
 /// misses some.
 const FRAMEWORK_EVENT_BACKLOG: usize = 1024;
+
+/// The kit's call that runs a message, as an error names it.
+const PROCESS_INBOUND: &str = "process_inbound";
 
 /// A RoomKit deployment: its channels, its hooks and its store.
 ///
@@ -192,11 +198,16 @@ impl<S: ConversationStore> RoomKit<S> {
     /// the room (RFC §7.5 rule 7).
     ///
     /// Inbound messages of one room run one at a time, which keeps each
-    /// event's delivery set ahead of the next one's (RFC §10.2). A hook or a
-    /// channel must not send into the same room while it runs, an
-    /// `ON_ROOM_CREATED` hook included: it would wait for itself, a hook
-    /// until its timeout (RFC §13.5 reentrancy comes with direct injection,
-    /// step 2).
+    /// event's delivery set ahead of the next one's (RFC §10.2). Called from
+    /// inside that work, by a hook, a turn or a delivery of a call into the
+    /// room it names, the message is adopted by that call instead of
+    /// waiting for it: it returns at its commit, with no delivery result,
+    /// and its delivery set follows in the room's lane (RFC §13.5, §10.1
+    /// step 18). A call from inside a room's work that would wait for the
+    /// room's lane anyway, a message routed back into the room, fails with
+    /// [`KitError::Reentrant`]. A call into another room waits for that
+    /// room's lane as any call does: two rooms whose work calls into each
+    /// other at the same moment wait for each other.
     ///
     /// A `BEFORE_BROADCAST` hook registered with `needs_lock = false` runs
     /// before the room lock, ordered by the room's admission ticket, so the
@@ -208,7 +219,8 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// Returns [`KitError::Inbound`] when the pipeline refused or failed the
-    /// message before committing it, the router's failure among others.
+    /// message before committing it, the router's failure among others, and
+    /// [`KitError::Reentrant`] for a call that would wait for itself.
     pub async fn process_inbound(
         &self,
         message: InboundMessage,
@@ -239,18 +251,29 @@ impl<S: ConversationStore> RoomKit<S> {
             .await
     }
 
+    /// Runs `message`, adopted by the call that holds its room's lane when
+    /// it comes from inside that call's work (RFC §13.5).
     async fn run_inbound(
         &self,
         room_id: Option<&RoomId>,
         organization_id: Option<String>,
         message: InboundMessage,
     ) -> Result<InboundResult, KitError> {
-        let target = room_id.map_or(InboundTarget::Routed, |room_id| {
-            InboundTarget::Room(room_id.clone())
-        });
-        let inbound = Inbound::new(self.config(), target, organization_id, message);
-        let processed = driver::run(&self.inner, inbound).await?;
-        Ok(processed?)
+        let Some(room_id) = room_id else {
+            let inbound = Inbound::new(
+                self.config(),
+                InboundTarget::Routed,
+                organization_id,
+                message,
+            );
+            return Ok(driver::run(&self.inner, PROCESS_INBOUND, inbound).await??);
+        };
+        let entry = Entry::Message {
+            room_id: room_id.clone(),
+            organization_id,
+            message: Box::new(message),
+        };
+        self.enter(entry, PROCESS_INBOUND).await
     }
 
     fn config(&self) -> Arc<KitConfig> {

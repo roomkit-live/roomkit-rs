@@ -152,19 +152,31 @@ fn task_payload(cx: &mut Cx<'_>, task: &Task) -> RoomEvent {
 }
 
 /// Reports `event`, from `origin`, refused by its room's `status`: a refused
-/// event is observable (RFC §5.1), an inbound one as `inbound`, a response
-/// or a hook's injected event as `reentry`, the framework's own re-injection
-/// into the room (gap G-043).
+/// event is observable (RFC §5.1), an inbound message or a direct injection
+/// as `inbound`, a response or a hook's injected event as `reentry`, the
+/// framework's own re-injection into the room (gap G-043).
 pub(super) fn room_refused(
     cx: &mut Cx<'_>,
     event: &RoomEvent,
     origin: &PassOrigin,
     status: RoomStatus,
 ) {
-    let operation = match origin {
-        PassOrigin::Trigger => RefusedOperation::Inbound,
-        PassOrigin::Response | PassOrigin::Injected { .. } => RefusedOperation::Reentry,
+    let operation = if origin.is_entry() {
+        RefusedOperation::Inbound
+    } else {
+        RefusedOperation::Reentry
     };
+    room_refused_as(cx, event, operation, status);
+}
+
+/// Reports `event` refused by its room's `status`, met on `operation`'s
+/// way (RFC §8.2 `room_refused_event`).
+pub(super) fn room_refused_as(
+    cx: &mut Cx<'_>,
+    event: &RoomEvent,
+    operation: RefusedOperation,
+    status: RoomStatus,
+) {
     notify(
         cx,
         FrameworkEvent::RoomRefusedEvent {

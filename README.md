@@ -9,8 +9,9 @@ for conversations between humans, AI agents and programs.
 > chain-depth limit, on a tokio runtime and an in-memory store. Step 2, the
 > rest of Level 0, is in progress: the room lifecycle and its timers, a
 > message naming its room, routing a message that names no room to its
-> conversation, edits and deletes, instructions, and off-lock checks with
-> the processing timeout are done. No provider yet, and the API will
+> conversation, edits and deletes, instructions, off-lock checks with the
+> processing timeout, and direct injection with the reentrant lock are
+> implemented, the last in review. No provider yet, and the API will
 > change.
 
 ## Why a Rust implementation

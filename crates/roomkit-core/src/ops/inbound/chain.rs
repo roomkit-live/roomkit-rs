@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use super::stamp;
-use crate::model::{RoomContext, RoomEvent, Timestamp};
+use crate::model::{RoomContext, RoomEvent, RoomId, Timestamp};
 use crate::ops::Cx;
 use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::rules::hook_chain::HookChain;
@@ -19,6 +19,8 @@ pub(super) struct HookRun {
     rest: VecDeque<HookId>,
     chain: HookChain<RoomEvent>,
     running: Option<HookId>,
+    /// Whether the run asked for a hook.
+    asked: bool,
 }
 
 impl HookRun {
@@ -28,7 +30,14 @@ impl HookRun {
             rest: hooks.into(),
             chain,
             running: None,
+            asked: false,
         }
+    }
+
+    /// Whether the run asked for a hook: under the room lock, one may have
+    /// changed the room (RFC §13.5).
+    pub(super) fn asked(&self) -> bool {
+        self.asked
     }
 
     /// A run of `hooks` on a new chain of `event`.
@@ -41,13 +50,15 @@ impl HookRun {
 
     /// Asks for the next hook on the payload as the previous hooks left
     /// it, with `original`'s identity (RFC §9.4), within its own timeout and
-    /// `deadline`; `None` once a hook blocked or none is left.
+    /// `deadline`, under the lock of `locked` when its caller holds it (RFC
+    /// §13.5); `None` once a hook blocked or none is left.
     pub(super) fn ask_next(
         &mut self,
         cx: &mut Cx<'_>,
         original: &RoomEvent,
         context: &RoomContext,
         deadline: Option<Timestamp>,
+        locked: Option<&RoomId>,
     ) -> Option<EffectId> {
         self.running = None;
         if self.chain.is_blocked() {
@@ -58,6 +69,7 @@ impl HookRun {
             .pop_front()
             .and_then(|hook| cx.config.hooks.get(hook).map(|spec| (hook, spec.timeout)))?;
         self.running = Some(hook);
+        self.asked = true;
         let request = Request::RunHook {
             hook,
             trigger: HookTrigger::BeforeBroadcast,
@@ -65,7 +77,7 @@ impl HookRun {
             context: Box::new(context.clone()),
             timeout,
         };
-        Some(cx.io.issue_within(request, deadline))
+        Some(cx.io.issue_under(request, deadline, locked.cloned()))
     }
 
     /// Applies what the running hook produced (RFC §9.3).

@@ -8,7 +8,10 @@
 //! - [`Channel`]: implement it for a transport or an intelligence channel.
 //! - [`RoomKit`]: register channels and hooks, run rooms through their
 //!   lifecycle and timers, process messages into the room they name or the
-//!   room their router finds.
+//!   room their router finds, inject events and commit records directly. A
+//!   hook, a turn or a delivery that calls into its own room never waits for
+//!   itself: the room lock is reentrant within the call's execution context,
+//!   and a call into the room is adopted by the work that holds it.
 //! - [`InboundRoomRouter`]: a routing strategy; [`DefaultRouter`] is the
 //!   RFC's.
 //! - [`store`]: where rooms live, in memory by default.
@@ -19,6 +22,7 @@
 //! [`ops`] and [`rules`].
 
 mod channel;
+mod context;
 mod driver;
 mod environment;
 mod error;
@@ -37,6 +41,7 @@ pub use roomkit_core::rules::transcoding::text_of;
 pub use roomkit_core::{model, ops, rules};
 
 pub use self::channel::{Channel, ChannelError, EventDraft};
+pub use self::context::keep_context;
 pub use self::environment::SystemEnvironment;
 pub use self::error::KitError;
 pub use self::hooks::{HookError, HookHandler, HookReturn};

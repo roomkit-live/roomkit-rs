@@ -8,11 +8,14 @@
 //! committed (gap G-065).
 
 use super::pass::PassResult;
-use crate::model::{EventStatus, EventType, RoomContext, RoomEvent, RoomUpdates, Timestamp};
+use crate::model::{
+    ChannelBinding, EventStatus, EventType, RoomContext, RoomEvent, RoomUpdates, Timestamp,
+    Visibility,
+};
 use crate::ops::protocol::{EffectId, Request, RoomCounters, TargetUpdate};
 use crate::ops::{Cx, FrameworkEvent, Notice};
 use crate::rules::lifecycle::{self, Transition};
-use crate::rules::permissions::DeliveryPlan;
+use crate::rules::permissions::{self, DeliveryPlan};
 
 /// A commit asked for, and what the pass did once it is durable; no effect
 /// for an instruction, which the pass decides without writing.
@@ -132,6 +135,21 @@ pub(super) fn blocked(
         effect: Some(effect),
         result,
     }
+}
+
+/// The visibility a channel's record stored `BLOCKED` keeps: the one step
+/// 12 would have given it, its own intersected with its source binding's
+/// (RFC §7.3), when its source is bound in `bindings`; its own when it is
+/// not (gap G-036). A muted or read-only source's record is narrowed so,
+/// and a reader that sees it later sees no more than it would have.
+pub(super) fn stored_visibility(event: &RoomEvent, bindings: &[ChannelBinding]) -> Visibility {
+    bindings
+        .iter()
+        .find(|binding| binding.channel_id == event.source.channel_id)
+        .map_or_else(
+            || event.visibility.clone(),
+            |source| permissions::effective_visibility(&event.visibility, source, bindings),
+        )
 }
 
 /// The write that resumes the room of `context` at `now` when it is paused,

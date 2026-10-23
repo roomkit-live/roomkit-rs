@@ -1,18 +1,23 @@
 //! The commit of a record the room refused before any hook (RFC §8.3).
 //!
 //! A channel not asked at the chain-depth limit, a response past its
-//! cascade's reentry budget, a response a transport returned at the limit:
-//! each is stored `BLOCKED`, under the room's lock, with the next index, and
-//! runs no hook. The room's due timer transitions apply first (gap G-045),
-//! and a room that no longer accepts events refuses the record, as it
-//! refuses any write (RFC §5.1).
+//! cascade's reentry budget, a response a transport returned at the limit,
+//! an entry adopted past it, an injected event past it: each is stored
+//! `BLOCKED`, under the room's lock, with the next index, and runs no hook.
+//! A channel's record keeps the visibility step 12 would have given it when
+//! its source is bound, a hook's injected event its own (gap G-036). The
+//! room's due timer transitions apply first (gap G-045), and a room that no
+//! longer accepts events refuses the record, as it refuses any write, with
+//! `room_refused_event`: `reentry` for the framework's records, `inbound`
+//! for an adopted entry's (RFC §5.1, gap G-043).
 
 use std::mem;
 
+use super::{commit, report};
 use crate::model::{ErrorRecord, EventStatus, RoomContext, RoomEvent, RoomUpdates};
 use crate::ops::lifecycle::gate::{self, Gate, Pending};
 use crate::ops::protocol::{EffectId, Outcome, Request, RoomCounters};
-use crate::ops::{self, Abort, Cx, Progress};
+use crate::ops::{self, Abort, Cx, Progress, RefusedOperation};
 
 /// What became of a record.
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +41,12 @@ pub(super) struct RecordReport {
 #[derive(Debug)]
 pub(super) struct RecordPass {
     record: RoomEvent,
+    /// What a refusal of the record by the room's status reports it as.
+    refused_as: RefusedOperation,
+    /// Whether the record is a channel's, whose visibility step 12 would
+    /// have narrowed to its source binding's (gap G-036); a hook's injected
+    /// event keeps its own.
+    narrowed: bool,
     state: State,
     release_error: Option<ErrorRecord>,
 }
@@ -72,14 +83,39 @@ impl State {
 }
 
 impl RecordPass {
-    /// The commit of `record`, which already carries its `blocked_by`.
-    pub(super) fn new(mut record: RoomEvent) -> Self {
+    /// The commit of `record`, a channel's, which already carries its
+    /// `blocked_by`, in place of what the framework refused: a turn or a
+    /// response (RFC §8.3).
+    pub(super) fn new(record: RoomEvent) -> Self {
+        Self::refusing(record, RefusedOperation::Reentry)
+    }
+
+    /// The commit of `record`, a channel's, which already carries its
+    /// `blocked_by`, reported as `refused_as` when the room's status
+    /// refuses it.
+    pub(super) fn refusing(mut record: RoomEvent, refused_as: RefusedOperation) -> Self {
         record.status = EventStatus::Blocked;
         Self {
             record,
+            refused_as,
+            narrowed: true,
             state: State::Start,
             release_error: None,
         }
+    }
+
+    /// The commit of `record`, an event a hook injected, which keeps its own
+    /// visibility (gap G-036).
+    pub(super) fn injected(record: RoomEvent) -> Self {
+        Self {
+            narrowed: false,
+            ..Self::new(record)
+        }
+    }
+
+    /// Whether the record's commit waits for `effect`.
+    pub(super) fn awaits(&self, effect: EffectId) -> bool {
+        self.state.awaits() == Some(effect)
     }
 
     /// Takes the room's lock.
@@ -97,7 +133,7 @@ impl RecordPass {
         effect: EffectId,
         outcome: Outcome,
     ) -> Progress<Result<RecordReport, Abort>> {
-        if self.state.awaits() != Some(effect) {
+        if !self.awaits(effect) {
             debug_assert!(false, "record pass received {effect:?} in {:?}", self.state);
             return Progress::Waiting;
         }
@@ -156,12 +192,18 @@ impl RecordPass {
         }
     }
 
-    /// The status gate, then the commit with the next index.
+    /// The status gate, then the commit with the next index and the
+    /// visibility step 12 would have given the record (gap G-036).
     fn on_gate(&mut self, cx: &mut Cx<'_>, context: &RoomContext) -> State {
-        if !context.room.status.accepts_events() {
+        let status = context.room.status;
+        if !status.accepts_events() {
+            report::room_refused_as(cx, &self.record, self.refused_as, status);
             return self.release(cx, Ok(RecordResult::Refused));
         }
         self.record.index = context.room.event_count;
+        if self.narrowed {
+            self.record.visibility = commit::stored_visibility(&self.record, &context.bindings);
+        }
         let counters = RoomCounters {
             event_count: context.room.event_count.saturating_add(1),
             latest_index: self.record.index,

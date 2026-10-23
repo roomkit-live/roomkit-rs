@@ -1,13 +1,16 @@
 //! What each direct call reads, writes and reports: an update reads the
 //! event and writes the fields it names, a delete removes the event and its
-//! thread (RFC §10.3 "Direct mutation (host-owned)", gap G-063).
+//! thread (RFC §10.3 "Direct mutation (host-owned)", gap G-063), a record
+//! outside the pipeline is committed with the room's next index (RFC §10.5,
+//! gap G-071).
 
 use super::MutationError;
 use super::section::{self, State};
-use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId};
-use crate::ops::protocol::{Outcome, Request};
+use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId, RoomUpdates};
+use crate::ops::protocol::{Outcome, Request, RoomCounters};
 use crate::ops::{Cx, Notice};
 use crate::rules::hook_registry::HookTrigger;
+use crate::rules::organizations;
 
 /// What a direct call changes.
 #[derive(Clone, Debug)]
@@ -19,6 +22,12 @@ pub(super) enum Change {
     Delete {
         event_id: EventId,
         cascade_replies: bool,
+    },
+    /// A record committed outside the pipeline, for a caller acting for
+    /// `organization_id` (RFC §10.5 `commit_event`).
+    Commit {
+        record: Box<RoomEvent>,
+        organization_id: Option<String>,
     },
 }
 
@@ -35,7 +44,7 @@ pub(super) struct Done {
 }
 
 /// The update reads the event; the delete removes it at once, the store
-/// answering what it removed.
+/// answering what it removed; the record is committed.
 pub(super) fn act(
     cx: &mut Cx<'_>,
     room_id: &RoomId,
@@ -43,6 +52,10 @@ pub(super) fn act(
     context: Box<RoomContext>,
 ) -> State {
     match change {
+        Change::Commit {
+            record,
+            organization_id,
+        } => commit(cx, room_id, record, organization_id.as_deref(), context),
         Change::Update { event_id, .. } => State::Reading {
             effect: cx.io.issue(Request::GetEvent {
                 event_id: event_id.clone(),
@@ -64,6 +77,52 @@ pub(super) fn act(
                 context,
             }),
         },
+    }
+}
+
+/// Commits `record` with the room's next index, unless the room is not the
+/// caller's or its status refuses events (RFC §10.5, §5.1, §17.2): another
+/// organization's room is not found. The record moves the room's counters
+/// only: it is no activity, and a paused room stays paused (gap G-071).
+fn commit(
+    cx: &mut Cx<'_>,
+    room_id: &RoomId,
+    record: &RoomEvent,
+    organization_id: Option<&str>,
+    context: Box<RoomContext>,
+) -> State {
+    if !organizations::admits(organization_id, &context.room) {
+        let error = MutationError::RoomNotFound(room_id.clone());
+        return section::release(cx, room_id, Err(error));
+    }
+    let status = context.room.status;
+    if !status.accepts_events() {
+        let error = MutationError::Refused {
+            room_id: room_id.clone(),
+            status,
+        };
+        return section::release(cx, room_id, Err(error));
+    }
+    let mut record = record.clone();
+    record.index = context.room.event_count;
+    let counters = RoomCounters {
+        event_count: context.room.event_count.saturating_add(1),
+        latest_index: record.index,
+        last_activity_at: context.room.timers.last_activity_at,
+        room: RoomUpdates::default(),
+    };
+    let effect = cx.io.issue(Request::Commit {
+        event: record.clone(),
+        counters,
+        target: None,
+    });
+    State::Writing {
+        effect,
+        done: Box::new(Done {
+            events: vec![record],
+            changed: true,
+            context,
+        }),
     }
 }
 
@@ -128,6 +187,7 @@ pub(super) fn on_written(
 ) -> State {
     let written = match change {
         Change::Update { .. } => outcome.into_stored(),
+        Change::Commit { .. } => outcome.into_committed(),
         Change::Delete { .. } => outcome.into_deleted().map(|removed| {
             done.changed = !removed.is_empty();
             done.context
@@ -144,11 +204,13 @@ pub(super) fn on_written(
 
 /// Fires the mutation trigger for each event changed: `ON_EVENT_UPDATED`
 /// for the updated event, `ON_EVENT_DELETED` for each removed one (RFC
-/// §10.3).
+/// §10.3). A record committed outside the pipeline fires no hook (RFC
+/// §10.5).
 pub(super) fn report(cx: &mut Cx<'_>, change: &Change, done: &Done) {
     let trigger = match change {
         Change::Update { .. } => HookTrigger::OnEventUpdated,
         Change::Delete { .. } => HookTrigger::OnEventDeleted,
+        Change::Commit { .. } => return,
     };
     for event in &done.events {
         let hooks = cx.config.hooks.observers(trigger, &event.source);

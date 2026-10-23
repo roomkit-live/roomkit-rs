@@ -49,7 +49,7 @@ mod an_allowed_message {
                 "lock room_1",
                 "load_context room_1",
                 "hook pii_scan",
-                "load_bindings room_1",
+                "load_context room_1",
                 "commit #0 sms delivered \"Bonjour\"",
                 "release room_1",
                 "on_event ws <- evt_1",
@@ -58,7 +58,7 @@ mod an_allowed_message {
                 "lock room_1",
                 "load_context room_1",
                 "hook pii_scan",
-                "load_bindings room_1",
+                "load_context room_1",
                 "commit #1 ai delivered \"Hello back\"",
                 "release room_1",
                 "on_event sms <- evt_2",
@@ -544,11 +544,12 @@ mod an_injected_event_s_pass {
     }
 
     /// Gap G-043: the framework's own re-injection, refused by a room that
-    /// closed during its cascade.
+    /// closed during its cascade, here by a hook running on it under the
+    /// lock (gap G-070).
     #[test]
     fn refused_by_a_room_closed_meanwhile_emits_room_refused_event_as_reentry() {
         let mut sim = notifying_room(false);
-        sim.hooks_change = Some(HookChange::CloseRoom);
+        sim.hooks_change = Some(HookChange::CloseRoomOn("Heads up"));
         sim.send(Sim::message("sms", "hello")).unwrap();
         assert_eq!(
             (sim.timeline_lines(), sim.framework_events().last().copied()),
@@ -666,7 +667,7 @@ mod a_source_that_cannot_write {
             sim.trace[5..],
             [
                 "hook audit",
-                "load_bindings room_1",
+                "load_context room_1",
                 "commit #0 sms blocked:source_muted \"Bonjour\"",
                 "release room_1",
                 "leave lane room_1",

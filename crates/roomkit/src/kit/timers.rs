@@ -69,7 +69,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 continue;
             }
             let check = CheckTimers::new(self.config(), room.id.clone());
-            match driver::run(&self.inner, check).await {
+            match driver::run(&self.inner, "check_timers", check).await {
                 Ok(Ok(checked)) if !checked.transitions.is_empty() => changed.push(checked.room),
                 Ok(Ok(_)) => {}
                 Ok(Err(error)) => tracing::warn!(

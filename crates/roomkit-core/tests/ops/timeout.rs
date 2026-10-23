@@ -333,8 +333,8 @@ mod expiring_during {
         );
     }
 
-    /// The locked section's reads before the commit: the key check, an
-    /// edit's target, the source check's bindings.
+    /// The locked section's reads before the hooks: the key check, an
+    /// edit's target.
     fn under_the_lock_while(effect: &'static str, message: InboundMessage) -> Sim {
         let mut sim = scanned();
         slow(&mut sim, effect);
@@ -396,17 +396,25 @@ mod expiring_during {
         );
     }
 
+    /// Gap G-070: the room read again once the hooks that ran under the
+    /// lock are over, for the source check and the next index.
     #[test]
-    fn the_source_check_s_read_releases_the_lock_and_names_the_event() {
-        let sim = under_the_lock_while("load_bindings", bonjour());
+    fn the_read_after_the_hooks_releases_the_lock_and_names_the_event() {
+        let mut sim = scanned();
+        // The step 2 read, the gate's, then the read after the hooks.
+        sim.nth_durations
+            .push(("load_context", 3, TIMEOUT + Duration::from_secs(1)));
+        let result = sim.send(bonjour()).unwrap();
         assert_eq!(
             (
-                released_after(&sim, "load_bindings"),
+                refusal(&result),
+                released_after(&sim, "hook policy")[1..].to_vec(),
                 process_timeouts(&sim),
                 sim.timeline.len()
             ),
             (
-                lock_ticket_lane("load_bindings room_1"),
+                timed_out(),
+                lock_ticket_lane("load_context room_1"),
                 vec![&under_the_lock("evt_1")],
                 0
             )
@@ -590,7 +598,7 @@ mod after_the_commit {
                 "lock room_1",
                 "load_context room_1",
                 "hook policy",
-                "load_bindings room_1",
+                "load_context room_1",
             ]
         );
     }

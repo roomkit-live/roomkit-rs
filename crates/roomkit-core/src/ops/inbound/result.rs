@@ -64,6 +64,19 @@ pub enum InboundError {
     /// `standalone` belongs to instructions only (RFC §10.1.1 rule 7).
     #[error("only an instruction may stand alone")]
     StandaloneOutsideInstruction,
+    /// Only the framework writes the visibility `internal`, on the records
+    /// it writes itself (gap G-041). Nothing was read or written.
+    #[error("only the framework writes the visibility internal")]
+    InternalVisibility,
+    /// A directly injected event refused before its commit (RFC §10.5),
+    /// with nothing written: `reason` says why, as an inbound result's
+    /// `reason` would: `room_closed`, `process_timeout`, one of step 8a's
+    /// refusals, `instruction_unaddressed` or `instruction_not_idempotent`.
+    #[error("the event was refused before its commit: {reason}")]
+    Refused {
+        /// Why.
+        reason: String,
+    },
     /// The channel's `handle_inbound()` failed.
     #[error("channel {channel_id} could not parse the message: {error:?}")]
     ChannelFailed {
@@ -88,4 +101,22 @@ pub enum InboundError {
     /// call decided stands.
     #[error("the room's admission ticket failed: {0:?}")]
     Ticket(ErrorRecord),
+}
+
+/// A direct injection's result read as its caller receives it (RFC §10.5):
+/// the committed event's result, a record stored `BLOCKED` included, or an
+/// instruction's, uncommitted (RFC §10.1.1). A result with no event was
+/// refused before its commit, with nothing written: it is raised as
+/// [`InboundError::Refused`], with its reason.
+///
+/// # Errors
+///
+/// Returns [`InboundError::Refused`] for a result that carries no event.
+pub(super) fn committed(result: InboundResult) -> Result<InboundResult, InboundError> {
+    if result.event.is_some() {
+        return Ok(result);
+    }
+    Err(InboundError::Refused {
+        reason: result.reason.unwrap_or_else(|| "refused".to_owned()),
+    })
 }

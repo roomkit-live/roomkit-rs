@@ -2,11 +2,16 @@
 //! (docs/architecture.md, "The effect protocol").
 //!
 //! An operation asks for [`Effect`]s, each answered by exactly one
-//! [`Outcome`], and emits [`Notice`]s, which need no answer.
+//! [`Outcome`], and emits [`Notice`]s, which need no answer. An operation
+//! that holds a room's lane adopts the calls into that room its own work
+//! makes ([`Entry`]), and reports each one's result once it is decided
+//! ([`Settled`]).
 
 mod answers;
+mod entries;
 
 pub(crate) use answers::RequestKind;
+pub use entries::{Entry, EntryId, Settled};
 
 use std::time::Duration;
 
@@ -50,6 +55,13 @@ pub struct Effect {
     /// a release or a commit: giving up on one of those midway could leave
     /// half of it done.
     pub deadline: Option<Timestamp>,
+    /// The room whose lock the operation holds on the request's behalf: the
+    /// request runs within that lock's tenure, as a hook under the lock
+    /// does, so code it calls may take the lock again, at once (RFC §13.5:
+    /// the lock is reentrant within one execution context). `None` for a
+    /// request made outside every lock: code it calls waits for a lock as
+    /// anyone does.
+    pub locked: Option<RoomId>,
 }
 
 /// What an effect asks of the driver, and the outcome it is answered with.
@@ -110,11 +122,6 @@ pub enum Request {
         room_id: RoomId,
         /// How many of the latest events to read.
         recent_events: usize,
-    },
-    /// Read the room's bindings. Answer [`Outcome::Bindings`].
-    LoadBindings {
-        /// The room.
-        room_id: RoomId,
     },
     /// Find the event the room committed from `channel_id` with an
     /// idempotency key (RFC §13.4, scoped to the channel by gap G-023).
@@ -337,8 +344,6 @@ pub enum Outcome {
     Context(Box<RoomContext>),
     /// No room has the requested id.
     RoomNotFound,
-    /// The room's bindings.
-    Bindings(Vec<ChannelBinding>),
     /// The event committed with the key, if any.
     Idempotent(Option<Box<RoomEvent>>),
     /// The event read, if any.
@@ -396,6 +401,9 @@ pub enum Notice {
 pub struct Step<T> {
     /// Notices to perform now, in order.
     pub notices: Vec<Notice>,
+    /// The adopted entries decided since the last poll, whose callers the
+    /// driver answers now (RFC §10.1 step 18).
+    pub settled: Vec<Settled>,
     /// What comes next.
     pub next: Next<T>,
 }
@@ -404,9 +412,10 @@ pub struct Step<T> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Next<T> {
     /// Execute these effects, in any order or concurrently, and complete
-    /// each; then poll again.
+    /// each as it finishes; poll again after each completion.
     Effects(Vec<Effect>),
-    /// Effects are still outstanding: complete them, then poll again.
+    /// Effects or adopted entries are still outstanding: complete the next
+    /// effect that finishes, or adopt the next call, then poll again.
     Waiting,
     /// The operation is over.
     Ready(T),
@@ -416,8 +425,9 @@ pub enum Next<T> {
 /// answer to each effect.
 ///
 /// A driver runs any operation with the same loop: poll, perform the
-/// notices, execute the effects and complete each, until the operation is
-/// ready (see the [`ops`](crate::ops) module).
+/// notices, execute the effects and complete each as it finishes, polling
+/// between completions, until the operation is ready (see the
+/// [`ops`](crate::ops) module).
 pub trait Operation {
     /// What the operation produces once it is over.
     type Output;
@@ -433,6 +443,22 @@ pub trait Operation {
     /// Returns [`ProtocolError`] when `id` is not outstanding or `outcome`
     /// does not answer its request; the operation is unchanged then.
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError>;
+
+    /// Hands the operation a call into the room whose lane it holds, made
+    /// by the code effect `origin` runs, or by code that code awaits (RFC
+    /// §13.5). The operation runs it as an entry of its own and reports its
+    /// result in [`Step::settled`]; the next poll starts it.
+    ///
+    /// # Errors
+    ///
+    /// Hands `entry` back when the operation does not adopt it: an operation
+    /// that holds no lane, another room's call, or an `origin` no longer
+    /// outstanding. The driver then fails the call rather than let it wait
+    /// for what its own caller holds.
+    fn adopt(&mut self, entry: Entry, origin: EffectId) -> Result<EntryId, Box<Entry>> {
+        let _ = origin;
+        Err(Box::new(entry))
+    }
 }
 
 /// A driver broke the protocol.

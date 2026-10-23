@@ -305,12 +305,7 @@ mod an_accepted_instruction {
         sim.send(instruction()).unwrap();
         assert_eq!(
             locked_section(&sim),
-            [
-                "lock room_1",
-                "load_context room_1",
-                "load_bindings room_1",
-                "release room_1",
-            ]
+            ["lock room_1", "load_context room_1", "release room_1",]
         );
     }
 

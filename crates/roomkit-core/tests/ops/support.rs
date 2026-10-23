@@ -22,6 +22,18 @@
 //!
 //! The router is scripted: each `Route` takes the next answer of `routes`,
 //! a new room once they are spent.
+//!
+//! A hook or a channel may call into its own room (RFC §13.5): it is
+//! scripted as a [`Reentry`], the entry it makes from the event it runs on
+//! and what it answers. The driver hands the entry to the running operation
+//! (`Operation::adopt`), keeps the hook's or the channel's effect
+//! outstanding, executes the operation's next effects, and completes the
+//! effect once the entry is settled, out of order; a caller that does not
+//! wait answers at once. The trace reads `<effect> calls <entry>` where the
+//! call is made, `<effect> settled` where its entry is settled, and
+//! `<effect> returns` where the effect completes. Every entry must be
+//! settled before the operation ends. A request made under a room's lock
+//! (`Effect::locked`) is checked to be made while the room's lock is held.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::mem;
@@ -30,15 +42,16 @@ use std::time::Duration;
 
 use roomkit_core::model::{
     Access, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelMediaType, ChannelOutput, ChannelType, ErrorRecord, EventContent, EventDirection,
-    EventId, EventSource, EventStatus, EventType, EventUpdates, Identity, InboundMessage,
-    Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomStatus,
-    Task, Timestamp,
+    ChannelMediaType, ChannelOutput, ChannelType, DirectEvent, ErrorRecord, EventContent,
+    EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates, HookResult,
+    Identity, InboundMessage, Observation, Participant, ParticipantId, Room, RoomContext,
+    RoomEvent, RoomId, RoomStatus, Task, Timestamp,
 };
 use roomkit_core::ops::{
-    ChannelDeclaration, DeleteEvent, Environment, FrameworkEvent, Inbound, InboundError,
-    InboundResult, InboundTarget, KitConfig, MutationError, Next, Notice, Operation, Outcome,
-    Request, RoomCounters, SequentialEnvironment, TargetUpdate, UpdateEvent, default_inbound_event,
+    ChannelDeclaration, CommitRecord, DeleteEvent, Effect, EffectId, Entry, EntryId, Environment,
+    FrameworkEvent, Inbound, InboundError, InboundResult, InboundTarget, KitConfig, MutationError,
+    Next, Notice, Operation, Outcome, Request, RoomCounters, SequentialEnvironment, Settled,
+    TargetUpdate, UpdateEvent, default_inbound_event,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
@@ -54,12 +67,58 @@ pub(crate) type Deliver = Box<dyn FnMut(&RoomEvent) -> Result<ChannelOutput, Err
 /// What a SYNC hook produces.
 pub(crate) type Hook = Box<dyn FnMut(&RoomEvent) -> HookOutcome<RoomEvent>>;
 
+/// What a call into the room returned: its entry's result.
+pub(crate) type Called = Result<InboundResult, InboundError>;
+
+/// The calls a hook or a channel makes into its own room while it runs (RFC
+/// §13.5): the entries it makes from the event it runs on, none for an
+/// event it runs on as it would without calling, and what it answers.
+pub(crate) struct Reentry<T> {
+    pub(crate) entries: MakeEntries,
+    pub(crate) answer: Answer<T>,
+}
+
+/// How a caller makes its entries from the event it runs on.
+pub(crate) type MakeEntries = Box<dyn FnMut(&RoomEvent) -> Vec<Entry>>;
+
+/// A caller that makes at most one entry, as `call` says.
+pub(crate) fn calling(mut call: impl FnMut(&RoomEvent) -> Option<Entry> + 'static) -> MakeEntries {
+    Box::new(move |event| call(event).into_iter().collect())
+}
+
+/// What a caller answers once it made its call.
+pub(crate) enum Answer<T> {
+    /// It awaits the entry's result and answers from it.
+    Awaits(Box<dyn FnMut(&Called) -> T>),
+    /// It does not wait for the result, and answers this at once.
+    AtOnce(Box<dyn FnMut() -> T>),
+}
+
+/// An effect kept outstanding while the entry its call made runs, or an
+/// entry nobody waits for.
+struct Deferred {
+    /// `None` for an entry whose caller did not wait.
+    effect: Option<EffectId>,
+    entry: EntryId,
+    label: String,
+    caller: Caller,
+}
+
+/// Who made a call into the room.
+#[derive(Clone)]
+enum Caller {
+    Hook(HookId),
+    Channel(ChannelId),
+}
+
 /// A change the hooks make in the room while they run.
 pub(crate) enum HookChange {
     /// They mute the channel, as a moderation hook would.
     Mute(ChannelId),
     /// They close the room, as a hook that ends the conversation would.
     CloseRoom,
+    /// They close the room when they run on the event of this text.
+    CloseRoomOn(&'static str),
 }
 
 struct Channel {
@@ -132,6 +191,9 @@ pub(crate) struct Sim {
     /// of its trace line (`hook pii_scan`, `lock room_1`, `await ticket
     /// room_1`, `handle_inbound sms`); the first match counts.
     pub(crate) durations: Vec<(&'static str, Duration)>,
+    /// How long the nth effect named by a start of trace line takes, the
+    /// others taking no time: `(start, n, duration)`, `n` counted from 1.
+    pub(crate) nth_durations: Vec<(&'static str, usize, Duration)>,
     /// The trace line of every effect that carried a deadline, in order.
     pub(crate) bounded: Vec<String>,
     /// The contexts the SYNC hooks ran with, by hook name, in order.
@@ -174,6 +236,14 @@ pub(crate) struct Sim {
     /// simulated clock, as a slow turn or provider would: the clock moves
     /// while a cascade runs.
     pub(crate) delivery_duration: Duration,
+    /// The hooks that call into their own room as they run (RFC §13.5).
+    reentrant_hooks: BTreeMap<HookId, Reentry<HookOutcome<RoomEvent>>>,
+    /// The channels whose `on_event()` calls into their own room.
+    reentrant_channels: BTreeMap<ChannelId, Reentry<Result<ChannelOutput, ErrorRecord>>>,
+    /// The entries the operations settled, in order.
+    pub(crate) settled: Vec<Settled>,
+    /// How many adopted entries are not settled yet.
+    adopting: usize,
     /// The effect that fails, named by the start of its trace line: a store
     /// write (`update room`, `delete binding sms`, `store room`), a room
     /// lock (`lock room_1`), a room's lane (`enter lane room_1`), the
@@ -234,6 +304,7 @@ impl Sim {
             tickets_held: BTreeSet::new(),
             admitted: BTreeSet::new(),
             durations: Vec::new(),
+            nth_durations: Vec::new(),
             bounded: Vec::new(),
             hook_contexts: Vec::new(),
             running: Running::Other,
@@ -251,6 +322,10 @@ impl Sim {
             release_fails: false,
             leave_fails: false,
             delivery_duration: Duration::ZERO,
+            reentrant_hooks: BTreeMap::new(),
+            reentrant_channels: BTreeMap::new(),
+            settled: Vec::new(),
+            adopting: 0,
             failing_effect: None,
         }
     }
@@ -431,6 +506,67 @@ impl Sim {
         id
     }
 
+    /// Registers a SYNC `BEFORE_BROADCAST` hook named `name`, under the
+    /// lock when `needs_lock`, that calls into its own room as it runs.
+    pub(crate) fn reentrant_hook(
+        &mut self,
+        name: &str,
+        needs_lock: bool,
+        reentry: Reentry<HookOutcome<RoomEvent>>,
+    ) -> HookId {
+        let spec = HookSpec {
+            needs_lock,
+            ..HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync)
+        };
+        let id = self.sync_hook(
+            spec,
+            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+        );
+        self.reentrant_hooks.insert(id, reentry);
+        id
+    }
+
+    /// Makes the bound channel `id` call into its own room from its
+    /// `on_event()`, as an agent's turn that injects does.
+    pub(crate) fn reentrant_channel(
+        &mut self,
+        id: &str,
+        reentry: Reentry<Result<ChannelOutput, ErrorRecord>>,
+    ) {
+        self.reentrant_channels.insert(channel(id), reentry);
+    }
+
+    /// Runs `event`, injected directly into `room` (RFC §10.5).
+    pub(crate) fn inject(
+        &mut self,
+        room: &str,
+        event: DirectEvent,
+    ) -> Result<InboundResult, InboundError> {
+        let config = Arc::new(self.config.clone());
+        let operation = Inbound::inject(config, RoomId::new(room).unwrap(), event);
+        self.running = Running::Inbound;
+        let result = self.run(operation);
+        self.running = Running::Other;
+        result
+    }
+
+    /// Commits `record` to `room` outside the pipeline, for a caller acting
+    /// for `organization` (RFC §10.5 `commit_event`).
+    pub(crate) fn commit_record(
+        &mut self,
+        room: &str,
+        record: RoomEvent,
+        organization: Option<&str>,
+    ) -> Result<RoomEvent, MutationError> {
+        let operation = CommitRecord::new(
+            self.shared_config(),
+            RoomId::new(room).unwrap(),
+            record,
+            organization.map(str::to_owned),
+        );
+        self.run(operation)
+    }
+
     /// A text message from `+15551234567` on `channel_id`.
     pub(crate) fn message(channel_id: &str, text: &str) -> InboundMessage {
         InboundMessage::new(
@@ -530,42 +666,194 @@ impl Sim {
         }
     }
 
-    /// Runs `operation` to its end, executing every effect it asks for.
+    /// Runs `operation` to its end, executing every effect it asks for,
+    /// and completing an effect whose call made an entry once the entry is
+    /// settled.
     pub(crate) fn run<O: Operation>(&mut self, mut operation: O) -> O::Output {
+        let mut deferred: Vec<Deferred> = Vec::new();
         loop {
             let step = operation.poll(&mut self.env);
             self.journal.extend(step.notices.iter().map(journal_line));
             self.notices.extend(step.notices);
+            let answered = !step.settled.is_empty();
+            for settled in step.settled {
+                self.answer(&mut operation, &mut deferred, settled);
+            }
+            self.adopting = deferred.len();
             match step.next {
                 Next::Ready(output) => {
                     assert!(
-                        self.locks_held.is_empty(),
-                        "the operation ended holding the lock of {:?}",
-                        self.locks_held
+                        deferred.is_empty(),
+                        "the operation ended with an entry unsettled"
                     );
-                    assert!(
-                        self.lanes_held.is_empty(),
-                        "the operation ended holding the lane of {:?}",
-                        self.lanes_held
-                    );
-                    assert!(
-                        self.tickets_held.is_empty(),
-                        "the operation ended holding the ticket of {:?}",
-                        self.tickets_held
-                    );
+                    self.assert_nothing_held();
                     return output;
                 }
-                Next::Waiting => panic!("a driver that completes every effect never waits"),
+                Next::Waiting => {
+                    assert!(answered, "the operation waits for nothing the driver does");
+                }
                 Next::Effects(effects) => {
                     for effect in effects {
-                        let traced = self.trace.len();
-                        let outcome = self.execute_timed(effect.request, effect.deadline);
-                        self.journal.extend(self.trace.iter().skip(traced).cloned());
-                        operation.complete(effect.id, outcome).unwrap();
+                        self.execute_effect(&mut operation, &mut deferred, effect);
+                        self.adopting = deferred.len();
                     }
                 }
             }
         }
+    }
+
+    fn assert_nothing_held(&self) {
+        assert!(
+            self.locks_held.is_empty(),
+            "the operation ended holding the lock of {:?}",
+            self.locks_held
+        );
+        assert!(
+            self.lanes_held.is_empty(),
+            "the operation ended holding the lane of {:?}",
+            self.lanes_held
+        );
+        assert!(
+            self.tickets_held.is_empty(),
+            "the operation ended holding the ticket of {:?}",
+            self.tickets_held
+        );
+    }
+
+    /// Executes `effect`, or, for a hook or a channel that calls into its
+    /// room, hands the operation the entry and keeps the effect outstanding.
+    fn execute_effect<O: Operation>(
+        &mut self,
+        operation: &mut O,
+        deferred: &mut Vec<Deferred>,
+        effect: Effect,
+    ) {
+        if let Some(room) = &effect.locked {
+            assert!(
+                self.locks_held.contains(room),
+                "a request made under the lock of {room} while the lock is free"
+            );
+        }
+        let traced = self.trace.len();
+        if let Some((caller, entries)) = self.reentry(&effect) {
+            let label = self.label(&effect.request);
+            let at_once = self.answer_at_once(&caller);
+            assert!(
+                at_once.is_some() || entries.len() == 1,
+                "a caller that waits makes one call"
+            );
+            for entry in entries {
+                self.trace
+                    .push(format!("{label} calls {}", entry_name(&entry)));
+                let id = operation
+                    .adopt(entry, effect.id)
+                    .unwrap_or_else(|_| panic!("the operation refused the call of {label}"));
+                deferred.push(Deferred {
+                    effect: at_once.is_none().then_some(effect.id),
+                    entry: id,
+                    label: label.clone(),
+                    caller: caller.clone(),
+                });
+            }
+            self.journal.extend(self.trace.iter().skip(traced).cloned());
+            if let Some(outcome) = at_once {
+                self.trace.push(format!("{label} returns"));
+                self.journal.push(format!("{label} returns"));
+                operation.complete(effect.id, outcome).unwrap();
+            }
+            return;
+        }
+        let outcome = self.execute_timed(effect.request, effect.deadline);
+        self.journal.extend(self.trace.iter().skip(traced).cloned());
+        operation.complete(effect.id, outcome).unwrap();
+    }
+
+    /// The entries a hook or a channel makes into its room on `effect`, if
+    /// it is one that calls.
+    fn reentry(&mut self, effect: &Effect) -> Option<(Caller, Vec<Entry>)> {
+        if let Request::RunHook {
+            hook,
+            event,
+            context,
+            ..
+        } = &effect.request
+        {
+            let reentry = self.reentrant_hooks.get_mut(hook)?;
+            let entries = (reentry.entries)(event);
+            if entries.is_empty() {
+                return None;
+            }
+            let name = self.config.hooks.get(*hook).unwrap().name.clone();
+            self.hook_contexts.push((name, (**context).clone()));
+            return Some((Caller::Hook(*hook), entries));
+        }
+        if let Request::OnEvent { binding, event, .. } = &effect.request {
+            let reentry = self.reentrant_channels.get_mut(&binding.channel_id)?;
+            let entries = (reentry.entries)(event);
+            if entries.is_empty() {
+                return None;
+            }
+            return Some((Caller::Channel(binding.channel_id.clone()), entries));
+        }
+        None
+    }
+
+    /// What a caller that does not wait for its entry's result answers at
+    /// once; `None` for a caller that waits.
+    fn answer_at_once(&mut self, caller: &Caller) -> Option<Outcome> {
+        match caller {
+            Caller::Hook(hook) => match &mut self.reentrant_hooks.get_mut(hook)?.answer {
+                Answer::AtOnce(answer) => Some(Outcome::Hook(Box::new(answer()))),
+                Answer::Awaits(_) => None,
+            },
+            Caller::Channel(channel_id) => {
+                match &mut self.reentrant_channels.get_mut(channel_id)?.answer {
+                    Answer::AtOnce(answer) => Some(output(answer())),
+                    Answer::Awaits(_) => None,
+                }
+            }
+        }
+    }
+
+    /// Answers the call that made `settled`'s entry, completing its effect
+    /// when the caller waits for it.
+    fn answer<O: Operation>(
+        &mut self,
+        operation: &mut O,
+        deferred: &mut Vec<Deferred>,
+        settled: Settled,
+    ) {
+        let index = deferred
+            .iter()
+            .position(|call| call.entry == settled.entry)
+            .unwrap_or_else(|| panic!("an entry settled that no call made: {settled:?}"));
+        let call = deferred.remove(index);
+        self.trace.push(format!("{} settled", call.label));
+        self.journal.push(format!("{} settled", call.label));
+        let Some(effect) = call.effect else {
+            self.settled.push(settled);
+            return;
+        };
+        let outcome = match &call.caller {
+            Caller::Hook(hook) => {
+                let reentry = self.reentrant_hooks.get_mut(hook).unwrap();
+                let Answer::Awaits(then) = &mut reentry.answer else {
+                    unreachable!("a caller that waits answers from the result");
+                };
+                Outcome::Hook(Box::new(then(&settled.result)))
+            }
+            Caller::Channel(channel_id) => {
+                let reentry = self.reentrant_channels.get_mut(channel_id).unwrap();
+                let Answer::Awaits(then) = &mut reentry.answer else {
+                    unreachable!("a caller that waits answers from the result");
+                };
+                output(then(&settled.result))
+            }
+        };
+        self.settled.push(settled);
+        self.trace.push(format!("{} returns", call.label));
+        self.journal.push(format!("{} returns", call.label));
+        operation.complete(effect, outcome).unwrap();
     }
 
     /// The kit's configuration, as an operation receives it.
@@ -709,11 +997,25 @@ impl Sim {
     /// `DeadlinePassed` at the deadline (RFC §13.6).
     fn execute_timed(&mut self, request: Request, deadline: Option<Timestamp>) -> Outcome {
         let line = self.label(&request);
+        let nth = |prefix: &str| {
+            self.trace
+                .iter()
+                .filter(|traced| traced.starts_with(prefix))
+                .count()
+                + 1
+        };
         let duration = self
             .durations
             .iter()
             .find(|(prefix, _)| line.starts_with(prefix))
-            .map_or(Duration::ZERO, |(_, duration)| *duration);
+            .map(|(_, duration)| *duration)
+            .or_else(|| {
+                self.nth_durations
+                    .iter()
+                    .find(|(prefix, n, _)| line.starts_with(prefix) && nth(prefix) == *n)
+                    .map(|(_, _, duration)| *duration)
+            })
+            .unwrap_or(Duration::ZERO);
         if let Some(deadline) = deadline {
             self.bounded.push(line.clone());
             let now = self.env.now();
@@ -740,7 +1042,6 @@ impl Sim {
             Request::AwaitTicket { room_id } => format!("await ticket {room_id}"),
             Request::ReleaseTicket { room_id } => format!("release ticket {room_id}"),
             Request::LoadContext { room_id, .. } => format!("load_context {room_id}"),
-            Request::LoadBindings { room_id } => format!("load_bindings {room_id}"),
             Request::FindByIdempotencyKey { key, .. } => format!("find_key {key}"),
             Request::GetEvent { event_id } => format!("get_event {event_id}"),
             Request::Commit { .. } => "commit".to_owned(),
@@ -822,7 +1123,6 @@ impl Sim {
                 self.on_room(&room, |sim| sim.update_stored_event(&event_id, &updates))
             }
             Request::LoadContext { .. }
-            | Request::LoadBindings { .. }
             | Request::FindByIdempotencyKey { .. }
             | Request::Commit { .. }
             | Request::PersistSideEffects { .. }
@@ -924,7 +1224,10 @@ impl Sim {
                 binding.unwrap().muted = true;
             }
             Some(HookChange::CloseRoom) => self.room.status = RoomStatus::Closed,
-            None => {}
+            Some(HookChange::CloseRoomOn(text)) if text_of(&event.content) == *text => {
+                self.room.status = RoomStatus::Closed;
+            }
+            Some(HookChange::CloseRoomOn(_)) | None => {}
         }
         Outcome::Hook(Box::new(outcome))
     }
@@ -1018,7 +1321,6 @@ impl Sim {
             | Request::ReleaseTicket { .. }
             | Request::LeaveLane { .. }
             | Request::LoadContext { .. }
-            | Request::LoadBindings { .. }
             | Request::FindByIdempotencyKey { .. }
             | Request::PersistSideEffects { .. }
             | Request::HandleInbound { .. }
@@ -1039,8 +1341,12 @@ impl Sim {
     fn acquire(&mut self, room_id: RoomId) -> Outcome {
         self.trace.push(format!("lock {room_id}"));
         self.assert_in_lane(&room_id, "took the room lock");
+        // An entry adopted from the operation's own work takes no ticket and
+        // commits ahead of the event whose check emitted it (RFC §9.5.1).
         assert!(
-            !self.tickets_held.contains(&room_id) || self.admitted.contains(&room_id),
+            !self.tickets_held.contains(&room_id)
+                || self.admitted.contains(&room_id)
+                || self.adopting > 0,
             "a ticketed event took the room lock before its turn"
         );
         self.record_meanwhile(&room_id);
@@ -1207,10 +1513,6 @@ impl Sim {
                     return Outcome::RoomNotFound;
                 }
                 Outcome::Context(Box::new(self.context(recent_events)))
-            }
-            Request::LoadBindings { room_id } => {
-                self.trace.push(format!("load_bindings {room_id}"));
-                Outcome::Bindings(self.bindings.clone())
             }
             Request::FindByIdempotencyKey {
                 channel_id, key, ..
@@ -1449,7 +1751,6 @@ impl Sim {
 fn store_room(request: &Request) -> &RoomId {
     match request {
         Request::LoadContext { room_id, .. }
-        | Request::LoadBindings { room_id }
         | Request::FindByIdempotencyKey { room_id, .. }
         | Request::PersistSideEffects { room_id, .. }
         | Request::UpdateRoom { room_id, .. }
@@ -1491,6 +1792,18 @@ fn output(answer: Result<ChannelOutput, ErrorRecord>) -> Outcome {
     match answer {
         Ok(output) => Outcome::Output(Box::new(output)),
         Err(error) => Outcome::Failed(error),
+    }
+}
+
+/// How the trace names an entry a call makes.
+fn entry_name(entry: &Entry) -> String {
+    match entry {
+        Entry::Direct { room_id, event } => {
+            format!("send_event {room_id} {:?}", text_of(&event.content))
+        }
+        Entry::Message {
+            room_id, message, ..
+        } => format!("process_inbound {room_id} {:?}", text_of(&message.content)),
     }
 }
 

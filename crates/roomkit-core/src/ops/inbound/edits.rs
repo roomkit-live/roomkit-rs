@@ -3,9 +3,10 @@
 //! the commit writes on it.
 //!
 //! Every pass checks its event, whoever brought it: the inbound message, a
-//! channel's response, an event a hook injected (gap G-031). A refused
-//! event is not stored: the inbound message's result reports the reason, a
-//! response's or an injected event's refusal is logged (gap G-062).
+//! direct injection, a channel's response, an event a hook injected (gap
+//! G-031). A refused event is not stored: an entry's caller receives the
+//! reason, a response's or an injected event's refusal is logged (gap
+//! G-062).
 
 use super::pass::PassOrigin;
 use crate::model::{ChannelBinding, EventId, Participant, RoomEvent};
@@ -45,7 +46,7 @@ pub(super) fn check(
 ) -> Result<Accepted, EditRefusal> {
     let mutation = edits::mutation(event)?.ok_or(EditRefusal::TargetNotFound)?;
     let origin = match origin {
-        PassOrigin::Trigger | PassOrigin::Response => Origin::Channel,
+        PassOrigin::Trigger | PassOrigin::Adopted(_) | PassOrigin::Response => Origin::Channel,
         PassOrigin::Injected { .. } => Origin::Hook,
     };
     edits::validate(event, &mutation, target.as_ref(), origin, participants)?;
@@ -56,6 +57,11 @@ pub(super) fn check(
 }
 
 impl Accepted {
+    /// The target's id.
+    pub(super) fn target_id(&self) -> &EventId {
+        &self.target.id
+    }
+
     /// Narrows `event`'s visibility to its target's (gap G-062), among the
     /// room's `bindings`, which tell each channel's category.
     pub(super) fn narrow(&self, event: &mut RoomEvent, bindings: &[ChannelBinding]) {
@@ -103,10 +109,10 @@ impl Accepted {
     }
 }
 
-/// Logs the refusal of an event other than the inbound message's, which
-/// its result reports instead (gap G-062).
+/// Logs the refusal of an event other than an entry's, whose caller's
+/// result reports it instead (gap G-062).
 pub(super) fn log_refusal(event: &RoomEvent, origin: &PassOrigin, refusal: EditRefusal) {
-    if *origin == PassOrigin::Trigger {
+    if origin.is_entry() {
         return;
     }
     tracing::warn!(

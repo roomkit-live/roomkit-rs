@@ -11,18 +11,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use roomkit_core::model::{
-    ChannelOutput, CompositeContent, DeleteContent, DeleteType, EditContent, EditSource,
-    EventContent, EventId, EventStatus, EventType, EventUpdates, HookResult, InboundMessage,
-    InjectedEvent, Participant, ParticipantId, ParticipantRole, Room, RoomEvent, RoomId,
-    RoomStatus, RoomTimers, Timestamp, Visibility,
+    ChannelOutput, CompositeContent, DeleteContent, DeleteType, DirectEvent, EditContent,
+    EditSource, EventContent, EventId, EventStatus, EventType, EventUpdates, HookResult,
+    InboundMessage, InjectedEvent, Participant, ParticipantId, ParticipantRole, Room, RoomEvent,
+    RoomId, RoomStatus, RoomTimers, Timestamp, Visibility,
 };
-use roomkit_core::ops::{InboundResult, MutationError};
+use roomkit_core::ops::{Entry, InboundResult, MutationError};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::HookTrigger;
 use roomkit_core::rules::transcoding;
 use serde_json::json;
 
-use crate::support::{Sim, channel, notice_event, response, room_id};
+use crate::support::{Answer, Reentry, Sim, calling, channel, notice_event, response, room_id};
 
 const SENDER: &str = "+15551234567";
 const OTHER: &str = "+15550000009";
@@ -167,7 +167,6 @@ mod an_accepted_edit {
                 "lock room_1",
                 "load_context room_1",
                 "get_event evt_1",
-                "load_bindings room_1",
                 "commit #1 wa delivered \"Correction: I need 50000$\" updating evt_1",
                 "release room_1",
                 "fire on_event_updated",
@@ -294,7 +293,7 @@ mod an_accepted_delete {
         sim.send(delete()).unwrap();
         assert_eq!(
             (
-                locked_section(&sim)[4..].to_vec(),
+                locked_section(&sim)[3..].to_vec(),
                 sim.async_payloads()[0].metadata.get("deleted").cloned()
             ),
             (
@@ -1375,5 +1374,59 @@ mod another_event {
         let mut sim = room();
         sim.send(Sim::message("wa", "Bonjour")).unwrap();
         assert_eq!(sim.traced("get_event"), Vec::<&str>::new());
+    }
+}
+
+/// RFC §10.1 step 8a, §13.5, gap G-070: an edit's target is checked again
+/// once the hooks that ran under the lock are over, so a change a hook's code
+/// committed ahead of the edit is not undone by it.
+mod a_target_changed_by_a_hook {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// A moderation hook deletes the target the edit was accepted for: the
+    /// edit is refused, and the target stays deleted.
+    #[test]
+    fn refuses_the_edit_the_target_no_longer_takes() {
+        let mut sim = room();
+        sim.reentrant_hook(
+            "moderator",
+            true,
+            Reentry {
+                entries: calling(|event| {
+                    (event.event_type == EventType::Edit).then(|| {
+                        let mut delete = DirectEvent::new(
+                            channel("wa"),
+                            EventContent::Delete(DeleteContent {
+                                target_event_id: id("evt_1"),
+                                delete_type: DeleteType::Sender,
+                                reason: None,
+                            }),
+                        );
+                        delete.event_type = EventType::Delete;
+                        delete.participant_id = Some(ParticipantId::new(SENDER).unwrap());
+                        Entry::Direct {
+                            room_id: room_id(),
+                            event: Box::new(delete),
+                        }
+                    })
+                }),
+                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        let result = sim.send(edit()).unwrap();
+        let target = stored(&sim, "evt_1");
+        assert_eq!(
+            (
+                result.reason.as_deref(),
+                transcoding::text_of(&target.content),
+                target.metadata.get("deleted").cloned()
+            ),
+            (
+                Some("target_event_not_found"),
+                "I need 5000$".to_owned(),
+                Some(json!(true))
+            )
+        );
     }
 }

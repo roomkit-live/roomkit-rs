@@ -3,9 +3,7 @@
 //! through once checked.
 
 use super::{EffectId, Outcome, ProtocolError, Request};
-use crate::model::{
-    ChannelBinding, ChannelOutput, ErrorRecord, IdentityId, RoomContext, RoomEvent, RoomId,
-};
+use crate::model::{ChannelOutput, ErrorRecord, IdentityId, RoomContext, RoomEvent, RoomId};
 use crate::rules::hook_chain::HookOutcome;
 
 /// The families of requests, each answered by its own outcomes.
@@ -19,7 +17,6 @@ pub(crate) enum RequestKind {
     AwaitTicket,
     ReleaseTicket,
     LoadContext,
-    LoadBindings,
     FindByIdempotencyKey,
     GetEvent,
     DeleteEvent,
@@ -45,7 +42,6 @@ impl Request {
             Self::AwaitTicket { .. } => RequestKind::AwaitTicket,
             Self::ReleaseTicket { .. } => RequestKind::ReleaseTicket,
             Self::LoadContext { .. } => RequestKind::LoadContext,
-            Self::LoadBindings { .. } => RequestKind::LoadBindings,
             Self::FindByIdempotencyKey { .. } => RequestKind::FindByIdempotencyKey,
             Self::GetEvent { .. } => RequestKind::GetEvent,
             Self::DeleteEvent { .. } => RequestKind::DeleteEvent,
@@ -78,7 +74,6 @@ impl RequestKind {
             Self::AwaitTicket => "Admitted",
             Self::ReleaseTicket => "TicketReleased",
             Self::LoadContext => "Context or RoomNotFound",
-            Self::LoadBindings => "Bindings",
             Self::FindByIdempotencyKey => "Idempotent",
             Self::GetEvent => "Event",
             Self::DeleteEvent => "Deleted",
@@ -114,7 +109,6 @@ impl RequestKind {
             | (Self::AwaitTicket, Outcome::Admitted)
             | (Self::ReleaseTicket, Outcome::TicketReleased)
             | (Self::LoadContext, Outcome::Context(_) | Outcome::RoomNotFound)
-            | (Self::LoadBindings, Outcome::Bindings(_))
             | (Self::FindByIdempotencyKey, Outcome::Idempotent(_))
             | (Self::GetEvent, Outcome::Event(_))
             | (Self::DeleteEvent, Outcome::Deleted(_))
@@ -136,7 +130,6 @@ impl RequestKind {
                 | Self::AwaitTicket
                 | Self::ReleaseTicket
                 | Self::LoadContext
-                | Self::LoadBindings
                 | Self::FindByIdempotencyKey
                 | Self::GetEvent
                 | Self::DeleteEvent
@@ -236,13 +229,6 @@ impl Outcome {
         match self {
             Self::Context(context) => Ok(Some(context)),
             Self::RoomNotFound => Ok(None),
-            other => Err(other.into_failure()),
-        }
-    }
-
-    pub(crate) fn into_bindings(self) -> Result<Vec<ChannelBinding>, ErrorRecord> {
-        match self {
-            Self::Bindings(bindings) => Ok(bindings),
             other => Err(other.into_failure()),
         }
     }
@@ -358,7 +344,6 @@ impl Outcome {
             Self::TicketReleased => "TicketReleased",
             Self::Context(_) => "Context",
             Self::RoomNotFound => "RoomNotFound",
-            Self::Bindings(_) => "Bindings",
             Self::Idempotent(_) => "Idempotent",
             Self::Event(_) => "Event",
             Self::Deleted(_) => "Deleted",
