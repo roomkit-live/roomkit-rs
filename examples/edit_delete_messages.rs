@@ -99,6 +99,13 @@ impl Conversation {
         })
     }
 
+    /// The mutation triggers that fired so far. They run as observers, in
+    /// the background: the kit's background work is waited for first.
+    async fn changes(&self) -> Vec<(HookTrigger, RoomEvent)> {
+        self.kit.idle().await;
+        self.changed.entries()
+    }
+
     async fn send(
         &self,
         message: InboundMessage,
@@ -229,7 +236,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let target = conversation.stored(3).await?;
     let to_advisor = last_delivered(&conversation.advisor);
     let read = conversation.agent.turns().last().cloned();
-    let updated = conversation.changed.wait_for(1).await.last().cloned();
+    let updated = conversation.changes().await.last().cloned();
     checks.expect(
         "the edit is stored after its target, which now reads \"I need 50000$\" and is marked edited",
         edited.event.is_some_and(|event| event.index == 6)
@@ -263,7 +270,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let deleted = conversation.send(delete).await?;
     let target = conversation.stored(5).await?;
     let to_advisor = last_delivered(&conversation.advisor);
-    let removed = conversation.changed.wait_for(2).await.last().cloned();
+    let removed = conversation.changes().await.last().cloned();
     checks.expect(
         "the delete is stored after its target, which is marked deleted",
         deleted.event.is_some_and(|event| event.index == 7)
@@ -285,7 +292,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let blocked = conversation.edit(4, "To card 4242 4242 4242 4242")?;
     let refused = conversation.send(blocked).await?;
     let target = conversation.stored(4).await?;
-    let fired = conversation.changed.settled().await;
+    let fired = conversation.changes().await;
     checks.expect(
         "the edit is blocked by the scanner, and its target still reads \"To my savings account\"",
         refused.blocked

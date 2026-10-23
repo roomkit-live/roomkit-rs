@@ -185,11 +185,12 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .first()
         .cloned()
         .ok_or("the agent sent no note")?;
-    // Nothing awaits the note's delivery: the framework reports its end.
-    let processed = shared::next_event(&mut events, |event| {
+    // Nothing awaits the note's delivery: it runs in the background, and
+    // the framework reports its end.
+    kit.idle().await;
+    let processed = shared::framework_events(&mut events).into_iter().find(|event| {
         matches!(event, FrameworkEvent::EventProcessed { event_id, .. } if *event_id == note.event.id)
-    })
-    .await;
+    });
     shared::print_timeline(&shared::timeline(&kit, &room).await?);
     println!("Delivered on SMS: {:?}", customer.texts());
     checks.expect(

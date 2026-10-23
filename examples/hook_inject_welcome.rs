@@ -116,7 +116,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.attach(&room, alice.id()).await?;
     kit.attach(&room, bob.id()).await?;
     // The observer runs in the background, once each attach returned.
-    attached.wait_for(2).await;
+    kit.idle().await;
 
     let says = async |on: &RecordingTransport, text: &str| -> Result<(), Box<dyn Error>> {
         println!("{} writes {text:?}.", on.id());

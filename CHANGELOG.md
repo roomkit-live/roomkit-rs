@@ -536,3 +536,13 @@ publishes a release.
   only once a commit in flight is answered and a room its step 2 created is
   attached (gap G-076). `Operation::completing` says while an operation
   completes such a write.
+- The kit tracks the work it runs in the background: the observer hooks it
+  runs after the fact and every inbound call, those that go on detached
+  included; they were bare tokio tasks. `RoomKit::idle()` waits until none
+  runs. `RoomKit::shutdown()` refuses every call that runs an operation from
+  then on with `KitError::ShutDown`, ends the background work at its next
+  wait, an event committed and not delivered yet staying undelivered, and
+  returns once it is over; a call running in its caller's own task runs to
+  its end. A timer sweeper stops when its kit shuts down, and
+  `check_timers` returns `KitError::ShutDown`. The examples wait for the
+  observers they check with `idle()` instead of a timeout.

@@ -215,9 +215,10 @@ async fn store_call<S: ConversationStore>(store: &S, request: Request) -> Outcom
 }
 
 /// Performs a notice: publishes a framework event, or runs observer hooks in
-/// the background, logging what they raise (RFC §9.3). A background
-/// observer runs outside every execution context: it runs after the fact,
-/// and nothing awaits it as its own.
+/// the background, as tasks the kit tracks, logging what they raise (RFC
+/// §9.3). A background observer runs outside every execution context: it
+/// runs after the fact, and nothing awaits it as its own. Once the kit is
+/// shut down, none runs.
 pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notice) {
     match notice {
         Notice::FrameworkEvent(event) => inner.publish(event),
@@ -231,7 +232,13 @@ pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notic
                 let Some(observing) = observe(inner, trigger, hook, &event, &context) else {
                     continue;
                 };
-                tokio::spawn(observing);
+                if inner.tasks.spawn(observing).is_none() {
+                    tracing::debug!(
+                        target: "roomkit::hooks",
+                        ?trigger,
+                        "the kit is shut down: an observer hook is not run"
+                    );
+                }
             }
         }
     }

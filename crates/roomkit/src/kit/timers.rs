@@ -22,7 +22,8 @@ use crate::error::KitError;
 use crate::store::{ConversationStore, RoomFilter};
 
 /// A background task checking the rooms' timers on a period, started by
-/// [`RoomKit::run_timers`]. Dropping it stops the task.
+/// [`RoomKit::run_timers`]. Dropping it stops the task, and so does the
+/// kit's [`shutdown`](RoomKit::shutdown).
 #[derive(Debug)]
 #[must_use = "dropping the sweeper stops it"]
 pub struct TimerSweeper {
@@ -53,8 +54,11 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Store`] when the store cannot list the rooms.
+    /// Returns [`KitError::Store`] when the store cannot list the rooms,
+    /// and [`KitError::ShutDown`] once the kit is shut down, which stops a
+    /// check under way before its next room.
     pub async fn check_timers(&self) -> Result<Vec<Room>, KitError> {
+        self.inner.open()?;
         let filter = RoomFilter {
             timers_armed: true,
             ..RoomFilter::default()
@@ -72,6 +76,7 @@ impl<S: ConversationStore> RoomKit<S> {
             match driver::run(&self.inner, "check_timers", check).await {
                 Ok(Ok(checked)) if !checked.transitions.is_empty() => changed.push(checked.room),
                 Ok(Ok(_)) => {}
+                Err(KitError::ShutDown) => return Err(KitError::ShutDown),
                 Ok(Err(error)) => tracing::warn!(
                     target: "roomkit::timers",
                     room_id = %room.id,
@@ -90,8 +95,9 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Starts a background task that checks the rooms' timers every
-    /// `period`, the first time at once. A silent room's transition arrives
-    /// up to one period late, with the instant it fell due.
+    /// `period`, the first time at once, until the sweeper is dropped or the
+    /// kit shut down. A silent room's transition arrives up to one period
+    /// late, with the instant it fell due.
     ///
     /// # Errors
     ///
@@ -107,12 +113,59 @@ impl<S: ConversationStore> RoomKit<S> {
             let mut ticks = tokio::time::interval(period);
             ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
-                ticks.tick().await;
-                if let Err(error) = kit.check_timers().await {
-                    tracing::warn!(target: "roomkit::timers", %error, "a timer sweep failed");
+                tokio::select! {
+                    () = kit.inner.tasks.shutting_down() => return,
+                    _ = ticks.tick() => {}
+                }
+                match kit.check_timers().await {
+                    Ok(_) => {}
+                    Err(KitError::ShutDown) => return,
+                    Err(error) => {
+                        tracing::warn!(target: "roomkit::timers", %error, "a timer sweep failed");
+                    }
                 }
             }
         });
         Ok(TimerSweeper { task })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use roomkit_core::model::RoomId;
+    use roomkit_core::ops::FrameworkEvent;
+
+    use super::*;
+
+    /// How long a wait that should end may take before the test fails.
+    const BOUND: Duration = Duration::from_secs(5);
+
+    /// A sweeper stops when its kit shuts down, rather than at its next
+    /// tick an hour later.
+    #[tokio::test]
+    async fn a_timer_sweeper_stops_when_its_kit_shuts_down() {
+        let kit = RoomKit::new();
+        let room_id = RoomId::new("room_1").unwrap();
+        kit.create_room_with(&room_id, |room| {
+            room.timers.inactive_after_seconds = Some(0);
+        })
+        .await
+        .unwrap();
+        let mut events = kit.subscribe();
+        let mut sweeper = kit.run_timers(Duration::from_secs(3600)).unwrap();
+        // The first check pauses the room; the sweeper then waits for its
+        // next tick.
+        let paused = tokio::time::timeout(BOUND, async {
+            while !matches!(events.recv().await, Ok(FrameworkEvent::RoomPaused { .. })) {}
+        })
+        .await;
+        kit.shutdown().await;
+        let stopped = tokio::time::timeout(BOUND, &mut sweeper.task).await;
+        assert_eq!(
+            (paused.is_ok(), stopped.is_ok_and(|ended| ended.is_ok())),
+            (true, true)
+        );
     }
 }

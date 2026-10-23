@@ -81,14 +81,16 @@ impl Clocks {
 ///
 /// # Errors
 ///
-/// Returns [`KitError::Reentrant`] when the operation waited for a ticket's
-/// turn in an admission order its own execution context stands in, which
-/// was refused; a protocol error or a stall is a defect of this crate.
+/// Returns [`KitError::ShutDown`] once the kit is shut down, and
+/// [`KitError::Reentrant`] when the operation waited for a ticket's turn in
+/// an admission order its own execution context stands in, which was
+/// refused; a protocol error or a stall is a defect of this crate.
 pub(crate) async fn run<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     operation: O,
 ) -> Result<O::Output, KitError> {
+    inner.open()?;
     drive(inner, call, operation, Leases::Granted, None).await
 }
 

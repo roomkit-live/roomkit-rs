@@ -237,7 +237,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     by_hand(&desk, &mut checks).await?;
     by_timers(&desk, &mut checks).await?;
 
-    let mut fired = transitions.wait_for(5).await;
+    // The hooks run in the background, after the calls that fired them.
+    desk.kit.idle().await;
+    let mut fired = transitions.entries();
     fired.sort();
     println!("Lifecycle hooks: {fired:?}");
     checks.expect(

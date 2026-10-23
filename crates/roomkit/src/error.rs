@@ -80,4 +80,9 @@ pub enum KitError {
     /// (RFC §10.5): a defect of this crate.
     #[error("a direct injection ended with neither its event nor a refusal")]
     NoEvent,
+    /// The kit is shut down ([`RoomKit::shutdown`](crate::RoomKit::shutdown)):
+    /// the call was made after it, or its run was running and the shutdown
+    /// ended it, what it wrote by then not known.
+    #[error("the kit is shut down")]
+    ShutDown,
 }

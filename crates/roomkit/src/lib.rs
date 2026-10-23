@@ -8,7 +8,8 @@
 //! - [`Channel`]: implement it for a transport or an intelligence channel.
 //! - [`RoomKit`]: register channels and hooks, run rooms through their
 //!   lifecycle and timers, process messages into the room they name or the
-//!   room their router finds, inject events and commit records directly. A
+//!   room their router finds, inject events and commit records directly,
+//!   wait for the work the kit runs in the background or end it. A
 //!   hook, a turn or a delivery that calls into its own room never waits for
 //!   itself: the room lock is reentrant within the call's execution context,
 //!   a call made under the lock or in the room's admission order is adopted
@@ -34,6 +35,7 @@ mod locks;
 mod queues;
 mod router;
 pub mod store;
+mod tasks;
 pub mod testing;
 
 pub use roomkit_core::rules::hook_registry::{

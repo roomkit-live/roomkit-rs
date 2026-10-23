@@ -160,10 +160,16 @@ impl<S: ConversationStore> RoomKit<S> {
             Entry::Direct { event, .. } => &mut event.chain_depth,
         };
         context::as_deep_as_its_turn(chain_depth);
+        self.inner.open()?;
         let room_id = entry.room_id().clone();
         let entry = match context::adopt(entry).await {
             Adopting::Settled(result) => return Ok((*result)?),
-            Adopting::Abandoned => return Err(KitError::Abandoned { room_id, call }),
+            // A run the kit's shutdown ended abandons the calls it adopted:
+            // their callers are told the kit is shut down.
+            Adopting::Abandoned => {
+                self.inner.open()?;
+                return Err(KitError::Abandoned { room_id, call });
+            }
             Adopting::Apart(entry) => entry,
         };
         let operation = match entry {

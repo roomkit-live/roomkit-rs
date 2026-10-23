@@ -7,8 +7,10 @@
 //! - `events`: the host's direct changes to stored events;
 //! - `inject`: direct injection and records committed outside the
 //!   pipeline;
-//! - `timers`: applying room timers, on demand or in the background.
+//! - `timers`: applying room timers, on demand or in the background;
+//! - `background`: waiting for the kit's background work, and ending it.
 
+mod background;
 mod events;
 mod inject;
 mod registry;
@@ -40,6 +42,7 @@ use crate::locks::RoomMutexes;
 use crate::queues::{RoomLanes, RoomTickets};
 use crate::router::{DefaultRouter, DynRouter, InboundRoomRouter};
 use crate::store::{ConversationStore, InMemoryStore};
+use crate::tasks::Tasks;
 
 /// How many framework events a slow subscriber may fall behind before it
 /// misses some.
@@ -91,6 +94,8 @@ pub(crate) struct Inner<S> {
     pub(crate) locks: RoomMutexes,
     pub(crate) lanes: RoomLanes,
     pub(crate) tickets: RoomTickets,
+    /// The tasks the kit runs in the background: observers, inbound runs.
+    pub(crate) tasks: Arc<Tasks>,
     environment: Mutex<Box<dyn Environment + Send>>,
     events: broadcast::Sender<FrameworkEvent>,
 }
@@ -128,6 +133,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 locks: RoomMutexes::default(),
                 lanes: RoomLanes::default(),
                 tickets: RoomTickets::default(),
+                tasks: Arc::default(),
                 environment: Mutex::new(Box::new(SystemEnvironment)),
                 events,
             }),
@@ -304,6 +310,18 @@ impl<S: ConversationStore> RoomKit<S> {
 }
 
 impl<S> Inner<S> {
+    /// Refuses a call once the kit is shut down.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KitError::ShutDown`] once [`RoomKit::shutdown`] was called.
+    pub(crate) fn open(&self) -> Result<(), KitError> {
+        if self.tasks.is_shut_down() {
+            return Err(KitError::ShutDown);
+        }
+        Ok(())
+    }
+
     /// The kit's environment, held only while the driver reads it.
     pub(crate) fn environment(&self) -> MutexGuard<'_, Box<dyn Environment + Send>> {
         self.environment

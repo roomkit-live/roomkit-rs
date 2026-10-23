@@ -176,43 +176,49 @@ impl Caller {
 ///
 /// As [`run`](super::run), and [`KitError::Reentrant`] for such a lock, or
 /// the lock of a room its context stands in the admission order of;
-/// [`KitError::Cancelled`] when the runtime cancelled the run's task, as it
-/// does when it shuts down.
+/// [`KitError::ShutDown`] when the kit's shutdown ended the run, and
+/// [`KitError::Cancelled`] when the runtime cancelled it, as it does when it
+/// shuts down.
 pub(crate) async fn run_inbound<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     inbound: Inbound,
 ) -> InboundOutput {
+    inner.open()?;
     let context = ExecutionContext::current();
     let inbound = match context.budget() {
         Some(budget) => inbound.drawing_on(budget),
         None => inbound,
     };
     let (answer, decided) = oneshot::channel();
-    let inner = Arc::clone(inner);
+    let kit = Arc::clone(inner);
     let run = async move {
         let mut caller = Caller::new(answer);
-        let output = super::drive(&inner, call, inbound, Leases::Refused, Some(&mut caller)).await;
+        let output = super::drive(&kit, call, inbound, Leases::Refused, Some(&mut caller)).await;
         caller.log_unread_end(call, &output);
         output
     };
-    // Dropped, the handle detaches the run: the run itself stops when its
-    // caller is gone before the call's decision.
-    let mut task = tokio::spawn(context.scope(run));
+    // The kit tracks the run. Dropped, the handle detaches it: the run
+    // itself stops when its caller is gone before the call's decision.
+    let Some(mut task) = inner.tasks.spawn(context.scope(run)) else {
+        return Err(KitError::ShutDown);
+    };
     tokio::select! {
         biased;
-        joined = &mut task => ended(joined),
+        joined = &mut task => ended(joined, inner.tasks.is_shut_down()),
         Ok(answer) = decided => answer,
     }
 }
 
-/// The output of a run's task that ended.
-fn ended(joined: Result<InboundOutput, JoinError>) -> InboundOutput {
+/// The output of a run's task that ended, cancelled by the kit's shutdown
+/// when `shut_down`, by the runtime otherwise.
+fn ended(joined: Result<InboundOutput, JoinError>, shut_down: bool) -> InboundOutput {
     match joined {
         Ok(output) => output,
         // A panic of the driver's own loop is a defect of this crate: the
         // caller receives it as it would from a run it drove itself.
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
+        Err(_cancelled) if shut_down => Err(KitError::ShutDown),
         Err(_cancelled) => Err(KitError::Cancelled),
     }
 }

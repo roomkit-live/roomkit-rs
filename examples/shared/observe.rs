@@ -1,5 +1,7 @@
 //! What an example observes while it runs: what its hooks and channels
-//! note, and the framework events the kit publishes.
+//! note, and the framework events the kit publishes. What the kit runs in
+//! the background, an observer hook or a call that went on detached, is
+//! waited for with `RoomKit::idle` before it is read.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,13 +9,9 @@ use std::time::Duration;
 use roomkit::ops::FrameworkEvent;
 use tokio::sync::{broadcast, watch};
 
-/// How long an example waits for what runs in the background, an observer
-/// hook above all: far longer than it takes.
+/// How long an example waits for a hook of a call still running to note
+/// something: far longer than it takes.
 const PATIENCE: Duration = Duration::from_secs(1);
-
-/// How long nothing new is noted before an example takes it that nothing
-/// more will be.
-const QUIET: Duration = Duration::from_millis(100);
 
 /// What the example's hooks and channels note while it runs, in the order
 /// they note it. Cloning it shares it: the example keeps a clone and gives
@@ -42,9 +40,9 @@ impl<T: Clone> Log<T> {
     }
 
     /// What was noted, once `count` entries are, or after a second at most:
-    /// an observer hook runs in the background, after the call that fired
-    /// it returned. Past the wait, the entries are what they are, and the
-    /// example's checks say what is missing.
+    /// for an example that goes on once a hook of a call still running
+    /// noted it started. Past the wait, the entries are what they are, and
+    /// the example's checks say what is missing.
     pub async fn wait_for(&self, count: usize) -> Vec<T> {
         let mut changes = self.entries.subscribe();
         let enough = async {
@@ -57,14 +55,6 @@ impl<T: Clone> Log<T> {
             Ok(Ok(entries)) => entries,
             Ok(Err(_)) | Err(_) => self.entries(),
         }
-    }
-
-    /// What was noted, once nothing new was for a tenth of a second: for a
-    /// check that nothing more fires.
-    pub async fn settled(&self) -> Vec<T> {
-        let mut changes = self.entries.subscribe();
-        while let Ok(Ok(())) = tokio::time::timeout(QUIET, changes.changed()).await {}
-        self.entries()
     }
 }
 
@@ -82,28 +72,10 @@ impl<T: Clone> Default for Log<T> {
     }
 }
 
-/// The first framework event `wanted` takes among those `events` received
-/// since it subscribed or was last read, waiting a second at most for one:
-/// `None` past it. The events before it are passed over.
-pub async fn next_event(
-    events: &mut broadcast::Receiver<FrameworkEvent>,
-    wanted: impl Fn(&FrameworkEvent) -> bool,
-) -> Option<FrameworkEvent> {
-    let found = async {
-        loop {
-            match events.recv().await {
-                Ok(event) if wanted(&event) => return Some(event),
-                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
-                Err(broadcast::error::RecvError::Closed) => return None,
-            }
-        }
-    };
-    tokio::time::timeout(PATIENCE, found).await.ok().flatten()
-}
-
 /// The framework events `events` received since it subscribed or was last
 /// read. The kit publishes each one as the work it reports runs: those of a
-/// call the example makes are all there once the call returned.
+/// call the example makes are all there once the call returned, and those of
+/// the work it runs in the background once `RoomKit::idle` returned.
 pub fn framework_events(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<FrameworkEvent> {
     std::iter::from_fn(|| events.try_recv().ok()).collect()
 }
