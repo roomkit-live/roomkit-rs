@@ -107,6 +107,8 @@ Routing and identities:
 - [Roadmap](docs/roadmap.md): the steps, from the text path to voice.
 - [Step 1](docs/steps/step-01.md): the text path, done.
 - [Step 2](docs/steps/step-02.md): the rest of Level 0, done.
+- [Step 2b](docs/steps/step-02b.md): the protocol and the public API in the
+  shape a Python driver will call, done.
 - [RFC gaps](docs/rfc-gaps.md): what the specification leaves open, and the
   decisions taken here.
 
