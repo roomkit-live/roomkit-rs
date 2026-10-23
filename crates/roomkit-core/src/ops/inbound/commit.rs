@@ -71,11 +71,13 @@ pub(super) fn delivered(
         }
         None => (None, None),
     };
-    let effect = cx.io.issue(Request::Commit {
+    let room_id = event.room_id.clone();
+    let request = Request::Commit {
         event: event.clone(),
         counters,
         target,
-    });
+    };
+    let effect = cx.io.issue_locked(request, room_id);
     Committing {
         effect: Some(effect),
         result: PassResult::Delivered {
@@ -126,11 +128,13 @@ pub(super) fn blocked(
         last_activity_at: context.room.timers.last_activity_at,
         room: RoomUpdates::default(),
     };
-    let effect = cx.io.issue(Request::Commit {
+    let room_id = event.room_id.clone();
+    let request = Request::Commit {
         event,
         counters,
         target: None,
-    });
+    };
+    let effect = cx.io.issue_locked(request, room_id);
     Committing {
         effect: Some(effect),
         result,

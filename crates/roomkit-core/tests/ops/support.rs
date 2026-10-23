@@ -212,6 +212,9 @@ pub(crate) struct Sim {
     /// (`Effect::admitted`), with the room, in order: `hook scanner in
     /// room_1`.
     pub(crate) in_admission_order: Vec<String>,
+    /// The label of every effect made under a room's lock
+    /// (`Effect::locked`), with the room, in order: `commit under room_1`.
+    pub(crate) under_lock: Vec<String>,
     /// The contexts the SYNC hooks ran with, by hook name, in order.
     pub(crate) hook_contexts: Vec<(String, RoomContext)>,
     /// The identities the store resolves addresses to (RFC §14.1).
@@ -323,6 +326,7 @@ impl Sim {
             nth_durations: Vec::new(),
             bounded: Vec::new(),
             in_admission_order: Vec::new(),
+            under_lock: Vec::new(),
             hook_contexts: Vec::new(),
             identities: Vec::new(),
             routes: VecDeque::new(),
@@ -829,6 +833,17 @@ impl Sim {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// How many commits were made, and how many of them on behalf of the
+    /// section that held their room's lock (`Effect::locked`, RFC §13.5).
+    pub(crate) fn commits_under_lock(&self) -> (usize, usize) {
+        let under_lock = self
+            .under_lock
+            .iter()
+            .filter(|line| line.starts_with("commit under "))
+            .count();
+        (self.traced("commit").len(), under_lock)
     }
 
     /// The trace lines matching `prefix`.

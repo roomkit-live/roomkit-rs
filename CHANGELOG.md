@@ -514,3 +514,7 @@ publishes a release.
   is not blank, or a number. A boolean, an array or an object under the
   recipient key is none, and a delivery to it is refused `no_recipient`;
   it was handed to the transport (gap G-075).
+- Every `Commit` effect carries the room whose lock the operation holds on
+  its behalf (`Effect::locked`), as the doc of `locked` says: the commit of
+  a pass, of a record stored `BLOCKED` in place of a refused response and
+  of `commit_event`'s record carried none.

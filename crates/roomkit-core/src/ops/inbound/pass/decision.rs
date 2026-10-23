@@ -329,7 +329,7 @@ impl CommitPass {
             event_id: event.id.clone(),
         };
         State::Placing {
-            effect: cx.io.issue_under(request, None, Some(room_id)),
+            effect: cx.io.issue_locked(request, room_id),
             result,
         }
     }

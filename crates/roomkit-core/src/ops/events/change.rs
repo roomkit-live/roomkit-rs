@@ -136,11 +136,12 @@ fn commit(
         last_activity_at: context.room.timers.last_activity_at,
         room: RoomUpdates::default(),
     };
-    let effect = cx.io.issue(Request::Commit {
+    let request = Request::Commit {
         event: record.clone(),
         counters,
         target: None,
-    });
+    };
+    let effect = cx.io.issue_locked(request, room_id.clone());
     State::Writing {
         effect,
         done: Box::new(Done {

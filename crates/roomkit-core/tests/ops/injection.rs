@@ -1923,6 +1923,16 @@ mod a_committed_record {
         );
     }
 
+    /// `Effect::locked`: the record is committed on behalf of the section
+    /// that holds the room's lock (RFC §13.5).
+    #[test]
+    fn is_committed_under_the_room_lock() {
+        let mut sim = room();
+        sim.commit_record("room_1", record("snap_1", "room_1"), None)
+            .unwrap();
+        assert_eq!(sim.commits_under_lock(), (1, 1));
+    }
+
     #[test]
     fn naming_another_room_is_refused_before_anything_is_read() {
         let mut sim = room();

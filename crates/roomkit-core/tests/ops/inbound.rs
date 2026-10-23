@@ -274,6 +274,17 @@ mod a_blocked_message {
         sim
     }
 
+    /// `Effect::locked`: the blocked record and the events injected after
+    /// it are each committed on behalf of the section that holds the room's
+    /// lock (RFC §13.5).
+    #[test]
+    fn commits_every_event_under_the_room_lock() {
+        let mut sim = scanning_room();
+        sim.send(Sim::message("sms", "Mon NAS est 123-456-789"))
+            .unwrap();
+        assert_eq!(sim.commits_under_lock(), (3, 3));
+    }
+
     #[test]
     fn stores_the_message_blocked_and_the_injected_events_after_it() {
         let mut sim = scanning_room();
@@ -1586,6 +1597,16 @@ mod a_chain_of_agents {
                 "#5 analyst blocked:event_chain_depth_limit \"\"",
             ]
         );
+    }
+
+    /// `Effect::locked`: the record the limit stores is committed on behalf
+    /// of the section that holds the room's lock, as the responses are (RFC
+    /// §13.5).
+    #[test]
+    fn commits_the_record_under_the_room_lock() {
+        let mut sim = analyst_and_writer();
+        sim.send(from_human()).unwrap();
+        assert_eq!(sim.commits_under_lock(), (6, 6));
     }
 
     #[test]

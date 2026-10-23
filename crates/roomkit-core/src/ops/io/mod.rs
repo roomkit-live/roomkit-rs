@@ -102,6 +102,14 @@ impl Io {
         self.issue_effect(request, deadline, locked, None)
     }
 
+    /// Asks the driver for `request` on behalf of a section that holds
+    /// `room_id`'s lock (`Effect::locked`, RFC §13.5), with no deadline: a
+    /// commit, or the place its event takes in the room's lane, which
+    /// nothing bounds (RFC §13.6).
+    pub(crate) fn issue_locked(&mut self, request: Request, room_id: RoomId) -> EffectId {
+        self.issue_under(request, None, Some(room_id))
+    }
+
     /// Asks the driver for `request`, a delivery set's `OnEvent` or
     /// `Deliver`, whose code's calls into a room draw on `budget`, the
     /// reentry budget of the cascade that delivers (`Effect::budget`, gap

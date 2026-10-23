@@ -248,11 +248,12 @@ impl RecordPass {
             last_activity_at: context.room.timers.last_activity_at,
             room: RoomUpdates::default(),
         };
-        State::Committing(cx.io.issue(Request::Commit {
+        let request = Request::Commit {
             event: self.record.clone(),
             counters,
             target: None,
-        }))
+        };
+        State::Committing(cx.io.issue_locked(request, self.record.room_id.clone()))
     }
 
     fn release(&mut self, cx: &mut Cx<'_>, result: Result<RecordResult, Abort>) -> State {

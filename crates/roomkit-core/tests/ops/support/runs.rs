@@ -808,6 +808,8 @@ impl Sim {
                 self.state(run).locks.contains(room),
                 "a request made under the lock of {room} while the lock is free"
             );
+            let line = format!("{} under {room}", self.label(&effect.request));
+            self.under_lock.push(line);
         }
         if let Some(room) = &effect.admitted {
             let line = format!("{} in {room}", self.label(&effect.request));
