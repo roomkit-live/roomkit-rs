@@ -1096,8 +1096,8 @@ mod an_arrival_from_a_delivery {
                 "commit #1 ai delivered \"Let me check.\"",
                 "enter lane room_1 evt_2",
                 "release room_1",
-                "release ticket room_1",
                 "on_event ai <- evt_1 returns",
+                "release ticket room_1",
                 "deliver ws <- evt_1",
                 "leave lane room_1 evt_1",
                 "await lane room_1 evt_2",
@@ -1349,6 +1349,65 @@ mod two_sections_of_one_operation {
                 "commit #1 sms delivered \"hello\"",
                 "release room_1",
             ]
+        );
+    }
+}
+
+/// RFC §9.5.1, §10.1 step 18: an entry an off-lock hook's body adopted
+/// keeps the call's admission ticket held until its own section is over,
+/// but the trigger's decision does not wait for it: the trigger, first to
+/// the lock, is published as soon as its pass is over.
+mod a_ticket_held_for_an_adopted_entry {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn does_not_hold_back_the_trigger_s_decision() {
+        let mut sim = room();
+        sim.reentrant_hook(
+            "scanner",
+            false,
+            Reentry {
+                // A message, whose step 2 and parse put its lock behind the
+                // trigger's.
+                entries: calling(|event| {
+                    (text_of(&event.content) == "hello").then(|| Entry::Message {
+                        room_id: room_id(),
+                        organization_id: None,
+                        message: Box::new(Sim::message("sms", "follow-up")),
+                    })
+                }),
+                answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        sim.send(hello()).unwrap();
+        let entry_commit = sim
+            .trace
+            .iter()
+            .position(|line| line.starts_with("commit") && line.contains("follow-up"))
+            .unwrap();
+        let decided_after = sim.decisions.first().and_then(|(line, _)| line.clone());
+        let decided_at = sim
+            .trace
+            .iter()
+            .position(|line| Some(line) == decided_after.as_ref())
+            .unwrap();
+        let committed: Vec<&str> = sim
+            .trace
+            .iter()
+            .map(String::as_str)
+            .filter(|line| line.starts_with("commit") || line.starts_with("release ticket"))
+            .collect();
+        assert_eq!(
+            (decided_at < entry_commit, committed),
+            (
+                true,
+                vec![
+                    "commit #0 sms delivered \"hello\"",
+                    "commit #1 sms delivered \"follow-up\"",
+                    "release ticket room_1",
+                ]
+            )
         );
     }
 }

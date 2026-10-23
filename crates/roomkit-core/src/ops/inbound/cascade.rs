@@ -58,14 +58,32 @@ impl Trigger {
 }
 
 impl Machine {
-    /// Settles a finished job; the trigger's pass once the call's ticket is
-    /// released (RFC §9.5.1).
+    /// Settles a finished job. The trigger's pass releases the call's ticket
+    /// (RFC §9.5.1): a pass that is over publishes its decision and queues
+    /// its delivery set first, since the release waits while an entry the
+    /// call adopted works under the room's lock, and the set's place comes
+    /// before that entry's; a pass that failed is settled once the ticket
+    /// is released.
     pub(super) fn settle(&mut self, cx: &mut Cx<'_>, finished: Finished) {
-        if self.trigger.ticket.is_some()
-            && matches!(finished, Finished::Pass(_, PassOrigin::Trigger))
-        {
-            return self.release_ticket(cx, super::AfterTicket::Settle(Box::new(finished)));
+        if self.trigger.ticket.is_some() {
+            match finished {
+                Finished::Pass(Ok(report), PassOrigin::Trigger) => {
+                    self.on_pass(cx, report, &PassOrigin::Trigger);
+                    return self.release_ticket(cx, super::AfterTicket::Resume);
+                }
+                finished @ Finished::Pass(Err(_), PassOrigin::Trigger) => {
+                    return self.release_ticket(cx, super::AfterTicket::Settle(Box::new(finished)));
+                }
+                Finished::Pass(..) | Finished::Record(..) => {
+                    return self.settle_released(cx, finished);
+                }
+            }
         }
+        self.settle_released(cx, finished);
+    }
+
+    /// Settles a finished job the call's ticket no longer holds back.
+    fn settle_released(&mut self, cx: &mut Cx<'_>, finished: Finished) {
         match finished {
             Finished::Pass(Ok(report), origin) => self.on_pass(cx, report, &origin),
             Finished::Record(Ok(report), note) => self.on_record(cx, report, note),

@@ -123,7 +123,8 @@ as it stands.
   made within a turn is at least as deep as the turn's response (§10.6); a
   call that would wait for what its own context holds fails
   `KitError::Reentrant`. A call's ticket is released once no section of the
-  call holds the room's lock. `roomkit::keep_context` keeps the context in
+  call holds the room's lock, its decision and its delivery set not waiting
+  for it. `roomkit::keep_context` keeps the context in
   a task a hook or a turn awaits as its own.
 - **The room lifecycle** (§5.1, §5.7, §7.2, §7.5): `CreateRoom`,
   `AttachChannel`, `DetachChannel`, `UpdateBinding`, `PauseRoom`,

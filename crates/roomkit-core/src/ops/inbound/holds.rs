@@ -10,7 +10,11 @@
 //!
 //! The ticket is released once the trigger's pass is over, the room lock
 //! released already: committed, blocked, refused, a duplicate, an edit
-//! refused, failed or past the call's deadline. `Io` holds the release
+//! refused, failed or past the call's deadline. A pass that is over has
+//! published the call's decision and queued its delivery set by then: the
+//! release waits while an entry the call adopted works under the room's
+//! lock, and neither the decision nor the set's place in the lane waits
+//! with it. `Io` holds the release
 //! back while another section of the call, an entry it adopted, holds the
 //! room's lock or waits for it (RFC §9.5.1). A call that ends before its
 //! pass releases it as it ends, before it waits for the sets of the entries
@@ -29,7 +33,10 @@ use crate::ops::protocol::{HoldRequest, Outcome};
 /// What a call does once its ticket is released.
 #[derive(Debug)]
 pub(super) enum AfterTicket {
-    /// It settles its trigger's pass.
+    /// It goes on with its cascade, its trigger's pass settled already; a
+    /// failed release is folded into its final result.
+    Resume,
+    /// It settles its trigger's pass, which failed.
     Settle(Box<Finished>),
     /// It ends with this outcome.
     End(Box<Result<InboundResult, InboundError>>),
@@ -105,6 +112,10 @@ impl Machine {
 
     fn after_ticket(&mut self, cx: &mut Cx<'_>, then: AfterTicket, failure: Option<ErrorRecord>) {
         match then {
+            AfterTicket::Resume => {
+                self.stage = Stage::Cascade;
+                self.trigger.note_error(failure);
+            }
             AfterTicket::Settle(finished) => {
                 self.stage = Stage::Cascade;
                 self.trigger.note_error(failure);
