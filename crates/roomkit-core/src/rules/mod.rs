@@ -1,7 +1,11 @@
-//! The RFC's rules, as pure functions over the model.
+//! The RFC's rules, as functions over the model.
 //!
-//! Nothing here holds state between calls or performs I/O: each function
-//! answers one question the pipeline asks, and the operations compose them.
+//! Nothing here performs I/O or reads a clock: each function answers one
+//! question the pipeline asks, and the operations compose them. Two rules
+//! keep what they count between calls, each as a value its owner holds: a
+//! kit's hook registrations ([`hook_registry::HookRegistry`]) and a
+//! cascade's reentry budget ([`chain_depth::ReentryBudget`], shared by the
+//! calls that draw on it).
 //!
 //! | Module | RFC |
 //! |---|---|

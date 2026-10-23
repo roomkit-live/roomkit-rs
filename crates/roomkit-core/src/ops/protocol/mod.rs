@@ -1,11 +1,20 @@
 //! The protocol between an operation and the driver that runs it
-//! (docs/architecture.md, "The effect protocol").
+//! (docs/architecture.md, "Operations").
 //!
-//! An operation asks for [`Effect`]s, each answered by exactly one
-//! [`Outcome`], and emits [`Notice`]s, which need no answer. An inbound
-//! operation adopts the calls into its room its own work makes ([`Entry`]),
-//! and reports each one's result once it is decided ([`Settled`]), and its
-//! own once it is ([`Decided`]).
+//! Each poll of an [`Operation`] returns a [`Step`]: the [`Notice`]s to
+//! perform now, which need no answer, and what comes [`Next`], the
+//! [`Effect`]s to execute or the operation's output. An effect carries a
+//! [`Request`] of one family, the room's lock, its lane and its admission
+//! ticket ([`HoldRequest`]), the store ([`StoreRequest`]), a channel
+//! ([`ChannelRequest`]), a hook ([`HookRequest`]) or the router; the driver
+//! answers it with exactly one [`Outcome`] of the same family, or
+//! `Failed`, or `DeadlinePassed` past the deadline it carries
+//! ([`Operation::complete`]). An inbound operation adopts the calls into
+//! its room that its own work makes ([`Entry`], [`Operation::adopt`]), and
+//! reports each one's result once it is decided ([`Settled`]), and its own
+//! once it is ([`Decided`]). An operation whose caller is gone before its
+//! decision expires ([`Operation::expire`]): the driver drops the requests
+//! it gives up on, and runs it to its end.
 
 mod answers;
 mod entries;
