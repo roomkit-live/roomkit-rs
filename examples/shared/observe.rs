@@ -70,6 +70,25 @@ impl<T: Clone> Default for Log<T> {
     }
 }
 
+/// The first framework event `wanted` takes among those `events` received
+/// since it subscribed or was last read, waiting a second at most for one:
+/// `None` past it. The events before it are passed over.
+pub async fn next_event(
+    events: &mut broadcast::Receiver<FrameworkEvent>,
+    wanted: impl Fn(&FrameworkEvent) -> bool,
+) -> Option<FrameworkEvent> {
+    let found = async {
+        loop {
+            match events.recv().await {
+                Ok(event) if wanted(&event) => return Some(event),
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    };
+    tokio::time::timeout(PATIENCE, found).await.ok().flatten()
+}
+
 /// The framework events `events` received since it subscribed or was last
 /// read. The kit publishes each one as the work it reports runs: those of a
 /// call the example makes are all there once the call returned.

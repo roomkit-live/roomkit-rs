@@ -78,3 +78,17 @@ path = "hook_inject_welcome.rs"
 [[example]]
 name = "hook_off_lock_check"
 path = "hook_off_lock_check.rs"
+
+# The pipeline.
+
+[[example]]
+name = "instruction_event"
+path = "instruction_event.rs"
+
+[[example]]
+name = "response_visibility"
+path = "response_visibility.rs"
+
+[[example]]
+name = "send_event"
+path = "send_event.rs"
