@@ -15,7 +15,7 @@ use thiserror::Error;
 use super::{Environment, FrameworkEvent};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventId, InboundMessage, Observation,
-    Room, RoomContext, RoomEvent, RoomId, Task, Timestamp,
+    Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
 };
 use crate::rules::hook_chain::HookOutcome;
 use crate::rules::hook_registry::{HookId, HookTrigger};
@@ -110,16 +110,28 @@ pub enum Request {
         /// The room to store.
         room: Room,
     },
-    /// Replace a room's stored record. Answer [`Outcome::Stored`].
+    /// Write the fields `updates` names on the stored room, keeping every
+    /// other one as stored (RFC §14.1 `update_room(room_id, updates)`).
+    /// Answer [`Outcome::Stored`].
     UpdateRoom {
-        /// The room as it is to be stored.
-        room: Room,
+        /// The room.
+        room_id: RoomId,
+        /// What to write.
+        updates: RoomUpdates,
     },
     /// Store a binding, replacing the room's binding of the same channel.
     /// Answer [`Outcome::Stored`].
     StoreBinding {
         /// The binding.
         binding: ChannelBinding,
+    },
+    /// Remove the room's binding of a channel (RFC §14.1
+    /// `delete_binding(room_id, channel_id)`). Answer [`Outcome::Stored`].
+    DeleteBinding {
+        /// The room.
+        room_id: RoomId,
+        /// The channel.
+        channel_id: ChannelId,
     },
     /// Call the channel's `handle_inbound()` (RFC §6.1). Answer
     /// [`Outcome::Parsed`].
@@ -172,7 +184,7 @@ pub enum Request {
 }
 
 /// The room's counters after a commit (RFC §10.1 step 12).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RoomCounters {
     /// How many events the timeline holds.
     pub event_count: u64,
@@ -180,6 +192,9 @@ pub struct RoomCounters {
     pub latest_index: u64,
     /// The room's last activity, moved by a delivered event only.
     pub last_activity_at: Option<Timestamp>,
+    /// What else the commit writes on the room, in the same transaction: a
+    /// delivered event resumes a PAUSED room (gap G-045). Empty otherwise.
+    pub room: RoomUpdates,
 }
 
 /// The driver's answer to an effect.

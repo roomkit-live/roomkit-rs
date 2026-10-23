@@ -1,0 +1,271 @@
+//! What a lifecycle change writes, decided on the room read under its lock
+//! once its due timers are applied, and what it did.
+
+use std::collections::VecDeque;
+
+use super::LifecycleError;
+use super::report::Reported;
+use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomUpdates, Timestamp};
+use crate::ops::protocol::Request;
+use crate::rules::attachment;
+use crate::rules::lifecycle::{self, Transition};
+
+/// A change made under a room's lock.
+#[derive(Clone, Debug)]
+pub(super) enum Change {
+    Attach(Box<ChannelBinding>),
+    Detach(ChannelId),
+    UpdateBinding {
+        channel_id: ChannelId,
+        update: Box<BindingUpdate>,
+    },
+    Transition(Transition),
+    /// Nothing beyond the due timer transitions the gate applies.
+    CheckTimers,
+}
+
+/// What a change did. A change made carries the room as it left it, which
+/// its hooks receive.
+#[derive(Clone, Debug)]
+pub(super) enum Changed {
+    Attached {
+        binding: Box<ChannelBinding>,
+        context: Box<RoomContext>,
+    },
+    Detached {
+        binding: Box<ChannelBinding>,
+        context: Box<RoomContext>,
+    },
+    BindingUpdated {
+        binding: Box<ChannelBinding>,
+        /// The binding's `muted` when the update changed it.
+        muted: Option<bool>,
+        context: Box<RoomContext>,
+    },
+    Transitioned {
+        transition: Transition,
+        context: Box<RoomContext>,
+    },
+    /// The change did not apply: it wrote nothing.
+    Unchanged(Box<RoomContext>),
+}
+
+/// The writes a change makes, in order, and what it did once they are
+/// stored.
+#[derive(Debug)]
+pub(super) struct Decision {
+    pub(super) writes: VecDeque<Request>,
+    pub(super) changed: Changed,
+}
+
+impl Change {
+    /// Decides the change on `context`, the room as the gate left it, at
+    /// `now`.
+    pub(super) fn decide(
+        &self,
+        context: Box<RoomContext>,
+        now: Timestamp,
+    ) -> Result<Decision, LifecycleError> {
+        match self {
+            Self::Attach(binding) => Ok(attach(binding, context, now)),
+            Self::Detach(channel_id) => detach(channel_id, context, now),
+            Self::UpdateBinding { channel_id, update } => {
+                update_binding(channel_id, update, context)
+            }
+            Self::Transition(transition) => Ok(transition_room(*transition, context, now)),
+            Self::CheckTimers => Ok(Decision {
+                writes: VecDeque::new(),
+                changed: Changed::Unchanged(context),
+            }),
+        }
+    }
+}
+
+impl Changed {
+    /// What the change reports after the release, and the context its hooks
+    /// receive; `None` for a change that reports nothing.
+    pub(super) fn reported(&self) -> Option<(Reported<'_>, &RoomContext)> {
+        match self {
+            Self::Attached { binding, context } => {
+                Some((Reported::ChannelAttached(binding), context.as_ref()))
+            }
+            Self::Detached { binding, context } => {
+                Some((Reported::ChannelDetached(binding), context.as_ref()))
+            }
+            Self::BindingUpdated {
+                binding,
+                muted: Some(true),
+                context,
+            } => Some((Reported::ChannelMuted(binding), context.as_ref())),
+            Self::BindingUpdated {
+                binding,
+                muted: Some(false),
+                context,
+            } => Some((Reported::ChannelUnmuted(binding), context.as_ref())),
+            Self::Transitioned {
+                transition,
+                context,
+            } => transition_reported(*transition).map(|reported| (reported, context.as_ref())),
+            Self::BindingUpdated { muted: None, .. } | Self::Unchanged(_) => None,
+        }
+    }
+
+    /// The room as the change left it.
+    pub(super) fn into_context(self) -> Box<RoomContext> {
+        match self {
+            Self::Attached { context, .. }
+            | Self::Detached { context, .. }
+            | Self::BindingUpdated { context, .. }
+            | Self::Transitioned { context, .. }
+            | Self::Unchanged(context) => context,
+        }
+    }
+}
+
+/// What the integrator's transition reports (RFC §26.1): a pause fires
+/// `ON_ROOM_PAUSED` without `room_paused`, which only its timer emits; a
+/// resume and a reopen report nothing.
+fn transition_reported(transition: Transition) -> Option<Reported<'static>> {
+    match transition {
+        Transition::Pause => Some(Reported::RoomPaused(None)),
+        Transition::Close => Some(Reported::RoomClosed(None)),
+        Transition::Archive => Some(Reported::RoomArchived),
+        Transition::Resume | Transition::Reopen => None,
+    }
+}
+
+/// Stores the binding in place of any the room has for its channel. An
+/// explicit attach clears the channel's revocation first (RFC §7.5 rule 7).
+fn attach(binding: &ChannelBinding, mut context: Box<RoomContext>, now: Timestamp) -> Decision {
+    let mut writes = VecDeque::new();
+    if let Some(updates) = attachment::clear_revocation(&context.room, &binding.channel_id, now) {
+        writes.push_back(update_room(&mut context, updates));
+    }
+    writes.push_back(Request::StoreBinding {
+        binding: binding.clone(),
+    });
+    context
+        .bindings
+        .retain(|bound| bound.channel_id != binding.channel_id);
+    context.bindings.push(binding.clone());
+    Decision {
+        writes,
+        changed: Changed::Attached {
+            binding: Box::new(binding.clone()),
+            context,
+        },
+    }
+}
+
+/// Records the channel's revocation, then removes its binding (RFC §7.5
+/// rule 7). The revocation is written first: a detach cut short leaves the
+/// channel revoked and still bound, never unbound and free to be attached
+/// again automatically.
+fn detach(
+    channel_id: &ChannelId,
+    mut context: Box<RoomContext>,
+    now: Timestamp,
+) -> Result<Decision, LifecycleError> {
+    let binding = bound(&context, channel_id)?;
+    let revocation = attachment::revoke(&context.room, channel_id, now);
+    let mut writes = VecDeque::from([update_room(&mut context, revocation)]);
+    writes.push_back(Request::DeleteBinding {
+        room_id: context.room.id.clone(),
+        channel_id: channel_id.clone(),
+    });
+    context
+        .bindings
+        .retain(|bound| &bound.channel_id != channel_id);
+    Ok(Decision {
+        writes,
+        changed: Changed::Detached {
+            binding: Box::new(binding),
+            context,
+        },
+    })
+}
+
+/// Writes the binding as the update leaves it, every field it does not name
+/// carried over (RFC §7.5 rule 6); an update that changes nothing writes
+/// nothing (gap G-047).
+fn update_binding(
+    channel_id: &ChannelId,
+    update: &BindingUpdate,
+    mut context: Box<RoomContext>,
+) -> Result<Decision, LifecycleError> {
+    let current = bound(&context, channel_id)?;
+    let updated = update.apply(&current);
+    if updated == current {
+        return Ok(Decision {
+            writes: VecDeque::new(),
+            changed: Changed::Unchanged(context),
+        });
+    }
+    let muted = (updated.muted != current.muted).then_some(updated.muted);
+    for binding in &mut context.bindings {
+        if &binding.channel_id == channel_id {
+            binding.clone_from(&updated);
+        }
+    }
+    Ok(Decision {
+        writes: VecDeque::from([Request::StoreBinding {
+            binding: updated.clone(),
+        }]),
+        changed: Changed::BindingUpdated {
+            binding: Box::new(updated),
+            muted,
+            context,
+        },
+    })
+}
+
+/// Applies the transition when it leaves from the room's status; otherwise
+/// the room is left as it is (RFC §5.1).
+fn transition_room(
+    transition: Transition,
+    mut context: Box<RoomContext>,
+    now: Timestamp,
+) -> Decision {
+    let mut room = context.room.clone();
+    if !lifecycle::apply(&mut room, transition, now) {
+        return Decision {
+            writes: VecDeque::new(),
+            changed: Changed::Unchanged(context),
+        };
+    }
+    room.updated_at = now;
+    let write = Request::UpdateRoom {
+        room_id: room.id.clone(),
+        updates: RoomUpdates::lifecycle(&room),
+    };
+    context.room = room;
+    Decision {
+        writes: VecDeque::from([write]),
+        changed: Changed::Transitioned {
+            transition,
+            context,
+        },
+    }
+}
+
+/// The room's binding of `channel_id`.
+fn bound(context: &RoomContext, channel_id: &ChannelId) -> Result<ChannelBinding, LifecycleError> {
+    context
+        .bindings
+        .iter()
+        .find(|binding| &binding.channel_id == channel_id)
+        .cloned()
+        .ok_or_else(|| LifecycleError::ChannelNotBound {
+            room_id: context.room.id.clone(),
+            channel_id: channel_id.clone(),
+        })
+}
+
+/// The write of `updates` on the room, which `context` then reflects.
+fn update_room(context: &mut RoomContext, updates: RoomUpdates) -> Request {
+    updates.apply(&mut context.room);
+    Request::UpdateRoom {
+        room_id: context.room.id.clone(),
+        updates,
+    }
+}

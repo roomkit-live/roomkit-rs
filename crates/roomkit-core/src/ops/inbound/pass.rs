@@ -1,10 +1,12 @@
 //! One event's way through the locked section of the pipeline (RFC §10.1
 //! steps 6 to 13).
 //!
-//! Under the room's lock, a pass checks the room still accepts events,
-//! answers a duplicate, assigns the index, runs the `BEFORE_BROADCAST` chain,
-//! checks the source may write, commits the event with the room's counters,
-//! and plans its broadcast. Every path that took the lock releases it.
+//! Under the room's lock, a pass applies the room's due timer transitions
+//! (gap G-045), checks the room still accepts events, answers a duplicate,
+//! assigns the index, runs the `BEFORE_BROADCAST` chain, checks the source
+//! may write, commits the event with the room's counters, resuming a paused
+//! room, and plans its broadcast. Every path that took the lock releases
+//! it.
 
 use std::collections::VecDeque;
 use std::mem;
@@ -12,12 +14,14 @@ use std::mem;
 use super::stamp;
 use crate::model::{
     ChannelBinding, ChannelId, ErrorRecord, EventStatus, InjectedEvent, Observation, RoomContext,
-    RoomEvent, RoomStatus, Task,
+    RoomEvent, RoomStatus, RoomUpdates, Task, Timestamp,
 };
+use crate::ops::lifecycle::gate::{self, Gate, Pending};
 use crate::ops::protocol::{EffectId, Outcome, Request, RoomCounters};
 use crate::ops::{self, Abort, Cx, FrameworkEvent, Notice, Progress, RefusedOperation};
 use crate::rules::hook_chain::{ChainDecision, ChainVerdict, HookChain};
 use crate::rules::hook_registry::{HookId, HookTrigger};
+use crate::rules::lifecycle::{self, Transition};
 use crate::rules::permissions::{self, DeliveryPlan, WriteRefusal};
 
 /// Where the event of a pass comes from.
@@ -96,6 +100,10 @@ enum State {
     Start,
     Locking(EffectId),
     LoadingContext(EffectId),
+    ApplyingTimers {
+        effect: EffectId,
+        pending: Box<Pending>,
+    },
     CheckingKey {
         effect: EffectId,
         context: Box<RoomContext>,
@@ -130,6 +138,7 @@ impl State {
         match self {
             Self::Locking(effect)
             | Self::LoadingContext(effect)
+            | Self::ApplyingTimers { effect, .. }
             | Self::CheckingKey { effect, .. }
             | Self::RunningHook { effect, .. }
             | Self::LoadingBindings { effect, .. }
@@ -176,6 +185,10 @@ impl CommitPass {
         self.state = match mem::replace(&mut self.state, State::Reported) {
             State::Locking(_) => self.on_locked(cx, outcome),
             State::LoadingContext(_) => self.on_context(cx, outcome),
+            State::ApplyingTimers { pending, .. } => match pending.stored(cx, outcome) {
+                Ok(opened) => self.on_gate(cx, opened.context),
+                Err(error) => self.release(cx, Err(Abort::Store(error))),
+            },
             State::CheckingKey { context, .. } => self.on_key(cx, context, outcome),
             State::RunningHook {
                 hook,
@@ -225,14 +238,23 @@ impl CommitPass {
         }
     }
 
-    /// The room's status gate, then the idempotency check or the hooks (RFC
-    /// §10.1 steps 6 to 8).
+    /// The room as the lock found it goes through the timer gate first (gap
+    /// G-045).
     fn on_context(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
         let context = match outcome.into_context() {
             Ok(Some(context)) => context,
             Ok(None) => return self.release(cx, Err(Abort::RoomNotFound)),
             Err(error) => return self.release(cx, Err(Abort::Store(error))),
         };
+        match gate::open(cx, context) {
+            Gate::Clear(context) => self.on_gate(cx, context),
+            Gate::Writing { effect, pending } => State::ApplyingTimers { effect, pending },
+        }
+    }
+
+    /// The room's status gate, on the room as its due timers left it, then
+    /// the idempotency check or the hooks (RFC §10.1 steps 6 to 8).
+    fn on_gate(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
         let status = context.room.status;
         if !status.accepts_events() {
             self.notify_refusal(cx, status);
@@ -419,13 +441,13 @@ impl CommitPass {
         State::Releasing { effect, result }
     }
 
-    /// A refused inbound event or response is observable (RFC §5.1); an
-    /// injected one may be refused without a framework event.
+    /// A refused event is observable (RFC §5.1): an inbound one as
+    /// `inbound`, a response or a hook's injected event as `reentry`, the
+    /// framework's own re-injection into the room (gap G-043).
     fn notify_refusal(&self, cx: &mut Cx<'_>, status: RoomStatus) {
         let operation = match self.origin {
             PassOrigin::Trigger => RefusedOperation::Inbound,
-            PassOrigin::Response => RefusedOperation::Reentry,
-            PassOrigin::Injected { .. } => return,
+            PassOrigin::Response | PassOrigin::Injected { .. } => RefusedOperation::Reentry,
         };
         cx.io
             .notify(Notice::FrameworkEvent(FrameworkEvent::RoomRefusedEvent {
@@ -439,18 +461,21 @@ impl CommitPass {
 }
 
 /// Commits `event` delivered with the room's counters, its activity moved
-/// (RFC §10.1 step 12).
+/// (RFC §10.1 step 12). A paused room is resumed in the same commit (gap
+/// G-045), and the delivery set reads it active.
 fn commit_delivered(
     cx: &mut Cx<'_>,
     mut event: RoomEvent,
     plan: DeliveryPlan,
-    context: Box<RoomContext>,
+    mut context: Box<RoomContext>,
 ) -> State {
     event.status = EventStatus::Delivered;
+    let now = cx.env.now();
     let counters = RoomCounters {
         event_count: context.room.event_count.saturating_add(1),
         latest_index: event.index,
-        last_activity_at: Some(cx.env.now()),
+        last_activity_at: Some(now),
+        room: resume(&mut context, now),
     };
     let effect = cx.io.issue(Request::Commit {
         event: event.clone(),
@@ -490,6 +515,7 @@ fn commit_blocked(
         event_count: context.room.event_count.saturating_add(1),
         latest_index: event.index,
         last_activity_at: context.room.timers.last_activity_at,
+        room: RoomUpdates::default(),
     };
     let effect = cx.io.issue(Request::Commit {
         event: event.clone(),
@@ -503,4 +529,14 @@ fn commit_blocked(
             context: Box::new(context.clone()),
         },
     }
+}
+
+/// The write that resumes the room of `context` at `now` when it is paused,
+/// applied to `context` too; empty for a room that is not (gap G-045).
+fn resume(context: &mut RoomContext, now: Timestamp) -> RoomUpdates {
+    if !lifecycle::apply(&mut context.room, Transition::Resume, now) {
+        return RoomUpdates::default();
+    }
+    context.room.updated_at = now;
+    RoomUpdates::lifecycle(&context.room)
 }

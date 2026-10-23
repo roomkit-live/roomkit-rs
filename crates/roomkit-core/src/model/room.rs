@@ -41,7 +41,8 @@ pub enum AgentResponsePolicy {
     AddressedOnly,
 }
 
-/// A room's automatic transitions (RFC §5.1).
+/// A room's automatic transitions (RFC §5.1); `rules::timers` says when
+/// they fall due.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RoomTimers {
@@ -49,7 +50,9 @@ pub struct RoomTimers {
     pub inactive_after_seconds: Option<u64>,
     /// Seconds paused before the room closes.
     pub closed_after_seconds: Option<u64>,
-    /// When the room's last event was committed.
+    /// When the room's last delivered event was committed, or when it was
+    /// last resumed or reopened, which restarts the inactivity timer (gap
+    /// G-045).
     pub last_activity_at: Option<Timestamp>,
 }
 
@@ -73,6 +76,10 @@ pub struct Room {
     /// When the room was closed.
     #[serde(default)]
     pub closed_at: Option<Timestamp>,
+    /// When the room was paused, which its close timer counts from (gap
+    /// G-045).
+    #[serde(default)]
+    pub paused_at: Option<Timestamp>,
     /// The room's automatic transitions.
     #[serde(default)]
     pub timers: RoomTimers,
@@ -101,6 +108,7 @@ impl Room {
             created_at: now,
             updated_at: now,
             closed_at: None,
+            paused_at: None,
             timers: RoomTimers::default(),
             agent_response_policy: AgentResponsePolicy::default(),
             metadata: Metadata::new(),

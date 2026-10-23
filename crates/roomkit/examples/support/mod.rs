@@ -5,7 +5,7 @@
 
 use std::process::ExitCode;
 
-use roomkit::model::{EventStatus, RoomEvent, RoomId};
+use roomkit::model::{EventStatus, RoomEvent, RoomId, Visibility};
 use roomkit::{ConversationStore, RoomKit, StoreError, text_of};
 
 /// A room's whole timeline, refused events included, as the store holds it.
@@ -16,7 +16,8 @@ pub(crate) async fn timeline(
     kit.store().list_events(room_id, true).await
 }
 
-/// Prints the timeline, one event per line.
+/// Prints the timeline, one event per line, with the channels an event is
+/// visible to when it is not visible to all.
 pub(crate) fn print_timeline(events: &[RoomEvent]) {
     println!("Timeline:");
     for event in events {
@@ -24,8 +25,13 @@ pub(crate) fn print_timeline(events: &[RoomEvent]) {
             (EventStatus::Blocked, Some(blocked_by)) => format!("blocked by {blocked_by}"),
             (status, _) => format!("{status:?}").to_lowercase(),
         };
+        let visibility = if event.visibility == Visibility::All {
+            String::new()
+        } else {
+            format!(" (visible to {})", event.visibility)
+        };
         println!(
-            "  #{} {:<8} depth {} {:<32} {:?}",
+            "  #{} {:<10} depth {} {:<32} {:?}{visibility}",
             event.index,
             event.source.channel_id,
             event.chain_depth,

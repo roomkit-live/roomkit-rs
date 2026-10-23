@@ -6,8 +6,9 @@ for conversations between humans, AI agents and programs.
 
 > **Status: pre-alpha.** Step 1 is done: the text path of the RFC's inbound
 > and broadcast pipelines, with hooks, permissions, transcoding and the
-> chain-depth limit, on a tokio runtime and an in-memory store. No provider
-> yet, and the API will change.
+> chain-depth limit, on a tokio runtime and an in-memory store. Step 2, the
+> rest of Level 0, is in progress: the room lifecycle and its timers are
+> done. No provider yet, and the API will change.
 
 ## Why a Rust implementation
 
@@ -54,6 +55,7 @@ The examples run the RFC's Appendix B flows and check their own result:
 cargo run -p roomkit --example echo_room         # B.1: an agent answers on SMS
 cargo run -p roomkit --example block_and_inject  # B.2: a hook blocks and injects
 cargo run -p roomkit --example agent_chain       # B.4: the chain-depth limit
+cargo run -p roomkit --example advisor_joins     # B.5: mute, whisper to an advisor, unmute
 ```
 
 ## Documentation
@@ -61,7 +63,8 @@ cargo run -p roomkit --example agent_chain       # B.4: the chain-depth limit
 - [Architecture](docs/architecture.md): the sans-IO core, the effect protocol,
   the crates and their rules.
 - [Roadmap](docs/roadmap.md): the steps, from the text path to voice.
-- [Step 1](docs/steps/step-01.md): the current step.
+- [Step 1](docs/steps/step-01.md): the text path, done.
+- [Step 2](docs/steps/step-02.md): the rest of Level 0, the current step.
 - [RFC gaps](docs/rfc-gaps.md): what the specification leaves open, and the
   decisions taken here.
 

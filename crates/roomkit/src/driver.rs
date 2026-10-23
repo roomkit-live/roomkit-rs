@@ -75,6 +75,7 @@ async fn execute<'kit, S: ConversationStore>(
             | Request::CreateRoom { .. }
             | Request::UpdateRoom { .. }
             | Request::StoreBinding { .. }
+            | Request::DeleteBinding { .. }
             | Request::HandleInbound { .. }
             | Request::OnEvent { .. }
             | Request::Deliver { .. }
@@ -174,7 +175,8 @@ async fn call<S: ConversationStore>(inner: &Inner<S>, request: Request) -> Outco
         | Request::PersistSideEffects { .. }
         | Request::CreateRoom { .. }
         | Request::UpdateRoom { .. }
-        | Request::StoreBinding { .. } => store_call(&inner.store, request).await,
+        | Request::StoreBinding { .. }
+        | Request::DeleteBinding { .. } => store_call(&inner.store, request).await,
         Request::AcquireLock { .. } | Request::ReleaseLock { .. } => Outcome::Failed(
             ErrorRecord::new("Internal", "a lock request reached the call executor"),
         ),
@@ -218,10 +220,20 @@ async fn store_call<S: ConversationStore>(store: &S, request: Request) -> Outcom
             .await
             .map(|()| Outcome::Persisted),
         Request::CreateRoom { room } => store.create_room(room).await.map(|()| Outcome::Stored),
-        Request::UpdateRoom { room } => store.update_room(room).await.map(|()| Outcome::Stored),
+        Request::UpdateRoom { room_id, updates } => store
+            .update_room(&room_id, updates)
+            .await
+            .map(|_| Outcome::Stored),
         Request::StoreBinding { binding } => {
             store.store_binding(binding).await.map(|()| Outcome::Stored)
         }
+        Request::DeleteBinding {
+            room_id,
+            channel_id,
+        } => store
+            .delete_binding(&room_id, &channel_id)
+            .await
+            .map(|()| Outcome::Stored),
         Request::AcquireLock { .. }
         | Request::ReleaseLock { .. }
         | Request::HandleInbound { .. }

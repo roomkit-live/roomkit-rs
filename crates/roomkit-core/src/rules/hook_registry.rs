@@ -29,10 +29,18 @@ pub enum HookTrigger {
     AfterBroadcast,
     /// A room was created.
     OnRoomCreated,
-    /// A room was closed.
+    /// A room transitioned to PAUSED, by the integrator or its timer.
+    OnRoomPaused,
+    /// A room transitioned to CLOSED, by the integrator or its timer.
     OnRoomClosed,
     /// A channel was attached to a room.
     OnChannelAttached,
+    /// A channel was detached from a room.
+    OnChannelDetached,
+    /// A channel was muted in a room (RFC §7.2).
+    OnChannelMuted,
+    /// A channel was unmuted in a room (RFC §7.2).
+    OnChannelUnmuted,
     /// A turn failed.
     OnError,
     /// A task a hook or a channel filed was stored (RFC §10.1 steps 10, 11
@@ -57,8 +65,12 @@ impl HookTrigger {
             | Self::BeforeToolUse => HookExecution::Sync,
             Self::AfterBroadcast
             | Self::OnRoomCreated
+            | Self::OnRoomPaused
             | Self::OnRoomClosed
             | Self::OnChannelAttached
+            | Self::OnChannelDetached
+            | Self::OnChannelMuted
+            | Self::OnChannelUnmuted
             | Self::OnError
             | Self::OnTaskCreated => HookExecution::Async,
         }
@@ -72,8 +84,12 @@ impl HookTrigger {
             Self::BeforeBroadcast
             | Self::AfterBroadcast
             | Self::OnRoomCreated
+            | Self::OnRoomPaused
             | Self::OnRoomClosed
             | Self::OnChannelAttached
+            | Self::OnChannelDetached
+            | Self::OnChannelMuted
+            | Self::OnChannelUnmuted
             | Self::OnError
             | Self::OnTaskCreated => false,
         }

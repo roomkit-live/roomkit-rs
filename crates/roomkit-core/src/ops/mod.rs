@@ -41,9 +41,12 @@ mod protocol;
 
 pub use config::{ChannelDeclaration, ConfigError, DEFAULT_CONTEXT_WINDOW, KitConfig};
 pub use environment::{Environment, SequentialEnvironment};
-pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation};
+pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation, TransitionReason};
 pub use inbound::{Inbound, InboundError, InboundResult, default_inbound_event};
-pub use lifecycle::{AttachChannel, CloseRoom, CreateRoom, LifecycleError};
+pub use lifecycle::{
+    ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, LifecycleError,
+    PauseRoom, ReopenRoom, ResumeRoom, TimersChecked, UpdateBinding,
+};
 pub use protocol::{
     Effect, EffectId, Next, Notice, Operation, Outcome, ProtocolError, Request, RoomCounters, Step,
 };

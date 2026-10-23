@@ -38,6 +38,9 @@ pub enum ConfigError {
     /// Another channel is registered under the id.
     #[error("a channel {0} is already registered")]
     DuplicateChannel(ChannelId),
+    /// No channel is registered under the id.
+    #[error("no channel {0} is registered")]
+    UnknownChannel(ChannelId),
 }
 
 /// A kit's configuration: what the operations read and never change.
@@ -75,6 +78,21 @@ impl KitConfig {
         self.channels
             .insert(declaration.channel_id.clone(), declaration);
         Ok(())
+    }
+
+    /// Unregisters the channel `id`, returning its declaration. Its
+    /// bindings stay in their rooms, as the store holds them (gap G-048).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::UnknownChannel`] when no channel has the id.
+    pub fn unregister_channel(
+        &mut self,
+        id: &ChannelId,
+    ) -> Result<ChannelDeclaration, ConfigError> {
+        self.channels
+            .remove(id)
+            .ok_or_else(|| ConfigError::UnknownChannel(id.clone()))
     }
 
     /// The registered channel `id`.

@@ -5,6 +5,8 @@ use roomkit_core::ops::{ConfigError, InboundError, LifecycleError, ProtocolError
 use roomkit_core::rules::hook_registry::RegistrationError;
 use thiserror::Error;
 
+use crate::store::StoreError;
+
 /// Why a kit call failed.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 #[non_exhaustive]
@@ -24,6 +26,15 @@ pub enum KitError {
     /// No channel is registered under the id.
     #[error("no channel {0} is registered")]
     UnknownChannel(ChannelId),
+    /// The store failed a read the kit made itself.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// The timer sweeper needs a tokio runtime to run on.
+    #[error("the timer sweeper must be started from within a tokio runtime")]
+    NoRuntime,
+    /// The timer sweeper's period must be longer than zero.
+    #[error("the timer sweeper's period must be longer than zero")]
+    ZeroPeriod,
     /// The driver broke the effect protocol: a defect of this crate.
     #[error("the driver broke the effect protocol: {0}")]
     Protocol(#[from] ProtocolError),

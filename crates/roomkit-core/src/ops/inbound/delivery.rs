@@ -16,6 +16,7 @@ use crate::model::{
 };
 use crate::ops::protocol::{EffectId, Notice, Outcome, Request};
 use crate::ops::{Cx, Progress};
+use crate::rules::attachment;
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::{self, DeliveryPlan};
 use crate::rules::transcoding;
@@ -59,6 +60,9 @@ pub(super) struct SetOutcome {
     pub(super) targets: usize,
     /// The merged response metadata of the intelligence targets (RFC §10.1).
     pub(super) response_metadata: Metadata,
+    /// The room metadata updates the targets returned, merged in the order
+    /// they answered, without the keys the implementation reserves.
+    pub(super) metadata_updates: Metadata,
     /// The first error an intelligence target's turn met.
     pub(super) error: Option<ErrorRecord>,
 }
@@ -186,22 +190,15 @@ impl DeliverySet {
         let Some(target) = self.targets.get(index) else {
             return;
         };
+        let responder = target.binding.clone();
+        let is_agent = target.role == Role::Agent;
+        self.collect_metadata(&responder.channel_id, output.metadata_updates);
         if self.kind == SetKind::Injected {
             self.outcome.tasks.extend(output.tasks);
             self.outcome.observations.extend(output.observations);
             self.deliver_if_transport(cx, index);
             return;
         }
-        if !output.metadata_updates.is_empty() {
-            tracing::warn!(
-                target: "roomkit::core::inbound",
-                room_id = %self.event.room_id,
-                channel_id = %target.binding.channel_id,
-                "a channel returned room metadata updates, which this step does not apply yet"
-            );
-        }
-        let responder = target.binding.clone();
-        let is_agent = target.role == Role::Agent;
         self.outcome.tasks.extend(output.tasks);
         self.outcome.observations.extend(output.observations);
         if is_agent {
@@ -290,6 +287,7 @@ impl DeliverySet {
         self.outcome
             .delivery_results
             .insert(channel_id.clone(), result);
+        self.collect_metadata(&channel_id, output.metadata_updates);
         self.outcome.tasks.extend(output.tasks);
         self.outcome.observations.extend(output.observations);
         match refusal {
@@ -320,6 +318,26 @@ impl DeliverySet {
             },
         );
         self.fail(index, error.message.clone());
+    }
+
+    /// Keeps a target's room metadata updates, a side effect collected
+    /// whatever the target's permissions (RFC §7.5 rule 3). A key of the
+    /// namespace the implementation reserves is refused (RFC §10.6.5, gap
+    /// G-049).
+    fn collect_metadata(&mut self, channel_id: &ChannelId, updates: Metadata) {
+        for (key, value) in updates {
+            if attachment::is_reserved_key(&key) {
+                tracing::warn!(
+                    target: "roomkit::core::inbound",
+                    room_id = %self.event.room_id,
+                    channel_id = %channel_id,
+                    key = %key,
+                    "a channel's room metadata update names a reserved key; the key is refused"
+                );
+                continue;
+            }
+            self.outcome.metadata_updates.insert(key, value);
+        }
     }
 
     fn fail(&mut self, index: usize, message: String) {

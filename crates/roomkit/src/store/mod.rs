@@ -9,9 +9,11 @@ mod memory;
 use std::future::Future;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ErrorRecord, Observation, Room, RoomContext, RoomEvent, RoomId, Task,
+    ChannelBinding, ChannelId, ErrorRecord, Observation, Room, RoomContext, RoomEvent, RoomId,
+    RoomStatus, RoomUpdates, Task,
 };
 use roomkit_core::ops::RoomCounters;
+use roomkit_core::rules::timers;
 use thiserror::Error;
 
 pub use self::memory::InMemoryStore;
@@ -53,17 +55,52 @@ impl StoreError {
     }
 }
 
+/// Which rooms [`ConversationStore::list_rooms`] returns; an empty filter
+/// returns every room.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoomFilter {
+    /// Only the rooms of this organization.
+    pub organization_id: Option<String>,
+    /// Only the rooms in this status.
+    pub status: Option<RoomStatus>,
+    /// Only the rooms with a timer that can still fall due: an ACTIVE room
+    /// with an inactivity timer, a PAUSED room with a close timer (RFC §5.1).
+    pub timers_armed: bool,
+}
+
+impl RoomFilter {
+    /// Whether `room` passes the filter.
+    pub fn matches(&self, room: &Room) -> bool {
+        self.organization_id
+            .as_ref()
+            .is_none_or(|organization| room.organization_id.as_ref() == Some(organization))
+            && self.status.is_none_or(|status| room.status == status)
+            && (!self.timers_armed || timers::armed(room))
+    }
+}
+
 /// A conversation store (RFC §14.1): the operations the pipeline and the kit
 /// use. Implement the methods with `async fn`.
+///
+/// The room metadata keys under `roomkit.` belong to the implementation
+/// (RFC §10.6.5): the framework writes them through [`update_room`], and
+/// host code that writes the store directly must leave them alone.
+///
+/// [`update_room`]: ConversationStore::update_room
 pub trait ConversationStore: Send + Sync + 'static {
     /// Stores a new room.
     fn create_room(&self, room: Room) -> impl Future<Output = Result<(), StoreError>> + Send;
 
-    /// Replaces a room's record, its counters included. The operations call
-    /// it under the room's lock with a record read under that lock, so no
-    /// commit can fall between the read and the write; a caller off the
-    /// lock would lose the counters of the events committed meanwhile.
-    fn update_room(&self, room: Room) -> impl Future<Output = Result<(), StoreError>> + Send;
+    /// Writes the fields `updates` names on the stored room, keeping every
+    /// other one as stored, and returns the room as it now stands (RFC §14.1
+    /// `update_room(room_id, updates)`). The write is atomic: a commit can
+    /// neither fall in the middle of it nor be lost by it, whether or not
+    /// its caller holds the room's lock.
+    fn update_room(
+        &self,
+        room_id: &RoomId,
+        updates: RoomUpdates,
+    ) -> impl Future<Output = Result<Room, StoreError>> + Send;
 
     /// The room `room_id`, if it exists.
     fn get_room(
@@ -71,10 +108,24 @@ pub trait ConversationStore: Send + Sync + 'static {
         room_id: &RoomId,
     ) -> impl Future<Output = Result<Option<Room>, StoreError>> + Send;
 
+    /// The rooms `filter` admits, oldest first (RFC §14.1 `list_rooms`).
+    fn list_rooms(
+        &self,
+        filter: &RoomFilter,
+    ) -> impl Future<Output = Result<Vec<Room>, StoreError>> + Send;
+
     /// Stores a binding, replacing the room's binding of the same channel.
     fn store_binding(
         &self,
         binding: ChannelBinding,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Removes the room's binding of `channel_id`; removing a binding the
+    /// room does not have changes nothing (RFC §14.1 `delete_binding`).
+    fn delete_binding(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// The room's bindings.
@@ -100,9 +151,10 @@ pub trait ConversationStore: Send + Sync + 'static {
         key: &str,
     ) -> impl Future<Output = Result<Option<RoomEvent>, StoreError>> + Send;
 
-    /// Stores `event` and sets the room's counters as one atomic commit
-    /// (RFC §14.3). Refuses with [`StoreError::IndexTaken`] an index the
-    /// room's timeline holds already (RFC §8.1).
+    /// Stores `event`, sets the room's counters and writes the room updates
+    /// they carry (a paused room's resume), as one atomic commit (RFC
+    /// §14.3). Refuses with [`StoreError::IndexTaken`] an index the room's
+    /// timeline holds already (RFC §8.1).
     fn commit(
         &self,
         event: RoomEvent,

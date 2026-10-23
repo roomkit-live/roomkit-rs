@@ -1,44 +1,35 @@
-//! The shape attaching and closing share: take the room's lock, read the
-//! room, write the change, release the lock, then report it.
+//! The shape every change of a room shares: take the room's lock, read the
+//! room, apply its due timers, write the change, release the lock, then
+//! report it.
 
 use std::mem;
 use std::sync::Arc;
 
 use super::LifecycleError;
-use super::report::{self, Reported};
-use crate::model::{ChannelBinding, ErrorRecord, Room, RoomContext, RoomId, RoomStatus};
+use super::change::{Change, Changed, Decision};
+use super::gate::{self, Gate, Opened, Pending};
+use super::report;
+use crate::model::{ErrorRecord, RoomContext, RoomId};
 use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Request, Step};
-use crate::ops::{self, Environment, KitConfig};
-
-/// A change made under a room's lock.
-#[derive(Clone, Debug)]
-pub(super) enum Change {
-    Attach(Box<ChannelBinding>),
-    Close,
-}
-
-/// What a locked change did. A change made carries the room as it left it,
-/// which its hooks receive.
-#[derive(Clone, Debug)]
-pub(super) enum Changed {
-    Attached {
-        binding: Box<ChannelBinding>,
-        context: Box<RoomContext>,
-    },
-    Closed(Box<RoomContext>),
-    /// The room was already closed: nothing was written.
-    Unchanged(Box<Room>),
-}
+use crate::ops::{self, Cx, Environment, KitConfig};
+use crate::rules::timers::DueTransition;
 
 /// One change of a room, made under its lock.
 #[derive(Debug)]
 pub(super) struct LockedChange {
     config: Arc<KitConfig>,
     io: Io,
+    section: Section,
+}
+
+#[derive(Debug)]
+struct Section {
     room_id: RoomId,
     change: Change,
     state: State,
+    /// The timer transitions the gate applied.
+    timers: Vec<DueTransition>,
 }
 
 #[derive(Debug)]
@@ -46,9 +37,13 @@ enum State {
     Start,
     Locking(EffectId),
     Loading(EffectId),
+    ApplyingTimers {
+        effect: EffectId,
+        pending: Box<Pending>,
+    },
     Writing {
         effect: EffectId,
-        changed: Changed,
+        decision: Box<Decision>,
     },
     Releasing {
         effect: EffectId,
@@ -63,6 +58,7 @@ impl State {
         match self {
             Self::Locking(effect)
             | Self::Loading(effect)
+            | Self::ApplyingTimers { effect, .. }
             | Self::Writing { effect, .. }
             | Self::Releasing { effect, .. } => Some(*effect),
             Self::Start | Self::Finished(_) | Self::Reported => None,
@@ -72,32 +68,54 @@ impl State {
 
 impl LockedChange {
     pub(super) fn new(config: Arc<KitConfig>, room_id: RoomId, change: Change) -> Self {
+        Self::with_state(config, room_id, change, State::Start)
+    }
+
+    /// A change refused before anything is read: it ends at once with
+    /// `error`, taking no lock.
+    pub(super) fn refused(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        change: Change,
+        error: LifecycleError,
+    ) -> Self {
+        Self::with_state(config, room_id, change, State::Finished(Err(error)))
+    }
+
+    fn with_state(config: Arc<KitConfig>, room_id: RoomId, change: Change, state: State) -> Self {
         Self {
             config,
             io: Io::new(),
-            room_id,
-            change,
-            state: State::Start,
+            section: Section {
+                room_id,
+                change,
+                state,
+                timers: Vec::new(),
+            },
         }
     }
 
     /// Advances the change; `output` reads the operation's result from what
-    /// the change did.
+    /// the change did and the timer transitions the gate applied.
     pub(super) fn poll<T>(
         &mut self,
         environment: &mut dyn Environment,
-        output: impl Fn(Changed) -> Option<T>,
+        output: impl Fn(Changed, &[DueTransition]) -> Option<T>,
     ) -> Step<Result<T, LifecycleError>> {
-        if matches!(self.state, State::Start) {
-            let room_id = self.room_id.clone();
-            self.state = State::Locking(self.io.issue(Request::AcquireLock { room_id }));
-        }
-        while let Some((effect, outcome)) = self.io.next_outcome() {
-            self.accept(environment, effect, outcome);
-        }
-        let result = self.take_result().map(|result| {
+        let Self {
+            config,
+            io,
+            section,
+        } = self;
+        let mut cx = Cx {
+            config,
+            env: environment,
+            io,
+        };
+        section.advance(&mut cx);
+        let result = section.take_result().map(|result| {
             result.and_then(|changed| {
-                output(changed).ok_or_else(|| {
+                output(changed, &section.timers).ok_or_else(|| {
                     LifecycleError::Store(ErrorRecord::new(
                         "Internal",
                         "the change produced another kind of result",
@@ -111,8 +129,20 @@ impl LockedChange {
     pub(super) fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.io.complete(id, outcome)
     }
+}
 
-    fn accept(&mut self, environment: &mut dyn Environment, effect: EffectId, outcome: Outcome) {
+impl Section {
+    fn advance(&mut self, cx: &mut Cx<'_>) {
+        if matches!(self.state, State::Start) {
+            let room_id = self.room_id.clone();
+            self.state = State::Locking(cx.io.issue(Request::AcquireLock { room_id }));
+        }
+        while let Some((effect, outcome)) = cx.io.next_outcome() {
+            self.accept(cx, effect, outcome);
+        }
+    }
+
+    fn accept(&mut self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) {
         if self.state.awaits() != Some(effect) {
             debug_assert!(
                 false,
@@ -122,16 +152,11 @@ impl LockedChange {
             return;
         }
         self.state = match mem::replace(&mut self.state, State::Reported) {
-            State::Locking(_) => self.on_locked(outcome),
-            State::Loading(_) => self.on_loaded(environment, outcome),
-            State::Writing { changed, .. } => {
-                let written = outcome
-                    .into_stored()
-                    .map(|()| changed)
-                    .map_err(LifecycleError::Store);
-                self.release(written)
-            }
-            State::Releasing { result, .. } => self.on_released(environment, result, outcome),
+            State::Locking(_) => self.on_locked(cx, outcome),
+            State::Loading(_) => self.on_loaded(cx, outcome),
+            State::ApplyingTimers { pending, .. } => self.on_timers(cx, *pending, outcome),
+            State::Writing { decision, .. } => self.on_written(cx, *decision, outcome),
+            State::Releasing { result, .. } => self.on_released(cx, result, outcome),
             state @ (State::Start | State::Finished(_) | State::Reported) => state,
         };
     }
@@ -146,53 +171,72 @@ impl LockedChange {
         Some(result)
     }
 
-    fn on_locked(&mut self, outcome: Outcome) -> State {
+    fn on_locked(&self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
         match outcome.into_locked() {
             // The change's hooks receive the room's recent events, as every
             // hook does (gap G-027).
-            Ok(()) => State::Loading(self.io.issue(Request::LoadContext {
+            Ok(()) => State::Loading(cx.io.issue(Request::LoadContext {
                 room_id: self.room_id.clone(),
-                recent_events: self.config.context_window,
+                recent_events: cx.config.context_window,
             })),
             Err(error) => State::Finished(Err(LifecycleError::Lock(error))),
         }
     }
 
-    /// Decides the write from the room as the lock found it.
-    fn on_loaded(&mut self, environment: &mut dyn Environment, outcome: Outcome) -> State {
-        let mut context = match outcome.into_context() {
+    /// The room as the lock found it goes through the timer gate first.
+    fn on_loaded(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
+        let context = match outcome.into_context() {
             Ok(Some(context)) => context,
             Ok(None) => {
-                return self.release(Err(LifecycleError::RoomNotFound(self.room_id.clone())));
+                let error = LifecycleError::RoomNotFound(self.room_id.clone());
+                return self.release(cx, Err(error));
             }
-            Err(error) => return self.release(Err(LifecycleError::Store(error))),
+            Err(error) => return self.release(cx, Err(LifecycleError::Store(error))),
         };
-        let (request, changed) = match &self.change {
-            Change::Attach(binding) => {
-                attached(&mut context, binding);
-                let request = Request::StoreBinding {
-                    binding: (**binding).clone(),
-                };
-                let changed = Changed::Attached {
-                    binding: binding.clone(),
-                    context,
-                };
-                (request, changed)
+        match gate::open(cx, context) {
+            Gate::Clear(context) => self.decide(cx, context),
+            Gate::Writing { effect, pending } => State::ApplyingTimers { effect, pending },
+        }
+    }
+
+    fn on_timers(&mut self, cx: &mut Cx<'_>, pending: Pending, outcome: Outcome) -> State {
+        match pending.stored(cx, outcome) {
+            Ok(Opened {
+                context,
+                transitions,
+            }) => {
+                self.timers = transitions;
+                self.decide(cx, context)
             }
-            Change::Close if !context.room.status.accepts_events() => {
-                return self.release(Ok(Changed::Unchanged(Box::new(context.room))));
-            }
-            Change::Close => {
-                close(&mut context.room, environment);
-                let request = Request::UpdateRoom {
-                    room: context.room.clone(),
-                };
-                (request, Changed::Closed(context))
-            }
-        };
-        State::Writing {
-            effect: self.io.issue(request),
-            changed,
+            Err(error) => self.release(cx, Err(LifecycleError::Store(error))),
+        }
+    }
+
+    /// Decides the change on the room as the gate left it.
+    fn decide(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
+        let now = cx.env.now();
+        match self.change.decide(context, now) {
+            Ok(decision) => self.write_next(cx, decision),
+            Err(error) => self.release(cx, Err(error)),
+        }
+    }
+
+    /// Issues the decision's next write, or releases the lock once none is
+    /// left.
+    fn write_next(&self, cx: &mut Cx<'_>, mut decision: Decision) -> State {
+        match decision.writes.pop_front() {
+            Some(request) => State::Writing {
+                effect: cx.io.issue(request),
+                decision: Box::new(decision),
+            },
+            None => self.release(cx, Ok(decision.changed)),
+        }
+    }
+
+    fn on_written(&self, cx: &mut Cx<'_>, decision: Decision, outcome: Outcome) -> State {
+        match outcome.into_stored() {
+            Ok(()) => self.write_next(cx, decision),
+            Err(error) => self.release(cx, Err(LifecycleError::Store(error))),
         }
     }
 
@@ -200,46 +244,22 @@ impl LockedChange {
     /// changes nothing the change did; a lifecycle operation reports no error
     /// beside its result, so the failure is only logged (gap G-025).
     fn on_released(
-        &mut self,
-        environment: &mut dyn Environment,
+        &self,
+        cx: &mut Cx<'_>,
         result: Result<Changed, LifecycleError>,
         outcome: Outcome,
     ) -> State {
         let (result, _logged) = ops::after_release(&self.room_id, result, outcome.into_released());
-        let reported = match &result {
-            Ok(Changed::Attached { binding, context }) => {
-                Some((Reported::ChannelAttached(binding), context))
-            }
-            Ok(Changed::Closed(context)) => Some((Reported::RoomClosed, context)),
-            Ok(Changed::Unchanged(_)) | Err(_) => None,
-        };
-        if let Some((reported, context)) = reported {
-            report::report(&mut self.io, &self.config, environment, reported, context);
+        if let Some((reported, context)) = result.as_ref().ok().and_then(Changed::reported) {
+            report::report(cx, reported, context);
         }
         State::Finished(result)
     }
 
-    fn release(&mut self, result: Result<Changed, LifecycleError>) -> State {
-        let effect = self.io.issue(Request::ReleaseLock {
+    fn release(&self, cx: &mut Cx<'_>, result: Result<Changed, LifecycleError>) -> State {
+        let effect = cx.io.issue(Request::ReleaseLock {
             room_id: self.room_id.clone(),
         });
         State::Releasing { effect, result }
     }
-}
-
-/// Puts `binding` in `context` in place of the room's binding of the same
-/// channel, as storing it does.
-fn attached(context: &mut RoomContext, binding: &ChannelBinding) {
-    context
-        .bindings
-        .retain(|bound| bound.channel_id != binding.channel_id);
-    context.bindings.push(binding.clone());
-}
-
-/// Closes `room` now.
-fn close(room: &mut Room, environment: &mut dyn Environment) {
-    let now = environment.now();
-    room.status = RoomStatus::Closed;
-    room.closed_at = Some(now);
-    room.updated_at = now;
 }

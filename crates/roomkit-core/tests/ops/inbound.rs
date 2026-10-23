@@ -13,7 +13,9 @@ use roomkit_core::ops::{
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
 
-use crate::support::{Sim, channel, notice_event, read_only, respond, response, room_id};
+use crate::support::{
+    HookChange, Sim, channel, notice_event, read_only, respond, response, room_id,
+};
 
 /// A room with an SMS sender, a WebSocket advisor and an echo agent.
 fn room() -> Sim {
@@ -539,6 +541,28 @@ mod an_injected_event_s_pass {
         );
     }
 
+    /// Gap G-043: the framework's own re-injection, refused by a room that
+    /// closed during its cascade.
+    #[test]
+    fn refused_by_a_room_closed_meanwhile_emits_room_refused_event_as_reentry() {
+        let mut sim = notifying_room(false);
+        sim.hooks_change = Some(HookChange::CloseRoom);
+        sim.send(Sim::message("sms", "hello")).unwrap();
+        assert_eq!(
+            (sim.timeline_lines(), sim.framework_events().last().copied()),
+            (
+                vec!["#0 sms delivered \"hello\"".to_owned()],
+                Some(&FrameworkEvent::RoomRefusedEvent {
+                    room_id: room_id(),
+                    event_id: "evt_2".parse().unwrap(),
+                    status: RoomStatus::Closed,
+                    operation: RefusedOperation::Reentry,
+                    event_type: EventType::Message,
+                })
+            )
+        );
+    }
+
     #[test]
     fn past_the_reentry_budget_is_stored_capped_without_its_hooks() {
         let mut sim = notifying_room(true);
@@ -549,6 +573,70 @@ mod an_injected_event_s_pass {
             lines.last().map(String::as_str),
             Some("#11 system blocked:reentry_loop_cap \"Heads up\"")
         );
+    }
+}
+
+/// RFC §6.1, §10.1 step 15: the room metadata updates a channel returns.
+mod metadata_updates {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    /// A room whose agent tags the room on every event it reads, trying the
+    /// implementation's revocation key too.
+    fn tagging_room() -> Sim {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.agent(
+            "crm",
+            Box::new(|_, _| {
+                let mut output = ChannelOutput::default();
+                output
+                    .metadata_updates
+                    .insert("tier".to_owned(), json!("gold"));
+                output
+                    .metadata_updates
+                    .insert("roomkit.detached".to_owned(), json!({ "sms": "now" }));
+                Ok(output)
+            }),
+        );
+        sim.room.metadata.insert("crm_id".to_owned(), json!("c_1"));
+        sim
+    }
+
+    #[test]
+    fn are_written_on_the_room_once_the_cascade_is_over() {
+        let mut sim = tagging_room();
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                sim.trace.last().map(String::as_str),
+                sim.room.metadata.get("tier")
+            ),
+            (Some("update room room_1 Active"), Some(&json!("gold")))
+        );
+    }
+
+    #[test]
+    fn keep_the_keys_they_do_not_name() {
+        let mut sim = tagging_room();
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(sim.room.metadata.get("crm_id"), Some(&json!("c_1")));
+    }
+
+    /// RFC §10.6.5: a channel never writes a key the implementation keeps.
+    #[test]
+    fn never_write_a_reserved_key() {
+        let mut sim = tagging_room();
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(sim.room.metadata.get("roomkit.detached"), None);
+    }
+
+    #[test]
+    fn leave_the_counters_as_the_commits_set_them() {
+        let mut sim = tagging_room();
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!((sim.room.event_count, sim.room.latest_index), (1, Some(0)));
     }
 }
 
@@ -620,7 +708,7 @@ mod a_source_that_cannot_write {
         // The context read under the lock still shows the source unmuted;
         // the hook mutes it. The source check reads the bindings as the hook
         // left them (RFC §7.5 rule 2).
-        sim.hooks_mute = Some(channel("sms"));
+        sim.hooks_change = Some(HookChange::Mute(channel("sms")));
         let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(result.reason.as_deref(), Some("source_muted"));
     }

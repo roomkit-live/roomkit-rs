@@ -24,7 +24,9 @@ pub struct ChannelOutput {
     pub tasks: Vec<Task>,
     /// Observations, always collected.
     pub observations: Vec<Observation>,
-    /// Room metadata to update.
+    /// Room metadata to update, written key by key once the cascade is over;
+    /// a key under `roomkit.` is the implementation's and is refused (gap
+    /// G-049).
     pub metadata_updates: Metadata,
     /// An error met while producing the output; the output is still used.
     pub error: Option<ErrorRecord>,

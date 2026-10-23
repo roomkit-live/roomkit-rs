@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, EventStatus, Observation, Room, RoomContext, RoomEvent, RoomId, Task,
+    ChannelBinding, ChannelId, EventStatus, Observation, Room, RoomContext, RoomEvent, RoomId,
+    RoomUpdates, Task,
 };
 use roomkit_core::ops::RoomCounters;
 
-use super::{ConversationStore, StoreError};
+use super::{ConversationStore, RoomFilter, StoreError};
 
 /// A store that keeps everything in memory, for one process.
 ///
@@ -87,16 +88,31 @@ impl ConversationStore for InMemoryStore {
         Ok(())
     }
 
-    async fn update_room(&self, room: Room) -> Result<(), StoreError> {
-        let room_id = room.id.clone();
-        self.write(&room_id, |record| {
-            record.room = room;
-            Ok(())
+    async fn update_room(
+        &self,
+        room_id: &RoomId,
+        updates: RoomUpdates,
+    ) -> Result<Room, StoreError> {
+        self.write(room_id, |record| {
+            updates.apply(&mut record.room);
+            Ok(record.room.clone())
         })
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
         Ok(self.rooms().get(room_id).map(|record| record.room.clone()))
+    }
+
+    async fn list_rooms(&self, filter: &RoomFilter) -> Result<Vec<Room>, StoreError> {
+        let mut rooms: Vec<Room> = self
+            .rooms()
+            .values()
+            .filter(|record| filter.matches(&record.room))
+            .map(|record| record.room.clone())
+            .collect();
+        rooms
+            .sort_by(|left, right| (left.created_at, &left.id).cmp(&(right.created_at, &right.id)));
+        Ok(rooms)
     }
 
     async fn store_binding(&self, binding: ChannelBinding) -> Result<(), StoreError> {
@@ -106,6 +122,19 @@ impl ConversationStore for InMemoryStore {
                 .bindings
                 .retain(|bound| bound.channel_id != binding.channel_id);
             record.bindings.push(binding);
+            Ok(())
+        })
+    }
+
+    async fn delete_binding(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<(), StoreError> {
+        self.write(room_id, |record| {
+            record
+                .bindings
+                .retain(|bound| &bound.channel_id != channel_id);
             Ok(())
         })
     }
@@ -161,6 +190,7 @@ impl ConversationStore for InMemoryStore {
             record.room.event_count = counters.event_count;
             record.room.latest_index = Some(counters.latest_index);
             record.room.timers.last_activity_at = counters.last_activity_at;
+            counters.room.apply(&mut record.room);
             record.events.push(event);
             Ok(())
         })
@@ -207,7 +237,8 @@ impl ConversationStore for InMemoryStore {
 mod tests {
     use pretty_assertions::assert_eq;
     use roomkit_core::model::{
-        ChannelType, EventContent, EventDirection, EventId, EventSource, EventType, Timestamp,
+        ChannelCategory, ChannelDirection, ChannelType, EventContent, EventDirection, EventId,
+        EventSource, EventType, RoomStatus, RoomTimers, Timestamp,
     };
 
     use super::*;
@@ -239,6 +270,7 @@ mod tests {
             event_count: index + 1,
             latest_index: index,
             last_activity_at: None,
+            room: RoomUpdates::default(),
         }
     }
 
@@ -335,6 +367,106 @@ mod tests {
                 .map(|event| event.index)
                 .collect::<Vec<_>>(),
             [1, 2]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_room_update_writes_only_the_fields_it_names() {
+        let store = store_with_room().await;
+        store
+            .commit(event(0, EventStatus::Delivered), counters(0))
+            .await
+            .unwrap();
+        let updates = RoomUpdates {
+            status: Some(RoomStatus::Paused),
+            ..RoomUpdates::default()
+        };
+        let room = store.update_room(&room_id(), updates).await.unwrap();
+        assert_eq!((room.status, room.event_count), (RoomStatus::Paused, 1));
+    }
+
+    #[tokio::test]
+    async fn a_commit_writes_the_room_updates_it_carries() {
+        let store = store_with_room().await;
+        let mut resumed = counters(0);
+        resumed.room.status = Some(RoomStatus::Active);
+        store
+            .update_room(
+                &room_id(),
+                RoomUpdates {
+                    status: Some(RoomStatus::Paused),
+                    ..RoomUpdates::default()
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .commit(event(0, EventStatus::Delivered), resumed)
+            .await
+            .unwrap();
+        let room = store.get_room(&room_id()).await.unwrap().unwrap();
+        assert_eq!(room.status, RoomStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_binding_is_gone() {
+        let store = store_with_room().await;
+        let binding = ChannelBinding::new(
+            ChannelId::new("sms").unwrap(),
+            room_id(),
+            ChannelType::Sms,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+            Timestamp::UNIX_EPOCH,
+        );
+        store.store_binding(binding).await.unwrap();
+        store
+            .delete_binding(&room_id(), &ChannelId::new("sms").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(store.list_bindings(&room_id()).await.unwrap(), []);
+    }
+
+    #[tokio::test]
+    async fn listing_rooms_with_timers_armed_skips_the_others() {
+        let store = store_with_room().await;
+        let mut timed = Room::new(RoomId::new("room_2").unwrap(), Timestamp::UNIX_EPOCH);
+        timed.timers = RoomTimers {
+            inactive_after_seconds: Some(60),
+            ..RoomTimers::default()
+        };
+        store.create_room(timed).await.unwrap();
+        let filter = RoomFilter {
+            timers_armed: true,
+            ..RoomFilter::default()
+        };
+        let listed = store.list_rooms(&filter).await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|room| room.id.as_str())
+                .collect::<Vec<_>>(),
+            ["room_2"]
+        );
+    }
+
+    #[tokio::test]
+    async fn listing_rooms_without_a_filter_returns_them_oldest_first() {
+        let store = InMemoryStore::new();
+        for (id, millis) in [("late", 2_000), ("early", 1_000)] {
+            let created = Timestamp::from_unix_millis(millis).unwrap();
+            store
+                .create_room(Room::new(RoomId::new(id).unwrap(), created))
+                .await
+                .unwrap();
+        }
+        let listed = store.list_rooms(&RoomFilter::default()).await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|room| room.id.as_str())
+                .collect::<Vec<_>>(),
+            ["early", "late"]
         );
     }
 }

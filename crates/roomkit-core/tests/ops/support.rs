@@ -7,12 +7,13 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use roomkit_core::model::{
     Access, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelMediaType, ChannelOutput, ChannelType, ErrorRecord, EventContent, EventDirection,
     EventId, EventSource, EventStatus, EventType, InboundMessage, Observation, Room, RoomContext,
-    RoomEvent, RoomId, Task, Timestamp,
+    RoomEvent, RoomId, RoomStatus, Task, Timestamp,
 };
 use roomkit_core::ops::{
     ChannelDeclaration, Environment, FrameworkEvent, Inbound, InboundError, InboundResult,
@@ -30,6 +31,14 @@ pub(crate) type OnEvent =
 pub(crate) type Deliver = Box<dyn FnMut(&RoomEvent) -> Result<ChannelOutput, ErrorRecord>>;
 /// What a SYNC hook produces.
 pub(crate) type Hook = Box<dyn FnMut(&RoomEvent) -> HookOutcome<RoomEvent>>;
+
+/// A change the hooks make in the room while they run.
+pub(crate) enum HookChange {
+    /// They mute the channel, as a moderation hook would.
+    Mute(ChannelId),
+    /// They close the room, as a hook that ends the conversation would.
+    CloseRoom,
+}
 
 struct Channel {
     on_event: OnEvent,
@@ -52,8 +61,8 @@ pub(crate) struct Sim {
     lock_held: bool,
     /// Whether the store finds the room.
     pub(crate) room_exists: bool,
-    /// A channel the hooks mute while they run, as a moderation hook would.
-    pub(crate) hooks_mute: Option<ChannelId>,
+    /// What the hooks change in the room while they run.
+    pub(crate) hooks_change: Option<HookChange>,
     /// The contexts the receiving channels parsed messages with.
     pub(crate) parse_contexts: Vec<RoomContext>,
     /// The contexts `on_event()` was called with, by channel, in order.
@@ -61,6 +70,22 @@ pub(crate) struct Sim {
     /// Whether releasing the room lock fails. The lock is let go all the
     /// same, as a lease that expires would be.
     pub(crate) release_fails: bool,
+    /// How long each delivery call (`on_event()`, `deliver()`) takes on the
+    /// simulated clock, as a slow turn or provider would: the clock moves
+    /// while a cascade runs.
+    pub(crate) delivery_duration: Duration,
+    /// The store write that fails, named by the start of its trace line
+    /// (`update room`, `delete binding sms`): it is answered `Failed` and
+    /// changes nothing.
+    pub(crate) failing_write: Option<&'static str>,
+}
+
+/// The instant the simulated clock starts at, 2026-10-22T14:03:00Z.
+pub(crate) const START_MILLIS: i64 = 1_792_677_780_000;
+
+/// The instant `seconds` after the simulated clock's start.
+pub(crate) fn after_start(seconds: i64) -> Timestamp {
+    Timestamp::from_unix_millis(START_MILLIS + seconds * 1000).unwrap()
 }
 
 pub(crate) fn channel(id: &str) -> ChannelId {
@@ -75,9 +100,7 @@ impl Sim {
     /// An active, empty room `room_1`.
     pub(crate) fn new() -> Self {
         Self {
-            env: SequentialEnvironment::new(
-                Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
-            ),
+            env: SequentialEnvironment::new(Timestamp::from_unix_millis(START_MILLIS).unwrap()),
             config: KitConfig::new(),
             room: Room::new(room_id(), Timestamp::UNIX_EPOCH),
             bindings: Vec::new(),
@@ -90,10 +113,12 @@ impl Sim {
             hooks: BTreeMap::new(),
             lock_held: false,
             room_exists: true,
-            hooks_mute: None,
+            hooks_change: None,
             parse_contexts: Vec::new(),
             on_event_contexts: Vec::new(),
             release_fails: false,
+            delivery_duration: Duration::ZERO,
+            failing_write: None,
         }
     }
 
@@ -310,6 +335,17 @@ impl Sim {
             .collect()
     }
 
+    /// The payloads the ASYNC hooks were fired with, in order.
+    pub(crate) fn async_payloads(&self) -> Vec<&RoomEvent> {
+        self.notices
+            .iter()
+            .filter_map(|notice| match notice {
+                Notice::AsyncHooks { event, .. } => Some(&**event),
+                Notice::FrameworkEvent(_) => None,
+            })
+            .collect()
+    }
+
     /// The contexts the ASYNC hooks were fired with, in order.
     pub(crate) fn async_contexts(&self) -> Vec<&RoomContext> {
         self.notices
@@ -337,12 +373,16 @@ impl Sim {
                 self.trace.push(format!("hook {name}"));
                 let hook = self.hooks.get_mut(&hook).unwrap();
                 let outcome = hook(&event);
-                if let Some(muted) = &self.hooks_mute {
-                    let binding = self
-                        .bindings
-                        .iter_mut()
-                        .find(|bound| &bound.channel_id == muted);
-                    binding.unwrap().muted = true;
+                match &self.hooks_change {
+                    Some(HookChange::Mute(muted)) => {
+                        let binding = self
+                            .bindings
+                            .iter_mut()
+                            .find(|bound| &bound.channel_id == muted);
+                        binding.unwrap().muted = true;
+                    }
+                    Some(HookChange::CloseRoom) => self.room.status = RoomStatus::Closed,
+                    None => {}
                 }
                 Outcome::Hook(Box::new(outcome))
             }
@@ -353,8 +393,42 @@ impl Sim {
             | Request::PersistSideEffects { .. }
             | Request::CreateRoom { .. }
             | Request::UpdateRoom { .. }
-            | Request::StoreBinding { .. } => self.execute_store(request),
+            | Request::StoreBinding { .. }
+            | Request::DeleteBinding { .. } => match self.refused_write(&request) {
+                Some(outcome) => outcome,
+                None => self.execute_store(request),
+            },
         }
+    }
+
+    /// The failure of the write `failing_write` names, traced as failed.
+    fn refused_write(&mut self, request: &Request) -> Option<Outcome> {
+        let failing = self.failing_write?;
+        let target = match request {
+            Request::UpdateRoom { room_id, .. } => format!("update room {room_id}"),
+            Request::StoreBinding { binding } => format!("store binding {}", binding.channel_id),
+            Request::DeleteBinding { channel_id, .. } => format!("delete binding {channel_id}"),
+            Request::Commit { .. } => "commit".to_owned(),
+            Request::AcquireLock { .. }
+            | Request::ReleaseLock { .. }
+            | Request::LoadContext { .. }
+            | Request::LoadBindings { .. }
+            | Request::FindByIdempotencyKey { .. }
+            | Request::PersistSideEffects { .. }
+            | Request::CreateRoom { .. }
+            | Request::HandleInbound { .. }
+            | Request::OnEvent { .. }
+            | Request::Deliver { .. }
+            | Request::RunHook { .. } => return None,
+        };
+        if !target.starts_with(failing) {
+            return None;
+        }
+        self.trace.push(format!("{target} failed"));
+        Some(Outcome::Failed(ErrorRecord::new(
+            "StoreUnavailable",
+            "the store is down",
+        )))
     }
 
     /// The room lock: never taken twice, released only when held.
@@ -421,6 +495,7 @@ impl Sim {
                 self.room.event_count = counters.event_count;
                 self.room.latest_index = Some(counters.latest_index);
                 self.room.timers.last_activity_at = counters.last_activity_at;
+                counters.room.apply(&mut self.room);
                 self.trace.push(format!("commit {}", describe(&event)));
                 self.timeline.push(event);
                 Outcome::Committed
@@ -439,10 +514,25 @@ impl Sim {
                 self.observations.extend(observations);
                 Outcome::Persisted
             }
-            Request::CreateRoom { room } | Request::UpdateRoom { room } => {
+            Request::CreateRoom { room } => {
                 self.trace
                     .push(format!("store room {} {:?}", room.id, room.status));
                 self.room = room;
+                Outcome::Stored
+            }
+            Request::UpdateRoom { room_id, updates } => {
+                assert!(
+                    self.lock_held || updates.status.is_none(),
+                    "a status was written outside the room lock"
+                );
+                updates.apply(&mut self.room);
+                self.trace
+                    .push(format!("update room {room_id} {:?}", self.room.status));
+                Outcome::Stored
+            }
+            Request::DeleteBinding { channel_id, .. } => {
+                self.trace.push(format!("delete binding {channel_id}"));
+                self.bindings.retain(|bound| bound.channel_id != channel_id);
                 Outcome::Stored
             }
             Request::StoreBinding { binding } => {
@@ -483,6 +573,7 @@ impl Sim {
                 event,
                 context,
             } => {
+                self.env.advance(self.delivery_duration);
                 self.trace
                     .push(format!("on_event {} <- {}", binding.channel_id, event.id));
                 self.on_event_contexts
@@ -491,6 +582,7 @@ impl Sim {
                 (channel.on_event)(&event, &context)
             }
             Request::Deliver { binding, event, .. } => {
+                self.env.advance(self.delivery_duration);
                 self.trace
                     .push(format!("deliver {} <- {}", binding.channel_id, event.id));
                 let channel = self.channels.get_mut(&binding.channel_id).unwrap();
@@ -506,6 +598,7 @@ impl Sim {
             | Request::CreateRoom { .. }
             | Request::UpdateRoom { .. }
             | Request::StoreBinding { .. }
+            | Request::DeleteBinding { .. }
             | Request::RunHook { .. } => panic!("not a channel request"),
         };
         match answer {

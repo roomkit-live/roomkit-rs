@@ -24,13 +24,36 @@ pub enum FrameworkEvent {
         /// Its type.
         channel_type: ChannelType,
     },
+    /// A channel was unregistered from the kit.
+    ChannelUnregistered {
+        /// The channel.
+        channel_id: ChannelId,
+        /// Its type.
+        channel_type: ChannelType,
+    },
     /// A room was created.
     RoomCreated {
         /// The room.
         room_id: RoomId,
     },
+    /// A room's inactivity timer paused it. A pause the integrator asks for
+    /// emits nothing (RFC §26.1).
+    RoomPaused {
+        /// The room.
+        room_id: RoomId,
+        /// What paused it.
+        reason: TransitionReason,
+    },
     /// A room was closed.
     RoomClosed {
+        /// The room.
+        room_id: RoomId,
+        /// `timer` when its close timer closed it, `None` when the
+        /// integrator did.
+        reason: Option<TransitionReason>,
+    },
+    /// A room was archived.
+    RoomArchived {
         /// The room.
         room_id: RoomId,
     },
@@ -57,6 +80,13 @@ pub enum FrameworkEvent {
         access: Access,
         /// The binding's visibility.
         visibility: Visibility,
+    },
+    /// A channel was detached from a room.
+    RoomChannelDetached {
+        /// The room.
+        room_id: RoomId,
+        /// The channel.
+        channel_id: ChannelId,
     },
     /// An event that entered through the inbound pipeline finished its
     /// delivery set and its `AFTER_BROADCAST` hooks.
@@ -150,13 +180,23 @@ pub enum FrameworkEvent {
     },
 }
 
+/// What made a room transition on its own (RFC §8.2 `room_paused`,
+/// `room_closed`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionReason {
+    /// The room's timer fell due (RFC §5.1).
+    Timer,
+}
+
 /// The path a refused event took (RFC §8.2, `room_refused_event`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RefusedOperation {
     /// An inbound message or a direct injection.
     Inbound,
-    /// The framework's own re-injection of a response.
+    /// The framework's own re-injection of a response, or the pass of an
+    /// event a hook injected (gap G-043).
     Reentry,
 }
 
@@ -185,6 +225,18 @@ mod tests {
         assert_eq!(
             serde_json::to_value(event).unwrap(),
             json!({ "event": "event_processed", "room_id": "room_1", "event_id": "evt_1" })
+        );
+    }
+
+    #[test]
+    fn a_timer_s_close_carries_its_reason() {
+        let event = FrameworkEvent::RoomClosed {
+            room_id: RoomId::new("room_1").unwrap(),
+            reason: Some(TransitionReason::Timer),
+        };
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({ "event": "room_closed", "room_id": "room_1", "reason": "timer" })
         );
     }
 

@@ -6,8 +6,8 @@
 //! against the registered channels, hooks and store.
 //!
 //! - [`Channel`]: implement it for a transport or an intelligence channel.
-//! - [`RoomKit`]: register channels and hooks, create rooms, process
-//!   messages.
+//! - [`RoomKit`]: register channels and hooks, run rooms through their
+//!   lifecycle and timers, process messages.
 //! - [`store`]: where rooms live, in memory by default.
 //! - [`testing`]: a recording transport and an echo agent, for tests and
 //!   examples.
@@ -35,5 +35,5 @@ pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::environment::SystemEnvironment;
 pub use self::error::KitError;
 pub use self::hooks::{HookError, HookHandler, HookReturn};
-pub use self::kit::RoomKit;
-pub use self::store::{ConversationStore, InMemoryStore, StoreError};
+pub use self::kit::{RoomKit, TimerSweeper};
+pub use self::store::{ConversationStore, InMemoryStore, RoomFilter, StoreError};

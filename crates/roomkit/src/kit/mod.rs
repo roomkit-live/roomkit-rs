@@ -1,26 +1,30 @@
 //! The kit: the channels, hooks and store of a deployment, and the calls
 //! that run the core's operations against them.
+//!
+//! - this module: the kit itself and the inbound pipeline;
+//! - `registry`: registering and unregistering channels and hooks;
+//! - `rooms`: the room lifecycle and channel bindings;
+//! - `timers`: applying room timers, on demand or in the background.
+
+mod registry;
+mod rooms;
+mod timers;
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
-use roomkit_core::model::{
-    ChannelBinding, ChannelId, InboundMessage, Room, RoomContext, RoomEvent, RoomId,
-};
-use roomkit_core::ops::{
-    AttachChannel, CloseRoom, CreateRoom, Environment, FrameworkEvent, Inbound, InboundResult,
-    KitConfig,
-};
+use roomkit_core::model::{ChannelId, InboundMessage, RoomEvent, RoomId};
+use roomkit_core::ops::{Environment, FrameworkEvent, Inbound, InboundResult, KitConfig};
 use roomkit_core::rules::hook_chain::HookOutcome;
-use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
+use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookTrigger};
 use tokio::sync::broadcast;
 
-use crate::channel::{Channel, DynChannel};
+pub use self::timers::TimerSweeper;
+use crate::channel::DynChannel;
 use crate::driver;
 use crate::environment::SystemEnvironment;
 use crate::error::KitError;
-use crate::hooks::{HookHandler, HookReturn, Observer};
+use crate::hooks::HookHandler;
 use crate::locks::RoomMutexes;
 use crate::store::{ConversationStore, InMemoryStore};
 
@@ -130,159 +134,6 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Framework events from now on (RFC §8.2).
     pub fn subscribe(&self) -> broadcast::Receiver<FrameworkEvent> {
         self.inner.events.subscribe()
-    }
-
-    /// Registers a channel.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::Config`] when a channel with its id is registered
-    /// already.
-    pub fn register_channel(&self, channel: impl Channel) -> Result<(), KitError> {
-        let declaration = Channel::declaration(&channel);
-        let registered = FrameworkEvent::ChannelRegistered {
-            channel_id: declaration.channel_id.clone(),
-            channel_type: declaration.channel_type,
-        };
-        let channel_id = declaration.channel_id.clone();
-        let channel: Arc<dyn DynChannel> = Arc::new(channel);
-        self.inner.try_change_config(|config| {
-            config.register_channel(declaration)?;
-            // The channel is in place before an operation can see its
-            // declaration.
-            write(&self.inner.channels).insert(channel_id, channel);
-            Ok::<(), KitError>(())
-        })?;
-        self.inner.publish(registered);
-        Ok(())
-    }
-
-    /// Registers a hook with its handler (RFC §9.1).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::Registration`] when the registration breaks a rule
-    /// of RFC §9.1.
-    pub fn hook(&self, spec: HookSpec, handler: impl HookHandler) -> Result<HookId, KitError> {
-        let handler: Arc<dyn HookHandler> = Arc::new(handler);
-        let id = self.inner.try_change_config(|config| {
-            let id = config.hooks.register(spec)?;
-            // The handler is in place before an operation can see the hook.
-            write(&self.inner.hooks).insert(id, handler);
-            Ok::<HookId, KitError>(id)
-        })?;
-        Ok(id)
-    }
-
-    /// Registers a SYNC `BEFORE_BROADCAST` hook named `name`, with the RFC's
-    /// defaults (RFC §9.5).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::Registration`] when the name is taken.
-    pub fn before_broadcast<F, Fut>(&self, name: &str, handler: F) -> Result<HookId, KitError>
-    where
-        F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = HookReturn> + Send + 'static,
-    {
-        let spec = HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync);
-        self.hook(spec, handler)
-    }
-
-    /// Registers an ASYNC observer on `trigger` (RFC §9.3): it runs after the
-    /// fact, and what it raises is logged.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::Registration`] when the name is taken.
-    pub fn observe<F, Fut>(
-        &self,
-        name: &str,
-        trigger: HookTrigger,
-        handler: F,
-    ) -> Result<HookId, KitError>
-    where
-        F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let spec = HookSpec::new(name, trigger, HookExecution::Async);
-        self.hook(spec, Observer(handler))
-    }
-
-    /// Creates the room `room_id`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::Lifecycle`] when the room exists already.
-    pub async fn create_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
-        let room = Room::new(room_id.clone(), self.inner.environment().now());
-        let created = driver::run(&self.inner, CreateRoom::new(self.config(), room)).await?;
-        Ok(created?)
-    }
-
-    /// Attaches a registered channel to a room with the RFC's default
-    /// binding: read-write, unmuted, visible to all (RFC §5.7).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::UnknownChannel`] for a channel not registered, and
-    /// [`KitError::Lifecycle`] when the room does not exist.
-    pub async fn attach(
-        &self,
-        room_id: &RoomId,
-        channel_id: &ChannelId,
-    ) -> Result<ChannelBinding, KitError> {
-        self.attach_with(room_id, channel_id, |_| {}).await
-    }
-
-    /// Attaches a registered channel to a room, with the binding `configure`
-    /// adjusts from the default: its access, mute, visibility, category,
-    /// capabilities and metadata. The channel, the room, and the channel's
-    /// type and direction stay what they are.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::UnknownChannel`] for a channel not registered, and
-    /// [`KitError::Lifecycle`] when the room does not exist.
-    pub async fn attach_with(
-        &self,
-        room_id: &RoomId,
-        channel_id: &ChannelId,
-        configure: impl FnOnce(&mut ChannelBinding),
-    ) -> Result<ChannelBinding, KitError> {
-        let config = self.config();
-        let declaration = config
-            .channel(channel_id)
-            .ok_or_else(|| KitError::UnknownChannel(channel_id.clone()))?;
-        let mut binding = ChannelBinding::new(
-            channel_id.clone(),
-            room_id.clone(),
-            declaration.channel_type,
-            declaration.category,
-            declaration.direction,
-            self.inner.environment().now(),
-        );
-        binding.capabilities = declaration.capabilities.clone();
-        configure(&mut binding);
-        // `configure` adjusts the binding's permissions and data, never which
-        // channel it binds to which room, nor what the channel is.
-        binding.channel_id = channel_id.clone();
-        binding.room_id = room_id.clone();
-        binding.channel_type = declaration.channel_type;
-        binding.direction = declaration.direction;
-        let attached = driver::run(&self.inner, AttachChannel::new(config, binding)).await?;
-        Ok(attached?)
-    }
-
-    /// Closes a room: it refuses every new event from now on (RFC §5.1).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist.
-    pub async fn close_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
-        let closed =
-            driver::run(&self.inner, CloseRoom::new(self.config(), room_id.clone())).await?;
-        Ok(closed?)
     }
 
     /// Runs `message` into the room `room_id` through the inbound pipeline

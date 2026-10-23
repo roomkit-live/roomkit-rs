@@ -32,9 +32,10 @@ impl Request {
             Self::FindByIdempotencyKey { .. } => RequestKind::FindByIdempotencyKey,
             Self::Commit { .. } => RequestKind::Commit,
             Self::PersistSideEffects { .. } => RequestKind::PersistSideEffects,
-            Self::CreateRoom { .. } | Self::UpdateRoom { .. } | Self::StoreBinding { .. } => {
-                RequestKind::Store
-            }
+            Self::CreateRoom { .. }
+            | Self::UpdateRoom { .. }
+            | Self::StoreBinding { .. }
+            | Self::DeleteBinding { .. } => RequestKind::Store,
             Self::HandleInbound { .. } => RequestKind::HandleInbound,
             Self::OnEvent { .. } | Self::Deliver { .. } => RequestKind::ChannelCall,
             Self::RunHook { .. } => RequestKind::RunHook,

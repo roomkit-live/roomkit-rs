@@ -1,23 +1,38 @@
-//! Room lifecycle operations: creating a room, attaching a channel, closing
-//! a room (RFC §5.1, §5.7, §8.2, §9.2).
+//! Room lifecycle operations (RFC §5.1, §5.7, §7.2, §7.5 rules 6 and 7,
+//! §8.2, §9.2): creating a room; attaching, detaching and updating a
+//! channel's binding; pausing, resuming, reopening, closing and archiving a
+//! room; and applying the timer transitions that fell due.
 //!
-//! Attaching and closing change a room that events may be flowing through,
-//! so both run under the room's lock: closing under it is what makes the
-//! inbound pipeline's status gate exact (RFC §10.1 step 6).
+//! Every change but a creation changes a room that events may be flowing
+//! through, so it runs under the room's lock, which is what makes the
+//! inbound pipeline's status gate exact (RFC §10.1 step 6). Its status gate
+//! first applies the timer transitions that fell due (gap G-045), then the
+//! change is decided on the room as they left it. A change reports after
+//! the release: its framework event and its trigger's hooks, with the room
+//! as the change left it (gap G-027).
 
+mod bindings;
+mod change;
+pub(crate) mod gate;
 mod locked;
-mod report;
+pub(crate) mod report;
+mod status;
 
 use std::sync::Arc;
 
 use thiserror::Error;
 
-use self::locked::{Change, Changed, LockedChange};
+pub use self::bindings::{AttachChannel, DetachChannel, UpdateBinding};
+pub use self::status::{
+    ArchiveRoom, CheckTimers, CloseRoom, PauseRoom, ReopenRoom, ResumeRoom, TimersChecked,
+};
+
 use self::report::Reported;
 use super::io::Io;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Request, Step};
-use super::{Environment, KitConfig};
-use crate::model::{ChannelBinding, ErrorRecord, Room, RoomContext, RoomId};
+use super::{Cx, Environment, KitConfig};
+use crate::model::{ChannelId, ErrorRecord, Room, RoomContext, RoomId};
+use crate::rules::attachment;
 
 /// Why a lifecycle operation failed. Nothing was changed.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
@@ -26,6 +41,23 @@ pub enum LifecycleError {
     /// The room does not exist.
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
+    /// The channel has no binding in the room to detach or update (gap
+    /// G-047).
+    #[error("channel {channel_id} is not attached to room {room_id}")]
+    ChannelNotBound {
+        /// The room.
+        room_id: RoomId,
+        /// The channel.
+        channel_id: ChannelId,
+    },
+    /// Only the framework writes the visibility `internal`, on the records
+    /// it writes itself (gap G-041).
+    #[error("only the framework writes the visibility internal")]
+    InternalVisibility,
+    /// The room metadata key belongs to the namespace the implementation
+    /// reserves (RFC §10.6.5, gap G-049).
+    #[error("room metadata key {0:?} is reserved by the implementation")]
+    ReservedMetadataKey(String),
     /// The store refused or failed the change.
     #[error("the store failed: {0:?}")]
     Store(ErrorRecord),
@@ -37,6 +69,10 @@ pub enum LifecycleError {
 
 /// Creates a room, then fires `ON_ROOM_CREATED` and emits `room_created`.
 /// Its output is the stored room.
+///
+/// A room whose metadata holds a key of the namespace the implementation
+/// reserves is refused before anything is written (RFC §10.6.5, gap
+/// G-049).
 #[derive(Debug)]
 pub struct CreateRoom {
     config: Arc<KitConfig>,
@@ -57,18 +93,24 @@ impl CreateRoom {
             started: false,
         }
     }
+
+    /// Asks for the write, unless the room is refused as it stands.
+    fn start(&mut self) -> Option<Result<Room, LifecycleError>> {
+        self.started = true;
+        if let Some(key) = attachment::reserved_key(&self.room.metadata) {
+            return Some(Err(LifecycleError::ReservedMetadataKey(key.to_owned())));
+        }
+        let room = self.room.clone();
+        self.creating = Some(self.io.issue(Request::CreateRoom { room }));
+        None
+    }
 }
 
 impl Operation for CreateRoom {
     type Output = Result<Room, LifecycleError>;
 
     fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
-        if !self.started {
-            self.started = true;
-            let room = self.room.clone();
-            self.creating = Some(self.io.issue(Request::CreateRoom { room }));
-        }
-        let mut result = None;
+        let mut result = if self.started { None } else { self.start() };
         while let Some((effect, outcome)) = self.io.next_outcome() {
             if self.creating != Some(effect) {
                 continue;
@@ -77,8 +119,12 @@ impl Operation for CreateRoom {
             result = Some(match outcome.into_stored() {
                 Ok(()) => {
                     let context = RoomContext::new(self.room.clone());
-                    let created = Reported::RoomCreated;
-                    report::report(&mut self.io, &self.config, environment, created, &context);
+                    let mut cx = Cx {
+                        config: &self.config,
+                        env: environment,
+                        io: &mut self.io,
+                    };
+                    report::report(&mut cx, Reported::RoomCreated, &context);
                     Ok(self.room.clone())
                 }
                 Err(error) => Err(LifecycleError::Store(error)),
@@ -89,71 +135,5 @@ impl Operation for CreateRoom {
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.io.complete(id, outcome)
-    }
-}
-
-/// Attaches a channel to a room with its binding, under the room's lock,
-/// then fires `ON_CHANNEL_ATTACHED` and emits `room_channel_attached`. Its
-/// output is the stored binding.
-#[derive(Debug)]
-pub struct AttachChannel {
-    change: LockedChange,
-}
-
-impl AttachChannel {
-    /// The attachment of `binding`'s channel to `binding`'s room.
-    pub fn new(config: Arc<KitConfig>, binding: ChannelBinding) -> Self {
-        let room_id = binding.room_id.clone();
-        Self {
-            change: LockedChange::new(config, room_id, Change::Attach(Box::new(binding))),
-        }
-    }
-}
-
-impl Operation for AttachChannel {
-    type Output = Result<ChannelBinding, LifecycleError>;
-
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
-        self.change.poll(environment, |changed| match changed {
-            Changed::Attached { binding, .. } => Some(*binding),
-            Changed::Closed(_) | Changed::Unchanged(_) => None,
-        })
-    }
-
-    fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
-        self.change.complete(id, outcome)
-    }
-}
-
-/// Closes a room under its lock, then fires `ON_ROOM_CLOSED` and emits
-/// `room_closed`. Closing a room that no longer accepts events changes
-/// nothing. Its output is the room as it now stands.
-#[derive(Debug)]
-pub struct CloseRoom {
-    change: LockedChange,
-}
-
-impl CloseRoom {
-    /// The closing of `room_id`.
-    pub fn new(config: Arc<KitConfig>, room_id: RoomId) -> Self {
-        Self {
-            change: LockedChange::new(config, room_id, Change::Close),
-        }
-    }
-}
-
-impl Operation for CloseRoom {
-    type Output = Result<Room, LifecycleError>;
-
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
-        self.change.poll(environment, |changed| match changed {
-            Changed::Closed(context) => Some(context.room),
-            Changed::Unchanged(room) => Some(*room),
-            Changed::Attached { .. } => None,
-        })
-    }
-
-    fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
-        self.change.complete(id, outcome)
     }
 }

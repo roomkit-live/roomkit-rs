@@ -156,6 +156,7 @@ fn room() {
     room.organization_id = Some("org_1".to_owned());
     room.status = RoomStatus::Paused;
     room.updated_at = at("2026-10-22T14:30:00Z");
+    room.paused_at = Some(at("2026-10-22T14:30:00Z"));
     room.timers = RoomTimers {
         inactive_after_seconds: Some(1800),
         closed_after_seconds: Some(86_400),
@@ -175,6 +176,7 @@ fn room() {
             "created_at": "2026-10-22T14:00:00Z",
             "updated_at": "2026-10-22T14:30:00Z",
             "closed_at": null,
+            "paused_at": "2026-10-22T14:30:00Z",
             "timers": {
                 "inactive_after_seconds": 1800,
                 "closed_after_seconds": 86400,
