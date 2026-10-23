@@ -397,7 +397,7 @@ impl Channel for Tagger {
             .insert("crm_contact".to_owned(), "c_42".into());
         output
             .metadata_updates
-            .insert("roomkit.detached".to_owned(), revoked.into());
+            .insert("roomkit:detached".to_owned(), revoked.into());
         ready(Ok(output))
     }
 }
@@ -433,7 +433,7 @@ mod metadata_updates {
     #[tokio::test]
     async fn a_reserved_key_is_refused() {
         let room = tagged_room().await;
-        assert!(!room.metadata.contains_key("roomkit.detached"));
+        assert!(!room.metadata.contains_key("roomkit:detached"));
     }
 
     #[tokio::test]
@@ -442,13 +442,13 @@ mod metadata_updates {
         let refused = kit
             .create_room_with(&room_id(), |room| {
                 room.metadata
-                    .insert("roomkit.detached".to_owned(), Metadata::new().into());
+                    .insert("roomkit:detached".to_owned(), Metadata::new().into());
             })
             .await;
         assert_eq!(
             refused,
             Err(KitError::Lifecycle(LifecycleError::ReservedMetadataKey(
-                "roomkit.detached".to_owned()
+                "roomkit:detached".to_owned()
             )))
         );
     }

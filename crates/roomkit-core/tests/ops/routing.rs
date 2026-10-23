@@ -950,7 +950,10 @@ mod a_chat_message {
         let binding = sim.other_bindings("new_room_1").into_iter().next();
         assert_eq!(
             named(binding.as_ref()),
-            (Some("-100777".to_owned()), json!({ "chat_id": "-100777" }))
+            (
+                Some("-100777".to_owned()),
+                json!({ "telegram_chat_id": "-100777" })
+            )
         );
     }
 
@@ -979,6 +982,40 @@ mod a_chat_message {
         );
     }
 
+    /// Gap G-051: a Teams message carries its conversation under
+    /// `conversation_id` by default.
+    #[test]
+    fn of_a_teams_conversation_is_routed_by_it() {
+        let mut sim = Sim::without_rooms();
+        sim.unbound_transport("teams", ChannelType::Teams);
+        let mut message = message_from("teams", "29:alice", "Hi");
+        message
+            .metadata
+            .insert("conversation_id".to_owned(), json!("19:abc@thread.v2"));
+        sim.route(None, message).unwrap();
+        assert_eq!(
+            sim.route_queries[0].sender.address.as_deref(),
+            Some("19:abc@thread.v2")
+        );
+    }
+
+    /// RFC §5.7, gap G-051: WhatsApp Personal takes a group message's
+    /// group, carried under `group_jid` by default, as its conversation.
+    #[test]
+    fn of_a_whatsapp_personal_group_is_routed_by_its_group() {
+        let mut sim = Sim::without_rooms();
+        sim.unbound_transport("whatsapp", ChannelType::WhatsappPersonal);
+        let mut message = message_from("whatsapp", SENDER, "Hi");
+        message
+            .metadata
+            .insert("group_jid".to_owned(), json!("120363@g.us"));
+        sim.route(None, message).unwrap();
+        assert_eq!(
+            sim.route_queries[0].sender.address.as_deref(),
+            Some("120363@g.us")
+        );
+    }
+
     #[test]
     fn records_its_chat_on_a_room_opened_naming_no_one() {
         let mut sim = Sim::new();
@@ -988,7 +1025,10 @@ mod a_chat_message {
         sim.route(None, in_the_chat()).unwrap();
         assert_eq!(
             named(binding_of(&sim, "telegram")),
-            (Some("-100777".to_owned()), json!({ "chat_id": "-100777" }))
+            (
+                Some("-100777".to_owned()),
+                json!({ "telegram_chat_id": "-100777" })
+            )
         );
     }
 }

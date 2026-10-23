@@ -163,7 +163,7 @@ impl EventFilter {
 /// A conversation store (RFC §14.1): the operations the pipeline and the kit
 /// use. Implement the methods with `async fn`.
 ///
-/// The room metadata keys under `roomkit.` belong to the implementation
+/// The room metadata keys under `roomkit:` belong to the implementation
 /// (RFC §10.6.5): the framework writes them through [`update_room`], and
 /// host code that writes the store directly must leave them alone.
 ///

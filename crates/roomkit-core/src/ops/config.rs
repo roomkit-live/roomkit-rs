@@ -43,19 +43,19 @@ pub struct ChannelDeclaration {
     /// §5.7); `None` keeps such a number as written.
     pub country_code: Option<CountryCode>,
     /// The metadata key under which an inbound message carries the chat it
-    /// was posted in, which routing addresses it by (RFC §5.7, §10.4, gap
-    /// G-057): `chat_id` for Telegram and `teams_conversation_id` for Teams
-    /// by default. A channel carrying private chats and groups (WhatsApp
-    /// Personal) declares the key its group messages carry the group under;
-    /// a message without the key is addressed by its sender.
+    /// was posted in, which routing addresses it by (RFC §5.7, §10.4, gaps
+    /// G-051 and G-057): `chat_id` for Telegram, `conversation_id` for Teams
+    /// and `group_jid` for WhatsApp Personal by default. On a channel
+    /// carrying private chats and groups (WhatsApp Personal), a message
+    /// without the key is addressed by its sender.
     pub chat_key: Option<String>,
 }
 
 impl ChannelDeclaration {
     /// A channel of `channel_type` with the RFC's defaults: the default
-    /// capabilities, no provider name, no country code, the recipient key
-    /// Appendix A gives its type (gap G-051), and on a chat channel the
-    /// recipient key as its chat key (gap G-057).
+    /// capabilities, no provider name, no country code, and the recipient
+    /// key and chat key of its type ([`addresses::recipient_key`],
+    /// [`addresses::chat_key`], gaps G-051 and G-057).
     pub fn new(
         channel_id: ChannelId,
         channel_type: ChannelType,

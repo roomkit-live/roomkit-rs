@@ -15,18 +15,19 @@
 //! The record maps each revoked channel to the instant it was detached:
 //!
 //! ```json
-//! { "roomkit.detached": { "sms": "2026-10-22T14:03:00Z" } }
+//! { "roomkit:detached": { "sms": "2026-10-22T14:03:00Z" } }
 //! ```
 
 use serde_json::Value;
 
 use crate::model::{ChannelId, Metadata, Room, RoomContext, RoomUpdates, Timestamp};
 
-/// The prefix of the room metadata keys the implementation reserves.
-pub const RESERVED_PREFIX: &str = "roomkit.";
+/// The prefix of the room metadata keys the implementation reserves (gap
+/// G-049).
+pub const RESERVED_PREFIX: &str = "roomkit:";
 
 /// The room metadata key holding the room's revocations.
-pub const REVOCATIONS_KEY: &str = "roomkit.detached";
+pub const REVOCATIONS_KEY: &str = "roomkit:detached";
 
 /// Whether a room metadata key belongs to the implementation's namespace,
 /// which integrator writes refuse (RFC §10.6.5).
@@ -195,15 +196,22 @@ mod tests {
     fn a_key_of_the_reserved_namespace_is_refused() {
         let metadata: Metadata = [
             ("crm".to_owned(), json!("c_1")),
-            ("roomkit.detached".to_owned(), json!({})),
+            ("roomkit:detached".to_owned(), json!({})),
         ]
         .into_iter()
         .collect();
-        assert_eq!(reserved_key(&metadata), Some("roomkit.detached"));
+        assert_eq!(reserved_key(&metadata), Some("roomkit:detached"));
     }
 
     #[test]
     fn an_integrator_key_is_not_reserved() {
         assert!(!is_reserved_key("roomkit_crm"));
+    }
+
+    /// Gap G-049: the namespace is `roomkit:`; a key written `roomkit.` is
+    /// the integrator's.
+    #[test]
+    fn a_key_under_the_dotted_prefix_is_the_integrator_s() {
+        assert!(!is_reserved_key("roomkit.detached"));
     }
 }

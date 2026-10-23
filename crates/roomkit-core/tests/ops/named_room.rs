@@ -209,7 +209,7 @@ mod a_missing_room {
                 binding.participant_id.as_ref().map(ParticipantId::as_str),
                 serde_json::Value::Object(binding.metadata.clone())
             ),
-            (Some("-100777"), json!({ "chat_id": "-100777" }))
+            (Some("-100777"), json!({ "telegram_chat_id": "-100777" }))
         );
     }
 

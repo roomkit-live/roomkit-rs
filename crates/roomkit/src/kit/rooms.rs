@@ -31,7 +31,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// Returns [`KitError::Lifecycle`] when the room exists already, or
     /// when its metadata names a key of the namespace the implementation
-    /// reserves (`roomkit.`, RFC §10.6.5).
+    /// reserves (`roomkit:`, RFC §10.6.5).
     pub async fn create_room_with(
         &self,
         room_id: &RoomId,

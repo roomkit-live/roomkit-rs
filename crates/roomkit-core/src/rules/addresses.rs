@@ -40,9 +40,21 @@ pub const FACEBOOK_USER_ID: &str = "facebook_user_id";
 /// The binding metadata key of a Teams conversation (Appendix A.6).
 pub const TEAMS_CONVERSATION_ID: &str = "teams_conversation_id";
 
-/// The binding metadata key of a Telegram chat, the `chat_id` its provider
-/// sends to (Appendix A.13, gap G-051).
-pub const TELEGRAM_CHAT_ID: &str = "chat_id";
+/// The binding metadata key of a Telegram chat, which its provider sends to
+/// (Appendix A.13, gap G-051).
+pub const TELEGRAM_CHAT_ID: &str = "telegram_chat_id";
+
+/// The metadata key under which a Telegram message carries the chat it was
+/// posted in (Appendix A.13, gap G-057).
+pub const TELEGRAM_CHAT: &str = "chat_id";
+
+/// The metadata key under which a Teams message carries the conversation it
+/// was posted in (Appendix A.6, gap G-057).
+pub const TEAMS_CONVERSATION: &str = "conversation_id";
+
+/// The metadata key under which a WhatsApp Personal group message carries
+/// its group (Appendix A.4, gap G-057); a private message carries none.
+pub const WHATSAPP_GROUP: &str = "group_jid";
 
 /// The sender under which the framework writes into a room itself; it names
 /// no correspondent (RFC §10.4).
@@ -254,10 +266,12 @@ pub fn email_address(address: &str) -> String {
 }
 
 /// The binding metadata key a channel of `channel_type` delivers to by
-/// default (RFC §5.7, Appendix A, gap G-051); `None` for a channel that
-/// delivers to a destination of its own, a WebSocket's connections, a
-/// webhook's URL, a voice session, which needs no recipient (RFC §10.2 step
-/// 3d).
+/// default (RFC §5.7, Appendix A, gap G-051): `phone_number` for SMS, MMS,
+/// RCS, WhatsApp and WhatsApp Personal, `email_address` for EMAIL,
+/// `facebook_user_id` for Messenger, `teams_conversation_id` for Teams and
+/// `telegram_chat_id` for Telegram. `None` for a channel that delivers to a
+/// destination of its own, a WebSocket's connections, a webhook's URL, a
+/// voice session, which needs no recipient (RFC §10.2 step 3d).
 pub fn recipient_key(channel_type: ChannelType) -> Option<&'static str> {
     match channel_type {
         ChannelType::Sms
@@ -285,14 +299,34 @@ pub fn recipient_key(channel_type: ChannelType) -> Option<&'static str> {
 }
 
 /// The metadata key under which a message on a channel of `channel_type`
-/// carries the chat it was posted in, by default (RFC §5.7, gap G-057): a
-/// chat channel's recipient key, `chat_id` for Telegram and
-/// `teams_conversation_id` for Teams; `None` for every other type, whose
-/// messages are routed by their sender.
+/// carries the chat it was posted in, by default (RFC §5.7, gaps G-051 and
+/// G-057): `chat_id` for Telegram, `conversation_id` for Teams, and
+/// `group_jid` for WhatsApp Personal, whose group messages are their
+/// group's and private messages their sender's. `None` for every other
+/// type, whose messages are routed by their sender.
 pub fn chat_key(channel_type: ChannelType) -> Option<&'static str> {
-    match Addressing::of(channel_type) {
-        Addressing::Chat => recipient_key(channel_type),
-        Addressing::PhoneNumber | Addressing::EmailAddress | Addressing::AsWritten => None,
+    match channel_type {
+        ChannelType::Telegram => Some(TELEGRAM_CHAT),
+        ChannelType::Teams => Some(TEAMS_CONVERSATION),
+        ChannelType::WhatsappPersonal => Some(WHATSAPP_GROUP),
+        ChannelType::Sms
+        | ChannelType::Mms
+        | ChannelType::Rcs
+        | ChannelType::Email
+        | ChannelType::Whatsapp
+        | ChannelType::Websocket
+        | ChannelType::Messenger
+        | ChannelType::Webhook
+        | ChannelType::Voice
+        | ChannelType::RealtimeVoice
+        | ChannelType::AudioVideo
+        | ChannelType::RealtimeAudioVideo
+        | ChannelType::Video
+        | ChannelType::Conference
+        | ChannelType::Cli
+        | ChannelType::Push
+        | ChannelType::Ai
+        | ChannelType::System => None,
     }
 }
 
@@ -517,6 +551,15 @@ mod tests {
         assert_eq!(code("+44").as_str(), "44");
     }
 
+    /// Gap G-051: a Telegram binding delivers to `telegram_chat_id`.
+    #[test]
+    fn a_telegram_channel_delivers_to_its_telegram_chat_id() {
+        assert_eq!(
+            recipient_key(ChannelType::Telegram),
+            Some("telegram_chat_id")
+        );
+    }
+
     #[test]
     fn the_appendix_a_channels_name_their_recipient_key() {
         let keys = [
@@ -599,8 +642,19 @@ mod tests {
             country_code: None,
             recipient_key: Some(TELEGRAM_CHAT_ID.to_owned()),
         };
-        let binding = binding_with(json!({ "chat_id": -100_777 }));
+        let binding = binding_with(json!({ "telegram_chat_id": -100_777 }));
         assert_eq!(form.recipient(&binding), Some("-100777".to_owned()));
+    }
+
+    /// Gap G-051: a WhatsApp Personal group's recipient is its JID, which
+    /// no phone rule rewrites.
+    #[test]
+    fn a_form_reads_a_group_s_jid_as_written() {
+        let binding = binding_with(json!({ "phone_number": "120363@g.us" }));
+        assert_eq!(
+            sms_form().recipient(&binding),
+            Some("120363@g.us".to_owned())
+        );
     }
 
     #[test]
@@ -613,11 +667,20 @@ mod tests {
         assert_eq!(form.recipient(&binding), None);
     }
 
+    /// Gap G-051: a chat channel's message carries its chat under a key of
+    /// its own, not under the binding's recipient key.
     #[test]
-    fn a_chat_channel_carries_its_chat_under_its_recipient_key() {
+    fn a_chat_channel_carries_its_chat_under_its_chat_key() {
         assert_eq!(
             [ChannelType::Telegram, ChannelType::Teams, ChannelType::Sms].map(chat_key),
-            [Some("chat_id"), Some("teams_conversation_id"), None]
+            [Some("chat_id"), Some("conversation_id"), None]
         );
+    }
+
+    /// RFC §5.7, gap G-051: a WhatsApp Personal group message carries its
+    /// group under `group_jid`.
+    #[test]
+    fn a_whatsapp_personal_group_message_carries_its_group_under_group_jid() {
+        assert_eq!(chat_key(ChannelType::WhatsappPersonal), Some("group_jid"));
     }
 }

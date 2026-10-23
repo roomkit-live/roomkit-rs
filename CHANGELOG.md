@@ -50,7 +50,7 @@ publishes a release.
   `unregister_channel`; the store's `delete_binding` and `list_rooms` with a
   `RoomFilter`.
 - The room metadata updates a channel returns are applied; the keys under
-  `roomkit.` are the implementation's and refused to integrator writes.
+  `roomkit:` are the implementation's and refused to integrator writes.
 - Example `advisor_joins`, after the RFC's Appendix B.5.
 - A named room (RFC §10.1 steps 1 to 3, §5.7, §17.2): the sender is written
   in its channel's form before anything reads it, a phone number in E.164 and
@@ -68,9 +68,9 @@ publishes a release.
   `ChannelDeclaration::new` gives a channel its type's key by default
   (Appendix A): `phone_number` for SMS, MMS, RCS, WhatsApp and WhatsApp
   Personal, `email_address` for email, `facebook_user_id` for Messenger,
-  `teams_conversation_id` for Teams, `chat_id` for Telegram; none for a
-  channel that delivers to a destination of its own (WebSocket, webhook,
-  voice). The integrator may declare another key, or none.
+  `teams_conversation_id` for Teams, `telegram_chat_id` for Telegram; none
+  for a channel that delivers to a destination of its own (WebSocket,
+  webhook, voice). The integrator may declare another key, or none.
 - The protocol's `EnterLane`, `LeaveLane` and `RunObservers` requests,
   `HookTrigger::OnSessionStarted` and `FrameworkEvent::SessionStarted`.
 - Participants in the store (`create_participant`, `get_participant`,
@@ -99,7 +99,8 @@ publishes a release.
   `RoomKit::set_router`.
 - Chat channels: a channel's declaration names the metadata key a message
   carries its chat under (`ChannelDeclaration::chat_key`, `chat_id` for
-  Telegram and `teams_conversation_id` for Teams by default). A chat
+  Telegram, `conversation_id` for Teams and `group_jid` for a WhatsApp
+  Personal group by default). A chat
   message is routed by its chat, and a room created for it binds the chat
   as correspondent and recipient, so its answers are delivered instead of
   refused `no_recipient`. `rules::addresses::AddressForm` and
@@ -239,6 +240,17 @@ publishes a release.
 
 ### Changed
 
+- The implementation's room metadata namespace is `roomkit:`, the
+  revocations of detached channels `roomkit:detached` (they were
+  `roomkit.` and `roomkit.detached`); a key written `roomkit.` is the
+  integrator's (gap G-049). No release wrote the old keys, so no store
+  holds a revocation under them.
+- A Telegram binding's recipient key is `telegram_chat_id` (it was
+  `chat_id`), and a channel's default chat key is its type's own instead of
+  its recipient key: `chat_id` for Telegram, `conversation_id` for Teams
+  (it was `teams_conversation_id`), `group_jid` for WhatsApp Personal (it
+  had none), so a WhatsApp Personal group message is routed by its group
+  (gap G-051).
 - The `roomkit` driver completes each effect as it finishes and polls the
   operation between completions, a lock, a lane or a ticket's turn waited
   for beside the calls, instead of waiting for a step's every effect.
