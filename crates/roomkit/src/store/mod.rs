@@ -16,6 +16,8 @@ use roomkit_core::model::{
 use roomkit_core::rules::timers;
 use thiserror::Error;
 
+use crate::error;
+
 pub use roomkit_core::ops::{RoomCounters, TargetUpdate};
 
 pub use self::memory::InMemoryStore;
@@ -189,20 +191,8 @@ impl StoreError {
             Self::IndexTaken { .. } => "IndexTaken",
             Self::Unavailable(_) => "StoreUnavailable",
         };
-        ErrorRecord::new(error_type, with_causes(self))
+        ErrorRecord::new(error_type, error::with_causes(self))
     }
-}
-
-/// `error`'s message, then each of its causes', joined by `: `.
-fn with_causes(error: &dyn std::error::Error) -> String {
-    let mut message = error.to_string();
-    let mut cause = error.source();
-    while let Some(next) = cause {
-        message.push_str(": ");
-        message.push_str(&next.to_string());
-        cause = next.source();
-    }
-    message
 }
 
 /// Which rooms [`ConversationStore::list_rooms`] returns; an empty filter

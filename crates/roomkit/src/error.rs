@@ -86,3 +86,38 @@ pub enum KitError {
     #[error("the kit is shut down")]
     ShutDown,
 }
+
+/// `error`'s message, then each of its causes', joined by `: `: what a log
+/// line or a record shows of an error whose message leaves its cause to its
+/// source, a store that could not be reached among them.
+pub(crate) fn with_causes(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        message.push_str(": ");
+        message.push_str(&next.to_string());
+        cause = next.source();
+    }
+    message
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    /// A store failure the kit meets shows its message alone; its chain
+    /// carries the cause the store met.
+    #[test]
+    fn a_kit_error_s_chain_carries_the_store_s_cause() {
+        let error = KitError::Store(StoreError::unavailable("connection refused"));
+        assert_eq!(
+            (error.to_string(), with_causes(&error)),
+            (
+                "the store failed".to_owned(),
+                "the store failed: connection refused".to_owned()
+            )
+        );
+    }
+}

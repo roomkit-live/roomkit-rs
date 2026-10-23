@@ -523,6 +523,8 @@ publishes a release.
   message is `the store failed`, the cause shown once, by a reader of the
   chain: `StoreError::to_record` writes `the store failed: <cause>`.
   `StoreError::unavailable(cause)` builds one from an error or a message.
+  The kit's logs of a failed sweep or of a call nobody waits for write an
+  error with its causes, as `to_record` does.
   `StoreError` and `KitError` are no longer `Clone`, and an `Unavailable`
   error equals itself only.
 - `KitError::Stalled` is a stall of the effect protocol only, a defect of

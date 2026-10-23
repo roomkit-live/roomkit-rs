@@ -18,7 +18,7 @@ use tokio::time::MissedTickBehavior;
 
 use super::RoomKit;
 use crate::driver;
-use crate::error::KitError;
+use crate::error::{KitError, with_causes};
 use crate::store::{ConversationStore, RoomFilter};
 
 /// A background task checking the rooms' timers on a period, started by
@@ -97,7 +97,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 Err(error) => tracing::error!(
                     target: "roomkit::timers",
                     room_id = %room.id,
-                    %error,
+                    error = %with_causes(&error),
                     "checking a room's timers broke the driver"
                 ),
             }
@@ -158,7 +158,11 @@ impl<S: ConversationStore> RoomKit<S> {
             Ok(Ok(_)) => true,
             Ok(Err(KitError::ShutDown)) => false,
             Ok(Err(error)) => {
-                tracing::warn!(target: "roomkit::timers", %error, "a timer sweep failed");
+                tracing::warn!(
+                    target: "roomkit::timers",
+                    error = %with_causes(&error),
+                    "a timer sweep failed"
+                );
                 true
             }
             // The shutdown ended the sweep under way.

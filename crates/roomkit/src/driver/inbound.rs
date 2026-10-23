@@ -34,7 +34,7 @@ use tokio::task::JoinError;
 
 use super::Leases;
 use crate::context::ExecutionContext;
-use crate::error::KitError;
+use crate::error::{KitError, with_causes};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 
@@ -156,7 +156,7 @@ impl Caller {
             Err(error) => tracing::warn!(
                 target: "roomkit::driver",
                 call,
-                %error,
+                error = %with_causes(&error),
                 "a call nobody waits for any more failed"
             ),
         }
