@@ -1,7 +1,8 @@
 //! The tasks a kit runs in the background, tracked so that the kit can wait
 //! for them and end them (decision 3 of step 2b): the observer hooks that run
-//! after the fact (RFC §9.3) and the inbound runs (RFC §10.1), whose caller
-//! waits for them or went on, answered at the decision or gone.
+//! after the fact (RFC §9.3), the inbound runs (RFC §10.1), whose caller
+//! waits for them or went on, answered at the decision or gone, and the
+//! timer sweeps (RFC §5.1).
 //!
 //! A task is tracked from its spawn until its future is dropped: at its end,
 //! aborted, or with the runtime. A task that spawns another one spawns it

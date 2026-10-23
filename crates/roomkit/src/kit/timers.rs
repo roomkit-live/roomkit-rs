@@ -99,6 +99,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// kit shut down. A silent room's transition arrives up to one period
     /// late, with the instant it fell due.
     ///
+    /// Each sweep runs as background work the kit tracks: [`idle`](Self::idle)
+    /// waits for one under way, and [`shutdown`](Self::shutdown) ends it at
+    /// its next wait, a room's lock it holds let go, and waits for it. The
+    /// sweeper waiting for its next tick keeps the kit idle.
+    ///
     /// # Errors
     ///
     /// Returns [`KitError::ZeroPeriod`] for a zero `period`, and
@@ -117,16 +122,39 @@ impl<S: ConversationStore> RoomKit<S> {
                     () = kit.inner.tasks.shutting_down() => return,
                     _ = ticks.tick() => {}
                 }
-                match kit.check_timers().await {
-                    Ok(_) => {}
-                    Err(KitError::ShutDown) => return,
-                    Err(error) => {
-                        tracing::warn!(target: "roomkit::timers", %error, "a timer sweep failed");
-                    }
+                if !kit.sweep().await {
+                    return;
                 }
             }
         });
         Ok(TimerSweeper { task })
+    }
+
+    /// Runs one sweep as a task the kit tracks, and waits for it; `false`
+    /// once the kit is shut down, which ends the sweeper.
+    async fn sweep(&self) -> bool {
+        let kit = self.clone();
+        let Some(sweep) = self
+            .inner
+            .tasks
+            .spawn(async move { kit.check_timers().await })
+        else {
+            return false;
+        };
+        match sweep.await {
+            Ok(Ok(_)) => true,
+            Ok(Err(KitError::ShutDown)) => false,
+            Ok(Err(error)) => {
+                tracing::warn!(target: "roomkit::timers", %error, "a timer sweep failed");
+                true
+            }
+            // The shutdown ended the sweep under way.
+            Err(ended) if ended.is_cancelled() => false,
+            Err(_panicked) => {
+                tracing::error!(target: "roomkit::timers", "a timer sweep panicked");
+                true
+            }
+        }
     }
 }
 
@@ -134,7 +162,7 @@ impl<S: ConversationStore> RoomKit<S> {
 mod tests {
     use std::time::Duration;
 
-    use roomkit_core::model::RoomId;
+    use roomkit_core::model::{RoomId, RoomStatus};
     use roomkit_core::ops::FrameworkEvent;
 
     use super::*;
@@ -142,17 +170,74 @@ mod tests {
     /// How long a wait that should end may take before the test fails.
     const BOUND: Duration = Duration::from_secs(5);
 
-    /// A sweeper stops when its kit shuts down, rather than at its next
-    /// tick an hour later.
-    #[tokio::test]
-    async fn a_timer_sweeper_stops_when_its_kit_shuts_down() {
+    /// How long a wait that should not end is given before the test takes
+    /// it that it does not.
+    const BRIEF: Duration = Duration::from_millis(20);
+
+    fn room_id() -> RoomId {
+        RoomId::new("room_1").unwrap()
+    }
+
+    /// A kit whose room's inactivity timer fell due at its creation.
+    async fn timed_kit() -> RoomKit {
         let kit = RoomKit::new();
-        let room_id = RoomId::new("room_1").unwrap();
-        kit.create_room_with(&room_id, |room| {
+        kit.create_room_with(&room_id(), |room| {
             room.timers.inactive_after_seconds = Some(0);
         })
         .await
         .unwrap();
+        kit
+    }
+
+    /// A sweeper of `kit` whose first sweep is under way: it waits for the
+    /// room's lock, which the test holds as a lifecycle change would.
+    async fn sweep_under_way(kit: &RoomKit) -> TimerSweeper {
+        let sweeper = kit.run_timers(Duration::from_secs(3600)).unwrap();
+        // Nothing tells the sweep apart from the outside: the kit's tasks
+        // are counted.
+        let deadline = tokio::time::Instant::now() + BOUND;
+        while kit.inner.tasks.running() == 0 {
+            assert!(tokio::time::Instant::now() < deadline, "no sweep started");
+            tokio::task::yield_now().await;
+        }
+        sweeper
+    }
+
+    /// `idle` waits for a sweep under way, which then applies the pause.
+    #[tokio::test]
+    async fn idle_waits_for_a_sweep_under_way() {
+        let kit = timed_kit().await;
+        let held = kit.inner.locks.lock(&room_id()).await;
+        let _sweeper = sweep_under_way(&kit).await;
+        let busy = tokio::time::timeout(BRIEF, kit.idle()).await.is_err();
+        drop(held);
+        tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        assert_eq!((busy, room.status), (true, RoomStatus::Paused));
+    }
+
+    /// The shutdown ends a sweep under way and waits for it: once it
+    /// returned, the sweep writes nothing, the lock let go or not.
+    #[tokio::test]
+    async fn shutdown_ends_a_sweep_under_way() {
+        let kit = timed_kit().await;
+        let held = kit.inner.locks.lock(&room_id()).await;
+        let mut sweeper = sweep_under_way(&kit).await;
+        tokio::time::timeout(BOUND, kit.shutdown()).await.unwrap();
+        let stopped = tokio::time::timeout(BOUND, &mut sweeper.task).await;
+        drop(held);
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        assert_eq!(
+            (stopped.is_ok_and(|ended| ended.is_ok()), room.status),
+            (true, RoomStatus::Active)
+        );
+    }
+
+    /// A sweeper stops when its kit shuts down, rather than at its next
+    /// tick an hour later.
+    #[tokio::test]
+    async fn a_timer_sweeper_stops_when_its_kit_shuts_down() {
+        let kit = timed_kit().await;
         let mut events = kit.subscribe();
         let mut sweeper = kit.run_timers(Duration::from_secs(3600)).unwrap();
         // The first check pauses the room; the sweeper then waits for its

@@ -549,7 +549,10 @@ publishes a release.
   wait, an event committed and not delivered yet staying undelivered, and
   returns once it is over; a call running in its caller's own task runs to
   its end. A timer sweeper stops when its kit shuts down, and
-  `check_timers` returns `KitError::ShutDown`. The examples wait for the
+  `check_timers` returns `KitError::ShutDown`. Each sweep of a timer
+  sweeper is tracked work too: `idle()` waits for one under way, and
+  `shutdown()` ends it, the room lock it holds let go, and waits for it; a
+  sweep could hold a lock and write after the shutdown returned. The examples wait for the
   observers they check with `idle()` instead of a timeout.
 - `ChannelBinding::can_write` is removed: `rules::permissions::write_refusal`
   says whether a source may write, and why not. `RoomContext::binding(channel_id)`

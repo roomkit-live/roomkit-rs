@@ -7,9 +7,10 @@ use crate::store::ConversationStore;
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Waits until the kit runs nothing in the background: no observer hook
-    /// running after the fact (RFC §9.3), and no inbound call running,
+    /// running after the fact (RFC §9.3), no timer sweep under way
+    /// ([`run_timers`](Self::run_timers)), and no inbound call running,
     /// whether its caller waits for it, was answered at its decision (RFC
-    /// §10.1 step 18) or stopped waiting once it was decided. What one of
+    /// §10.1 step 18) or stopped waiting. What one of
     /// them starts, an observer its delivery fires, a call its channel
     /// makes, is waited for too. A call that runs in its caller's own task,
     /// a lifecycle change, a direct change of a stored event or
@@ -33,7 +34,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///   [`check_timers`](Self::check_timers). Registering channels and
     ///   hooks, subscribing and reading the store go on working;
     /// - the background work is ended at its next wait. An observer hook
-    ///   running after the fact is dropped. An inbound call running stops
+    ///   running after the fact is dropped, and so is a timer sweep under
+    ///   way, the room lock it holds let go. An inbound call running stops
     ///   and lets go of what it holds, its room lock, its places in the
     ///   room's lane and its admission ticket; its caller, if it still
     ///   waits, receives `KitError::ShutDown`. An event it committed and
@@ -42,8 +44,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// - a call that runs in its caller's own task, a lifecycle change, a
     ///   direct change of a stored event or `commit_event`, is not ended: it
     ///   runs to its end, and the observer hooks it would start run no more;
-    /// - a timer sweeper ([`run_timers`](Self::run_timers)) stops at its next
-    ///   tick, and a check under way stops before its next room.
+    /// - a timer sweeper ([`run_timers`](Self::run_timers)) stops.
     ///
     /// To let the background work finish first, await [`idle`](Self::idle)
     /// before, within the grace the host gives it:
