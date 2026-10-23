@@ -89,6 +89,10 @@ pub(crate) enum Abort {
     /// naming the event when the pass held the room lock by then, which it
     /// released; `None` before the lock.
     DeadlinePassed(Option<EventId>),
+    /// A direct injection the room refused before its hooks, nothing
+    /// written: the room is another organization's, or binds no channel
+    /// the event names (gap G-069).
+    Refused(InboundError),
 }
 
 impl Abort {
@@ -100,6 +104,7 @@ impl Abort {
             Self::DeadlinePassed(_) => {
                 ErrorRecord::new("ProcessTimeout", "the call passed its process_timeout")
             }
+            Self::Refused(error) => ErrorRecord::new("Refused", error.to_string()),
         }
     }
 }

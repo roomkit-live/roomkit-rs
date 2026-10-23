@@ -24,7 +24,11 @@ impl Machine {
                 organization_id,
                 message,
             } => self.begin_message(cx, target, organization_id, *message),
-            Call::Direct { room_id, event } => self.begin_direct(cx, room_id, *event),
+            Call::Direct {
+                room_id,
+                organization_id,
+                event,
+            } => self.begin_direct(cx, room_id, organization_id, *event),
         }
     }
 

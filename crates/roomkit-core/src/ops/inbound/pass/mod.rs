@@ -30,6 +30,7 @@ mod gates;
 
 use std::mem;
 
+use super::direct::DirectCall;
 use super::edits::Accepted;
 use crate::model::{
     ChannelId, ErrorRecord, InjectedEvent, Observation, RoomContext, RoomEvent, RoomStatus, Task,
@@ -145,6 +146,8 @@ pub(super) struct CommitPass {
     /// The chain the trigger's off-lock check left, which step 9 goes on
     /// with (RFC §9.5.1).
     checked: Option<Box<HookChain<RoomEvent>>>,
+    /// What a direct injection is checked for at the gate (gap G-069).
+    direct: Option<DirectCall>,
     injected_events: Vec<InjectedEvent>,
     tasks: Vec<Task>,
     observations: Vec<Observation>,
@@ -237,6 +240,7 @@ impl CommitPass {
             accepted: None,
             deadline: None,
             checked: None,
+            direct: None,
             injected_events: Vec::new(),
             tasks: Vec::new(),
             observations: Vec::new(),
@@ -257,6 +261,12 @@ impl CommitPass {
             checked: checked.map(Box::new),
             ..Self::new(PassOrigin::Trigger, event)
         }
+    }
+
+    /// The pass of a direct injection for `direct`, whose room the gate
+    /// checks before the hooks (gap G-069); `None` for any other event.
+    pub(super) fn checking(self, direct: Option<DirectCall>) -> Self {
+        Self { direct, ..self }
     }
 
     /// Whether the pass waits for `effect`.

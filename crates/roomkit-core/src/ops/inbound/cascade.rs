@@ -327,6 +327,7 @@ pub(super) fn failure(abort: Abort, room_id: Option<crate::model::RoomId>) -> In
         (Abort::RoomNotFound, Some(room_id)) => InboundError::RoomNotFound(room_id),
         (Abort::Store(error), _) => InboundError::Store(error),
         (Abort::Lock(error), _) => InboundError::Lock(error),
+        (Abort::Refused(error), _) => error,
         (abort @ (Abort::RoomNotFound | Abort::DeadlinePassed(_)), _) => {
             InboundError::Store(abort.into_record())
         }

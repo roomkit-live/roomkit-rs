@@ -133,19 +133,29 @@ impl Inbound {
     }
 
     /// The pipeline for `event`, injected directly into `room_id` (RFC
-    /// §10.5): the same pipeline as a message's from the room lock on, its
-    /// off-lock check included, without `handle_inbound()`, routing, the
-    /// room's creation or an attach (gap G-069).
+    /// §10.5) by a caller acting for `organization_id` (RFC §17.2): the same
+    /// pipeline as a message's from the room lock on, its off-lock check
+    /// included, without `handle_inbound()`, routing, the room's creation or
+    /// an attach (gap G-069). A call that names no organization reads the
+    /// room unscoped.
     ///
     /// Its output is the committed event's result, a record stored
     /// `BLOCKED` included, once its delivery set is over. A refusal before
-    /// the commit is an error with nothing written,
-    /// [`InboundError::Refused`]: a room whose status refuses events, the
-    /// call's `process_timeout`, a refused edit or delete, a refused
-    /// instruction.
-    pub fn inject(config: Arc<KitConfig>, room_id: RoomId, event: DirectEvent) -> Self {
+    /// the commit is an error with nothing written: a room of another
+    /// organization, or of none for a caller that names one,
+    /// [`InboundError::OtherOrganization`]; otherwise
+    /// [`InboundError::Refused`]: a channel the room does not bind
+    /// (`source_unbound`), a room whose status refuses events, the call's
+    /// `process_timeout`, a refused edit or delete, a refused instruction.
+    pub fn inject(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        organization_id: Option<String>,
+        event: DirectEvent,
+    ) -> Self {
         let call = Call::Direct {
             room_id,
+            organization_id,
             event: Box::new(event),
         };
         Self::calling(config, call)
@@ -164,6 +174,7 @@ impl Inbound {
                 room_id: None,
                 entry,
                 channel_id: None,
+                direct: None,
                 deadline: None,
                 holds_lane: false,
                 ticket: None,
@@ -223,6 +234,7 @@ enum Call {
     },
     Direct {
         room_id: RoomId,
+        organization_id: Option<String>,
         event: Box<DirectEvent>,
     },
 }
@@ -245,6 +257,9 @@ struct Machine {
     entry: EntryKind,
     /// The call's channel, once resolved (RFC §10.1 step 1).
     channel_id: Option<ChannelId>,
+    /// What a direct injection's trigger is checked for before its hooks
+    /// (gap G-069); `None` for a message.
+    direct: Option<direct::DirectCall>,
     /// The call's deadline, set at its start from `process_timeout` (RFC
     /// §13.6).
     deadline: Option<Timestamp>,

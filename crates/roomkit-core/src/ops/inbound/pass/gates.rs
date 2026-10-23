@@ -45,8 +45,17 @@ impl CommitPass {
     /// 8a or the hooks (RFC §10.1 steps 6 to 8). The index given here is
     /// the one the hooks see; the pass takes it again once they are over.
     /// An event a hook injected is given the visibility of the targets the
-    /// room binds, which its own hooks may narrow (gap G-031).
+    /// room binds, which its own hooks may narrow (gap G-031). A direct
+    /// injection the room refuses, another organization's or binding no
+    /// channel it names, is refused first, nothing written (gap G-069).
     pub(super) fn on_gate(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
+        let refusal = self
+            .direct
+            .as_ref()
+            .and_then(|direct| direct.refusal(&self.event, &context));
+        if let Some(refusal) = refusal {
+            return self.release(cx, Err(Abort::Refused(refusal)));
+        }
         let status = context.room.status;
         if !status.accepts_events() {
             super::super::report::room_refused(cx, &self.event, &self.origin, status);

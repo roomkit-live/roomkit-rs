@@ -544,8 +544,21 @@ impl Sim {
         room: &str,
         event: DirectEvent,
     ) -> Result<InboundResult, InboundError> {
+        self.inject_for(None, room, event)
+    }
+
+    /// Injects `event` into `room` for a caller acting for `organization`
+    /// (RFC §10.5, §17.2).
+    pub(crate) fn inject_for(
+        &mut self,
+        organization: Option<&str>,
+        room: &str,
+        event: DirectEvent,
+    ) -> Result<InboundResult, InboundError> {
         let config = Arc::new(self.config.clone());
-        let operation = Inbound::inject(config, RoomId::new(room).unwrap(), event);
+        let organization = organization.map(str::to_owned);
+        let room = RoomId::new(room).unwrap();
+        let operation = Inbound::inject(config, room, organization, event);
         self.running = Running::Inbound;
         let result = self.run(operation);
         self.running = Running::Other;
@@ -1803,7 +1816,7 @@ fn output(answer: Result<ChannelOutput, ErrorRecord>) -> Outcome {
 /// How the trace names an entry a call makes.
 fn entry_name(entry: &Entry) -> String {
     match entry {
-        Entry::Direct { room_id, event } => {
+        Entry::Direct { room_id, event, .. } => {
             format!("send_event {room_id} {:?}", text_of(&event.content))
         }
         Entry::Message {

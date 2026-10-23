@@ -23,7 +23,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// re-entering as a message's do. Its idempotency key is checked per
     /// room and channel, as an inbound message's (RFC §13.4). A room that
     /// does not exist is not created, and a channel the room does not bind
-    /// is not attached: its event is stored `BLOCKED` with `source_unbound`.
+    /// is not attached: its event is refused, nothing written (gap G-069).
+    /// The room is read unscoped; [`send_event_for`](Self::send_event_for)
+    /// acts for an organization.
     ///
     /// Returns the committed event, a record stored `BLOCKED` included,
     /// once its delivery set is over; a replay returns the event its key
@@ -42,18 +44,54 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Returns [`KitError::Inbound`] with
     /// [`InboundError::Refused`](roomkit_core::ops::InboundError::Refused)
     /// when the room refused the event before its commit, nothing written:
-    /// `room_closed`, `process_timeout`, one of the refusals of an edit or a
-    /// delete, an instruction's refusal; with another error when the event
-    /// cannot be one (an unregistered channel, the visibility `internal`,
-    /// `standalone` on a type other than an instruction) or the store, the
-    /// lock or the lane failed before its commit.
+    /// `source_unbound` for a channel the room does not bind, `room_closed`,
+    /// `process_timeout`, one of the refusals of an edit or a delete, an
+    /// instruction's refusal; with another error when the event cannot be
+    /// one (an unregistered channel, the visibility `internal`, `standalone`
+    /// on a type other than an instruction) or the store, the lock or the
+    /// lane failed before its commit.
     pub async fn send_event(
         &self,
         room_id: &RoomId,
         event: DirectEvent,
     ) -> Result<RoomEvent, KitError> {
+        self.inject(room_id, None, event).await
+    }
+
+    /// Injects `event` into the room `room_id` as
+    /// [`send_event`](Self::send_event) does, for a caller acting for
+    /// `organization_id` (RFC §17.2, gap G-069): a room of another
+    /// organization, or of none, refuses it before its hooks, nothing
+    /// written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KitError::Inbound`] with
+    /// [`InboundError::OtherOrganization`](roomkit_core::ops::InboundError::OtherOrganization)
+    /// for a room of another organization, and otherwise as
+    /// [`send_event`](Self::send_event) does.
+    pub async fn send_event_for(
+        &self,
+        organization_id: &str,
+        room_id: &RoomId,
+        event: DirectEvent,
+    ) -> Result<RoomEvent, KitError> {
+        self.inject(room_id, Some(organization_id.to_owned()), event)
+            .await
+    }
+
+    /// Runs the injection of `event` into `room_id`, for a caller acting
+    /// for `organization_id`, adopted by the call that holds the room's lane
+    /// when it comes from inside that call's work (RFC §13.5).
+    async fn inject(
+        &self,
+        room_id: &RoomId,
+        organization_id: Option<String>,
+        event: DirectEvent,
+    ) -> Result<RoomEvent, KitError> {
         let entry = Entry::Direct {
             room_id: room_id.clone(),
+            organization_id,
             event: Box::new(event),
         };
         let result = self.enter(entry, SEND_EVENT).await?;
@@ -121,7 +159,11 @@ impl<S: ConversationStore> RoomKit<S> {
                 organization_id,
                 *message,
             ),
-            Entry::Direct { room_id, event } => Inbound::inject(self.config(), room_id, *event),
+            Entry::Direct {
+                room_id,
+                organization_id,
+                event,
+            } => Inbound::inject(self.config(), room_id, organization_id, *event),
         };
         Ok(driver::run(&self.inner, call, operation).await??)
     }

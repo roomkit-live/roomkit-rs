@@ -209,8 +209,8 @@ publishes a release.
   before the commit is raised with nothing written,
   `InboundError::Refused { reason }` (`room_closed`, `process_timeout`, an
   edit's or a delete's refusal, an instruction's). A missing room is not
-  created, and an unbound channel's event is stored `source_unbound` (gap
-  G-069). `model::DirectEvent`.
+  created, and an unbound channel is not attached (gap G-069).
+  `model::DirectEvent`.
 - A record outside the pipeline (RFC §10.5): `RoomKit::commit_event(room_id,
   event, organization_id)` and the core's `CommitRecord` commit a record
   under the room lock with the next index, and nothing else: no hook, no
@@ -280,6 +280,15 @@ publishes a release.
 - `RoomKit::update_event` and `delete_event` on a room that does not exist
   are a no-op, `None` and no id, as for an event the room does not hold;
   they failed with `MutationError::RoomNotFound` (gap G-063).
+- `RoomKit::send_event` on a channel the room does not bind is refused,
+  `InboundError::Refused` with the reason `source_unbound` and nothing
+  written; its event was stored `BLOCKED` `source_unbound` (gap G-069).
+- `RoomKit::send_event_for(organization_id, room_id, event)` injects for a
+  caller acting for an organization: a room of another organization, or of
+  none, refuses the event with nothing written,
+  `InboundError::OtherOrganization` (RFC §17.2, gap G-069).
+  `Inbound::inject(config, room_id, organization_id, event)` and
+  `Entry::Direct` carry the organization.
 - The `roomkit` driver completes each effect as it finishes and polls the
   operation between completions, a lock, a lane or a ticket's turn waited
   for beside the calls, instead of waiting for a step's every effect.

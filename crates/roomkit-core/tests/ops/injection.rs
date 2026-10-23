@@ -41,6 +41,7 @@ fn from_console(text: &str) -> DirectEvent {
 fn send_event(text: &str) -> Entry {
     Entry::Direct {
         room_id: room_id(),
+        organization_id: None,
         event: Box::new(from_console(text)),
     }
 }
@@ -212,20 +213,109 @@ mod an_injected_event {
     }
 
     /// Gap G-069: no step 2 runs: an unbound channel is not attached, and
-    /// its event is refused `source_unbound`.
+    /// its event is refused `source_unbound`, nothing written: the host
+    /// named the channel itself.
     #[test]
-    fn from_an_unbound_channel_is_stored_source_unbound() {
+    fn from_an_unbound_channel_is_refused_with_nothing_written() {
         let mut sim = room();
         sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
         let event = DirectEvent::new(channel("api"), EventContent::text("Order shipped"));
-        let result = sim.inject("room_1", event).unwrap();
+        let refused = sim.inject("room_1", event);
         assert_eq!(
-            (result.reason, sim.bindings.len(), sim.timeline_lines()),
+            (refused, sim.bindings.len(), sim.timeline_lines()),
             (
-                Some("source_unbound".to_owned()),
+                Err(InboundError::Refused {
+                    reason: "source_unbound".to_owned()
+                }),
                 2,
-                vec!["#0 api blocked:source_unbound \"Order shipped\"".to_owned()]
+                vec![]
             )
+        );
+    }
+
+    /// Gap G-069: refused before its hooks, which see nothing of it.
+    #[test]
+    fn from_an_unbound_channel_runs_no_hook() {
+        let mut sim = room();
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.before_broadcast(
+            "audit",
+            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+        );
+        let event = DirectEvent::new(channel("api"), EventContent::text("Order shipped"));
+        sim.inject("room_1", event).unwrap_err();
+        assert_eq!(sim.traced("hook"), Vec::<&str>::new());
+    }
+
+    /// Gap G-069: refused on the room its off-lock check reads, before the
+    /// check's hooks and its ticket.
+    #[test]
+    fn from_an_unbound_channel_runs_no_off_lock_check() {
+        let mut sim = room();
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.off_lock_check(
+            "scanner",
+            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+        );
+        let event = DirectEvent::new(channel("api"), EventContent::text("Order shipped"));
+        let refused = sim.inject("room_1", event);
+        assert_eq!(
+            (refused, sim.traced("hook"), sim.traced("take ticket")),
+            (
+                Err(InboundError::Refused {
+                    reason: "source_unbound".to_owned()
+                }),
+                vec![],
+                vec![]
+            )
+        );
+    }
+
+    /// RFC §17.2, gap G-069: a room of another organization than the one
+    /// the caller acts for refuses the event, nothing written.
+    #[test]
+    fn into_another_organization_s_room_is_refused_with_nothing_written() {
+        let mut sim = room();
+        sim.room.organization_id = Some("bank".to_owned());
+        let refused = sim.inject_for(Some("clinic"), "room_1", from_console("Hi"));
+        assert_eq!(
+            (refused, sim.timeline.len(), sim.traced("hook")),
+            (Err(InboundError::OtherOrganization(room_id())), 0, vec![])
+        );
+    }
+
+    /// RFC §17.2: a room of no organization is not the caller's either.
+    #[test]
+    fn into_a_room_of_no_organization_is_refused_for_a_caller_naming_one() {
+        let mut sim = room();
+        let refused = sim.inject_for(Some("clinic"), "room_1", from_console("Hi"));
+        assert_eq!(refused, Err(InboundError::OtherOrganization(room_id())));
+    }
+
+    #[test]
+    fn into_its_organization_s_room_is_committed() {
+        let mut sim = room();
+        sim.room.organization_id = Some("clinic".to_owned());
+        let result = sim
+            .inject_for(Some("clinic"), "room_1", from_console("Hi"))
+            .unwrap();
+        assert_eq!(result.event.map(|event| event.index), Some(0));
+    }
+
+    /// Gap G-069: another organization's room is refused before an off-lock
+    /// check's hooks read it.
+    #[test]
+    fn into_another_organization_s_room_runs_no_off_lock_check() {
+        let mut sim = room();
+        sim.room.organization_id = Some("bank".to_owned());
+        sim.off_lock_check(
+            "scanner",
+            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+        );
+        let refused = sim.inject_for(Some("clinic"), "room_1", from_console("Hi"));
+        assert_eq!(
+            (refused, sim.traced("hook")),
+            (Err(InboundError::OtherOrganization(room_id())), vec![])
         );
     }
 
@@ -471,6 +561,7 @@ mod an_entry_adopted_under_the_lock {
                     replay.idempotency_key = Some("alert_1".to_owned());
                     Some(Entry::Direct {
                         room_id: room_id(),
+                        organization_id: None,
                         event: Box::new(replay),
                     })
                 }),
@@ -768,6 +859,148 @@ mod an_entry_adopted_under_the_lock {
             )
         );
     }
+
+    /// The answers a locked hook received from the injection `entry` it
+    /// makes on the customer's events.
+    fn answered(sim: &mut Sim, entry: Entry) -> Rc<RefCell<Vec<Result<(), InboundError>>>> {
+        let answers = Rc::new(RefCell::new(Vec::new()));
+        let kept = Rc::clone(&answers);
+        sim.reentrant_hook(
+            "notifier",
+            true,
+            Reentry {
+                entries: calling(move |event| {
+                    (event.source.channel_id.as_str() == "sms").then(|| entry.clone())
+                }),
+                answer: Answer::Awaits(Box::new(move |called| {
+                    kept.borrow_mut().push(called.clone().map(|_| ()));
+                    HookOutcome::Returned(HookResult::allow())
+                })),
+            },
+        );
+        answers
+    }
+
+    /// Gap G-069: adopted, an injection from a channel the room does not
+    /// bind is refused all the same, nothing written.
+    #[test]
+    fn from_an_unbound_channel_is_refused_to_its_caller() {
+        let mut sim = room();
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        let entry = Entry::Direct {
+            room_id: room_id(),
+            organization_id: None,
+            event: Box::new(DirectEvent::new(
+                channel("api"),
+                EventContent::text("Shipped"),
+            )),
+        };
+        let answers = answered(&mut sim, entry);
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            (answers.borrow().clone(), sim.timeline_lines()),
+            (
+                vec![Err(InboundError::Refused {
+                    reason: "source_unbound".to_owned()
+                })],
+                vec!["#0 sms delivered \"hello\"".to_owned()]
+            )
+        );
+    }
+
+    /// Gap G-069: past its caller's reentry budget, an injection the room
+    /// refuses is refused all the same: no capped record is stored.
+    #[test]
+    fn past_the_reentry_budget_from_an_unbound_channel_stores_nothing() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 0;
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        let entry = Entry::Direct {
+            room_id: room_id(),
+            organization_id: None,
+            event: Box::new(DirectEvent::new(
+                channel("api"),
+                EventContent::text("Shipped"),
+            )),
+        };
+        let answers = answered(&mut sim, entry);
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            (answers.borrow().clone(), sim.timeline_lines()),
+            (
+                vec![Err(InboundError::Refused {
+                    reason: "source_unbound".to_owned()
+                })],
+                vec!["#0 sms delivered \"hello\"".to_owned()]
+            )
+        );
+    }
+
+    /// RFC §17.2, gap G-069: past its caller's reentry budget, an injection
+    /// for another organization than the room's stores no capped record
+    /// there.
+    #[test]
+    fn past_the_reentry_budget_for_another_organization_stores_nothing() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 0;
+        sim.room.organization_id = Some("bank".to_owned());
+        let entry = Entry::Direct {
+            room_id: room_id(),
+            organization_id: Some("clinic".to_owned()),
+            event: Box::new(from_console("Heads up")),
+        };
+        let answers = answered(&mut sim, entry);
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            (answers.borrow().clone(), sim.timeline_lines()),
+            (
+                vec![Err(InboundError::OtherOrganization(room_id()))],
+                vec!["#0 sms delivered \"hello\"".to_owned()]
+            )
+        );
+    }
+
+    /// Past its caller's reentry budget, an injection the room admits is
+    /// stored capped, as before (RFC §8.3).
+    #[test]
+    fn past_the_reentry_budget_for_the_room_s_organization_is_stored_capped() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 0;
+        sim.room.organization_id = Some("bank".to_owned());
+        let entry = Entry::Direct {
+            room_id: room_id(),
+            organization_id: Some("bank".to_owned()),
+            event: Box::new(from_console("Heads up")),
+        };
+        answered(&mut sim, entry);
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            sim.timeline_lines().first().cloned(),
+            Some("#0 ws blocked:reentry_loop_cap \"Heads up\"".to_owned())
+        );
+    }
+
+    /// RFC §17.2, gap G-069: adopted, an injection for another organization
+    /// than the room's is refused, nothing written.
+    #[test]
+    fn for_another_organization_is_refused_to_its_caller() {
+        let mut sim = room();
+        sim.room.organization_id = Some("bank".to_owned());
+        let entry = Entry::Direct {
+            room_id: room_id(),
+            organization_id: Some("clinic".to_owned()),
+            event: Box::new(from_console("Heads up")),
+        };
+        let answers = answered(&mut sim, entry);
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            (answers.borrow().clone(), sim.timeline_lines()),
+            (
+                vec![Err(InboundError::OtherOrganization(room_id()))],
+                vec!["#0 sms delivered \"hello\"".to_owned()]
+            )
+        );
+    }
 }
 
 /// RFC §13.5, §10.1 step 18, gap G-070: an entry the operation's delivery
@@ -789,6 +1022,7 @@ mod an_entry_adopted_from_a_delivery {
                 entries: calling(|event| {
                     (event.source.channel_id.as_str() == "sms").then(|| Entry::Direct {
                         room_id: room_id(),
+                        organization_id: None,
                         event: Box::new(DirectEvent::new(
                             channel("ai"),
                             EventContent::text("Let me check."),
@@ -942,6 +1176,7 @@ mod two_sections_of_one_operation {
                 entries: calling(|event| {
                     (event.source.channel_id.as_str() == "sms").then(|| Entry::Direct {
                         room_id: room_id(),
+                        organization_id: None,
                         event: Box::new(DirectEvent::new(
                             channel("ai"),
                             EventContent::text("Let me check."),
@@ -1009,6 +1244,7 @@ mod an_entry_whose_caller_did_not_wait {
                 entries: calling(|event| {
                     (event.source.channel_id.as_str() == "sms").then(|| Entry::Direct {
                         room_id: room_id(),
+                        organization_id: None,
                         event: Box::new(DirectEvent::new(
                             channel("ai"),
                             EventContent::text("Let me check."),
@@ -1048,6 +1284,7 @@ mod an_entry_whose_caller_did_not_wait {
                 entries: calling(|event| {
                     (event.source.channel_id.as_str() == "sms").then(|| Entry::Direct {
                         room_id: room_id(),
+                        organization_id: None,
                         event: Box::new(DirectEvent::new(
                             channel("ai"),
                             EventContent::text("Let me check."),
@@ -1216,6 +1453,7 @@ mod an_adoption {
         let (mut inbound, effect) = started();
         let entry = Entry::Direct {
             room_id: RoomId::new("room_2").unwrap(),
+            organization_id: None,
             event: Box::new(from_console("Hi")),
         };
         inbound
@@ -1396,13 +1634,15 @@ mod a_blocked_record_s_visibility {
         assert_eq!(capped, Some("sms".to_owned()));
     }
 
+    /// A message from a channel the room detached is stored
+    /// `source_unbound` (a direct injection from one is refused, gap G-069).
     #[test]
     fn of_an_unbound_source_is_its_own() {
         let mut sim = room();
-        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
-        let mut event = DirectEvent::new(channel("api"), EventContent::text("Shipped"));
-        event.visibility = Visibility::Transport;
-        sim.inject("room_1", event).unwrap();
+        sim.detach("sms");
+        let mut message = hello();
+        message.visibility = Visibility::Transport;
+        sim.send(message).unwrap();
         assert_eq!(sim.timeline[0].visibility, Visibility::Transport);
     }
 }

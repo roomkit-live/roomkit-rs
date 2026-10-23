@@ -38,7 +38,7 @@ use std::mem;
 use super::arrival::{self, Arrival};
 use super::cascade::{self, entry_result};
 use super::deadline::Stopped;
-use super::direct::{self, Admitted};
+use super::direct::{self, Admitted, DirectCall};
 use super::instructions::{self, Admission};
 use super::pass::{CommitPass, PassOrigin, PassReport};
 use super::record::{RecordPass, RecordReport, RecordResult};
@@ -253,8 +253,15 @@ impl Machine {
 
     fn start_entry(&mut self, cx: &mut Cx<'_>, adopted: Adopted, entry: Entry) {
         match entry {
-            Entry::Direct { room_id, event } => match direct::admit(cx, room_id, *event) {
-                Ok(Admitted::Event(event)) => self.enter_pass(cx, adopted, *event, false),
+            Entry::Direct {
+                room_id,
+                organization_id,
+                event,
+            } => match direct::admit(cx, room_id, *event) {
+                Ok(Admitted::Event(event)) => {
+                    let call = DirectCall { organization_id };
+                    self.enter_pass(cx, adopted, *event, Some(call));
+                }
                 Ok(Admitted::Refused(refused)) => self.settle_entry(cx, &adopted, Ok(*refused)),
                 Err(error) => self.settle_entry(cx, &adopted, Err(error)),
             },
@@ -311,22 +318,26 @@ impl Machine {
     }
 
     /// The entry's event goes through its pass, within its caller's reentry
-    /// budget (RFC §8.3), `charged` already for a message, whose arrival took
-    /// it; past it, it is stored blocked.
+    /// budget (RFC §8.3), charged already for a message, whose arrival took
+    /// it, and when it is `direct`, an injection's, for that call; past the
+    /// budget, it is stored blocked.
     fn enter_pass(
         &mut self,
         cx: &mut Cx<'_>,
         adopted: Adopted,
         mut event: RoomEvent,
-        charged: bool,
+        direct: Option<DirectCall>,
     ) {
+        let charged = direct.is_none();
         let state = if charged || self.budget.take() {
-            let mut pass = Box::new(CommitPass::new(PassOrigin::Adopted(adopted.id), event));
+            let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event).checking(direct);
+            let mut pass = Box::new(pass);
             within(cx, adopted.nested.as_ref(), |cx| pass.start(cx));
             RunState::Passing(pass)
         } else {
             event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
-            let mut record = Box::new(RecordPass::refusing(event, RefusedOperation::Inbound));
+            let record = RecordPass::refusing(event, RefusedOperation::Inbound).checking(direct);
+            let mut record = Box::new(record);
             within(cx, adopted.nested.as_ref(), |cx| record.start(cx));
             RunState::Recording(record)
         };
@@ -357,7 +368,7 @@ impl Machine {
         let adopted = run.entry.clone();
         match advanced {
             Advanced::Waiting => self.adopted.running.insert(index, run),
-            Advanced::Arrived(event) => self.enter_pass(cx, adopted, *event, true),
+            Advanced::Arrived(event) => self.enter_pass(cx, adopted, *event, None),
             Advanced::Stopped(error) => self.settle_entry(cx, &adopted, Err(error)),
             Advanced::Passed(Ok(report)) => self.on_adopted_pass(cx, &adopted, report),
             Advanced::Passed(Err(abort)) | Advanced::Recorded(Err(abort)) => {

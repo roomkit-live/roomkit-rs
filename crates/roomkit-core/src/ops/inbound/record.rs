@@ -10,10 +10,14 @@
 //! room's due timer transitions apply first (gap G-045), and a room that no
 //! longer accepts events refuses the record, as it refuses any write, with
 //! `room_refused_event`: `reentry` for the framework's records, `inbound`
-//! for an adopted entry's (RFC §5.1, gap G-043).
+//! for an adopted entry's (RFC §5.1, gap G-043). A direct injection adopted
+//! past the budget is refused first, as its pass would have refused it, when
+//! the room is another organization's or binds no channel it names: nothing
+//! is stored (gap G-069).
 
 use std::mem;
 
+use super::direct::DirectCall;
 use super::{commit, report};
 use crate::model::{ChannelId, ErrorRecord, EventStatus, RoomContext, RoomEvent, RoomUpdates};
 use crate::ops::lifecycle::gate::{self, Gate, Pending};
@@ -47,6 +51,9 @@ pub(super) struct RecordPass {
     refused_as: RefusedOperation,
     /// What the record's visibility is narrowed to at its commit.
     narrowing: Narrowing,
+    /// What a direct injection's record is checked for at the gate (gap
+    /// G-069).
+    direct: Option<DirectCall>,
     state: State,
     release_error: Option<ErrorRecord>,
 }
@@ -111,9 +118,17 @@ impl RecordPass {
             record,
             refused_as,
             narrowing: Narrowing::SourceBinding,
+            direct: None,
             state: State::Start,
             release_error: None,
         }
+    }
+
+    /// The record of a direct injection for `direct`, which the room refuses
+    /// before anything is stored as its pass would have (gap G-069); `None`
+    /// for any other record.
+    pub(super) fn checking(self, direct: Option<DirectCall>) -> Self {
+        Self { direct, ..self }
     }
 
     /// The commit of `record`, an event a hook injected for `targets`,
@@ -205,8 +220,16 @@ impl RecordPass {
     }
 
     /// The status gate, then the commit with the next index and the
-    /// visibility step 12 would have given the record (gap G-036).
+    /// visibility step 12 would have given the record (gap G-036); a direct
+    /// injection the room refuses is refused first (gap G-069).
     fn on_gate(&mut self, cx: &mut Cx<'_>, context: &RoomContext) -> State {
+        let refusal = self
+            .direct
+            .as_ref()
+            .and_then(|direct| direct.refusal(&self.record, context));
+        if let Some(refusal) = refusal {
+            return self.release(cx, Err(Abort::Refused(refusal)));
+        }
         let status = context.room.status;
         if !status.accepts_events() {
             report::room_refused_as(cx, &self.record, self.refused_as, status);

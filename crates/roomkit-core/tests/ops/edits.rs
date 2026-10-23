@@ -1429,6 +1429,7 @@ mod a_target_changed_by_a_hook {
                         delete.participant_id = Some(ParticipantId::new(SENDER).unwrap());
                         Entry::Direct {
                             room_id: room_id(),
+                            organization_id: None,
                             event: Box::new(delete),
                         }
                     })

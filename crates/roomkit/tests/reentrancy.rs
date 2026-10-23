@@ -1093,6 +1093,61 @@ mod send_event {
             }))
         );
     }
+
+    /// Gap G-069: the host named a channel the room does not bind; nothing
+    /// is written.
+    #[tokio::test]
+    async fn on_a_channel_the_room_does_not_bind_is_refused() {
+        let (kit, _) = room().await;
+        kit.detach(&room_id(), &channel("ws")).await.unwrap();
+        let refused = kit.send_event(&room_id(), from_console("Hi")).await;
+        assert_eq!(
+            (refused, timeline(&kit).await),
+            (
+                Err(KitError::Inbound(InboundError::Refused {
+                    reason: "source_unbound".to_owned()
+                })),
+                vec![]
+            )
+        );
+    }
+
+    /// RFC §17.2, gap G-069: a caller acting for an organization reaches its
+    /// rooms only.
+    #[tokio::test]
+    async fn for_another_organization_than_the_room_s_is_refused() {
+        let (kit, _) = room().await;
+        let refused = kit
+            .send_event_for("clinic", &room_id(), from_console("Hi"))
+            .await;
+        assert_eq!(
+            (refused, timeline(&kit).await),
+            (
+                Err(KitError::Inbound(
+                    InboundError::OtherOrganization(room_id())
+                )),
+                vec![]
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn for_the_room_s_organization_is_committed() {
+        let (kit, audit) = room().await;
+        let clinic = RoomId::new("room_2").unwrap();
+        kit.create_room_with(&clinic, |room| {
+            room.organization_id = Some("clinic".to_owned());
+        })
+        .await
+        .unwrap();
+        kit.attach(&clinic, &channel("ws")).await.unwrap();
+        kit.attach(&clinic, audit.id()).await.unwrap();
+        let event = kit
+            .send_event_for("clinic", &clinic, from_console("Hi"))
+            .await
+            .unwrap();
+        assert_eq!((event.index, audit.texts()), (0, vec!["Hi".to_owned()]));
+    }
 }
 
 /// RFC §10.5: `commit_event` commits a record no one receives.

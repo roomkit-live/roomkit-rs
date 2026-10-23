@@ -5,12 +5,19 @@
 //! one (an unregistered channel, the visibility `internal`, an instruction
 //! that names no agent or carries a key), then stamped, its source the
 //! channel it names. It runs none of step 2: a room that does not exist is
-//! not created, and a channel the room does not bind is not attached, so
-//! its event is refused `source_unbound` at step 11. The call enters the
-//! room's lane, then reads the room before the lock only when an off-lock
-//! hook fires for the event, whose check reads it (RFC §9.5.1); otherwise
-//! its pass starts at once. Every request up to its decision carries the
-//! call's deadline (RFC §13.6).
+//! not created, and a channel the room does not bind is not attached. The
+//! call enters the room's lane, then reads the room before the lock only
+//! when an off-lock hook fires for the event, whose check reads it (RFC
+//! §9.5.1); otherwise its pass starts at once. Every request up to its
+//! decision carries the call's deadline (RFC §13.6).
+//!
+//! A room of another organization than the one the caller acts for, and a
+//! room that binds no channel the event names, refuse it with nothing
+//! written (gap G-069): the host named the room and the channel itself, so
+//! the call is its error, with nothing to audit. Both are checked under the
+//! room lock, before the pass's hooks or the record of an injection past its
+//! caller's reentry budget, and on the room an off-lock check reads, before
+//! its hooks too.
 
 use std::mem;
 
@@ -21,11 +28,42 @@ use super::{InboundError, InboundResult, Machine, Stage, stamp};
 use crate::model::{DirectEvent, RoomContext, RoomEvent, RoomId, Timestamp};
 use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::ops::{Cx, Progress};
+use crate::rules::organizations;
+use crate::rules::permissions::WriteRefusal;
+
+/// What a direct injection is checked for on the room, before its hooks
+/// (RFC §10.5, §17.2, gap G-069).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DirectCall {
+    /// The organization its caller acts for; `None` reads the room
+    /// unscoped.
+    pub(super) organization_id: Option<String>,
+}
+
+impl DirectCall {
+    /// Why the room as `context` holds it refuses `event`, if it does: it
+    /// is another organization's than the caller's, or binds no channel the
+    /// event names. Nothing is written for either.
+    pub(super) fn refusal(&self, event: &RoomEvent, context: &RoomContext) -> Option<InboundError> {
+        if !organizations::admits(self.organization_id.as_deref(), &context.room) {
+            return Some(InboundError::OtherOrganization(context.room.id.clone()));
+        }
+        let bound = context
+            .bindings
+            .iter()
+            .any(|binding| binding.channel_id == event.source.channel_id);
+        (!bound).then(|| InboundError::Refused {
+            reason: WriteRefusal::Unbound.blocked_by().to_owned(),
+        })
+    }
+}
 
 /// A directly injected event's entry into its room's lane.
 #[derive(Debug)]
 pub(super) struct DirectArrival {
     event: RoomEvent,
+    /// What the room read for the off-lock check is checked for.
+    call: DirectCall,
     /// The call's deadline (RFC §13.6).
     deadline: Option<Timestamp>,
     /// Whether an off-lock hook fires for the event, whose check reads the
@@ -54,11 +92,17 @@ pub(super) struct Entered {
 }
 
 impl DirectArrival {
-    /// The way of `event`, stamped already, within the call's `deadline`;
-    /// `checked` when an off-lock hook fires for it.
-    pub(super) fn new(event: RoomEvent, deadline: Option<Timestamp>, checked: bool) -> Self {
+    /// The way of `event`, stamped already, for `call`, within the call's
+    /// `deadline`; `checked` when an off-lock hook fires for it.
+    pub(super) fn new(
+        event: RoomEvent,
+        call: DirectCall,
+        deadline: Option<Timestamp>,
+        checked: bool,
+    ) -> Self {
         Self {
             event,
+            call,
             deadline,
             checked,
             in_lane: false,
@@ -129,14 +173,18 @@ impl DirectArrival {
     }
 
     /// The room as the off-lock check reads it; a missing room fails the
-    /// call, nothing written.
+    /// call, and so does one that refuses the injection, before the check's
+    /// hooks run, nothing written (gap G-069).
     fn on_read(&self, outcome: Outcome) -> Progress<Result<Entered, Stopped>> {
         let failed = |error| Progress::Done(Err(Stopped::Failed(error)));
         match outcome.into_context() {
-            Ok(Some(context)) => Progress::Done(Ok(Entered {
-                event: self.event.clone(),
-                context: Some(context),
-            })),
+            Ok(Some(context)) => match self.call.refusal(&self.event, &context) {
+                Some(refusal) => failed(refusal),
+                None => Progress::Done(Ok(Entered {
+                    event: self.event.clone(),
+                    context: Some(context),
+                })),
+            },
             Ok(None) => failed(InboundError::RoomNotFound(self.event.room_id.clone())),
             Err(error) => failed(InboundError::Store(error)),
         }
@@ -178,18 +226,27 @@ pub(super) fn admit(
 }
 
 impl Machine {
-    /// Starts a direct injection's way (RFC §10.5): refused before anything
-    /// is read when it cannot be one, it enters the room's lane.
-    pub(super) fn begin_direct(&mut self, cx: &mut Cx<'_>, room_id: RoomId, event: DirectEvent) {
+    /// Starts a direct injection's way (RFC §10.5), for a caller acting for
+    /// `organization_id` (RFC §17.2): refused before anything is read when
+    /// it cannot be one, it enters the room's lane.
+    pub(super) fn begin_direct(
+        &mut self,
+        cx: &mut Cx<'_>,
+        room_id: RoomId,
+        organization_id: Option<String>,
+        event: DirectEvent,
+    ) {
         self.channel_id = Some(event.channel_id.clone());
         self.room_id = Some(room_id.clone());
+        let call = DirectCall { organization_id };
+        self.direct = Some(call.clone());
         let event = match admit(cx, room_id, event) {
             Ok(Admitted::Event(event)) => *event,
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),
             Err(error) => return self.end(cx, Err(error)),
         };
         let checked = !cx.config.hooks.off_lock_checks(&event.source).is_empty();
-        let mut entering = Box::new(DirectArrival::new(event, self.deadline, checked));
+        let mut entering = Box::new(DirectArrival::new(event, call, self.deadline, checked));
         entering.start(cx);
         self.stage = Stage::Entering(entering);
     }

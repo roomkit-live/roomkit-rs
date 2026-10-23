@@ -40,10 +40,13 @@ pub enum Entry {
         /// The message.
         message: Box<InboundMessage>,
     },
-    /// `send_event(room_id, ...)` (RFC §10.5).
+    /// `send_event(room_id, ...)` (RFC §10.5), for a caller acting for
+    /// `organization_id` (RFC §17.2, gap G-069).
     Direct {
         /// The room the call names.
         room_id: RoomId,
+        /// The organization the caller acts for.
+        organization_id: Option<String>,
         /// The event.
         event: Box<DirectEvent>,
     },
