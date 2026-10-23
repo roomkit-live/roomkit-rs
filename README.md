@@ -91,7 +91,7 @@ Hooks:
 The pipeline:
 
 - `instruction_event`: an instruction directs one agent and is never stored.
-- `response_visibility`: who sees what, by the event's visibility and its binding's.
+- `response_visibility`: who sees what, by the event's visibility and its binding's, and where a message's answers go.
 - `send_event`: direct injection, from the host and from an agent's turn.
 
 Routing and identities:

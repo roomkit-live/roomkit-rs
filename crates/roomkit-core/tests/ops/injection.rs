@@ -2076,16 +2076,28 @@ mod the_visibility_internal {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// Where the message's answers may go is the integrator's to write too
+    /// (RFC §5.12, gap G-073).
     #[test]
-    fn on_an_inbound_message_is_refused_before_anything_is_read() {
-        let mut sim = room();
-        let mut message = hello();
-        message.visibility = Visibility::Internal;
-        let refused = sim.send(message);
-        assert_eq!(
-            (refused, sim.trace.len()),
-            (Err(InboundError::InternalVisibility), 0)
-        );
+    fn on_an_inbound_message_or_its_response_visibility_is_refused_before_anything_is_read() {
+        let internal = [
+            InboundMessage {
+                visibility: Visibility::Internal,
+                ..hello()
+            },
+            InboundMessage {
+                response_visibility: Some(Visibility::Internal),
+                ..hello()
+            },
+        ];
+        for message in internal {
+            let mut sim = room();
+            let refused = sim.send(message);
+            assert_eq!(
+                (refused, sim.trace.len()),
+                (Err(InboundError::InternalVisibility), 0)
+            );
+        }
     }
 
     #[test]

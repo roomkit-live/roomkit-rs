@@ -43,6 +43,7 @@ impl Machine {
         message: InboundMessage,
     ) {
         self.channel_id = Some(message.channel_id.clone());
+        self.answers_within.clone_from(&message.response_visibility);
         let (channel, message) = match arrival::resolve(cx.config, message) {
             Ok(resolved) => resolved,
             Err(error) => return self.end(cx, Err(error)),

@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use super::stamp;
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, DeliveryResult, DeliveryStatus,
-    ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task,
+    ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
 };
 use crate::ops::protocol::{CHANNEL_NOT_REGISTERED, EffectId, Notice, Outcome, Request};
 use crate::ops::{Cx, Progress};
@@ -134,6 +134,9 @@ pub(super) struct DeliverySet {
     /// The reentry budget of the cascade that delivers, which the calls its
     /// targets make into a room draw on (gap G-070).
     budget: ReentryBudget,
+    /// Where the answers to its event may go: the response visibility of
+    /// the message it came from (RFC §5.12, gap G-073); `None` for anywhere.
+    answers_within: Option<Visibility>,
     calls: BTreeMap<EffectId, (usize, Call)>,
     outcome: SetOutcome,
 }
@@ -163,8 +166,19 @@ impl DeliverySet {
             targets,
             place: if placed { Place::Taken } else { Place::Missing },
             budget,
+            answers_within: None,
             calls: BTreeMap::new(),
             outcome,
+        }
+    }
+
+    /// The same set, whose event's answers may go to `within`, the
+    /// response visibility of the message it came from (RFC §5.12, gap
+    /// G-073); `None` for anywhere.
+    pub(super) fn answering_within(self, within: Option<Visibility>) -> Self {
+        Self {
+            answers_within: within,
+            ..self
         }
     }
 
@@ -194,6 +208,11 @@ impl DeliverySet {
     /// The kind of event the set broadcasts.
     pub(super) fn kind(&self) -> SetKind {
         self.kind
+    }
+
+    /// Where the answers to its event may go; `None` for anywhere.
+    pub(super) fn answers_within(&self) -> Option<&Visibility> {
+        self.answers_within.as_ref()
     }
 
     /// Waits for the set's turn in the room's lane, with no deadline: what
@@ -404,7 +423,8 @@ impl DeliverySet {
         };
         let id = cx.env.new_event_id();
         let now = cx.env.now();
-        let payload = stamp::error_event(id, &target.binding, &self.event, error, now);
+        let within = self.answers_within.as_ref();
+        let payload = stamp::error_event(id, &target.binding, &self.event, within, error, now);
         let hooks = cx
             .config
             .hooks

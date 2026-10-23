@@ -474,3 +474,12 @@ publishes a release.
   gives the binding its recipient when it attaches the channel
   (`attach_with`, `phone_number` = the customer's number): otherwise its
   deliveries are refused `no_recipient`.
+- `InboundMessage::response_visibility` is applied (RFC §5.12): each
+  response to the message's event or instruction keeps the visibility its
+  channel gave it within the message's, never wider than either, and its
+  commit narrows it to its binding's as before; an answer to a response is
+  not restricted, and the `ON_ERROR` payload of a turn that failed on the
+  message's event takes it. It was carried and ignored. A message whose
+  `response_visibility` is `internal` is refused
+  `InboundError::InternalVisibility` before anything is read (gaps G-041,
+  G-073). `rules::permissions::answer_visibility`.

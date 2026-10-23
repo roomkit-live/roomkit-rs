@@ -95,7 +95,7 @@ use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, Pro
 use super::{Cx, Environment, KitConfig};
 use crate::model::{
     ChannelId, DirectEvent, InboundMessage, Metadata, Observation, RoomContext, RoomId, Task,
-    Timestamp,
+    Timestamp, Visibility,
 };
 use crate::rules::chain_depth::ReentryBudget;
 
@@ -202,6 +202,7 @@ impl Inbound {
                 entry,
                 channel_id: None,
                 direct: None,
+                answers_within: None,
                 deadline: None,
                 ticket: None,
                 stage: Stage::Start(Box::new(call)),
@@ -289,6 +290,10 @@ struct Machine {
     /// What a direct injection's trigger is checked for before its hooks
     /// (gap G-069); `None` for a message.
     direct: Option<direct::DirectCall>,
+    /// Where the answers to the call's message may go, its response
+    /// visibility (RFC §5.12, gap G-073); `None` for anywhere, and for a
+    /// direct injection.
+    answers_within: Option<Visibility>,
     /// The call's deadline, set at its start from `process_timeout` (RFC
     /// §13.6).
     deadline: Option<Timestamp>,

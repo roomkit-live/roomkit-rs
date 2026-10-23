@@ -12,7 +12,7 @@ use crate::model::{
     InjectedEvent, Metadata, ParticipantId, RoomEvent, RoomId, Timestamp, Visibility,
 };
 use crate::ops::ChannelDeclaration;
-use crate::rules::{chain_depth, edits, instructions};
+use crate::rules::{chain_depth, edits, instructions, permissions};
 
 /// The event a channel that keeps no data of its own parses from `message`:
 /// its content, its provider data, and its sender, in the channel's form
@@ -172,6 +172,25 @@ pub(crate) fn stamp_response(
     reset_commit_fields(response)
 }
 
+/// Narrows `response`, an answer to a message whose answers may go to
+/// `within`, its `response_visibility` (RFC §5.12, gap G-073): the response
+/// keeps what its channel gave it within `within`, a listed channel's
+/// category read from the room's `bindings`, and is never wider than
+/// either. A message that restricted nothing, and any other trigger, leave
+/// it as its channel gave it. Its commit narrows it once more, to its
+/// source binding's (RFC §7.3).
+pub(crate) fn answer_within(
+    mut response: RoomEvent,
+    within: Option<&Visibility>,
+    bindings: &[ChannelBinding],
+) -> RoomEvent {
+    if let Some(within) = within {
+        response.visibility =
+            permissions::answer_visibility(&response.visibility, within, bindings);
+    }
+    response
+}
+
 /// Puts `none` in place of the visibility `internal` on a response of
 /// `responder` (gap G-041): only the framework writes `internal`, on the
 /// records it writes itself, and a channel never forges that mark. The
@@ -298,11 +317,13 @@ fn edit_with(original: &EditContent, new_content: Box<EventContent>) -> EventCon
 
 /// The payload of `ON_ERROR` for a turn of `channel` that failed on
 /// `trigger` (RFC §9.2): never stored, one hop deeper than the trigger, its
-/// text the error's message.
+/// text the error's message, and visible where the trigger's answers may
+/// go, `within`; to all when its message restricted nothing (gap G-073).
 pub(crate) fn error_event(
     id: EventId,
     channel: &ChannelBinding,
     trigger: &RoomEvent,
+    within: Option<&Visibility>,
     error: &ErrorRecord,
     now: Timestamp,
 ) -> RoomEvent {
@@ -321,6 +342,9 @@ pub(crate) fn error_event(
     );
     event.chain_depth = chain_depth::response_depth(trigger);
     event.responds_to = Some(trigger.id.clone());
+    if let Some(within) = within {
+        event.visibility = within.clone();
+    }
     let mut metadata = Metadata::new();
     metadata.insert("error".to_owned(), error.message.clone().into());
     metadata.insert("error_type".to_owned(), error.error_type.clone().into());

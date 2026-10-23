@@ -51,7 +51,12 @@ pub struct InboundMessage {
     /// (RFC §19.3).
     #[serde(default)]
     pub addressed_to: Option<Vec<ChannelId>>,
-    /// Where the answer may go; `None` for anywhere.
+    /// Where the answers to the message may go; `None` for anywhere. Each
+    /// response its event, or its instruction, gets keeps the visibility its
+    /// channel gave it within this one, then its commit narrows it to its
+    /// source binding's (RFC §5.12, §7.3, gap G-073); an answer to that
+    /// response is not restricted. Never `internal`, which only the
+    /// framework writes (gap G-041).
     #[serde(default)]
     pub response_visibility: Option<Visibility>,
     /// The chain the message continues (RFC §8.3).

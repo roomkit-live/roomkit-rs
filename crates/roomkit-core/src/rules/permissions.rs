@@ -155,12 +155,34 @@ pub fn effective_visibility(
     source: &ChannelBinding,
     bindings: &[ChannelBinding],
 ) -> Visibility {
-    requested.intersect(&source.visibility, |channel| {
+    requested.intersect(&source.visibility, category_in(bindings))
+}
+
+/// The visibility of a response to a message whose answers may go to
+/// `within`, the message's `response_visibility` (RFC §5.12, gap G-073):
+/// what the response's channel gave it, `given`, narrowed to `within`, a
+/// listed channel's category read from the room's `bindings`. It is never
+/// wider than either; its commit narrows it once more, to its source
+/// binding's ([`effective_visibility`]).
+pub fn answer_visibility(
+    given: &Visibility,
+    within: &Visibility,
+    bindings: &[ChannelBinding],
+) -> Visibility {
+    given.intersect(within, category_in(bindings))
+}
+
+/// The category of a channel the room binds among `bindings`, which a
+/// category intersected with a list reads (RFC §7.3).
+fn category_in(
+    bindings: &[ChannelBinding],
+) -> impl Fn(&ChannelId) -> Option<ChannelCategory> + Copy {
+    |channel| {
         bindings
             .iter()
             .find(|binding| &binding.channel_id == channel)
             .map(|binding| binding.category)
-    })
+    }
 }
 
 /// Whom the broadcast of one event reaches (RFC §10.2 steps 2 and 3c).
@@ -269,12 +291,7 @@ pub fn injected_visibility(
     targets: Option<&[ChannelId]>,
     bindings: &[ChannelBinding],
 ) -> Visibility {
-    let category_of = |channel: &ChannelId| {
-        bindings
-            .iter()
-            .find(|binding| &binding.channel_id == channel)
-            .map(|binding| binding.category)
-    };
+    let category_of = category_in(bindings);
     requested
         .intersect(given, category_of)
         .intersect(&targets_visibility(targets, bindings), category_of)

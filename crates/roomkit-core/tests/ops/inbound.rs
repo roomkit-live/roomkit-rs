@@ -1394,6 +1394,164 @@ mod targets {
     }
 }
 
+/// RFC §5.12, gap G-073: a message's `response_visibility` is where the
+/// answers to it may go.
+mod a_response_visibility {
+    use super::*;
+    use crate::support::{Answer, OnEvent, Reentry, calling};
+    use pretty_assertions::assert_eq;
+    use roomkit_core::model::InboundMessage;
+    use roomkit_core::ops::Entry;
+    use roomkit_core::rules::transcoding::text_of;
+
+    /// A room with the customer's `sms`, the advisor's `ws_advisor` and an
+    /// agent `ai` answering with `answer`.
+    fn room_with(answer: OnEvent) -> Sim {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.transport("ws_advisor");
+        sim.agent("ai", answer);
+        sim
+    }
+
+    /// An agent that answers the customer's `text` with `Re: text`, visible
+    /// to `own`, and nothing else.
+    fn answering_as(own: &'static str) -> OnEvent {
+        Box::new(move |event, _| {
+            if event.source.channel_id.as_str() != "sms" {
+                return Ok(ChannelOutput::default());
+            }
+            let text = format!("Re: {}", text_of(&event.content));
+            let mut answer = response("ai", event, &text);
+            answer.visibility = own.parse().unwrap();
+            Ok(ChannelOutput::respond(vec![answer]))
+        })
+    }
+
+    /// The customer's `text`, whose answers may go to `within`.
+    fn answered_within(text: &str, within: &str) -> InboundMessage {
+        InboundMessage {
+            response_visibility: Some(within.parse().unwrap()),
+            ..Sim::message("sms", text)
+        }
+    }
+
+    /// The stored event that says `text`.
+    fn saying<'sim>(sim: &'sim Sim, text: &str) -> Option<&'sim RoomEvent> {
+        sim.timeline
+            .iter()
+            .find(|event| text_of(&event.content) == text)
+    }
+
+    /// The stored visibility of the event that says `text`.
+    fn stored(sim: &Sim, text: &str) -> Option<String> {
+        saying(sim, text).map(|event| event.visibility.to_string())
+    }
+
+    /// The transports delivered the event that says `text`.
+    fn delivered<'sim>(sim: &'sim Sim, text: &str) -> Vec<&'sim str> {
+        let Some(event) = saying(sim, text) else {
+            return Vec::new();
+        };
+        let suffix = format!(" <- {}", event.id);
+        sim.traced("deliver ")
+            .into_iter()
+            .filter_map(|line| line.strip_suffix(suffix.as_str()))
+            .map(|line| line.trim_start_matches("deliver "))
+            .collect()
+    }
+
+    #[test]
+    fn narrows_each_response_within_what_its_channel_gave_it() {
+        let cases = [
+            ("all", "ws_advisor", "ws_advisor", vec!["ws_advisor"]),
+            ("ws_advisor", "transport", "ws_advisor", vec!["ws_advisor"]),
+            ("sms", "ws_advisor", "none", vec![]),
+            ("all", "all", "all", vec!["sms", "ws_advisor"]),
+        ];
+        for (own, within, visibility, reached) in cases {
+            let mut sim = room_with(answering_as(own));
+            sim.send(answered_within("Hello", within)).unwrap();
+            assert_eq!(
+                (stored(&sim, "Re: Hello"), delivered(&sim, "Re: Hello")),
+                (Some(visibility.to_owned()), reached),
+                "a response visible to {own}, its message's answers within {within}"
+            );
+        }
+    }
+
+    #[test]
+    fn leaves_the_message_itself_as_it_asked() {
+        let mut sim = room_with(answering_as("all"));
+        sim.send(answered_within("Hello", "ws_advisor")).unwrap();
+        assert_eq!(stored(&sim, "Hello"), Some("all".to_owned()));
+    }
+
+    /// An entry a hook's call adopts answers within its own message's
+    /// response visibility, the call's message within its own.
+    #[test]
+    fn narrows_the_responses_of_an_adopted_message_by_its_own() {
+        let mut sim = room_with(answering_as("all"));
+        sim.reentrant_hook(
+            "follow_up",
+            true,
+            Reentry {
+                entries: calling(|event| {
+                    (text_of(&event.content) == "Hello").then(|| Entry::Message {
+                        room_id: room_id(),
+                        organization_id: None,
+                        message: Box::new(answered_within("Follow-up", "ws_advisor")),
+                    })
+                }),
+                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        sim.send(Sim::message("sms", "Hello")).unwrap();
+        assert_eq!(
+            (stored(&sim, "Re: Follow-up"), stored(&sim, "Re: Hello")),
+            (Some("ws_advisor".to_owned()), Some("all".to_owned()))
+        );
+    }
+
+    /// An answer to an answer answers no message: it keeps the visibility
+    /// its channel gave it.
+    #[test]
+    fn leaves_a_response_to_a_response_as_its_channel_gave_it() {
+        let mut sim = room_with(answering_as("all"));
+        sim.agent(
+            "writer",
+            Box::new(|event, _| {
+                if event.source.channel_id.as_str() != "ai" {
+                    return Ok(ChannelOutput::default());
+                }
+                Ok(respond("writer", event, "Noted"))
+            }),
+        );
+        sim.send(answered_within("Hello", "intelligence")).unwrap();
+        assert_eq!(
+            (stored(&sim, "Re: Hello"), stored(&sim, "Noted")),
+            (Some("intelligence".to_owned()), Some("all".to_owned()))
+        );
+    }
+
+    /// RFC §9.2: the payload of `ON_ERROR` is visible where the trigger's
+    /// answers may go.
+    #[test]
+    fn is_the_visibility_of_a_failed_turn_s_on_error_payload() {
+        let mut sim = room_with(Box::new(|_, _| {
+            Err(ErrorRecord::new("ProviderError", "rate limited"))
+        }));
+        sim.observer("alerts", HookTrigger::OnError);
+        sim.send(answered_within("Hello", "ws_advisor")).unwrap();
+        let payloads: Vec<String> = sim
+            .async_payloads()
+            .iter()
+            .map(|payload| payload.visibility.to_string())
+            .collect();
+        assert_eq!(payloads, ["ws_advisor"]);
+    }
+}
+
 /// RFC Appendix B.4: two agents answer each other until the limit.
 mod a_chain_of_agents {
     use super::*;

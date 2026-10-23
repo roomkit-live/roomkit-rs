@@ -44,6 +44,9 @@ pub(super) struct Asked<'entry> {
     event_type: EventType,
     standalone: bool,
     visibility: &'entry Visibility,
+    /// Where the answers may go; `None` for anywhere, and for a direct
+    /// injection, which names no such place.
+    response_visibility: Option<&'entry Visibility>,
     addressed_to: Option<&'entry [ChannelId]>,
     idempotency_key: Option<&'entry str>,
 }
@@ -54,6 +57,7 @@ impl<'entry> From<&'entry InboundMessage> for Asked<'entry> {
             event_type: message.event_type,
             standalone: message.standalone,
             visibility: &message.visibility,
+            response_visibility: message.response_visibility.as_ref(),
             addressed_to: message.addressed_to.as_deref(),
             idempotency_key: message.idempotency_key.as_deref(),
         }
@@ -66,6 +70,7 @@ impl<'entry> From<&'entry DirectEvent> for Asked<'entry> {
             event_type: event.event_type,
             standalone: event.standalone,
             visibility: &event.visibility,
+            response_visibility: None,
             addressed_to: event.addressed_to.as_deref(),
             idempotency_key: event.idempotency_key.as_deref(),
         }
@@ -83,9 +88,11 @@ impl<'entry> From<&'entry DirectEvent> for Asked<'entry> {
 /// on any other event type: it is raised, since the event would otherwise
 /// land as a participant's line without the isolation it asked for; and
 /// [`InboundError::InternalVisibility`] for the visibility `internal`, which
-/// only the framework writes (gap G-041).
+/// only the framework writes (gap G-041), as the event's or as where its
+/// answers may go (gap G-073).
 pub(super) fn admit(config: &KitConfig, asked: Asked<'_>) -> Result<Admission, InboundError> {
-    if *asked.visibility == Visibility::Internal {
+    let internal = |visibility: &Visibility| *visibility == Visibility::Internal;
+    if internal(asked.visibility) || asked.response_visibility.is_some_and(internal) {
         return Err(InboundError::InternalVisibility);
     }
     if asked.standalone && !instructions::may_stand_alone(asked.event_type) {

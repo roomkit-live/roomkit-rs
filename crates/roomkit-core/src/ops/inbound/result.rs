@@ -66,7 +66,9 @@ pub enum InboundError {
     #[error("only an instruction may stand alone")]
     StandaloneOutsideInstruction,
     /// Only the framework writes the visibility `internal`, on the records
-    /// it writes itself (gap G-041). Nothing was read or written.
+    /// it writes itself (gap G-041): an entry's visibility, or where a
+    /// message's answers may go (gap G-073), is never `internal`. Nothing was
+    /// read or written.
     #[error("only the framework writes the visibility internal")]
     InternalVisibility,
     /// A directly injected event refused before its commit (RFC §10.5),
