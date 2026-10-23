@@ -65,7 +65,7 @@ pub enum KitError {
         call: &'static str,
     },
     /// The driver broke the effect protocol: a defect of this crate.
-    #[error("the driver broke the effect protocol: {0}")]
+    #[error("the driver broke the effect protocol")]
     Protocol(#[from] ProtocolError),
     /// An operation's run waited for effects the driver never received, or
     /// was answered for a call it never made: a defect of this crate.
@@ -103,7 +103,12 @@ pub(crate) fn with_causes(error: &dyn std::error::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use pretty_assertions::assert_eq;
+    use roomkit_core::ops::{
+        CheckTimers, HoldOutcome, KitConfig, Next, Operation, SequentialEnvironment,
+    };
 
     use super::*;
 
@@ -119,5 +124,30 @@ mod tests {
                 "the store failed: connection refused".to_owned()
             )
         );
+    }
+
+    /// A protocol error is shown once: as the source of the kit's error.
+    #[test]
+    fn a_kit_error_s_chain_shows_a_protocol_error_once() {
+        let error = KitError::Protocol(answered_twice());
+        assert_eq!(
+            with_causes(&error),
+            format!("the driver broke the effect protocol: {}", answered_twice())
+        );
+    }
+
+    /// The error of an effect answered twice.
+    fn answered_twice() -> ProtocolError {
+        let room_id = RoomId::new("room_1").unwrap();
+        let mut check = CheckTimers::new(Arc::new(KitConfig::new()), room_id);
+        let step = check.poll(&SequentialEnvironment::default());
+        let Next::Effects(effects) = step.next else {
+            panic!("the check asks for the room's lock first");
+        };
+        let lock = effects[0].id;
+        check.complete(lock, HoldOutcome::Locked.into()).unwrap();
+        check
+            .complete(lock, HoldOutcome::Locked.into())
+            .unwrap_err()
     }
 }
