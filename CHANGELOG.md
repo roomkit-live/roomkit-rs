@@ -7,645 +7,180 @@ publishes a release.
 
 ## [Unreleased]
 
+Nothing is published yet: this section lists what the first release brings,
+as it stands.
+
 ### Added
 
-- Repository foundation: the `roomkit-core` and `roomkit` crates, workspace
-  lints, the `make all` gate, CI, and the architecture, roadmap, step 1 and
-  RFC gap documents.
-- `roomkit_core::model`: the data model of RFC §5 (rooms, events and every
-  content type, bindings and permissions, capabilities, participants, tasks,
-  observations, inbound messages, channel outputs, hook results), with its
-  invariants checked at construction and its JSON form.
-- `roomkit_core::rules`: the RFC's rules as pure functions: permissions and
-  delivery planning with solicitation and addressing (§7.5, §10.2, §19.3),
-  the visibility of what a source writes (§7.3), transcoding (§6.6), the
-  chain-depth limit and reentry budget (§8.3), hook registration checks and
-  the SYNC hook chain (§9.1–9.4).
-- `roomkit_core::ops`: the effect protocol (`Operation`, `Effect`, `Outcome`,
-  `Notice`) and the operations run through it: `Inbound` (RFC §10.1 and
-  §10.2: the locked commit pass, hooks, permissions, broadcast, reentry,
-  chain depth, injected events, framework events), `CreateRoom`,
-  `AttachChannel` and `CloseRoom`.
-- `roomkit`: the tokio runtime. `RoomKit` registers channels and hooks,
-  creates, attaches and closes rooms, and runs inbound messages; the
-  `Channel` and `ConversationStore` traits, `InMemoryStore`, framework
-  event subscription, and `roomkit::testing` (`RecordingTransport`,
-  `EchoAgent`).
-- Examples `echo_room`, `block_and_inject` and `agent_chain`, after the RFC's
-  Appendix B.1, B.2 and B.4.
-- The room lifecycle (RFC §5.1, §7.2, §7.5 rules 6 and 7): the core
-  operations `DetachChannel`, `UpdateBinding`, `PauseRoom`, `ResumeRoom`,
-  `ReopenRoom`, `ArchiveRoom` and `CheckTimers`, with their hooks
-  (`ON_CHANNEL_DETACHED`, `ON_CHANNEL_MUTED`, `ON_CHANNEL_UNMUTED`,
-  `ON_ROOM_PAUSED`) and framework events (`room_channel_detached`,
-  `room_paused`, `room_archived`, `channel_unregistered`); the rules
-  `lifecycle`, `timers` and `attachment`; `Room.paused_at`, `RoomUpdates` and
-  `BindingUpdate`.
-- Room timers: every locked section applies the transitions that fell due
-  before it decides, each at the instant it fell due; `RoomKit::check_timers`
-  and the background `RoomKit::run_timers` apply them to silent rooms. A
-  delivered event resumes a paused room.
-- `RoomKit`: `create_room_with`, `detach`, `update_binding`, `mute`, `unmute`,
-  `pause_room`, `resume_room`, `reopen_room`, `archive_room`,
-  `unregister_channel`; the store's `delete_binding` and `list_rooms` with a
-  `RoomFilter`.
-- The room metadata updates a channel returns are applied; the keys under
-  `roomkit:` are the implementation's and refused to integrator writes.
-- Example `advisor_joins`, after the RFC's Appendix B.5.
-- A named room (RFC §10.1 steps 1 to 3, §5.7, §17.2): the sender is written
-  in its channel's form before anything reads it, a phone number in E.164 and
-  an email address lower-case without its display name (`rules::addresses`).
-  A missing room is created with its id in the caller's organization,
-  `ON_ROOM_CREATED`'s hooks are awaited, the channel is attached with a
-  binding naming the sender and its recipient, and a channel other than
-  `VOICE` and `REALTIME_VOICE` fires `ON_SESSION_STARTED` and emits
-  `session_started`. A room that exists has its unbound channel attached,
-  unless it was detached. A room of another organization fails the message
-  with nothing written (`rules::organizations`,
-  `InboundError::OtherOrganization`).
-- Recipients (RFC §10.2 step 3d): a channel's declaration names the binding
-  metadata key it delivers to, and its country code.
-  `ChannelDeclaration::new` gives a channel its type's key by default
-  (Appendix A): `phone_number` for SMS, MMS, RCS, WhatsApp and WhatsApp
-  Personal, `email_address` for email, `facebook_user_id` for Messenger,
-  `teams_conversation_id` for Teams, `telegram_chat_id` for Telegram; none
-  for a channel that delivers to a destination of its own (WebSocket,
-  webhook, voice). The integrator may declare another key, or none.
-- The protocol's `EnterLane`, `AwaitLane`, `LeaveLane` and `RunObservers`
-  requests, `Outcome::LaneTurn`, `HookTrigger::OnSessionStarted` and
-  `FrameworkEvent::SessionStarted`.
-- Participants in the store (`create_participant`, `get_participant`,
-  `update_participant`, `delete_participant`, `list_participants`), and in
-  every room context.
-- `RoomKit::process_inbound_for`, for a caller acting for an organization;
-  `ChannelDeclaration::new` and `ChannelDeclaration::binding`.
-
-- Inbound routing (RFC §10.4, §10.1 step 2): a message that names no room
-  is routed. `InboundTarget::Routed`; the kit's router is asked through the
-  protocol's `Route` request with a `RouteQuery` (the channel, the sender
-  in the channel's form, the metadata, the caller's organization, the
-  sender's address and identity, the channel's address form), after the core
-  reads the sender's identity once (`ResolveIdentity`). A routed sender is
-  recorded on the room's binding under the room lock before step 3, through
-  `BindingUpdate`; a binding naming someone else by then, or a room no
-  longer ACTIVE, routes the message once more, then into a new room. A
-  router's failure fails the message with nothing written
-  (`InboundError::Routing`).
-- `rules::routing`: the default strategy over the rooms a channel reaches
-  (the sender's newest conversation by binding, then by participant; else
-  the one bound room when it admits the sender; else none), deterministic
-  whatever the order rooms are read in, comparing addresses in the
-  channel's form; the routing address; what step 2 records.
-- `roomkit::InboundRoomRouter`, `DefaultRouter` and `RouterError`;
-  `RoomKit::set_router`.
-- Chat channels: a channel's declaration names the metadata key a message
-  carries its chat under (`ChannelDeclaration::chat_key`, `chat_id` for
-  Telegram, `conversation_id` for Teams and `group_jid` for a WhatsApp
-  Personal group by default). A chat
-  message is routed by its chat, and a room created for it binds the chat
-  as correspondent and recipient, so its answers are delivered instead of
-  refused `no_recipient`. `rules::addresses::AddressForm` and
-  `ChannelDeclaration::form`.
-- Identities (RFC §5.6): `model::Identity`, and the store's
-  `create_identity`, `get_identity`, `resolve_identity` and `link_address`,
-  scoped by organization, one identity per address within one. The store's
-  `find_room_id_by_binding` and `find_room_id_by_participant`, and
-  `RoomFilter::channel_id`.
-- `Environment::new_room_id`, `RoomId::from_u128`; `SequentialEnvironment`
-  numbers rooms `new_room_1`, `new_room_2`, ...
-- `BindingUpdate::participant_id` and `BindingUpdate::is_empty`.
-- Example `new_conversation`, after the RFC's Appendix B.1 with two senders.
-- Edits and deletes (RFC §10.3, §10.1 steps 8a and 12): every pass, the
-  inbound message's, a response's or a hook's injected event, checks an
-  `EDIT` or a `DELETE` against its target under the room lock
-  (`rules::edits`). The target is a received event of the room, neither
-  deleted nor itself an edit or a delete; a sender's change comes from the
-  target's author (the same participant on their channel, or the same sender
-  id on the same channel, an agent's response being its channel's); an
-  `ADMIN` delete from an OWNER or an AGENT on their channel; a `SYSTEM`
-  change from a SYSTEM channel or a hook, which may make no other. An edit
-  or a delete held anywhere but as an `EDIT`'s or a `DELETE`'s whole content
-  (an edit's new content, a composite's part) is refused. A refused
-  change stores nothing, and the inbound result reports
-  `target_event_not_found`, `identity_required_for_edit`, `not_authorized`
-  or `not_original_author`. An accepted change updates its target in its own
-  commit (the new content and `metadata.edited`, or `metadata.deleted`),
-  reaches no channel that could not see the target, and fires
-  `ON_EVENT_UPDATED` or `ON_EVENT_DELETED` with the target as the commit left
-  it once the lock is released; a blocked one changes and fires nothing.
-- The host's direct calls (RFC §10.3): `RoomKit::update_event`, which
-  replaces the fields an `EventUpdates` names and adds no marker, and
-  `RoomKit::delete_event`, a hard delete that takes the event's thread
-  replies by default, and always the edits and deletes of what it removes,
-  and returns the removed ids; both under the room lock,
-  firing their trigger after it. A missing target is a no-op. The core's
-  `UpdateEvent` and `DeleteEvent`, `MutationError` and `KitError::Mutation`.
-- The store's `get_event`, `update_event`, `delete_event` and
-  `get_event_count` with an `EventFilter`, and `StoreError::EventNotFound`. A
-  hard delete leaves the room's counters as they are: an index is never
-  given again, and `get_event_count` then counts fewer rows than
-  `event_count`.
-- `model::EventUpdates`; the protocol's `GetEvent`, `UpdateEvent` and
-  `DeleteEvent` requests, `Outcome::Event`, `Outcome::Deleted` and
-  `TargetUpdate`; `HookTrigger::OnEventUpdated` and
-  `HookTrigger::OnEventDeleted`; `rules::edits::is_edited`, `is_deleted` and `holds_change`;
-  `RecordingTransport::with_capabilities`.
-- Example `edit_and_delete`, after the RFC's Appendix B.6 and B.7.
-- Instructions (RFC §10.1.1): a message of type `INSTRUCTION` makes the
-  agents it names speak without being stored. It is refused before anything
-  is read, `blocked` with `instruction_unaddressed` when its address names no
-  registered intelligence channel and `instruction_not_idempotent` when it
-  carries an idempotency key. It is visible to intelligence channels only
-  and carries the caller's metadata and `metadata.standalone`, the typed
-  field's word. Its hooks may block it or change its text, never its
-  visibility, its address or its `standalone` word. Its pass commits
-  nothing: no index is consumed and no counter moves; a blocked instruction
-  is not stored, and `event_blocked` is emitted. `InboundResult.event` is
-  the uncommitted instruction. Every response it produces records
-  `metadata.instruction = {sha256, length}`, never the text, which the
-  response's hooks cannot remove or replace, and a standalone instruction's
-  turn is handed no history. A hook's injected
-  instruction and a channel's response typed as one are dropped with a
-  warning (gaps G-042, G-066).
-- `rules::instructions`: the refusals (`InstructionRefusal`), the stamp,
-  what a modify keeps, a standalone turn's context, and the responses'
-  `Fingerprint`. `roomkit-core` depends on `sha2` for it.
-- Off-lock checks (RFC §9.5.1, §10.1 step 5a): a SYNC `BEFORE_BROADCAST`
-  hook registered with `needs_lock = false` runs before the room lock, on
-  the room as step 2 left it. The event takes the room's admission ticket
-  before its first off-lock hook and waits for every earlier ticket after
-  the last; step 9 then applies their outcome after the status, idempotency
-  and edit gates, running only the hooks that need the lock, and the side
-  effects of both phases are collected once. An event no off-lock hook fires
-  for takes no ticket; a response and a hook's injected event run every hook
-  under the lock. An off-lock hook's failure is reported before the lock.
-  The ticket is released on every path; one that cannot be taken or awaited
-  fails the call with `InboundError::Ticket` (gap G-067).
-- The protocol's `TakeTicket`, `AwaitTicket` and `ReleaseTicket` requests,
-  `Outcome::Ticketed`, `Outcome::Admitted` and `Outcome::TicketReleased`;
-  the runtime's ticket queue, which drops a cancelled call's ticket.
-  `HookRegistry::off_lock_checks`, `HookRegistry::locked_chain` and
-  `HookChain::take_incidents`.
-- The processing timeout (RFC §13.6, §10.4): `KitConfig::process_timeout`
-  and `RoomKit::set_process_timeout`, off by default, bound a call from its
-  start to its decision: routing, the parse, the off-lock hooks, the
-  ticket's turn, the room lock and the locked section up to the commit.
-  Past it nothing of the event is written, the hooks' injected events and
-  side effects are dropped, what the call holds is released,
-  `process_timeout` is emitted (`FrameworkEvent::ProcessTimeout`, naming
-  the channel before the room lock and the event under it), and the result
-  is `blocked` with the reason `process_timeout`. The commit and what
-  follows it are never bounded; a hook's own timeout is still `hook_timeout`
-  and `hook_error` (gap G-068).
-- `Effect::deadline` and `Outcome::DeadlinePassed`: an effect may carry the
-  instant past which the driver gives up on it; the tokio driver waits for
-  it on tokio's clock, whatever clock the kit has.
-- Direct injection (RFC §10.5): `RoomKit::send_event(room_id, DirectEvent)`
-  and `Inbound::inject` run an event through the inbound pipeline without a
-  channel's parse: its off-lock check and ticket, its hooks, its source's
-  permissions, an edit's or a delete's target, its idempotency key (per room
-  and channel), its commit, delivery and reentry passes. Its source is the
-  channel it names, `INBOUND`, or `OUTBOUND` for an intelligence channel. It
-  returns the committed event, a record stored `BLOCKED` included; a refusal
-  before the commit is raised with nothing written,
-  `InboundError::Refused { reason }` (`room_closed`, `process_timeout`, an
-  edit's or a delete's refusal, an instruction's). A missing room is not
-  created, and an unbound channel is not attached (gap G-069).
-  `model::DirectEvent`.
-- A record outside the pipeline (RFC §10.5): `RoomKit::commit_event(room_id,
-  event, organization_id)` and the core's `CommitRecord` commit a record
-  under the room lock with the next index, and nothing else: no hook, no
-  delivery, no framework event. It is refused for another room's id before
-  anything is read, not found in another organization's room, and refused
-  by a status that refuses events (`MutationError::OtherRoom`,
-  `MutationError::Refused`). It moves the room's counters, not its activity
-  (gap G-071).
-- The reentrant lock (RFC §13.5, §9.5.1 Reentrance, §10.1 step 18): code
-  that runs inside a room's own work calls into the room without waiting for
-  itself. A lifecycle change, a direct mutation or `commit_event` made from a
-  hook under the lock takes the lock again at once, within the hook's
-  execution context, a tokio task-local the driver scopes into every call it
-  makes. `send_event` or `process_inbound` naming the room, made under its
-  lock or in its admission order (an off-lock hook's body, the message's
-  parse), is adopted by the call whose work made it: from a locked hook it
-  commits ahead of the event being decided, which takes the next index;
-  from the admission order it commits beside the running work; either way
-  its caller receives it at its commit. One made by a turn, a delivery or
-  an awaited `ON_ROOM_CREATED` hook is a new arrival, a call of its own;
-  one a turn or a delivery makes into its own room is answered at its
-  decision, its delivery waiting behind its caller's. A call that would
-  wait for what its own context holds fails with `KitError::Reentrant` (gap
-  G-070).
-- The protocol's adoption: `Operation::adopt(entry, origin)`, `Entry`,
-  `EntryId`, `Step::settled` and `Settled`; `Effect::locked`, the room lock
-  an operation holds on a request's behalf, and `Effect::admitted`, the
-  room in whose admission order a request stands; `Step::decided` and
-  `Decided`, an inbound call's decision, published once, before its
-  deliveries.
-- `roomkit::keep_context(future)`: a task a hook or a turn spawns and
-  awaits as its own keeps the call's execution context (RFC §13.5).
-  `KitError::Reentrant` and `KitError::Abandoned`.
-- `ConversationStore::unlink_address` and `Identity::unlink`: an address is
-  moved from one identity to another by an unlink, then a link, since
-  `link_address` refuses an address another identity of the organization
-  uses (RFC §5.6, §14.1, gap G-060).
-- `ops::LifecyclePayload` and `ops::LifecycleChange`: what a lifecycle
-  hook's payload says of its change, the room, the channel a channel's
-  change is about, the type of the channel a session started on and the
-  reason of a transition its timer made, read with
-  `LifecyclePayload::of(&event)` from the type the framework writes the
-  payload with, so a hook no longer digs them out of the `SystemContent`'s
-  JSON `data` (RFC §9.2, §26.1).
-- Examples, beside the RFC's Appendix B flows, each checking what it
-  shows: `room_lifecycle`, `channel_mute_unmute` and `room_membership` for
-  rooms and channels; `hook_moderation`, `hook_inject_welcome` and
-  `hook_off_lock_check` for hooks; `instruction_event`,
-  `response_visibility` and `send_event` for the pipeline;
-  `shared_sms_number`, `paused_conversation` and `identity_addresses` for
-  routing and identities.
-
-### Changed
-
-- The examples are a package of their own, `roomkit-examples` in
-  `examples/`, one file per example, run from the repository root with
-  `cargo run --example <name>`; what they share is its `shared` library.
-  `edit_and_delete` is renamed `edit_delete_messages`, after the Python
-  example it matches. `make examples` runs every example, and CI runs it.
-- The implementation's room metadata namespace is `roomkit:`, the
-  revocations of detached channels `roomkit:detached` (they were
-  `roomkit.` and `roomkit.detached`); a key written `roomkit.` is the
-  integrator's (gap G-049). No release wrote the old keys, so no store
-  holds a revocation under them.
-- A Telegram binding's recipient key is `telegram_chat_id` (it was
-  `chat_id`), and a channel's default chat key is its type's own instead of
-  its recipient key: `chat_id` for Telegram, `conversation_id` for Teams
-  (it was `teams_conversation_id`), `group_jid` for WhatsApp Personal (it
-  had none), so a WhatsApp Personal group message is routed by its group
-  (gap G-051).
-- A hook's injected event is visible to the targets the room binds only,
-  `none` when it binds none (it named every target the hook gave); the hooks
-  of its own pass may narrow that visibility, never widen it, and its
-  delivery reaches only the targets it admits. A blocked one, or one stored
-  past the reentry budget, keeps that visibility (gaps G-031, G-036).
-  `rules::permissions::targets_visibility` and `injected_visibility`.
-- A response that claims another channel's source gets a fresh source, the
-  responder's, keeping nothing of the claimed one (participant, provider,
-  ids, raw payload, verification); one under its own source keeps its other
-  fields (gap G-035).
-- A phone number written without `+` on a channel that declares no country
-  code is kept as written; 11 to 15 digits were read as international. With
-  a country code declared, digits that start with it are read as written
-  with it only past ten digits, a shorter number taking the code as a
-  national one: `3931234567` on a channel declaring `39` is
-  `+393931234567` (gap G-052).
-- A delivery set does not call a target whose channel is not registered,
-  its binding left in the room: a transport is skipped, logged at debug
-  level, and an intelligence channel is reported `delivery_failed` with the
-  error `channel_not_registered`; each was called and its failure reported
-  (gap G-048). A driver answers an `on_event()` or a `deliver()` of a
-  channel it no longer holds `Failed` with the error type
-  `ops::CHANNEL_NOT_REGISTERED`.
-- `RoomKit::create_room` and `create_room_with` wait for the room's
-  `ON_ROOM_CREATED` hooks before they return, as the inbound pipeline's
-  creation does; they fired them without waiting (gap G-050).
-- `RoomKit::update_event` and `delete_event` on a room that does not exist
-  are a no-op, `None` and no id, as for an event the room does not hold;
-  they failed with `MutationError::RoomNotFound` (gap G-063).
-- `RoomKit::send_event` on a channel the room does not bind is refused,
-  `InboundError::Refused` with the reason `source_unbound` and nothing
-  written; its event was stored `BLOCKED` `source_unbound` (gap G-069).
-- `RoomKit::send_event_for(organization_id, room_id, event)` injects for a
-  caller acting for an organization: a room of another organization, or of
-  none, refuses the event with nothing written,
-  `InboundError::OtherOrganization` (RFC §17.2, gap G-069).
-  `Inbound::inject(config, room_id, organization_id, event)` and
-  `Entry::Direct` carry the organization.
-- A sender who writes again after a timer paused their room returns to it,
-  and the message resumes it: routing's step 1 reads ACTIVE and PAUSED
-  rooms, the newest winning. Step 3 reads ACTIVE rooms and the PAUSED rooms
-  bound to the channel as a group, so a paused group room takes its group's
-  next message, and any other PAUSED room takes in no one new; one ACTIVE
-  room and one PAUSED group room bound to the channel are two, and give a
-  new room. Under the room lock, a routed room found PAUSED stays the
-  message's when it is the sender's conversation by step 1 or bound to the
-  channel as a group, and the message is routed once more otherwise; it was
-  routed once more whenever the room was not ACTIVE (gaps G-045, G-055).
-  `rules::routing::considered` gives way to `step_one_considers` and
-  `step_three_considers`, which take a `Candidate`; `conversation_through`,
-  answering a `Through`, tells a sender's conversation for step 1, and
-  `paused_room_takes` tells the lock what steps 1 and 3 would take.
-  `DefaultRouter::candidates` reads the PAUSED rooms too.
-- A channel's response that carries the visibility `internal` is committed
-  with `none`, stored and shown to no channel, and a warning is logged; it
-  was committed with `internal`, the mark only the framework writes (gap
+- **Repository.** The `roomkit-core` and `roomkit` crates and the
+  `roomkit-examples` package; workspace lints; the gates `make all`, `make
+  examples` and `make msrv`; CI for commit messages, formatting, lints,
+  tests, documentation, the examples, the core's dependencies, the minimum
+  Rust version, the dependency policy, and a weekly check against the
+  security advisories; the architecture, roadmap, step and RFC gap
+  documents. The minimum Rust version is written once, as the workspace's
+  `rust-version`.
+- **The model** (`roomkit_core::model`, RFC §5): rooms, events and every
+  content type, bindings and permissions, capabilities, participants,
+  identities, tasks, observations, inbound messages and direct events,
+  channel outputs and hook results, with their invariants checked at
+  construction and their JSON form. A room's `paused_at` and timers, a
+  visibility's grammar and intersection (`Visibility::intersect`, gap
+  G-009), the partial updates of a room, an event and a binding
+  (`RoomUpdates`, `EventUpdates`, `BindingUpdate`, which carries over what
+  it does not name, RFC §7.5 rule 6), and what a room is created and a
+  channel attached with (`RoomOptions`, `BindingOptions`).
+- **The rules** (`roomkit_core::rules`), functions with no I/O and no
+  clock: permissions and delivery planning, with solicitation and
+  addressing (§7.5, §10.2, §19.3); the visibility a hook's injected event
+  and a refused record keep, never wider than their event's (gaps G-031,
+  G-036); answers kept within where their message's answers may go (§5.12,
+  gap G-073); a channel's history withholding a soft-deleted event's
+  content (gap G-062); transcoding and the text a reader takes (§6.6); the
+  chain-depth limit and a cascade's reentry budget, shared by the calls that
+  draw on it (§8.3); hook registrations, the off-lock and locked chains and
+  how a chain of SYNC outcomes decides (§9.1–9.4); the lifecycle's
+  transitions, which refuse a status they neither leave from nor lead to
+  (gap G-074); the timer transitions due at an instant (gap G-045); a
+  detach's revocation and the `roomkit:` metadata namespace (gaps G-049,
+  G-053); an address in its channel's form, a phone number in E.164 by the
+  rules of gap G-052 and an email address lower-case, how each channel
+  type is addressed, its recipient and chat keys, and what a recipient is
+  (gaps G-051, G-057, G-075); the rooms an organization reaches (§17.2);
+  the default routing strategy, its steps 1 and 3 over ACTIVE and PAUSED
+  rooms, what keeps a routed room under its lock and what step 2 records of
+  a routed sender (§10.4, gaps G-045, G-055, G-058, G-061); the validation
+  of an edit or a delete against its target (§10.3, gap G-062); and what an
+  instruction must be and what its responses carry (§10.1.1, gap G-065).
+- **The effect protocol** (`roomkit_core::ops`): an `Operation` is polled
+  for a `Step`, the notices to perform, the adopted entries settled, an
+  inbound call's decision once known (`Decided`), and what comes `Next`;
+  its `Effect`s each carry a `Request` of one family, hold (the room's
+  lock, its delivery lane, its admission ticket), store, channel, hook or
+  route, a deadline, the lock held on its behalf, the admission order it
+  stands in and the reentry budget a delivery's calls draw on, and are
+  answered by one `Outcome` of the same family, `Failed` or
+  `DeadlinePassed`. `Operation::adopt` hands an operation a call its own
+  work makes into its room, and `Operation::expire` expires one whose
+  caller is gone. Every poll reads the environment the run started with;
+  `Environment` takes `&self`, `SequentialEnvironment` is shared through an
+  `Arc`.
+- **The inbound pipeline** (`Inbound`, RFC §10.1, §10.2), for a message
+  into a named room or one routed (§10.4): the sender in the channel's form;
+  a missing room created with its id, its `ON_ROOM_CREATED` hooks awaited
+  before `room_created` and the channel's attach, a session started on any
+  channel but voice (gap G-050); an unbound channel attached unless it was
+  detached (gap G-053); a routed sender's identity resolved once, the
+  kit's router asked, the sender recorded on the room's binding under its
+  lock, and the message routed once more when the room no longer admits
+  them (gaps G-055, G-061). Then the channel's parse, the off-lock checks
+  ordered by the room's admission ticket (§9.5.1, gap G-067), and the pass
+  under the room lock: the due timers applied, the status gate, the
+  idempotency key, an edit's or a delete's target, the hooks, the room
+  read again after a hook that ran under the lock, the source's
+  permissions, the commit with the room's counters and the event's place in
+  the room's delivery lane. Delivery sets run in index order, one at a
+  time per room; a transport delivery with no recipient is refused
+  `no_recipient`, a target whose channel is no longer registered skipped
+  or reported (gap G-048); responses re-enter with their own source (gap
+  G-035) and within their message's answers (gap G-073), injected events
+  and records past the reentry budget are stored, a refused record emits
+  `room_refused_event` (gap G-043), and step 15 stores the cascade's side
+  effects and applies the room metadata updates channels return (gap
+  G-049). An `INSTRUCTION` is decided without being stored, delivered to
+  the agents it names and fingerprinted on every response (gaps G-042,
+  G-065, G-066). Only the framework writes the visibility `internal`: a
+  message carrying it is refused, a response carrying it is committed with
+  `none`, and a hook's modify of an event marked `internal` keeps it (gap
   G-041).
-- The `roomkit` driver completes each effect as it finishes and polls the
-  operation between completions, a lock, a lane or a ticket's turn waited
-  for beside the calls, instead of waiting for a step's every effect.
-  `Next::Waiting` is answered by waiting for the next completion.
-- A pass that ran a hook under the room lock reads the room again once its
-  hooks are over (`LoadContext`): the event takes the room's next index then,
-  a room a hook closed refuses it with nothing stored, and the source is
-  checked on the bindings as the hooks left them. A pass that ran no such
-  hook decides on its gate's read. `Request::LoadBindings` and
-  `Outcome::Bindings` are removed.
-- A record stored `BLOCKED` keeps the visibility step 12 would have given it
-  when its source is bound (gap G-036); a record a closed room refuses
-  emits `room_refused_event` (gap G-043).
-- An inbound message carrying the visibility `internal` is refused,
-  `InboundError::InternalVisibility`, and a hook's modify that writes it is
-  put back to the original's (gap G-041).
-- A message whose idempotency key replays an event no longer clears the
-  lane, which may hold an adopted entry's delivery set.
-- A cascade that fails or passes its deadline still delivers every event it
-  committed: the delivery sets already queued run before the call ends
-  (RFC §13.6); no pass runs any more. They were dropped.
-- A pass that ran a hook under the room lock checks an edit's or a delete's
-  target again before its commit.
-
-- `metadata.instruction` is the pipeline's alone: a parser's, a caller's or
-  a channel's key is stripped from an inbound, an injected event and a
-  response that does not answer an instruction, and a hook's modify keeps
-  the pipeline's fingerprint only, so a hook that redacts the key elsewhere
-  stays obeyed (gap G-065).
-- `Effect` carries a `deadline`, and `Request` the ticket requests, which
-  every driver answers.
-- A channel's history never carries a soft-deleted event's content: it is
-  handed with an empty text and no raw payload, and an edit of it with its
-  new content withheld; hooks and the store keep the record whole (gap
-  G-062).
-- A routed sender is recorded only where the room, as its lock finds it,
-  still admits them by step 3: a room that has heard someone else on the
-  channel meanwhile routes the message once more (gap G-055).
-- `RoomKit::process_inbound(message, room_id)` and
-  `RoomKit::process_inbound_for(organization_id, message, room_id)` take the
-  RFC's order, the room optional: `None` routes the message.
-- `RoomFilter::matches` takes the room's bindings and participants.
-- An `EDIT` or a `DELETE` message is processed instead of refused
-  `InboundError::Unsupported`.
-- An `INSTRUCTION` message is processed instead of refused
-  `InboundError::Unsupported`, which is removed: nothing returns it any
-  more.
-- `ConversationStore::commit(event, counters, target)` and `Request::Commit`
-  carry what an accepted edit or delete writes on its target, in the same
-  transaction. `InMemoryStore` refuses an index below the room's
-  `event_count` (it compared with the timeline's length), so a hard-deleted
-  index is never reused.
-- A `BEFORE_BROADCAST` modify keeps an edit's or a delete's target, its
-  `edit_source` and its `delete_type`; it never turns an event into an edit
-  or a delete, nor a delete into another event, nor slips one into an
-  edit's new content or a composite. A hook's content of another kind in
-  place of an edit is the edit's new content, so a hook that redacts as
-  text redacts an edit too, and its target; it left the original edit,
-  whose unredacted text reached the target (RFC §9.4, §10.3, gap G-062).
-- `StoreError::IndexTaken` reads "index N is not room R's next index": the
-  commit's index is not the room's next one.
-- `Environment` requires `new_room_id`.
-- A room step 2 creates for a chat message names the chat on its binding;
-  a chat message without its chat still names neither.
-- `rules::addresses::correspondent` is gone: the binding of a created room is
-  written by `rules::routing::recording`.
-- `ConversationStore::update_room` is a partial update,
-  `update_room(room_id, updates)`, and `Request::UpdateRoom` carries
-  `RoomUpdates`; a commit's `RoomCounters` carries the resume of a paused
-  room.
-- `room_closed` carries a `reason`, `timer` when the close timer closed the
-  room; the pass of a hook's injected event that a closed room refuses emits
-  `room_refused_event` with `operation = reentry`.
-- `Inbound::new(config, target, organization_id, message)` takes an
-  `InboundTarget` and the organization the caller acts for. A message naming
-  a missing room creates it instead of failing.
-- The room's delivery lane is an effect, taken at the commit (RFC §10.2):
-  an event takes its place under the room lock, between its `Commit` and
-  the release (`EnterLane`), its delivery set waits for the place's turn
-  (`AwaitLane`) and leaves it once over (`LeaveLane`), each naming the
-  event; an instruction takes its place at its decision. The runtime keeps
-  one queue of places per room. Calls into one room overlap until the room
-  lock, commit in lock order and deliver in index order, and another call's
-  commit may land between a trigger and its responses; the lane was a
-  per-room mutex held for the whole call (gap G-070).
-- `source_unbound` marks the event of a channel detached from the room: step
-  2 attaches any other unbound channel.
-- The default `handle_inbound` names the sender as the event source's
-  `participant_id`.
-- Two calls into one room run their off-lock checks at the same time and
-  commit in ticket order, whichever check finishes first; an event no
-  off-lock hook fires for may commit during another call's check. Two
-  checks of one room never overlapped (gap G-067).
-- `process_timeout` no longer counts the wait for an earlier call's
-  cascade: a call behind a slow delivery commits within its bound, and its
-  delivery waits after the commit. A call into a busy room was refused past
-  its bound (gap G-068).
-- A call that an agent's turn or a delivery makes into a room is a new
-  arrival: its own operation, admission ticket and `process_timeout`, its
-  off-lock hooks run off the lock; it was adopted beside the running work.
-  It draws on the reentry budget of the cascade that delivers, past which a
-  message is refused with no event and an injected event stored `BLOCKED`,
-  both with `reentry_loop_cap`, so a transport that calls into its room on
-  every delivery stops at the cap. `Inbound::drawing_on(budget)`,
-  `Effect::budget`; `ReentryBudget` is a shared count, its clones drawing on
-  the same passes. Into its caller's own room it is answered at its
-  decision, `send_event` returning the committed event with no delivery
-  results, its delivery run after its caller's set and its end logged; a
-  message a turn routes back into its room is answered so too, where it
-  failed `KitError::Reentrant`. A `send_event` from an awaited
-  `ON_ROOM_CREATED` hook waits for its delivery and reports it (gap G-070).
-- A call made within an agent's turn is at least as deep as the turn's
-  response, so an agent that injects into its room on every turn, through
-  any channel, stops at the chain-depth limit (RFC §10.6, §8.3, gap G-070).
-- A message that a hook, an off-lock hook's body or a channel's parse
-  routes back into its room fails with `KitError::Reentrant`, one no
-  off-lock hook fires for included: it is refused the lock of a room its
-  context stands in the admission order of. A parse that routed every
-  message back recursed without bound. A frame of the execution context
-  stands in an admission order only while its call runs, so a run the call
-  started that goes on detached is not handed to it (gap G-070).
-- An inbound call runs on a task of its own, within its caller's execution
-  context; a caller that stops waiting aborts it. `KitError::Stalled` also
-  reports a run the runtime cancelled, as it does when it shuts down.
-- A lane request that fails is logged and the event delivered all the same
-  (RFC §13.6); a failed leave no longer sets the result's `error`.
-  `InboundError::Lane` is removed.
-- `ChannelDeclaration` has `recipient_key` and `country_code`;
-  `RecordingTransport` declares no recipient key, its record being its
-  destination.
-- A transport delivery whose binding holds nothing under its channel's
-  recipient key is refused `no_recipient` before `deliver()` is called: a
-  failed delivery result of code `no_recipient`, not retryable, and
-  `delivery_failed` for an event that entered through the inbound pipeline.
-  Its `on_event()` is still called.
-- A channel attached to an existing room at step 2 names no recipient (RFC
-  §10.1 step 2: with a room id given, only a room step 2 creates records
-  its sender; a routed message records it, with routing). An integrator
-  that names the room of an SMS, email or other addressed conversation
-  gives the binding its recipient when it attaches the channel
-  (`attach_with`, `phone_number` = the customer's number): otherwise its
-  deliveries are refused `no_recipient`.
-- `InboundMessage::response_visibility` is applied (RFC §5.12): each
-  response to the message's event or instruction keeps the visibility its
-  channel gave it within the message's, never wider than either, and its
-  commit narrows it to its binding's as before; an answer to a response is
-  not restricted, and the `ON_ERROR` payload of a turn that failed on the
-  message's event takes it. It was carried and ignored. A message whose
-  `response_visibility` is `internal` is refused
-  `InboundError::InternalVisibility` before anything is read (gaps G-041,
-  G-073). `rules::permissions::answer_visibility`.
-- A room transition called on a status it neither leaves from nor leads
-  to fails with `LifecycleError::TransitionRefused`, nothing written or
-  reported: `pause_room` and `resume_room` of a closed or archived room,
-  `reopen_room` of a room that is not closed, `close_room` of an archived
-  one. A transition whose room is in its status already (a pause of a
-  paused room, a resume of an active one, a close of a closed one, an
-  archive of an archived one) still succeeds and does nothing. Each
-  answered with the room unchanged, so the reopen of an archived room
-  answered as if it had succeeded (RFC §5.1, gap G-074).
-  `Transition::refuses` and `Transition::is_done`.
-- `RoomKit::hook(spec, handler)` takes a closure, bound
-  `Fn(RoomEvent, RoomContext) -> Fut` as `before_broadcast` and `observe`
-  are, so its argument types are inferred and need no annotation. A handler
-  of a type of its own implementing `HookHandler` registers with the new
-  `RoomKit::hook_handler(spec, handler)`; code that passed one to `hook`
-  calls `hook_handler` instead.
-- `room_created` is emitted once a creation's `ON_ROOM_CREATED` hooks are
-  over, the integrator's `create_room` and step 2's alike, and before step
-  2's attach, as the amended RFC §10.1 step 2 orders it; it was emitted
-  before the hooks ran.
-- A binding has a recipient exactly when routing reads one: a string that
-  is not blank, or a number. A boolean, an array or an object under the
-  recipient key is none, and a delivery to it is refused `no_recipient`;
-  it was handed to the transport (gap G-075).
-- Every `Commit` effect carries the room whose lock the operation holds on
-  its behalf (`Effect::locked`), as the doc of `locked` says: the commit of
-  a pass, of a record stored `BLOCKED` in place of a refused response and
-  of `commit_event`'s record carried none.
-- `StoreError::Unavailable` keeps the error the store met as its cause
-  (`std::error::Error::source`), a `StoreFailure`; it held a string. Its
-  message is `the store failed`, the cause shown once, by a reader of the
-  chain: `StoreError::to_record` writes `the store failed: <cause>`.
-  `StoreError::unavailable(cause)` builds one from an error or a message.
-  The kit's logs of a failed sweep or of a call nobody waits for write an
-  error with its causes, as `to_record` does.
-  `StoreError` and `KitError` are no longer `Clone`, and an `Unavailable`
-  error equals itself only.
-- `KitError::Stalled` is a stall of the effect protocol only, a defect of
-  the crate. A call whose run the runtime cancelled, as a shutting-down
-  runtime does, fails with `KitError::Cancelled`, and a direct injection
-  that ended with neither its event nor a refusal, a defect too, with
-  `KitError::NoEvent`; both were `Stalled`.
-- A caller that stops waiting for `process_inbound` or `send_event`, its
-  future dropped (a client gone, a `tokio::time::timeout` that expired), no
-  longer aborts the call: the call goes on detached, and is never dropped
-  once anything it ran is committed. Decided, it delivers its event and its
-  cascade, runs their hooks and logs its end. Before its decision it
-  expires as one past its `process_timeout` does, without the
-  `process_timeout` event: its requests within the call's bound are given
-  up on, nothing more of its event is written, what it holds is let go,
-  and every event it committed is delivered, its own when its commit was in
-  flight, an entry's it adopted; a room its step 2 created is attached
-  first (gap G-076). The runtime aborted the call wherever it stood, which
-  left an event stored and never delivered. `Operation::expire` expires an
-  operation whose caller is gone.
-- A call's admission ticket is released once no section of the call holds
-  the room's lock or waits for it (RFC §9.5.1): a call whose trigger stops,
-  its caller gone or its deadline passed, while an entry it adopted works
-  under the lock released its ticket under that lock.
-- The kit tracks the work it runs in the background: the observer hooks it
-  runs after the fact and every inbound call, those that go on detached
-  included; they were bare tokio tasks. `RoomKit::idle()` waits until none
-  runs. `RoomKit::shutdown()` refuses every call that runs an operation from
-  then on with `KitError::ShutDown`, ends the background work at its next
-  wait, an event committed and not delivered yet staying undelivered, and
-  returns once it is over; a call running in its caller's own task runs to
-  its end. A timer sweeper stops when its kit shuts down, and
-  `check_timers` returns `KitError::ShutDown`. Each sweep of a timer
-  sweeper is tracked work too: `idle()` waits for one under way, and
-  `shutdown()` ends it, the room lock it holds let go, and waits for it; a
-  sweep could hold a lock and write after the shutdown returned. Stopping
-  or dropping the sweeper ends its sweep under way the same way. The
-  examples wait for the observers they check with `idle()` instead of a
-  timeout.
-- `ChannelBinding::can_write` is removed: `rules::permissions::write_refusal`
-  says whether a source may write, and why not.
-  `RoomContext::binding(channel_id)` reads a room's binding of a channel,
-  and `rules::routing::kept_by_status` whether a routed room's status, as
-  its lock finds it, keeps the message.
-- A hook's modify of an event marked `internal` keeps `internal`, whatever
-  visibility it writes; it could widen the framework's record to channels
-  (gap G-041). A modify writing `internal` on another event still gets the
-  original's visibility back.
-- The effect protocol is grouped by family: `Request` is `Hold`
-  (`HoldRequest`: the room's lock, the lane's places, the admission
-  ticket), `Store` (`StoreRequest`), `Channel` (`ChannelRequest`), `Hook`
-  (`HookRequest`) or `Route`, and `Outcome` answers by the same families
-  (`HoldOutcome`, `StoreOutcome`, `ChannelOutcome`, `HookAnswer`, whose
-  `Ran` was `Outcome::Hook`), beside `Routed`, `Failed` and
-  `DeadlinePassed`; both were flat. A driver hands each family to one
-  handler, and the runtime's call executor no longer has the branches a
-  request of another family could reach. `StoreRequest::Commit` and
-  `HookRequest::RunHook` carry their event boxed.
-- A call keeps the environment it started with: `RoomKit::set_environment`
-  serves the calls made after it, and no kit-wide lock is taken around each
-  poll of an operation any more; a call read the kit's environment anew at
-  every poll. `Environment`'s methods take `&self`, so one environment
-  serves many runs at once, and `set_environment` takes an environment that
-  is `Send + Sync`. `SequentialEnvironment` keeps its clock and counters in
-  atomics, `advance(&self, ..)` included, and an `Arc` of an environment is
-  one, for a host that keeps a handle on the clock its kit reads.
-- `roomkit` re-exports the core's model whole, as `roomkit::model`, and of
-  its operations and rules only what a caller names, at the crate's root:
-  the results and errors of the kit's calls (`InboundResult`,
-  `InboundError`, `LifecycleError`, `MutationError`, `ConfigError`,
-  `RegistrationError`, `ProtocolError`), the framework events and their
-  parts (`FrameworkEvent`, `ChainDepthData`, `RefusedOperation`,
-  `TransitionReason`, `LifecyclePayload`, `LifecycleChange`,
-  `CHANNEL_NOT_REGISTERED`, `Transition`), what a channel declares and how
-  it writes its addresses (`ChannelDeclaration`, `default_inbound_event`,
-  `CountryCode`, `InvalidCountryCode`, `Addressing`, `AddressForm`), what a
-  router answers (`RouteQuery`, `Sender`, `Candidate`) and the default
-  strategy's decision (`default_route`, the core's `rules::routing::route`,
-  for a router wrapping `DefaultRouter::candidates`), the environment
-  (`Environment`, `SequentialEnvironment`) and the readers of an event
-  (`is_edited`, `is_deleted`, `text_of`); the
-  store's `RoomCounters` and `TargetUpdate` are `roomkit::store`'s. The
-  modules `roomkit::ops` and `roomkit::rules`, which carried the protocol
-  the driver speaks with the core, are gone: `roomkit::ops::FrameworkEvent`
-  is `roomkit::FrameworkEvent`, `roomkit::rules::edits::is_deleted`
-  `roomkit::is_deleted`.
-- The organization a call acts for is named once, through a handle:
+- **Deadlines and callers that leave.** The kit's `process_timeout` bounds
+  a call from its start to its decision, routing, the parse, the off-lock
+  hooks, the ticket, the lock and the locked section, never the commit and
+  what follows it (§13.6, gap G-068). A caller that stops waiting, its
+  future dropped, never drops the call once anything it ran is committed:
+  decided, the call delivers its cascade; before, it expires as one past its
+  `process_timeout`, writes nothing more of its event and delivers every
+  event it committed (gap G-076). A cascade that fails still delivers what
+  it committed.
+- **Direct calls.** `send_event` injects an event through the pipeline
+  from its lock on, without a parse or step 2: a refusal before its commit
+  is raised with nothing written (§10.5, gap G-069). `commit_event` commits
+  a record under the room lock with the next index and nothing else: no
+  hook, no delivery, no activity (gap G-071). `update_event` and
+  `delete_event`, the host's changes of stored events, run under the lock,
+  fire their trigger after it, and are a no-op on a missing target or
+  room; a hard delete takes its thread and the changes of what it removes,
+  leaving the counters as they are (§10.3, gaps G-063, G-064).
+- **Reentrancy** (§13.5, §9.5.1 Reentrance, §10.1 step 18, gap G-070): code
+  that runs inside a room's own work calls into the room without waiting
+  for itself. A lifecycle change, a direct change or a record made under the
+  lock takes the lock again through the caller's lease; `send_event` or
+  `process_inbound_in` made under the lock or in the admission order is
+  adopted by the call whose work made it and returns at its commit; a
+  turn's or a delivery's call is a new arrival with its own ticket and
+  `process_timeout`, drawing on the delivering cascade's budget and
+  answered at its decision when it comes into its caller's room; a call
+  made within a turn is at least as deep as the turn's response (§10.6); a
+  call that would wait for what its own context holds fails
+  `KitError::Reentrant`. A call's ticket is released once no section of the
+  call holds the room's lock. `roomkit::keep_context` keeps the context in
+  a task a hook or a turn awaits as its own.
+- **The room lifecycle** (§5.1, §5.7, §7.2, §7.5): `CreateRoom`,
+  `AttachChannel`, `DetachChannel`, `UpdateBinding`, `PauseRoom`,
+  `ResumeRoom`, `ReopenRoom`, `CloseRoom`, `ArchiveRoom` and `CheckTimers`,
+  each but the creation one locked section, with their hooks, their
+  framework events and their payloads (`LifecyclePayload`,
+  `LifecycleChange`). A change that changes nothing writes and fires
+  nothing (gap G-047); a transition from a status it does not leave from is
+  refused (gap G-074). Every locked section applies the timer transitions
+  that fell due, each at its instant; a delivered event resumes a paused
+  room (gap G-045).
+- **Organizations** (§17.2, decision 2 of step 2b, gap G-077): every room
+  operation acts for an organization or for none.
   `RoomKit::for_organization(organization_id)` returns an `OrganizationKit`
-  whose every call is the kit's call of the same name, made for the
-  organization (RFC §17.2, decision 2 of step 2b, gap G-077). Its lifecycle
-  changes (`attach`, `detach`, `update_binding`, `mute`, `unmute` and the
-  transitions) and its record commits do not find a room of another
-  organization, or of none (`RoomNotFound`); its updates and deletes of a
-  stored event find no event there; its messages and injected events are
-  refused `OtherOrganization`; a room it creates belongs to the
-  organization. Its reads (`get_room`, `list_rooms`, `get_event`,
-  `list_events`, `list_bindings`, `list_participants`, `get_participant`)
-  see the organization's rooms only, another's reading as a room that does
-  not exist; the handle never hands back the kit, which reads every room. The kit itself acts for no organization: its calls read
-  rooms unscoped, and a room they create belongs to none, its organization
-  no option of `create_room_with`.
-  `RoomKit::process_inbound_for` and `send_event_for` are gone, and
-  `commit_event` takes no organization: an organization's handle makes
-  each of them. The core's lifecycle and event operations take the
-  caller's organization (`PauseRoom::new(config, room_id,
-  organization_id)` and the others), `None` reading the room unscoped.
-- `process_inbound` splits in two (decision 2 of step 2b):
-  `process_inbound(message)` routes the message (RFC §10.4), and
-  `process_inbound_in(room_id, message)` runs it into the room the caller
-  names (RFC §10.1 step 2); the one call took the room as an `Option`, `None`
-  routing the message. An organization's handle has both.
-- `create_room_with` and `attach_with` take what they set as a value,
-  `model::RoomOptions` (the room's timers, agent response policy and
-  metadata) and `model::BindingOptions` (the binding's access, mute,
-  visibility, correspondent, `group`, category, capabilities, limits and
-  metadata), in place of a closure given the whole `&mut Room` or `&mut
-  ChannelBinding`: what the framework owns, a room's id, organization,
-  status, instants and counters, a binding's channel, room, type,
-  direction and attach instant, cannot be named. `RoomOptions::room` and
-  `BindingOptions::apply` build the record.
-- A call acting for an organization writes nothing in another
-  organization's room, its due timers included: an injected event and a
-  record's commit applied the room's due timer transitions before they
-  refused it (gaps G-069, G-071, G-077).
+  whose calls are the kit's, made for the organization, and whose reads
+  (`get_room`, `list_rooms`, `get_event`, `list_events`, `list_bindings`,
+  `list_participants`, `get_participant`) see its rooms only. A room of
+  another organization, or of none, is not found by its changes, holds no
+  event for its updates and deletes, and refuses its messages and
+  injections `OtherOrganization`, nothing written in it, its due timers
+  included; a room it creates belongs to it, and its messages are routed
+  among its rooms and identities only (gaps G-051, G-060). The kit itself
+  acts for no organization.
+- **The runtime** (`roomkit`), on tokio. `RoomKit` registers and
+  unregisters channels, registers hooks (`hook`, `hook_handler`,
+  `before_broadcast`, `observe`), sets the
+  router, the environment, the chain-depth limit and the
+  `process_timeout`, creates rooms (`create_room`, `create_room_with`
+  `RoomOptions`), attaches channels (`attach`, `attach_with`
+  `BindingOptions`), detaches, updates, mutes and unmutes them, moves rooms
+  through their lifecycle, routes a message (`process_inbound`) or runs one
+  into a named room (`process_inbound_in`), injects, commits records,
+  updates and deletes stored events, applies room timers on demand
+  (`check_timers`) or in the background (`run_timers`, a `TimerSweeper`
+  whose stop ends its sweep under way), publishes framework events
+  (`subscribe`), and tracks the work it runs in the background: `idle()`
+  waits until none runs, `shutdown()` ends it and refuses every later call
+  (`KitError::ShutDown`). Its driver executes a run's effects concurrently,
+  completing each as it finishes; a call keeps the environment it started
+  with. The `Channel`, `InboundRoomRouter` and `ConversationStore` traits,
+  `DefaultRouter` (whose `candidates` and `default_route` a router wrapping
+  it reuses), `InMemoryStore`, `StoreError` (an unavailable store's cause
+  kept as its source), `KitError`, and the testing helpers
+  `RecordingTransport` and `EchoAgent`. The crate re-exports the core's
+  model whole and, of its operations and rules, only what a caller names.
+- **The store** (§14.1): rooms with partial updates and filters, bindings,
+  participants by room, identities linked to and unlinked from addresses
+  per organization, the routing lookups by binding and by participant, and
+  events, a commit writing the event, the room's counters and an edit's or
+  a delete's target in one transaction, an index below `event_count`
+  refused, the idempotency lookup, hard deletes and event counts.
+- **Examples**, one runnable file each, every one checking what it shows:
+  the RFC's Appendix B flows (`echo_room`, `new_conversation`,
+  `block_and_inject`, `agent_chain`, `advisor_joins`,
+  `edit_delete_messages`), rooms and channels (`room_lifecycle`,
+  `channel_mute_unmute`, `room_membership`), hooks (`hook_moderation`,
+  `hook_inject_welcome`, `hook_off_lock_check`), the pipeline
+  (`instruction_event`, `response_visibility`, `send_event`), and routing and
+  identities (`shared_sms_number`, `paused_conversation`,
+  `identity_addresses`).
