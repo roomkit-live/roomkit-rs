@@ -171,6 +171,11 @@ publishes a release.
 
 ### Changed
 
+- `metadata.instruction` is the pipeline's alone: a parser's, a caller's or
+  a channel's key is stripped from an inbound, an injected event and a
+  response that does not answer an instruction, and a hook's modify keeps
+  the pipeline's fingerprint only, so a hook that redacts the key elsewhere
+  stays obeyed (gap G-065).
 - A channel's history never carries a soft-deleted event's content: it is
   handed with an empty text and no raw payload, and an edit of it with its
   new content withheld; hooks and the store keep the record whole (gap

@@ -18,7 +18,9 @@ use crate::model::{ChannelId, EventType, Metadata, RoomContext, RoomEvent, Visib
 use crate::rules::transcoding;
 
 /// The metadata key under which a response records the instruction that
-/// produced it (RFC §10.1.1 rule 6).
+/// produced it (RFC §10.1.1 rule 6). The pipeline's alone: it writes the key
+/// on a response to an instruction and removes it from every other event
+/// (gap G-065).
 pub const INSTRUCTION: &str = "instruction";
 
 /// The metadata key under which an instruction carries its `standalone`
@@ -108,17 +110,16 @@ pub fn is_standalone(event: &RoomEvent) -> bool {
 ///
 /// - on an instruction, its visibility, its address and its `standalone`
 ///   word (gap G-020);
-/// - on a response to one, the fingerprint it records, which no hook
-///   removes or replaces with the instruction's text (gap G-065).
+/// - under `instruction`, the original's fingerprint, which no hook removes
+///   or replaces with the instruction's text, and nothing else: a key the
+///   original holds that is not a fingerprint is not the pipeline's, and a
+///   key the hook writes on an event the pipeline does not fingerprint is
+///   removed (gap G-065).
 ///
 /// The rest, an instruction's text and its other metadata included, is the
 /// hook's to change.
 pub fn keep_checked(original: &RoomEvent, modified: &mut RoomEvent) {
-    if let Some(fingerprint) = original.metadata.get(INSTRUCTION) {
-        modified
-            .metadata
-            .insert(INSTRUCTION.to_owned(), fingerprint.clone());
-    }
+    keep_fingerprint(original, modified);
     if original.event_type != EventType::Instruction {
         return;
     }
@@ -132,6 +133,24 @@ pub fn keep_checked(original: &RoomEvent, modified: &mut RoomEvent) {
         }
         None => {
             modified.metadata.remove(STANDALONE);
+        }
+    }
+}
+
+/// The key `instruction` of `modified` as `original` holds it: the
+/// pipeline's fingerprint, or none (gap G-065). The stamps let a
+/// fingerprint written by the pipeline only reach a pass (`mark_response`,
+/// `clear_fingerprint`); this keeps a hook from undoing either, and never
+/// restores a value that is not a fingerprint, which could hold text.
+fn keep_fingerprint(original: &RoomEvent, modified: &mut RoomEvent) {
+    match original.metadata.get(INSTRUCTION) {
+        Some(value) if Fingerprint::from_value(value).is_some() => {
+            modified
+                .metadata
+                .insert(INSTRUCTION.to_owned(), value.clone());
+        }
+        Some(_) | None => {
+            modified.metadata.remove(INSTRUCTION);
         }
     }
 }
@@ -191,21 +210,48 @@ impl Fingerprint {
         fields.insert("length".to_owned(), Value::from(self.length));
         Value::Object(fields)
     }
+
+    /// The fingerprint `value` holds in the form [`to_value`](Self::to_value)
+    /// writes: those two fields only, the digest as 64 lowercase hexadecimal
+    /// digits. `None` for any other value, a text among them.
+    pub fn from_value(value: &Value) -> Option<Self> {
+        let fields = value.as_object().filter(|fields| fields.len() == 2)?;
+        let sha256 = fields.get("sha256")?.as_str().filter(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })?;
+        let length = usize::try_from(fields.get("length")?.as_u64()?).ok()?;
+        Some(Self {
+            sha256: sha256.to_owned(),
+            length,
+        })
+    }
 }
 
 /// Writes on `response`, an event the delivery set of `trigger` returned,
 /// the fingerprint of `trigger` when it is an instruction (RFC §10.1.1
 /// rule 6, decision 9 of step 2). It replaces whatever the channel wrote
-/// under the key, so the instruction's text never rides there. Leaves the
-/// response as it is for any other trigger.
+/// under the key, so the instruction's text never rides there. For any
+/// other trigger the key is removed: a response to a message records no
+/// instruction (gap G-065).
 pub fn mark_response(response: &mut RoomEvent, trigger: &RoomEvent) {
     if trigger.event_type != EventType::Instruction {
-        return;
+        return clear_fingerprint(response);
     }
     let fingerprint = Fingerprint::of_instruction(trigger);
     response
         .metadata
         .insert(INSTRUCTION.to_owned(), fingerprint.to_value());
+}
+
+/// Removes the key `instruction` from an event the pipeline does not
+/// fingerprint, whoever wrote it: a channel's parser, the caller of an
+/// instruction, a hook's injected event (gap G-065). The RFC defines the
+/// key on a response to an instruction only, where the pipeline writes it.
+pub fn clear_fingerprint(event: &mut RoomEvent) {
+    event.metadata.remove(INSTRUCTION);
 }
 
 #[cfg(test)]
@@ -450,6 +496,35 @@ mod tests {
             );
         }
 
+        /// Gap G-065: a key that is not a fingerprint is not the
+        /// pipeline's, so a hook's redaction of it stands.
+        #[test]
+        fn a_modify_removing_a_key_that_is_no_fingerprint_stays_removed() {
+            let mut message = instruction("Hi");
+            message.event_type = EventType::Message;
+            message
+                .metadata
+                .insert(INSTRUCTION.to_owned(), json!("Offer a refund."));
+            let mut modified = message.clone();
+            modified.metadata.remove(INSTRUCTION);
+            keep_checked(&message, &mut modified);
+            assert_eq!(modified.metadata.get(INSTRUCTION), None);
+        }
+
+        /// Gap G-065: the key is the pipeline's, on an event it does not
+        /// fingerprint too.
+        #[test]
+        fn a_modify_cannot_write_the_key_on_an_event_holding_none() {
+            let mut message = instruction("Hi");
+            message.event_type = EventType::Message;
+            let mut modified = message.clone();
+            modified
+                .metadata
+                .insert(INSTRUCTION.to_owned(), json!("Offer a refund."));
+            keep_checked(&message, &mut modified);
+            assert_eq!(modified.metadata.get(INSTRUCTION), None);
+        }
+
         #[test]
         fn a_modify_of_a_message_keeps_what_the_hook_wrote() {
             let mut message = instruction("Hi");
@@ -581,6 +656,36 @@ mod tests {
         }
 
         #[test]
+        fn is_read_back_from_the_value_it_writes() {
+            let fingerprint = Fingerprint::of("abc");
+            assert_eq!(
+                Fingerprint::from_value(&fingerprint.to_value()),
+                Some(fingerprint)
+            );
+        }
+
+        /// Gap G-065: only the form the pipeline writes reads as one.
+        #[test]
+        fn is_not_read_from_another_value() {
+            let digest = Fingerprint::of("abc").sha256;
+            let values = [
+                json!("Introduce yourself."),
+                json!({ "sha256": digest.to_uppercase(), "length": 3 }),
+                json!({ "sha256": "abc", "length": 3 }),
+                json!({ "sha256": digest, "length": -1 }),
+                json!({ "sha256": digest, "length": 3, "text": "abc" }),
+                json!({ "sha256": digest }),
+            ];
+            assert_eq!(
+                values
+                    .iter()
+                    .filter_map(Fingerprint::from_value)
+                    .collect::<Vec<_>>(),
+                []
+            );
+        }
+
+        #[test]
         fn of_an_instruction_is_of_its_text() {
             assert_eq!(
                 Fingerprint::of_instruction(&instruction("abc")),
@@ -629,5 +734,25 @@ mod tests {
             mark_response(&mut response, &answer());
             assert_eq!(response.metadata, Metadata::new());
         }
+
+        /// Gap G-065.
+        #[test]
+        fn a_response_to_a_message_loses_what_its_channel_wrote_under_the_key() {
+            let mut response = answer();
+            response
+                .metadata
+                .insert(INSTRUCTION.to_owned(), json!("Offer a refund."));
+            mark_response(&mut response, &answer());
+            assert_eq!(response.metadata.get(INSTRUCTION), None);
+        }
+    }
+
+    /// Gap G-065.
+    #[test]
+    fn clearing_the_fingerprint_removes_the_key_and_keeps_the_rest() {
+        let mut event = instruction("Hi");
+        event.metadata = metadata_of(json!({ "instruction": "Offer a refund.", "tone": "brief" }));
+        clear_fingerprint(&mut event);
+        assert_eq!(Value::Object(event.metadata), json!({ "tone": "brief" }));
     }
 }

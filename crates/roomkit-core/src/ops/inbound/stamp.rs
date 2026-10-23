@@ -55,7 +55,9 @@ pub fn default_inbound_event(
 /// visibility, address, thread and idempotency key the message asked for,
 /// and the receiving channel as its inbound source. An instruction is
 /// visible to intelligence channels only, and carries the caller's
-/// metadata and its `standalone` word (RFC §10.1.1 rules 3 and 4).
+/// metadata and its `standalone` word (RFC §10.1.1 rules 3 and 4). No
+/// trigger carries the key a response to an instruction records, whoever
+/// wrote it (gap G-065).
 pub(crate) fn stamp_trigger(
     mut event: RoomEvent,
     message: &InboundMessage,
@@ -79,6 +81,7 @@ pub(crate) fn stamp_trigger(
     if message.event_type == EventType::Instruction {
         instructions::stamp(&mut event, &message.metadata, message.standalone);
     }
+    instructions::clear_fingerprint(&mut event);
     reset_commit_fields(event)
 }
 
@@ -86,7 +89,8 @@ pub(crate) fn stamp_trigger(
 /// a fresh id (gap G-024), the responder as its outbound source, one hop
 /// deeper than the trigger (RFC §8.3), answering the trigger unless the
 /// channel named the event it answers (RFC §8.5), and the fingerprint of
-/// the instruction that produced it (RFC §10.1.1 rule 6).
+/// the instruction that produced it (RFC §10.1.1 rule 6), or no
+/// `instruction` key at all when the trigger is not one (gap G-065).
 pub(crate) fn stamp_response(
     mut response: RoomEvent,
     responder: &ChannelBinding,
@@ -121,7 +125,7 @@ pub(crate) fn stamp_response(
 /// Writes the pipeline's fields on an event a hook injected while deciding
 /// on `trigger` (gap G-021): a fresh id (gap G-024), the trigger's room and
 /// depth, and a visibility naming its targets only, `none` when it is stored
-/// only.
+/// only. It records no instruction (gap G-065).
 pub(crate) fn stamp_injected(
     injected: InjectedEvent,
     trigger: &RoomEvent,
@@ -136,6 +140,7 @@ pub(crate) fn stamp_injected(
         .and_then(|targets| Visibility::channels(targets).ok())
         .unwrap_or(Visibility::None);
     event.idempotency_key = None;
+    instructions::clear_fingerprint(&mut event);
     reset_commit_fields(event)
 }
 
@@ -144,8 +149,9 @@ pub(crate) fn stamp_injected(
 /// event says, where it is addressed and who may see it, never which event it
 /// is, where it came from, how deep it is or what became of it. Nor what step
 /// 8a checked on an edit or a delete ([`kept_change`]), nor an instruction's
-/// visibility, address and `standalone` word, nor the fingerprint a
-/// response to one records (RFC §10.1.1, gaps G-020 and G-065).
+/// visibility, address and `standalone` word, nor the key `instruction`,
+/// the fingerprint a response to one records and no other event holds (RFC
+/// §10.1.1, gaps G-020 and G-065).
 pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> RoomEvent {
     modified.content = kept_change(&original.content, modified.content);
     instructions::keep_checked(original, &mut modified);
@@ -372,6 +378,49 @@ mod tests {
             serde_json::Value::Object(stamped.metadata),
             serde_json::json!({ "task_id": "t_7", "standalone": false })
         );
+    }
+
+    /// Gap G-065: the key a response to an instruction records.
+    fn writing_the_instruction_key(mut event: RoomEvent) -> RoomEvent {
+        event.metadata.insert(
+            instructions::INSTRUCTION.to_owned(),
+            "Offer a refund.".into(),
+        );
+        event
+    }
+
+    #[test]
+    fn a_parsed_event_loses_the_instruction_key_its_parser_wrote() {
+        let parsed = writing_the_instruction_key(trigger());
+        let stamped = stamp_trigger(parsed, &message(), &sms(), fresh());
+        assert_eq!(stamped.metadata.get(instructions::INSTRUCTION), None);
+    }
+
+    #[test]
+    fn a_parsed_instruction_loses_the_instruction_key_its_caller_wrote() {
+        let mut instruction = message();
+        instruction.event_type = EventType::Instruction;
+        instruction.idempotency_key = None;
+        instruction.metadata.insert(
+            instructions::INSTRUCTION.to_owned(),
+            "Offer a refund.".into(),
+        );
+        let stamped = stamp_trigger(trigger(), &instruction, &sms(), fresh());
+        assert_eq!(stamped.metadata.get(instructions::INSTRUCTION), None);
+    }
+
+    #[test]
+    fn a_response_to_a_message_loses_the_instruction_key_its_channel_wrote() {
+        let response = writing_the_instruction_key(trigger());
+        let stamped = stamp_response(response, &ai(), &trigger(), fresh());
+        assert_eq!(stamped.metadata.get(instructions::INSTRUCTION), None);
+    }
+
+    #[test]
+    fn an_injected_event_loses_the_instruction_key_its_hook_wrote() {
+        let injected = InjectedEvent::stored_only(writing_the_instruction_key(trigger()));
+        let stamped = stamp_injected(injected, &trigger(), fresh());
+        assert_eq!(stamped.metadata.get(instructions::INSTRUCTION), None);
     }
 
     #[test]

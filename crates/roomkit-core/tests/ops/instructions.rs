@@ -747,6 +747,23 @@ mod the_response {
         );
     }
 
+    /// Gap G-065: a hook that removes the fingerprint has its removal
+    /// undone.
+    #[test]
+    fn keeps_its_fingerprint_when_a_hook_removes_it() {
+        let mut sim = with_agent();
+        hook_seeing(&mut sim, "redactor", |event| {
+            let mut redacted = event.clone();
+            redacted.metadata.remove("instruction");
+            HookResult::modify(redacted)
+        });
+        sim.send(instruction()).unwrap();
+        assert_eq!(
+            stored_from(&sim, "ai").metadata.get("instruction"),
+            Some(&json!({ "sha256": TEXT_SHA256, "length": 26 }))
+        );
+    }
+
     /// A response stored refused past the cascade's reentry budget (RFC
     /// §8.3) records it too.
     #[test]
@@ -783,6 +800,124 @@ mod the_response {
             stored_from(&sim, "billing").metadata.get("instruction"),
             None
         );
+    }
+}
+
+/// Gap G-065: `metadata.instruction` is the pipeline's, written on a
+/// response to an instruction only. What a channel, a parser or a hook
+/// wrote under the key on any other event is not stored, and a hook that
+/// removes it is not undone.
+mod an_instruction_key_the_pipeline_did_not_write {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// A message whose parser kept the key it came with.
+    fn carrying_the_key() -> InboundMessage {
+        let mut message = Sim::message("sms", "Bonjour");
+        message
+            .metadata
+            .insert("instruction".to_owned(), json!(TEXT));
+        message
+    }
+
+    /// The agent `ai`, answering every event with a response that writes
+    /// the key itself.
+    fn agent_writing_the_key(sim: &mut Sim) {
+        sim.agent(
+            "ai",
+            Box::new(|event, _| {
+                let mut answer = response("ai", event, "Hello, I am the assistant.");
+                answer
+                    .metadata
+                    .insert("instruction".to_owned(), json!(TEXT));
+                Ok(ChannelOutput::respond(vec![answer]))
+            }),
+        );
+    }
+
+    /// A hook that removes the key from every event it is handed.
+    fn redacting(sim: &mut Sim) {
+        hook_seeing(sim, "redactor", |event| {
+            let mut redacted = event.clone();
+            redacted.metadata.remove("instruction");
+            HookResult::modify(redacted)
+        });
+    }
+
+    #[test]
+    fn on_an_inbound_message_is_not_stored() {
+        let mut sim = room();
+        sim.send(carrying_the_key()).unwrap();
+        let stored = sim.timeline.last().unwrap();
+        assert_eq!(stored.metadata.get("instruction"), None);
+    }
+
+    #[test]
+    fn on_an_inbound_message_is_not_handed_to_its_hooks() {
+        let mut sim = room();
+        let seen = hook_seeing(&mut sim, "audit", |_| HookResult::allow());
+        sim.send(carrying_the_key()).unwrap();
+        assert_eq!(seen.borrow()[0].metadata.get("instruction"), None);
+    }
+
+    #[test]
+    fn removed_by_a_hook_from_an_inbound_message_stays_removed() {
+        let mut sim = room();
+        redacting(&mut sim);
+        sim.send(carrying_the_key()).unwrap();
+        let stored = sim.timeline.last().unwrap();
+        assert_eq!(stored.metadata.get("instruction"), None);
+    }
+
+    #[test]
+    fn on_a_response_to_a_message_is_not_stored() {
+        let mut sim = room();
+        agent_writing_the_key(&mut sim);
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(stored_from(&sim, "ai").metadata.get("instruction"), None);
+    }
+
+    #[test]
+    fn removed_by_a_hook_from_a_response_to_a_message_stays_removed() {
+        let mut sim = room();
+        agent_writing_the_key(&mut sim);
+        redacting(&mut sim);
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(stored_from(&sim, "ai").metadata.get("instruction"), None);
+    }
+
+    #[test]
+    fn on_an_event_a_hook_injects_is_not_stored() {
+        let mut sim = room();
+        hook_seeing(&mut sim, "notifier", |event| {
+            if event.source.channel_id.as_str() != "sms" {
+                return HookResult::allow();
+            }
+            let mut notice = notice_event("notice", "An advisor will call");
+            notice
+                .metadata
+                .insert("instruction".to_owned(), json!(TEXT));
+            HookResult::allow().inject(InjectedEvent::to_channels(notice, vec![channel("sms")]))
+        });
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            stored_from(&sim, "system").metadata.get("instruction"),
+            None
+        );
+    }
+
+    /// The caller's metadata rides an instruction (RFC §10.1.1 rule 4),
+    /// never under the key its responses record.
+    #[test]
+    fn on_an_instruction_from_its_caller_is_not_handed_to_its_hooks() {
+        let mut sim = with_agent();
+        let seen = hook_seeing(&mut sim, "audit", |_| HookResult::allow());
+        let mut message = instruction();
+        message
+            .metadata
+            .insert("instruction".to_owned(), json!(TEXT));
+        sim.send(message).unwrap();
+        assert_eq!(seen.borrow()[0].metadata.get("instruction"), None);
     }
 }
 
