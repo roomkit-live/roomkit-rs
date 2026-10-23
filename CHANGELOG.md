@@ -165,8 +165,8 @@ as it stands.
   (`KitError::ShutDown`). Its driver executes a run's effects concurrently,
   completing each as it finishes; a call keeps the environment it started
   with. The `Channel`, `InboundRoomRouter` and `ConversationStore` traits,
-  `DefaultRouter` (whose `candidates` and `default_route` a router wrapping
-  it reuses), `InMemoryStore`, `StoreError` (an unavailable store's cause
+  `DefaultRouter`, whose `candidates` a router wrapping it reuses with the
+  crate's `default_route`, the default strategy's decision, `InMemoryStore`, `StoreError` (an unavailable store's cause
   kept as its source), `KitError`, and the testing helpers
   `RecordingTransport` and `EchoAgent`. The crate re-exports the core's
   model whole and, of its operations and rules, only what a caller names.

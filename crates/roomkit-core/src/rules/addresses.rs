@@ -775,6 +775,13 @@ mod tests {
         }
 
         proptest! {
+            // A failing case is printed, never written to a file a later run
+            // would replay.
+            #![proptest_config(ProptestConfig {
+                failure_persistence: None,
+                ..ProptestConfig::default()
+            })]
+
             /// RFC §5.7: a number in its channel's form stays in it, so
             /// comparing addresses compares their forms once.
             #[test]

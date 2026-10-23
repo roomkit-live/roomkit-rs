@@ -472,6 +472,13 @@ mod tests {
         }
 
         proptest! {
+            // A failing case is printed, never written to a file a later run
+            // would replay.
+            #![proptest_config(ProptestConfig {
+                failure_persistence: None,
+                ..ProptestConfig::default()
+            })]
+
             #[test]
             fn an_intersection_does_not_depend_on_the_order(
                 first in visibility(),

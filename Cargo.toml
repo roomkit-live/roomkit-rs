@@ -26,7 +26,8 @@ uuid = { version = "1", features = ["v4"] }
 
 pretty_assertions = "1"
 # Property tests (decision 3 of step 2b). No default features: no forking
-# test runner, no regex strategies, no persisted failure files.
+# test runner, no regex strategies. Each property test turns off the
+# persistence of failing cases, which a failing test prints instead.
 proptest = { version = "1", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]

@@ -157,6 +157,13 @@ mod tests {
         use super::*;
 
         proptest! {
+            // A failing case is printed, never written to a file a later run
+            // would replay.
+            #![proptest_config(ProptestConfig {
+                failure_persistence: None,
+                ..ProptestConfig::default()
+            })]
+
             /// A timestamp reads back from its text form, to the
             /// millisecond, from year 1 to year 9999.
             #[test]

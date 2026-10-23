@@ -11,6 +11,9 @@ allow-print-in-tests = true
 # Product names read as words in documentation, not as code.
 doc-valid-idents = ["RoomKit", "PyO3", "WhatsApp", ".."]
 
+# jiff's `Timestamp::now` is not listed: clippy does not resolve its
+# re-exported path. The core builds jiff without `std`, so the method is not
+# there to call (scripts/check-core-deps.sh).
 disallowed-methods = [
     { path = "std::time::SystemTime::now", reason = "the core reads the clock from its Environment" },
     { path = "std::time::Instant::now", reason = "the core reads the clock from its Environment" },

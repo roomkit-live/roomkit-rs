@@ -10,10 +10,10 @@ allow-print-in-tests = true
 doc-valid-idents = ["RoomKit", "PyO3", "WhatsApp", ".."]
 
 # The clock is the operations' environment's (docs/architecture.md, "The
-# core"): nothing reads the system clock but the runtime's system
-# environment, which marks its one read. The core builds jiff without `std`,
-# so jiff's own `Timestamp::now` is not there to call
-# (scripts/check-core-deps.sh).
+# core"). The core's own clippy.toml (crates/roomkit-core) bans the system
+# clocks with the rest of what it never does; this list extends the clock
+# ban to the runtime and the examples, where the runtime's system
+# environment marks the one read of the wall clock.
 disallowed-methods = [
     { path = "std::time::SystemTime::now", reason = "read the time from the Environment" },
     { path = "std::time::Instant::now", reason = "read the time from the Environment" },
