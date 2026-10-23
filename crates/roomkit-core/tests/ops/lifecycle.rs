@@ -69,23 +69,26 @@ mod create_room {
         );
     }
 
-    /// Gap G-050: the integrator's creation waits for its hooks, as the
-    /// inbound pipeline's does, so the room it returns is ready for what
-    /// the host sends next.
+    /// RFC §10.1 step 2, gap G-050: the integrator's creation waits for its
+    /// hooks, as the inbound pipeline's does, so the room it returns is
+    /// ready for what the host sends next; `room_created` follows them.
     #[test]
-    fn awaits_its_on_room_created_hooks() {
+    fn awaits_its_on_room_created_hooks_then_emits_room_created() {
         let mut sim = Sim::without_rooms();
         sim.observer("welcome", HookTrigger::OnRoomCreated);
         let room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
         sim.run(CreateRoom::new(sim.shared_config(), room)).unwrap();
         assert_eq!(
-            (sim.async_triggers(), sim.trace),
+            (sim.async_triggers(), sim.journal),
             (
                 vec![],
-                vec![
-                    "store room room_1 Active".to_owned(),
-                    "await on_room_created welcome".to_owned()
+                [
+                    "store room room_1 Active",
+                    "await on_room_created welcome",
+                    "emit room_created"
                 ]
+                .map(str::to_owned)
+                .to_vec()
             )
         );
     }

@@ -153,7 +153,7 @@ struct Observers {
 /// participants and recent events, as any hook's context has them (gap
 /// G-027). A room just created has the bindings its creation made.
 pub(crate) fn report(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) {
-    announce(cx, reported, context);
+    announce(cx, reported, &context.room.id);
     let Some(Observers {
         trigger,
         hooks,
@@ -170,21 +170,26 @@ pub(crate) fn report(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomCont
     });
 }
 
-/// Emits the change's framework event, then asks for its trigger's hooks to
-/// be run and awaited, as the inbound pipeline's creation of a room does
-/// (gap G-050). Returns the effect to wait for, `None` when no hook observes
-/// the trigger.
+/// Asks for the change's trigger's hooks to be run and awaited, as every
+/// creation of a room does (gap G-050). The change's framework event comes
+/// once they are over ([`announce`]), as RFC §10.1 step 2 orders a
+/// creation's: `ON_ROOM_CREATED`'s hooks, then `room_created`. Returns the
+/// effect to wait for; `None` when no hook observes the trigger, the event
+/// emitted at once.
 pub(crate) fn report_awaited(
     cx: &mut Cx<'_>,
     reported: Reported<'_>,
     context: &RoomContext,
 ) -> Option<EffectId> {
-    announce(cx, reported, context);
-    let Observers {
+    let Some(Observers {
         trigger,
         hooks,
         payload,
-    } = observers(cx, reported, context)?;
+    }) = observers(cx, reported, context)
+    else {
+        announce(cx, reported, &context.room.id);
+        return None;
+    };
     Some(cx.io.issue(Request::RunObservers {
         trigger,
         hooks,
@@ -193,9 +198,11 @@ pub(crate) fn report_awaited(
     }))
 }
 
-/// Emits the change's framework event, if it has one.
-fn announce(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) {
-    if let Some(event) = reported.framework_event(&context.room.id) {
+/// Emits the framework event of a change to the room `room_id`, if it has
+/// one: at once for a change whose hooks run after the fact, once its
+/// awaited hooks are over for a creation ([`report_awaited`]).
+pub(crate) fn announce(cx: &mut Cx<'_>, reported: Reported<'_>, room_id: &RoomId) {
+    if let Some(event) = reported.framework_event(room_id) {
         cx.io.notify(Notice::FrameworkEvent(event));
     }
 }

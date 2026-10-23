@@ -91,6 +91,11 @@ fn event_names(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<String> 
 /// again after a creation refused), and the attach of the call that created
 /// the room then finds it bound. Each message commits once, with its own
 /// index.
+///
+/// The creating call reports `room_created` before `session_started`
+/// (RFC §10.1 step 2). RFC §8.2 orders no framework events across calls:
+/// the other call's `room_channel_attached` may come before, between or
+/// after them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
     let kit = RoomKit::new();
@@ -120,21 +125,19 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
         .unwrap();
     let timeline = kit.store().list_events(&room_id(), true).await.unwrap();
     let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
+    let names = event_names(&mut events);
+    let count = |name: &str| names.iter().filter(|seen| *seen == name).count();
+    let position = |name: &str| names.iter().position(|seen| seen == name);
     assert_eq!(
         (
             rooms.len(),
-            event_names(&mut events),
+            ["room_created", "room_channel_attached", "session_started"].map(count),
+            position("room_created") < position("session_started"),
             timeline.iter().map(|event| event.index).collect::<Vec<_>>(),
             bindings.len(),
         ),
-        (
-            1,
-            ["room_created", "room_channel_attached", "session_started"]
-                .map(str::to_owned)
-                .to_vec(),
-            vec![0, 1],
-            1
-        )
+        (1, [1, 1, 1], true, vec![0, 1], 1),
+        "{names:?}"
     );
 }
 

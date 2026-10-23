@@ -506,3 +506,7 @@ publishes a release.
   of a type of its own implementing `HookHandler` registers with the new
   `RoomKit::hook_handler(spec, handler)`; code that passed one to `hook`
   calls `hook_handler` instead.
+- `room_created` is emitted once a creation's `ON_ROOM_CREATED` hooks are
+  over, the integrator's `create_room` and step 2's alike, and before step
+  2's attach, as the amended RFC §10.1 step 2 orders it; it was emitted
+  before the hooks ran.

@@ -44,10 +44,11 @@ mod a_missing_room {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    /// RFC Appendix B.1, gap G-050: the creation is reported, its hooks are
-    /// awaited, then the channel is attached and the session starts.
+    /// RFC §10.1 step 2, Appendix B.1, gap G-050: the creation's hooks are
+    /// awaited, the creation is reported, then the channel is attached and
+    /// the session starts.
     #[test]
-    fn is_created_then_its_hooks_awaited_then_the_channel_attached_then_a_session_started() {
+    fn is_created_its_hooks_awaited_and_reported_then_the_channel_attached_and_a_session_started() {
         let mut sim = no_room_yet();
         sim.observer_attaching("welcome", HookTrigger::OnRoomCreated, "ai");
         sim.observer("greeter", HookTrigger::OnChannelAttached);
@@ -63,8 +64,8 @@ mod a_missing_room {
             [
                 "load_context room_1",
                 "store room room_1 Active",
-                "emit room_created",
                 "await on_room_created welcome",
+                "emit room_created",
                 "lock room_1",
                 "load_context room_1",
                 "store binding sms",

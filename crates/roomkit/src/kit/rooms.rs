@@ -14,9 +14,10 @@ use crate::store::ConversationStore;
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Creates the room `room_id`, then runs its `ON_ROOM_CREATED` hooks and
-    /// waits for them, each within its timeout: what they set up, the agent
-    /// they attach for instance, is in place when the call returns (RFC
-    /// Appendix B.1, gap G-050).
+    /// waits for them, each within its timeout, before it emits
+    /// `room_created` (RFC §10.1 step 2): what they set up, the agent they
+    /// attach for instance, is in place when the call returns (RFC Appendix
+    /// B.1, gap G-050).
     ///
     /// # Errors
     ///

@@ -5,8 +5,8 @@
 //! The room is read for the organization the caller acts for: a room of
 //! another organization fails the message with nothing written (gap G-051),
 //! whoever named it, the caller or a router. A missing room is created with
-//! the id, in the caller's organization: `room_created` is emitted and the
-//! `ON_ROOM_CREATED` hooks run, awaited (gap G-050); the channel is then
+//! the id, in the caller's organization: the `ON_ROOM_CREATED` hooks run,
+//! awaited (gap G-050), then `room_created` is emitted; the channel is then
 //! attached with a binding naming the message's address, the sender's or on
 //! a chat channel the chat (RFC §5.7, gap G-057), as its correspondent and,
 //! on a transport, as its recipient; for a channel other than `VOICE` and
@@ -282,8 +282,9 @@ impl NamedRoom {
         Progress::Waiting
     }
 
-    /// The room is created: `room_created` is emitted and its hooks are
-    /// awaited before the channel is attached (gap G-050). A failed creation
+    /// The room is created: its hooks are awaited, then `room_created` is
+    /// emitted, before the channel is attached (RFC §10.1 step 2, gap
+    /// G-050). A failed creation
     /// reads the room again, in case another call created it meanwhile; a
     /// fresh room's is never read again, since a room holding its id is
     /// someone else's.
@@ -320,8 +321,8 @@ impl NamedRoom {
         }
     }
 
-    /// The `ON_ROOM_CREATED` hooks are over; what they raised was the
-    /// driver's to log.
+    /// The `ON_ROOM_CREATED` hooks are over, what they raised the driver's
+    /// to log: `room_created` is emitted, and the channel attached.
     fn on_observed(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<Named> {
         if let Err(error) = outcome.into_observed() {
             tracing::warn!(
@@ -332,6 +333,7 @@ impl NamedRoom {
                 "the ON_ROOM_CREATED hooks could not be run; the channel is attached all the same"
             );
         }
+        report::announce(cx, Reported::RoomCreated, &self.room_id);
         self.attach_sender(cx)
     }
 

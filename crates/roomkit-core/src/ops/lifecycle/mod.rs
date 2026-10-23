@@ -83,14 +83,14 @@ pub enum LifecycleError {
     Lock(ErrorRecord),
 }
 
-/// Creates a room, then emits `room_created` and runs the `ON_ROOM_CREATED`
-/// hooks, waiting for them (`RunObservers`) before it returns, as the
-/// inbound pipeline's creation of a room does: a host that creates a room
-/// and then sends into it finds what the hooks set up, the agent they
-/// attach for instance (RFC Appendix B.1, gap G-050). What a hook raises is
-/// the driver's to log; a driver that cannot run them answers `Failed`,
-/// which is logged, and the room is created all the same. Its output is the
-/// stored room.
+/// Creates a room, then runs the `ON_ROOM_CREATED` hooks, waiting for them
+/// (`RunObservers`) before it emits `room_created` and returns, as the
+/// inbound pipeline's creation of a room does (RFC §10.1 step 2): a host
+/// that creates a room and then sends into it finds what the hooks set up,
+/// the agent they attach for instance (RFC Appendix B.1, gap G-050). What a
+/// hook raises is the driver's to log; a driver that cannot run them
+/// answers `Failed`, which is logged, and the room is created all the same.
+/// Its output is the stored room.
 ///
 /// A room whose metadata holds a key of the namespace the implementation
 /// reserves is refused before anything is written (RFC §10.6.5, gap
@@ -118,8 +118,9 @@ impl CreateRoom {
         }
     }
 
-    /// The room is stored: its creation is announced and its hooks run,
-    /// awaited (gap G-050); the output once none observes it.
+    /// The room is stored: its hooks run, awaited (gap G-050), its creation
+    /// announced once they are over; the output at once when none observes
+    /// it.
     fn on_created(
         &mut self,
         environment: &mut dyn Environment,
@@ -141,9 +142,10 @@ impl CreateRoom {
         }
     }
 
-    /// The `ON_ROOM_CREATED` hooks are over; what they raised was the
-    /// driver's to log. The room is created whatever they did.
-    fn on_observed(&self, outcome: Outcome) -> Room {
+    /// The `ON_ROOM_CREATED` hooks are over, what they raised the driver's
+    /// to log: `room_created` is emitted. The room is created whatever they
+    /// did.
+    fn on_observed(&mut self, environment: &mut dyn Environment, outcome: Outcome) -> Room {
         if let Err(error) = outcome.into_observed() {
             tracing::warn!(
                 target: "roomkit::core::lifecycle",
@@ -153,6 +155,12 @@ impl CreateRoom {
                 "the ON_ROOM_CREATED hooks could not be run; the room is created all the same"
             );
         }
+        let mut cx = Cx {
+            config: &self.config,
+            env: environment,
+            io: &mut self.io,
+        };
+        report::announce(&mut cx, Reported::RoomCreated, &self.room.id);
         self.room.clone()
     }
 
@@ -179,7 +187,7 @@ impl Operation for CreateRoom {
                 result = self.on_created(environment, outcome);
             } else if self.observing == Some(effect) {
                 self.observing = None;
-                result = Some(Ok(self.on_observed(outcome)));
+                result = Some(Ok(self.on_observed(environment, outcome)));
             }
         }
         self.io.step(result)
