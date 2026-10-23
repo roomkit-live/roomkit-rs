@@ -19,6 +19,7 @@ use roomkit_core::model::{
 use roomkit_core::ops::{InboundResult, MutationError};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::HookTrigger;
+use roomkit_core::rules::transcoding;
 use serde_json::json;
 
 use crate::support::{Sim, channel, notice_event, response, room_id};
@@ -88,6 +89,14 @@ fn delete_from(sender: &str, target: &str, delete_type: DeleteType) -> InboundMe
 /// The sender's delete of `evt_1` (RFC Appendix B.7).
 fn delete() -> InboundMessage {
     delete_from(SENDER, "evt_1", DeleteType::Sender)
+}
+
+/// The texts of `events`, as a reader takes them.
+fn texts(events: &[RoomEvent]) -> Vec<String> {
+    events
+        .iter()
+        .map(|event| transcoding::text_of(&event.content))
+        .collect()
 }
 
 /// The stored event `event_id`.
@@ -228,6 +237,19 @@ mod an_accepted_edit {
         assert_eq!(sim.history_seen_by("ai"), ["I need 50000$"]);
     }
 
+    /// A later turn reads the corrected message and the correction.
+    #[test]
+    fn leaves_a_later_turn_its_correction() {
+        let mut sim = room();
+        sim.agent("ai", Box::new(|_, _| Ok(ChannelOutput::default())));
+        sim.send(edit()).unwrap();
+        sim.send(Sim::message("wa", "Is it fine?")).unwrap();
+        assert_eq!(
+            sim.history_seen_by("ai"),
+            ["I need 50000$", "Correction: I need 50000$"]
+        );
+    }
+
     /// An edit of an edited message is accepted: the target holds the
     /// latest correction.
     #[test]
@@ -283,6 +305,77 @@ mod an_accepted_delete {
                 ],
                 Some(json!(true))
             )
+        );
+    }
+
+    /// Gap G-062: the delete's readers hold its target, its text withheld.
+    #[test]
+    fn hands_its_readers_the_target_without_its_text() {
+        let mut sim = room();
+        sim.agent("ai", Box::new(|_, _| Ok(ChannelOutput::default())));
+        sim.send(delete()).unwrap();
+        assert_eq!(sim.history_seen_by("ai"), [""]);
+    }
+
+    /// Gap G-062: a later turn reads the delete, never the deleted text.
+    #[test]
+    fn leaves_a_later_turn_the_delete_without_the_deleted_text() {
+        let mut sim = room();
+        sim.agent("ai", Box::new(|_, _| Ok(ChannelOutput::default())));
+        sim.send(delete()).unwrap();
+        sim.send(Sim::message("wa", "Is it gone?")).unwrap();
+        assert_eq!(sim.history_seen_by("ai"), ["", "[Message deleted]"]);
+    }
+
+    /// Gap G-062: the correction of a deleted message is withheld too.
+    #[test]
+    fn of_an_edited_message_leaves_a_later_turn_neither_text() {
+        let mut sim = room();
+        sim.agent("ai", Box::new(|_, _| Ok(ChannelOutput::default())));
+        sim.send(edit()).unwrap();
+        sim.send(delete()).unwrap();
+        sim.send(Sim::message("wa", "Is it gone?")).unwrap();
+        assert_eq!(
+            sim.history_seen_by("ai"),
+            ["", "Correction: ", "[Message deleted]"]
+        );
+    }
+
+    /// Gap G-062: the channel the next message arrives on parses it without
+    /// the deleted text.
+    #[test]
+    fn leaves_the_next_message_s_parser_without_the_deleted_text() {
+        let mut sim = room();
+        sim.send(delete()).unwrap();
+        sim.send(Sim::message("wa", "Is it gone?")).unwrap();
+        let parsed = sim.parse_contexts.last().unwrap();
+        assert_eq!(texts(&parsed.recent_events), ["", "[Message deleted]"]);
+    }
+
+    /// Gap G-062: hooks, which are the host's code, read the room whole.
+    #[test]
+    fn leaves_the_hooks_the_deleted_text() {
+        let mut sim = room();
+        sim.observer("audit", HookTrigger::AfterBroadcast);
+        sim.send(delete()).unwrap();
+        sim.send(Sim::message("wa", "Is it gone?")).unwrap();
+        let context = sim.async_contexts().last().copied().unwrap();
+        assert_eq!(
+            texts(&context.recent_events),
+            ["I need 5000$", "[Message deleted]"]
+        );
+    }
+
+    /// Gap G-062: what a reader is handed changes nothing stored.
+    #[test]
+    fn keeps_its_target_s_text_in_the_store_once_an_agent_read_it() {
+        let mut sim = room();
+        sim.agent("ai", Box::new(|_, _| Ok(ChannelOutput::default())));
+        sim.send(delete()).unwrap();
+        sim.send(Sim::message("wa", "Is it gone?")).unwrap();
+        assert_eq!(
+            stored(&sim, "evt_1").content,
+            EventContent::text("I need 5000$")
         );
     }
 

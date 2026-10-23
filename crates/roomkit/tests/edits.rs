@@ -360,6 +360,23 @@ mod a_delete {
         );
     }
 
+    /// Gap G-062: the agent's next turn reads the delete, never the deleted
+    /// text, which the store keeps.
+    #[tokio::test]
+    async fn leaves_the_agent_s_next_turn_without_the_deleted_text() {
+        let room = room().await;
+        send(&room.kit, delete()).await;
+        say(&room.kit, CUSTOMER, "Is it gone?").await;
+        let (_, history) = room.agent.read().last().cloned().unwrap();
+        assert_eq!(
+            (history, target(&room.kit).await.unwrap().content),
+            (
+                vec![String::new(), "[Message deleted]".to_owned()],
+                EventContent::text("I need 5000$")
+            )
+        );
+    }
+
     #[tokio::test]
     async fn fires_on_event_deleted_with_the_deleted_target() {
         let room = room().await;

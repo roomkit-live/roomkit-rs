@@ -152,6 +152,10 @@ publishes a release.
 
 ### Changed
 
+- A channel's history never carries a soft-deleted event's content: it is
+  handed with an empty text and no raw payload, and an edit of it with its
+  new content withheld; hooks and the store keep the record whole (gap
+  G-062).
 - A routed sender is recorded only where the room, as its lock finds it,
   still admits them by step 3: a room that has heard someone else on the
   channel meanwhile routes the message once more (gap G-055).

@@ -1,11 +1,14 @@
 //! Who reads, who writes, and whom a broadcast reaches (RFC §7.5, §10.2,
 //! §19.3).
 
+use std::collections::BTreeSet;
+
 use crate::model::{
-    AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelId, EventStatus, RoomContext,
-    RoomEvent, Visibility,
+    AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelId, EventContent, EventId,
+    EventStatus, Metadata, RoomContext, RoomEvent, Visibility,
 };
 use crate::rules::chain_depth;
+use crate::rules::edits::{self, Mutation};
 
 /// Why a source's event may not be broadcast (RFC §7.5 rule 2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -79,18 +82,70 @@ pub fn history_for<'timeline>(
 }
 
 /// The context a channel receives: the room as it is, with only the events
-/// it may see (RFC §7.5 rule 8). Every context the pipeline hands a channel
-/// goes through here; hooks, which are host code, receive the room whole.
+/// it may see (RFC §7.5 rule 8), and nothing of what was deleted: a
+/// soft-deleted event, and an edit of one, reach it with their content
+/// withheld (RFC §10.3, gap G-062).
+///
+/// Every context the pipeline hands a channel goes through here: the one it
+/// parses a message with, and the one each target of a broadcast is told
+/// and delivered with. Hooks, which are host code, receive the room whole,
+/// as the store keeps it.
 pub fn context_for(reader: &ChannelBinding, whole: &RoomContext) -> RoomContext {
+    let deleted = deleted_events(&whole.recent_events);
     RoomContext {
         room: whole.room.clone(),
         bindings: whole.bindings.clone(),
         participants: whole.participants.clone(),
         recent_events: history_for(reader, &whole.recent_events)
             .into_iter()
-            .cloned()
+            .map(|event| withheld(event, &deleted))
             .collect(),
     }
+}
+
+/// The events `timeline` shows deleted (RFC §10.3): an event it holds is
+/// deleted when it carries the mark an accepted delete leaves, which a host's
+/// direct update may have removed since; an event before the window, when
+/// the window holds an accepted delete of it.
+fn deleted_events(timeline: &[RoomEvent]) -> BTreeSet<&EventId> {
+    let held: BTreeSet<&EventId> = timeline.iter().map(|event| &event.id).collect();
+    let marked = timeline
+        .iter()
+        .filter(|event| edits::is_deleted(event))
+        .map(|event| &event.id);
+    let before_the_window = timeline
+        .iter()
+        .filter(|event| event.status != EventStatus::Blocked)
+        .filter_map(|event| match edits::mutation(event) {
+            Ok(Some(Mutation::Delete(delete))) => Some(&delete.target_event_id),
+            Ok(Some(Mutation::Edit(_)) | None) | Err(_) => None,
+        })
+        .filter(|target| !held.contains(target));
+    marked.chain(before_the_window).collect()
+}
+
+/// `event` as a reader is handed it: whole, unless it was deleted or is an
+/// edit of an event that was (gap G-062). What was said is then withheld: a
+/// deleted event's content, or an edit's new content, becomes an empty
+/// text, and the provider's original payload, which holds the text, is left
+/// out (`source.raw_payload`). The rest stays: the id, index, type, source
+/// with the provider's message id, thread, metadata with `metadata.deleted`,
+/// and the provider's structured data (`channel_data`), so the reader tells
+/// a deleted event from an empty one, the delete that follows names an
+/// event the reader holds, and a channel deletes it natively.
+fn withheld(event: &RoomEvent, deleted: &BTreeSet<&EventId>) -> RoomEvent {
+    let mut handed = event.clone();
+    if deleted.contains(&event.id) {
+        handed.content = EventContent::text("");
+    } else if let EventContent::Edit(edit) = &mut handed.content
+        && deleted.contains(&edit.target_event_id)
+    {
+        *edit.new_content = EventContent::text("");
+    } else {
+        return handed;
+    }
+    handed.source.raw_payload = Metadata::new();
+    handed
 }
 
 /// The visibility an event is committed with: what its sender asked,
@@ -430,6 +485,195 @@ mod tests {
                 history_for(&agent("ai"), &[refused]),
                 Vec::<&RoomEvent>::new()
             );
+        }
+    }
+
+    /// RFC §7.5 rule 8, §10.3, gap G-062: a reader's history carries
+    /// nothing of what was deleted.
+    mod context_for {
+        use super::*;
+        use crate::model::{DeleteContent, DeleteType, EditContent, EditSource, Room};
+        use pretty_assertions::assert_eq;
+        use serde_json::json;
+
+        fn id(event_id: &str) -> EventId {
+            EventId::new(event_id).unwrap()
+        }
+
+        /// The customer's "I need 5000$" on SMS, `evt_1` at index 0, with its
+        /// provider's payload.
+        fn message() -> RoomEvent {
+            let mut event = event_from(&transport("sms"));
+            event.content = EventContent::text("I need 5000$");
+            event.parent_event_id = Some(id("evt_0"));
+            event
+                .source
+                .raw_payload
+                .insert("Body".to_owned(), json!("I need 5000$"));
+            event
+                .channel_data
+                .insert("quoted".to_owned(), json!("I need 5000$"));
+            event
+        }
+
+        /// `message()` as an accepted delete leaves it.
+        fn deleted() -> RoomEvent {
+            let mut event = message();
+            event
+                .metadata
+                .insert(edits::DELETED.to_owned(), json!(true));
+            event
+        }
+
+        /// The edit `edit_id` of `evt_1`, to `text`.
+        fn edit(edit_id: &str, text: &str) -> RoomEvent {
+            let mut event = event_from(&transport("sms"));
+            event.id = id(edit_id);
+            event.index = 1;
+            event.event_type = EventType::Edit;
+            event.content = EventContent::Edit(EditContent {
+                target_event_id: id("evt_1"),
+                new_content: Box::new(EventContent::text(text)),
+                edit_source: Some(EditSource::Sender),
+            });
+            event
+        }
+
+        /// The delete `delete_id` of `evt_1`.
+        fn delete(delete_id: &str) -> RoomEvent {
+            let mut event = event_from(&transport("sms"));
+            event.id = id(delete_id);
+            event.index = 2;
+            event.event_type = EventType::Delete;
+            event.content = EventContent::Delete(DeleteContent {
+                target_event_id: id("evt_1"),
+                delete_type: DeleteType::Sender,
+                reason: Some("typo".to_owned()),
+            });
+            event
+        }
+
+        fn context(recent_events: Vec<RoomEvent>) -> RoomContext {
+            RoomContext {
+                recent_events,
+                ..RoomContext::new(Room::new(
+                    RoomId::new("room_1").unwrap(),
+                    Timestamp::UNIX_EPOCH,
+                ))
+            }
+        }
+
+        /// The history `ai` is handed of `timeline`.
+        fn history(timeline: Vec<RoomEvent>) -> Vec<RoomEvent> {
+            context_for(&agent("ai"), &context(timeline)).recent_events
+        }
+
+        #[test]
+        fn a_deleted_event_reaches_a_reader_with_its_content_withheld() {
+            assert_eq!(history(vec![deleted()])[0].content, EventContent::text(""));
+        }
+
+        /// The event keeps its place: the delete that follows names it, and
+        /// the reader tells it from an event that said nothing.
+        #[test]
+        fn a_deleted_event_keeps_its_id_index_thread_and_mark() {
+            let handed = history(vec![deleted()]).remove(0);
+            assert_eq!(
+                (
+                    edits::is_deleted(&handed),
+                    handed.id,
+                    handed.index,
+                    handed.parent_event_id
+                ),
+                (true, id("evt_1"), 0, Some(id("evt_0")))
+            );
+        }
+
+        /// The provider's original payload holds the text.
+        #[test]
+        fn a_deleted_event_reaches_a_reader_without_its_provider_s_payload() {
+            let handed = history(vec![deleted()]).remove(0);
+            assert_eq!(handed.source.raw_payload, Metadata::new());
+        }
+
+        /// What a channel needs to delete it natively, and the integrator's
+        /// metadata, stay.
+        #[test]
+        fn a_deleted_event_keeps_its_provider_data_and_metadata() {
+            let mut marked = deleted();
+            marked.metadata.insert("crm".to_owned(), json!("c_1"));
+            marked.source.provider_message_id = Some("SM1".to_owned());
+            let handed = history(vec![marked.clone()]).remove(0);
+            assert_eq!(
+                (
+                    handed.source.provider_message_id,
+                    handed.channel_data,
+                    handed.metadata
+                ),
+                (Some("SM1".to_owned()), marked.channel_data, marked.metadata)
+            );
+        }
+
+        #[test]
+        fn an_event_not_deleted_reaches_a_reader_whole() {
+            assert_eq!(history(vec![message()]), [message()]);
+        }
+
+        #[test]
+        fn the_delete_itself_reaches_a_reader_whole() {
+            assert_eq!(
+                history(vec![deleted(), delete("evt_3")])[1],
+                delete("evt_3")
+            );
+        }
+
+        #[test]
+        fn an_edit_of_a_live_event_keeps_its_new_content() {
+            assert_eq!(
+                history(vec![message(), edit("evt_2", "I need 50000$")])[1],
+                edit("evt_2", "I need 50000$")
+            );
+        }
+
+        /// The edit held the deleted event's corrected text.
+        #[test]
+        fn an_edit_of_a_deleted_event_reaches_a_reader_with_its_new_content_withheld() {
+            let handed = history(vec![deleted(), edit("evt_2", "I need 50000$")]).remove(1);
+            assert_eq!(handed.content, edit("evt_2", "").content);
+        }
+
+        #[test]
+        fn an_edit_of_a_deleted_event_reaches_a_reader_without_its_provider_s_payload() {
+            let mut edited = edit("evt_2", "I need 50000$");
+            edited
+                .source
+                .raw_payload
+                .insert("Body".to_owned(), json!("I need 50000$"));
+            let handed = history(vec![deleted(), edited]).remove(1);
+            assert_eq!(handed.source.raw_payload, Metadata::new());
+        }
+
+        /// The target lies before the window; the delete in it tells.
+        #[test]
+        fn an_edit_whose_target_a_delete_in_the_window_removed_is_withheld() {
+            let handed = history(vec![edit("evt_2", "I need 50000$"), delete("evt_3")]).remove(0);
+            assert_eq!(handed.content, edit("evt_2", "").content);
+        }
+
+        /// The stored mark decides for an event the window holds: a host's
+        /// direct update that removed it gives the event back.
+        #[test]
+        fn an_event_whose_mark_was_removed_reaches_a_reader_whole() {
+            assert_eq!(history(vec![message(), delete("evt_3")])[0], message());
+        }
+
+        /// A blocked delete changed nothing.
+        #[test]
+        fn a_blocked_delete_withholds_nothing() {
+            let mut blocked = delete("evt_3");
+            blocked.status = EventStatus::Blocked;
+            let edited = edit("evt_2", "I need 50000$");
+            assert_eq!(history(vec![edited.clone(), blocked]), [edited]);
         }
     }
 
