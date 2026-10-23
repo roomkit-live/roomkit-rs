@@ -339,9 +339,64 @@ pub fn admits(query: &RouteQuery, candidate: &Candidate) -> Result<(), Refusal> 
     if query.is_system() {
         return Err(Refusal::System);
     }
-    let sender = &query.sender;
-    let form = &query.form;
-    let named_by = |id: &str| sender.named_by(id, form, &query.channel_id, &candidate.participants);
+    admission(
+        &query.sender,
+        &query.form,
+        binding,
+        &candidate.participants,
+        &candidate.heard,
+    )
+}
+
+/// Whether a room read under its lock still admits a routed `sender` whose
+/// record is about to name them on `binding`, the room's binding of the
+/// channel, holding `participants` and having heard `heard` on the channel
+/// (RFC §10.4 step 3, §10.1 step 2, gap G-055).
+///
+/// A record names the sender as the correspondent of a binding that names
+/// none. The room was then the sender's by step 3, or by a custom
+/// strategy, as the router read it; by the lock, someone else may have
+/// been heard on the channel or have joined through it, and the record
+/// would send their answers to the sender. The room is held to step 3's
+/// conditions once more, unless the binding is declared `group`, it names
+/// a correspondent ([`recording`] judges that one), or the sender is a
+/// participant reached through the channel, whose conversation the room is
+/// by step 1 whoever else was heard there.
+///
+/// # Errors
+///
+/// Returns the first of step 3's conditions that no longer holds, as a
+/// [`Refusal`].
+pub fn still_admits(
+    binding: &ChannelBinding,
+    sender: &Sender,
+    form: &AddressForm,
+    participants: &[Participant],
+    heard: &[ParticipantId],
+) -> Result<(), Refusal> {
+    if binding.group || correspondent(binding, form).is_some() {
+        return Ok(());
+    }
+    let joined = participants.iter().any(|participant| {
+        reached_through(participant, &binding.channel_id)
+            && sender.is_participant(participant, form)
+    });
+    if joined {
+        return Ok(());
+    }
+    admission(sender, form, binding, participants, heard)
+}
+
+/// Step 3's conditions on a binding not declared `group` ([`admits`]).
+fn admission(
+    sender: &Sender,
+    form: &AddressForm,
+    binding: &ChannelBinding,
+    participants: &[Participant],
+    heard: &[ParticipantId],
+) -> Result<(), Refusal> {
+    let channel_id = &binding.channel_id;
+    let named_by = |id: &str| sender.named_by(id, form, channel_id, participants);
     if let Some(named) = &binding.participant_id
         && !named_by(named.as_str())
     {
@@ -352,17 +407,13 @@ pub fn admits(query: &RouteQuery, candidate: &Candidate) -> Result<(), Refusal> 
     {
         return Err(Refusal::AddressedToAnother);
     }
-    let member = candidate.participants.iter().any(|participant| {
-        reached_through(participant, &query.channel_id) && !sender.is_participant(participant, form)
+    let member = participants.iter().any(|participant| {
+        reached_through(participant, channel_id) && !sender.is_participant(participant, form)
     });
     if member {
         return Err(Refusal::MemberJoined);
     }
-    if candidate
-        .heard
-        .iter()
-        .any(|author| !named_by(author.as_str()))
-    {
+    if heard.iter().any(|author| !named_by(author.as_str())) {
         return Err(Refusal::HeardAnother);
     }
     Ok(())
@@ -1318,6 +1369,98 @@ mod tests {
                 panic!("the sender is recorded");
             };
             assert!(update.metadata.is_empty());
+        }
+    }
+
+    /// RFC §10.4 step 3, gap G-055: a room read under its lock, held to step
+    /// 3's conditions once more before a record names the sender.
+    mod still_admitted_under_the_lock {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        fn binding() -> ChannelBinding {
+            sms_binding(&RoomId::new("room_1").unwrap(), "sms")
+        }
+
+        fn alice() -> Sender {
+            query(ALICE).sender
+        }
+
+        fn participant(id: &str) -> Participant {
+            Participant::new(
+                ParticipantId::new(id).unwrap(),
+                RoomId::new("room_1").unwrap(),
+                channel("sms"),
+                Timestamp::UNIX_EPOCH,
+            )
+        }
+
+        fn heard(author: &str) -> Vec<ParticipantId> {
+            vec![ParticipantId::new(author).unwrap()]
+        }
+
+        #[test]
+        fn a_room_that_heard_no_one_else_admits_the_sender() {
+            assert_eq!(
+                still_admits(&binding(), &alice(), &sms_form(), &[], &heard(ALICE)),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn a_room_that_heard_another_sender_refuses_them() {
+            assert_eq!(
+                still_admits(&binding(), &alice(), &sms_form(), &[], &heard(BOB)),
+                Err(Refusal::HeardAnother)
+            );
+        }
+
+        #[test]
+        fn a_room_another_member_joined_through_the_channel_refuses_them() {
+            assert_eq!(
+                still_admits(&binding(), &alice(), &sms_form(), &[participant(BOB)], &[]),
+                Err(Refusal::MemberJoined)
+            );
+        }
+
+        /// RFC §10.4 step 1: the room is the sender's conversation.
+        #[test]
+        fn a_room_the_sender_joined_through_the_channel_admits_them_whoever_was_heard() {
+            assert_eq!(
+                still_admits(
+                    &binding(),
+                    &alice(),
+                    &sms_form(),
+                    &[participant(ALICE)],
+                    &heard(BOB)
+                ),
+                Ok(())
+            );
+        }
+
+        /// A correspondent is [`recording`]'s to judge.
+        #[test]
+        fn a_binding_naming_the_sender_admits_them_whoever_was_heard() {
+            let alices = ChannelBinding {
+                participant_id: Some(ParticipantId::new(ALICE).unwrap()),
+                ..binding()
+            };
+            assert_eq!(
+                still_admits(&alices, &alice(), &sms_form(), &[], &heard(BOB)),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn a_group_binding_admits_them_whoever_was_heard() {
+            let group = ChannelBinding {
+                group: true,
+                ..binding()
+            };
+            assert_eq!(
+                still_admits(&group, &alice(), &sms_form(), &[], &heard(BOB)),
+                Ok(())
+            );
         }
     }
 

@@ -24,7 +24,7 @@ use roomkit::{
     Channel, ChannelError, ConversationStore, DefaultRouter, HookTrigger, InMemoryStore,
     InboundRoomRouter, KitError, RoomFilter, RoomKit, RouterError, text_of,
 };
-use tokio::sync::Barrier;
+use tokio::sync::{Barrier, Notify};
 
 const ALICE: &str = "+15550000001";
 const BOB: &str = "+15550000002";
@@ -581,5 +581,70 @@ async fn two_first_messages_into_one_open_room_at_once_record_one_and_route_the_
             router.calls.load(Ordering::SeqCst)
         ),
         (true, false, Some(second.0), 2, 3)
+    );
+}
+
+/// The default router, whose first answer is held until the test lets it
+/// go: another message can reach the room it chose before this one is
+/// recorded there.
+struct HeldFirst {
+    routed: Notify,
+    go: Notify,
+    calls: AtomicUsize,
+}
+
+impl InboundRoomRouter<InMemoryStore> for HeldFirst {
+    async fn route(
+        &self,
+        store: &InMemoryStore,
+        query: &RouteQuery,
+    ) -> Result<Option<RoomId>, RouterError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        let answer = DefaultRouter.route(store, query).await;
+        if call == 0 {
+            self.routed.notify_one();
+            self.go.notified().await;
+        }
+        answer
+    }
+}
+
+/// RFC §10.4 step 3, gap G-055: alice's first message is admitted into the
+/// one room bound to the number, whose binding names no one; before she is
+/// recorded there, bob's message reaches the room by its id and is
+/// committed on the number. By the lock the room has heard bob, so alice is
+/// not recorded on its binding, which would send bob's answers to her: she
+/// is routed once more, into a room of her own.
+#[tokio::test]
+async fn a_room_that_heard_another_sender_before_the_record_routes_the_message_once_more() {
+    let (kit, sms) = kit_with_agent();
+    let opened = open_room(&kit, "support").await;
+    let router = Arc::new(HeldFirst {
+        routed: Notify::new(),
+        go: Notify::new(),
+        calls: AtomicUsize::new(0),
+    });
+    kit.set_router(SharedRouter(Arc::clone(&router)));
+    let alices = {
+        let kit = kit.clone();
+        tokio::spawn(async move { routed(&kit, message(ALICE, "Bonjour")).await })
+    };
+    router.routed.notified().await;
+    kit.process_inbound(message(BOB, "Hello"), Some(&opened))
+        .await
+        .unwrap();
+    router.go.notify_one();
+    let landed = alices.await.unwrap();
+    assert_eq!(
+        (
+            landed == opened,
+            correspondent(&kit, &opened).await,
+            correspondent(&kit, &landed).await,
+            sms.sent()
+                .iter()
+                .any(|(to, text)| to == ALICE && text.contains("Hello")),
+            router.calls.load(Ordering::SeqCst)
+        ),
+        (false, None, Some(ALICE.to_owned()), false, 2)
     );
 }

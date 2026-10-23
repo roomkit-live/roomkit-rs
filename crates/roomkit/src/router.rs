@@ -31,7 +31,8 @@ pub type RouterError = Box<dyn Error + Send + Sync>;
 /// caller's fails the message, and a missing room is created with the id.
 /// Unlike a room the caller names, the framework then records the sender on
 /// the room's binding of the channel under the room lock; a room whose
-/// binding names someone else by then, or that is no longer ACTIVE, is not
+/// binding names someone else by then, that is no longer ACTIVE, or that step
+/// 3 no longer admits the sender to (someone else heard there meanwhile), is not
 /// the message's, which is routed once more, then given a new room (gap
 /// G-055), never refused `room_closed`. A strategy that sends several
 /// senders to one room declares that room's binding `group`.

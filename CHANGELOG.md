@@ -116,6 +116,9 @@ publishes a release.
 
 ### Changed
 
+- A routed sender is recorded only where the room, as its lock finds it,
+  still admits them by step 3: a room that has heard someone else on the
+  channel meanwhile routes the message once more (gap G-055).
 - `RoomKit::process_inbound(message, room_id)` and
   `RoomKit::process_inbound_for(organization_id, message, room_id)` take the
   RFC's order, the room optional: `None` routes the message.

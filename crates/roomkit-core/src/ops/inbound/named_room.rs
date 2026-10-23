@@ -21,8 +21,10 @@
 //!   `source_unbound`;
 //! - a room a router returned has the sender recorded on its binding of the
 //!   channel, under the room lock, before step 3 (RFC §10.1 step 2, gap
-//!   G-061). A room no longer ACTIVE by then, or whose binding names another
-//!   sender, is no longer the message's, which is routed once more (gap
+//!   G-061). A room no longer ACTIVE by then, whose binding names another
+//!   sender, or that step 3 no longer admits the sender to (someone else
+//!   heard on the channel meanwhile), is no longer the message's, which is
+//!   routed once more (gap
 //!   G-055). The wait for that lock is what `process_timeout` bounds for
 //!   routing (RFC §10.4, §13.6), with milestone 6.
 //!

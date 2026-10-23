@@ -471,6 +471,121 @@ mod a_binding_taken_meanwhile {
     }
 }
 
+/// RFC §10.4 step 3, gap G-055: a room the sender was admitted into while
+/// its binding named no one, which by its lock has heard someone else on
+/// the channel, is no longer the message's.
+mod a_room_that_heard_another_sender_meanwhile {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// `room_1`, its SMS binding naming no one, which the router returns for
+    /// a message from `SENDER` having read the room before `OTHER`'s message,
+    /// sent naming the room (RFC §10.1 step 2, gap G-053), was committed
+    /// there: by the lock, the room has heard `OTHER` on the channel.
+    fn heard_meanwhile() -> Sim {
+        let mut sim = routed_to_room_1();
+        sim.send(message_from("sms", OTHER, "Hello")).unwrap();
+        sim.trace.clear();
+        sim.notices.clear();
+        sim
+    }
+
+    #[test]
+    fn leaves_the_room_s_lane_and_routes_the_message_once_more() {
+        let mut sim = heard_meanwhile();
+        sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            until_parse(&sim),
+            [
+                "resolve_identity sms +15551234567",
+                "route sms +15551234567",
+                "enter lane room_1",
+                "load_context room_1",
+                "lock room_1",
+                "load_context room_1",
+                "release room_1",
+                "leave lane room_1",
+                "route sms +15551234567",
+                "enter lane new_room_1",
+                "store room new_room_1 Active",
+                "lock new_room_1",
+                "load_context new_room_1",
+                "store binding sms",
+                "release new_room_1",
+                "handle_inbound sms",
+            ]
+        );
+    }
+
+    /// The binding is not recorded for the sender, so the answers to the
+    /// one heard are not sent to them.
+    #[test]
+    fn writes_nothing_in_the_room() {
+        let mut sim = heard_meanwhile();
+        sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (named(binding_of(&sim, "sms")), sim.timeline_lines()),
+            (
+                (None, json!({})),
+                vec!["#0 sms delivered \"Hello\"".to_owned()]
+            )
+        );
+    }
+
+    /// RFC §10.4 step 1: a room where the sender is a member reached through
+    /// the channel is their conversation, whoever else was heard there; the
+    /// router would choose it again, and the sender is recorded.
+    #[test]
+    fn whose_member_is_the_sender_is_their_conversation_and_records_them() {
+        let mut sim = heard_meanwhile();
+        sim.participants.push(Participant::new(
+            ParticipantId::new(SENDER).unwrap(),
+            room_id(),
+            channel("sms"),
+            Timestamp::UNIX_EPOCH,
+        ));
+        sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (named(binding_of(&sim, "sms")).0, sim.traced("route").len()),
+            (Some(SENDER.to_owned()), 1)
+        );
+    }
+
+    /// RFC §10.4 step 3: a member other than the sender reached through the
+    /// channel by the lock closes the room to them too.
+    #[test]
+    fn having_another_member_joined_through_the_channel_routes_the_message_once_more() {
+        let mut sim = routed_to_room_1();
+        sim.participants.push(Participant::new(
+            ParticipantId::new(OTHER).unwrap(),
+            room_id(),
+            channel("sms"),
+            Timestamp::UNIX_EPOCH,
+        ));
+        let result = sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                result.event.map(|event| event.room_id.to_string()),
+                named(binding_of(&sim, "sms")).0
+            ),
+            (Some("new_room_1".to_owned()), None)
+        );
+    }
+
+    /// The sender's own earlier message on the channel keeps the room
+    /// theirs.
+    #[test]
+    fn having_heard_the_sender_only_records_them() {
+        let mut sim = routed_to_room_1();
+        sim.send(Sim::message("sms", "Hello")).unwrap();
+        sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (named(binding_of(&sim, "sms")).0, sim.traced("route").len()),
+            (Some(SENDER.to_owned()), 1)
+        );
+    }
+}
+
 /// Gap G-055: a routed room no longer ACTIVE by its lock is no longer the
 /// message's.
 mod a_routed_room_no_longer_active {

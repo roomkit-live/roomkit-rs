@@ -60,9 +60,10 @@ pub(crate) enum Changed {
     },
     /// The change did not apply: it wrote nothing.
     Unchanged(Box<RoomContext>),
-    /// The room is no longer the routed message's: it is not ACTIVE, or its
-    /// binding names another sender by now. Nothing was written, and the
-    /// message is routed once more (gap G-055).
+    /// The room is no longer the routed message's: it is not ACTIVE, its
+    /// binding names another sender by now, or it no longer admits the
+    /// sender a record would name on a binding naming no one. Nothing was
+    /// written, and the message is routed once more (gap G-055).
     Rerouted(Box<RoomContext>),
 }
 
@@ -213,22 +214,16 @@ fn attach_automatically(binding: &ChannelBinding, mut context: Box<RoomContext>)
 }
 
 /// Records a routed message's sender on the room as the lock finds it (RFC
-/// §10.1 step 2, §10.4, gap G-061). A room no longer ACTIVE, or whose
-/// binding names another sender by now, is no longer the message's: the
-/// message is routed once more (gap G-055). A room that does not bind the
-/// channel has it attached naming the sender, unless rule 7 refuses; one
-/// that binds it has the sender recorded through rule 6, unless the binding
-/// is declared `group` or has them already.
+/// §10.1 step 2, §10.4, gap G-061). A room no longer ACTIVE, whose binding
+/// names another sender by now, or which no longer admits the sender a
+/// record would name on a binding naming no one, is no longer the
+/// message's: the message is routed once more (gap G-055). A room that does
+/// not bind the channel has it attached naming the sender, unless rule 7
+/// refuses; one that binds it has the sender recorded through rule 6,
+/// unless the binding is declared `group` or has them already.
 fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision {
-    let unchanged = |context| Decision {
-        writes: VecDeque::new(),
-        changed: Changed::Unchanged(context),
-    };
     if context.room.status != RoomStatus::Active {
-        return Decision {
-            writes: VecDeque::new(),
-            changed: Changed::Rerouted(context),
-        };
+        return rerouted(context);
     }
     let Ok(current) = bound(&context, &record.binding.channel_id) else {
         return attach_automatically(&record.binding, context);
@@ -240,15 +235,57 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision {
         &context.participants,
     );
     match recording {
-        Recording::Kept => unchanged(context),
-        Recording::Taken => Decision {
+        Recording::Kept => Decision {
             writes: VecDeque::new(),
-            changed: Changed::Rerouted(context),
+            changed: Changed::Unchanged(context),
         },
-        Recording::Write(update) => {
+        Recording::Write(update) if still_admitted(record, &current, &context) => {
             let updated = update.apply(&current);
             store_updated(&current, updated, context)
         }
+        Recording::Taken | Recording::Write(_) => rerouted(context),
+    }
+}
+
+/// Whether the room, as its lock finds it, still admits the sender a record
+/// is about to name on `current` (RFC §10.4 step 3, gap G-055): between the
+/// router's read and the lock, a message from someone else may have been
+/// committed on the channel, through a room its caller named (gap G-053),
+/// or a member may have joined through it.
+///
+/// What the room has heard is read from the events the locked section
+/// reads, the room's latest `context_window` (50 by default), refused ones
+/// set aside. That window holds every event committed since the router's
+/// read unless as many were committed in the room in between; the events
+/// before the read are the router's (the default router reads the whole
+/// timeline). A wider gap goes unseen (gap G-055).
+fn still_admitted(record: &SenderRecord, current: &ChannelBinding, context: &RoomContext) -> bool {
+    let heard = routing::heard(&context.recent_events, &current.channel_id);
+    let admitted = routing::still_admits(
+        current,
+        &record.sender,
+        &record.form,
+        &context.participants,
+        &heard,
+    );
+    if let Err(refusal) = admitted {
+        tracing::debug!(
+            target: "roomkit::core::inbound",
+            room_id = %context.room.id,
+            channel_id = %current.channel_id,
+            refusal = ?refusal,
+            "the routed room no longer admits the sender by its lock"
+        );
+    }
+    admitted.is_ok()
+}
+
+/// A room that is no longer the routed message's: nothing is written (gap
+/// G-055).
+fn rerouted(context: Box<RoomContext>) -> Decision {
+    Decision {
+        writes: VecDeque::new(),
+        changed: Changed::Rerouted(context),
     }
 }
 
