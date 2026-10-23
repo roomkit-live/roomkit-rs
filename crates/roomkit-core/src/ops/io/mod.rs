@@ -23,8 +23,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use self::locks::RoomLocks;
 use super::protocol::{
-    Decided, Effect, EffectId, EntryId, Next, Notice, Outcome, ProtocolError, Request, RequestKind,
-    Settled, Step,
+    ChannelRequest, Decided, Effect, EffectId, EntryId, HoldOutcome, HoldRequest, Next, Notice,
+    Outcome, ProtocolError, Request, RequestKind, Settled, Step,
 };
 use super::{InboundError, InboundResult};
 use crate::model::{RoomId, Timestamp};
@@ -117,12 +117,12 @@ impl Io {
 
     /// Asks the driver for `request`, which nothing bounds; the effect goes
     /// out on the next step.
-    pub(crate) fn issue(&mut self, request: Request) -> EffectId {
+    pub(crate) fn issue(&mut self, request: impl Into<Request>) -> EffectId {
         self.issue_within(request, Bound::Unbounded)
     }
 
     /// Asks the driver for `request`, within `bound` (RFC §13.6).
-    pub(crate) fn issue_within(&mut self, request: Request, bound: Bound) -> EffectId {
+    pub(crate) fn issue_within(&mut self, request: impl Into<Request>, bound: Bound) -> EffectId {
         self.issue_under(request, bound, None)
     }
 
@@ -132,18 +132,22 @@ impl Io {
     /// for that lock are answered at once, without the driver.
     pub(crate) fn issue_under(
         &mut self,
-        request: Request,
+        request: impl Into<Request>,
         bound: Bound,
         locked: Option<RoomId>,
     ) -> EffectId {
-        self.issue_effect(request, bound, locked, None)
+        self.issue_effect(request.into(), bound, locked, None)
     }
 
     /// Asks the driver for `request` on behalf of a section that holds
     /// `room_id`'s lock (`Effect::locked`, RFC §13.5), unbounded: a commit,
     /// or the place its event takes in the room's lane, which nothing
     /// bounds (RFC §13.6).
-    pub(crate) fn issue_locked(&mut self, request: Request, room_id: RoomId) -> EffectId {
+    pub(crate) fn issue_locked(
+        &mut self,
+        request: impl Into<Request>,
+        room_id: RoomId,
+    ) -> EffectId {
         self.issue_under(request, Bound::Unbounded, Some(room_id))
     }
 
@@ -153,10 +157,10 @@ impl Io {
     /// G-070).
     pub(crate) fn issue_drawing_on(
         &mut self,
-        request: Request,
+        request: ChannelRequest,
         budget: &ReentryBudget,
     ) -> EffectId {
-        self.issue_effect(request, Bound::Unbounded, None, Some(budget.clone()))
+        self.issue_effect(request.into(), Bound::Unbounded, None, Some(budget.clone()))
     }
 
     fn issue_effect(
@@ -205,17 +209,22 @@ impl Io {
     /// its outer section's, held throughout.
     fn answer_nested(&self, request: &Request) -> Option<Outcome> {
         let nested = self.nested.as_ref()?;
-        if let Request::AcquireLock { room_id } = request
-            && room_id == nested
-        {
-            return Some(Outcome::Locked);
-        }
-        if let Request::ReleaseLock { room_id } = request
-            && room_id == nested
-        {
-            return Some(Outcome::Released);
-        }
-        None
+        let Request::Hold(hold) = request else {
+            return None;
+        };
+        let answer = match hold {
+            HoldRequest::AcquireLock { room_id } if room_id == nested => HoldOutcome::Locked,
+            HoldRequest::ReleaseLock { room_id } if room_id == nested => HoldOutcome::Released,
+            HoldRequest::AcquireLock { .. }
+            | HoldRequest::ReleaseLock { .. }
+            | HoldRequest::EnterLane { .. }
+            | HoldRequest::AwaitLane { .. }
+            | HoldRequest::LeaveLane { .. }
+            | HoldRequest::TakeTicket { .. }
+            | HoldRequest::AwaitTicket { .. }
+            | HoldRequest::ReleaseTicket { .. } => return None,
+        };
+        Some(answer.into())
     }
 
     /// Makes the sections advanced from now on nested under the section

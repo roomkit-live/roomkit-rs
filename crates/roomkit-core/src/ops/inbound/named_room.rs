@@ -51,7 +51,7 @@ use crate::ops::io::Bound;
 use crate::ops::lifecycle::change::{Change, Changed, SenderRecord};
 use crate::ops::lifecycle::locked::LockedSection;
 use crate::ops::lifecycle::report::{self, Reported};
-use crate::ops::protocol::{EffectId, Outcome, Request};
+use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::{ChannelDeclaration, Cx, LifecycleError, Progress};
 use crate::rules::routing::{self, Recording, Sender};
 use crate::rules::{attachment, organizations};
@@ -179,7 +179,7 @@ impl NamedRoom {
 
     /// Reads the room, within the call's deadline.
     fn read(&self, cx: &mut Cx<'_>) -> EffectId {
-        let request = Request::LoadContext {
+        let request = StoreRequest::LoadContext {
             room_id: self.room_id.clone(),
             recent_events: cx.config.context_window,
         };
@@ -273,7 +273,7 @@ impl NamedRoom {
     fn create(&mut self, cx: &mut Cx<'_>) -> Progress<Named> {
         let mut room = Room::new(self.room_id.clone(), cx.env.now());
         room.organization_id.clone_from(&self.organization_id);
-        let effect = cx.io.issue(Request::CreateRoom { room: room.clone() });
+        let effect = cx.io.issue(StoreRequest::CreateRoom { room: room.clone() });
         self.state = State::Creating {
             effect,
             room: Box::new(room),

@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::model::RoomId;
-use crate::ops::protocol::{Effect, EffectId, Outcome, Request};
+use crate::ops::protocol::{Effect, EffectId, HoldOutcome, HoldRequest, Outcome, Request};
 
 /// Which lock request an effect is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +74,7 @@ impl RoomLocks {
     /// not take it), the acquire held back first goes out now.
     pub(super) fn answered(&mut self, effect: EffectId, outcome: &Outcome) -> Option<Effect> {
         let (room_id, step) = self.requests.remove(&effect)?;
-        let let_go = step == Step::Release || *outcome != Outcome::Locked;
+        let let_go = step == Step::Release || *outcome != Outcome::Hold(HoldOutcome::Locked);
         if !let_go {
             return None;
         }
@@ -89,13 +89,19 @@ impl RoomLocks {
 
 /// The room and the step of a lock request; `None` for any other request.
 fn lock_request(request: &Request) -> Option<(RoomId, Step)> {
-    if let Request::AcquireLock { room_id } = request {
-        return Some((room_id.clone(), Step::Acquire));
+    match request {
+        Request::Hold(HoldRequest::AcquireLock { room_id }) => {
+            Some((room_id.clone(), Step::Acquire))
+        }
+        Request::Hold(HoldRequest::ReleaseLock { room_id }) => {
+            Some((room_id.clone(), Step::Release))
+        }
+        Request::Hold(_)
+        | Request::Store(_)
+        | Request::Channel(_)
+        | Request::Hook(_)
+        | Request::Route { .. } => None,
     }
-    if let Request::ReleaseLock { room_id } = request {
-        return Some((room_id.clone(), Step::Release));
-    }
-    None
 }
 
 #[cfg(test)]
@@ -124,11 +130,11 @@ mod tests {
     }
 
     fn acquire(id: u64) -> Effect {
-        effect(id, Request::AcquireLock { room_id: room_id() })
+        effect(id, HoldRequest::AcquireLock { room_id: room_id() }.into())
     }
 
     fn release(id: u64) -> Effect {
-        effect(id, Request::ReleaseLock { room_id: room_id() })
+        effect(id, HoldRequest::ReleaseLock { room_id: room_id() }.into())
     }
 
     #[test]
@@ -142,9 +148,9 @@ mod tests {
         let mut locks = RoomLocks::default();
         locks.admit(acquire(0));
         let held_back = locks.admit(acquire(1));
-        locks.answered(acquire(0).id, &Outcome::Locked);
+        locks.answered(acquire(0).id, &HoldOutcome::Locked.into());
         locks.admit(release(2));
-        let after_release = locks.answered(release(2).id, &Outcome::Released);
+        let after_release = locks.answered(release(2).id, &HoldOutcome::Released.into());
         assert_eq!((held_back, after_release), (None, Some(acquire(1))));
     }
 
@@ -176,9 +182,9 @@ mod tests {
     fn a_room_let_go_with_nothing_held_back_is_free_again() {
         let mut locks = RoomLocks::default();
         locks.admit(acquire(0));
-        locks.answered(acquire(0).id, &Outcome::Locked);
+        locks.answered(acquire(0).id, &HoldOutcome::Locked.into());
         locks.admit(release(1));
-        locks.answered(release(1).id, &Outcome::Released);
+        locks.answered(release(1).id, &HoldOutcome::Released.into());
         assert_eq!(locks.admit(acquire(2)), Some(acquire(2)));
     }
 }

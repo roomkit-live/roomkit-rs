@@ -29,7 +29,7 @@ use super::named_room::{Mode, Named, NamedRoom};
 use super::{InboundError, InboundResult, result, stamp};
 use crate::model::{EventId, InboundMessage, RoomContext, RoomEvent, RoomId};
 use crate::ops::io::Bound;
-use crate::ops::protocol::{EffectId, Outcome, Request};
+use crate::ops::protocol::{ChannelRequest, EffectId, Outcome, Request, StoreRequest};
 use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
 use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::routing::{self, RouteQuery, Sender};
@@ -299,7 +299,7 @@ impl Arrival {
         let Some(address) = self.sender.address.clone() else {
             return self.route(cx);
         };
-        let request = Request::ResolveIdentity {
+        let request = StoreRequest::ResolveIdentity {
             channel_type: self.channel.channel_type,
             address,
             organization_id: self.organization_id.clone(),
@@ -407,7 +407,7 @@ impl Arrival {
     /// beside the operation's work, and draws on its budget.
     fn parse(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> Arriving {
         let id = cx.env.new_event_id();
-        let request = Request::HandleInbound {
+        let request = ChannelRequest::HandleInbound {
             channel_id: self.message.channel_id.clone(),
             message: (*self.message).clone(),
             context: self.receiver_context((*context).clone()),

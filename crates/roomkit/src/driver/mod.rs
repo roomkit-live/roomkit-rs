@@ -36,7 +36,9 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use roomkit_core::model::{ErrorRecord, RoomId, Timestamp};
-use roomkit_core::ops::{Effect, EffectId, EntryId, Next, Operation, Outcome, Request, Settled};
+use roomkit_core::ops::{
+    Effect, EffectId, EntryId, HoldRequest, Next, Operation, Outcome, Request, Settled,
+};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{self, AbortHandle, JoinError, JoinSet};
 use tokio::time::Instant;
@@ -269,8 +271,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         }
     }
 
-    /// Starts `effect`: answered at once when it can be, a wait or a call
-    /// otherwise.
+    /// Starts `effect`: a hold is answered at once when it can be, or
+    /// waited for; any other family is a call, run by its family's handler.
     fn start(&mut self, effect: Effect) -> Option<(EffectId, Outcome)> {
         let work = Work::of(&effect);
         let Effect {
@@ -280,6 +282,33 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             ..
         } = effect;
         let deadline = deadline.and_then(|deadline| self.clocks.instant_of(deadline));
+        let inner = Arc::clone(self.inner);
+        match request {
+            Request::Hold(hold) => return self.hold(id, hold, deadline),
+            Request::Store(request) => self.spawn(id, work, deadline, async move {
+                calls::store(&inner.store, request).await
+            }),
+            Request::Channel(request) => self.spawn(id, work, deadline, async move {
+                calls::channel(&inner, request).await
+            }),
+            Request::Hook(request) => self.spawn(id, work, deadline, async move {
+                calls::hook(&inner, request).await
+            }),
+            Request::Route { query } => self.spawn(id, work, deadline, async move {
+                calls::route(&inner, &query).await
+            }),
+        }
+        None
+    }
+
+    /// Carries out the hold `request` for `effect`, within `deadline`: at
+    /// once, refused, or as a wait the run polls.
+    fn hold(
+        &mut self,
+        id: EffectId,
+        request: HoldRequest,
+        deadline: Option<Instant>,
+    ) -> Option<(EffectId, Outcome)> {
         let rooms = Rooms {
             locks: &self.inner.locks,
             lanes: &self.inner.lanes,
@@ -302,23 +331,24 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 self.waits.push((id, wait));
                 None
             }
-            Hold::Call(request) => {
-                let frame = Frame::new(&self.shared, id, work);
-                self.spawn(frame, *request, deadline);
-                None
-            }
         }
     }
 
-    /// Runs `request` as a task, within its execution context: the run's
-    /// `frame` for its effect.
-    fn spawn(&mut self, frame: Frame, request: Request, deadline: Option<Instant>) {
-        let effect = frame.effect();
+    /// Runs `call`, the call of `effect`, as a task within its execution
+    /// context, the run's frame recording `work` for it, and within
+    /// `deadline`.
+    fn spawn(
+        &mut self,
+        effect: EffectId,
+        work: Work,
+        deadline: Option<Instant>,
+        call: impl Future<Output = Outcome> + Send + 'static,
+    ) {
+        let frame = Frame::new(&self.shared, effect, work);
         self.shared.calling(effect);
         let context = self.context.within(frame);
-        let inner = Arc::clone(self.inner);
         let task = self.calls.spawn(context.scope(async move {
-            within(deadline, calls::call(&inner, request))
+            within(deadline, call)
                 .await
                 .unwrap_or(Outcome::DeadlinePassed)
         }));

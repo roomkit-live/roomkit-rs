@@ -22,7 +22,7 @@ use super::job::Finished;
 use super::{InboundError, InboundResult, Machine, Stage};
 use crate::model::ErrorRecord;
 use crate::ops::Cx;
-use crate::ops::protocol::{Outcome, Request};
+use crate::ops::protocol::{HoldRequest, Outcome};
 
 /// What a call does once its ticket is released.
 #[derive(Debug)]
@@ -74,7 +74,7 @@ impl Machine {
         let Some(room_id) = self.ticket.take() else {
             return self.after_ticket(cx, then, None);
         };
-        let effect = cx.io.issue(Request::ReleaseTicket { room_id });
+        let effect = cx.io.issue(HoldRequest::ReleaseTicket { room_id });
         self.stage = Stage::ReleasingTicket {
             effect,
             then: Box::new(then),

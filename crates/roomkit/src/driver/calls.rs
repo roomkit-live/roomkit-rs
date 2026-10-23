@@ -1,13 +1,17 @@
-//! The calls the driver runs as tasks: a request on the store, a channel,
-//! a hook or the router, each within its execution context; and the
-//! notices it performs without answering.
+//! The calls the driver runs as tasks, one handler per family of request:
+//! the store's, a channel's, hooks' and the router's, each within its
+//! execution context; and the notices it performs without answering.
 
 use std::sync::Arc;
 
 use roomkit_core::model::{ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent};
-use roomkit_core::ops::{CHANNEL_NOT_REGISTERED, Notice, Outcome, Request};
+use roomkit_core::ops::{
+    CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, HookAnswer, HookRequest, Notice,
+    Outcome, StoreOutcome, StoreRequest,
+};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookTrigger};
+use roomkit_core::rules::routing::RouteQuery;
 use tokio::task::JoinSet;
 
 use crate::channel::{ChannelError, EventDraft};
@@ -16,10 +20,96 @@ use crate::hooks;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 
-/// Carries out a request on the store, a channel, a hook or the router.
-pub(super) async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: Request) -> Outcome {
+/// Carries out a request on the store (RFC §14).
+pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest) -> Outcome {
+    let answer = match request {
+        StoreRequest::LoadContext {
+            room_id,
+            recent_events,
+        } => {
+            return match store.load_context(&room_id, recent_events).await {
+                Ok(Some(context)) => StoreOutcome::Context(Box::new(context)).into(),
+                Ok(None) => StoreOutcome::RoomNotFound.into(),
+                Err(error) => Outcome::Failed(error.to_record()),
+            };
+        }
+        StoreRequest::FindByIdempotencyKey {
+            room_id,
+            channel_id,
+            key,
+        } => store
+            .find_by_idempotency_key(&room_id, &channel_id, &key)
+            .await
+            .map(|event| StoreOutcome::Idempotent(event.map(Box::new))),
+        StoreRequest::GetEvent { event_id } => store
+            .get_event(&event_id)
+            .await
+            .map(|event| StoreOutcome::Event(event.map(Box::new))),
+        StoreRequest::Commit {
+            event,
+            counters,
+            target,
+        } => store
+            .commit(*event, counters, target)
+            .await
+            .map(|()| StoreOutcome::Committed),
+        StoreRequest::UpdateEvent { event_id, updates } => store
+            .update_event(&event_id, updates)
+            .await
+            .map(|_| StoreOutcome::Stored),
+        StoreRequest::DeleteEvent {
+            room_id,
+            event_id,
+            cascade_replies,
+        } => store
+            .delete_event(&room_id, &event_id, cascade_replies)
+            .await
+            .map(StoreOutcome::Deleted),
+        StoreRequest::PersistSideEffects {
+            room_id,
+            tasks,
+            observations,
+        } => store
+            .persist_side_effects(&room_id, tasks, observations)
+            .await
+            .map(|()| StoreOutcome::Persisted),
+        StoreRequest::CreateRoom { room } => {
+            store.create_room(room).await.map(|()| StoreOutcome::Stored)
+        }
+        StoreRequest::UpdateRoom { room_id, updates } => store
+            .update_room(&room_id, updates)
+            .await
+            .map(|_| StoreOutcome::Stored),
+        StoreRequest::StoreBinding { binding } => store
+            .store_binding(binding)
+            .await
+            .map(|()| StoreOutcome::Stored),
+        StoreRequest::DeleteBinding {
+            room_id,
+            channel_id,
+        } => store
+            .delete_binding(&room_id, &channel_id)
+            .await
+            .map(|()| StoreOutcome::Stored),
+        StoreRequest::ResolveIdentity {
+            channel_type,
+            address,
+            organization_id,
+        } => store
+            .resolve_identity(channel_type, &address, organization_id.as_deref())
+            .await
+            .map(|identity| StoreOutcome::Resolved(identity.map(|identity| identity.id))),
+    };
+    answer.map_or_else(|error| Outcome::Failed(error.to_record()), Outcome::from)
+}
+
+/// Calls a channel (RFC §6.1): a parse, a turn or a delivery.
+pub(super) async fn channel<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    request: ChannelRequest,
+) -> Outcome {
     match request {
-        Request::HandleInbound {
+        ChannelRequest::HandleInbound {
             channel_id,
             message,
             context,
@@ -34,11 +124,11 @@ pub(super) async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: R
                 now: inner.environment().now(),
             };
             match channel.handle_inbound(message, *context, draft).await {
-                Ok(event) => Outcome::Parsed(Box::new(event)),
+                Ok(event) => ChannelOutcome::Parsed(Box::new(event)).into(),
                 Err(error) => Outcome::Failed(ErrorRecord::new("ChannelError", error.to_string())),
             }
         }
-        Request::OnEvent {
+        ChannelRequest::OnEvent {
             binding,
             event,
             context,
@@ -48,7 +138,7 @@ pub(super) async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: R
             };
             channel_output(channel.on_event(event, binding, *context).await)
         }
-        Request::Deliver {
+        ChannelRequest::Deliver {
             binding,
             event,
             context,
@@ -58,7 +148,17 @@ pub(super) async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: R
             };
             channel_output(channel.deliver(event, binding, *context).await)
         }
-        Request::RunHook {
+    }
+}
+
+/// Runs hooks (RFC §9.3): one SYNC hook within its timeout, or observers,
+/// awaited.
+pub(super) async fn hook<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    request: HookRequest,
+) -> Outcome {
+    match request {
+        HookRequest::RunHook {
             hook,
             event,
             context,
@@ -66,152 +166,36 @@ pub(super) async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: R
             ..
         } => {
             let outcome = match inner.hook(hook) {
-                Some(handler) => hooks::run(handler, event, *context, timeout).await,
+                Some(handler) => hooks::run(handler, *event, *context, timeout).await,
                 None => {
                     HookOutcome::Raised(ErrorRecord::new("HookError", "the hook has no handler"))
                 }
             };
-            Outcome::Hook(Box::new(outcome))
+            HookAnswer::Ran(Box::new(outcome)).into()
         }
-        Request::RunObservers {
+        HookRequest::RunObservers {
             trigger,
             hooks,
             event,
             context,
         } => {
             run_observers(inner, trigger, hooks, *event, *context).await;
-            Outcome::Observed
+            HookAnswer::Observed.into()
         }
-        Request::Route { query } => {
-            let router = inner.router();
-            match router.route(&inner.store, &query).await {
-                Ok(room_id) => Outcome::Routed(room_id),
-                Err(error) => Outcome::Failed(ErrorRecord::new("RouterError", error.to_string())),
-            }
-        }
-        Request::LoadContext { .. }
-        | Request::FindByIdempotencyKey { .. }
-        | Request::GetEvent { .. }
-        | Request::UpdateEvent { .. }
-        | Request::DeleteEvent { .. }
-        | Request::Commit { .. }
-        | Request::PersistSideEffects { .. }
-        | Request::CreateRoom { .. }
-        | Request::UpdateRoom { .. }
-        | Request::StoreBinding { .. }
-        | Request::DeleteBinding { .. }
-        | Request::ResolveIdentity { .. } => store_call(&inner.store, request).await,
-        Request::AcquireLock { .. }
-        | Request::ReleaseLock { .. }
-        | Request::EnterLane { .. }
-        | Request::AwaitLane { .. }
-        | Request::LeaveLane { .. }
-        | Request::TakeTicket { .. }
-        | Request::AwaitTicket { .. }
-        | Request::ReleaseTicket { .. } => Outcome::Failed(ErrorRecord::new(
-            "Internal",
-            "a lock, lane or ticket request reached the call executor",
-        )),
     }
 }
 
-/// Carries out a request on the store.
-async fn store_call<S: ConversationStore>(store: &S, request: Request) -> Outcome {
-    let answer = match request {
-        Request::LoadContext {
-            room_id,
-            recent_events,
-        } => {
-            return match store.load_context(&room_id, recent_events).await {
-                Ok(Some(context)) => Outcome::Context(Box::new(context)),
-                Ok(None) => Outcome::RoomNotFound,
-                Err(error) => Outcome::Failed(error.to_record()),
-            };
-        }
-        Request::FindByIdempotencyKey {
-            room_id,
-            channel_id,
-            key,
-        } => store
-            .find_by_idempotency_key(&room_id, &channel_id, &key)
-            .await
-            .map(|event| Outcome::Idempotent(event.map(Box::new))),
-        Request::GetEvent { event_id } => store
-            .get_event(&event_id)
-            .await
-            .map(|event| Outcome::Event(event.map(Box::new))),
-        Request::Commit {
-            event,
-            counters,
-            target,
-        } => store
-            .commit(event, counters, target)
-            .await
-            .map(|()| Outcome::Committed),
-        Request::UpdateEvent { event_id, updates } => store
-            .update_event(&event_id, updates)
-            .await
-            .map(|_| Outcome::Stored),
-        Request::DeleteEvent {
-            room_id,
-            event_id,
-            cascade_replies,
-        } => store
-            .delete_event(&room_id, &event_id, cascade_replies)
-            .await
-            .map(Outcome::Deleted),
-        Request::PersistSideEffects {
-            room_id,
-            tasks,
-            observations,
-        } => store
-            .persist_side_effects(&room_id, tasks, observations)
-            .await
-            .map(|()| Outcome::Persisted),
-        Request::CreateRoom { room } => store.create_room(room).await.map(|()| Outcome::Stored),
-        Request::UpdateRoom { room_id, updates } => store
-            .update_room(&room_id, updates)
-            .await
-            .map(|_| Outcome::Stored),
-        Request::StoreBinding { binding } => {
-            store.store_binding(binding).await.map(|()| Outcome::Stored)
-        }
-        Request::DeleteBinding {
-            room_id,
-            channel_id,
-        } => store
-            .delete_binding(&room_id, &channel_id)
-            .await
-            .map(|()| Outcome::Stored),
-        Request::ResolveIdentity {
-            channel_type,
-            address,
-            organization_id,
-        } => store
-            .resolve_identity(channel_type, &address, organization_id.as_deref())
-            .await
-            .map(|identity| Outcome::Resolved(identity.map(|identity| identity.id))),
-        Request::AcquireLock { .. }
-        | Request::ReleaseLock { .. }
-        | Request::EnterLane { .. }
-        | Request::AwaitLane { .. }
-        | Request::LeaveLane { .. }
-        | Request::TakeTicket { .. }
-        | Request::AwaitTicket { .. }
-        | Request::ReleaseTicket { .. }
-        | Request::HandleInbound { .. }
-        | Request::OnEvent { .. }
-        | Request::Deliver { .. }
-        | Request::RunHook { .. }
-        | Request::RunObservers { .. }
-        | Request::Route { .. } => {
-            return Outcome::Failed(ErrorRecord::new(
-                "Internal",
-                "a request reached the store that is not the store's",
-            ));
-        }
-    };
-    answer.unwrap_or_else(|error| Outcome::Failed(error.to_record()))
+/// Asks the kit's router which room a message that names none belongs to
+/// (RFC §10.4).
+pub(super) async fn route<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    query: &RouteQuery,
+) -> Outcome {
+    let router = inner.router();
+    match router.route(&inner.store, query).await {
+        Ok(room_id) => Outcome::Routed(room_id),
+        Err(error) => Outcome::Failed(ErrorRecord::new("RouterError", error.to_string())),
+    }
 }
 
 /// Performs a notice: publishes a framework event, or runs observer hooks in
@@ -294,7 +278,7 @@ fn observe<S: ConversationStore>(
 
 fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
     match result {
-        Ok(output) => Outcome::Output(Box::new(output)),
+        Ok(output) => ChannelOutcome::Output(Box::new(output)).into(),
         Err(error) => Outcome::Failed(ErrorRecord::new("ChannelError", error.to_string())),
     }
 }

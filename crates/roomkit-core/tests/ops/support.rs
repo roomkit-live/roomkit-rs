@@ -52,10 +52,11 @@ use roomkit_core::model::{
     RoomEvent, RoomId, RoomStatus, Task, Timestamp,
 };
 use roomkit_core::ops::{
-    ChannelDeclaration, CommitRecord, Decided, DeleteEvent, Effect, EffectId, Entry, Environment,
-    FrameworkEvent, Inbound, InboundError, InboundResult, InboundTarget, KitConfig, MutationError,
-    Notice, Outcome, Request, RoomCounters, SequentialEnvironment, Settled, TargetUpdate,
-    UpdateEvent, default_inbound_event,
+    ChannelDeclaration, ChannelOutcome, ChannelRequest, CommitRecord, Decided, DeleteEvent, Effect,
+    EffectId, Entry, Environment, FrameworkEvent, HoldOutcome, HoldRequest, HookAnswer,
+    HookRequest, Inbound, InboundError, InboundResult, InboundTarget, KitConfig, MutationError,
+    Notice, Outcome, Request, RoomCounters, SequentialEnvironment, Settled, StoreOutcome,
+    StoreRequest, TargetUpdate, UpdateEvent, default_inbound_event,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
@@ -699,12 +700,12 @@ impl Sim {
     /// The entries a hook or a channel makes into its room on `effect`, if
     /// it is one that calls.
     fn reentry(&mut self, effect: &Effect) -> Option<(Caller, Vec<Entry>)> {
-        if let Request::RunHook {
+        if let Request::Hook(HookRequest::RunHook {
             hook,
             event,
             context,
             ..
-        } = &effect.request
+        }) = &effect.request
         {
             let reentry = self.reentrant_hooks.get_mut(hook)?;
             let entries = (reentry.entries)(event);
@@ -715,7 +716,7 @@ impl Sim {
             self.hook_contexts.push((name, (**context).clone()));
             return Some((Caller::Hook(*hook), entries));
         }
-        if let Request::OnEvent { binding, event, .. } = &effect.request {
+        if let Request::Channel(ChannelRequest::OnEvent { binding, event, .. }) = &effect.request {
             let reentry = self.reentrant_channels.get_mut(&binding.channel_id)?;
             let entries = (reentry.entries)(event);
             if entries.is_empty() {
@@ -738,8 +739,12 @@ impl Sim {
         match caller {
             Caller::Hook(hook) => match &mut self.reentrant_hooks.get_mut(hook).unwrap().answer {
                 Answer::Awaits(_) => Then::Waits,
-                Answer::AtOnce(answer) => at_once(Outcome::Hook(Box::new(answer())), false),
-                Answer::Apart(answer) => at_once(Outcome::Hook(Box::new(answer())), true),
+                Answer::AtOnce(answer) => {
+                    at_once(Outcome::Hook(HookAnswer::Ran(Box::new(answer()))), false)
+                }
+                Answer::Apart(answer) => {
+                    at_once(Outcome::Hook(HookAnswer::Ran(Box::new(answer()))), true)
+                }
             },
             Caller::Channel(channel_id) => {
                 match &mut self.reentrant_channels.get_mut(channel_id).unwrap().answer {
@@ -759,7 +764,7 @@ impl Sim {
                 let Answer::Awaits(then) = &mut reentry.answer else {
                     unreachable!("a caller that waits answers from the result");
                 };
-                Outcome::Hook(Box::new(then(result)))
+                Outcome::Hook(HookAnswer::Ran(Box::new(then(result))))
             }
             Caller::Channel(channel_id) => {
                 let reentry = self.reentrant_channels.get_mut(channel_id).unwrap();
@@ -966,42 +971,70 @@ impl Sim {
     /// whose line says more once they ran.
     fn label(&self, request: &Request) -> String {
         match request {
-            Request::AcquireLock { room_id } => format!("lock {room_id}"),
-            Request::ReleaseLock { room_id } => format!("release {room_id}"),
-            Request::EnterLane { room_id, event_id } => format!("enter lane {room_id} {event_id}"),
-            Request::AwaitLane { room_id, event_id } => format!("await lane {room_id} {event_id}"),
-            Request::LeaveLane { room_id, event_id } => format!("leave lane {room_id} {event_id}"),
-            Request::TakeTicket { room_id } => format!("take ticket {room_id}"),
-            Request::AwaitTicket { room_id } => format!("await ticket {room_id}"),
-            Request::ReleaseTicket { room_id } => format!("release ticket {room_id}"),
-            Request::LoadContext { room_id, .. } => format!("load_context {room_id}"),
-            Request::FindByIdempotencyKey { key, .. } => format!("find_key {key}"),
-            Request::GetEvent { event_id } => format!("get_event {event_id}"),
-            Request::Commit { .. } => "commit".to_owned(),
-            Request::PersistSideEffects { .. } => "persist".to_owned(),
-            Request::CreateRoom { room } => format!("store room {}", room.id),
-            Request::UpdateRoom { room_id, .. } => format!("update room {room_id}"),
-            Request::StoreBinding { binding } => format!("store binding {}", binding.channel_id),
-            Request::DeleteBinding { channel_id, .. } => format!("delete binding {channel_id}"),
-            Request::UpdateEvent { event_id, .. } => format!("update event {event_id}"),
-            Request::DeleteEvent { event_id, .. } => format!("delete event {event_id}"),
-            Request::ResolveIdentity {
+            Request::Hold(HoldRequest::AcquireLock { room_id }) => format!("lock {room_id}"),
+            Request::Hold(HoldRequest::ReleaseLock { room_id }) => format!("release {room_id}"),
+            Request::Hold(HoldRequest::EnterLane { room_id, event_id }) => {
+                format!("enter lane {room_id} {event_id}")
+            }
+            Request::Hold(HoldRequest::AwaitLane { room_id, event_id }) => {
+                format!("await lane {room_id} {event_id}")
+            }
+            Request::Hold(HoldRequest::LeaveLane { room_id, event_id }) => {
+                format!("leave lane {room_id} {event_id}")
+            }
+            Request::Hold(HoldRequest::TakeTicket { room_id }) => format!("take ticket {room_id}"),
+            Request::Hold(HoldRequest::AwaitTicket { room_id }) => {
+                format!("await ticket {room_id}")
+            }
+            Request::Hold(HoldRequest::ReleaseTicket { room_id }) => {
+                format!("release ticket {room_id}")
+            }
+            Request::Store(StoreRequest::LoadContext { room_id, .. }) => {
+                format!("load_context {room_id}")
+            }
+            Request::Store(StoreRequest::FindByIdempotencyKey { key, .. }) => {
+                format!("find_key {key}")
+            }
+            Request::Store(StoreRequest::GetEvent { event_id }) => format!("get_event {event_id}"),
+            Request::Store(StoreRequest::Commit { .. }) => "commit".to_owned(),
+            Request::Store(StoreRequest::PersistSideEffects { .. }) => "persist".to_owned(),
+            Request::Store(StoreRequest::CreateRoom { room }) => format!("store room {}", room.id),
+            Request::Store(StoreRequest::UpdateRoom { room_id, .. }) => {
+                format!("update room {room_id}")
+            }
+            Request::Store(StoreRequest::StoreBinding { binding }) => {
+                format!("store binding {}", binding.channel_id)
+            }
+            Request::Store(StoreRequest::DeleteBinding { channel_id, .. }) => {
+                format!("delete binding {channel_id}")
+            }
+            Request::Store(StoreRequest::UpdateEvent { event_id, .. }) => {
+                format!("update event {event_id}")
+            }
+            Request::Store(StoreRequest::DeleteEvent { event_id, .. }) => {
+                format!("delete event {event_id}")
+            }
+            Request::Store(StoreRequest::ResolveIdentity {
                 channel_type,
                 address,
                 ..
-            } => format!("resolve_identity {} {address}", type_name(*channel_type)),
+            }) => format!("resolve_identity {} {address}", type_name(*channel_type)),
             Request::Route { query } => format!("route {} {}", query.channel_id, query.sender_id),
-            Request::HandleInbound { channel_id, .. } => format!("handle_inbound {channel_id}"),
-            Request::OnEvent { binding, event, .. } => {
+            Request::Channel(ChannelRequest::HandleInbound { channel_id, .. }) => {
+                format!("handle_inbound {channel_id}")
+            }
+            Request::Channel(ChannelRequest::OnEvent { binding, event, .. }) => {
                 format!("on_event {} <- {}", binding.channel_id, event.id)
             }
-            Request::Deliver { binding, event, .. } => {
+            Request::Channel(ChannelRequest::Deliver { binding, event, .. }) => {
                 format!("deliver {} <- {}", binding.channel_id, event.id)
             }
-            Request::RunHook { hook, .. } => {
+            Request::Hook(HookRequest::RunHook { hook, .. }) => {
                 format!("hook {}", self.config.hooks.get(*hook).unwrap().name)
             }
-            Request::RunObservers { trigger, .. } => format!("await {}", trigger_name(*trigger)),
+            Request::Hook(HookRequest::RunObservers { trigger, .. }) => {
+                format!("await {}", trigger_name(*trigger))
+            }
         }
     }
 
@@ -1017,65 +1050,65 @@ impl Sim {
             return Some(refused);
         }
         let outcome = match request {
-            Request::AcquireLock { room_id } => return self.acquire(effect, room_id, deadline),
-            Request::AwaitLane { room_id, event_id } => {
+            Request::Hold(HoldRequest::AcquireLock { room_id }) => {
+                return self.acquire(effect, room_id, deadline);
+            }
+            Request::Hold(HoldRequest::AwaitLane { room_id, event_id }) => {
                 return self.await_place(effect, room_id, event_id, deadline);
             }
-            Request::AwaitTicket { room_id } => {
+            Request::Hold(HoldRequest::AwaitTicket { room_id }) => {
                 return self.await_ticket(effect, room_id, deadline);
             }
-            Request::ReleaseLock { room_id } => self.release(&room_id),
-            Request::EnterLane { room_id, event_id } => self.enter_lane(room_id, event_id),
-            Request::LeaveLane { room_id, event_id } => self.leave_lane(&room_id, &event_id),
-            Request::TakeTicket { room_id } => self.take_ticket(room_id),
-            Request::ReleaseTicket { room_id } => self.release_ticket(&room_id),
-            Request::HandleInbound {
+            Request::Hold(HoldRequest::ReleaseLock { room_id }) => self.release(&room_id),
+            Request::Hold(HoldRequest::EnterLane { room_id, event_id }) => {
+                self.enter_lane(room_id, event_id)
+            }
+            Request::Hold(HoldRequest::LeaveLane { room_id, event_id }) => {
+                self.leave_lane(&room_id, &event_id)
+            }
+            Request::Hold(HoldRequest::TakeTicket { room_id }) => self.take_ticket(room_id),
+            Request::Hold(HoldRequest::ReleaseTicket { room_id }) => self.release_ticket(&room_id),
+            Request::Channel(ChannelRequest::HandleInbound {
                 channel_id,
                 message,
                 context,
                 id,
-            } => self.handle_inbound(&channel_id, message, *context, id),
-            Request::OnEvent {
+            }) => self.handle_inbound(&channel_id, message, *context, id),
+            Request::Channel(ChannelRequest::OnEvent {
                 binding,
                 event,
                 context,
-            } => self.on_event(&binding, &event, *context),
-            Request::Deliver { binding, event, .. } => self.deliver(&binding, &event),
-            Request::RunHook {
+            }) => self.on_event(&binding, &event, *context),
+            Request::Channel(ChannelRequest::Deliver { binding, event, .. }) => {
+                self.deliver(&binding, &event)
+            }
+            Request::Hook(HookRequest::RunHook {
                 hook,
                 event,
                 context,
                 ..
-            } => self.execute_hook(hook, &event, *context),
-            Request::RunObservers {
+            }) => self.execute_hook(hook, &event, *context),
+            Request::Hook(HookRequest::RunObservers {
                 trigger,
                 hooks,
                 event,
                 context,
-            } => {
+            }) => {
                 self.awaited_contexts.push(*context);
                 self.execute_observers(trigger, &hooks, &event)
             }
-            Request::ResolveIdentity {
+            Request::Store(StoreRequest::ResolveIdentity {
                 channel_type,
                 address,
                 organization_id,
-            } => self.resolve_identity(channel_type, &address, organization_id.as_deref()),
+            }) => self.resolve_identity(channel_type, &address, organization_id.as_deref()),
             Request::Route { query } => self.execute_route(*query),
-            Request::GetEvent { event_id } => self.get_event(&event_id),
-            Request::UpdateEvent { event_id, updates } => {
+            Request::Store(StoreRequest::GetEvent { event_id }) => self.get_event(&event_id),
+            Request::Store(StoreRequest::UpdateEvent { event_id, updates }) => {
                 let room = self.room_of_event(&event_id);
                 self.on_room(&room, |sim| sim.update_stored_event(&event_id, &updates))
             }
-            Request::LoadContext { .. }
-            | Request::FindByIdempotencyKey { .. }
-            | Request::Commit { .. }
-            | Request::PersistSideEffects { .. }
-            | Request::CreateRoom { .. }
-            | Request::UpdateRoom { .. }
-            | Request::StoreBinding { .. }
-            | Request::DeleteBinding { .. }
-            | Request::DeleteEvent { .. } => {
+            Request::Store(request) => {
                 let room = store_room(&request).clone();
                 self.on_room(&room, |sim| sim.execute_store(request))
             }
@@ -1096,7 +1129,7 @@ impl Sim {
             )
             .find(|event| &event.id == event_id)
             .cloned();
-        Outcome::Event(found.map(Box::new))
+        Outcome::Store(StoreOutcome::Event(found.map(Box::new)))
     }
 
     /// The room whose timeline holds `event_id`, `room_1` when none does.
@@ -1115,7 +1148,7 @@ impl Sim {
             return Outcome::Failed(ErrorRecord::new("EventNotFound", "no such event"));
         };
         updates.apply(stored);
-        Outcome::Stored
+        Outcome::Store(StoreOutcome::Stored)
     }
 
     /// The identity of `organization` that uses `address` on channels of
@@ -1134,7 +1167,9 @@ impl Sim {
             identity.organization_id.as_deref() == organization
                 && identity.uses(channel_type, address)
         });
-        Outcome::Resolved(identity.map(|identity| identity.id.clone()))
+        Outcome::Store(StoreOutcome::Resolved(
+            identity.map(|identity| identity.id.clone()),
+        ))
     }
 
     /// The scripted router's next answer; no room once they are spent. The
@@ -1178,7 +1213,7 @@ impl Sim {
             }
             Some(HookChange::CloseRoomOn(_) | HookChange::DetachOn(..)) | None => {}
         }
-        Outcome::Hook(Box::new(outcome))
+        Outcome::Hook(HookAnswer::Ran(Box::new(outcome)))
     }
 
     /// Observers run to their end, awaited: each attaches its channel to the
@@ -1213,7 +1248,7 @@ impl Sim {
                 sim.bindings.push(binding);
             });
         }
-        Outcome::Observed
+        Outcome::Hook(HookAnswer::Observed)
     }
 
     /// The failure of the effect `failing_effect` names, traced as failed.
@@ -1221,69 +1256,80 @@ impl Sim {
         let failing = self.failing_effect?;
         let store_down = || ErrorRecord::new("StoreUnavailable", "the store is down");
         let (target, error) = match request {
-            Request::UpdateRoom { room_id, .. } => (format!("update room {room_id}"), store_down()),
-            Request::StoreBinding { binding } => (
+            Request::Store(StoreRequest::UpdateRoom { room_id, .. }) => {
+                (format!("update room {room_id}"), store_down())
+            }
+            Request::Store(StoreRequest::StoreBinding { binding }) => (
                 format!("store binding {}", binding.channel_id),
                 store_down(),
             ),
-            Request::DeleteBinding { channel_id, .. } => {
+            Request::Store(StoreRequest::DeleteBinding { channel_id, .. }) => {
                 (format!("delete binding {channel_id}"), store_down())
             }
-            Request::CreateRoom { room } => (format!("store room {}", room.id), store_down()),
-            Request::Commit { .. } => ("commit".to_owned(), store_down()),
-            Request::GetEvent { event_id } => (format!("get_event {event_id}"), store_down()),
-            Request::UpdateEvent { event_id, .. } => {
+            Request::Store(StoreRequest::CreateRoom { room }) => {
+                (format!("store room {}", room.id), store_down())
+            }
+            Request::Store(StoreRequest::Commit { .. }) => ("commit".to_owned(), store_down()),
+            Request::Store(StoreRequest::GetEvent { event_id }) => {
+                (format!("get_event {event_id}"), store_down())
+            }
+            Request::Store(StoreRequest::UpdateEvent { event_id, .. }) => {
                 (format!("update event {event_id}"), store_down())
             }
-            Request::DeleteEvent { event_id, .. } => {
+            Request::Store(StoreRequest::DeleteEvent { event_id, .. }) => {
                 (format!("delete event {event_id}"), store_down())
             }
-            Request::AcquireLock { room_id } => (
+            Request::Hold(HoldRequest::AcquireLock { room_id }) => (
                 format!("lock {room_id}"),
                 ErrorRecord::new("LockUnavailable", "the lock manager is down"),
             ),
-            Request::RunObservers { trigger, .. } => (
+            Request::Hook(HookRequest::RunObservers { trigger, .. }) => (
                 format!("await {}", trigger_name(*trigger)),
                 ErrorRecord::new("HooksUnavailable", "the observers could not be run"),
             ),
-            Request::ResolveIdentity { address, .. } => {
+            Request::Store(StoreRequest::ResolveIdentity { address, .. }) => {
                 (format!("resolve_identity {address}"), store_down())
             }
             Request::Route { query } => (
                 format!("route {}", query.channel_id),
                 ErrorRecord::new("RouterError", "the CRM is unreachable"),
             ),
-            Request::EnterLane { room_id, event_id } => (
+            Request::Hold(HoldRequest::EnterLane { room_id, event_id }) => (
                 format!("enter lane {room_id} {event_id}"),
                 ErrorRecord::new("LaneUnavailable", "the lane manager is down"),
             ),
-            Request::AwaitLane { room_id, event_id } => (
+            Request::Hold(HoldRequest::AwaitLane { room_id, event_id }) => (
                 format!("await lane {room_id} {event_id}"),
                 ErrorRecord::new("LaneUnavailable", "the lane manager is down"),
             ),
-            Request::TakeTicket { room_id } => (
+            Request::Hold(HoldRequest::TakeTicket { room_id }) => (
                 format!("take ticket {room_id}"),
                 ErrorRecord::new("TicketUnavailable", "the ticket queue is down"),
             ),
-            Request::AwaitTicket { room_id } => (
+            Request::Hold(HoldRequest::AwaitTicket { room_id }) => (
                 format!("await ticket {room_id}"),
                 ErrorRecord::new("TicketUnavailable", "the ticket queue is down"),
             ),
-            Request::ReleaseLock { .. }
-            | Request::ReleaseTicket { .. }
-            | Request::LeaveLane { .. }
-            | Request::LoadContext { .. }
-            | Request::FindByIdempotencyKey { .. }
-            | Request::PersistSideEffects { .. }
-            | Request::HandleInbound { .. }
-            | Request::OnEvent { .. }
-            | Request::Deliver { .. }
-            | Request::RunHook { .. } => return None,
+            Request::Hold(
+                HoldRequest::ReleaseLock { .. }
+                | HoldRequest::ReleaseTicket { .. }
+                | HoldRequest::LeaveLane { .. },
+            )
+            | Request::Store(
+                StoreRequest::LoadContext { .. }
+                | StoreRequest::FindByIdempotencyKey { .. }
+                | StoreRequest::PersistSideEffects { .. },
+            )
+            | Request::Channel(_)
+            | Request::Hook(HookRequest::RunHook { .. }) => return None,
         };
         if !target.starts_with(failing) {
             return None;
         }
-        if let Request::EnterLane { event_id, .. } | Request::AwaitLane { event_id, .. } = request {
+        if let Request::Hold(
+            HoldRequest::EnterLane { event_id, .. } | HoldRequest::AwaitLane { event_id, .. },
+        ) = request
+        {
             self.placeless.insert(event_id.clone());
         }
         self.trace.push(format!("{target} failed"));
@@ -1320,7 +1366,7 @@ impl Sim {
         if self.release_fails {
             return Outcome::Failed(ErrorRecord::new("LockLost", "the lock's lease was lost"));
         }
-        Outcome::Released
+        Outcome::Hold(HoldOutcome::Released)
     }
 
     /// Takes the current run's place for `event_id` in the room's delivery
@@ -1328,7 +1374,7 @@ impl Sim {
     fn enter_lane(&mut self, room_id: RoomId, event_id: EventId) -> Outcome {
         self.trace.push(format!("enter lane {room_id} {event_id}"));
         self.take_place(room_id, event_id);
-        Outcome::Entered
+        Outcome::Hold(HoldOutcome::Entered)
     }
 
     /// Leaves the current run's place for `event_id`, which must be held.
@@ -1338,7 +1384,7 @@ impl Sim {
         if self.leave_fails {
             return Outcome::Failed(ErrorRecord::new("LaneLost", "the lane was lost"));
         }
-        Outcome::Left
+        Outcome::Hold(HoldOutcome::Left)
     }
 
     /// Takes the room's admission ticket, before its lock (RFC §9.5.1).
@@ -1349,7 +1395,7 @@ impl Sim {
             "an admission ticket was taken under the room lock"
         );
         self.take_a_ticket(room_id);
-        Outcome::Ticketed
+        Outcome::Hold(HoldOutcome::Ticketed)
     }
 
     /// The ticket's turn, once every earlier ticket of the room is
@@ -1379,7 +1425,7 @@ impl Sim {
         {
             return Outcome::Failed(ErrorRecord::new("TicketLost", "the ticket queue was lost"));
         }
-        Outcome::TicketReleased
+        Outcome::Hold(HoldOutcome::TicketReleased)
     }
 
     /// Runs `execute` on the room `id`. `room_1` is the room the fields
@@ -1413,19 +1459,19 @@ impl Sim {
 
     /// The store, for the room the fields hold: its bindings, participants,
     /// timeline and side effects.
-    fn execute_store(&mut self, request: Request) -> Outcome {
+    fn execute_store(&mut self, request: StoreRequest) -> Outcome {
         match request {
-            Request::LoadContext {
+            StoreRequest::LoadContext {
                 room_id,
                 recent_events,
             } => {
                 self.trace.push(format!("load_context {room_id}"));
                 if !self.room_exists {
-                    return Outcome::RoomNotFound;
+                    return Outcome::Store(StoreOutcome::RoomNotFound);
                 }
-                Outcome::Context(Box::new(self.context(recent_events)))
+                Outcome::Store(StoreOutcome::Context(Box::new(self.context(recent_events))))
             }
-            Request::FindByIdempotencyKey {
+            StoreRequest::FindByIdempotencyKey {
                 channel_id, key, ..
             } => {
                 self.trace.push(format!("find_key {key}"));
@@ -1438,19 +1484,19 @@ impl Sim {
                     })
                     .cloned()
                     .map(Box::new);
-                Outcome::Idempotent(found)
+                Outcome::Store(StoreOutcome::Idempotent(found))
             }
-            Request::Commit {
+            StoreRequest::Commit {
                 event,
                 counters,
                 target,
-            } => self.commit(event, &counters, target.as_ref()),
-            Request::DeleteEvent {
+            } => self.commit(*event, &counters, target.as_ref()),
+            StoreRequest::DeleteEvent {
                 event_id,
                 cascade_replies,
                 ..
             } => self.delete_stored_event(&event_id, cascade_replies),
-            Request::PersistSideEffects {
+            StoreRequest::PersistSideEffects {
                 tasks,
                 observations,
                 ..
@@ -1462,10 +1508,10 @@ impl Sim {
                 ));
                 self.tasks.extend(tasks);
                 self.observations.extend(observations);
-                Outcome::Persisted
+                Outcome::Store(StoreOutcome::Persisted)
             }
-            Request::CreateRoom { room } => self.create_room(room),
-            Request::UpdateRoom { room_id, updates } => {
+            StoreRequest::CreateRoom { room } => self.create_room(room),
+            StoreRequest::UpdateRoom { room_id, updates } => {
                 assert!(
                     self.state(self.current).locks.contains(&room_id) || updates.status.is_none(),
                     "a status was written outside the room lock"
@@ -1473,38 +1519,24 @@ impl Sim {
                 updates.apply(&mut self.room);
                 self.trace
                     .push(format!("update room {room_id} {:?}", self.room.status));
-                Outcome::Stored
+                Outcome::Store(StoreOutcome::Stored)
             }
-            Request::DeleteBinding { channel_id, .. } => {
+            StoreRequest::DeleteBinding { channel_id, .. } => {
                 self.trace.push(format!("delete binding {channel_id}"));
                 self.bindings.retain(|bound| bound.channel_id != channel_id);
-                Outcome::Stored
+                Outcome::Store(StoreOutcome::Stored)
             }
-            Request::StoreBinding { binding } => {
+            StoreRequest::StoreBinding { binding } => {
                 self.trace
                     .push(format!("store binding {}", binding.channel_id));
                 self.bindings
                     .retain(|bound| bound.channel_id != binding.channel_id);
                 self.bindings.push(binding);
-                Outcome::Stored
+                Outcome::Store(StoreOutcome::Stored)
             }
-            Request::AcquireLock { .. }
-            | Request::ReleaseLock { .. }
-            | Request::EnterLane { .. }
-            | Request::AwaitLane { .. }
-            | Request::LeaveLane { .. }
-            | Request::TakeTicket { .. }
-            | Request::AwaitTicket { .. }
-            | Request::ReleaseTicket { .. }
-            | Request::HandleInbound { .. }
-            | Request::OnEvent { .. }
-            | Request::Deliver { .. }
-            | Request::RunHook { .. }
-            | Request::RunObservers { .. }
-            | Request::ResolveIdentity { .. }
-            | Request::Route { .. }
-            | Request::GetEvent { .. }
-            | Request::UpdateEvent { .. } => panic!("not a room's store request"),
+            StoreRequest::ResolveIdentity { .. }
+            | StoreRequest::GetEvent { .. }
+            | StoreRequest::UpdateEvent { .. } => panic!("not a room's store request"),
         }
     }
 
@@ -1519,7 +1551,7 @@ impl Sim {
             "an event was deleted outside the room lock"
         );
         let Some(at) = self.timeline.iter().position(|event| &event.id == event_id) else {
-            return Outcome::Deleted(Vec::new());
+            return Outcome::Store(StoreOutcome::Deleted(Vec::new()));
         };
         let mut removed = vec![self.timeline.remove(at)];
         let mut gone = vec![event_id.clone()];
@@ -1539,7 +1571,7 @@ impl Sim {
             gone.push(next.id.clone());
             removed.push(next);
         }
-        Outcome::Deleted(removed)
+        Outcome::Store(StoreOutcome::Deleted(removed))
     }
 
     /// Commits `event` with the room's counters, under the room's lock, with
@@ -1578,7 +1610,7 @@ impl Sim {
         self.trace
             .push(format!("commit {}{updating}", describe(&event)));
         self.timeline.push(event);
-        Outcome::Committed
+        Outcome::Store(StoreOutcome::Committed)
     }
 
     /// Creates the room, unless its id is taken, by another call meanwhile
@@ -1598,7 +1630,7 @@ impl Sim {
         }
         self.room = room;
         self.room_exists = true;
-        Outcome::Stored
+        Outcome::Store(StoreOutcome::Stored)
     }
 
     /// The default parser, for every channel.
@@ -1616,7 +1648,7 @@ impl Sim {
         let now = self.env.now();
         let event = default_inbound_event(&message, &declaration, room_id, id, now);
         self.parsed_messages.push(message);
-        Outcome::Parsed(Box::new(event))
+        Outcome::Channel(ChannelOutcome::Parsed(Box::new(event)))
     }
 
     /// A channel's `on_event()`, as its closure answers.
@@ -1659,34 +1691,20 @@ impl Sim {
 }
 
 /// The room a store request reads or writes.
-fn store_room(request: &Request) -> &RoomId {
+fn store_room(request: &StoreRequest) -> &RoomId {
     match request {
-        Request::LoadContext { room_id, .. }
-        | Request::FindByIdempotencyKey { room_id, .. }
-        | Request::PersistSideEffects { room_id, .. }
-        | Request::UpdateRoom { room_id, .. }
-        | Request::DeleteBinding { room_id, .. }
-        | Request::DeleteEvent { room_id, .. } => room_id,
-        Request::Commit { event, .. } => &event.room_id,
-        Request::CreateRoom { room } => &room.id,
-        Request::StoreBinding { binding } => &binding.room_id,
-        Request::AcquireLock { .. }
-        | Request::ReleaseLock { .. }
-        | Request::EnterLane { .. }
-        | Request::AwaitLane { .. }
-        | Request::LeaveLane { .. }
-        | Request::TakeTicket { .. }
-        | Request::AwaitTicket { .. }
-        | Request::ReleaseTicket { .. }
-        | Request::HandleInbound { .. }
-        | Request::OnEvent { .. }
-        | Request::Deliver { .. }
-        | Request::RunHook { .. }
-        | Request::RunObservers { .. }
-        | Request::ResolveIdentity { .. }
-        | Request::Route { .. }
-        | Request::GetEvent { .. }
-        | Request::UpdateEvent { .. } => panic!("not a room's store request"),
+        StoreRequest::LoadContext { room_id, .. }
+        | StoreRequest::FindByIdempotencyKey { room_id, .. }
+        | StoreRequest::PersistSideEffects { room_id, .. }
+        | StoreRequest::UpdateRoom { room_id, .. }
+        | StoreRequest::DeleteBinding { room_id, .. }
+        | StoreRequest::DeleteEvent { room_id, .. } => room_id,
+        StoreRequest::Commit { event, .. } => &event.room_id,
+        StoreRequest::CreateRoom { room } => &room.id,
+        StoreRequest::StoreBinding { binding } => &binding.room_id,
+        StoreRequest::ResolveIdentity { .. }
+        | StoreRequest::GetEvent { .. }
+        | StoreRequest::UpdateEvent { .. } => panic!("not a room's store request"),
     }
 }
 
@@ -1702,7 +1720,7 @@ fn type_name(channel_type: ChannelType) -> String {
 /// A channel's answer as the driver completes its call with it.
 fn output(answer: Result<ChannelOutput, ErrorRecord>) -> Outcome {
     match answer {
-        Ok(output) => Outcome::Output(Box::new(output)),
+        Ok(output) => Outcome::Channel(ChannelOutcome::Output(Box::new(output))),
         Err(error) => Outcome::Failed(error),
     }
 }

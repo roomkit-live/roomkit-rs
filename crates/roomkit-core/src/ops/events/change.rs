@@ -8,7 +8,7 @@ use super::MutationError;
 use super::section::{self, State};
 use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId};
 use crate::ops::Cx;
-use crate::ops::protocol::{Outcome, Request, RoomCounters};
+use crate::ops::protocol::{Outcome, RoomCounters, StoreRequest};
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::organizations;
 
@@ -82,7 +82,7 @@ pub(super) fn act(
             organization_id,
         } => commit(cx, room_id, record, organization_id.as_deref(), context),
         Change::Update { event_id, .. } => State::Reading {
-            effect: cx.io.issue(Request::GetEvent {
+            effect: cx.io.issue(StoreRequest::GetEvent {
                 event_id: event_id.clone(),
             }),
             context,
@@ -91,7 +91,7 @@ pub(super) fn act(
             event_id,
             cascade_replies,
         } => State::Writing {
-            effect: cx.io.issue(Request::DeleteEvent {
+            effect: cx.io.issue(StoreRequest::DeleteEvent {
                 room_id: room_id.clone(),
                 event_id: event_id.clone(),
                 cascade_replies: *cascade_replies,
@@ -131,8 +131,8 @@ fn commit(
     let mut record = record.clone();
     record.index = context.room.event_count;
     let counters = RoomCounters::after_commit(&context.room, record.index);
-    let request = Request::Commit {
-        event: record.clone(),
+    let request = StoreRequest::Commit {
+        event: Box::new(record.clone()),
         counters,
         target: None,
     };
@@ -183,7 +183,7 @@ pub(super) fn on_read(
             recent.clone_from(&updated);
         }
     }
-    let effect = cx.io.issue(Request::UpdateEvent {
+    let effect = cx.io.issue(StoreRequest::UpdateEvent {
         event_id: event_id.clone(),
         updates: (**updates).clone(),
     });

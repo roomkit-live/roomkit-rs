@@ -40,7 +40,7 @@ use crate::model::{
 };
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::gate::Pending;
-use crate::ops::protocol::{EffectId, EntryId, Outcome, Request};
+use crate::ops::protocol::{EffectId, EntryId, HoldRequest, Outcome, StoreRequest};
 use crate::ops::{self, Abort, Cx, Progress};
 use crate::rules::edits::EditRefusal;
 use crate::rules::hook_chain::HookChain;
@@ -293,14 +293,14 @@ impl CommitPass {
     pub(super) fn start(&mut self, cx: &mut Cx<'_>) {
         if matches!(self.state, State::Start) {
             let room_id = self.event.room_id.clone();
-            let request = Request::AcquireLock { room_id };
+            let request = HoldRequest::AcquireLock { room_id };
             self.state = State::Locking(cx.io.issue_within(request, self.bound));
         }
     }
 
     /// Asks for `request` under the room's lock, within the call's
     /// deadline: what precedes the commit is bounded by it (RFC §13.6).
-    fn issue(&self, cx: &mut Cx<'_>, request: Request) -> EffectId {
+    fn issue(&self, cx: &mut Cx<'_>, request: StoreRequest) -> EffectId {
         let locked = Some(self.event.room_id.clone());
         cx.io.issue_under(request, self.bound, locked)
     }
@@ -403,7 +403,7 @@ impl CommitPass {
 
     /// Releases the room's lock before reporting `result` (RFC §10.1 step 13).
     fn release(&mut self, cx: &mut Cx<'_>, result: Result<PassResult, Abort>) -> State {
-        let effect = cx.io.issue(Request::ReleaseLock {
+        let effect = cx.io.issue(HoldRequest::ReleaseLock {
             room_id: self.event.room_id.clone(),
         });
         State::Releasing { effect, result }

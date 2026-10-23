@@ -56,7 +56,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{ChannelCategory, RoomId};
-use roomkit_core::ops::{Effect, EffectId, Entry, InboundError, InboundResult, Request};
+use roomkit_core::ops::{
+    ChannelRequest, Effect, EffectId, Entry, InboundError, InboundResult, Request,
+};
 use roomkit_core::rules::chain_depth::{self, ReentryBudget};
 use tokio::sync::{mpsc, oneshot};
 
@@ -261,36 +263,19 @@ impl Work {
     /// What the frame of `effect`'s call records.
     pub(crate) fn of(effect: &Effect) -> Self {
         let (delivering, response_depth) = match &effect.request {
-            Request::OnEvent { binding, event, .. } => {
+            Request::Channel(ChannelRequest::OnEvent { binding, event, .. }) => {
                 let turn = binding.category == ChannelCategory::Intelligence;
                 let depth = turn.then(|| chain_depth::response_depth(event));
                 (Some(binding.room_id.clone()), depth)
             }
-            Request::Deliver { binding, .. } => (Some(binding.room_id.clone()), None),
-            Request::AcquireLock { .. }
-            | Request::ReleaseLock { .. }
-            | Request::EnterLane { .. }
-            | Request::AwaitLane { .. }
-            | Request::LeaveLane { .. }
-            | Request::TakeTicket { .. }
-            | Request::AwaitTicket { .. }
-            | Request::ReleaseTicket { .. }
-            | Request::LoadContext { .. }
-            | Request::FindByIdempotencyKey { .. }
-            | Request::GetEvent { .. }
-            | Request::Commit { .. }
-            | Request::PersistSideEffects { .. }
-            | Request::CreateRoom { .. }
-            | Request::UpdateRoom { .. }
-            | Request::StoreBinding { .. }
-            | Request::DeleteBinding { .. }
-            | Request::UpdateEvent { .. }
-            | Request::DeleteEvent { .. }
-            | Request::ResolveIdentity { .. }
-            | Request::Route { .. }
-            | Request::HandleInbound { .. }
-            | Request::RunHook { .. }
-            | Request::RunObservers { .. } => (None, None),
+            Request::Channel(ChannelRequest::Deliver { binding, .. }) => {
+                (Some(binding.room_id.clone()), None)
+            }
+            Request::Channel(ChannelRequest::HandleInbound { .. })
+            | Request::Hold(_)
+            | Request::Store(_)
+            | Request::Hook(_)
+            | Request::Route { .. } => (None, None),
         };
         Self {
             locked: effect.locked.clone(),
@@ -332,11 +317,6 @@ impl Frame {
     /// or was about to take, waits for nothing that run does any more.
     fn is_admitted_to(&self, room_id: &RoomId) -> bool {
         self.work.admitted.as_ref() == Some(room_id) && self.run.is_calling(self.effect)
-    }
-
-    /// The effect whose call this is.
-    pub(crate) fn effect(&self) -> EffectId {
-        self.effect
     }
 
     /// Hands `entry` to the frame's run, and waits for its decision.
@@ -689,14 +669,15 @@ mod tests {
         event.chain_depth = depth;
         Effect {
             id: effect(),
-            request: Request::OnEvent {
+            request: ChannelRequest::OnEvent {
                 binding: declaration.binding(room_id(), Timestamp::UNIX_EPOCH),
                 event,
                 context: Box::new(RoomContext::new(Room::new(
                     room_id(),
                     Timestamp::UNIX_EPOCH,
                 ))),
-            },
+            }
+            .into(),
             deadline: None,
             locked: None,
             admitted: None,

@@ -15,7 +15,7 @@ use roomkit_core::model::{
 };
 use roomkit_core::ops::{
     EffectId, Entry, FrameworkEvent, Inbound, InboundError, InboundTarget, MutationError, Next,
-    Operation, Outcome, RefusedOperation, SequentialEnvironment,
+    Operation, Outcome, RefusedOperation, SequentialEnvironment, StoreOutcome,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::transcoding::text_of;
@@ -1855,7 +1855,10 @@ mod an_adoption {
             recent_events: Vec::new(),
         };
         inbound
-            .complete(read, Outcome::Context(Box::new(context)))
+            .complete(
+                read,
+                Outcome::Store(StoreOutcome::Context(Box::new(context))),
+            )
             .unwrap();
         let parse = first_effect(&mut inbound, &mut environment);
         (inbound, read, parse)

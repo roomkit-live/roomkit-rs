@@ -30,7 +30,7 @@ use super::deadline::Stopped;
 use super::{InboundError, Machine, Stage, report};
 use crate::model::{RoomContext, RoomEvent, RoomId};
 use crate::ops::io::Bound;
-use crate::ops::protocol::{EffectId, Outcome, Request};
+use crate::ops::protocol::{EffectId, HoldRequest, Outcome};
 use crate::ops::{Cx, Progress};
 use crate::rules::hook_chain::HookChain;
 use crate::rules::hook_registry::HookId;
@@ -88,7 +88,7 @@ impl OffLockCheck {
         self.state = match mem::replace(&mut self.state, State::Done) {
             State::Start(run) => {
                 let room_id = self.event.room_id.clone();
-                let effect = cx.io.issue(Request::TakeTicket { room_id });
+                let effect = cx.io.issue(HoldRequest::TakeTicket { room_id });
                 State::Taking { effect, run }
             }
             state @ (State::Taking { .. }
@@ -174,7 +174,7 @@ impl OffLockCheck {
         let room_id = self.event.room_id.clone();
         let effect = cx
             .io
-            .issue_within(Request::AwaitTicket { room_id }, self.bound);
+            .issue_within(HoldRequest::AwaitTicket { room_id }, self.bound);
         self.state = State::Awaiting { effect, run };
         Progress::Waiting
     }

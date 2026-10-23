@@ -21,7 +21,7 @@ use super::direct::DirectCall;
 use super::{commit, report};
 use crate::model::{ChannelId, ErrorRecord, EventStatus, RoomContext, RoomEvent};
 use crate::ops::lifecycle::gate::{self, Gate, Pending};
-use crate::ops::protocol::{EffectId, Outcome, Request, RoomCounters};
+use crate::ops::protocol::{EffectId, HoldRequest, Outcome, RoomCounters, StoreRequest};
 use crate::ops::{self, Abort, Cx, Progress, RefusedOperation};
 use crate::rules::permissions;
 
@@ -149,7 +149,7 @@ impl RecordPass {
     pub(super) fn start(&mut self, cx: &mut Cx<'_>) {
         if matches!(self.state, State::Start) {
             let room_id = self.record.room_id.clone();
-            self.state = State::Locking(cx.io.issue(Request::AcquireLock { room_id }));
+            self.state = State::Locking(cx.io.issue(HoldRequest::AcquireLock { room_id }));
         }
     }
 
@@ -168,7 +168,7 @@ impl RecordPass {
             // The context holds the recent events the hooks of a due timer
             // transition read (gap G-027).
             State::Locking(_) => match outcome.into_locked() {
-                Ok(()) => State::LoadingRoom(cx.io.issue(Request::LoadContext {
+                Ok(()) => State::LoadingRoom(cx.io.issue(StoreRequest::LoadContext {
                     room_id: self.record.room_id.clone(),
                     recent_events: cx.config.context_window,
                 })),
@@ -243,8 +243,8 @@ impl RecordPass {
             }
         };
         let counters = RoomCounters::after_commit(&context.room, self.record.index);
-        let request = Request::Commit {
-            event: self.record.clone(),
+        let request = StoreRequest::Commit {
+            event: Box::new(self.record.clone()),
             counters,
             target: None,
         };
@@ -252,7 +252,7 @@ impl RecordPass {
     }
 
     fn release(&mut self, cx: &mut Cx<'_>, result: Result<RecordResult, Abort>) -> State {
-        let effect = cx.io.issue(Request::ReleaseLock {
+        let effect = cx.io.issue(HoldRequest::ReleaseLock {
             room_id: self.record.room_id.clone(),
         });
         State::Releasing { effect, result }

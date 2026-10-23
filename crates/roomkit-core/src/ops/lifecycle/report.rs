@@ -7,7 +7,7 @@ use crate::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType,
     RoomContext, RoomEvent, RoomId,
 };
-use crate::ops::protocol::{EffectId, Request};
+use crate::ops::protocol::{EffectId, HookRequest};
 use crate::ops::{Cx, FrameworkEvent, Notice, TransitionReason};
 use crate::rules::hook_registry::{HookId, HookTrigger};
 
@@ -181,7 +181,7 @@ pub(crate) fn report_awaited(
         announce(cx, reported, &context.room.id);
         return None;
     };
-    Some(cx.io.issue(Request::RunObservers {
+    Some(cx.io.issue(HookRequest::RunObservers {
         trigger,
         hooks,
         event: Box::new(payload),

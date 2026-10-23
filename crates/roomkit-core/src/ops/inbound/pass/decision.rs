@@ -16,7 +16,7 @@ use super::super::commit::{self, Committing};
 use super::super::stamp;
 use super::{CommitPass, PassOrigin, PassResult, State, Verdict};
 use crate::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, Visibility};
-use crate::ops::protocol::{Outcome, Request};
+use crate::ops::protocol::{HoldRequest, Outcome, StoreRequest};
 use crate::ops::{Abort, Cx};
 use crate::rules::edits::EditRefusal;
 use crate::rules::hook_chain::{ChainDecision, ChainVerdict};
@@ -176,7 +176,7 @@ impl CommitPass {
                 Some(accepted) => {
                     let event_id = accepted.target_id().clone();
                     State::RereadingTarget {
-                        effect: self.issue(cx, Request::GetEvent { event_id }),
+                        effect: self.issue(cx, StoreRequest::GetEvent { event_id }),
                         payload: Box::new(payload),
                         context,
                     }
@@ -323,7 +323,7 @@ impl CommitPass {
             return self.release(cx, Ok(result));
         };
         let room_id = event.room_id.clone();
-        let request = Request::EnterLane {
+        let request = HoldRequest::EnterLane {
             room_id: room_id.clone(),
             event_id: event.id.clone(),
         };

@@ -5,7 +5,7 @@
 use super::{CommitPass, PassOrigin, PassResult, State};
 use crate::model::RoomContext;
 use crate::ops::lifecycle::gate::{self, Gate};
-use crate::ops::protocol::{Outcome, Request};
+use crate::ops::protocol::{Outcome, StoreRequest};
 use crate::ops::{Abort, Cx};
 use crate::rules::permissions;
 
@@ -19,7 +19,7 @@ impl CommitPass {
 
     /// Reads the room with its bindings, participants and recent events.
     pub(super) fn load_context(&self, cx: &mut Cx<'_>) -> crate::ops::protocol::EffectId {
-        let request = Request::LoadContext {
+        let request = StoreRequest::LoadContext {
             room_id: self.event.room_id.clone(),
             recent_events: cx.config.context_window,
         };
@@ -70,7 +70,7 @@ impl CommitPass {
             Some(key) if self.origin.is_entry() => State::CheckingKey {
                 effect: self.issue(
                     cx,
-                    Request::FindByIdempotencyKey {
+                    StoreRequest::FindByIdempotencyKey {
                         room_id: self.event.room_id.clone(),
                         channel_id: self.event.source.channel_id.clone(),
                         key,
@@ -101,7 +101,7 @@ impl CommitPass {
         match super::super::edits::target_of(&self.event) {
             Ok(None) => self.start_hooks(cx, context),
             Ok(Some(event_id)) => State::ReadingTarget {
-                effect: self.issue(cx, Request::GetEvent { event_id }),
+                effect: self.issue(cx, StoreRequest::GetEvent { event_id }),
                 context,
             },
             Err(refusal) => self.refuse_edit(cx, refusal),

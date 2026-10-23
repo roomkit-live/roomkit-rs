@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use super::LifecycleError;
 use super::report::Reported;
 use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomUpdates, Timestamp};
-use crate::ops::protocol::Request;
+use crate::ops::protocol::StoreRequest;
 use crate::rules::addresses::AddressForm;
 use crate::rules::attachment;
 use crate::rules::lifecycle::{self, Transition};
@@ -83,7 +83,7 @@ pub(crate) struct SenderRecord {
 /// stored.
 #[derive(Debug)]
 pub(crate) struct Decision {
-    pub(crate) writes: VecDeque<Request>,
+    pub(crate) writes: VecDeque<StoreRequest>,
     pub(crate) changed: Changed,
 }
 
@@ -175,7 +175,7 @@ fn attach(binding: &ChannelBinding, mut context: Box<RoomContext>, now: Timestam
     if let Some(updates) = attachment::clear_revocation(&context.room, &binding.channel_id, now) {
         writes.push_back(update_room(&mut context, updates));
     }
-    writes.push_back(Request::StoreBinding {
+    writes.push_back(StoreRequest::StoreBinding {
         binding: binding.clone(),
     });
     context
@@ -203,7 +203,7 @@ fn attach_automatically(binding: &ChannelBinding, mut context: Box<RoomContext>)
     }
     context.bindings.push(binding.clone());
     Decision {
-        writes: VecDeque::from([Request::StoreBinding {
+        writes: VecDeque::from([StoreRequest::StoreBinding {
             binding: binding.clone(),
         }]),
         changed: Changed::Attached {
@@ -311,7 +311,7 @@ fn detach(
     let binding = bound(&context, channel_id)?;
     let revocation = attachment::revoke(&context.room, channel_id, now);
     let mut writes = VecDeque::from([update_room(&mut context, revocation)]);
-    writes.push_back(Request::DeleteBinding {
+    writes.push_back(StoreRequest::DeleteBinding {
         room_id: context.room.id.clone(),
         channel_id: channel_id.clone(),
     });
@@ -360,7 +360,7 @@ fn store_updated(
         }
     }
     Decision {
-        writes: VecDeque::from([Request::StoreBinding {
+        writes: VecDeque::from([StoreRequest::StoreBinding {
             binding: updated.clone(),
         }]),
         changed: Changed::BindingUpdated {
@@ -395,7 +395,7 @@ fn transition_room(
         });
     }
     room.updated_at = now;
-    let write = Request::UpdateRoom {
+    let write = StoreRequest::UpdateRoom {
         room_id: room.id.clone(),
         updates: RoomUpdates::lifecycle(&room),
     };
@@ -421,9 +421,9 @@ fn bound(context: &RoomContext, channel_id: &ChannelId) -> Result<ChannelBinding
 }
 
 /// The write of `updates` on the room, which `context` then reflects.
-fn update_room(context: &mut RoomContext, updates: RoomUpdates) -> Request {
+fn update_room(context: &mut RoomContext, updates: RoomUpdates) -> StoreRequest {
     updates.apply(&mut context.room);
-    Request::UpdateRoom {
+    StoreRequest::UpdateRoom {
         room_id: context.room.id.clone(),
         updates,
     }

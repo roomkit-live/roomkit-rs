@@ -31,9 +31,10 @@ pub use self::status::{
 
 use self::report::Reported;
 use super::io::Io;
-use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Request, Step};
+use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use super::{Cx, Environment, KitConfig};
 use crate::model::{ChannelId, ErrorRecord, Room, RoomContext, RoomId, RoomStatus};
+use crate::ops::protocol::StoreRequest;
 use crate::rules::attachment;
 use crate::rules::lifecycle::Transition;
 
@@ -171,7 +172,7 @@ impl CreateRoom {
             return Some(Err(LifecycleError::ReservedMetadataKey(key.to_owned())));
         }
         let room = self.room.clone();
-        self.creating = Some(self.io.issue(Request::CreateRoom { room }));
+        self.creating = Some(self.io.issue(StoreRequest::CreateRoom { room }));
         None
     }
 }

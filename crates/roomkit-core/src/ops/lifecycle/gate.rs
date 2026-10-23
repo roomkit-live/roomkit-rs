@@ -10,7 +10,7 @@
 //! transitions left it, so a late message is refused exactly.
 
 use crate::model::{ErrorRecord, Room, RoomContext, RoomUpdates};
-use crate::ops::protocol::{EffectId, Outcome, Request};
+use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::{Cx, TransitionReason};
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::timers::{self, DueTransition};
@@ -62,7 +62,7 @@ pub(crate) fn open(cx: &mut Cx<'_>, context: Box<RoomContext>) -> Gate {
         room.updated_at = now;
         applied.push((transition, room.clone()));
     }
-    let effect = cx.io.issue(Request::UpdateRoom {
+    let effect = cx.io.issue(StoreRequest::UpdateRoom {
         room_id: room.id.clone(),
         updates: RoomUpdates::lifecycle(&room),
     });

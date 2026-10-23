@@ -10,7 +10,7 @@ use super::change::{self, Change, Done};
 use crate::model::{RoomContext, RoomId};
 use crate::ops::io::Io;
 use crate::ops::lifecycle::gate::{self, Gate, Opened, Pending};
-use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Request, Step};
+use crate::ops::protocol::{EffectId, HoldRequest, Outcome, ProtocolError, Step, StoreRequest};
 use crate::ops::{self, Cx, Environment, KitConfig};
 
 /// The shape the direct calls share: take the lock, read the room, apply
@@ -102,7 +102,7 @@ impl EventSection {
         };
         if matches!(state, State::Start) {
             let room_id = room_id.clone();
-            *state = State::Locking(cx.io.issue(Request::AcquireLock { room_id }));
+            *state = State::Locking(cx.io.issue(HoldRequest::AcquireLock { room_id }));
         }
         while let Some((effect, outcome)) = cx.io.next_outcome() {
             *state = advance(
@@ -144,7 +144,7 @@ fn advance(
 ) -> State {
     match state {
         State::Locking(expected) if expected == effect => match outcome.into_locked() {
-            Ok(()) => State::Loading(cx.io.issue(Request::LoadContext {
+            Ok(()) => State::Loading(cx.io.issue(StoreRequest::LoadContext {
                 room_id: room_id.clone(),
                 recent_events: cx.config.context_window,
             })),
@@ -236,7 +236,7 @@ pub(super) fn release(
     room_id: &RoomId,
     result: Result<Box<Done>, MutationError>,
 ) -> State {
-    let effect = cx.io.issue(Request::ReleaseLock {
+    let effect = cx.io.issue(HoldRequest::ReleaseLock {
         room_id: room_id.clone(),
     });
     State::Releasing { effect, result }

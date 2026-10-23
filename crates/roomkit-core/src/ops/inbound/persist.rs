@@ -7,7 +7,7 @@
 use super::{Machine, Stage, report};
 use crate::model::{RoomUpdates, Task};
 use crate::ops::Cx;
-use crate::ops::protocol::{EffectId, Outcome, Request};
+use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 
 impl Machine {
     /// Stores the side effects every pass and set collected, and applies the
@@ -28,7 +28,7 @@ impl Machine {
         }
         let room_id = self.room_id.clone()?;
         let tasks = std::mem::take(&mut self.tasks);
-        let effect = cx.io.issue(Request::PersistSideEffects {
+        let effect = cx.io.issue(StoreRequest::PersistSideEffects {
             room_id,
             tasks: tasks.clone(),
             observations: std::mem::take(&mut self.observations),
@@ -42,7 +42,7 @@ impl Machine {
             return None;
         }
         let room_id = self.room_id.clone()?;
-        Some(cx.io.issue(Request::UpdateRoom {
+        Some(cx.io.issue(StoreRequest::UpdateRoom {
             room_id,
             updates: RoomUpdates {
                 updated_at: Some(cx.env.now()),

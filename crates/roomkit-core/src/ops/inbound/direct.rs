@@ -25,7 +25,7 @@ use super::instructions::{self, Admission};
 use super::{InboundError, InboundResult, Machine, Stage, stamp};
 use crate::model::{DirectEvent, RoomContext, RoomEvent, RoomId};
 use crate::ops::io::Bound;
-use crate::ops::protocol::{EffectId, Outcome, Request};
+use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::{Cx, Progress};
 use crate::rules::organizations;
 use crate::rules::permissions::WriteRefusal;
@@ -77,7 +77,7 @@ impl DirectRead {
 
     /// Reads the room, within the call's `deadline`.
     pub(super) fn start(&mut self, cx: &mut Cx<'_>, bound: Bound) {
-        let request = Request::LoadContext {
+        let request = StoreRequest::LoadContext {
             room_id: self.event.room_id.clone(),
             recent_events: cx.config.context_window,
         };

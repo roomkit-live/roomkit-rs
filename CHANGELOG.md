@@ -554,13 +554,25 @@ publishes a release.
   `check_timers` returns `KitError::ShutDown`. Each sweep of a timer
   sweeper is tracked work too: `idle()` waits for one under way, and
   `shutdown()` ends it, the room lock it holds let go, and waits for it; a
-  sweep could hold a lock and write after the shutdown returned. The examples wait for the
-  observers they check with `idle()` instead of a timeout.
+  sweep could hold a lock and write after the shutdown returned. The
+  examples wait for the observers they check with `idle()` instead of a
+  timeout.
 - `ChannelBinding::can_write` is removed: `rules::permissions::write_refusal`
-  says whether a source may write, and why not. `RoomContext::binding(channel_id)`
-  reads a room's binding of a channel, and `rules::routing::kept_by_status`
-  whether a routed room's status, as its lock finds it, keeps the message.
+  says whether a source may write, and why not.
+  `RoomContext::binding(channel_id)` reads a room's binding of a channel,
+  and `rules::routing::kept_by_status` whether a routed room's status, as
+  its lock finds it, keeps the message.
 - A hook's modify of an event marked `internal` keeps `internal`, whatever
   visibility it writes; it could widen the framework's record to channels
   (gap G-041). A modify writing `internal` on another event still gets the
   original's visibility back.
+- The effect protocol is grouped by family: `Request` is `Hold`
+  (`HoldRequest`: the room's lock, the lane's places, the admission
+  ticket), `Store` (`StoreRequest`), `Channel` (`ChannelRequest`), `Hook`
+  (`HookRequest`) or `Route`, and `Outcome` answers by the same families
+  (`HoldOutcome`, `StoreOutcome`, `ChannelOutcome`, `HookAnswer`, whose
+  `Ran` was `Outcome::Hook`), beside `Routed`, `Failed` and
+  `DeadlinePassed`; both were flat. A driver hands each family to one
+  handler, and the runtime's call executor no longer has the branches a
+  request of another family could reach. `StoreRequest::Commit` and
+  `HookRequest::RunHook` carry their event boxed.

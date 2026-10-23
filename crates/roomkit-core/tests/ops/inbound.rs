@@ -8,8 +8,8 @@ use roomkit_core::model::{
     Visibility,
 };
 use roomkit_core::ops::{
-    FrameworkEvent, Inbound, InboundError, InboundTarget, KitConfig, Next, Operation, Outcome,
-    ProtocolError, RefusedOperation, SequentialEnvironment,
+    FrameworkEvent, HoldOutcome, Inbound, InboundError, InboundTarget, KitConfig, Next, Operation,
+    Outcome, ProtocolError, RefusedOperation, SequentialEnvironment, StoreOutcome,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
@@ -1799,12 +1799,14 @@ mod a_refused_operation {
         let target = InboundTarget::Room(room_id());
         let mut inbound = Inbound::new(Arc::new(config), target, None, Sim::message("sms", "Hi"));
         let mut environment = SequentialEnvironment::default();
-        let context = Outcome::Context(Box::new(roomkit_core::model::RoomContext {
-            room: sim.room.clone(),
-            bindings: sim.bindings.clone(),
-            participants: Vec::new(),
-            recent_events: Vec::new(),
-        }));
+        let context = Outcome::Store(StoreOutcome::Context(Box::new(
+            roomkit_core::model::RoomContext {
+                room: sim.room.clone(),
+                bindings: sim.bindings.clone(),
+                participants: Vec::new(),
+                recent_events: Vec::new(),
+            },
+        )));
         let failure = Outcome::Failed(ErrorRecord::new("ParseError", "bad payload"));
         for outcome in [context, failure] {
             answer(&mut inbound, &mut environment, outcome);
@@ -2121,7 +2123,7 @@ mod the_protocol {
     fn an_outcome_of_another_family_is_refused() {
         let (mut inbound, effect) = started();
         assert!(matches!(
-            inbound.complete(effect, Outcome::Locked),
+            inbound.complete(effect, Outcome::Hold(HoldOutcome::Locked)),
             Err(ProtocolError::UnexpectedOutcome { .. })
         ));
     }
@@ -2129,9 +2131,11 @@ mod the_protocol {
     #[test]
     fn an_effect_completed_twice_is_refused() {
         let (mut inbound, effect) = started();
-        inbound.complete(effect, Outcome::RoomNotFound).unwrap();
+        inbound
+            .complete(effect, Outcome::Store(StoreOutcome::RoomNotFound))
+            .unwrap();
         assert_eq!(
-            inbound.complete(effect, Outcome::RoomNotFound),
+            inbound.complete(effect, Outcome::Store(StoreOutcome::RoomNotFound)),
             Err(ProtocolError::UnknownEffect(effect))
         );
     }

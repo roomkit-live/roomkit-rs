@@ -39,7 +39,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use roomkit_core::model::{ErrorRecord, EventId, RoomId};
-use roomkit_core::ops::{EffectId, Outcome, Request};
+use roomkit_core::ops::{EffectId, HoldOutcome, HoldRequest, Outcome};
 use tokio::time::Instant;
 
 use crate::context::{ExecutionContext, RunShared};
@@ -79,7 +79,7 @@ pub(super) enum Waited<'kit> {
     Turn(RoomId, Ticket<'kit>, bool),
 }
 
-/// What a request comes to.
+/// What a hold comes to.
 pub(super) enum Hold<'kit> {
     /// Answered at once.
     Now(Outcome),
@@ -88,8 +88,6 @@ pub(super) enum Hold<'kit> {
     /// Refused at once: what it waits for is held by the call this one runs
     /// within, which waits for this one.
     Refused(RoomId),
-    /// Not a hold: a call.
-    Call(Box<Request>),
 }
 
 /// How the run holds a room's lock.
@@ -124,67 +122,48 @@ impl<'kit> Held<'kit> {
     }
 
     /// Carries out `request` for `effect`: a release, a place or a ticket at
-    /// once, a wait as a future, within `deadline`; any other request comes
-    /// back as a call.
+    /// once, a wait as a future, within `deadline`.
     pub(super) fn hold(
         &mut self,
         rooms: Rooms<'kit>,
         context: &ExecutionContext,
         effect: EffectId,
-        request: Request,
+        request: HoldRequest,
         deadline: Option<Instant>,
     ) -> Hold<'kit> {
         match request {
-            Request::AcquireLock { room_id } => {
+            HoldRequest::AcquireLock { room_id } => {
                 self.acquire(rooms, context, effect, room_id, deadline)
             }
-            Request::ReleaseLock { room_id } => {
+            HoldRequest::ReleaseLock { room_id } => {
                 self.locks.remove(&room_id);
                 self.shared.released(&room_id);
-                Hold::Now(Outcome::Released)
+                Hold::Now(HoldOutcome::Released.into())
             }
-            Request::EnterLane { room_id, event_id } => {
+            HoldRequest::EnterLane { room_id, event_id } => {
                 let place = rooms.lanes.take(&room_id, event_id.clone());
                 self.places.insert((room_id, event_id), place);
-                Hold::Now(Outcome::Entered)
+                Hold::Now(HoldOutcome::Entered.into())
             }
-            Request::AwaitLane { room_id, event_id } => {
+            HoldRequest::AwaitLane { room_id, event_id } => {
                 self.await_place(rooms, effect, room_id, event_id, deadline)
             }
-            Request::LeaveLane { room_id, event_id } => {
+            HoldRequest::LeaveLane { room_id, event_id } => {
                 self.places.remove(&(room_id, event_id));
-                Hold::Now(Outcome::Left)
+                Hold::Now(HoldOutcome::Left.into())
             }
-            Request::TakeTicket { room_id } => {
+            HoldRequest::TakeTicket { room_id } => {
                 let ticket = rooms.tickets.take(&room_id);
                 self.tickets.insert(room_id, ticket);
-                Hold::Now(Outcome::Ticketed)
+                Hold::Now(HoldOutcome::Ticketed.into())
             }
-            Request::AwaitTicket { room_id } => {
+            HoldRequest::AwaitTicket { room_id } => {
                 self.await_turn(rooms, context, effect, room_id, deadline)
             }
-            Request::ReleaseTicket { room_id } => {
+            HoldRequest::ReleaseTicket { room_id } => {
                 self.tickets.remove(&room_id);
-                Hold::Now(Outcome::TicketReleased)
+                Hold::Now(HoldOutcome::TicketReleased.into())
             }
-            request @ (Request::LoadContext { .. }
-            | Request::FindByIdempotencyKey { .. }
-            | Request::GetEvent { .. }
-            | Request::UpdateEvent { .. }
-            | Request::DeleteEvent { .. }
-            | Request::Commit { .. }
-            | Request::PersistSideEffects { .. }
-            | Request::CreateRoom { .. }
-            | Request::UpdateRoom { .. }
-            | Request::StoreBinding { .. }
-            | Request::DeleteBinding { .. }
-            | Request::HandleInbound { .. }
-            | Request::OnEvent { .. }
-            | Request::Deliver { .. }
-            | Request::RunHook { .. }
-            | Request::RunObservers { .. }
-            | Request::ResolveIdentity { .. }
-            | Request::Route { .. }) => Hold::Call(Box::new(request)),
         }
     }
 
@@ -209,7 +188,7 @@ impl<'kit> Held<'kit> {
             }
             self.shared.granted(lease);
             self.locks.insert(room_id, LockHold::Granted);
-            return Hold::Now(Outcome::Locked);
+            return Hold::Now(HoldOutcome::Locked.into());
         }
         let wait = async move {
             let guard = super::within(deadline, rooms.locks.lock(&room_id)).await;
@@ -280,13 +259,13 @@ impl<'kit> Held<'kit> {
             Waited::Lock(room_id, Some(guard)) => {
                 self.shared.locked(room_id.clone());
                 self.locks.insert(room_id, LockHold::Own(guard));
-                Outcome::Locked
+                HoldOutcome::Locked.into()
             }
             Waited::Lock(_, None) => Outcome::DeadlinePassed,
             Waited::Place(key, place, came) => {
                 self.places.insert(key, place);
                 if came {
-                    Outcome::LaneTurn
+                    HoldOutcome::LaneTurn.into()
                 } else {
                     Outcome::DeadlinePassed
                 }
@@ -294,7 +273,7 @@ impl<'kit> Held<'kit> {
             Waited::Turn(room_id, ticket, admitted) => {
                 self.tickets.insert(room_id, ticket);
                 if admitted {
-                    Outcome::Admitted
+                    HoldOutcome::Admitted.into()
                 } else {
                     Outcome::DeadlinePassed
                 }

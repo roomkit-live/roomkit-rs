@@ -2,11 +2,15 @@
 //! driver completes an effect, and the readers an operation takes an answer
 //! through once checked.
 
-use super::{EffectId, Outcome, ProtocolError, Request};
+use super::{
+    ChannelOutcome, ChannelRequest, EffectId, HoldOutcome, HoldRequest, HookAnswer, HookRequest,
+    Outcome, ProtocolError, Request, StoreOutcome, StoreRequest,
+};
 use crate::model::{ChannelOutput, ErrorRecord, IdentityId, RoomContext, RoomEvent, RoomId};
 use crate::rules::hook_chain::HookOutcome;
 
-/// The families of requests, each answered by its own outcomes.
+/// The kind of a request, which `Io` keeps until the request is answered,
+/// to check the answer against it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RequestKind {
     AcquireLock,
@@ -23,17 +27,36 @@ pub(crate) enum RequestKind {
     DeleteEvent,
     Commit,
     PersistSideEffects,
-    Store,
+    /// A write answered `Stored`: a room's creation or update, a binding's
+    /// store or delete, an event's update.
+    Write,
+    ResolveIdentity,
     HandleInbound,
+    /// A turn or a delivery: `on_event()` or `deliver()`.
     ChannelCall,
     RunHook,
     RunObservers,
-    ResolveIdentity,
     Route,
 }
 
 impl Request {
     pub(crate) fn kind(&self) -> RequestKind {
+        match self {
+            Self::Hold(request) => request.kind(),
+            Self::Store(request) => request.kind(),
+            Self::Channel(ChannelRequest::HandleInbound { .. }) => RequestKind::HandleInbound,
+            Self::Channel(ChannelRequest::OnEvent { .. } | ChannelRequest::Deliver { .. }) => {
+                RequestKind::ChannelCall
+            }
+            Self::Hook(HookRequest::RunHook { .. }) => RequestKind::RunHook,
+            Self::Hook(HookRequest::RunObservers { .. }) => RequestKind::RunObservers,
+            Self::Route { .. } => RequestKind::Route,
+        }
+    }
+}
+
+impl HoldRequest {
+    fn kind(&self) -> RequestKind {
         match self {
             Self::AcquireLock { .. } => RequestKind::AcquireLock,
             Self::ReleaseLock { .. } => RequestKind::ReleaseLock,
@@ -43,6 +66,13 @@ impl Request {
             Self::TakeTicket { .. } => RequestKind::TakeTicket,
             Self::AwaitTicket { .. } => RequestKind::AwaitTicket,
             Self::ReleaseTicket { .. } => RequestKind::ReleaseTicket,
+        }
+    }
+}
+
+impl StoreRequest {
+    fn kind(&self) -> RequestKind {
+        match self {
             Self::LoadContext { .. } => RequestKind::LoadContext,
             Self::FindByIdempotencyKey { .. } => RequestKind::FindByIdempotencyKey,
             Self::GetEvent { .. } => RequestKind::GetEvent,
@@ -53,19 +83,14 @@ impl Request {
             | Self::UpdateRoom { .. }
             | Self::StoreBinding { .. }
             | Self::DeleteBinding { .. }
-            | Self::UpdateEvent { .. } => RequestKind::Store,
-            Self::HandleInbound { .. } => RequestKind::HandleInbound,
-            Self::OnEvent { .. } | Self::Deliver { .. } => RequestKind::ChannelCall,
-            Self::RunHook { .. } => RequestKind::RunHook,
-            Self::RunObservers { .. } => RequestKind::RunObservers,
+            | Self::UpdateEvent { .. } => RequestKind::Write,
             Self::ResolveIdentity { .. } => RequestKind::ResolveIdentity,
-            Self::Route { .. } => RequestKind::Route,
         }
     }
 }
 
 impl RequestKind {
-    /// The outcomes that answer this family, for error messages.
+    /// The outcomes that answer this kind, for error messages.
     fn expected(self) -> &'static str {
         match self {
             Self::AcquireLock => "Locked",
@@ -82,18 +107,50 @@ impl RequestKind {
             Self::DeleteEvent => "Deleted",
             Self::Commit => "Committed",
             Self::PersistSideEffects => "Persisted",
-            Self::Store => "Stored",
+            Self::Write => "Stored",
+            Self::ResolveIdentity => "Resolved",
             Self::HandleInbound => "Parsed",
             Self::ChannelCall => "Output",
-            Self::RunHook => "Hook",
+            Self::RunHook => "Ran",
             Self::RunObservers => "Observed",
-            Self::ResolveIdentity => "Resolved",
             Self::Route => "Routed",
         }
     }
 
-    /// Checks that `outcome` answers this family; `Failed` answers every
-    /// one, and `DeadlinePassed` every one whose effect carried a deadline
+    /// Whether `outcome`, of the kind's family, answers the kind.
+    fn answered_by(self, outcome: &Outcome) -> bool {
+        match self {
+            Self::AcquireLock => matches!(outcome, Outcome::Hold(HoldOutcome::Locked)),
+            Self::ReleaseLock => matches!(outcome, Outcome::Hold(HoldOutcome::Released)),
+            Self::EnterLane => matches!(outcome, Outcome::Hold(HoldOutcome::Entered)),
+            Self::AwaitLane => matches!(outcome, Outcome::Hold(HoldOutcome::LaneTurn)),
+            Self::LeaveLane => matches!(outcome, Outcome::Hold(HoldOutcome::Left)),
+            Self::TakeTicket => matches!(outcome, Outcome::Hold(HoldOutcome::Ticketed)),
+            Self::AwaitTicket => matches!(outcome, Outcome::Hold(HoldOutcome::Admitted)),
+            Self::ReleaseTicket => matches!(outcome, Outcome::Hold(HoldOutcome::TicketReleased)),
+            Self::LoadContext => matches!(
+                outcome,
+                Outcome::Store(StoreOutcome::Context(_) | StoreOutcome::RoomNotFound)
+            ),
+            Self::FindByIdempotencyKey => {
+                matches!(outcome, Outcome::Store(StoreOutcome::Idempotent(_)))
+            }
+            Self::GetEvent => matches!(outcome, Outcome::Store(StoreOutcome::Event(_))),
+            Self::DeleteEvent => matches!(outcome, Outcome::Store(StoreOutcome::Deleted(_))),
+            Self::Commit => matches!(outcome, Outcome::Store(StoreOutcome::Committed)),
+            Self::PersistSideEffects => matches!(outcome, Outcome::Store(StoreOutcome::Persisted)),
+            Self::Write => matches!(outcome, Outcome::Store(StoreOutcome::Stored)),
+            Self::ResolveIdentity => matches!(outcome, Outcome::Store(StoreOutcome::Resolved(_))),
+            Self::HandleInbound => matches!(outcome, Outcome::Channel(ChannelOutcome::Parsed(_))),
+            Self::ChannelCall => matches!(outcome, Outcome::Channel(ChannelOutcome::Output(_))),
+            Self::RunHook => matches!(outcome, Outcome::Hook(HookAnswer::Ran(_))),
+            Self::RunObservers => matches!(outcome, Outcome::Hook(HookAnswer::Observed)),
+            Self::Route => matches!(outcome, Outcome::Routed(_)),
+        }
+    }
+
+    /// Checks that `outcome` answers this kind; `Failed` answers every one,
+    /// and `DeadlinePassed` every one whose effect carried a deadline
     /// (`bounded`).
     pub(crate) fn check(
         self,
@@ -101,54 +158,14 @@ impl RequestKind {
         outcome: &Outcome,
         bounded: bool,
     ) -> Result<(), ProtocolError> {
-        let fits = match (self, outcome) {
-            (_, Outcome::DeadlinePassed) => bounded,
-            (_, Outcome::Failed(_))
-            | (Self::AcquireLock, Outcome::Locked)
-            | (Self::ReleaseLock, Outcome::Released)
-            | (Self::EnterLane, Outcome::Entered)
-            | (Self::AwaitLane, Outcome::LaneTurn)
-            | (Self::LeaveLane, Outcome::Left)
-            | (Self::TakeTicket, Outcome::Ticketed)
-            | (Self::AwaitTicket, Outcome::Admitted)
-            | (Self::ReleaseTicket, Outcome::TicketReleased)
-            | (Self::LoadContext, Outcome::Context(_) | Outcome::RoomNotFound)
-            | (Self::FindByIdempotencyKey, Outcome::Idempotent(_))
-            | (Self::GetEvent, Outcome::Event(_))
-            | (Self::DeleteEvent, Outcome::Deleted(_))
-            | (Self::Commit, Outcome::Committed)
-            | (Self::PersistSideEffects, Outcome::Persisted)
-            | (Self::Store, Outcome::Stored)
-            | (Self::HandleInbound, Outcome::Parsed(_))
-            | (Self::ChannelCall, Outcome::Output(_))
-            | (Self::RunHook, Outcome::Hook(_))
-            | (Self::RunObservers, Outcome::Observed)
-            | (Self::ResolveIdentity, Outcome::Resolved(_))
-            | (Self::Route, Outcome::Routed(_)) => true,
-            (
-                Self::AcquireLock
-                | Self::ReleaseLock
-                | Self::EnterLane
-                | Self::AwaitLane
-                | Self::LeaveLane
-                | Self::TakeTicket
-                | Self::AwaitTicket
-                | Self::ReleaseTicket
-                | Self::LoadContext
-                | Self::FindByIdempotencyKey
-                | Self::GetEvent
-                | Self::DeleteEvent
-                | Self::Commit
-                | Self::PersistSideEffects
-                | Self::Store
-                | Self::HandleInbound
-                | Self::ChannelCall
-                | Self::RunHook
-                | Self::RunObservers
-                | Self::ResolveIdentity
-                | Self::Route,
-                _,
-            ) => false,
+        let fits = match outcome {
+            Outcome::DeadlinePassed => bounded,
+            Outcome::Failed(_) => true,
+            Outcome::Hold(_)
+            | Outcome::Store(_)
+            | Outcome::Channel(_)
+            | Outcome::Hook(_)
+            | Outcome::Routed(_) => self.answered_by(outcome),
         };
         if fits {
             Ok(())
@@ -173,65 +190,49 @@ impl RequestKind {
     reason = "Io has checked the outcome against its request: other variants cannot arrive"
 )]
 impl Outcome {
-    pub(crate) fn into_locked(self) -> Result<(), ErrorRecord> {
+    /// Whether the outcome is the hold `held`.
+    fn held(self, held: HoldOutcome) -> Result<(), ErrorRecord> {
         match self {
-            Self::Locked => Ok(()),
+            Self::Hold(outcome) if outcome == held => Ok(()),
             other => Err(other.into_failure()),
         }
+    }
+
+    pub(crate) fn into_locked(self) -> Result<(), ErrorRecord> {
+        self.held(HoldOutcome::Locked)
     }
 
     pub(crate) fn into_released(self) -> Result<(), ErrorRecord> {
-        match self {
-            Self::Released => Ok(()),
-            other => Err(other.into_failure()),
-        }
+        self.held(HoldOutcome::Released)
     }
 
     pub(crate) fn into_entered(self) -> Result<(), ErrorRecord> {
-        match self {
-            Self::Entered => Ok(()),
-            other => Err(other.into_failure()),
-        }
+        self.held(HoldOutcome::Entered)
     }
 
     pub(crate) fn into_lane_turn(self) -> Result<(), ErrorRecord> {
-        match self {
-            Self::LaneTurn => Ok(()),
-            other => Err(other.into_failure()),
-        }
+        self.held(HoldOutcome::LaneTurn)
     }
 
     pub(crate) fn into_left(self) -> Result<(), ErrorRecord> {
-        match self {
-            Self::Left => Ok(()),
-            other => Err(other.into_failure()),
-        }
+        self.held(HoldOutcome::Left)
     }
 
     pub(crate) fn into_ticketed(self) -> Result<(), ErrorRecord> {
-        match self {
-            Self::Ticketed => Ok(()),
-            other => Err(other.into_failure()),
-        }
+        self.held(HoldOutcome::Ticketed)
     }
 
     pub(crate) fn into_admitted(self) -> Result<(), ErrorRecord> {
-        match self {
-            Self::Admitted => Ok(()),
-            other => Err(other.into_failure()),
-        }
+        self.held(HoldOutcome::Admitted)
     }
 
     pub(crate) fn into_ticket_released(self) -> Result<(), ErrorRecord> {
-        match self {
-            Self::TicketReleased => Ok(()),
-            other => Err(other.into_failure()),
-        }
+        self.held(HoldOutcome::TicketReleased)
     }
 
     pub(crate) fn into_observed(self) -> Result<(), ErrorRecord> {
         match self {
-            Self::Observed => Ok(()),
+            Self::Hook(HookAnswer::Observed) => Ok(()),
             other => Err(other.into_failure()),
         }
     }
@@ -239,15 +240,15 @@ impl Outcome {
     /// The room's context, `None` when the room does not exist.
     pub(crate) fn into_context(self) -> Result<Option<Box<RoomContext>>, ErrorRecord> {
         match self {
-            Self::Context(context) => Ok(Some(context)),
-            Self::RoomNotFound => Ok(None),
+            Self::Store(StoreOutcome::Context(context)) => Ok(Some(context)),
+            Self::Store(StoreOutcome::RoomNotFound) => Ok(None),
             other => Err(other.into_failure()),
         }
     }
 
     pub(crate) fn into_idempotent(self) -> Result<Option<Box<RoomEvent>>, ErrorRecord> {
         match self {
-            Self::Idempotent(event) => Ok(event),
+            Self::Store(StoreOutcome::Idempotent(event)) => Ok(event),
             other => Err(other.into_failure()),
         }
     }
@@ -255,7 +256,7 @@ impl Outcome {
     /// The event read, `None` when the store holds none with the id.
     pub(crate) fn into_event(self) -> Result<Option<Box<RoomEvent>>, ErrorRecord> {
         match self {
-            Self::Event(event) => Ok(event),
+            Self::Store(StoreOutcome::Event(event)) => Ok(event),
             other => Err(other.into_failure()),
         }
     }
@@ -263,42 +264,42 @@ impl Outcome {
     /// The events a delete removed, the target first.
     pub(crate) fn into_deleted(self) -> Result<Vec<RoomEvent>, ErrorRecord> {
         match self {
-            Self::Deleted(events) => Ok(events),
+            Self::Store(StoreOutcome::Deleted(events)) => Ok(events),
             other => Err(other.into_failure()),
         }
     }
 
     pub(crate) fn into_committed(self) -> Result<(), ErrorRecord> {
         match self {
-            Self::Committed => Ok(()),
+            Self::Store(StoreOutcome::Committed) => Ok(()),
             other => Err(other.into_failure()),
         }
     }
 
     pub(crate) fn into_persisted(self) -> Result<(), ErrorRecord> {
         match self {
-            Self::Persisted => Ok(()),
+            Self::Store(StoreOutcome::Persisted) => Ok(()),
             other => Err(other.into_failure()),
         }
     }
 
     pub(crate) fn into_stored(self) -> Result<(), ErrorRecord> {
         match self {
-            Self::Stored => Ok(()),
+            Self::Store(StoreOutcome::Stored) => Ok(()),
             other => Err(other.into_failure()),
         }
     }
 
     pub(crate) fn into_parsed(self) -> Result<Box<RoomEvent>, ErrorRecord> {
         match self {
-            Self::Parsed(event) => Ok(event),
+            Self::Channel(ChannelOutcome::Parsed(event)) => Ok(event),
             other => Err(other.into_failure()),
         }
     }
 
     pub(crate) fn into_output(self) -> Result<Box<ChannelOutput>, ErrorRecord> {
         match self {
-            Self::Output(output) => Ok(output),
+            Self::Channel(ChannelOutcome::Output(output)) => Ok(output),
             other => Err(other.into_failure()),
         }
     }
@@ -306,7 +307,7 @@ impl Outcome {
     /// The identity an address resolved to, if any.
     pub(crate) fn into_resolved(self) -> Result<Option<IdentityId>, ErrorRecord> {
         match self {
-            Self::Resolved(identity) => Ok(identity),
+            Self::Store(StoreOutcome::Resolved(identity)) => Ok(identity),
             other => Err(other.into_failure()),
         }
     }
@@ -322,7 +323,7 @@ impl Outcome {
     /// What a hook produced; a hook the driver could not run raised.
     pub(crate) fn into_hook(self) -> HookOutcome<RoomEvent> {
         match self {
-            Self::Hook(outcome) => *outcome,
+            Self::Hook(HookAnswer::Ran(outcome)) => *outcome,
             other => HookOutcome::Raised(other.into_failure()),
         }
     }
@@ -347,27 +348,31 @@ impl Outcome {
 impl Outcome {
     fn name(&self) -> &'static str {
         match self {
-            Self::Locked => "Locked",
-            Self::Released => "Released",
-            Self::Entered => "Entered",
-            Self::LaneTurn => "LaneTurn",
-            Self::Left => "Left",
-            Self::Ticketed => "Ticketed",
-            Self::Admitted => "Admitted",
-            Self::TicketReleased => "TicketReleased",
-            Self::Context(_) => "Context",
-            Self::RoomNotFound => "RoomNotFound",
-            Self::Idempotent(_) => "Idempotent",
-            Self::Event(_) => "Event",
-            Self::Deleted(_) => "Deleted",
-            Self::Committed => "Committed",
-            Self::Persisted => "Persisted",
-            Self::Stored => "Stored",
-            Self::Parsed(_) => "Parsed",
-            Self::Output(_) => "Output",
-            Self::Hook(_) => "Hook",
-            Self::Observed => "Observed",
-            Self::Resolved(_) => "Resolved",
+            Self::Hold(outcome) => match outcome {
+                HoldOutcome::Locked => "Locked",
+                HoldOutcome::Released => "Released",
+                HoldOutcome::Entered => "Entered",
+                HoldOutcome::LaneTurn => "LaneTurn",
+                HoldOutcome::Left => "Left",
+                HoldOutcome::Ticketed => "Ticketed",
+                HoldOutcome::Admitted => "Admitted",
+                HoldOutcome::TicketReleased => "TicketReleased",
+            },
+            Self::Store(outcome) => match outcome {
+                StoreOutcome::Context(_) => "Context",
+                StoreOutcome::RoomNotFound => "RoomNotFound",
+                StoreOutcome::Idempotent(_) => "Idempotent",
+                StoreOutcome::Event(_) => "Event",
+                StoreOutcome::Deleted(_) => "Deleted",
+                StoreOutcome::Committed => "Committed",
+                StoreOutcome::Persisted => "Persisted",
+                StoreOutcome::Stored => "Stored",
+                StoreOutcome::Resolved(_) => "Resolved",
+            },
+            Self::Channel(ChannelOutcome::Parsed(_)) => "Parsed",
+            Self::Channel(ChannelOutcome::Output(_)) => "Output",
+            Self::Hook(HookAnswer::Ran(_)) => "Ran",
+            Self::Hook(HookAnswer::Observed) => "Observed",
             Self::Routed(_) => "Routed",
             Self::Failed(_) => "Failed",
             Self::DeadlinePassed => "DeadlinePassed",
@@ -393,7 +398,11 @@ mod tests {
     #[test]
     fn an_outcome_of_another_family_is_a_protocol_error() {
         assert_eq!(
-            RequestKind::Commit.check(EffectId::first(), &Outcome::Locked, false),
+            RequestKind::Commit.check(
+                EffectId::first(),
+                &Outcome::Hold(HoldOutcome::Locked),
+                false
+            ),
             Err(ProtocolError::UnexpectedOutcome {
                 effect: EffectId::first(),
                 expected: "Committed",
@@ -419,9 +428,17 @@ mod tests {
     fn an_event_or_none_answers_an_event_read_only() {
         assert_eq!(
             (
-                RequestKind::GetEvent.check(EffectId::first(), &Outcome::Event(None), false),
+                RequestKind::GetEvent.check(
+                    EffectId::first(),
+                    &Outcome::Store(StoreOutcome::Event(None)),
+                    false
+                ),
                 RequestKind::GetEvent
-                    .check(EffectId::first(), &Outcome::Stored, false)
+                    .check(
+                        EffectId::first(),
+                        &Outcome::Store(StoreOutcome::Stored),
+                        false
+                    )
                     .is_err()
             ),
             (Ok(()), true)
@@ -434,14 +451,22 @@ mod tests {
             (
                 RequestKind::DeleteEvent.check(
                     EffectId::first(),
-                    &Outcome::Deleted(Vec::new()),
+                    &Outcome::Store(StoreOutcome::Deleted(Vec::new())),
                     false
                 ),
                 RequestKind::DeleteEvent
-                    .check(EffectId::first(), &Outcome::Stored, false)
+                    .check(
+                        EffectId::first(),
+                        &Outcome::Store(StoreOutcome::Stored),
+                        false
+                    )
                     .is_err(),
-                RequestKind::Store
-                    .check(EffectId::first(), &Outcome::Deleted(Vec::new()), false)
+                RequestKind::Write
+                    .check(
+                        EffectId::first(),
+                        &Outcome::Store(StoreOutcome::Deleted(Vec::new())),
+                        false
+                    )
                     .is_err()
             ),
             (Ok(()), true, true)
@@ -474,15 +499,27 @@ mod tests {
     fn a_ticket_s_answers_answer_their_own_requests_only() {
         assert_eq!(
             (
-                RequestKind::TakeTicket.check(EffectId::first(), &Outcome::Ticketed, false),
-                RequestKind::AwaitTicket.check(EffectId::first(), &Outcome::Admitted, false),
+                RequestKind::TakeTicket.check(
+                    EffectId::first(),
+                    &Outcome::Hold(HoldOutcome::Ticketed),
+                    false
+                ),
+                RequestKind::AwaitTicket.check(
+                    EffectId::first(),
+                    &Outcome::Hold(HoldOutcome::Admitted),
+                    false
+                ),
                 RequestKind::ReleaseTicket.check(
                     EffectId::first(),
-                    &Outcome::TicketReleased,
+                    &Outcome::Hold(HoldOutcome::TicketReleased),
                     false
                 ),
                 RequestKind::AwaitTicket
-                    .check(EffectId::first(), &Outcome::Ticketed, false)
+                    .check(
+                        EffectId::first(),
+                        &Outcome::Hold(HoldOutcome::Ticketed),
+                        false
+                    )
                     .is_err()
             ),
             (Ok(()), Ok(()), Ok(()), true)
@@ -492,7 +529,11 @@ mod tests {
     #[test]
     fn a_missing_room_answers_a_context_request() {
         assert_eq!(
-            RequestKind::LoadContext.check(EffectId::first(), &Outcome::RoomNotFound, false),
+            RequestKind::LoadContext.check(
+                EffectId::first(),
+                &Outcome::Store(StoreOutcome::RoomNotFound),
+                false
+            ),
             Ok(())
         );
     }

@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use roomkit_core::model::{EventId, RoomId, Timestamp};
 use roomkit_core::ops::{
-    Decided, Effect, EffectId, Entry, EntryId, Environment, Inbound, InboundTarget, Next,
-    Operation, Outcome, Request, Settled,
+    ChannelRequest, Decided, Effect, EffectId, Entry, EntryId, Environment, HoldOutcome, Inbound,
+    InboundTarget, Next, Operation, Outcome, Request, Settled,
 };
 use roomkit_core::rules::chain_depth::ReentryBudget;
 
@@ -57,8 +57,9 @@ pub(super) struct Frame {
 
 impl Frame {
     fn of(run: RunId, effect: &Effect) -> Self {
-        let delivering = if let Request::OnEvent { binding, .. }
-        | Request::Deliver { binding, .. } = &effect.request
+        let delivering = if let Request::Channel(
+            ChannelRequest::OnEvent { binding, .. } | ChannelRequest::Deliver { binding, .. },
+        ) = &effect.request
         {
             Some(binding.room_id.clone())
         } else {
@@ -588,7 +589,7 @@ impl Sim {
             return self.wait(effect, deadline, Awaited::Lock(room_id));
         }
         self.take_lock(run, room_id);
-        Some(Outcome::Locked)
+        Some(Outcome::Hold(HoldOutcome::Locked))
     }
 
     /// Gives `run` the room's lock. A sender recorded meanwhile on the room
@@ -652,7 +653,7 @@ impl Sim {
             return self.wait(effect, deadline, Awaited::Place(room_id, event_id));
         }
         self.give_turn(run, room_id, event_id);
-        Some(Outcome::LaneTurn)
+        Some(Outcome::Hold(HoldOutcome::LaneTurn))
     }
 
     fn give_turn(&mut self, run: RunId, room_id: RoomId, event_id: EventId) {
@@ -727,7 +728,7 @@ impl Sim {
             return self.wait(effect, deadline, Awaited::Turn(room_id));
         }
         self.admit(run, room_id);
-        Some(Outcome::Admitted)
+        Some(Outcome::Hold(HoldOutcome::Admitted))
     }
 
     fn admit(&mut self, run: RunId, room_id: RoomId) {
@@ -793,15 +794,15 @@ impl Sim {
             let outcome = match wait.awaited {
                 Awaited::Lock(room_id) => {
                     self.take_lock(wait.run, room_id);
-                    Outcome::Locked
+                    Outcome::Hold(HoldOutcome::Locked)
                 }
                 Awaited::Place(room_id, event_id) => {
                     self.give_turn(wait.run, room_id, event_id);
-                    Outcome::LaneTurn
+                    Outcome::Hold(HoldOutcome::LaneTurn)
                 }
                 Awaited::Turn(room_id) => {
                     self.admit(wait.run, room_id);
-                    Outcome::Admitted
+                    Outcome::Hold(HoldOutcome::Admitted)
                 }
             };
             self.post(wait.run, wait.effect, outcome);

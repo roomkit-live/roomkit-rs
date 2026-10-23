@@ -16,7 +16,7 @@ use super::report;
 use crate::model::{ErrorRecord, RoomContext, RoomId};
 use crate::ops::io::Bound;
 use crate::ops::io::Io;
-use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Request, Step};
+use crate::ops::protocol::{EffectId, HoldRequest, Outcome, ProtocolError, Step, StoreRequest};
 use crate::ops::{self, Cx, Environment, KitConfig, Progress};
 use crate::rules::timers::DueTransition;
 
@@ -174,7 +174,7 @@ impl LockedSection {
     pub(crate) fn start(&mut self, cx: &mut Cx<'_>) {
         if matches!(self.state, State::Start) {
             let room_id = self.room_id.clone();
-            let request = Request::AcquireLock { room_id };
+            let request = HoldRequest::AcquireLock { room_id };
             self.state = State::Locking(cx.io.issue_within(request, self.bound));
         }
     }
@@ -233,7 +233,7 @@ impl LockedSection {
         match outcome.into_locked() {
             // The change's hooks receive the room's recent events, as every
             // hook does (gap G-027).
-            Ok(()) => State::Loading(cx.io.issue(Request::LoadContext {
+            Ok(()) => State::Loading(cx.io.issue(StoreRequest::LoadContext {
                 room_id: self.room_id.clone(),
                 recent_events: cx.config.context_window,
             })),
@@ -315,7 +315,7 @@ impl LockedSection {
     }
 
     fn release(&self, cx: &mut Cx<'_>, result: Result<Changed, LifecycleError>) -> State {
-        let effect = cx.io.issue(Request::ReleaseLock {
+        let effect = cx.io.issue(HoldRequest::ReleaseLock {
             room_id: self.room_id.clone(),
         });
         State::Releasing { effect, result }

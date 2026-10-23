@@ -10,7 +10,7 @@ use super::stamp;
 use crate::model::{RoomContext, RoomEvent, RoomId};
 use crate::ops::Cx;
 use crate::ops::io::Bound;
-use crate::ops::protocol::{EffectId, Outcome, Request};
+use crate::ops::protocol::{EffectId, HookRequest, Outcome};
 use crate::rules::hook_chain::HookChain;
 use crate::rules::hook_registry::{HookId, HookTrigger};
 
@@ -71,10 +71,10 @@ impl HookRun {
             .and_then(|hook| cx.config.hooks.get(hook).map(|spec| (hook, spec.timeout)))?;
         self.running = Some(hook);
         self.asked = true;
-        let request = Request::RunHook {
+        let request = HookRequest::RunHook {
             hook,
             trigger: HookTrigger::BeforeBroadcast,
-            event: stamp::keep_identity(original, self.chain.payload().clone()),
+            event: Box::new(stamp::keep_identity(original, self.chain.payload().clone())),
             context: Box::new(context.clone()),
             timeout,
         };

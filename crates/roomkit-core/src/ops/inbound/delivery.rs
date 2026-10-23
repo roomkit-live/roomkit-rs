@@ -26,7 +26,9 @@ use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, DeliveryResult, DeliveryStatus,
     ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
 };
-use crate::ops::protocol::{CHANNEL_NOT_REGISTERED, EffectId, Outcome, Request};
+use crate::ops::protocol::{
+    CHANNEL_NOT_REGISTERED, ChannelRequest, EffectId, HoldRequest, Outcome,
+};
 use crate::ops::{Cx, Progress};
 use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::HookTrigger;
@@ -222,7 +224,7 @@ impl DeliverySet {
         if self.place != Place::Taken {
             return self.deliver(cx);
         }
-        let request = Request::AwaitLane {
+        let request = HoldRequest::AwaitLane {
             room_id: self.event.room_id.clone(),
             event_id: self.event.id.clone(),
         };
@@ -241,7 +243,7 @@ impl DeliverySet {
                 self.not_registered(index);
                 continue;
             }
-            let request = Request::OnEvent {
+            let request = ChannelRequest::OnEvent {
                 binding: target.binding.clone(),
                 event: target.event.clone(),
                 context: target.context.clone(),
@@ -334,7 +336,7 @@ impl DeliverySet {
         if self.place != Place::Turn {
             return Progress::Done(std::mem::take(&mut self.outcome));
         }
-        let request = Request::LeaveLane {
+        let request = HoldRequest::LeaveLane {
             room_id: self.event.room_id.clone(),
             event_id: self.event.id.clone(),
         };
@@ -387,7 +389,7 @@ impl DeliverySet {
         if let Some(key) = missing_recipient(cx, &target.binding) {
             return self.refuse_without_recipient(index, &key);
         }
-        let request = Request::Deliver {
+        let request = ChannelRequest::Deliver {
             binding: target.binding.clone(),
             event: target.event.clone(),
             context: target.context.clone(),

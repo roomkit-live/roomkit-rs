@@ -59,8 +59,9 @@ pub use lifecycle::{
     UpdateBinding,
 };
 pub use protocol::{
-    CHANNEL_NOT_REGISTERED, Decided, Effect, EffectId, Entry, EntryId, Next, Notice, Operation,
-    Outcome, ProtocolError, Request, RoomCounters, Settled, Step, TargetUpdate,
+    CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided, Effect, EffectId, Entry,
+    EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest, Next, Notice, Operation, Outcome,
+    ProtocolError, Request, RoomCounters, Settled, Step, StoreOutcome, StoreRequest, TargetUpdate,
 };
 
 use crate::model::{ErrorRecord, EventId, RoomContext, RoomEvent, RoomId};

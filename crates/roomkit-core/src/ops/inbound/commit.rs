@@ -11,7 +11,7 @@ use super::pass::PassResult;
 use crate::model::{
     EventStatus, EventType, RoomContext, RoomEvent, RoomUpdates, Timestamp, Visibility,
 };
-use crate::ops::protocol::{EffectId, Request, RoomCounters, TargetUpdate};
+use crate::ops::protocol::{EffectId, RoomCounters, StoreRequest, TargetUpdate};
 use crate::ops::{Cx, FrameworkEvent, Notice};
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::permissions::{self, DeliveryPlan};
@@ -67,8 +67,8 @@ pub(super) fn delivered(
         None => (None, None),
     };
     let room_id = event.room_id.clone();
-    let request = Request::Commit {
-        event: event.clone(),
+    let request = StoreRequest::Commit {
+        event: Box::new(event.clone()),
         counters,
         target,
     };
@@ -119,8 +119,8 @@ pub(super) fn blocked(
     }
     let counters = RoomCounters::after_commit(&context.room, event.index);
     let room_id = event.room_id.clone();
-    let request = Request::Commit {
-        event,
+    let request = StoreRequest::Commit {
+        event: Box::new(event),
         counters,
         target: None,
     };
