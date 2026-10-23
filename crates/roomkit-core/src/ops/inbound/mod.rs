@@ -32,9 +32,10 @@
 //! set takes its place in the lane at that commit (RFC §13.5, §10.1 step 18,
 //! gap G-070). The queues thus carry several cascades: the call's, and one
 //! per adopted entry. A turn's or a delivery's call is a new arrival, an
-//! operation of its own (RFC §9.5.1 Reentrance), whose caller may take the
-//! call's decision, published once it is known (`Step::decided`), rather
-//! than wait for its delivery.
+//! operation of its own (RFC §9.5.1 Reentrance), drawing on the reentry
+//! budget of the cascade that delivers (gap G-070), whose caller may take
+//! the call's decision, published once it is known (`Step::decided`),
+//! rather than wait for its delivery.
 //!
 //! Every pass checks an edit or a delete against its target (RFC §10.1 step
 //! 8a, §10.3), updates the target in its commit, and fires `ON_EVENT_UPDATED`
@@ -170,6 +171,23 @@ impl Inbound {
         Self::calling(config, call)
     }
 
+    /// The same call, made by the code a delivery set runs, a turn or a
+    /// transport's delivery, drawing on `budget`, the reentry budget of the
+    /// cascade that delivers, rather than on one of its own (RFC §8.3, gap
+    /// G-070). The call is charged as it starts, as an entry adopted from
+    /// that cascade would be: a message as its arrival starts, before its
+    /// parse, refused with no event past the budget; an injected event at
+    /// its pass, stored `BLOCKED` with `reentry_loop_cap` past it, its hooks
+    /// never run. Its own cascade draws on the same budget, so that a
+    /// channel that calls into a room on every delivery stops at the cap.
+    /// The call keeps its own admission ticket and `process_timeout`.
+    #[must_use]
+    pub fn drawing_on(mut self, budget: ReentryBudget) -> Self {
+        self.machine.budget = budget;
+        self.machine.drawn = true;
+        self
+    }
+
     fn calling(config: Arc<KitConfig>, call: Call) -> Self {
         let budget = ReentryBudget::new(config.max_chain_depth);
         let entry = match call {
@@ -194,6 +212,7 @@ impl Inbound {
                 adopted: Adoptions::default(),
                 stopping: false,
                 budget,
+                drawn: false,
                 decided: false,
                 result: InboundResult::default(),
                 tasks: Vec::new(),
@@ -290,8 +309,12 @@ struct Machine {
     /// runs any more, committed events are still delivered.
     stopping: bool,
     /// The reentry budget every cascade of the operation draws on, an
-    /// adopted entry's on its caller's (RFC §8.3).
+    /// adopted entry's on its caller's (RFC §8.3), and the calls its
+    /// delivery sets' targets make into a room too (gap G-070).
     budget: ReentryBudget,
+    /// Whether the call draws on the budget of the cascade whose delivery
+    /// made it, which charges its trigger as it starts (gap G-070).
+    drawn: bool,
     /// Whether the trigger is decided: committed or, for an instruction,
     /// which is never committed, delivered or blocked by its pass. A failure
     /// after it no longer voids the result (RFC §13.6, gap G-065).

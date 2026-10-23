@@ -1013,8 +1013,8 @@ mod an_entry_adopted_under_the_lock {
 /// RFC §9.5.1 Reentrance, §10.1 step 18, gap G-070: a call an agent's turn
 /// makes into its own room is a new arrival, an operation of its own: it
 /// takes the room's admission ticket when an off-lock hook fires for it,
-/// draws on its own reentry budget, returns at its decision, and is
-/// delivered after its caller's set.
+/// draws on the reentry budget of the cascade that delivers to the turn,
+/// returns at its decision, and is delivered after its caller's set.
 mod an_arrival_from_a_delivery {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -1148,10 +1148,11 @@ mod an_arrival_from_a_delivery {
         );
     }
 
-    /// RFC §8.3: its budget is its own: the turn's calls, as many as its
-    /// trigger's budget holds, leave the turn's response to re-enter.
+    /// RFC §8.3, gap G-070: it draws on the reentry budget of the cascade
+    /// that delivers to the turn: the turn's call past it is stored capped,
+    /// and so is the turn's response, which finds the budget spent.
     #[test]
-    fn draws_on_its_own_reentry_budget() {
+    fn draws_on_the_budget_of_the_cascade_that_delivers() {
         let mut sim = room();
         sim.config.max_chain_depth = 2;
         sim.echo_agent("ai", "unused");
@@ -1162,7 +1163,7 @@ mod an_arrival_from_a_delivery {
                     if event.source.channel_id.as_str() != "sms" {
                         return Vec::new();
                     }
-                    (0..20).map(|_| thought("Checking.")).collect()
+                    (0..=20).map(|_| thought("Checking.")).collect()
                 }),
                 answer: Answer::AtOnce(Box::new(|| {
                     Ok(crate::support::respond(
@@ -1175,12 +1176,16 @@ mod an_arrival_from_a_delivery {
         );
         sim.send(hello()).unwrap();
         let lines = sim.timeline_lines();
+        let capped = |text: &str| {
+            let line = format!("ai blocked:reentry_loop_cap \"{text}\"");
+            lines
+                .iter()
+                .filter(|stored| stored.ends_with(&line))
+                .count()
+        };
         assert_eq!(
-            (
-                lines.len(),
-                lines.iter().filter(|line| line.contains("blocked")).count()
-            ),
-            (22, 0)
+            (lines.len(), capped("Checking."), capped("Hello back")),
+            (23, 1, 1)
         );
     }
 

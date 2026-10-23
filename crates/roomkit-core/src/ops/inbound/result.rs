@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::model::{ChannelId, DeliveryResult, ErrorRecord, Metadata, RoomEvent, RoomId};
+use crate::rules::chain_depth;
 
 /// What became of an inbound message (RFC §10.1 `InboundResult`).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -97,6 +98,16 @@ pub enum InboundError {
     /// call decided stands.
     #[error("the room's admission ticket failed: {0:?}")]
     Ticket(ErrorRecord),
+}
+
+/// The result of a message refused past the reentry budget it draws on,
+/// before its parse, with no event (RFC §8.3, gap G-070).
+pub(super) fn past_the_budget() -> InboundResult {
+    InboundResult {
+        blocked: true,
+        reason: Some(chain_depth::REENTRY_LOOP_CAP.to_owned()),
+        ..InboundResult::default()
+    }
 }
 
 /// A direct injection's result read as its caller receives it (RFC §10.5):

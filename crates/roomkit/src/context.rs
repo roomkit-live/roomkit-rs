@@ -51,7 +51,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{ChannelCategory, RoomId};
 use roomkit_core::ops::{Effect, EffectId, Entry, InboundError, InboundResult, Request};
-use roomkit_core::rules::chain_depth;
+use roomkit_core::rules::chain_depth::{self, ReentryBudget};
 use tokio::sync::{mpsc, oneshot};
 
 tokio::task_local! {
@@ -139,6 +139,9 @@ pub(crate) struct Work {
     /// The depth of a turn's response, for a turn: an intelligence
     /// channel's `on_event()` (RFC §8.3, §10.6).
     pub(crate) response_depth: Option<u32>,
+    /// The reentry budget of the cascade that delivers, for a delivery
+    /// set's calls (`Effect::budget`, gap G-070).
+    pub(crate) budget: Option<ReentryBudget>,
 }
 
 /// The frames of the calls the current task runs within, the innermost
@@ -269,6 +272,7 @@ impl Work {
             admitted: effect.admitted.clone(),
             delivering,
             response_depth,
+            budget: effect.budget.clone(),
         }
     }
 }
@@ -383,6 +387,16 @@ impl ExecutionContext {
             .iter()
             .filter_map(|frame| frame.work.response_depth)
             .max()
+    }
+
+    /// The reentry budget a call made in this context draws on: the
+    /// budget of the cascade whose delivery set runs the innermost frame
+    /// of a delivery, `None` outside every delivery (gap G-070).
+    pub(crate) fn budget(&self) -> Option<ReentryBudget> {
+        self.frames
+            .iter()
+            .rev()
+            .find_map(|frame| frame.work.budget.clone())
     }
 
     /// The innermost frame that runs under `room_id`'s lock or in its
@@ -625,6 +639,7 @@ mod tests {
             deadline: None,
             locked: None,
             admitted: None,
+            budget: None,
         }
     }
 

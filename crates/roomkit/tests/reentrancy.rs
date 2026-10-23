@@ -588,6 +588,53 @@ async fn process_inbound_from_a_channel_into_its_own_room_returns_at_its_commit(
     );
 }
 
+/// RFC §8.3, gap G-070: a transport whose delivery sends a follow-up into
+/// its room on every delivery stops at the reentry cap. Each follow-up is a
+/// new arrival drawing on the budget of the cascade that delivers, the
+/// chain's first call's, ten times the chain-depth limit, and the one past
+/// it is refused with no event.
+#[tokio::test]
+async fn a_delivery_that_calls_into_its_room_on_every_delivery_stops_at_the_reentry_cap() {
+    let (kit, _) = room().await;
+    kit.set_max_chain_depth(1);
+    let refused = Arc::new(Mutex::new(Vec::new()));
+    let (bot_kit, bot_refused) = (kit.clone(), Arc::clone(&refused));
+    let bot = Scripted::transport(
+        "bot",
+        Arc::new(move |_| {
+            let (kit, refused) = (bot_kit.clone(), Arc::clone(&bot_refused));
+            Box::pin(async move {
+                let result = kit
+                    .process_inbound(message("follow-up"), Some(&room_id()))
+                    .await?;
+                if result.event.is_none() {
+                    refused.lock().unwrap().push(result.reason);
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(bot).unwrap();
+    kit.attach(&room_id(), &channel("bot")).await.unwrap();
+    send(&kit, "hello").await.unwrap();
+    // The follow-ups are answered at their decisions: nothing awaits the
+    // chain but its refusal.
+    let deadline = tokio::time::Instant::now() + BOUND;
+    while refused.lock().unwrap().is_empty() {
+        let stored = timeline(&kit).await.len();
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the chain never stopped: {stored} events stored"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let stored = timeline(&kit).await.len();
+    assert_eq!(
+        (refused.lock().unwrap().clone(), stored),
+        (vec![Some("reentry_loop_cap".to_owned())], 11)
+    );
+}
+
 /// RFC §13.5: the lock is reentrant within one execution context only.
 mod a_context {
     use super::*;
@@ -1223,33 +1270,31 @@ async fn a_turn_s_call_meets_its_own_process_timeout() {
     );
 }
 
-/// RFC §8.3, §9.5.1 Reentrance: a turn's calls draw on their own reentry
-/// budgets, not on their trigger's: the turn's own response re-enters as it
-/// would without them, although the calls spend as many passes as the
-/// trigger's budget holds, ten times the chain-depth limit.
+/// RFC §8.3, gap G-070: a turn's calls draw on the reentry budget of the
+/// cascade that delivers to it, ten times the chain-depth limit: the call
+/// past it is stored `BLOCKED` with `reentry_loop_cap`, as an injected event
+/// past the cap is, and so is the turn's own response, which finds the
+/// budget spent.
 #[tokio::test]
-async fn a_turn_s_call_draws_on_its_own_reentry_budget() {
+async fn a_turn_s_calls_draw_on_the_reentry_budget_of_the_cascade_that_delivers() {
     const LIMIT: u32 = 2;
     let (kit, _) = room().await;
     kit.set_max_chain_depth(LIMIT);
-    let (turn_kit, injected) = (kit.clone(), Arc::new(Mutex::new(None)));
-    let turn_injected = Arc::clone(&injected);
+    let (turn_kit, last_call) = (kit.clone(), Arc::new(Mutex::new(None)));
+    let turn_last_call = Arc::clone(&last_call);
     let agent = Scripted::agent(
         "ai",
         Arc::new(move |event: RoomEvent| {
-            let (kit, injected) = (turn_kit.clone(), Arc::clone(&turn_injected));
+            let (kit, last_call) = (turn_kit.clone(), Arc::clone(&turn_last_call));
             Box::pin(async move {
                 if text_of(&event.content) != "hello" {
                     return Ok(ChannelOutput::default());
                 }
-                let mut sent = 0;
-                for _ in 0..LIMIT * 10 {
+                for _ in 0..=LIMIT * 10 {
                     let thought = DirectEvent::new(channel("ai"), EventContent::text("Checking."));
-                    if kit.send_event(&room_id(), thought).await.is_ok() {
-                        sent += 1;
-                    }
+                    let injected = kit.send_event(&room_id(), thought).await.unwrap();
+                    *last_call.lock().unwrap() = Some((injected.status, injected.blocked_by));
                 }
-                *injected.lock().unwrap() = Some(sent);
                 let source =
                     EventSource::new(channel("ai"), ChannelType::Ai, EventDirection::Outbound);
                 let reply = RoomEvent::new(
@@ -1267,12 +1312,21 @@ async fn a_turn_s_call_draws_on_its_own_reentry_budget() {
     kit.register_channel(agent).unwrap();
     kit.attach(&room_id(), &channel("ai")).await.unwrap();
     send(&kit, "hello").await.unwrap();
-    let last = timeline(&kit).await.last().cloned();
+    let lines = timeline(&kit).await;
+    let cap = Some("reentry_loop_cap".to_owned());
     assert_eq!(
-        (*injected.lock().unwrap(), last),
         (
-            Some(LIMIT * 10),
-            Some("#21 ai delivered Hello back".to_owned())
+            last_call.lock().unwrap().clone(),
+            lines.get(20).cloned(),
+            lines.get(21..).map(<[String]>::to_vec)
+        ),
+        (
+            Some((EventStatus::Blocked, cap)),
+            Some("#20 ai delivered Checking.".to_owned()),
+            Some(vec![
+                "#21 ai blocked Checking.".to_owned(),
+                "#22 ai blocked Hello back".to_owned()
+            ])
         )
     );
 }

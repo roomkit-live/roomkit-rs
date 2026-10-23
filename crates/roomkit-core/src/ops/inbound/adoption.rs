@@ -8,8 +8,10 @@
 //! holds or is about to take. The driver hands such a call to the operation
 //! instead: it is adopted, as an entry of its own, with its own result
 //! (RFC §9.5.1 Reentrance). A call from a turn or a delivery waits for
-//! nothing the operation holds: it is a new arrival, its own operation.
-//! Where an entry runs depends on the call that made it, its origin:
+//! nothing the operation holds: it is a new arrival, its own operation,
+//! drawing on the reentry budget of the cascade that delivers
+//! (`Inbound::drawing_on`, gap G-070). Where an entry runs depends on the
+//! call that made it, its origin:
 //!
 //! - a call the operation made under the room's lock (`Effect::locked`): a
 //!   hook a pass runs, or any call of an entry nested already. The entry is
@@ -45,7 +47,7 @@ use super::deadline::Stopped;
 use super::direct::{self, Admitted, DirectCall};
 use super::instructions::{self, Admission};
 use super::pass::{CommitPass, PassOrigin, PassReport};
-use super::record::{RecordPass, RecordReport, RecordResult};
+use super::record::{RecordPass, RecordReport};
 use super::{InboundError, InboundResult, Machine, result};
 use crate::model::{InboundMessage, RoomEvent, RoomId};
 use crate::ops::io::Io;
@@ -307,12 +309,7 @@ impl Machine {
         // Charged before its parse: a channel whose parse calls into its room
         // for every message is bounded too.
         if !self.budget.take() {
-            let refused = InboundResult {
-                blocked: true,
-                reason: Some(chain_depth::REENTRY_LOOP_CAP.to_owned()),
-                ..InboundResult::default()
-            };
-            return self.settle_entry(cx, &adopted, Ok(refused));
+            return self.settle_entry(cx, &adopted, Ok(result::past_the_budget()));
         }
         let mut arrival = Box::new(Arrival::adopted(room_id, organization_id, channel, message));
         within(cx, &adopted, |cx| arrival.start(cx));
@@ -396,21 +393,7 @@ impl Machine {
     /// The entry was stored blocked past its caller's reentry budget, or
     /// refused by the room's status.
     fn on_adopted_record(&mut self, cx: &mut Cx<'_>, adopted: &Adopted, report: RecordReport) {
-        let result = match report.result {
-            RecordResult::Committed(record) => InboundResult {
-                blocked: true,
-                reason: record.blocked_by.clone(),
-                event: Some(*record),
-                error: report.release_error,
-                ..InboundResult::default()
-            },
-            RecordResult::Refused => InboundResult {
-                blocked: true,
-                reason: Some("room_closed".to_owned()),
-                ..InboundResult::default()
-            },
-        };
-        self.settle_entry(cx, adopted, Ok(result));
+        self.settle_entry(cx, adopted, Ok(cascade::record_result(report)));
     }
 
     /// Answers the entry's caller with `result`, a direct injection's

@@ -28,6 +28,7 @@ use crate::model::{
 };
 use crate::ops::protocol::{CHANNEL_NOT_REGISTERED, EffectId, Notice, Outcome, Request};
 use crate::ops::{Cx, Progress};
+use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::{self, DeliveryPlan};
 use crate::rules::transcoding;
@@ -130,19 +131,24 @@ pub(super) struct DeliverySet {
     context: Box<RoomContext>,
     targets: Vec<Target>,
     place: Place,
+    /// The reentry budget of the cascade that delivers, which the calls its
+    /// targets make into a room draw on (gap G-070).
+    budget: ReentryBudget,
     calls: BTreeMap<EffectId, (usize, Call)>,
     outcome: SetOutcome,
 }
 
 impl DeliverySet {
     /// The set of `event`, planned as `plan`, with the room's whole context;
-    /// `placed` when the event took its place in the room's lane.
+    /// `placed` when the event took its place in the room's lane. The calls
+    /// its targets make into a room draw on `budget`, the cascade's.
     pub(super) fn new(
         kind: SetKind,
         event: RoomEvent,
         plan: DeliveryPlan,
         context: Box<RoomContext>,
         placed: bool,
+        budget: ReentryBudget,
     ) -> Self {
         let targets = targets_of(&plan, &event, &context);
         let outcome = SetOutcome {
@@ -156,6 +162,7 @@ impl DeliverySet {
             context,
             targets,
             place: if placed { Place::Taken } else { Place::Missing },
+            budget,
             calls: BTreeMap::new(),
             outcome,
         }
@@ -215,11 +222,12 @@ impl DeliverySet {
                 self.not_registered(index);
                 continue;
             }
-            let effect = cx.io.issue(Request::OnEvent {
+            let request = Request::OnEvent {
                 binding: target.binding.clone(),
                 event: target.event.clone(),
                 context: target.context.clone(),
-            });
+            };
+            let effect = cx.io.issue_drawing_on(request, &self.budget);
             self.calls.insert(effect, (index, Call::OnEvent));
         }
         self.progress(cx)
@@ -360,11 +368,12 @@ impl DeliverySet {
         if let Some(key) = missing_recipient(cx, &target.binding) {
             return self.refuse_without_recipient(index, &key);
         }
-        let effect = cx.io.issue(Request::Deliver {
+        let request = Request::Deliver {
             binding: target.binding.clone(),
             event: target.event.clone(),
             context: target.context.clone(),
-        });
+        };
+        let effect = cx.io.issue_drawing_on(request, &self.budget);
         self.calls.insert(effect, (index, Call::Deliver));
     }
 

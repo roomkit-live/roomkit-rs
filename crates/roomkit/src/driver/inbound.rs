@@ -85,7 +85,9 @@ impl Decision {
 /// caller whose context detaches from the call's room, its decision. A lock
 /// its context holds a lease on is refused to it: a call nested under the
 /// lock is adopted by the section that holds it, and one that reaches the
-/// driver would commit within that section's tenure.
+/// driver would commit within that section's tenure. A call made within a
+/// delivery set's code, a turn or a transport's delivery, draws on the
+/// reentry budget of the cascade that delivers (gap G-070).
 ///
 /// # Errors
 ///
@@ -97,6 +99,11 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     call: &'static str,
     inbound: Inbound,
 ) -> InboundOutput {
+    let context = ExecutionContext::current();
+    let inbound = match context.budget() {
+        Some(budget) => inbound.drawing_on(budget),
+        None => inbound,
+    };
     let (decision, decided) = oneshot::channel();
     let inner = Arc::clone(inner);
     let run = async move {
@@ -107,7 +114,7 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
         }
         output
     };
-    let mut task = RunTask(Some(tokio::spawn(ExecutionContext::current().scope(run))));
+    let mut task = RunTask(Some(tokio::spawn(context.scope(run))));
     let Some(handle) = task.0.as_mut() else {
         return Err(KitError::Stalled);
     };

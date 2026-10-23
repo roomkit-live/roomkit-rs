@@ -209,9 +209,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// instead of waiting for it: it returns at its commit, with no delivery
     /// result, and its delivery set follows in the room's lane (RFC §13.5,
     /// §9.5.1 Reentrance, §10.1 step 18). Called from a turn or a delivery,
-    /// it is a new arrival, with its own admission ticket, `process_timeout`
-    /// and reentry budget, and returns at its decision when it comes into
-    /// the room that turn or delivery works in. A call from under the room's
+    /// it is a new arrival, with its own admission ticket and
+    /// `process_timeout`, drawing on the reentry budget of the cascade that
+    /// delivers, so that a channel that calls into a room on every delivery
+    /// stops at the cap (gap G-070), and returns at its decision when it
+    /// comes into the room that turn or delivery works in. A call from under the room's
     /// lock or in its admission order that cannot be adopted, a message
     /// routed back into the room, fails with [`KitError::Reentrant`]. A call
     /// into another room waits for its delivery as any call does: two rooms

@@ -104,7 +104,8 @@ impl Machine {
             PassOrigin::Response => SetKind::Response,
             PassOrigin::Injected { .. } => SetKind::Injected,
         };
-        let set = DeliverySet::new(kind, *event, plan, context, report.placed);
+        let budget = self.budget.clone();
+        let set = DeliverySet::new(kind, *event, plan, context, report.placed, budget);
         self.queue_set(Delivery {
             set: Box::new(set),
             then: injected,
@@ -160,11 +161,18 @@ impl Machine {
         jobs
     }
 
+    /// A record is over: the call's own, past the reentry budget it draws
+    /// on, decides the call; a channel's not asked at the chain-depth limit
+    /// gets its observation and its framework event (RFC §8.3).
     pub(super) fn on_record(&mut self, cx: &mut Cx<'_>, report: RecordReport, note: RecordNote) {
+        let RecordNote::NotAsked { agent, trigger } = note else {
+            if matches!(note, RecordNote::Trigger) {
+                return self.settle_capped_trigger(cx, report);
+            }
+            return self.note_error(report.release_error);
+        };
         self.note_error(report.release_error);
-        let (RecordResult::Committed(record), RecordNote::NotAsked { agent, trigger }) =
-            (report.result, note)
-        else {
+        let RecordResult::Committed(record) = report.result else {
             return;
         };
         let id = cx.env.new_observation_id();
@@ -178,6 +186,20 @@ impl Machine {
             now,
         ));
         report::chain_depth_exceeded(cx, &record, &agent);
+    }
+
+    /// The call's own record, stored past the reentry budget it draws on
+    /// or refused by the room's status, is its result, published as its
+    /// decision (gap G-070).
+    fn settle_capped_trigger(&mut self, cx: &mut Cx<'_>, report: RecordReport) {
+        let result = record_result(report);
+        self.decided = result.event.is_some();
+        self.result.event = result.event;
+        self.result.blocked = result.blocked;
+        self.result.reason = result.reason;
+        self.note_error(result.error);
+        let decided = Ok(self.result.clone());
+        self.publish(cx, &decided);
     }
 
     /// A delivery set finished: its observers run, its responses re-enter,
@@ -285,6 +307,25 @@ impl Machine {
         }
         let error = failure(abort, self.room_id.clone());
         self.end(cx, Err(error));
+    }
+}
+
+/// What a record stored in place of an entry, past its reentry budget, or
+/// refused by the room's status gives the entry's caller (RFC §8.3).
+pub(super) fn record_result(report: RecordReport) -> InboundResult {
+    match report.result {
+        RecordResult::Committed(record) => InboundResult {
+            blocked: true,
+            reason: record.blocked_by.clone(),
+            event: Some(*record),
+            error: report.release_error,
+            ..InboundResult::default()
+        },
+        RecordResult::Refused => InboundResult {
+            blocked: true,
+            reason: Some("room_closed".to_owned()),
+            ..InboundResult::default()
+        },
     }
 }
 

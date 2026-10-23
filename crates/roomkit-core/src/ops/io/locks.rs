@@ -102,6 +102,7 @@ mod tests {
             deadline: None,
             locked: None,
             admitted: None,
+            budget: None,
         }
     }
 

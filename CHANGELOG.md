@@ -415,9 +415,14 @@ publishes a release.
   delivery waits after the commit. A call into a busy room was refused past
   its bound (gap G-068).
 - A call that an agent's turn or a delivery makes into a room is a new
-  arrival: its own operation, admission ticket, `process_timeout` and
-  reentry budget, its off-lock hooks run off the lock; it was adopted
-  beside the running work. Into its caller's own room it is answered at its
+  arrival: its own operation, admission ticket and `process_timeout`, its
+  off-lock hooks run off the lock; it was adopted beside the running work.
+  It draws on the reentry budget of the cascade that delivers, past which a
+  message is refused with no event and an injected event stored `BLOCKED`,
+  both with `reentry_loop_cap`, so a transport that calls into its room on
+  every delivery stops at the cap. `Inbound::drawing_on(budget)`,
+  `Effect::budget`; `ReentryBudget` is a shared count, its clones drawing on
+  the same passes. Into its caller's own room it is answered at its
   decision, `send_event` returning the committed event with no delivery
   results, its delivery run after its caller's set and its end logged; a
   message a turn routes back into its room is answered so too, where it

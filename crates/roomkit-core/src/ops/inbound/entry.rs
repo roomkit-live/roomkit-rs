@@ -5,7 +5,7 @@
 use super::arrival::{self, Arrival};
 use super::deadline::{self, Stopped};
 use super::instructions::{self, Admission};
-use super::{Call, InboundTarget, Machine, Stage};
+use super::{Call, InboundTarget, Machine, Stage, result};
 use crate::model::InboundMessage;
 use crate::ops::protocol::{EffectId, Outcome};
 use crate::ops::{Cx, Progress};
@@ -53,6 +53,11 @@ impl Machine {
                 return self.end(cx, Ok(instructions::refused(refusal)));
             }
             Err(error) => return self.end(cx, Err(error)),
+        }
+        // A message a delivery's code sends is charged on the cascade that
+        // delivers before its parse, as an adopted one is (gap G-070).
+        if self.drawn && !self.budget.take() {
+            return self.end(cx, Ok(result::past_the_budget()));
         }
         let mut arrival = Box::new(Arrival::new(
             target,

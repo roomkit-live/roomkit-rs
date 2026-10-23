@@ -173,6 +173,12 @@ impl Machine {
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),
             Err(error) => return self.end(cx, Err(error)),
         };
+        // An event a delivery's code injects is charged on the cascade that
+        // delivers, as an adopted one is: past it, it is stored capped, and
+        // no hook runs for it (gap G-070).
+        if self.drawn && !self.budget.take() {
+            return self.start_capped_trigger(event, call);
+        }
         if cx.config.hooks.off_lock_checks(&event.source).is_empty() {
             return self.start_trigger(event, None);
         }

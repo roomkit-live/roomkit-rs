@@ -24,6 +24,7 @@ use roomkit_core::ops::{
     Decided, Effect, EffectId, Entry, EntryId, Environment, Inbound, InboundTarget, Next,
     Operation, Outcome, Request, Settled,
 };
+use roomkit_core::rules::chain_depth::ReentryBudget;
 
 use super::{Called, Caller, Sim, Then, journal_line};
 
@@ -50,6 +51,8 @@ pub(super) struct Frame {
     admitted: Option<RoomId>,
     /// The room a delivery set delivers in, for its calls.
     delivering: Option<RoomId>,
+    /// The reentry budget of the cascade that delivers, for its calls.
+    budget: Option<ReentryBudget>,
 }
 
 impl Frame {
@@ -67,6 +70,7 @@ impl Frame {
             locked: effect.locked.clone(),
             admitted: effect.admitted.clone(),
             delivering,
+            budget: effect.budget.clone(),
         }
     }
 
@@ -374,7 +378,9 @@ impl Sim {
     }
 
     /// Starts `entry` as an inbound operation of its own, within the
-    /// context `call` was made in, answering `call` once it is over.
+    /// context `call` was made in, answering `call` once it is over; made
+    /// within a delivery, it draws on the budget of the cascade that
+    /// delivers (gap G-070).
     fn spawn(&mut self, entry: Entry, call: Call) {
         let config = self.shared_config();
         let operation = match entry {
@@ -393,6 +399,15 @@ impl Sim {
                 organization_id,
                 event,
             } => Inbound::inject(config, room_id, organization_id, *event),
+        };
+        let operation = match call
+            .context
+            .iter()
+            .rev()
+            .find_map(|frame| frame.budget.clone())
+        {
+            Some(budget) => operation.drawing_on(budget),
+            None => operation,
         };
         let context = call.context.clone();
         self.runs.push(RunState::new(context, Some(call)));

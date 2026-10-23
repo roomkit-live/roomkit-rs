@@ -1,5 +1,8 @@
 //! How far a chain of responses may go (RFC §8.3).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use crate::model::{
     ChannelBinding, EventContent, EventDirection, EventId, EventSource, EventStatus, EventType,
     Observation, ObservationId, RoomEvent, Timestamp,
@@ -99,37 +102,64 @@ pub fn not_asked_observation(
 }
 
 /// The reentry passes one cascade may still take (RFC §8.3): ten times the
-/// chain-depth limit, shared by every response the cascade re-enters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// chain-depth limit, shared by every response the cascade re-enters, the
+/// events its hooks inject, the entries its operation adopts, and the calls
+/// its delivery sets make into a room, a turn's or a transport's delivery's
+/// (gap G-070).
+///
+/// A clone draws on the same passes: the operation a delivery's call starts
+/// draws on the budget of the cascade that delivers, so that a channel that
+/// calls into a room on every delivery stops at the cap. The count is shared
+/// across threads, as the operations that draw on it may run on several.
+#[derive(Clone, Debug)]
 pub struct ReentryBudget {
-    remaining: u32,
+    remaining: Arc<AtomicU32>,
 }
 
 impl ReentryBudget {
     /// The budget of a cascade under `max_chain_depth`.
     pub fn new(max_chain_depth: u32) -> Self {
         Self {
-            remaining: max_chain_depth.saturating_mul(10),
+            remaining: Arc::new(AtomicU32::new(max_chain_depth.saturating_mul(10))),
         }
     }
 
     /// Spends one pass, or answers `false` when none is left: the response
     /// is then stored blocked with [`REENTRY_LOOP_CAP`] instead.
-    pub fn take(&mut self) -> bool {
-        match self.remaining.checked_sub(1) {
-            Some(remaining) => {
-                self.remaining = remaining;
-                true
+    pub fn take(&self) -> bool {
+        // The count guards nothing else: no ordering with other memory is
+        // needed.
+        let mut remaining = self.remaining.load(Ordering::Relaxed);
+        loop {
+            let Some(left) = remaining.checked_sub(1) else {
+                return false;
+            };
+            match self.remaining.compare_exchange_weak(
+                remaining,
+                left,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(now) => remaining = now,
             }
-            None => false,
         }
     }
 
     /// The passes left.
-    pub fn remaining(self) -> u32 {
-        self.remaining
+    pub fn remaining(&self) -> u32 {
+        self.remaining.load(Ordering::Relaxed)
     }
 }
+
+/// Two budgets are equal when they are one budget, shared.
+impl PartialEq for ReentryBudget {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.remaining, &other.remaining)
+    }
+}
+
+impl Eq for ReentryBudget {}
 
 #[cfg(test)]
 mod tests {
@@ -257,14 +287,24 @@ mod tests {
 
     #[test]
     fn an_exhausted_reentry_budget_refuses_a_pass() {
-        let mut budget = ReentryBudget::new(0);
+        let budget = ReentryBudget::new(0);
         assert!(!budget.take());
     }
 
     #[test]
     fn taking_a_pass_spends_the_budget() {
-        let mut budget = ReentryBudget::new(1);
+        let budget = ReentryBudget::new(1);
         budget.take();
+        assert_eq!(budget.remaining(), 9);
+    }
+
+    /// Gap G-070: the operation a delivery's call starts draws on the
+    /// passes of the cascade that delivers.
+    #[test]
+    fn a_clone_spends_the_same_passes() {
+        let budget = ReentryBudget::new(1);
+        let drawn = budget.clone();
+        drawn.take();
         assert_eq!(budget.remaining(), 9);
     }
 }

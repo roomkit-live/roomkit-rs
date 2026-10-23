@@ -21,6 +21,7 @@ use super::protocol::{
 };
 use super::{InboundError, InboundResult};
 use crate::model::{RoomId, Timestamp};
+use crate::rules::chain_depth::ReentryBudget;
 
 /// What `Io` keeps of an effect until it is answered.
 #[derive(Debug)]
@@ -98,6 +99,28 @@ impl Io {
         deadline: Option<Timestamp>,
         locked: Option<RoomId>,
     ) -> EffectId {
+        self.issue_effect(request, deadline, locked, None)
+    }
+
+    /// Asks the driver for `request`, a delivery set's `OnEvent` or
+    /// `Deliver`, whose code's calls into a room draw on `budget`, the
+    /// reentry budget of the cascade that delivers (`Effect::budget`, gap
+    /// G-070).
+    pub(crate) fn issue_drawing_on(
+        &mut self,
+        request: Request,
+        budget: &ReentryBudget,
+    ) -> EffectId {
+        self.issue_effect(request, None, None, Some(budget.clone()))
+    }
+
+    fn issue_effect(
+        &mut self,
+        request: Request,
+        deadline: Option<Timestamp>,
+        locked: Option<RoomId>,
+        budget: Option<ReentryBudget>,
+    ) -> EffectId {
         let id = self.next_id;
         self.next_id = id.next();
         if let Some(outcome) = self.answer_nested(&request) {
@@ -118,6 +141,7 @@ impl Io {
             deadline,
             locked,
             admitted: self.admitted.clone(),
+            budget,
         };
         if let Some(effect) = self.locks.admit(effect) {
             self.issued.push(effect);

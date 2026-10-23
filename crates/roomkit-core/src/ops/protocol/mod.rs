@@ -23,6 +23,7 @@ use crate::model::{
     IdentityId, InboundMessage, Observation, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
     Task, Timestamp,
 };
+use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_chain::HookOutcome;
 use crate::rules::hook_registry::{HookId, HookTrigger};
 use crate::rules::routing::RouteQuery;
@@ -69,6 +70,13 @@ pub struct Effect {
     /// never waits for the ticket its own caller holds (RFC §9.5.1
     /// Reentrance). `None` for any other request.
     pub admitted: Option<RoomId>,
+    /// The reentry budget a call into a room that the request's code makes
+    /// draws on (RFC §8.3, gap G-070): an `OnEvent` or a `Deliver` carries
+    /// the budget of the cascade whose delivery set made it, so that the
+    /// operation a turn's or a delivery's call starts is charged on it, and
+    /// a channel that calls into a room on every delivery stops at the cap.
+    /// `None` for any other request.
+    pub budget: Option<ReentryBudget>,
 }
 
 /// The error type of a [`Request::OnEvent`] or [`Request::Deliver`]

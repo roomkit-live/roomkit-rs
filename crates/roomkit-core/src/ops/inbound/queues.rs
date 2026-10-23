@@ -22,12 +22,15 @@
 //! delivers every event committed (RFC §13.6).
 
 use super::delivery::{DeliverySet, SetOutcome};
-use super::job::{Job, Run};
+use super::direct::DirectCall;
+use super::job::{Job, RecordNote, Run};
 use super::pass::{CommitPass, PassOrigin};
+use super::record::RecordPass;
 use super::{Machine, Stage};
 use crate::model::RoomEvent;
 use crate::ops::protocol::{EffectId, Outcome};
-use crate::ops::{Cx, Progress};
+use crate::ops::{Cx, Progress, RefusedOperation};
+use crate::rules::chain_depth;
 use crate::rules::hook_chain::HookChain;
 
 /// A committed event's delivery set, and the passes that follow it.
@@ -52,6 +55,18 @@ impl Machine {
         let pass = CommitPass::trigger(event, self.deadline, checked).checking(self.direct.clone());
         self.passes
             .push_front(Job::Pass(Box::new(pass), PassOrigin::Trigger));
+        self.stage = Stage::Cascade;
+    }
+
+    /// Queues the trigger, past the reentry budget it draws on, as its
+    /// record at the head of the passes: stored `BLOCKED` with
+    /// `reentry_loop_cap`, checked first for the refusals `direct` names,
+    /// with no hook run for it (RFC §8.3, gap G-070).
+    pub(super) fn start_capped_trigger(&mut self, mut event: RoomEvent, direct: DirectCall) {
+        event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
+        let record = RecordPass::refusing(event, RefusedOperation::Inbound).checking(Some(direct));
+        self.passes
+            .push_front(Job::Record(Box::new(record), RecordNote::Trigger));
         self.stage = Stage::Cascade;
     }
 

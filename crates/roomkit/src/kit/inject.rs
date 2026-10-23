@@ -39,9 +39,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// the event a locked hook is deciding on, and returns at its commit,
     /// its delivery following in the room's lane (RFC §13.5, §9.5.1
     /// Reentrance). Called from a turn or a delivery in the room, it is a
-    /// new arrival, with its own ticket, `process_timeout` and reentry
-    /// budget, and returns at its decision, its delivery following the
-    /// caller's own set in the lane (RFC §10.1 step 18). Made within an
+    /// new arrival, with its own ticket and `process_timeout`, drawing on
+    /// the reentry budget of the cascade that delivers (gap G-070), and
+    /// returns at its decision, its delivery following the caller's own set
+    /// in the lane (RFC §10.1 step 18). Made within an
     /// agent's turn, the event is at least as deep as the turn's response,
     /// whatever `chain_depth` it was given (RFC §10.6, §8.3).
     ///

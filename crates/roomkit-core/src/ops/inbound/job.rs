@@ -26,6 +26,9 @@ pub(super) enum RecordNote {
     },
     /// A response the room refused without asking anyone.
     Refused,
+    /// The call's own event, past the reentry budget it draws on (gap
+    /// G-070): the record is the call's result.
+    Trigger,
 }
 
 /// A pass after an answer: still running, or finished.
