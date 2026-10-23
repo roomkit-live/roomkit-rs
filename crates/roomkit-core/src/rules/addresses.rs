@@ -10,11 +10,11 @@
 //! | Written | Read as |
 //! |---|---|
 //! | `whatsapp:+15550000001`, `+1 (555) 000-0001`, `0015550000001` | `+15550000001` |
-//! | `15550000001` (11 to 15 digits) | `+15550000001` |
 //! | `+33 (0)6 12 34 56 78` | `+33612345678` |
-//! | `5550000001`, channel country code `1` | `+15550000001` |
+//! | `15550000001`, `5550000001`, channel country code `1` | `+15550000001` |
+//! | `393 123 4567`, channel country code `39` | `+393931234567` |
 //! | `06 12 34 56 78`, channel country code `33` | `+33612345678` |
-//! | `5550000001`, `07911 123456`, no country code | as written |
+//! | `15550000001`, `5550000001`, `07911 123456`, no country code | as written |
 //! | `12345` (a short code), `alice`, `whatsapp:alice` | as written |
 //! | `Alice <Alice@Example.com>` on an email channel | `alice@example.com` |
 //!
@@ -67,9 +67,9 @@ const MAX_DIGITS: usize = 15;
 /// more (gap G-052).
 const MAX_SHORT_CODE_DIGITS: usize = 6;
 
-/// The most digits of a number written without its country code when the
-/// channel configures none; a longer one carries its code without its `+`
-/// (gap G-052).
+/// The most digits of a national number: digits that start with the
+/// channel's country code are read as written with it, without its `+`,
+/// only when there are more (gap G-052).
 const MAX_NATIONAL_DIGITS: usize = 10;
 
 /// How a channel's senders are addressed (RFC §5.7, gap G-051).
@@ -230,10 +230,15 @@ pub fn normalize(
 /// international. Six digits or fewer are a short code. A number starting
 /// with the trunk prefix `0` is national: it takes the channel's country code
 /// in place of the `0`, or is kept as written. With a country code, any
-/// other number whose digits start with it is written with it, and one that
-/// does not takes it before its digits. Without one, a number of 11 to 15
-/// digits is written with its code, without its `+`. No E.164 number starts
-/// with `0`.
+/// other number of more than ten digits that start with the code is
+/// written with it, without its `+` (`15550000001` on a channel declaring
+/// `1`); any other is national and takes the code before its digits, so an
+/// Italian mobile `3931234567` on a channel declaring `39` is
+/// `+393931234567`. Without a country code, digits without `+` are kept as
+/// written: whether they carry a code cannot be told (`13800138000` is a
+/// national number in China, `+13800138000` one in North America), and
+/// reading them as international would merge two people. No E.164 number
+/// starts with `0`.
 pub fn phone_number(address: &str, country_code: Option<&CountryCode>) -> Option<String> {
     let number = without_trunk_mark(without_scheme(address.trim()));
     let (international, digits) = dial(&number)?;
@@ -246,12 +251,11 @@ pub fn phone_number(address: &str, country_code: Option<&CountryCode>) -> Option
     if let Some(national) = digits.strip_prefix('0') {
         return country_code.and_then(|code| e164(&format!("{}{national}", code.as_str())));
     }
-    match country_code {
-        Some(code) if digits.starts_with(code.as_str()) => e164(&digits),
-        Some(code) => e164(&format!("{}{digits}", code.as_str())),
-        None if digits.len() > MAX_NATIONAL_DIGITS => e164(&digits),
-        None => None,
+    let code = country_code?;
+    if digits.starts_with(code.as_str()) && digits.len() > MAX_NATIONAL_DIGITS {
+        return e164(&digits);
     }
+    e164(&format!("{}{digits}", code.as_str()))
 }
 
 /// `address` lower-case, without its display name (RFC §5.7): `Alice
@@ -418,15 +422,33 @@ mod tests {
     }
 
     #[test]
-    fn a_number_with_a_scheme_its_country_code_or_separators_is_one_number() {
+    fn a_number_with_a_scheme_its_international_prefix_or_separators_is_one_number() {
         let written = [
             "whatsapp:+15550000001",
-            "15550000001",
             "+1 (555) 000-0001",
             "tel:+1.555.000.0001",
             "0015550000001",
         ];
-        assert_eq!(written.map(phone), ["+15550000001"; 5]);
+        assert_eq!(written.map(phone), ["+15550000001"; 4]);
+    }
+
+    /// Gap G-052: with no country code declared, whether digits carry one
+    /// cannot be told.
+    #[test]
+    fn digits_without_a_plus_are_kept_as_written_where_the_channel_has_no_country_code() {
+        assert_eq!(phone("15550000001"), "15550000001");
+    }
+
+    #[test]
+    fn digits_starting_with_the_channel_s_country_code_and_longer_than_ten_carry_it() {
+        assert_eq!(phone_in("15550000001", "1"), "+15550000001");
+    }
+
+    /// Gap G-052: an Italian mobile number starts with `3`, as Italy's
+    /// country code `39` does.
+    #[test]
+    fn ten_digits_starting_with_the_channel_s_country_code_are_a_national_number() {
+        assert_eq!(phone_in("393 123 4567", "39"), "+393931234567");
     }
 
     #[test]

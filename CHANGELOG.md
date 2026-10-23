@@ -261,6 +261,12 @@ publishes a release.
   responder's, keeping nothing of the claimed one (participant, provider,
   ids, raw payload, verification); one under its own source keeps its other
   fields (gap G-035).
+- A phone number written without `+` on a channel that declares no country
+  code is kept as written; 11 to 15 digits were read as international. With
+  a country code declared, digits that start with it are read as written
+  with it only past ten digits, a shorter number taking the code as a
+  national one: `3931234567` on a channel declaring `39` is
+  `+393931234567` (gap G-052).
 - The `roomkit` driver completes each effect as it finishes and polls the
   operation between completions, a lock, a lane or a ticket's turn waited
   for beside the calls, instead of waiting for a step's every effect.

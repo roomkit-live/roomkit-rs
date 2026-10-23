@@ -563,7 +563,7 @@ mod the_sender {
     fn is_named_on_the_event_s_source_in_the_channel_s_form() {
         let mut sim = on(ChannelType::Sms);
         let result = sim
-            .send(message_from("inbox", "1 555 000 0001", "Hi"))
+            .send(message_from("inbox", "+1 555 000 0001", "Hi"))
             .unwrap();
         assert_eq!(
             result
@@ -572,6 +572,16 @@ mod the_sender {
                 .map(String::from),
             Some("+15550000001".to_owned())
         );
+    }
+
+    /// Gap G-052: with no country code declared, digits without `+` are
+    /// kept as written.
+    #[test]
+    fn without_a_plus_is_kept_as_written_where_its_channel_declares_no_country_code() {
+        let mut sim = on(ChannelType::Sms);
+        sim.send(message_from("inbox", "15550000001", "Hi"))
+            .unwrap();
+        assert_eq!(sim.parsed_messages[0].sender_id, "15550000001");
     }
 
     #[test]
