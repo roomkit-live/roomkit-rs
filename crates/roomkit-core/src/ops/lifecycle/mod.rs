@@ -31,8 +31,9 @@ use self::report::Reported;
 use super::io::Io;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Request, Step};
 use super::{Cx, Environment, KitConfig};
-use crate::model::{ChannelId, ErrorRecord, Room, RoomContext, RoomId};
+use crate::model::{ChannelId, ErrorRecord, Room, RoomContext, RoomId, RoomStatus};
 use crate::rules::attachment;
+use crate::rules::lifecycle::Transition;
 
 /// Why a lifecycle operation failed. Nothing was changed.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
@@ -54,6 +55,18 @@ pub enum LifecycleError {
     /// it writes itself (gap G-041).
     #[error("only the framework writes the visibility internal")]
     InternalVisibility,
+    /// The room's status is not one the transition leaves from, and the
+    /// transition refuses it: only a CLOSED room is reopened, and ARCHIVED
+    /// is never left (RFC §5.1, gap G-074).
+    #[error("room {room_id} is {status:?}, which {transition:?} does not leave from")]
+    TransitionRefused {
+        /// The room.
+        room_id: RoomId,
+        /// The transition.
+        transition: Transition,
+        /// The room's status, as the transition found it.
+        status: RoomStatus,
+    },
     /// The room metadata key belongs to the namespace the implementation
     /// reserves (RFC §10.6.5, gap G-049).
     #[error("room metadata key {0:?} is reserved by the implementation")]

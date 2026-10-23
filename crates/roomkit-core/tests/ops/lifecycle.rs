@@ -531,15 +531,19 @@ mod room_transitions {
     }
 
     fn run(sim: &mut Sim, transition: Transition) -> Room {
+        attempt(sim, transition).unwrap()
+    }
+
+    /// The operation of `transition` on the room, as it ended.
+    fn attempt(sim: &mut Sim, transition: Transition) -> Result<Room, LifecycleError> {
         let config = sim.shared_config();
-        let result = match transition {
+        match transition {
             Transition::Pause => sim.run(PauseRoom::new(config, room_id())),
             Transition::Resume => sim.run(ResumeRoom::new(config, room_id())),
             Transition::Reopen => sim.run(ReopenRoom::new(config, room_id())),
             Transition::Close => sim.run(CloseRoom::new(config, room_id())),
             Transition::Archive => sim.run(ArchiveRoom::new(config, room_id())),
-        };
-        result.unwrap()
+        }
     }
 
     #[test]
@@ -662,12 +666,40 @@ mod room_transitions {
             Transition::Archive,
         ]
         .into_iter()
-        .map(|transition| run(&mut sim, transition).status)
+        .map(|transition| {
+            // A reopen is refused (below); the room stays as it is either way.
+            drop(attempt(&mut sim, transition));
+            sim.room.status
+        })
         .collect();
         assert_eq!(
             (statuses, sim.traced("update room").len()),
             (vec![RoomStatus::Archived; 5], 0)
         );
+    }
+
+    /// Only a CLOSED room is reopened, and ARCHIVED is never left (RFC §5.1,
+    /// gap G-074): a reopen of a room in another status fails, writing and
+    /// reporting nothing.
+    #[test]
+    fn a_reopen_of_a_room_that_is_not_closed_is_refused() {
+        for status in [RoomStatus::Active, RoomStatus::Paused, RoomStatus::Archived] {
+            let mut sim = in_status(status);
+            let refused = attempt(&mut sim, Transition::Reopen);
+            assert_eq!(
+                (refused, sim.trace, sim.notices.len()),
+                (
+                    Err(LifecycleError::TransitionRefused {
+                        room_id: room_id(),
+                        transition: Transition::Reopen,
+                        status,
+                    }),
+                    read_only_section(),
+                    0
+                ),
+                "a reopen of a room {status:?}"
+            );
+        }
     }
 
     #[test]

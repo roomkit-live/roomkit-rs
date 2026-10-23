@@ -1,10 +1,11 @@
 //! The room lifecycle (RFC §5.1, §8.2). The integrator pauses a room, which
 //! still takes messages and is resumed by the first one delivered; closes
 //! it, so that it refuses every message with nothing written; reopens it;
-//! then archives it for good. A second room has timers: a minute without
-//! activity pauses it, two minutes paused close it, and `check_timers`
-//! applies both, each at the instant it fell due. `ON_ROOM_PAUSED` and
-//! `ON_ROOM_CLOSED` fire with every transition.
+//! then archives it for good: a reopen of the archived room is refused,
+//! since only a closed room is reopened. A second room has timers: a
+//! minute without activity pauses it, two minutes paused close it, and
+//! `check_timers` applies both, each at the instant it fell due.
+//! `ON_ROOM_PAUSED` and `ON_ROOM_CLOSED` fire with every transition.
 //!
 //! ```sh
 //! cargo run --example room_lifecycle
@@ -19,9 +20,9 @@ use std::time::Duration;
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, InboundMessage, Room, RoomId, RoomStatus, RoomTimers,
 };
-use roomkit::ops::{FrameworkEvent, InboundResult, TransitionReason};
+use roomkit::ops::{FrameworkEvent, InboundResult, LifecycleError, TransitionReason};
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, HookTrigger, RoomKit, text_of};
+use roomkit::{ConversationStore, HookTrigger, KitError, RoomKit, text_of};
 
 use shared::{Checks, Clock, Log};
 
@@ -138,11 +139,21 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
     kit.archive_room(&room).await?;
     println!("  Archived.");
     let while_archived = desk.alice_says(&room, "Still here?").await?;
-    let reopened = kit.reopen_room(&room).await?;
+    let reopened = kit.reopen_room(&room).await;
+    if let Err(error) = &reopened {
+        println!("  Reopening it fails: {error}.");
+    }
+    let after_reopen = kit.store().get_room(&room).await?;
     checks.expect(
-        "an archived room refuses messages as a closed one does, and stays archived",
+        "an archived room refuses messages as a closed one does, and a reopen is refused",
         while_archived.reason.as_deref() == Some("room_closed")
-            && reopened.status == RoomStatus::Archived,
+            && matches!(
+                reopened,
+                Err(KitError::Lifecycle(
+                    LifecycleError::TransitionRefused { .. }
+                ))
+            )
+            && after_reopen.is_some_and(|room| room.status == RoomStatus::Archived),
     );
     checks.expect(
         "the advisor received the three messages delivered, and the room holds nothing it refused",

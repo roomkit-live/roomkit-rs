@@ -105,7 +105,7 @@ impl Change {
             Self::UpdateBinding { channel_id, update } => {
                 update_binding(channel_id, update, context)
             }
-            Self::Transition(transition) => Ok(transition_room(*transition, context, now)),
+            Self::Transition(transition) => transition_room(*transition, context, now),
             Self::CheckTimers => Ok(Decision {
                 writes: VecDeque::new(),
                 changed: Changed::Unchanged(context),
@@ -397,18 +397,28 @@ fn store_updated(
 }
 
 /// Applies the transition when it leaves from the room's status; otherwise
-/// the room is left as it is (RFC §5.1).
+/// the room is left as it is (RFC §5.1), or the transition is refused when
+/// it refuses that status, a reopen of a room that is not CLOSED (gap
+/// G-074).
 fn transition_room(
     transition: Transition,
     mut context: Box<RoomContext>,
     now: Timestamp,
-) -> Decision {
+) -> Result<Decision, LifecycleError> {
+    let status = context.room.status;
+    if transition.refuses(status) {
+        return Err(LifecycleError::TransitionRefused {
+            room_id: context.room.id.clone(),
+            transition,
+            status,
+        });
+    }
     let mut room = context.room.clone();
     if !lifecycle::apply(&mut room, transition, now) {
-        return Decision {
+        return Ok(Decision {
             writes: VecDeque::new(),
             changed: Changed::Unchanged(context),
-        };
+        });
     }
     room.updated_at = now;
     let write = Request::UpdateRoom {
@@ -416,13 +426,13 @@ fn transition_room(
         updates: RoomUpdates::lifecycle(&room),
     };
     context.room = room;
-    Decision {
+    Ok(Decision {
         writes: VecDeque::from([write]),
         changed: Changed::Transitioned {
             transition,
             context,
         },
-    }
+    })
 }
 
 /// The room's binding of `channel_id`.

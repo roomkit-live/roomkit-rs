@@ -219,7 +219,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist.
+    /// Returns [`KitError::Lifecycle`] when the room does not exist, and
+    /// `LifecycleError::TransitionRefused`, nothing written, when it is not
+    /// CLOSED: an archived room is never left (gap G-074).
     pub async fn reopen_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let reopen = ReopenRoom::new(self.config(), room_id.clone());
         Ok(driver::run(&self.inner, "reopen_room", reopen).await??)

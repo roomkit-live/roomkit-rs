@@ -9,8 +9,10 @@
 //! | close | ACTIVE, PAUSED | CLOSED |
 //! | archive | ACTIVE, PAUSED, CLOSED | ARCHIVED |
 //!
-//! A transition from any other status does not apply and changes nothing, as
-//! closing a closed room does. ARCHIVED is never left.
+//! A reopen from any other status is refused: only a CLOSED room is reopened,
+//! and ARCHIVED is never left (gap G-074). Any other transition from a
+//! status it does not leave from does not apply and changes nothing, as
+//! closing a closed room does.
 
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +43,15 @@ impl Transition {
             Self::Close => RoomStatus::Closed,
             Self::Archive => RoomStatus::Archived,
         }
+    }
+
+    /// Whether the transition is refused on a room in `status`, rather than
+    /// leaving it as it is (RFC §5.1, gap G-074): a reopen of a room that is
+    /// not CLOSED, since only a CLOSED room is reopened and ARCHIVED is
+    /// never left. Any other transition that does not leave from `status`
+    /// changes nothing, as closing a closed room does.
+    pub fn refuses(self, status: RoomStatus) -> bool {
+        self == Self::Reopen && !self.leaves_from(status)
     }
 
     /// Whether the transition applies to a room in `status`.
@@ -149,6 +160,29 @@ mod tests {
         assert_eq!(
             leaves_from(Transition::Archive),
             [RoomStatus::Active, RoomStatus::Paused, RoomStatus::Closed]
+        );
+    }
+
+    #[test]
+    fn only_a_reopen_is_refused_where_it_does_not_leave_from() {
+        let refused: Vec<(Transition, RoomStatus)> = [
+            Transition::Pause,
+            Transition::Resume,
+            Transition::Reopen,
+            Transition::Close,
+            Transition::Archive,
+        ]
+        .into_iter()
+        .flat_map(|transition| STATUSES.map(|status| (transition, status)))
+        .filter(|(transition, status)| transition.refuses(*status))
+        .collect();
+        assert_eq!(
+            refused,
+            [
+                (Transition::Reopen, RoomStatus::Active),
+                (Transition::Reopen, RoomStatus::Paused),
+                (Transition::Reopen, RoomStatus::Archived),
+            ]
         );
     }
 

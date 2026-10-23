@@ -414,7 +414,8 @@ fn change_failure(error: LifecycleError) -> InboundError {
         // and decides nothing that fails under it.
         error @ (LifecycleError::ChannelNotBound { .. }
         | LifecycleError::InternalVisibility
-        | LifecycleError::ReservedMetadataKey(_)) => {
+        | LifecycleError::ReservedMetadataKey(_)
+        | LifecycleError::TransitionRefused { .. }) => {
             InboundError::Store(ErrorRecord::new("Internal", error.to_string()))
         }
     }

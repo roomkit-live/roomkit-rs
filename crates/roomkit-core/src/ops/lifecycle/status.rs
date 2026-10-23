@@ -4,7 +4,8 @@
 //! Each runs under the room's lock and applies a transition of
 //! [`rules::lifecycle`](crate::rules::lifecycle) when it leaves from the
 //! room's status; otherwise the room is left as it is, as closing a closed
-//! room is. Its output is the room as it now stands.
+//! room is, but a reopen of a room that is not CLOSED fails (gap G-074).
+//! Its output is the room as it now stands.
 
 use std::sync::Arc;
 
@@ -68,7 +69,9 @@ status_change!(
 status_change!(
     /// Reopens a closed room: it accepts events again (RFC §5.1), and its
     /// inactivity timer restarts (gap G-045). The RFC names no trigger or
-    /// framework event for it.
+    /// framework event for it. A room in any other status, ARCHIVED among
+    /// them, fails it with [`LifecycleError::TransitionRefused`], nothing
+    /// written (gap G-074).
     ReopenRoom,
     Transition::Reopen
 );
