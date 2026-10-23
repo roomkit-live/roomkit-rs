@@ -24,9 +24,7 @@
 //!   G-061). A room no longer ACTIVE by then, whose binding names another
 //!   sender, or that step 3 no longer admits the sender to (someone else
 //!   heard on the channel meanwhile), is no longer the message's, which is
-//!   routed once more (gap
-//!   G-055). The wait for that lock is what `process_timeout` bounds for
-//!   routing (RFC §10.4, §13.6), with milestone 6.
+//!   routed once more (gap G-055).
 //!
 //! A new room for a message no room was found for is created with a fresh
 //! id: a store that holds a room with it fails the message, since that room
@@ -36,11 +34,19 @@
 //! as the lock finds it, so that it never replaces a binding made
 //! meanwhile, by an `ON_ROOM_CREATED` hook among others. What step 2 read
 //! last is the room's context at step 3.
+//!
+//! The call's deadline bounds step 2's read of the room and its wait for
+//! the room lock, routing's among them (RFC §10.4, §13.6): past it, step 2
+//! stops with nothing written. A room step 2 creates is attached whatever
+//! the deadline, its creation hooks bounded by their own timeouts: the
+//! creation is a write, and a room created is completed (gap G-068).
 
 use std::mem;
 
 use super::InboundError;
-use crate::model::{ChannelBinding, ChannelType, ErrorRecord, Room, RoomContext, RoomId};
+use crate::model::{
+    ChannelBinding, ChannelType, ErrorRecord, Room, RoomContext, RoomId, Timestamp,
+};
 use crate::ops::lifecycle::change::{Change, Changed, SenderRecord};
 use crate::ops::lifecycle::locked::LockedSection;
 use crate::ops::lifecycle::report::{self, Reported};
@@ -69,6 +75,8 @@ pub(super) struct NamedRoom {
     /// The message's sender, as routing names them (RFC §10.4).
     sender: Sender,
     mode: Mode,
+    /// The call's deadline (RFC §13.6).
+    deadline: Option<Timestamp>,
     state: State,
 }
 
@@ -82,6 +90,8 @@ pub(super) enum Named {
     Rerouted,
     /// Why the message fails.
     Failed(InboundError),
+    /// The call's deadline passed: nothing was written (RFC §13.6).
+    Expired,
 }
 
 #[derive(Debug)]
@@ -110,13 +120,15 @@ enum State {
 
 impl NamedRoom {
     /// Step 2 into `room_id`, named as `mode` says, for a caller acting for
-    /// `organization_id`, of a message on `channel` from `sender`.
+    /// `organization_id`, of a message on `channel` from `sender`, within
+    /// the call's `deadline`.
     pub(super) fn new(
         room_id: RoomId,
         mode: Mode,
         organization_id: Option<String>,
         channel: Box<ChannelDeclaration>,
         sender: Sender,
+        deadline: Option<Timestamp>,
     ) -> Self {
         Self {
             room_id,
@@ -124,6 +136,7 @@ impl NamedRoom {
             channel,
             sender,
             mode,
+            deadline,
             state: State::Start,
         }
     }
@@ -144,10 +157,16 @@ impl NamedRoom {
             self.create(cx);
             return;
         }
-        self.state = State::Reading(cx.io.issue(Request::LoadContext {
+        self.state = State::Reading(self.read(cx));
+    }
+
+    /// Reads the room, within the call's deadline.
+    fn read(&self, cx: &mut Cx<'_>) -> EffectId {
+        let request = Request::LoadContext {
             room_id: self.room_id.clone(),
             recent_events: cx.config.context_window,
-        }));
+        };
+        cx.io.issue_within(request, self.deadline)
     }
 
     /// Takes the driver's answer to step 2's outstanding effect.
@@ -157,6 +176,12 @@ impl NamedRoom {
         effect: EffectId,
         outcome: Outcome,
     ) -> Progress<Named> {
+        if outcome == Outcome::DeadlinePassed {
+            // Only a read and the wait for the lock carry the deadline: no
+            // lock is held, nothing was written.
+            self.state = State::Done;
+            return Progress::Done(Named::Expired);
+        }
         match mem::replace(&mut self.state, State::Done) {
             State::Reading(expected) if expected == effect => self.on_read(cx, outcome),
             State::Creating {
@@ -249,10 +274,7 @@ impl NamedRoom {
             if self.mode == Mode::Fresh {
                 return Progress::Done(Named::Failed(InboundError::Store(error)));
             }
-            let effect = cx.io.issue(Request::LoadContext {
-                room_id: self.room_id.clone(),
-                recent_events: cx.config.context_window,
-            });
+            let effect = self.read(cx);
             self.state = State::Rereading { effect, error };
             return Progress::Waiting;
         }
@@ -317,9 +339,13 @@ impl NamedRoom {
         }
     }
 
-    /// Makes `change` under the room's lock.
+    /// Makes `change` under the room's lock, waiting for the lock within the
+    /// call's deadline unless step 2 created the room, whose attach
+    /// completes its creation.
     fn change(&mut self, cx: &mut Cx<'_>, change: Change, created: bool) -> Progress<Named> {
-        let mut section = Box::new(LockedSection::new(self.room_id.clone(), change));
+        let deadline = if created { None } else { self.deadline };
+        let mut section =
+            Box::new(LockedSection::new(self.room_id.clone(), change).waiting_within(deadline));
         section.start(cx);
         self.state = State::Changing { section, created };
         Progress::Waiting

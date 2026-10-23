@@ -170,6 +170,13 @@ impl<P> HookChain<P> {
         }
     }
 
+    /// Hands over the hooks that produced no usable result so far, so that
+    /// a chain run in two phases reports each phase's when it ends (RFC
+    /// §9.5.1: the off-lock hooks before the lock, the others under it).
+    pub fn take_incidents(&mut self) -> Vec<HookIncident> {
+        std::mem::take(&mut self.incidents)
+    }
+
     /// What the chain decided, with everything its hooks produced.
     pub fn finish(self) -> ChainVerdict<P> {
         let decision = match self.block {
@@ -451,6 +458,24 @@ mod tests {
         let allow = HookResult::allow().inject(injected());
         chain.apply(&hook("notifier"), HookOutcome::Returned(allow));
         assert_eq!(chain.finish().injected_events, [injected()]);
+    }
+
+    #[test]
+    fn incidents_taken_are_not_reported_again() {
+        let mut chain = chain();
+        chain.apply(&hook("scanner"), HookOutcome::TimedOut);
+        let taken = chain.take_incidents();
+        chain.apply(&hook("policy"), HookOutcome::TimedOut);
+        let names = |incidents: Vec<HookIncident>| -> Vec<String> {
+            incidents
+                .into_iter()
+                .map(|incident| incident.hook)
+                .collect()
+        };
+        assert_eq!(
+            (names(taken), names(chain.finish().incidents)),
+            (vec!["scanner".to_owned()], vec!["policy".to_owned()])
+        );
     }
 
     #[test]

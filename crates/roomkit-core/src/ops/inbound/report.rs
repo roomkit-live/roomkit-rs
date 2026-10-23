@@ -2,11 +2,12 @@
 //! firing of observer hooks (RFC §9.3).
 
 use super::delivery::SetOutcome;
+use super::pass::PassOrigin;
 use crate::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType,
-    Metadata, RoomContext, RoomEvent, SystemContent, Task,
+    Metadata, RoomContext, RoomEvent, RoomStatus, SystemContent, Task,
 };
-use crate::ops::{ChainDepthData, Cx, FrameworkEvent, Notice};
+use crate::ops::{ChainDepthData, Cx, FrameworkEvent, Notice, RefusedOperation};
 use crate::rules::hook_chain::{HookIncident, HookProblem};
 use crate::rules::hook_registry::HookTrigger;
 
@@ -148,6 +149,32 @@ fn task_payload(cx: &mut Cx<'_>, task: &Task) -> RoomEvent {
         content,
         now,
     )
+}
+
+/// Reports `event`, from `origin`, refused by its room's `status`: a refused
+/// event is observable (RFC §5.1), an inbound one as `inbound`, a response
+/// or a hook's injected event as `reentry`, the framework's own re-injection
+/// into the room (gap G-043).
+pub(super) fn room_refused(
+    cx: &mut Cx<'_>,
+    event: &RoomEvent,
+    origin: &PassOrigin,
+    status: RoomStatus,
+) {
+    let operation = match origin {
+        PassOrigin::Trigger => RefusedOperation::Inbound,
+        PassOrigin::Response | PassOrigin::Injected { .. } => RefusedOperation::Reentry,
+    };
+    notify(
+        cx,
+        FrameworkEvent::RoomRefusedEvent {
+            room_id: event.room_id.clone(),
+            event_id: event.id.clone(),
+            status,
+            operation,
+            event_type: event.event_type,
+        },
+    );
 }
 
 /// Reports the record of a channel not asked at the chain-depth limit (RFC

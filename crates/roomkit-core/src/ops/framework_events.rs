@@ -178,6 +178,22 @@ pub enum FrameworkEvent {
         /// What failed.
         error: String,
     },
+    /// A call's pre-commit phase passed its `process_timeout` (RFC §13.6):
+    /// nothing of its event was written. It names the message's channel
+    /// when the timeout passed before the room lock, the event when it
+    /// passed under it (gap G-068).
+    ProcessTimeout {
+        /// The room; `None` when the timeout passed before the message had
+        /// one, while it was routed (gap G-068).
+        room_id: Option<RoomId>,
+        /// The message's channel, when the timeout passed before the room
+        /// lock.
+        channel_id: Option<ChannelId>,
+        /// The event, when the timeout passed under the room lock.
+        event_id: Option<EventId>,
+        /// The timeout, in seconds.
+        timeout: f64,
+    },
     /// A hook ran past its timeout.
     HookTimeout {
         /// The room.
@@ -248,6 +264,27 @@ mod tests {
         assert_eq!(
             serde_json::to_value(event).unwrap(),
             json!({ "event": "room_closed", "room_id": "room_1", "reason": "timer" })
+        );
+    }
+
+    /// RFC §8.2: `channel_id` before the room lock, or `event_id` under it.
+    #[test]
+    fn a_process_timeout_before_the_lock_names_the_channel() {
+        let event = FrameworkEvent::ProcessTimeout {
+            room_id: Some(RoomId::new("room_1").unwrap()),
+            channel_id: Some(ChannelId::new("sms").unwrap()),
+            event_id: None,
+            timeout: 2.5,
+        };
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({
+                "event": "process_timeout",
+                "room_id": "room_1",
+                "channel_id": "sms",
+                "event_id": null,
+                "timeout": 2.5,
+            })
         );
     }
 

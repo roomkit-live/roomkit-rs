@@ -10,6 +10,16 @@
 //! An inbound operation never holds two lanes at once, the lane of a room
 //! it was routed to included.
 //!
+//! An admission ticket (RFC §9.5.1) is taken in the room's lane and before
+//! the room lock, its turn awaited before the lock is taken, and it is
+//! released once the lock is let go, on every path: a ticket left held when
+//! the operation ends fails the test, as a lock or a lane does.
+//!
+//! Time is simulated: an effect named in `durations` moves the clock as it
+//! runs. An effect that carries a deadline (RFC §13.6) and would finish
+//! past it does nothing: the clock moves to the deadline, the trace reads
+//! `<effect> deadline passed`, and the driver answers `DeadlinePassed`.
+//!
 //! The router is scripted: each `Route` takes the next answer of `routes`,
 //! a new room once they are spent.
 
@@ -114,6 +124,18 @@ pub(crate) struct Sim {
     others: BTreeMap<RoomId, StoredRoom>,
     locks_held: BTreeSet<RoomId>,
     lanes_held: BTreeSet<RoomId>,
+    /// The rooms whose admission ticket the operation holds.
+    tickets_held: BTreeSet<RoomId>,
+    /// The rooms whose ticket's turn came.
+    admitted: BTreeSet<RoomId>,
+    /// How long each effect takes on the simulated clock, named by the start
+    /// of its trace line (`hook pii_scan`, `lock room_1`, `await ticket
+    /// room_1`, `handle_inbound sms`); the first match counts.
+    pub(crate) durations: Vec<(&'static str, Duration)>,
+    /// The trace line of every effect that carried a deadline, in order.
+    pub(crate) bounded: Vec<String>,
+    /// The contexts the SYNC hooks ran with, by hook name, in order.
+    pub(crate) hook_contexts: Vec<(String, RoomContext)>,
     /// What runs: an inbound operation must hold the lane of every room it
     /// acts in.
     running: Running,
@@ -155,9 +177,12 @@ pub(crate) struct Sim {
     /// The effect that fails, named by the start of its trace line: a store
     /// write (`update room`, `delete binding sms`, `store room`), a room
     /// lock (`lock room_1`), a room's lane (`enter lane room_1`), the
-    /// router (`route sms`), an identity read (`resolve_identity`) or
-    /// awaited observers (`await on_room_created`).
-    /// It is answered `Failed` and changes nothing.
+    /// router (`route sms`), an identity read (`resolve_identity`), awaited
+    /// observers (`await on_room_created`), or an admission ticket taken or
+    /// awaited (`take ticket room_1`, `await ticket room_1`).
+    /// It is answered `Failed` and changes nothing. A ticket's release named
+    /// (`release ticket room_1`) fails too, and lets the ticket go all the
+    /// same, as a lease that expires would.
     pub(crate) failing_effect: Option<&'static str>,
 }
 
@@ -206,6 +231,11 @@ impl Sim {
             others: BTreeMap::new(),
             locks_held: BTreeSet::new(),
             lanes_held: BTreeSet::new(),
+            tickets_held: BTreeSet::new(),
+            admitted: BTreeSet::new(),
+            durations: Vec::new(),
+            bounded: Vec::new(),
+            hook_contexts: Vec::new(),
             running: Running::Other,
             identities: Vec::new(),
             routes: VecDeque::new(),
@@ -371,6 +401,16 @@ impl Sim {
         self.sync_hook(spec, hook)
     }
 
+    /// Registers a SYNC `BEFORE_BROADCAST` hook named `name` that runs off
+    /// the room lock (RFC §9.5.1).
+    pub(crate) fn off_lock_check(&mut self, name: &str, hook: Hook) -> HookId {
+        let spec = HookSpec {
+            needs_lock: false,
+            ..HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync)
+        };
+        self.sync_hook(spec, hook)
+    }
+
     /// Registers an ASYNC observer on `trigger`.
     pub(crate) fn observer(&mut self, name: &str, trigger: HookTrigger) -> HookId {
         let spec = HookSpec::new(name, trigger, HookExecution::Async);
@@ -508,13 +548,18 @@ impl Sim {
                         "the operation ended holding the lane of {:?}",
                         self.lanes_held
                     );
+                    assert!(
+                        self.tickets_held.is_empty(),
+                        "the operation ended holding the ticket of {:?}",
+                        self.tickets_held
+                    );
                     return output;
                 }
                 Next::Waiting => panic!("a driver that completes every effect never waits"),
                 Next::Effects(effects) => {
                     for effect in effects {
                         let traced = self.trace.len();
-                        let outcome = self.execute(effect.request);
+                        let outcome = self.execute_timed(effect.request, effect.deadline);
                         self.journal.extend(self.trace.iter().skip(traced).cloned());
                         operation.complete(effect.id, outcome).unwrap();
                     }
@@ -659,6 +704,73 @@ impl Sim {
         self.timeline.iter().map(describe).collect()
     }
 
+    /// Runs `request` for as long as `durations` says, within `deadline`:
+    /// a request that would finish past it does nothing, and is answered
+    /// `DeadlinePassed` at the deadline (RFC §13.6).
+    fn execute_timed(&mut self, request: Request, deadline: Option<Timestamp>) -> Outcome {
+        let line = self.label(&request);
+        let duration = self
+            .durations
+            .iter()
+            .find(|(prefix, _)| line.starts_with(prefix))
+            .map_or(Duration::ZERO, |(_, duration)| *duration);
+        if let Some(deadline) = deadline {
+            self.bounded.push(line.clone());
+            let now = self.env.now();
+            if now.checked_add(duration).unwrap() > deadline {
+                self.env
+                    .advance(deadline.duration_since(now).unwrap_or_default());
+                self.trace.push(format!("{line} deadline passed"));
+                return Outcome::DeadlinePassed;
+            }
+        }
+        self.env.advance(duration);
+        self.execute(request)
+    }
+
+    /// How the trace names `request`, or the start of it for the requests
+    /// whose line says more once they ran.
+    fn label(&self, request: &Request) -> String {
+        match request {
+            Request::AcquireLock { room_id } => format!("lock {room_id}"),
+            Request::ReleaseLock { room_id } => format!("release {room_id}"),
+            Request::EnterLane { room_id } => format!("enter lane {room_id}"),
+            Request::LeaveLane { room_id } => format!("leave lane {room_id}"),
+            Request::TakeTicket { room_id } => format!("take ticket {room_id}"),
+            Request::AwaitTicket { room_id } => format!("await ticket {room_id}"),
+            Request::ReleaseTicket { room_id } => format!("release ticket {room_id}"),
+            Request::LoadContext { room_id, .. } => format!("load_context {room_id}"),
+            Request::LoadBindings { room_id } => format!("load_bindings {room_id}"),
+            Request::FindByIdempotencyKey { key, .. } => format!("find_key {key}"),
+            Request::GetEvent { event_id } => format!("get_event {event_id}"),
+            Request::Commit { .. } => "commit".to_owned(),
+            Request::PersistSideEffects { .. } => "persist".to_owned(),
+            Request::CreateRoom { room } => format!("store room {}", room.id),
+            Request::UpdateRoom { room_id, .. } => format!("update room {room_id}"),
+            Request::StoreBinding { binding } => format!("store binding {}", binding.channel_id),
+            Request::DeleteBinding { channel_id, .. } => format!("delete binding {channel_id}"),
+            Request::UpdateEvent { event_id, .. } => format!("update event {event_id}"),
+            Request::DeleteEvent { event_id, .. } => format!("delete event {event_id}"),
+            Request::ResolveIdentity {
+                channel_type,
+                address,
+                ..
+            } => format!("resolve_identity {} {address}", type_name(*channel_type)),
+            Request::Route { query } => format!("route {} {}", query.channel_id, query.sender_id),
+            Request::HandleInbound { channel_id, .. } => format!("handle_inbound {channel_id}"),
+            Request::OnEvent { binding, event, .. } => {
+                format!("on_event {} <- {}", binding.channel_id, event.id)
+            }
+            Request::Deliver { binding, event, .. } => {
+                format!("deliver {} <- {}", binding.channel_id, event.id)
+            }
+            Request::RunHook { hook, .. } => {
+                format!("hook {}", self.config.hooks.get(*hook).unwrap().name)
+            }
+            Request::RunObservers { trigger, .. } => format!("await {}", trigger_name(*trigger)),
+        }
+    }
+
     fn execute(&mut self, request: Request) -> Outcome {
         if let Some(refused) = self.refused(&request) {
             return refused;
@@ -668,6 +780,9 @@ impl Sim {
             Request::ReleaseLock { room_id } => self.release(&room_id),
             Request::EnterLane { room_id } => self.enter_lane(room_id),
             Request::LeaveLane { room_id } => self.leave_lane(&room_id),
+            Request::TakeTicket { room_id } => self.take_ticket(room_id),
+            Request::AwaitTicket { room_id } => self.await_ticket(&room_id),
+            Request::ReleaseTicket { room_id } => self.release_ticket(&room_id),
             Request::HandleInbound {
                 channel_id,
                 message,
@@ -680,7 +795,12 @@ impl Sim {
                 context,
             } => self.on_event(&binding, &event, *context),
             Request::Deliver { binding, event, .. } => self.deliver(&binding, &event),
-            Request::RunHook { hook, event, .. } => self.execute_hook(hook, &event),
+            Request::RunHook {
+                hook,
+                event,
+                context,
+                ..
+            } => self.execute_hook(hook, &event, *context),
             Request::RunObservers {
                 trigger,
                 hooks,
@@ -789,9 +909,10 @@ impl Sim {
     }
 
     /// A SYNC hook, and the change the hooks make in the room as they run.
-    fn execute_hook(&mut self, hook: HookId, event: &RoomEvent) -> Outcome {
+    fn execute_hook(&mut self, hook: HookId, event: &RoomEvent, context: RoomContext) -> Outcome {
         let name = self.config.hooks.get(hook).unwrap().name.clone();
         self.trace.push(format!("hook {name}"));
+        self.hook_contexts.push((name, context));
         let hook = self.hooks.get_mut(&hook).unwrap();
         let outcome = hook(event);
         match &self.hooks_change {
@@ -885,7 +1006,16 @@ impl Sim {
                 format!("enter lane {room_id}"),
                 ErrorRecord::new("LaneUnavailable", "the lane manager is down"),
             ),
+            Request::TakeTicket { room_id } => (
+                format!("take ticket {room_id}"),
+                ErrorRecord::new("TicketUnavailable", "the ticket queue is down"),
+            ),
+            Request::AwaitTicket { room_id } => (
+                format!("await ticket {room_id}"),
+                ErrorRecord::new("TicketUnavailable", "the ticket queue is down"),
+            ),
             Request::ReleaseLock { .. }
+            | Request::ReleaseTicket { .. }
             | Request::LeaveLane { .. }
             | Request::LoadContext { .. }
             | Request::LoadBindings { .. }
@@ -909,6 +1039,10 @@ impl Sim {
     fn acquire(&mut self, room_id: RoomId) -> Outcome {
         self.trace.push(format!("lock {room_id}"));
         self.assert_in_lane(&room_id, "took the room lock");
+        assert!(
+            !self.tickets_held.contains(&room_id) || self.admitted.contains(&room_id),
+            "a ticketed event took the room lock before its turn"
+        );
         self.record_meanwhile(&room_id);
         assert!(
             self.locks_held.insert(room_id),
@@ -979,6 +1113,56 @@ impl Sim {
             return Outcome::Failed(ErrorRecord::new("LaneLost", "the lane was lost"));
         }
         Outcome::Left
+    }
+
+    /// Takes the room's admission ticket, in the room's lane and before its
+    /// lock (RFC §9.5.1).
+    fn take_ticket(&mut self, room_id: RoomId) -> Outcome {
+        self.trace.push(format!("take ticket {room_id}"));
+        self.assert_in_lane(&room_id, "took an admission ticket");
+        assert!(
+            !self.locks_held.contains(&room_id),
+            "an admission ticket was taken under the room lock"
+        );
+        assert!(
+            self.tickets_held.insert(room_id),
+            "the room's ticket was taken twice"
+        );
+        Outcome::Ticketed
+    }
+
+    /// The ticket's turn: no earlier ticket is held in the simulation, so it
+    /// comes at once, once `durations` says it waited.
+    fn await_ticket(&mut self, room_id: &RoomId) -> Outcome {
+        self.trace.push(format!("await ticket {room_id}"));
+        assert!(
+            self.tickets_held.contains(room_id),
+            "a ticket's turn was awaited without the ticket"
+        );
+        self.admitted.insert(room_id.clone());
+        Outcome::Admitted
+    }
+
+    /// Releases the room's ticket, once the room lock is let go.
+    fn release_ticket(&mut self, room_id: &RoomId) -> Outcome {
+        self.trace.push(format!("release ticket {room_id}"));
+        assert!(
+            !self.locks_held.contains(room_id),
+            "the ticket was released under the room lock"
+        );
+        assert!(
+            self.tickets_held.remove(room_id),
+            "the room's ticket was released without being held"
+        );
+        self.admitted.remove(room_id);
+        let line = format!("release ticket {room_id}");
+        if self
+            .failing_effect
+            .is_some_and(|failing| line.starts_with(failing))
+        {
+            return Outcome::Failed(ErrorRecord::new("TicketLost", "the ticket queue was lost"));
+        }
+        Outcome::TicketReleased
     }
 
     /// Runs `execute` on the room `id`. `room_1` is the room the fields
@@ -1095,6 +1279,9 @@ impl Sim {
             | Request::ReleaseLock { .. }
             | Request::EnterLane { .. }
             | Request::LeaveLane { .. }
+            | Request::TakeTicket { .. }
+            | Request::AwaitTicket { .. }
+            | Request::ReleaseTicket { .. }
             | Request::HandleInbound { .. }
             | Request::OnEvent { .. }
             | Request::Deliver { .. }
@@ -1275,6 +1462,9 @@ fn store_room(request: &Request) -> &RoomId {
         | Request::ReleaseLock { .. }
         | Request::EnterLane { .. }
         | Request::LeaveLane { .. }
+        | Request::TakeTicket { .. }
+        | Request::AwaitTicket { .. }
+        | Request::ReleaseTicket { .. }
         | Request::HandleInbound { .. }
         | Request::OnEvent { .. }
         | Request::Deliver { .. }

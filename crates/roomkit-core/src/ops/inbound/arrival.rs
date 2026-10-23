@@ -15,13 +15,20 @@
 //! its lane left, and the router is asked once more; a second such answer,
 //! or none, gives the message a new room (gap G-055). The arrival never
 //! holds two lanes at once.
+//!
+//! Every request of the arrival carries the call's deadline (RFC §13.6),
+//! but a write, a release, what completes a room step 2 creates, and the
+//! reads under step 2's lock, whose wait for the lock alone carries it: a
+//! deadline passed stops it with nothing of the event written, holding at
+//! most the room's lane, which its caller leaves.
 
 use std::mem;
 
 use super::InboundError;
+use super::deadline::Stopped;
 use super::named_room::{Mode, Named, NamedRoom};
 use super::stamp;
-use crate::model::{EventId, InboundMessage, RoomContext, RoomEvent, RoomId};
+use crate::model::{EventId, InboundMessage, RoomContext, RoomEvent, RoomId, Timestamp};
 use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
 use crate::rules::routing::{self, RouteQuery, Sender};
@@ -67,10 +74,21 @@ pub(super) fn resolve(
     Ok((channel, message))
 }
 
+/// A message arrived in its room: its event as the pipeline stamped it, and
+/// the room's context as step 2 left it, which the trigger's off-lock check
+/// reads (RFC §9.5.1).
+#[derive(Debug)]
+pub(super) struct Arrived {
+    pub(super) event: RoomEvent,
+    pub(super) context: Box<RoomContext>,
+}
+
 /// Steps 2 to 4 for one message.
 #[derive(Debug)]
 pub(super) struct Arrival {
     target: InboundTarget,
+    /// The call's deadline (RFC §13.6).
+    deadline: Option<Timestamp>,
     organization_id: Option<String>,
     message: Box<InboundMessage>,
     channel: Box<ChannelDeclaration>,
@@ -105,22 +123,26 @@ enum State {
     Parsing {
         effect: EffectId,
         id: EventId,
+        /// The room's context, whole, for the off-lock check.
+        context: Box<RoomContext>,
     },
     Done,
 }
 
 /// What the arrival ends with: the message's event in its room, or why it
-/// fails.
-type Arrived = Progress<Result<RoomEvent, InboundError>>;
+/// stopped.
+type Arriving = Progress<Result<Arrived, Stopped>>;
 
 impl Arrival {
     /// The arrival of `message`, resolved on `channel` (step 1), into the
-    /// room `target` names, for a caller acting for `organization_id`.
+    /// room `target` names, for a caller acting for `organization_id`,
+    /// within the call's `deadline`.
     pub(super) fn new(
         target: InboundTarget,
         organization_id: Option<String>,
         channel: ChannelDeclaration,
         message: InboundMessage,
+        deadline: Option<Timestamp>,
     ) -> Self {
         let address = routing::routing_address(
             channel.addressing(),
@@ -130,6 +152,7 @@ impl Arrival {
         );
         Self {
             target,
+            deadline,
             organization_id,
             message: Box::new(message),
             channel: Box::new(channel),
@@ -147,6 +170,20 @@ impl Arrival {
     /// the arrival fails.
     pub(super) fn lane(&self) -> Option<&RoomId> {
         self.lane.as_ref()
+    }
+
+    /// The room the arrival works on: the room whose lane it enters or
+    /// holds, `None` while the message is routed.
+    pub(super) fn room(&self) -> Option<&RoomId> {
+        match &self.state {
+            State::Entering { step, .. } | State::Naming(step) => Some(step.room_id()),
+            State::Start
+            | State::Resolving(_)
+            | State::Routing(_)
+            | State::Leaving(_)
+            | State::Parsing { .. }
+            | State::Done => self.lane.as_ref(),
+        }
     }
 
     /// Starts step 2: the named room's lane is entered, or the message is
@@ -168,7 +205,12 @@ impl Arrival {
         cx: &mut Cx<'_>,
         effect: EffectId,
         outcome: Outcome,
-    ) -> Arrived {
+    ) -> Arriving {
+        if outcome == Outcome::DeadlinePassed && !matches!(self.state, State::Naming(_)) {
+            // Step 2 answers for its own requests; the arrival's own hold
+            // nothing but the lane.
+            return Progress::Done(Err(Stopped::Expired));
+        }
         match mem::replace(&mut self.state, State::Done) {
             State::Resolving(expected) if expected == effect => self.on_resolved(cx, outcome),
             State::Routing(expected) if expected == effect => self.on_routed(cx, outcome),
@@ -187,7 +229,8 @@ impl Arrival {
             State::Parsing {
                 effect: expected,
                 id,
-            } if expected == effect => Progress::Done(self.on_parsed(id, outcome)),
+                context,
+            } if expected == effect => Progress::Done(self.on_parsed(id, context, outcome)),
             state @ (State::Start
             | State::Resolving(_)
             | State::Routing(_)
@@ -209,23 +252,24 @@ impl Arrival {
         let Some(address) = self.sender.address.clone() else {
             return self.route(cx);
         };
-        self.state = State::Resolving(cx.io.issue(Request::ResolveIdentity {
+        let request = Request::ResolveIdentity {
             channel_type: self.channel.channel_type,
             address,
             organization_id: self.organization_id.clone(),
-        }));
+        };
+        self.state = State::Resolving(cx.io.issue_within(request, self.deadline));
     }
 
     /// The identity is read; a store that fails it fails the message, with
     /// nothing written.
-    fn on_resolved(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arrived {
+    fn on_resolved(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arriving {
         match outcome.into_resolved() {
             Ok(identity_id) => {
                 self.sender.identity_id = identity_id;
                 self.route(cx);
                 Progress::Waiting
             }
-            Err(error) => Progress::Done(Err(InboundError::Store(error))),
+            Err(error) => failed(InboundError::Store(error)),
         }
     }
 
@@ -241,19 +285,20 @@ impl Arrival {
             sender: self.sender.clone(),
             form: self.channel.form(),
         };
-        self.state = State::Routing(cx.io.issue(Request::Route {
+        let request = Request::Route {
             query: Box::new(query),
-        }));
+        };
+        self.state = State::Routing(cx.io.issue_within(request, self.deadline));
     }
 
     /// The router answered: its room, or a new one when it found none (RFC
     /// §10.1 step 2). A router that fails fails the message, with nothing
     /// written.
-    fn on_routed(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arrived {
+    fn on_routed(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arriving {
         match outcome.into_routed() {
             Ok(Some(room_id)) => self.enter(cx, room_id, Mode::Routed),
             Ok(None) => self.enter_fresh(cx),
-            Err(error) => return Progress::Done(Err(InboundError::Routing(error))),
+            Err(error) => return failed(InboundError::Routing(error)),
         }
         Progress::Waiting
     }
@@ -273,8 +318,11 @@ impl Arrival {
             self.organization_id.clone(),
             self.channel.clone(),
             self.sender.clone(),
+            self.deadline,
         ));
-        let effect = cx.io.issue(Request::EnterLane { room_id });
+        let effect = cx
+            .io
+            .issue_within(Request::EnterLane { room_id }, self.deadline);
         self.state = State::Entering { effect, step };
     }
 
@@ -284,9 +332,9 @@ impl Arrival {
         cx: &mut Cx<'_>,
         mut step: Box<NamedRoom>,
         outcome: Outcome,
-    ) -> Arrived {
+    ) -> Arriving {
         if let Err(error) = outcome.into_entered() {
-            return Progress::Done(Err(InboundError::Lane(error)));
+            return failed(InboundError::Lane(error));
         }
         self.lane = Some(step.room_id().clone());
         step.start(cx);
@@ -296,10 +344,11 @@ impl Arrival {
 
     /// Step 2 is over: the room's context goes to the channel, or the room
     /// is no longer the message's and its lane is left to route it again.
-    fn on_named(&mut self, cx: &mut Cx<'_>, named: Named) -> Arrived {
+    fn on_named(&mut self, cx: &mut Cx<'_>, named: Named) -> Arriving {
         match named {
-            Named::Arrived(context) => self.parse(cx, *context),
-            Named::Failed(error) => Progress::Done(Err(error)),
+            Named::Arrived(context) => self.parse(cx, context),
+            Named::Failed(error) => failed(error),
+            Named::Expired => Progress::Done(Err(Stopped::Expired)),
             Named::Rerouted => {
                 if let Some(room_id) = self.lane.clone() {
                     tracing::debug!(
@@ -319,7 +368,7 @@ impl Arrival {
     /// The lane is left. A failed leave changes nothing the call decided:
     /// it is logged, as at the call's end, and the message is routed all the
     /// same.
-    fn on_left(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arrived {
+    fn on_left(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arriving {
         if let (Err(error), Some(room_id)) = (outcome.into_left(), &self.lane) {
             tracing::warn!(
                 target: "roomkit::core::inbound",
@@ -346,15 +395,20 @@ impl Arrival {
 
     /// Hands the room's context to the channel's `handle_inbound()` (RFC
     /// §10.1 steps 3 and 4).
-    fn parse(&mut self, cx: &mut Cx<'_>, context: RoomContext) -> Arrived {
+    fn parse(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> Arriving {
         let id = cx.env.new_event_id();
-        let effect = cx.io.issue(Request::HandleInbound {
+        let request = Request::HandleInbound {
             channel_id: self.message.channel_id.clone(),
             message: (*self.message).clone(),
-            context: self.receiver_context(context),
+            context: self.receiver_context((*context).clone()),
             id: id.clone(),
-        });
-        self.state = State::Parsing { effect, id };
+        };
+        let effect = cx.io.issue_within(request, self.deadline);
+        self.state = State::Parsing {
+            effect,
+            id,
+            context,
+        };
         Progress::Waiting
     }
 
@@ -377,17 +431,27 @@ impl Arrival {
 
     /// Stamps the event the channel parsed (RFC §10.1 step 4), in the room
     /// whose lane the arrival holds.
-    fn on_parsed(&self, id: EventId, outcome: Outcome) -> Result<RoomEvent, InboundError> {
-        let parsed = outcome
-            .into_parsed()
-            .map_err(|error| InboundError::ChannelFailed {
+    fn on_parsed(
+        &self,
+        id: EventId,
+        context: Box<RoomContext>,
+        outcome: Outcome,
+    ) -> Result<Arrived, Stopped> {
+        let parsed = outcome.into_parsed().map_err(|error| {
+            Stopped::Failed(InboundError::ChannelFailed {
                 channel_id: self.message.channel_id.clone(),
                 error,
-            })?;
+            })
+        })?;
         let mut event = stamp::stamp_trigger(*parsed, &self.message, &self.channel, id);
         if let Some(room_id) = &self.lane {
             event.room_id = room_id.clone();
         }
-        Ok(event)
+        Ok(Arrived { event, context })
     }
+}
+
+/// The arrival fails with `error`, nothing of the message written.
+fn failed(error: InboundError) -> Arriving {
+    Progress::Done(Err(Stopped::Failed(error)))
 }

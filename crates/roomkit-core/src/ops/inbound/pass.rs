@@ -9,23 +9,29 @@
 //! updating an edit's or a delete's target, and plans its broadcast. An
 //! instruction takes every step but the write: it is decided, never
 //! committed (RFC §10.1.1). Every path that took the lock releases it.
+//!
+//! The trigger's pass is the end of the call's pre-commit phase: it carries
+//! the call's deadline on every request up to the commit, and a passed
+//! deadline ends it, the lock released, with nothing stored (RFC §13.6). It
+//! also carries the outcome of the trigger's off-lock check, which step 9
+//! applies first, running only the hooks that need the lock (RFC §9.5.1).
 
-use std::collections::VecDeque;
 use std::mem;
 
+use super::chain::HookRun;
 use super::commit::{self, Committing};
 use super::edits::{self, Accepted};
 use super::stamp;
 use crate::model::{
     ChannelBinding, ChannelId, ErrorRecord, InjectedEvent, Observation, RoomContext, RoomEvent,
-    RoomStatus, Task,
+    RoomStatus, Task, Timestamp,
 };
 use crate::ops::lifecycle::gate::{self, Gate, Pending};
 use crate::ops::protocol::{EffectId, Outcome, Request};
-use crate::ops::{self, Abort, Cx, FrameworkEvent, Notice, Progress, RefusedOperation};
+use crate::ops::{self, Abort, Cx, Progress};
 use crate::rules::edits::EditRefusal;
 use crate::rules::hook_chain::{ChainDecision, ChainVerdict, HookChain};
-use crate::rules::hook_registry::{HookId, HookTrigger};
+use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::{self, DeliveryPlan, WriteRefusal};
 
 /// Where the event of a pass comes from.
@@ -108,6 +114,12 @@ pub(super) struct CommitPass {
     state: State,
     /// The edit or the delete step 8a accepted, with its target.
     accepted: Option<Accepted>,
+    /// The call's deadline, which the trigger's pass carries up to its
+    /// commit (RFC §13.6).
+    deadline: Option<Timestamp>,
+    /// The chain the trigger's off-lock check left, which step 9 goes on
+    /// with (RFC §9.5.1).
+    checked: Option<Box<HookChain<RoomEvent>>>,
     injected_events: Vec<InjectedEvent>,
     tasks: Vec<Task>,
     observations: Vec<Observation>,
@@ -134,9 +146,7 @@ enum State {
     },
     RunningHook {
         effect: EffectId,
-        hook: HookId,
-        rest: VecDeque<HookId>,
-        chain: Box<HookChain<RoomEvent>>,
+        run: Box<HookRun>,
         context: Box<RoomContext>,
     },
     LoadingBindings {
@@ -182,6 +192,8 @@ impl CommitPass {
             event,
             state: State::Start,
             accepted: None,
+            deadline: None,
+            checked: None,
             injected_events: Vec::new(),
             tasks: Vec::new(),
             observations: Vec::new(),
@@ -189,12 +201,33 @@ impl CommitPass {
         }
     }
 
+    /// The trigger's pass of `event`, bounded by the call's `deadline` up
+    /// to its commit (RFC §13.6), going on with the chain its off-lock check
+    /// left, if it ran one (RFC §9.5.1).
+    pub(super) fn trigger(
+        event: RoomEvent,
+        deadline: Option<Timestamp>,
+        checked: Option<HookChain<RoomEvent>>,
+    ) -> Self {
+        Self {
+            deadline,
+            checked: checked.map(Box::new),
+            ..Self::new(PassOrigin::Trigger, event)
+        }
+    }
+
     /// Takes the room's lock (RFC §10.1 step 6).
     pub(super) fn start(&mut self, cx: &mut Cx<'_>) {
         if matches!(self.state, State::Start) {
             let room_id = self.event.room_id.clone();
-            self.state = State::Locking(cx.io.issue(Request::AcquireLock { room_id }));
+            self.state = State::Locking(self.issue(cx, Request::AcquireLock { room_id }));
         }
+    }
+
+    /// Asks for `request`, within the call's deadline: what precedes the
+    /// commit is bounded by it (RFC §13.6).
+    fn issue(&self, cx: &mut Cx<'_>, request: Request) -> EffectId {
+        cx.io.issue_within(request, self.deadline)
     }
 
     /// Takes the driver's answer to the pass's outstanding effect.
@@ -208,6 +241,10 @@ impl CommitPass {
             debug_assert!(false, "pass received {effect:?} in {:?}", self.state);
             return Progress::Waiting;
         }
+        if outcome == Outcome::DeadlinePassed {
+            self.state = self.expire(cx);
+            return self.report();
+        }
         self.state = match mem::replace(&mut self.state, State::Reported) {
             State::Locking(_) => self.on_locked(cx, outcome),
             State::LoadingContext(_) => self.on_context(cx, outcome),
@@ -217,13 +254,7 @@ impl CommitPass {
             },
             State::CheckingKey { context, .. } => self.on_key(cx, context, outcome),
             State::ReadingTarget { context, .. } => self.on_target(cx, context, outcome),
-            State::RunningHook {
-                hook,
-                rest,
-                chain,
-                context,
-                ..
-            } => self.on_hook(cx, hook, rest, *chain, context, outcome),
+            State::RunningHook { run, context, .. } => self.on_hook(cx, run, context, outcome),
             State::LoadingBindings {
                 payload, context, ..
             } => self.on_bindings(cx, *payload, context, outcome),
@@ -255,12 +286,43 @@ impl CommitPass {
         }))
     }
 
+    /// The call's deadline passed (RFC §13.6): nothing is stored, and the
+    /// lock is released when the pass holds it. What the hooks produced is
+    /// dropped with the pass.
+    fn expire(&mut self, cx: &mut Cx<'_>) -> State {
+        match mem::replace(&mut self.state, State::Reported) {
+            State::Locking(_) => State::Finished(Err(Abort::DeadlinePassed(None))),
+            State::LoadingContext(_)
+            | State::ApplyingTimers { .. }
+            | State::CheckingKey { .. }
+            | State::ReadingTarget { .. }
+            | State::RunningHook { .. }
+            | State::LoadingBindings { .. } => {
+                let expired = Abort::DeadlinePassed(Some(self.event.id.clone()));
+                self.release(cx, Err(expired))
+            }
+            // The commit and the release carry no deadline (RFC §13.6): `Io`
+            // answers them with no `DeadlinePassed`.
+            state @ (State::Start
+            | State::Committing { .. }
+            | State::Releasing { .. }
+            | State::Finished(_)
+            | State::Reported) => {
+                debug_assert!(false, "a deadline passed for an unbounded request");
+                state
+            }
+        }
+    }
+
     fn on_locked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
         match outcome.into_locked() {
-            Ok(()) => State::LoadingContext(cx.io.issue(Request::LoadContext {
-                room_id: self.event.room_id.clone(),
-                recent_events: cx.config.context_window,
-            })),
+            Ok(()) => {
+                let request = Request::LoadContext {
+                    room_id: self.event.room_id.clone(),
+                    recent_events: cx.config.context_window,
+                };
+                State::LoadingContext(self.issue(cx, request))
+            }
             Err(error) => State::Finished(Err(Abort::Lock(error))),
         }
     }
@@ -284,17 +346,20 @@ impl CommitPass {
     fn on_gate(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
         let status = context.room.status;
         if !status.accepts_events() {
-            self.notify_refusal(cx, status);
+            super::report::room_refused(cx, &self.event, &self.origin, status);
             return self.release(cx, Ok(PassResult::Refused { status }));
         }
         self.event.index = context.room.event_count;
         match (&self.origin, self.event.idempotency_key.clone()) {
             (PassOrigin::Trigger, Some(key)) => State::CheckingKey {
-                effect: cx.io.issue(Request::FindByIdempotencyKey {
-                    room_id: self.event.room_id.clone(),
-                    channel_id: self.event.source.channel_id.clone(),
-                    key,
-                }),
+                effect: self.issue(
+                    cx,
+                    Request::FindByIdempotencyKey {
+                        room_id: self.event.room_id.clone(),
+                        channel_id: self.event.source.channel_id.clone(),
+                        key,
+                    },
+                ),
                 context,
             },
             _ => self.check_edit(cx, context),
@@ -315,7 +380,7 @@ impl CommitPass {
         match edits::target_of(&self.event) {
             Ok(None) => self.start_hooks(cx, context),
             Ok(Some(event_id)) => State::ReadingTarget {
-                effect: cx.io.issue(Request::GetEvent { event_id }),
+                effect: self.issue(cx, Request::GetEvent { event_id }),
                 context,
             },
             Err(refusal) => self.refuse_edit(cx, refusal),
@@ -343,61 +408,47 @@ impl CommitPass {
         self.release(cx, Ok(PassResult::EditRefused { refusal }))
     }
 
+    /// Step 9: the chain the off-lock check left goes on with the hooks
+    /// that need the lock, its outcome applied first (RFC §9.5.1); with no
+    /// check, the whole chain runs here.
     fn start_hooks(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
-        let hooks = cx
-            .config
-            .hooks
-            .chain(HookTrigger::BeforeBroadcast, &self.event.source);
-        let chain = HookChain::new(HookTrigger::BeforeBroadcast, self.event.clone());
-        self.next_hook(cx, hooks.into(), chain, context)
+        let source = &self.event.source;
+        let run = match self.checked.take() {
+            Some(chain) => HookRun::new(cx.config.hooks.locked_chain(source), *chain),
+            None => HookRun::of(
+                cx.config.hooks.chain(HookTrigger::BeforeBroadcast, source),
+                &self.event,
+            ),
+        };
+        self.next_hook(cx, Box::new(run), context)
     }
 
     /// Runs the next hook of the chain, or concludes it (RFC §10.1 step 9).
     fn next_hook(
         &mut self,
         cx: &mut Cx<'_>,
-        mut rest: VecDeque<HookId>,
-        chain: HookChain<RoomEvent>,
+        mut run: Box<HookRun>,
         context: Box<RoomContext>,
     ) -> State {
-        let next = if chain.is_blocked() {
-            None
-        } else {
-            rest.pop_front()
-                .and_then(|hook| cx.config.hooks.get(hook).map(|spec| (hook, spec.timeout)))
-        };
-        let Some((hook, timeout)) = next else {
-            return self.conclude_chain(cx, chain.finish(), context);
-        };
-        let effect = cx.io.issue(Request::RunHook {
-            hook,
-            trigger: HookTrigger::BeforeBroadcast,
-            event: stamp::keep_identity(&self.event, chain.payload().clone()),
-            context: context.clone(),
-            timeout,
-        });
-        State::RunningHook {
-            effect,
-            hook,
-            rest,
-            chain: Box::new(chain),
-            context,
+        match run.ask_next(cx, &self.event, &context, self.deadline) {
+            Some(effect) => State::RunningHook {
+                effect,
+                run,
+                context,
+            },
+            None => self.conclude_chain(cx, run.into_chain().finish(), context),
         }
     }
 
     fn on_hook(
         &mut self,
         cx: &mut Cx<'_>,
-        hook: HookId,
-        rest: VecDeque<HookId>,
-        mut chain: HookChain<RoomEvent>,
+        mut run: Box<HookRun>,
         context: Box<RoomContext>,
         outcome: Outcome,
     ) -> State {
-        if let Some(spec) = cx.config.hooks.get(hook) {
-            chain.apply(spec, outcome.into_hook());
-        }
-        self.next_hook(cx, rest, chain, context)
+        run.apply(cx, outcome);
+        self.next_hook(cx, run, context)
     }
 
     /// Blocked: commits the record (RFC §10.1 step 10). Allowed: reads the
@@ -420,9 +471,12 @@ impl CommitPass {
                 self.committing(cx, blocked)
             }
             ChainDecision::Allowed => State::LoadingBindings {
-                effect: cx.io.issue(Request::LoadBindings {
-                    room_id: self.event.room_id.clone(),
-                }),
+                effect: self.issue(
+                    cx,
+                    Request::LoadBindings {
+                        room_id: self.event.room_id.clone(),
+                    },
+                ),
                 payload: Box::new(payload),
                 context,
             },
@@ -528,23 +582,5 @@ impl CommitPass {
             room_id: self.event.room_id.clone(),
         });
         State::Releasing { effect, result }
-    }
-
-    /// A refused event is observable (RFC §5.1): an inbound one as
-    /// `inbound`, a response or a hook's injected event as `reentry`, the
-    /// framework's own re-injection into the room (gap G-043).
-    fn notify_refusal(&self, cx: &mut Cx<'_>, status: RoomStatus) {
-        let operation = match self.origin {
-            PassOrigin::Trigger => RefusedOperation::Inbound,
-            PassOrigin::Response | PassOrigin::Injected { .. } => RefusedOperation::Reentry,
-        };
-        cx.io
-            .notify(Notice::FrameworkEvent(FrameworkEvent::RoomRefusedEvent {
-                room_id: self.event.room_id.clone(),
-                event_id: self.event.id.clone(),
-                status,
-                operation,
-                event_type: self.event.event_type,
-            }));
     }
 }

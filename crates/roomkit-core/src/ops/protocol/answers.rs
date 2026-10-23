@@ -15,6 +15,9 @@ pub(crate) enum RequestKind {
     ReleaseLock,
     EnterLane,
     LeaveLane,
+    TakeTicket,
+    AwaitTicket,
+    ReleaseTicket,
     LoadContext,
     LoadBindings,
     FindByIdempotencyKey,
@@ -38,6 +41,9 @@ impl Request {
             Self::ReleaseLock { .. } => RequestKind::ReleaseLock,
             Self::EnterLane { .. } => RequestKind::EnterLane,
             Self::LeaveLane { .. } => RequestKind::LeaveLane,
+            Self::TakeTicket { .. } => RequestKind::TakeTicket,
+            Self::AwaitTicket { .. } => RequestKind::AwaitTicket,
+            Self::ReleaseTicket { .. } => RequestKind::ReleaseTicket,
             Self::LoadContext { .. } => RequestKind::LoadContext,
             Self::LoadBindings { .. } => RequestKind::LoadBindings,
             Self::FindByIdempotencyKey { .. } => RequestKind::FindByIdempotencyKey,
@@ -68,6 +74,9 @@ impl RequestKind {
             Self::ReleaseLock => "Released",
             Self::EnterLane => "Entered",
             Self::LeaveLane => "Left",
+            Self::TakeTicket => "Ticketed",
+            Self::AwaitTicket => "Admitted",
+            Self::ReleaseTicket => "TicketReleased",
             Self::LoadContext => "Context or RoomNotFound",
             Self::LoadBindings => "Bindings",
             Self::FindByIdempotencyKey => "Idempotent",
@@ -85,14 +94,25 @@ impl RequestKind {
         }
     }
 
-    /// Checks that `outcome` answers this family; `Failed` answers every one.
-    pub(crate) fn check(self, effect: EffectId, outcome: &Outcome) -> Result<(), ProtocolError> {
+    /// Checks that `outcome` answers this family; `Failed` answers every
+    /// one, and `DeadlinePassed` every one whose effect carried a deadline
+    /// (`bounded`).
+    pub(crate) fn check(
+        self,
+        effect: EffectId,
+        outcome: &Outcome,
+        bounded: bool,
+    ) -> Result<(), ProtocolError> {
         let fits = match (self, outcome) {
+            (_, Outcome::DeadlinePassed) => bounded,
             (_, Outcome::Failed(_))
             | (Self::AcquireLock, Outcome::Locked)
             | (Self::ReleaseLock, Outcome::Released)
             | (Self::EnterLane, Outcome::Entered)
             | (Self::LeaveLane, Outcome::Left)
+            | (Self::TakeTicket, Outcome::Ticketed)
+            | (Self::AwaitTicket, Outcome::Admitted)
+            | (Self::ReleaseTicket, Outcome::TicketReleased)
             | (Self::LoadContext, Outcome::Context(_) | Outcome::RoomNotFound)
             | (Self::LoadBindings, Outcome::Bindings(_))
             | (Self::FindByIdempotencyKey, Outcome::Idempotent(_))
@@ -112,6 +132,9 @@ impl RequestKind {
                 | Self::ReleaseLock
                 | Self::EnterLane
                 | Self::LeaveLane
+                | Self::TakeTicket
+                | Self::AwaitTicket
+                | Self::ReleaseTicket
                 | Self::LoadContext
                 | Self::LoadBindings
                 | Self::FindByIdempotencyKey
@@ -176,6 +199,27 @@ impl Outcome {
     pub(crate) fn into_left(self) -> Result<(), ErrorRecord> {
         match self {
             Self::Left => Ok(()),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    pub(crate) fn into_ticketed(self) -> Result<(), ErrorRecord> {
+        match self {
+            Self::Ticketed => Ok(()),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    pub(crate) fn into_admitted(self) -> Result<(), ErrorRecord> {
+        match self {
+            Self::Admitted => Ok(()),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    pub(crate) fn into_ticket_released(self) -> Result<(), ErrorRecord> {
+        match self {
+            Self::TicketReleased => Ok(()),
             other => Err(other.into_failure()),
         }
     }
@@ -309,6 +353,9 @@ impl Outcome {
             Self::Released => "Released",
             Self::Entered => "Entered",
             Self::Left => "Left",
+            Self::Ticketed => "Ticketed",
+            Self::Admitted => "Admitted",
+            Self::TicketReleased => "TicketReleased",
             Self::Context(_) => "Context",
             Self::RoomNotFound => "RoomNotFound",
             Self::Bindings(_) => "Bindings",
@@ -325,6 +372,7 @@ impl Outcome {
             Self::Resolved(_) => "Resolved",
             Self::Routed(_) => "Routed",
             Self::Failed(_) => "Failed",
+            Self::DeadlinePassed => "DeadlinePassed",
         }
     }
 }
@@ -339,7 +387,7 @@ mod tests {
     fn failed_answers_every_request() {
         let failed = Outcome::Failed(ErrorRecord::new("StoreError", "down"));
         assert_eq!(
-            RequestKind::Commit.check(EffectId::first(), &failed),
+            RequestKind::Commit.check(EffectId::first(), &failed, false),
             Ok(())
         );
     }
@@ -347,7 +395,7 @@ mod tests {
     #[test]
     fn an_outcome_of_another_family_is_a_protocol_error() {
         assert_eq!(
-            RequestKind::Commit.check(EffectId::first(), &Outcome::Locked),
+            RequestKind::Commit.check(EffectId::first(), &Outcome::Locked, false),
             Err(ProtocolError::UnexpectedOutcome {
                 effect: EffectId::first(),
                 expected: "Committed",
@@ -360,9 +408,9 @@ mod tests {
     fn a_router_s_answer_answers_a_route_request_only() {
         assert_eq!(
             (
-                RequestKind::Route.check(EffectId::first(), &Outcome::Routed(None)),
+                RequestKind::Route.check(EffectId::first(), &Outcome::Routed(None), false),
                 RequestKind::ResolveIdentity
-                    .check(EffectId::first(), &Outcome::Routed(None))
+                    .check(EffectId::first(), &Outcome::Routed(None), false)
                     .is_err()
             ),
             (Ok(()), true)
@@ -373,9 +421,9 @@ mod tests {
     fn an_event_or_none_answers_an_event_read_only() {
         assert_eq!(
             (
-                RequestKind::GetEvent.check(EffectId::first(), &Outcome::Event(None)),
+                RequestKind::GetEvent.check(EffectId::first(), &Outcome::Event(None), false),
                 RequestKind::GetEvent
-                    .check(EffectId::first(), &Outcome::Stored)
+                    .check(EffectId::first(), &Outcome::Stored, false)
                     .is_err()
             ),
             (Ok(()), true)
@@ -386,22 +434,67 @@ mod tests {
     fn the_events_removed_answer_a_delete_only() {
         assert_eq!(
             (
-                RequestKind::DeleteEvent.check(EffectId::first(), &Outcome::Deleted(Vec::new())),
+                RequestKind::DeleteEvent.check(
+                    EffectId::first(),
+                    &Outcome::Deleted(Vec::new()),
+                    false
+                ),
                 RequestKind::DeleteEvent
-                    .check(EffectId::first(), &Outcome::Stored)
+                    .check(EffectId::first(), &Outcome::Stored, false)
                     .is_err(),
                 RequestKind::Store
-                    .check(EffectId::first(), &Outcome::Deleted(Vec::new()))
+                    .check(EffectId::first(), &Outcome::Deleted(Vec::new()), false)
                     .is_err()
             ),
             (Ok(()), true, true)
         );
     }
 
+    /// RFC §13.6: a deadline passed answers an effect that carried one, of
+    /// any family, and no other.
+    #[test]
+    fn a_passed_deadline_answers_a_bounded_effect_only() {
+        assert_eq!(
+            (
+                RequestKind::RunHook.check(EffectId::first(), &Outcome::DeadlinePassed, true),
+                RequestKind::AwaitTicket.check(EffectId::first(), &Outcome::DeadlinePassed, true),
+                RequestKind::Commit.check(EffectId::first(), &Outcome::DeadlinePassed, false)
+            ),
+            (
+                Ok(()),
+                Ok(()),
+                Err(ProtocolError::UnexpectedOutcome {
+                    effect: EffectId::first(),
+                    expected: "Committed",
+                    got: "DeadlinePassed",
+                })
+            )
+        );
+    }
+
+    #[test]
+    fn a_ticket_s_answers_answer_their_own_requests_only() {
+        assert_eq!(
+            (
+                RequestKind::TakeTicket.check(EffectId::first(), &Outcome::Ticketed, false),
+                RequestKind::AwaitTicket.check(EffectId::first(), &Outcome::Admitted, false),
+                RequestKind::ReleaseTicket.check(
+                    EffectId::first(),
+                    &Outcome::TicketReleased,
+                    false
+                ),
+                RequestKind::AwaitTicket
+                    .check(EffectId::first(), &Outcome::Ticketed, false)
+                    .is_err()
+            ),
+            (Ok(()), Ok(()), Ok(()), true)
+        );
+    }
+
     #[test]
     fn a_missing_room_answers_a_context_request() {
         assert_eq!(
-            RequestKind::LoadContext.check(EffectId::first(), &Outcome::RoomNotFound),
+            RequestKind::LoadContext.check(EffectId::first(), &Outcome::RoomNotFound, false),
             Ok(())
         );
     }

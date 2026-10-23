@@ -10,10 +10,13 @@
 mod events;
 mod registry;
 mod rooms;
+#[cfg(test)]
+mod tests;
 mod timers;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::time::Duration;
 
 use roomkit_core::model::{ChannelId, InboundMessage, RoomEvent, RoomId};
 use roomkit_core::ops::{
@@ -32,6 +35,7 @@ use crate::hooks::HookHandler;
 use crate::locks::RoomMutexes;
 use crate::router::{DefaultRouter, DynRouter, InboundRoomRouter};
 use crate::store::{ConversationStore, InMemoryStore};
+use crate::tickets::RoomTickets;
 
 /// How many framework events a slow subscriber may fall behind before it
 /// misses some.
@@ -79,6 +83,7 @@ pub(crate) struct Inner<S> {
     pub(crate) store: S,
     pub(crate) locks: RoomMutexes,
     pub(crate) lanes: RoomMutexes,
+    pub(crate) tickets: RoomTickets,
     environment: Mutex<Box<dyn Environment + Send>>,
     events: broadcast::Sender<FrameworkEvent>,
 }
@@ -115,6 +120,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 store,
                 locks: RoomMutexes::default(),
                 lanes: RoomMutexes::default(),
+                tickets: RoomTickets::default(),
                 environment: Mutex::new(Box::new(SystemEnvironment)),
                 events,
             }),
@@ -131,6 +137,21 @@ impl<S: ConversationStore> RoomKit<S> {
     pub fn set_max_chain_depth(&self, max_chain_depth: u32) {
         self.inner
             .change_config(|config| config.max_chain_depth = max_chain_depth);
+    }
+
+    /// Bounds how long an inbound call may take from its start to its
+    /// decision (RFC §13.6); `None`, the default, bounds nothing. Past it,
+    /// the call writes nothing of its event, lets go of what it holds and
+    /// returns `blocked` with the reason `process_timeout`, after the
+    /// `process_timeout` framework event. The commit and what follows it,
+    /// the event's delivery and its responses, are never bounded.
+    ///
+    /// The bound counts from the call's start: with the room's lane held
+    /// for each call (RFC §10.2), the wait for the previous call into the
+    /// room counts against it (gap G-068).
+    pub fn set_process_timeout(&self, process_timeout: Option<Duration>) {
+        self.inner
+            .change_config(|config| config.process_timeout = process_timeout);
     }
 
     /// Replaces the routing strategy that finds the room of a message that
@@ -176,6 +197,13 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `ON_ROOM_CREATED` hook included: it would wait for itself, a hook
     /// until its timeout (RFC §13.5 reentrancy comes with direct injection,
     /// step 2).
+    ///
+    /// A `BEFORE_BROADCAST` hook registered with `needs_lock = false` runs
+    /// before the room lock, ordered by the room's admission ticket, so the
+    /// room's lifecycle changes go on while it runs; the hooks that need the
+    /// lock run under it after the room's status is checked (RFC §9.5.1).
+    /// The kit's `process_timeout` bounds the call up to its decision (see
+    /// [`set_process_timeout`](Self::set_process_timeout)).
     ///
     /// # Errors
     ///

@@ -305,6 +305,31 @@ impl HookRegistry {
         chain.into_iter().map(|(id, _)| *id).collect()
     }
 
+    /// The off-lock checks of an event from `source`: the SYNC
+    /// `BEFORE_BROADCAST` hooks registered with `needs_lock = false` it
+    /// fires, in chain order, which run before the room lock (RFC §9.5.1,
+    /// §10.1 step 5a). The ordering rule keeps them ahead of every hook that
+    /// needs the lock, so they are the chain's first hooks.
+    pub fn off_lock_checks(&self, source: &EventSource) -> Vec<HookId> {
+        self.chain_where(source, |spec| !spec.needs_lock)
+    }
+
+    /// The hooks step 9 runs under the lock once an off-lock check ran:
+    /// the `BEFORE_BROADCAST` chain of an event from `source` without its
+    /// off-lock hooks (RFC §10.1 step 9).
+    pub fn locked_chain(&self, source: &EventSource) -> Vec<HookId> {
+        self.chain_where(source, |spec| spec.needs_lock)
+    }
+
+    /// The `BEFORE_BROADCAST` chain of an event from `source`, kept to the
+    /// hooks `keep` admits.
+    fn chain_where(&self, source: &EventSource, keep: impl Fn(&HookSpec) -> bool) -> Vec<HookId> {
+        self.chain(HookTrigger::BeforeBroadcast, source)
+            .into_iter()
+            .filter(|id| self.get(*id).is_some_and(&keep))
+            .collect()
+    }
+
     /// The hooks `trigger` runs as observers for an event from `source`:
     /// the ASYNC hooks of a SYNC trigger, every hook of an ASYNC trigger
     /// (RFC §9.2).
@@ -624,5 +649,53 @@ mod tests {
         let mut registry = HookRegistry::new();
         registry.register(sync_hook("router", 10)).unwrap();
         assert!(registry.register(off_lock_hook("pii_scan", 0)).is_ok());
+    }
+
+    /// RFC §9.5.1: step 5a runs the off-lock hooks, step 9 the others.
+    mod off_lock {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        fn registry() -> HookRegistry {
+            let mut registry = HookRegistry::new();
+            registry.register(sync_hook("router", 10)).unwrap();
+            registry.register(off_lock_hook("moderation", 5)).unwrap();
+            registry.register(off_lock_hook("pii_scan", 0)).unwrap();
+            registry
+                .register(HookSpec::new(
+                    "audit",
+                    HookTrigger::BeforeBroadcast,
+                    HookExecution::Async,
+                ))
+                .unwrap();
+            registry
+        }
+
+        #[test]
+        fn the_checks_are_the_off_lock_hooks_in_chain_order() {
+            let registry = registry();
+            assert_eq!(
+                names(&registry, &registry.off_lock_checks(&sms_source())),
+                ["pii_scan", "moderation"]
+            );
+        }
+
+        #[test]
+        fn the_locked_chain_leaves_the_off_lock_hooks_out() {
+            let registry = registry();
+            assert_eq!(
+                names(&registry, &registry.locked_chain(&sms_source())),
+                ["router"]
+            );
+        }
+
+        #[test]
+        fn a_check_filtered_to_another_channel_does_not_fire() {
+            let mut registry = HookRegistry::new();
+            let mut scan = off_lock_hook("pii_scan", 0);
+            scan.filter.channel_ids = Some([ChannelId::new("email").unwrap()].into());
+            registry.register(scan).unwrap();
+            assert_eq!(registry.off_lock_checks(&sms_source()), []);
+        }
     }
 }

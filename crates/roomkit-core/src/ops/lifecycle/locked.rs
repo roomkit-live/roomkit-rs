@@ -13,7 +13,7 @@ use super::LifecycleError;
 use super::change::{Change, Changed, Decision};
 use super::gate::{self, Gate, Opened, Pending};
 use super::report;
-use crate::model::{ErrorRecord, RoomContext, RoomId};
+use crate::model::{ErrorRecord, RoomContext, RoomId, Timestamp};
 use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Request, Step};
 use crate::ops::{self, Cx, Environment, KitConfig, Progress};
@@ -107,6 +107,9 @@ impl LockedChange {
 pub(crate) struct LockedSection {
     room_id: RoomId,
     change: Change,
+    /// The deadline of the wait for the lock, the inbound call's (RFC
+    /// §10.4, §13.6); `None` for a lifecycle change.
+    deadline: Option<Timestamp>,
     state: State,
     /// The timer transitions the gate applied.
     timers: Vec<DueTransition>,
@@ -152,16 +155,26 @@ impl LockedSection {
         Self {
             room_id,
             change,
+            deadline: None,
             state: State::Start,
             timers: Vec::new(),
         }
+    }
+
+    /// The section waiting for the lock until `deadline` at most: past it,
+    /// the driver answers `DeadlinePassed`, which the section's caller takes
+    /// before handing it the outcome, since no lock is held then.
+    pub(crate) fn waiting_within(mut self, deadline: Option<Timestamp>) -> Self {
+        self.deadline = deadline;
+        self
     }
 
     /// Takes the room's lock, once.
     pub(crate) fn start(&mut self, cx: &mut Cx<'_>) {
         if matches!(self.state, State::Start) {
             let room_id = self.room_id.clone();
-            self.state = State::Locking(cx.io.issue(Request::AcquireLock { room_id }));
+            let request = Request::AcquireLock { room_id };
+            self.state = State::Locking(cx.io.issue_within(request, self.deadline));
         }
     }
 

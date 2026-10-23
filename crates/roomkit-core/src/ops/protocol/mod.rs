@@ -43,6 +43,13 @@ pub struct Effect {
     pub id: EffectId,
     /// What to do.
     pub request: Request,
+    /// The instant past which the driver gives up on the request and answers
+    /// [`Outcome::DeadlinePassed`]: a call's `process_timeout`, which bounds
+    /// what precedes its commit (RFC §13.6). `None` for a request nothing
+    /// bounds but its own timeouts. An operation never sets one on a write,
+    /// a release or a commit: giving up on one of those midway could leave
+    /// half of it done.
+    pub deadline: Option<Timestamp>,
 }
 
 /// What an effect asks of the driver, and the outcome it is answered with.
@@ -71,6 +78,27 @@ pub enum Request {
     },
     /// Leave the room's delivery lane. Answer [`Outcome::Left`].
     LeaveLane {
+        /// The room.
+        room_id: RoomId,
+    },
+    /// Take the room's admission ticket, behind every ticket of the room
+    /// taken earlier in this process (RFC §9.5.1): an event whose off-lock
+    /// checks run before the room lock keeps its arrival order. It never
+    /// waits. An operation holds at most one ticket per room. Answer
+    /// [`Outcome::Ticketed`].
+    TakeTicket {
+        /// The room.
+        room_id: RoomId,
+    },
+    /// Wait until every ticket of the room taken before the operation's
+    /// own is released (RFC §9.5.1). Answer [`Outcome::Admitted`].
+    AwaitTicket {
+        /// The room.
+        room_id: RoomId,
+    },
+    /// Release the operation's ticket of the room, wherever it stands in
+    /// the room's order. Answer [`Outcome::TicketReleased`].
+    ReleaseTicket {
         /// The room.
         room_id: RoomId,
     },
@@ -299,6 +327,12 @@ pub enum Outcome {
     Entered,
     /// The room's delivery lane is left.
     Left,
+    /// The room's admission ticket is taken.
+    Ticketed,
+    /// Every earlier ticket of the room is released: the operation's turn.
+    Admitted,
+    /// The room's admission ticket is released.
+    TicketReleased,
     /// The room's context.
     Context(Box<RoomContext>),
     /// No room has the requested id.
@@ -331,6 +365,11 @@ pub enum Outcome {
     Routed(Option<RoomId>),
     /// The driver could not carry the request out.
     Failed(ErrorRecord),
+    /// The effect's deadline passed before the request was carried out; it
+    /// answers an effect that carried a deadline only (RFC §13.6). What the
+    /// request would have taken is not held: a lock or a ticket's turn
+    /// waited for is not granted, a hook given up on is not heard.
+    DeadlinePassed,
 }
 
 /// Something the driver performs or reports without answering.

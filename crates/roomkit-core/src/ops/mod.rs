@@ -54,7 +54,7 @@ pub use protocol::{
     TargetUpdate,
 };
 
-use crate::model::{ErrorRecord, RoomId};
+use crate::model::{ErrorRecord, EventId, RoomId};
 
 /// What a sub-machine reads and writes while it advances.
 pub(crate) struct Cx<'op> {
@@ -78,6 +78,23 @@ pub(crate) enum Abort {
     RoomNotFound,
     Store(ErrorRecord),
     Lock(ErrorRecord),
+    /// The call's deadline passed before its pass decided (RFC §13.6),
+    /// naming the event when the pass held the room lock by then, which it
+    /// released; `None` before the lock.
+    DeadlinePassed(Option<EventId>),
+}
+
+impl Abort {
+    /// The failure as a result's `error` records it.
+    pub(crate) fn into_record(self) -> ErrorRecord {
+        match self {
+            Self::RoomNotFound => ErrorRecord::new("RoomNotFound", "the room disappeared"),
+            Self::Store(error) | Self::Lock(error) => error,
+            Self::DeadlinePassed(_) => {
+                ErrorRecord::new("ProcessTimeout", "the call passed its process_timeout")
+            }
+        }
+    }
 }
 
 /// Settles a locked section once its lock's release answered (gap G-025).

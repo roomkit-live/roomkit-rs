@@ -168,6 +168,36 @@ publishes a release.
 - `rules::instructions`: the refusals (`InstructionRefusal`), the stamp,
   what a modify keeps, a standalone turn's context, and the responses'
   `Fingerprint`. `roomkit-core` depends on `sha2` for it.
+- Off-lock checks (RFC §9.5.1, §10.1 step 5a): a SYNC `BEFORE_BROADCAST`
+  hook registered with `needs_lock = false` runs before the room lock, on
+  the room as step 2 left it. The event takes the room's admission ticket
+  before its first off-lock hook and waits for every earlier ticket after
+  the last; step 9 then applies their outcome after the status, idempotency
+  and edit gates, running only the hooks that need the lock, and the side
+  effects of both phases are collected once. An event no off-lock hook fires
+  for takes no ticket; a response and a hook's injected event run every hook
+  under the lock. An off-lock hook's failure is reported before the lock.
+  The ticket is released on every path; one that cannot be taken or awaited
+  fails the call with `InboundError::Ticket` (gap G-067).
+- The protocol's `TakeTicket`, `AwaitTicket` and `ReleaseTicket` requests,
+  `Outcome::Ticketed`, `Outcome::Admitted` and `Outcome::TicketReleased`;
+  the runtime's ticket queue, which drops a cancelled call's ticket.
+  `HookRegistry::off_lock_checks`, `HookRegistry::locked_chain` and
+  `HookChain::take_incidents`.
+- The processing timeout (RFC §13.6, §10.4): `KitConfig::process_timeout`
+  and `RoomKit::set_process_timeout`, off by default, bound a call from its
+  start to its decision: routing, the room's lane, the parse, the off-lock
+  hooks, the ticket's turn, the room lock and the locked section up to the
+  commit. Past it nothing of the event is written, the hooks' injected
+  events and side effects are dropped, what the call holds is released,
+  `process_timeout` is emitted (`FrameworkEvent::ProcessTimeout`, naming
+  the channel before the room lock and the event under it), and the result
+  is `blocked` with the reason `process_timeout`. The commit and what
+  follows it are never bounded; a hook's own timeout is still `hook_timeout`
+  and `hook_error` (gap G-068).
+- `Effect::deadline` and `Outcome::DeadlinePassed`: an effect may carry the
+  instant past which the driver gives up on it; the tokio driver waits for
+  it on tokio's clock, whatever clock the kit has.
 
 ### Changed
 
@@ -176,6 +206,8 @@ publishes a release.
   response that does not answer an instruction, and a hook's modify keeps
   the pipeline's fingerprint only, so a hook that redacts the key elsewhere
   stays obeyed (gap G-065).
+- `Effect` carries a `deadline`, and `Request` the ticket requests, which
+  every driver answers.
 - A channel's history never carries a soft-deleted event's content: it is
   handed with an empty text and no raw payload, and an edit of it with its
   new content withheld; hooks and the store keep the record whole (gap

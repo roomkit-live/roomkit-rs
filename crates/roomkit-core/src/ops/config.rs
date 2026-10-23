@@ -1,6 +1,7 @@
 //! What a kit knows of itself: its channels, its hooks and its limits.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use thiserror::Error;
 
@@ -129,6 +130,10 @@ pub struct KitConfig {
     pub max_chain_depth: u32,
     /// How many of a room's latest events a context holds.
     pub context_window: usize,
+    /// How long a call may take from its start to its decision (RFC
+    /// §13.6): past it the call is refused `process_timeout`, with nothing
+    /// of its event written. `None`, the default, bounds nothing.
+    pub process_timeout: Option<Duration>,
 }
 
 impl KitConfig {
@@ -139,6 +144,7 @@ impl KitConfig {
             hooks: HookRegistry::new(),
             max_chain_depth: DEFAULT_MAX_CHAIN_DEPTH,
             context_window: DEFAULT_CONTEXT_WINDOW,
+            process_timeout: None,
         }
     }
 

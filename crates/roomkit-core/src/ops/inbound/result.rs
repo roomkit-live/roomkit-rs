@@ -20,15 +20,16 @@ pub struct InboundResult {
     /// index its hooks were shown, which the next event takes (gap G-065).
     pub event: Option<RoomEvent>,
     /// Whether the message was blocked: refused by the room, step 8a, a hook
-    /// or its source's permissions, or an instruction refused before
-    /// anything was read.
+    /// or its source's permissions, an instruction refused before anything
+    /// was read, or a call past its `process_timeout` (RFC §13.6).
     pub blocked: bool,
     /// Why it was blocked: `instruction_unaddressed` or
     /// `instruction_not_idempotent` (RFC §10.1.1); `room_closed`; one of step
     /// 8a's `target_event_not_found`, `identity_required_for_edit`,
     /// `not_authorized`, `not_original_author` (RFC §10.1 step 8a); a hook's
-    /// reason; `source_muted`, `source_read_only`, `source_unbound`. A replay
-    /// gives the record's `blocked_by`, the hook's reason not being stored.
+    /// reason; `source_muted`, `source_read_only`, `source_unbound`;
+    /// `process_timeout` (RFC §13.6), with no event. A replay gives the
+    /// record's `blocked_by`, the hook's reason not being stored.
     pub reason: Option<String>,
     /// The first error met once the message was decided: a turn's, a
     /// later commit's, or the room lock's release (gap G-025). What was
@@ -82,4 +83,9 @@ pub enum InboundError {
     /// error: what the call decided stands.
     #[error("the room's delivery lane failed: {0:?}")]
     Lane(ErrorRecord),
+    /// The room's admission ticket could not be taken or waited for (RFC
+    /// §9.5.1). Nothing was written. A failed release is no error: what the
+    /// call decided stands.
+    #[error("the room's admission ticket failed: {0:?}")]
+    Ticket(ErrorRecord),
 }

@@ -1,0 +1,374 @@
+//! Off-lock checks on the tokio driver (RFC §9.5.1, §10.1 step 5a, Appendix
+//! B.2): a hook registered with `needs_lock = false` keeps the room lock
+//! free while it runs, a call cancelled during it leaves no ticket behind,
+//! and B.2's scanner run off the lock gives the timeline it gives under it.
+
+#![expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "a test fails on a broken fixture"
+)]
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use pretty_assertions::assert_eq;
+use roomkit::model::{
+    ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventStatus, EventType,
+    HookResult, InboundMessage, InjectedEvent, Observation, RoomContext, RoomEvent, RoomId,
+    RoomStatus, Timestamp,
+};
+use roomkit::ops::{InboundResult, SequentialEnvironment};
+use roomkit::testing::RecordingTransport;
+use roomkit::{
+    ConversationStore, HookExecution, HookReturn, HookSpec, HookTrigger, RoomKit, text_of,
+};
+use tokio::sync::Notify;
+
+/// How long a call that should not wait may take before the test fails it.
+const BOUND: Duration = Duration::from_secs(5);
+
+fn channel(id: &str) -> ChannelId {
+    ChannelId::new(id).unwrap()
+}
+
+fn room_id() -> RoomId {
+    RoomId::new("room_1").unwrap()
+}
+
+fn message(text: &str) -> InboundMessage {
+    InboundMessage::new(channel("sms"), "+15551234567", EventContent::text(text))
+}
+
+/// A SYNC `BEFORE_BROADCAST` hook named `name`, off the room lock or under
+/// it.
+fn before_broadcast(name: &str, needs_lock: bool) -> HookSpec {
+    HookSpec {
+        needs_lock,
+        ..HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync)
+    }
+}
+
+/// A kit with an SMS transport attached to `room_1`.
+async fn room() -> RoomKit {
+    let kit = RoomKit::new();
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+        .unwrap();
+    kit.create_room(&room_id()).await.unwrap();
+    kit.attach(&room_id(), &channel("sms")).await.unwrap();
+    kit
+}
+
+/// Registers a hook named `scanner`, off the lock or under it, that waits
+/// for `go` once it told `started` it runs; then runs a message into
+/// `room_1` in a task of its own, and waits until the hook runs.
+async fn message_held_in_its_hook(
+    kit: &RoomKit,
+    needs_lock: bool,
+) -> (Arc<Notify>, tokio::task::JoinHandle<InboundResult>) {
+    let (started, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (hook_started, hook_go) = (Arc::clone(&started), Arc::clone(&go));
+    kit.hook(
+        before_broadcast("scanner", needs_lock),
+        move |_: RoomEvent, _: RoomContext| {
+            let (started, go) = (Arc::clone(&hook_started), Arc::clone(&hook_go));
+            async move {
+                started.notify_one();
+                go.notified().await;
+                Ok(HookResult::allow())
+            }
+        },
+    )
+    .unwrap();
+    let call = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.process_inbound(message("Bonjour"), Some(&room_id()))
+                .await
+                .unwrap()
+        })
+    };
+    tokio::time::timeout(BOUND, started.notified())
+        .await
+        .unwrap_or_else(|_| panic!("the hook never ran"));
+    (go, call)
+}
+
+/// RFC §9.5.1, §13.5: the room's lifecycle goes on while an off-lock check
+/// runs; the message, decided once the check is over, resumes the room.
+#[tokio::test]
+async fn a_slow_off_lock_hook_leaves_the_room_lock_free_for_a_lifecycle_change() {
+    let kit = room().await;
+    let (go, call) = message_held_in_its_hook(&kit, false).await;
+    let paused = tokio::time::timeout(BOUND, kit.pause_room(&room_id())).await;
+    let status_meanwhile = kit
+        .store()
+        .get_room(&room_id())
+        .await
+        .unwrap()
+        .unwrap()
+        .status;
+    go.notify_one();
+    let result = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
+    let status_after = kit
+        .store()
+        .get_room(&room_id())
+        .await
+        .unwrap()
+        .unwrap()
+        .status;
+    assert_eq!(
+        (
+            paused.is_ok(),
+            status_meanwhile,
+            result.event.map(|event| (event.index, event.status)),
+            status_after
+        ),
+        (
+            true,
+            RoomStatus::Paused,
+            Some((0, EventStatus::Delivered)),
+            RoomStatus::Active
+        )
+    );
+}
+
+/// The contrast: a hook that needs the lock holds it while it runs.
+#[tokio::test]
+async fn a_slow_locked_hook_holds_the_room_lock_from_a_lifecycle_change() {
+    let kit = room().await;
+    let (go, call) = message_held_in_its_hook(&kit, true).await;
+    let paused = tokio::time::timeout(Duration::from_millis(100), kit.pause_room(&room_id())).await;
+    go.notify_one();
+    tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
+    assert!(paused.is_err(), "the pause should wait for the room lock");
+}
+
+/// RFC §9.5.1, Release: a call dropped while its off-lock check runs
+/// releases its ticket. Were it left held, the next message's check would
+/// wait for it forever.
+#[tokio::test]
+async fn a_call_cancelled_during_its_off_lock_check_releases_its_ticket() {
+    let kit = room().await;
+    let hung = Arc::new(AtomicBool::new(false));
+    kit.hook(
+        before_broadcast("scanner", false),
+        move |_: RoomEvent, _: RoomContext| {
+            let first = !hung.swap(true, Ordering::SeqCst);
+            async move {
+                if first {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                }
+                Ok(HookResult::allow())
+            }
+        },
+    )
+    .unwrap();
+    let dropped = tokio::time::timeout(
+        Duration::from_millis(50),
+        kit.process_inbound(message("Bonjour"), Some(&room_id())),
+    )
+    .await;
+    let next = tokio::time::timeout(
+        BOUND,
+        kit.process_inbound(message("Still there?"), Some(&room_id())),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("the next call waited on a ticket left held"))
+    .unwrap();
+    assert_eq!(
+        (dropped.is_err(), next.event.map(|event| event.index)),
+        (true, Some(0))
+    );
+}
+
+/// RFC §9.5.1, §13.5: a call dropped in a locked hook, after its off-lock
+/// check, leaves the room lock, the lane and the ticket free: a lifecycle
+/// change and the next message go through.
+#[tokio::test]
+async fn a_call_cancelled_in_a_locked_hook_after_its_check_leaves_everything_free() {
+    let kit = room().await;
+    kit.hook(
+        before_broadcast("scanner", false),
+        |_: RoomEvent, _: RoomContext| async { Ok(HookResult::allow()) },
+    )
+    .unwrap();
+    let hung = Arc::new(AtomicBool::new(false));
+    kit.hook(
+        before_broadcast("policy", true),
+        move |_: RoomEvent, _: RoomContext| {
+            let first = !hung.swap(true, Ordering::SeqCst);
+            async move {
+                if first {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                }
+                Ok(HookResult::allow())
+            }
+        },
+    )
+    .unwrap();
+    let dropped = tokio::time::timeout(
+        Duration::from_millis(50),
+        kit.process_inbound(message("Bonjour"), Some(&room_id())),
+    )
+    .await;
+    let paused = tokio::time::timeout(BOUND, kit.pause_room(&room_id())).await;
+    let next = tokio::time::timeout(
+        BOUND,
+        kit.process_inbound(message("Still there?"), Some(&room_id())),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("the next call waited on what the dropped one held"))
+    .unwrap();
+    assert_eq!(
+        (
+            dropped.is_err(),
+            paused.is_ok(),
+            next.event.map(|event| event.index)
+        ),
+        (true, true, Some(0))
+    );
+}
+
+/// A Canadian social insurance number, as `123-456-789`.
+fn has_sin(text: &str) -> bool {
+    text.split_whitespace().any(|word| {
+        let groups: Vec<&str> = word.split('-').collect();
+        groups.len() == 3
+            && groups
+                .iter()
+                .all(|group| group.len() == 3 && group.chars().all(|c| c.is_ascii_digit()))
+    })
+}
+
+/// A notice from the framework, for the scanner to inject.
+fn notice(text: &str, now: Timestamp) -> RoomEvent {
+    RoomEvent::new(
+        "placeholder".parse().unwrap(),
+        room_id(),
+        EventType::Message,
+        EventSource::new(
+            channel("system"),
+            ChannelType::System,
+            EventDirection::Outbound,
+        ),
+        EventContent::text(text),
+        now,
+    )
+}
+
+/// What B.2 leaves: the timeline, what each side received, the
+/// observations, and the call's result.
+#[derive(Debug, PartialEq)]
+struct B2 {
+    timeline: Vec<RoomEvent>,
+    customer: Vec<String>,
+    advisor: Vec<String>,
+    observations: Vec<Observation>,
+    blocked: bool,
+    reason: Option<String>,
+}
+
+/// RFC Appendix B.2, as the `block_and_inject` example runs it, its
+/// scanner registered off the lock or under it.
+async fn block_and_inject(needs_lock: bool) -> B2 {
+    let kit = RoomKit::new();
+    let now = Timestamp::from_unix_millis(1_792_677_780_000).unwrap();
+    kit.set_environment(SequentialEnvironment::new(now));
+    let customer = RecordingTransport::new(channel("sms_customer"), ChannelType::Sms);
+    let advisor = RecordingTransport::new(channel("ws_advisor"), ChannelType::Websocket);
+    kit.register_channel(customer.clone()).unwrap();
+    kit.register_channel(advisor.clone()).unwrap();
+    let to_customer = notice("Message blocked. Do not send your SIN by SMS.", now);
+    let to_advisor = notice("The client attempted to send a SIN. Blocked.", now);
+    kit.hook(
+        before_broadcast("sensitivity_scanner", needs_lock),
+        move |event: RoomEvent, context: RoomContext| {
+            let found = has_sin(&text_of(&event.content));
+            let (to_customer, to_advisor) = (to_customer.clone(), to_advisor.clone());
+            async move {
+                if !found {
+                    return HookReturn::Ok(HookResult::allow());
+                }
+                let observation = Observation::new(
+                    "obs_sin".parse()?,
+                    context.room.id.clone(),
+                    channel("sms_customer"),
+                    "SIN sent by SMS",
+                    event.created_at,
+                );
+                Ok(HookResult::block("SIN detected")
+                    .inject(InjectedEvent::to_channels(
+                        to_customer,
+                        vec![channel("sms_customer")],
+                    ))
+                    .inject(InjectedEvent::to_channels(
+                        to_advisor,
+                        vec![channel("ws_advisor")],
+                    ))
+                    .with_observation(observation))
+            }
+        },
+    )
+    .unwrap();
+    kit.create_room(&room_id()).await.unwrap();
+    kit.attach(&room_id(), customer.id()).await.unwrap();
+    kit.attach(&room_id(), advisor.id()).await.unwrap();
+    let sin = InboundMessage::new(
+        customer.id().clone(),
+        "+15551234567",
+        EventContent::text("Mon NAS est 123-456-789"),
+    );
+    let result = kit.process_inbound(sin, Some(&room_id())).await.unwrap();
+    B2 {
+        timeline: kit.store().list_events(&room_id(), true).await.unwrap(),
+        customer: customer.texts(),
+        advisor: advisor.texts(),
+        observations: kit.store().list_observations(&room_id()).await.unwrap(),
+        blocked: result.blocked,
+        reason: result.reason,
+    }
+}
+
+/// The timeline as `#index source status text` lines.
+fn lines(timeline: &[RoomEvent]) -> Vec<String> {
+    timeline
+        .iter()
+        .map(|event| {
+            let status = match &event.blocked_by {
+                Some(blocked_by) => format!("blocked by {blocked_by}"),
+                None => format!("{:?}", event.status).to_lowercase(),
+            };
+            format!(
+                "#{} {} {status} {:?}",
+                event.index,
+                event.source.channel_id,
+                text_of(&event.content)
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn b2_with_its_scanner_off_the_lock_gives_block_and_inject_s_timeline() {
+    let off_lock = block_and_inject(false).await;
+    assert_eq!(
+        lines(&off_lock.timeline),
+        [
+            "#0 sms_customer blocked by sensitivity_scanner \"Mon NAS est 123-456-789\"",
+            "#1 system delivered \"Message blocked. Do not send your SIN by SMS.\"",
+            "#2 system delivered \"The client attempted to send a SIN. Blocked.\"",
+        ]
+    );
+}
+
+/// Everything B.2 leaves is the same off the lock as under it: the
+/// timeline record for record, the deliveries, the observation and the
+/// result.
+#[tokio::test]
+async fn b2_leaves_the_same_room_off_the_lock_as_under_it() {
+    let under_the_lock = block_and_inject(true).await;
+    let off_the_lock = block_and_inject(false).await;
+    assert_eq!(off_the_lock, under_the_lock);
+}

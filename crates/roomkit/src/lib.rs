@@ -28,6 +28,7 @@ mod locks;
 mod router;
 pub mod store;
 pub mod testing;
+mod tickets;
 
 pub use roomkit_core::rules::hook_registry::{
     HookExecution, HookFilter, HookId, HookSpec, HookTrigger,

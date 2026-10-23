@@ -38,6 +38,7 @@ pub(super) enum Run {
 }
 
 /// What a finished job produced.
+#[derive(Debug)]
 pub(super) enum Finished {
     Pass(Result<PassReport, Abort>, PassOrigin),
     Record(Result<RecordReport, Abort>, RecordNote),
