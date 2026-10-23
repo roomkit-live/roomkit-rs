@@ -165,7 +165,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 event,
             } => Inbound::inject(self.config(), room_id, organization_id, *event),
         };
-        Ok(driver::run(&self.inner, call, operation).await??)
+        Ok(driver::run_inbound(&self.inner, call, operation).await??)
     }
 }
 

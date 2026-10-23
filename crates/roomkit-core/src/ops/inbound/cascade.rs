@@ -40,10 +40,15 @@ impl Machine {
     /// when it is the call's own, and its delivery set and injected events
     /// join the lane (RFC §10.1 steps 10 to 12).
     pub(super) fn on_pass(&mut self, cx: &mut Cx<'_>, report: PassReport, origin: &PassOrigin) {
-        if *origin == PassOrigin::Trigger {
+        let trigger = *origin == PassOrigin::Trigger;
+        if trigger {
             self.settle_trigger(&report.result);
         }
         self.add_to_cascade(cx, report, origin);
+        if trigger {
+            let decided = Ok(self.result.clone());
+            self.publish(cx, &decided);
+        }
     }
 
     /// What every pass adds to the cascade, whichever cascade it belongs

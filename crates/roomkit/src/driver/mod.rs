@@ -10,17 +10,20 @@
 //! the operation holds on its behalf again, or call into the room whose
 //! lane the operation holds: such a call is handed to the operation, which
 //! adopts it, and its caller is answered when the operation settles it
-//! (RFC §13.5, §10.1 step 18).
+//! (RFC §13.5, §10.1 step 18). An inbound call's operation runs on a task
+//! of its own, within its caller's execution context (`inbound`).
 //!
-//! The driver never waits for what its own context holds: a lane or a
-//! ticket a run of its context holds fails the call with
-//! [`KitError::Reentrant`], since that run waits for this one. An effect
+//! The driver never waits for what its own context holds: a lane a run of
+//! its context holds, or a ticket's turn in a room's admission order its
+//! context stands in, fails the call with [`KitError::Reentrant`], since
+//! that run waits for this one. An effect
 //! that carries a deadline (RFC §13.6) is given up on past it: a lock, a
 //! lane or a ticket's turn waited for is not taken, a call in flight is
 //! dropped, and the operation is answered `DeadlinePassed`.
 
 mod calls;
 mod holds;
+mod inbound;
 
 use std::collections::HashMap;
 use std::future::poll_fn;
@@ -34,6 +37,7 @@ use tokio::task::{self, JoinError, JoinSet};
 use tokio::time::Instant;
 
 use self::holds::{Held, Hold, Rooms, Waited, Waiting};
+pub(crate) use self::inbound::run_inbound;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared};
 use crate::error::KitError;
 use crate::kit::Inner;

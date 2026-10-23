@@ -267,7 +267,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 organization_id,
                 message,
             );
-            return Ok(driver::run(&self.inner, PROCESS_INBOUND, inbound).await??);
+            return Ok(driver::run_inbound(&self.inner, PROCESS_INBOUND, inbound).await??);
         };
         let entry = Entry::Message {
             room_id: room_id.clone(),

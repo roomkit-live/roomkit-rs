@@ -20,8 +20,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use roomkit_core::model::{RoomId, Timestamp};
 use roomkit_core::ops::{
-    Effect, EffectId, Entry, EntryId, Environment, Inbound, InboundTarget, Next, Operation,
-    Outcome, Settled,
+    Decided, Effect, EffectId, Entry, EntryId, Environment, Inbound, InboundTarget, Next,
+    Operation, Outcome, Settled,
 };
 
 use super::{Called, Caller, Running, Sim, Then, journal_line};
@@ -86,6 +86,8 @@ pub(super) struct RunState {
     mail: VecDeque<Mail>,
     /// Whether the run was polled yet.
     started: bool,
+    /// Whether it published its decision.
+    decided: bool,
     done: bool,
     /// Its effects not answered yet.
     outstanding: BTreeSet<EffectId>,
@@ -107,6 +109,7 @@ impl RunState {
             context,
             mail: VecDeque::new(),
             started: false,
+            decided: false,
             done: false,
             outstanding: BTreeSet::new(),
             adopted: Vec::new(),
@@ -244,6 +247,9 @@ impl Sim {
         for settled in step.settled {
             self.answer_settled(settled);
         }
+        if let Some(decided) = step.decided {
+            self.record_decision(decided);
+        }
         match step.next {
             Next::Ready(output) => {
                 self.end_run();
@@ -364,6 +370,17 @@ impl Sim {
             self.answer_call(&call, &settled.result);
         }
         self.settled.push(settled);
+    }
+
+    /// Records the current run's decision, which it publishes once.
+    fn record_decision(&mut self, decided: Decided) {
+        let run = self.current;
+        assert!(
+            !self.state(run).decided,
+            "an operation published its decision twice"
+        );
+        self.state_mut(run).decided = true;
+        self.decisions.push((self.trace.last().cloned(), decided));
     }
 
     /// The arrival `run` is over: its caller is answered when it waits.

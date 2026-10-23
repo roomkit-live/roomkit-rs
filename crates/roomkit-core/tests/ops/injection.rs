@@ -1596,6 +1596,45 @@ mod a_call_no_operation_adopts {
     }
 }
 
+/// RFC §10.1 step 18: the call's decision is published at its refusal,
+/// before the delivery sets of the entries it adopted, which still run.
+#[test]
+fn a_call_past_its_deadline_is_decided_before_its_off_lock_entry_is_delivered() {
+    let mut sim = room();
+    sim.config.process_timeout = Some(std::time::Duration::from_secs(10));
+    sim.durations
+        .push(("await ticket", std::time::Duration::from_secs(11)));
+    sim.reentrant_hook(
+        "scanner",
+        false,
+        Reentry {
+            entries: calling(|event| {
+                (event.source.channel_id.as_str() == "sms").then(|| send_event("Scanned"))
+            }),
+            answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+        },
+    );
+    sim.send(hello()).unwrap();
+    let decided: Vec<(Option<String>, Option<String>)> = sim
+        .decisions
+        .iter()
+        .map(|(line, decided)| {
+            let reason = decided.result.clone().ok().and_then(|result| result.reason);
+            (line.clone(), reason)
+        })
+        .collect();
+    assert_eq!(
+        (decided, sim.traced("on_event")),
+        (
+            vec![(
+                Some("await ticket room_1 deadline passed".to_owned()),
+                Some("process_timeout".to_owned())
+            )],
+            vec!["on_event sms <- evt_2"]
+        )
+    );
+}
+
 /// The operation adopts a call into the room it holds the lane of, made by
 /// an effect still outstanding; any other is handed back.
 mod an_adoption {

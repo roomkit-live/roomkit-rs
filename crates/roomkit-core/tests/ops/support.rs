@@ -53,7 +53,7 @@ use roomkit_core::model::{
     RoomEvent, RoomId, RoomStatus, Task, Timestamp,
 };
 use roomkit_core::ops::{
-    ChannelDeclaration, CommitRecord, DeleteEvent, Effect, EffectId, Entry, Environment,
+    ChannelDeclaration, CommitRecord, Decided, DeleteEvent, Effect, EffectId, Entry, Environment,
     FrameworkEvent, Inbound, InboundError, InboundResult, InboundTarget, KitConfig, MutationError,
     Notice, Outcome, Request, RoomCounters, SequentialEnvironment, Settled, TargetUpdate,
     UpdateEvent, default_inbound_event,
@@ -260,6 +260,9 @@ pub(crate) struct Sim {
     reentrant_channels: BTreeMap<ChannelId, Reentry<Result<ChannelOutput, ErrorRecord>>>,
     /// The entries the operations settled, in order.
     pub(crate) settled: Vec<Settled>,
+    /// The decisions the inbound operations published (`Step::decided`),
+    /// each with the trace line written last before it.
+    pub(crate) decisions: Vec<(Option<String>, Decided)>,
     /// The effect that fails, named by the start of its trace line: a store
     /// write (`update room`, `delete binding sms`, `store room`), a room
     /// lock (`lock room_1`), a room's lane (`enter lane room_1`), the
@@ -342,6 +345,7 @@ impl Sim {
             reentrant_hooks: BTreeMap::new(),
             reentrant_channels: BTreeMap::new(),
             settled: Vec::new(),
+            decisions: Vec::new(),
             failing_effect: None,
         }
     }

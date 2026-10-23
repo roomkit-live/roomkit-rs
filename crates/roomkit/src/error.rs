@@ -64,8 +64,9 @@ pub enum KitError {
     /// The driver broke the effect protocol: a defect of this crate.
     #[error("the driver broke the effect protocol: {0}")]
     Protocol(#[from] ProtocolError),
-    /// An operation waited for effects the driver never received: a defect
-    /// of this crate.
-    #[error("an operation waited for effects that were never issued")]
+    /// An operation's run ended without its output: it waited for effects
+    /// the driver never received, a defect of this crate, or the runtime
+    /// cancelled it, as it does when it shuts down.
+    #[error("an operation's run ended without its output")]
     Stalled,
 }

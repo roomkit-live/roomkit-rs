@@ -35,6 +35,7 @@ impl Machine {
     /// settled, the ticket the call holds released and the room's lane
     /// left: every path that took them lets them go.
     pub(super) fn end(&mut self, cx: &mut Cx<'_>, outcome: Result<InboundResult, InboundError>) {
+        self.publish(cx, &outcome);
         self.stop_cascade();
         if !self.adopted.is_idle() || !self.lane.is_empty() || self.active.is_some() {
             self.stage = Stage::Ending(Box::new(outcome));

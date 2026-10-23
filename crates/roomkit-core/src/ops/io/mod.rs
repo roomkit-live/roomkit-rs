@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use self::locks::RoomLocks;
 use super::protocol::{
-    Effect, EffectId, EntryId, Next, Notice, Outcome, ProtocolError, Request, RequestKind, Settled,
-    Step,
+    Decided, Effect, EffectId, EntryId, Next, Notice, Outcome, ProtocolError, Request, RequestKind,
+    Settled, Step,
 };
 use super::{InboundError, InboundResult};
 use crate::model::{RoomId, Timestamp};
@@ -40,6 +40,10 @@ pub(crate) struct Io {
     issued: Vec<Effect>,
     notices: Vec<Notice>,
     settled: Vec<Settled>,
+    /// The call's decision, until the next step publishes it.
+    decided: Option<Decided>,
+    /// Whether the call's decision is known, published or about to be.
+    has_decided: bool,
     inbox: VecDeque<(EffectId, Outcome)>,
     locks: RoomLocks,
     /// The room whose lock the section being advanced runs under, nested
@@ -58,6 +62,8 @@ impl Io {
             issued: Vec::new(),
             notices: Vec::new(),
             settled: Vec::new(),
+            decided: None,
+            has_decided: false,
             inbox: VecDeque::new(),
             locks: RoomLocks::default(),
             nested: None,
@@ -157,6 +163,21 @@ impl Io {
         self.settled.push(Settled { entry, result });
     }
 
+    /// Publishes the call's decision on the next step, once: a later one
+    /// is a defect of the operation, and is not published.
+    pub(crate) fn decide(&mut self, decided: Decided) {
+        debug_assert!(!self.has_decided, "a call is decided once");
+        if !self.has_decided {
+            self.has_decided = true;
+            self.decided = Some(decided);
+        }
+    }
+
+    /// Whether the call's decision is known.
+    pub(crate) fn has_decided(&self) -> bool {
+        self.has_decided
+    }
+
     /// Whether `effect` is issued and not answered yet.
     pub(crate) fn is_outstanding(&self, effect: EffectId) -> bool {
         self.outstanding.contains_key(&effect)
@@ -200,10 +221,12 @@ impl Io {
     }
 
     /// The step the driver receives: the notices so far, the entries
-    /// settled, then the effects issued, a wait, or the operation's result.
+    /// settled, the call's decision, then the effects issued, a wait, or the
+    /// operation's result.
     pub(crate) fn step<T>(&mut self, result: Option<T>) -> Step<T> {
         let notices = std::mem::take(&mut self.notices);
         let settled = std::mem::take(&mut self.settled);
+        let decided = self.decided.take();
         let next = match result {
             Some(result) => Next::Ready(result),
             None if !self.issued.is_empty() => Next::Effects(std::mem::take(&mut self.issued)),
@@ -212,6 +235,7 @@ impl Io {
         Step {
             notices,
             settled,
+            decided,
             next,
         }
     }

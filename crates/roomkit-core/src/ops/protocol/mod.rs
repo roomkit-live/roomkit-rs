@@ -11,7 +11,7 @@ mod answers;
 mod entries;
 
 pub(crate) use answers::RequestKind;
-pub use entries::{Entry, EntryId, Settled};
+pub use entries::{Decided, Entry, EntryId, Settled};
 
 use std::time::Duration;
 
@@ -421,6 +421,11 @@ pub struct Step<T> {
     /// The adopted entries decided since the last poll, whose callers the
     /// driver answers now (RFC §10.1 step 18).
     pub settled: Vec<Settled>,
+    /// An inbound call's decision, published once, on the poll that knows
+    /// it: what a caller that does not wait for the call's delivery
+    /// receives (RFC §10.1 step 18). `None` on every other poll, and for
+    /// every other operation.
+    pub decided: Option<Decided>,
     /// What comes next.
     pub next: Next<T>,
 }

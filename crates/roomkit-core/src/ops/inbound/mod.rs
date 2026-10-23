@@ -81,7 +81,7 @@ use self::off_lock::OffLockCheck;
 pub use self::result::{InboundError, InboundResult};
 pub use self::stamp::default_inbound_event;
 use super::io::Io;
-use super::protocol::{EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
+use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
 use super::{Cx, Environment, KitConfig};
 use crate::model::{
     ChannelId, DirectEvent, InboundMessage, Metadata, Observation, RoomContext, RoomId, Task,
@@ -347,15 +347,38 @@ impl Machine {
         }
     }
 
-    /// The operation's outcome once it is over, a direct injection's
-    /// refusal before its commit raised (RFC §10.5).
+    /// The operation's outcome once it is over, as its caller receives it.
     fn take_outcome(&mut self) -> Option<Result<InboundResult, InboundError>> {
         let outcome = self.outcome.take()?;
-        Some(if self.entry == EntryKind::Direct {
+        Some(self.for_caller(outcome))
+    }
+
+    /// `outcome` as the call's caller receives it: a direct injection's
+    /// refusal before its commit raised (RFC §10.5).
+    fn for_caller(
+        &self,
+        outcome: Result<InboundResult, InboundError>,
+    ) -> Result<InboundResult, InboundError> {
+        if self.entry == EntryKind::Direct {
             outcome.and_then(result::committed)
         } else {
             outcome
-        })
+        }
+    }
+
+    /// Publishes the call's decision, once: `outcome`, the trigger's result
+    /// at its commit or the call's end before it, with no delivery (RFC
+    /// §10.1 step 18). It is published whatever is still to run: the
+    /// delivery sets of the entries the call adopted, which may wait in the
+    /// room's lane behind the work of the caller that reads it.
+    fn publish(&self, cx: &mut Cx<'_>, outcome: &Result<InboundResult, InboundError>) {
+        if cx.io.has_decided() {
+            return;
+        }
+        cx.io.decide(Decided {
+            room_id: self.room_id.clone(),
+            result: self.for_caller(outcome.clone()),
+        });
     }
 
     /// Hands an answer to whoever waits for it: an adopted entry, or the

@@ -1639,6 +1639,89 @@ mod a_refused_operation {
     }
 }
 
+/// RFC §10.1 step 18: the call's decision, published once, is what a
+/// caller that does not wait for the delivery receives.
+mod the_decision {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use roomkit_core::model::DirectEvent;
+
+    /// What the operation decided, read once: the trace line written last
+    /// before it, the room, and the committed event's index or the error.
+    fn decided(
+        sim: &Sim,
+    ) -> (
+        Option<String>,
+        Option<String>,
+        Result<Option<u64>, InboundError>,
+    ) {
+        let [(line, decided)] = sim.decisions.as_slice() else {
+            panic!("one decision expected, got {:?}", sim.decisions);
+        };
+        let index = decided
+            .result
+            .clone()
+            .map(|result| result.event.map(|event| event.index));
+        let room = decided.room_id.as_ref().map(ToString::to_string);
+        (line.clone(), room, index)
+    }
+
+    /// It comes once the lock is released, before the delivery set runs,
+    /// and carries no delivery.
+    #[test]
+    fn of_a_committed_message_comes_at_its_commit() {
+        let mut sim = room();
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        let deliveries = sim.decisions.first().map(|(_, decided)| {
+            decided
+                .result
+                .as_ref()
+                .map(|result| result.delivery_results.len())
+        });
+        assert_eq!(
+            (decided(&sim), deliveries),
+            (
+                (
+                    Some("release room_1".to_owned()),
+                    Some("room_1".to_owned()),
+                    Ok(Some(0))
+                ),
+                Some(Ok(0))
+            )
+        );
+    }
+
+    #[test]
+    fn of_a_message_refused_before_anything_is_read_is_its_error() {
+        let mut sim = room();
+        sim.send(Sim::message("telegram", "Bonjour")).unwrap_err();
+        assert_eq!(
+            decided(&sim),
+            (
+                None,
+                None,
+                Err(InboundError::UnknownChannel(channel("telegram")))
+            )
+        );
+    }
+
+    /// RFC §10.5: a direct injection's refusal before its commit is
+    /// raised.
+    #[test]
+    fn of_a_direct_injection_refused_by_its_room_raises_the_refusal() {
+        let mut sim = room();
+        sim.room.status = RoomStatus::Closed;
+        let event = DirectEvent::new(channel("ws"), roomkit_core::model::EventContent::text("Hi"));
+        sim.inject("room_1", event).unwrap_err();
+        assert_eq!(
+            decided(&sim).2,
+            Err(InboundError::Refused {
+                reason: "room_closed".to_owned()
+            })
+        );
+    }
+}
+
 /// The protocol a driver follows (docs/architecture.md).
 mod the_protocol {
     use super::*;

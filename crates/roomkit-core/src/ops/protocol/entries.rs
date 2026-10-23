@@ -72,3 +72,17 @@ pub struct Settled {
     /// Its result.
     pub result: Result<InboundResult, InboundError>,
 }
+
+/// An inbound call decided: what a caller that cannot wait for the call's
+/// delivery receives, at the commit (RFC §10.1 step 18, detached
+/// completion). The result carries no delivery: the event's delivery set,
+/// and the rest of the cascade, follow in the room's lane. A direct
+/// injection's refusal before its commit is an error (RFC §10.5).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Decided {
+    /// The room the call came into; `None` when it reached none, its
+    /// routing having failed.
+    pub room_id: Option<RoomId>,
+    /// Its result at the decision.
+    pub result: Result<InboundResult, InboundError>,
+}
