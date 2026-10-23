@@ -23,10 +23,13 @@ make hooks
 
 `make all` passes before every commit: formatting, clippy with warnings
 denied, tests, documentation with warnings denied, `cargo deny` when it is
-installed, and the check that `roomkit-core` stays free of I/O dependencies.
-`make examples` passes too: it runs every example, each of which checks what
-it shows. Run `make msrv` when a change adds a dependency or uses a recent
-standard library API.
+installed, and the check that `roomkit-core` depends only on the crates its
+allow list names (`scripts/check-core-deps.sh`). `make examples` passes too:
+it runs every example, each of which checks what it shows. Run `make msrv`
+when a change adds a dependency or uses a recent standard library API: the
+minimum supported Rust version is the workspace's `rust-version`, written
+once in `Cargo.toml` (`make msrv-toolchain` installs it). CI checks the
+dependency graph against the security advisories every week.
 
 ## Code
 

@@ -1,0 +1,22 @@
+name: Advisories
+
+# A security advisory published against a dependency fails no push: the
+# dependency graph did not change. This job checks the graph against the
+# advisory database every week, and on demand.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    name: Security advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories

@@ -1,11 +1,13 @@
 # The gates every change passes before it is committed (CONTRIBUTING.md).
 
 CARGO ?= cargo
-MSRV := 1.92.0
+# The minimum supported Rust version is written once, as the workspace's
+# `rust-version`; its toolchain is that version's first release.
+MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv hooks
+.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks
 
 all: fmt-check clippy test doc deny check-core-deps
 
@@ -44,6 +46,9 @@ examples:
 
 msrv:
 	$(CARGO) +$(MSRV) check --workspace --all-targets --all-features --locked
+
+msrv-toolchain:
+	rustup toolchain install $(MSRV) --profile minimal
 
 hooks:
 	git config core.hooksPath .githooks

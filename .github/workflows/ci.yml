@@ -58,7 +58,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: rustup toolchain install 1.92.0 --profile minimal
+      # The version is the workspace's `rust-version` (Makefile).
+      - run: make msrv-toolchain
       - run: make msrv
 
   deny:
