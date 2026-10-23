@@ -1070,6 +1070,25 @@ mod an_entry_adopted_from_a_delivery {
         );
     }
 
+    /// RFC §9.5.1 Reentrance: every request of an entry adopted beside the
+    /// operation's work stands in the room's admission order.
+    #[test]
+    fn stands_in_the_room_s_admission_order() {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut sim = checking(&seen);
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            sim.in_admission_order,
+            [
+                "handle_inbound sms in room_1",
+                "lock room_1 in room_1",
+                "load_context room_1 in room_1",
+                "commit in room_1",
+                "release room_1 in room_1",
+            ]
+        );
+    }
+
     /// RFC §10.1 step 18: the call's result reports its own event's
     /// deliveries, none of the entry's.
     #[test]

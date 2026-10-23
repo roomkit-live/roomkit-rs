@@ -70,6 +70,21 @@ pub(crate) struct Cx<'op> {
     pub(crate) io: &'op mut io::Io,
 }
 
+impl Cx<'_> {
+    /// Runs `advance` with the requests it issues made in the admission
+    /// order of `room_id` (RFC §9.5.1, `Effect::admitted`).
+    pub(crate) fn in_admission_order<T>(
+        &mut self,
+        room_id: &RoomId,
+        advance: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let outer = self.io.admit(Some(room_id.clone()));
+        let advanced = advance(self);
+        self.io.admit(outer);
+        advanced
+    }
+}
+
 /// Where a sub-machine stands after an outcome.
 #[derive(Debug)]
 pub(crate) enum Progress<T> {

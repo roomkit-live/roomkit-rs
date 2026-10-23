@@ -101,6 +101,7 @@ mod tests {
             request,
             deadline: None,
             locked: None,
+            admitted: None,
         }
     }
 

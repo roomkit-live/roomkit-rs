@@ -6,7 +6,9 @@
 //! (`locks`): the second waits for the first's release. A section nested
 //! under the section that holds the lock, an entry adopted from that
 //! section's hook (gap G-070), runs within its tenure: its requests for the
-//! lock are answered here, and never reach the driver.
+//! lock are answered here, and never reach the driver. The requests of a
+//! section that stands in a room's admission order (RFC §9.5.1) say so, as
+//! those of a section under a lock do.
 
 mod locks;
 
@@ -43,6 +45,9 @@ pub(crate) struct Io {
     /// The room whose lock the section being advanced runs under, nested
     /// in the section that holds it.
     nested: Option<RoomId>,
+    /// The room in whose admission order the section being advanced runs
+    /// (RFC §9.5.1).
+    admitted: Option<RoomId>,
 }
 
 impl Io {
@@ -56,6 +61,7 @@ impl Io {
             inbox: VecDeque::new(),
             locks: RoomLocks::default(),
             nested: None,
+            admitted: None,
         }
     }
 
@@ -102,6 +108,7 @@ impl Io {
             request,
             deadline,
             locked,
+            admitted: self.admitted.clone(),
         };
         if let Some(effect) = self.locks.admit(effect) {
             self.issued.push(effect);
@@ -131,6 +138,13 @@ impl Io {
     /// returns what it replaces, which its caller puts back.
     pub(crate) fn nest(&mut self, room_id: Option<RoomId>) -> Option<RoomId> {
         std::mem::replace(&mut self.nested, room_id)
+    }
+
+    /// Makes the requests issued from now on run in the admission order of
+    /// `room_id` (RFC §9.5.1, `Effect::admitted`), or in none for `None`;
+    /// returns what it replaces, which its caller puts back.
+    pub(crate) fn admit(&mut self, room_id: Option<RoomId>) -> Option<RoomId> {
+        std::mem::replace(&mut self.admitted, room_id)
     }
 
     /// Emits `notice` on the next step.

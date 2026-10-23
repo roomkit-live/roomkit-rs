@@ -12,9 +12,10 @@
 //!
 //! - a lock the context holds a live lease on is granted at once, and its
 //!   release gives nothing back: the lease holder releases it;
-//! - a lane, or a ticket, a run of the context holds is never waited for:
-//!   that run waits for this one, so the request fails at once
-//!   ([`Hold::Refused`]).
+//! - a lane a run of the context holds is never waited for: that run waits
+//!   for this one, so the request fails at once ([`Hold::Refused`]); nor is
+//!   a ticket's turn in the admission order of a room a frame of the
+//!   context stands in (RFC §9.5.1 Reentrance).
 //!
 //! What the run holds is mirrored in its shared side, which the calls it
 //! makes read live, and forgotten when the run is dropped, whatever ends
@@ -130,7 +131,6 @@ impl<'kit> Held<'kit> {
             }
             Request::TakeTicket { room_id } => {
                 let ticket = rooms.tickets.take(&room_id);
-                self.shared.set_ticket(&room_id, true);
                 self.tickets.insert(room_id, ticket);
                 Hold::Now(Outcome::Ticketed)
             }
@@ -139,7 +139,6 @@ impl<'kit> Held<'kit> {
             }
             Request::ReleaseTicket { room_id } => {
                 self.tickets.remove(&room_id);
-                self.shared.set_ticket(&room_id, false);
                 Hold::Now(Outcome::TicketReleased)
             }
             request @ (Request::LoadContext { .. }
@@ -185,8 +184,9 @@ impl<'kit> Held<'kit> {
         Hold::Wait(Box::pin(wait))
     }
 
-    /// The turn of the run's ticket of the room, never one a run of the
-    /// context holds an earlier ticket for.
+    /// The turn of the run's ticket of the room, never one in the admission
+    /// order of a room a frame of the context stands in: the ticket that
+    /// frame's run holds, or takes after it, would wait for this one.
     fn await_turn(
         &mut self,
         rooms: Rooms<'kit>,
@@ -195,7 +195,7 @@ impl<'kit> Held<'kit> {
         room_id: RoomId,
         deadline: Option<Instant>,
     ) -> Hold<'kit> {
-        if context.holds_ticket(&room_id) {
+        if context.is_admitted_to(&room_id) {
             return Hold::Refused(room_id);
         }
         let Some(ticket) = self.tickets.remove(&room_id) else {

@@ -210,6 +210,10 @@ pub(crate) struct Sim {
     pub(crate) nth_durations: Vec<(&'static str, usize, Duration)>,
     /// The trace line of every effect that carried a deadline, in order.
     pub(crate) bounded: Vec<String>,
+    /// The trace line of every effect made in a room's admission order
+    /// (`Effect::admitted`), with the room, in order: `hook scanner in
+    /// room_1`.
+    pub(crate) in_admission_order: Vec<String>,
     /// The contexts the SYNC hooks ran with, by hook name, in order.
     pub(crate) hook_contexts: Vec<(String, RoomContext)>,
     /// What the test runs: an inbound operation must hold the lane of every
@@ -318,6 +322,7 @@ impl Sim {
             durations: Vec::new(),
             nth_durations: Vec::new(),
             bounded: Vec::new(),
+            in_admission_order: Vec::new(),
             hook_contexts: Vec::new(),
             running: Running::Other,
             identities: Vec::new(),

@@ -5,19 +5,23 @@
 //! Every hook and channel call the driver spawns for an operation runs in a
 //! tokio task-local context: a stack of frames, the innermost last, each
 //! naming a run of the driver (what it holds now, read live, and the queue
-//! that hands it calls into its room), the effect whose call this is, and,
-//! when the operation made the request under a room's lock
-//! (`Effect::locked`), a lease on that lock's tenure. A call made inside a
-//! call keeps the outer frames: a hook of room S run inside a hook of room
-//! R's pass holds R's lease too.
+//! that hands it calls into its room), the effect whose call this is, when
+//! the operation made the request under a room's lock (`Effect::locked`),
+//! a lease on that lock's tenure, and the room in whose admission order the
+//! request runs (`Effect::admitted`). A call made inside a call keeps the
+//! outer frames: a hook of room S run inside a hook of room R's pass holds
+//! R's lease too.
 //!
 //! The driver reads the context of the task that runs it:
 //!
 //! - a lock a frame holds a live lease on is granted at once (counted in
 //!   the run that asks, released with the lease holder's release only);
-//! - a lane or a ticket a frame's run holds is never waited for: that run
-//!   waits for this call, so the call fails instead
-//!   ([`KitError::Reentrant`](crate::KitError::Reentrant));
+//! - a lane a frame's run holds is never waited for: that run waits for
+//!   this call, so the call fails instead
+//!   ([`KitError::Reentrant`](crate::KitError::Reentrant)); nor is a
+//!   ticket's turn in the admission order of a room a frame stands in,
+//!   whose ticket its run holds or is about to take (RFC §9.5.1
+//!   Reentrance);
 //! - a call into the room whose lane a frame's run holds is adopted by that
 //!   run's operation instead of run apart.
 //!
@@ -71,7 +75,6 @@ pub(crate) enum Reply {
 #[derive(Debug, Default)]
 struct Holdings {
     lanes: HashSet<RoomId>,
-    tickets: HashSet<RoomId>,
     locks: HashMap<RoomId, Tenure>,
 }
 
@@ -108,6 +111,9 @@ pub(crate) struct Frame {
     run: Arc<RunShared>,
     effect: EffectId,
     lease: Option<Lease>,
+    /// The room in whose admission order the effect's request runs (RFC
+    /// §9.5.1).
+    admitted: Option<RoomId>,
 }
 
 /// The frames of the calls the current task runs within, the innermost
@@ -175,16 +181,6 @@ impl RunShared {
         }
     }
 
-    /// Records whether the run holds a ticket of `room_id`.
-    pub(crate) fn set_ticket(&self, room_id: &RoomId, held: bool) {
-        let mut holdings = self.holdings();
-        if held {
-            holdings.tickets.insert(room_id.clone());
-        } else {
-            holdings.tickets.remove(room_id);
-        }
-    }
-
     /// Forgets everything the run held: it is over.
     pub(crate) fn clear(&self) {
         *self.holdings() = Holdings::default();
@@ -206,10 +202,6 @@ impl RunShared {
     fn holds_lane(&self, room_id: &RoomId) -> bool {
         self.holdings().lanes.contains(room_id)
     }
-
-    fn holds_ticket(&self, room_id: &RoomId) -> bool {
-        self.holdings().tickets.contains(room_id)
-    }
 }
 
 impl Lease {
@@ -229,13 +221,25 @@ impl Lease {
 
 impl Frame {
     /// The frame of the call for `effect`, made by `run`, under the lock of
-    /// `locked` when the operation holds it on the call's behalf.
-    pub(crate) fn new(run: &Arc<RunShared>, effect: EffectId, locked: Option<&RoomId>) -> Self {
+    /// `locked` when the operation holds it on the call's behalf, in the
+    /// admission order of `admitted` when it runs in one.
+    pub(crate) fn new(
+        run: &Arc<RunShared>,
+        effect: EffectId,
+        locked: Option<&RoomId>,
+        admitted: Option<RoomId>,
+    ) -> Self {
         Self {
             run: Arc::clone(run),
             effect,
             lease: locked.and_then(|room_id| run.lease_of(room_id)),
+            admitted,
         }
+    }
+
+    /// The effect whose call this is.
+    pub(crate) fn effect(&self) -> EffectId {
+        self.effect
     }
 
     /// Hands `entry` to the frame's run, and waits for its decision.
@@ -295,11 +299,14 @@ impl ExecutionContext {
         self.lane_holder(room_id).is_some()
     }
 
-    /// Whether a run of this context holds a ticket of `room_id`.
-    pub(crate) fn holds_ticket(&self, room_id: &RoomId) -> bool {
+    /// Whether a frame of this context stands in `room_id`'s admission
+    /// order (RFC §9.5.1): its run holds the room's ticket, or takes one
+    /// once the frame's call is over, so a turn behind it is never waited
+    /// for.
+    pub(crate) fn is_admitted_to(&self, room_id: &RoomId) -> bool {
         self.frames
             .iter()
-            .any(|frame| frame.run.holds_ticket(room_id))
+            .any(|frame| frame.admitted.as_ref() == Some(room_id))
     }
 
     /// The innermost frame whose run holds `room_id`'s lane.
@@ -375,7 +382,7 @@ mod tests {
         let (run, _queue) = RunShared::new();
         run.locked(room_id());
         let context =
-            ExecutionContext::default().within(Frame::new(&run, effect(), Some(&room_id())));
+            ExecutionContext::default().within(Frame::new(&run, effect(), Some(&room_id()), None));
         assert!(context.lease(&room_id()).is_some());
     }
 
@@ -385,7 +392,7 @@ mod tests {
         let (run, _queue) = RunShared::new();
         run.locked(room_id());
         let context =
-            ExecutionContext::default().within(Frame::new(&run, effect(), Some(&room_id())));
+            ExecutionContext::default().within(Frame::new(&run, effect(), Some(&room_id()), None));
         run.released(&room_id());
         assert!(context.lease(&room_id()).is_none());
     }
@@ -396,7 +403,7 @@ mod tests {
         let (run, _queue) = RunShared::new();
         run.locked(room_id());
         let context =
-            ExecutionContext::default().within(Frame::new(&run, effect(), Some(&room_id())));
+            ExecutionContext::default().within(Frame::new(&run, effect(), Some(&room_id()), None));
         run.released(&room_id());
         run.locked(room_id());
         assert!(context.lease(&room_id()).is_none());
@@ -406,15 +413,32 @@ mod tests {
     fn a_call_made_outside_the_lock_holds_no_lease() {
         let (run, _queue) = RunShared::new();
         run.locked(room_id());
-        let context = ExecutionContext::default().within(Frame::new(&run, effect(), None));
+        let context = ExecutionContext::default().within(Frame::new(&run, effect(), None, None));
         assert!(context.lease(&room_id()).is_none());
+    }
+
+    /// RFC §9.5.1 Reentrance: code run in a room's admission order stands
+    /// in it, and in no other room's.
+    #[test]
+    fn a_call_made_in_a_room_s_admission_order_stands_in_it() {
+        let (run, _queue) = RunShared::new();
+        let context =
+            ExecutionContext::default().within(Frame::new(&run, effect(), None, Some(room_id())));
+        let other = RoomId::new("room_2").unwrap();
+        assert_eq!(
+            (
+                context.is_admitted_to(&room_id()),
+                context.is_admitted_to(&other)
+            ),
+            (true, false)
+        );
     }
 
     #[test]
     fn a_lane_is_held_while_the_run_holds_it() {
         let (run, _queue) = RunShared::new();
         run.set_lane(&room_id(), true);
-        let context = ExecutionContext::default().within(Frame::new(&run, effect(), None));
+        let context = ExecutionContext::default().within(Frame::new(&run, effect(), None, None));
         let held = context.holds_lane(&room_id());
         run.set_lane(&room_id(), false);
         assert_eq!((held, context.holds_lane(&room_id())), (true, false));

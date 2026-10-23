@@ -443,7 +443,9 @@ impl Arrival {
     }
 
     /// Hands the room's context to the channel's `handle_inbound()` (RFC
-    /// §10.1 steps 3 and 4).
+    /// §10.1 steps 3 and 4). The parse stands in its message's admission
+    /// order (gap G-070): an event it injects into the room is adopted
+    /// beside the operation's work, and draws on its budget.
     fn parse(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> Arriving {
         let id = cx.env.new_event_id();
         let request = Request::HandleInbound {
@@ -452,7 +454,9 @@ impl Arrival {
             context: self.receiver_context((*context).clone()),
             id: id.clone(),
         };
-        let effect = cx.io.issue_within(request, self.deadline);
+        let deadline = self.deadline;
+        let effect =
+            cx.in_admission_order(&context.room.id, |cx| cx.io.issue_within(request, deadline));
         self.state = State::Parsing {
             effect,
             id,

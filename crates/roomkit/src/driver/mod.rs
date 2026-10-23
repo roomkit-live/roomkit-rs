@@ -194,6 +194,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             request,
             deadline,
             locked,
+            admitted,
         } = effect;
         let deadline = deadline.and_then(|deadline| self.clocks.instant_of(deadline));
         let rooms = Rooms {
@@ -219,25 +220,18 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 None
             }
             Hold::Call(request) => {
-                self.spawn(id, *request, deadline, locked.as_ref());
+                let frame = Frame::new(&self.shared, id, locked.as_ref(), admitted);
+                self.spawn(frame, *request, deadline);
                 None
             }
         }
     }
 
     /// Runs `request` as a task, within its execution context: the run's
-    /// frame for `effect`, under the lock the operation holds on its
-    /// behalf.
-    fn spawn(
-        &mut self,
-        effect: EffectId,
-        request: Request,
-        deadline: Option<Instant>,
-        locked: Option<&RoomId>,
-    ) {
-        let context = self
-            .context
-            .within(Frame::new(&self.shared, effect, locked));
+    /// `frame` for its effect.
+    fn spawn(&mut self, frame: Frame, request: Request, deadline: Option<Instant>) {
+        let effect = frame.effect();
+        let context = self.context.within(frame);
         let inner = Arc::clone(self.inner);
         let task = self.calls.spawn(context.scope(async move {
             within(deadline, calls::call(&inner, request))

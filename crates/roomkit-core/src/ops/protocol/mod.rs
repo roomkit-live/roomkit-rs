@@ -62,6 +62,13 @@ pub struct Effect {
     /// request made outside every lock: code it calls waits for a lock as
     /// anyone does.
     pub locked: Option<RoomId>,
+    /// The room in whose admission order the request runs (RFC §9.5.1): an
+    /// off-lock hook, a message's parse, or any request of an entry the
+    /// operation adopted beside its work. Code it runs stands in that
+    /// order: an event it injects into the room takes no ticket, so it
+    /// never waits for the ticket its own caller holds (RFC §9.5.1
+    /// Reentrance). `None` for any other request.
+    pub admitted: Option<RoomId>,
 }
 
 /// The error type of a [`Request::OnEvent`] or [`Request::Deliver`]

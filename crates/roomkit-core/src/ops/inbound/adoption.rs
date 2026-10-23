@@ -20,7 +20,8 @@
 //! - any other call (an off-lock hook, a delivery set's turn or delivery,
 //!   step 2's awaited observers, a channel's parse): the entry runs beside
 //!   the lane's work, taking the room lock as any section does, after the
-//!   operation's other section that holds it, if any.
+//!   operation's other section that holds it, if any, and every request it
+//!   makes stands in the room's admission order (`Effect::admitted`).
 //!
 //! Either way the entry takes no admission ticket and runs every hook under
 //! the lock: the operation it joins stands in the room's order already (RFC
@@ -66,6 +67,8 @@ pub(super) struct Adoptions {
 #[derive(Clone, Debug)]
 struct Adopted {
     id: EntryId,
+    /// The room the call names, the operation's.
+    room_id: RoomId,
     /// The effect whose call made the entry.
     origin: EffectId,
     /// The room whose lock the entry is nested under: its origin is a hook
@@ -191,16 +194,17 @@ impl AdoptedRun {
     }
 }
 
-/// Runs `advance` for an entry nested under the lock of `nested`, its
-/// requests for that lock answered at once, or for an entry of its own.
-fn within<T>(
-    cx: &mut Cx<'_>,
-    nested: Option<&RoomId>,
-    advance: impl FnOnce(&mut Cx<'_>) -> T,
-) -> T {
-    let outer = cx.io.nest(nested.cloned());
+/// Runs `advance` for `adopted`: nested under the lock of the section its
+/// origin runs under, its requests for that lock answered at once, or beside
+/// the operation's work, every request it makes in the room's admission
+/// order (RFC §9.5.1 Reentrance).
+fn within<T>(cx: &mut Cx<'_>, adopted: &Adopted, advance: impl FnOnce(&mut Cx<'_>) -> T) -> T {
+    let beside = adopted.nested.is_none().then(|| adopted.room_id.clone());
+    let outer_lock = cx.io.nest(adopted.nested.clone());
+    let outer_order = cx.io.admit(beside);
     let advanced = advance(cx);
-    cx.io.nest(outer);
+    cx.io.admit(outer_order);
+    cx.io.nest(outer_lock);
     advanced
 }
 
@@ -229,6 +233,7 @@ impl Machine {
         let id = self.adopted.next_id();
         let adopted = Adopted {
             id,
+            room_id: entry.room_id().clone(),
             origin,
             nested,
             direct: matches!(entry, Entry::Direct { .. }),
@@ -310,7 +315,7 @@ impl Machine {
             channel,
             message,
         ));
-        within(cx, adopted.nested.as_ref(), |cx| arrival.start(cx));
+        within(cx, &adopted, |cx| arrival.start(cx));
         self.adopted.running.push(AdoptedRun {
             entry: adopted,
             state: RunState::Arriving(arrival),
@@ -332,13 +337,13 @@ impl Machine {
         let state = if charged || self.budget.take() {
             let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event).checking(direct);
             let mut pass = Box::new(pass);
-            within(cx, adopted.nested.as_ref(), |cx| pass.start(cx));
+            within(cx, &adopted, |cx| pass.start(cx));
             RunState::Passing(pass)
         } else {
             event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
             let record = RecordPass::refusing(event, RefusedOperation::Inbound).checking(direct);
             let mut record = Box::new(record);
-            within(cx, adopted.nested.as_ref(), |cx| record.start(cx));
+            within(cx, &adopted, |cx| record.start(cx));
             RunState::Recording(record)
         };
         self.adopted.running.push(AdoptedRun {
@@ -363,9 +368,8 @@ impl Machine {
             return;
         };
         let mut run = self.adopted.running.remove(index);
-        let nested = run.entry.nested.clone();
-        let advanced = within(cx, nested.as_ref(), |cx| run.accept(cx, effect, outcome));
         let adopted = run.entry.clone();
+        let advanced = within(cx, &adopted, |cx| run.accept(cx, effect, outcome));
         match advanced {
             Advanced::Waiting => self.adopted.running.insert(index, run),
             Advanced::Arrived(event) => self.enter_pass(cx, adopted, *event, None),

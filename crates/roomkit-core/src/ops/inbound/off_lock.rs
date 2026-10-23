@@ -159,10 +159,15 @@ impl OffLockCheck {
         self.next_hook(cx, run)
     }
 
-    /// Runs the next off-lock hook or, once a hook blocked or none is
-    /// left, waits for every earlier ticket of the room.
+    /// Runs the next off-lock hook, in the room's admission order (RFC
+    /// §9.5.1 Reentrance), or, once a hook blocked or none is left, waits for
+    /// every earlier ticket of the room.
     fn next_hook(&mut self, cx: &mut Cx<'_>, mut run: Box<HookRun>) -> Checking {
-        if let Some(effect) = run.ask_next(cx, &self.event, &self.context, self.deadline, None) {
+        let room_id = self.event.room_id.clone();
+        let asked = cx.in_admission_order(&room_id, |cx| {
+            run.ask_next(cx, &self.event, &self.context, self.deadline, None)
+        });
+        if let Some(effect) = asked {
             self.state = State::Running { effect, run };
             return Progress::Waiting;
         }

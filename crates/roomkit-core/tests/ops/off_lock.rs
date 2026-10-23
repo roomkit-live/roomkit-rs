@@ -122,6 +122,19 @@ mod an_off_lock_hook {
         );
     }
 
+    /// RFC §9.5.1 Reentrance: the off-lock hooks, and the parse before
+    /// them, run in the room's admission order; the hooks under the lock
+    /// stand in it by the lock.
+    #[test]
+    fn runs_in_the_room_s_admission_order_as_the_parse_does() {
+        let mut sim = scanned(HookResult::allow);
+        sim.send(bonjour()).unwrap();
+        assert_eq!(
+            sim.in_admission_order,
+            ["handle_inbound sms in room_1", "hook scanner in room_1"]
+        );
+    }
+
     /// The context is the one step 2 read: a sender recorded on the
     /// binding by the time the lock is taken is seen by the locked hook
     /// only.

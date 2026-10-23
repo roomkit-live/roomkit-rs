@@ -670,6 +670,10 @@ impl Sim {
                 "a request made under the lock of {room} while the lock is free"
             );
         }
+        if let Some(room) = &effect.admitted {
+            let line = format!("{} in {room}", self.label(&effect.request));
+            self.in_admission_order.push(line);
+        }
         let traced = self.trace.len();
         if let Some((caller, entries)) = self.reentry(&effect) {
             self.make_calls(&effect, &caller, entries);
