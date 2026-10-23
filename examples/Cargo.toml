@@ -25,26 +25,42 @@ workspace = true
 # `cargo run --example <name>`. `make examples` runs every file of this
 # directory, so an example missing here fails the gate.
 
-[[example]]
-name = "advisor_joins"
-path = "advisor_joins.rs"
-
-[[example]]
-name = "agent_chain"
-path = "agent_chain.rs"
-
-[[example]]
-name = "block_and_inject"
-path = "block_and_inject.rs"
+# The RFC's Appendix B flows.
 
 [[example]]
 name = "echo_room"
 path = "echo_room.rs"
 
 [[example]]
+name = "new_conversation"
+path = "new_conversation.rs"
+
+[[example]]
+name = "block_and_inject"
+path = "block_and_inject.rs"
+
+[[example]]
+name = "agent_chain"
+path = "agent_chain.rs"
+
+[[example]]
+name = "advisor_joins"
+path = "advisor_joins.rs"
+
+[[example]]
 name = "edit_delete_messages"
 path = "edit_delete_messages.rs"
 
+# Rooms and channels.
+
 [[example]]
-name = "new_conversation"
-path = "new_conversation.rs"
+name = "room_lifecycle"
+path = "room_lifecycle.rs"
+
+[[example]]
+name = "channel_mute_unmute"
+path = "channel_mute_unmute.rs"
+
+[[example]]
+name = "room_membership"
+path = "room_membership.rs"

@@ -1,0 +1,128 @@
+//! An agent that stands in for a model: it answers from a script and keeps
+//! what it read.
+
+use std::future::{Future, ready};
+
+use roomkit::model::{
+    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
+    ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType, RoomContext,
+    RoomEvent,
+};
+use roomkit::ops::ChannelDeclaration;
+use roomkit::{Channel, ChannelError, text_of};
+
+use crate::Log;
+
+/// What an agent answers, by the text it reads.
+pub type Script = &'static [(&'static str, &'static str)];
+
+/// An intelligence channel standing in for a model: at each turn it answers
+/// the text it reads with the script's line for it, and stays silent on any
+/// other text. It keeps what each turn read. Cloning it shares what it kept.
+#[derive(Clone, Debug)]
+pub struct ScriptedAgent {
+    declaration: ChannelDeclaration,
+    script: Script,
+    turns: Log<Turn>,
+}
+
+/// What one turn of a [`ScriptedAgent`] read.
+#[derive(Clone, Debug)]
+pub struct Turn {
+    /// The event the turn was asked about.
+    pub event: RoomEvent,
+    /// The texts of the history the room handed the turn, oldest first.
+    pub history: Vec<String>,
+}
+
+impl ScriptedAgent {
+    /// An agent named `channel_id`, answering from `script`.
+    pub fn new(channel_id: ChannelId, script: Script) -> Self {
+        let declaration = ChannelDeclaration::new(
+            channel_id,
+            ChannelType::Ai,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+        );
+        Self {
+            declaration: ChannelDeclaration {
+                provider_name: Some("ScriptedAgent".to_owned()),
+                ..declaration
+            },
+            script,
+            turns: Log::new(),
+        }
+    }
+
+    /// The same agent, declaring `capabilities`: one that edits and deletes
+    /// natively is handed an edit or a delete as it is (RFC §6.6).
+    #[must_use]
+    pub fn with_capabilities(mut self, capabilities: ChannelCapabilities) -> Self {
+        self.declaration.capabilities = capabilities;
+        self
+    }
+
+    /// The channel's id.
+    pub fn id(&self) -> &ChannelId {
+        &self.declaration.channel_id
+    }
+
+    /// What its turns read so far, in order.
+    pub fn turns(&self) -> Vec<Turn> {
+        self.turns.entries()
+    }
+
+    /// The texts of the events its turns were asked about, in order.
+    pub fn read(&self) -> Vec<String> {
+        self.turns()
+            .iter()
+            .map(|turn| text_of(&turn.event.content))
+            .collect()
+    }
+
+    /// The script's answer to `event`, as the agent's response.
+    fn answer(&self, event: &RoomEvent) -> Option<RoomEvent> {
+        let read = text_of(&event.content);
+        let (_, reply) = self.script.iter().find(|(line, _)| *line == read)?;
+        let source = EventSource::new(
+            self.declaration.channel_id.clone(),
+            ChannelType::Ai,
+            EventDirection::Outbound,
+        );
+        // The pipeline gives the response its own id, room and depth, and
+        // makes it answer the event that asked.
+        Some(RoomEvent::new(
+            event.id.clone(),
+            event.room_id.clone(),
+            EventType::Message,
+            source,
+            EventContent::text(*reply),
+            event.created_at,
+        ))
+    }
+}
+
+impl Channel for ScriptedAgent {
+    fn declaration(&self) -> ChannelDeclaration {
+        self.declaration.clone()
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let output = match self.answer(&event) {
+            Some(answer) => ChannelOutput::respond(vec![answer]),
+            None => ChannelOutput::default(),
+        };
+        let history = context
+            .recent_events
+            .iter()
+            .map(|event| text_of(&event.content))
+            .collect();
+        self.turns.push(Turn { event, history });
+        ready(Ok(output))
+    }
+}

@@ -1,6 +1,7 @@
 //! The room an example left, as it prints it.
 
 use roomkit::model::{EventStatus, RoomEvent, RoomId, Visibility};
+use roomkit::rules::edits;
 use roomkit::{ConversationStore, RoomKit, StoreError, text_of};
 
 /// A room's whole timeline, refused events included, as the store holds it.
@@ -12,8 +13,9 @@ pub async fn timeline(kit: &RoomKit, room_id: &RoomId) -> Result<Vec<RoomEvent>,
     kit.store().list_events(room_id, true).await
 }
 
-/// Prints the timeline, one event per line, with the channels an event is
-/// visible to when it is not visible to all.
+/// Prints the timeline, one event per line: its index, source, depth,
+/// status and text, then whether it was edited or deleted, and the channels
+/// it is visible to when it is not visible to all.
 pub fn print_timeline(events: &[RoomEvent]) {
     println!("Timeline:");
     for event in events {
@@ -21,13 +23,20 @@ pub fn print_timeline(events: &[RoomEvent]) {
             (EventStatus::Blocked, Some(blocked_by)) => format!("blocked by {blocked_by}"),
             (status, _) => format!("{status:?}").to_lowercase(),
         };
+        let changed = if edits::is_deleted(event) {
+            " (deleted)"
+        } else if edits::is_edited(event) {
+            " (edited)"
+        } else {
+            ""
+        };
         let visibility = if event.visibility == Visibility::All {
             String::new()
         } else {
             format!(" (visible to {})", event.visibility)
         };
         println!(
-            "  #{} {:<10} depth {} {:<32} {:?}{visibility}",
+            "  #{} {:<12} depth {} {:<32} {:?}{changed}{visibility}",
             event.index,
             event.source.channel_id,
             event.chain_depth,
