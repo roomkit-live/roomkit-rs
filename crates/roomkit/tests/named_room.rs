@@ -66,8 +66,8 @@ async fn two_messages_naming_one_missing_room_create_it_once() {
     let mut events = kit.subscribe();
     let room = room_id();
     let (first, second) = tokio::join!(
-        kit.process_inbound(message(&sms, "one"), Some(&room)),
-        kit.process_inbound(message(&sms, "two"), Some(&room)),
+        kit.process_inbound_in(&room, message(&sms, "one")),
+        kit.process_inbound_in(&room, message(&sms, "two")),
     );
     first.unwrap();
     second.unwrap();
@@ -106,7 +106,7 @@ async fn an_agent_attached_by_an_on_room_created_hook_answers_the_first_message(
         }
     })
     .unwrap();
-    kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
         .await
         .unwrap();
     assert_eq!(sms.texts(), ["You said: Bonjour"]);
@@ -116,7 +116,7 @@ async fn an_agent_attached_by_an_on_room_created_hook_answers_the_first_message(
 async fn a_room_created_for_an_organization_belongs_to_it() {
     let (kit, sms) = kit_without_rooms();
     kit.for_organization("bank")
-        .process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        .process_inbound_in(&room_id(), message(&sms, "Bonjour"))
         .await
         .unwrap();
     let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
@@ -134,7 +134,7 @@ async fn a_room_of_another_organization_is_refused_with_nothing_written() {
         .unwrap();
     let refused = kit
         .for_organization("clinic")
-        .process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        .process_inbound_in(&room_id(), message(&sms, "Bonjour"))
         .await;
     assert_eq!(
         (
@@ -171,7 +171,7 @@ async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
         }
     })
     .unwrap();
-    kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
         .await
         .unwrap();
     assert_eq!(read.recv().await, Some(vec![jean]));
@@ -196,7 +196,7 @@ async fn an_on_room_created_hook_that_hangs_is_bounded_by_its_timeout() {
     let room = room_id();
     let sent = tokio::time::timeout(
         Duration::from_secs(5),
-        kit.process_inbound(message(&sms, "Bonjour"), Some(&room)),
+        kit.process_inbound_in(&room, message(&sms, "Bonjour")),
     )
     .await;
     let mut timed_out = false;
@@ -233,7 +233,7 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
     .unwrap();
     let mut events = kit.subscribe();
     let room = room_id();
-    let call = kit.process_inbound(message(&sms, "Bonjour"), Some(&room));
+    let call = kit.process_inbound_in(&room, message(&sms, "Bonjour"));
     tokio::select! {
         result = call => panic!("the call ended before its room's hooks: {result:?}"),
         () = observing.notified() => {}
@@ -359,7 +359,7 @@ fn customer(text: &str) -> InboundMessage {
 #[tokio::test]
 async fn an_sms_channel_attached_to_an_existing_room_names_no_recipient_and_sends_nothing() {
     let (kit, sms) = sms_room(None).await;
-    kit.process_inbound(customer("Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), customer("Bonjour"))
         .await
         .unwrap();
     let bound = kit.store().list_bindings(&room_id()).await.unwrap();
@@ -376,7 +376,7 @@ async fn an_sms_channel_attached_to_an_existing_room_names_no_recipient_and_send
 #[tokio::test]
 async fn an_sms_binding_the_integrator_addresses_receives_the_answer() {
     let (kit, sms) = sms_room(Some("+15551234567")).await;
-    kit.process_inbound(customer("Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), customer("Bonjour"))
         .await
         .unwrap();
     assert_eq!(sms.sent_to(), ["+15551234567"]);
@@ -399,7 +399,7 @@ async fn a_room_created_for_an_sms_sender_answers_at_their_number() {
         }
     })
     .unwrap();
-    kit.process_inbound(customer("Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), customer("Bonjour"))
         .await
         .unwrap();
     assert_eq!(sms.sent_to(), ["+15551234567"]);

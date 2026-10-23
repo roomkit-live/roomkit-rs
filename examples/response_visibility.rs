@@ -118,7 +118,7 @@ async fn writes(
         text_of(&message.content),
         message.visibility
     );
-    kit.process_inbound(message, Some(room)).await?;
+    kit.process_inbound_in(room, message).await?;
     Ok(())
 }
 

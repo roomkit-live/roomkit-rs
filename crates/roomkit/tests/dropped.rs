@@ -322,7 +322,7 @@ async fn a_message_dropped_during_its_commit_is_delivered() {
         "+15551234567",
         EventContent::text("Bonjour"),
     );
-    drop_during_the_commit(&kit, kit.process_inbound(message, Some(&room))).await;
+    drop_during_the_commit(&kit, kit.process_inbound_in(&room, message)).await;
     assert_eq!(
         (delivered_and_processed(&kit, &mut events).await, ws.texts()),
         (

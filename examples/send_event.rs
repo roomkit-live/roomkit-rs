@@ -181,7 +181,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "+15551234567",
         EventContent::text("Where is my refund?"),
     );
-    kit.process_inbound(question, Some(&room)).await?;
+    kit.process_inbound_in(&room, question).await?;
     let note = notes
         .entries()
         .first()

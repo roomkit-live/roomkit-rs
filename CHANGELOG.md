@@ -617,6 +617,11 @@ publishes a release.
   each of them. The core's lifecycle and event operations take the
   caller's organization (`PauseRoom::new(config, room_id,
   organization_id)` and the others), `None` reading the room unscoped.
+- `process_inbound` splits in two (decision 2 of step 2b):
+  `process_inbound(message)` routes the message (RFC §10.4), and
+  `process_inbound_in(room_id, message)` runs it into the room the caller
+  names (RFC §10.1 step 2); the one call took the room as an `Option`, `None`
+  routing the message. An organization's handle has both.
 - A call acting for an organization writes nothing in another
   organization's room, its due timers included: an injected event and a
   record's commit applied the room's due timer transitions before they

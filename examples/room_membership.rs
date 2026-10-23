@@ -112,7 +112,7 @@ impl Team {
     async fn says(&self, who: &str, text: &str) -> Result<EventId, Box<dyn Error>> {
         println!("  {who} writes {text:?}.");
         let message = InboundMessage::new(self.ws.clone(), who, EventContent::text(text));
-        let result = self.kit.process_inbound(message, Some(&self.room)).await?;
+        let result = self.kit.process_inbound_in(&self.room, message).await?;
         Ok(result.event.ok_or("the message was refused")?.id)
     }
 
@@ -132,7 +132,7 @@ impl Team {
             event_type: EventType::Delete,
             ..InboundMessage::new(self.ws.clone(), who, content)
         };
-        Ok(self.kit.process_inbound(message, Some(&self.room)).await?)
+        Ok(self.kit.process_inbound_in(&self.room, message).await?)
     }
 
     /// Whether the stored event `id` is marked deleted.

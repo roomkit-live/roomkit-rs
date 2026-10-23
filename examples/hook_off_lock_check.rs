@@ -71,7 +71,7 @@ struct Chat {
 impl Chat {
     async fn says(self, text: &'static str) -> Result<InboundResult, KitError> {
         let message = InboundMessage::new(self.user, "user", EventContent::text(text));
-        self.kit.process_inbound(message, Some(&self.room)).await
+        self.kit.process_inbound_in(&self.room, message).await
     }
 }
 

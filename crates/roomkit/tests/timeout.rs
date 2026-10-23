@@ -90,7 +90,7 @@ fn slow_the_first_time(kit: &RoomKit, needs_lock: bool) {
 
 /// Runs `message` into `room_1`, failing the test past `BOUND`.
 async fn send(kit: &RoomKit, text: &str) -> InboundResult {
-    tokio::time::timeout(BOUND, kit.process_inbound(message(text), Some(&room_id())))
+    tokio::time::timeout(BOUND, kit.process_inbound_in(&room_id(), message(text)))
         .await
         .unwrap_or_else(|_| panic!("the call outlasted its process_timeout"))
         .unwrap()
@@ -311,10 +311,7 @@ async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
     kit.attach(&room_id(), &channel("slow")).await.unwrap();
     let first = {
         let kit = kit.clone();
-        tokio::spawn(async move {
-            kit.process_inbound(message("Bonjour"), Some(&room_id()))
-                .await
-        })
+        tokio::spawn(async move { kit.process_inbound_in(&room_id(), message("Bonjour")).await })
     };
     // The first call committed and hangs in its delivery, its place first.
     tokio::time::timeout(BOUND, delivering.notified())

@@ -46,7 +46,7 @@ async fn text(
     body: &str,
 ) -> Result<RoomId, Box<dyn Error>> {
     let message = InboundMessage::new(channel.clone(), from, EventContent::text(body));
-    let result = kit.process_inbound(message, None).await?;
+    let result = kit.process_inbound(message).await?;
     let room = result.event.ok_or("the message was refused")?.room_id;
     println!("{from} texts {body:?}: routed to {room}.");
     Ok(room)

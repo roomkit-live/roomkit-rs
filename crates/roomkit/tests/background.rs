@@ -133,7 +133,7 @@ async fn idle_waits_for_an_observer_hook_running_after_its_call() {
         }
     })
     .unwrap();
-    kit.process_inbound(message("Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), message("Bonjour"))
         .await
         .unwrap();
     tokio::time::timeout(BOUND, gate.reached.notified())
@@ -154,7 +154,7 @@ async fn idle_waits_for_a_call_that_goes_on_detached() {
     kit.register_channel(slow.clone()).unwrap();
     kit.attach(&room_id(), &channel("slow")).await.unwrap();
     let room = room_id();
-    let call = kit.process_inbound(message("Bonjour"), Some(&room));
+    let call = kit.process_inbound_in(&room, message("Bonjour"));
     tokio::select! {
         result = call => panic!("the call ended before its delivery: {result:?}"),
         () = slow.gate.reached.notified() => {}
@@ -185,10 +185,7 @@ async fn shutdown_ends_a_call_running_and_its_caller_receives_shut_down() {
     .unwrap();
     let call = {
         let kit = kit.clone();
-        tokio::spawn(async move {
-            kit.process_inbound(message("Bonjour"), Some(&room_id()))
-                .await
-        })
+        tokio::spawn(async move { kit.process_inbound_in(&room_id(), message("Bonjour")).await })
     };
     tokio::time::timeout(BOUND, gate.reached.notified())
         .await
@@ -213,7 +210,7 @@ async fn shutdown_drops_an_observer_hook_still_running() {
         }
     })
     .unwrap();
-    kit.process_inbound(message("Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), message("Bonjour"))
         .await
         .unwrap();
     tokio::time::timeout(BOUND, gate.reached.notified())
@@ -232,10 +229,10 @@ async fn a_call_made_after_the_shutdown_is_refused() {
     kit.shutdown().await;
     let room = room_id();
     let refused = (
-        kit.process_inbound(message("Bonjour"), Some(&room))
+        kit.process_inbound_in(&room, message("Bonjour"))
             .await
             .err(),
-        kit.process_inbound(message("Bonjour"), None).await.err(),
+        kit.process_inbound(message("Bonjour")).await.err(),
         kit.create_room(&RoomId::new("room_2").unwrap()).await.err(),
         kit.pause_room(&room).await.err(),
         kit.check_timers().await.err(),

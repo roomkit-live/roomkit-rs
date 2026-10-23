@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     kit.attach(&room, agent.id()).await?;
 
     let message = InboundMessage::new(sms.id().clone(), "+15551234567", EventContent::text("Bonjour"));
-    kit.process_inbound(message, Some(&room)).await?;
+    kit.process_inbound_in(&room, message).await?;
     assert_eq!(sms.texts(), ["You said: Bonjour"]);
     Ok(())
 }

@@ -72,7 +72,7 @@ impl Helpdesk {
             "+15551234567",
             EventContent::text(text),
         );
-        Ok(self.kit.process_inbound(message, Some(room)).await?)
+        Ok(self.kit.process_inbound_in(room, message).await?)
     }
 }
 

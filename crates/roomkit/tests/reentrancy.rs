@@ -205,7 +205,7 @@ async fn room() -> (RoomKit, RecordingTransport) {
 
 /// Runs `message` into `room_1`, failing the test past [`BOUND`].
 async fn send(kit: &RoomKit, text: &str) -> Result<roomkit::InboundResult, KitError> {
-    tokio::time::timeout(BOUND, kit.process_inbound(message(text), Some(&room_id())))
+    tokio::time::timeout(BOUND, kit.process_inbound_in(&room_id(), message(text)))
         .await
         .unwrap_or_else(|_| panic!("the call waited for itself"))
 }
@@ -552,7 +552,7 @@ async fn process_inbound_from_a_channel_into_its_own_room_returns_at_its_commit(
             Box::pin(async move {
                 if text_of(&event.content) == "hello" {
                     let follow_up = message("follow-up");
-                    let result = kit.process_inbound(follow_up, Some(&room_id())).await?;
+                    let result = kit.process_inbound_in(&room_id(), follow_up).await?;
                     *seen.lock().unwrap() = Some((
                         result.event.map(|event| event.index),
                         result.delivery_results.len(),
@@ -592,7 +592,7 @@ async fn a_delivery_that_calls_into_its_room_on_every_delivery_stops_at_the_reen
             let (kit, refused) = (bot_kit.clone(), Arc::clone(&bot_refused));
             Box::pin(async move {
                 let result = kit
-                    .process_inbound(message("follow-up"), Some(&room_id()))
+                    .process_inbound_in(&room_id(), message("follow-up"))
                     .await?;
                 if result.event.is_none() {
                     refused.lock().unwrap().push(result.reason);
@@ -742,7 +742,7 @@ async fn an_awaited_creation_hook_injects_into_the_room_being_created() {
         }
     })
     .unwrap();
-    let created = kit.process_inbound(message("hello"), Some(&new_room));
+    let created = kit.process_inbound_in(&new_room, message("hello"));
     let result = tokio::time::timeout(BOUND, created)
         .await
         .unwrap_or_else(|_| panic!("the creation hook waited for its own call"))
@@ -831,7 +831,7 @@ async fn an_entry_made_by_a_nested_entry_s_parse_is_nested_in_turn() {
             if event.source.channel_id == channel("sms") {
                 let relayed =
                     InboundMessage::new(channel("bot"), "relay", EventContent::text("Relayed"));
-                kit.process_inbound(relayed, Some(&room_id())).await?;
+                kit.process_inbound_in(&room_id(), relayed).await?;
             }
             Ok(HookResult::allow())
         }
@@ -901,7 +901,7 @@ async fn a_parse_that_calls_into_its_room_for_every_message_is_bounded() {
         let (kit, refused) = (relay_kit.clone(), Arc::clone(&relay_refused));
         Box::pin(async move {
             let again = InboundMessage::new(channel("relay"), "relay", EventContent::text("again"));
-            let result = kit.process_inbound(again, Some(&room_id())).await?;
+            let result = kit.process_inbound_in(&room_id(), again).await?;
             if result.event.is_none() {
                 refused.lock().unwrap().push(result.reason);
             }
@@ -911,7 +911,7 @@ async fn a_parse_that_calls_into_its_room_for_every_message_is_bounded() {
     kit.register_channel(relay).unwrap();
     kit.attach(&room_id(), &channel("relay")).await.unwrap();
     let first = InboundMessage::new(channel("relay"), "relay", EventContent::text("again"));
-    tokio::time::timeout(BOUND, kit.process_inbound(first, Some(&room_id())))
+    tokio::time::timeout(BOUND, kit.process_inbound_in(&room_id(), first))
         .await
         .unwrap_or_else(|_| panic!("the parse recursed past the budget"))
         .unwrap();
@@ -971,7 +971,7 @@ async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
     })
     .unwrap();
     let room = room_id();
-    let call = kit.process_inbound(message("first"), Some(&room));
+    let call = kit.process_inbound_in(&room, message("first"));
     tokio::select! {
         result = call => panic!("the call ended before its hook's event: {result:?}"),
         () = delivering.notified() => {}
@@ -1100,7 +1100,7 @@ async fn a_call_that_could_only_wait_for_itself_fails() {
         let (kit, refused) = (hook_kit.clone(), Arc::clone(&hook_refused));
         async move {
             if text_of(&event.content) == "hello" {
-                let routed = kit.process_inbound(message("forwarded"), None).await;
+                let routed = kit.process_inbound(message("forwarded")).await;
                 *refused.lock().unwrap() = Some(routed.err());
             }
             Ok(HookResult::allow())
@@ -1142,7 +1142,7 @@ async fn a_parse_that_routes_a_message_back_into_its_room_fails() {
         let (kit, failed) = (relay_kit.clone(), Arc::clone(&relay_failed));
         Box::pin(async move {
             let again = InboundMessage::new(channel("relay"), "relay", EventContent::text("again"));
-            let routed = kit.process_inbound(again, None).await;
+            let routed = kit.process_inbound(again).await;
             failed.lock().unwrap().push(routed.err());
             Ok(ChannelOutput::default())
         })
@@ -1150,7 +1150,7 @@ async fn a_parse_that_routes_a_message_back_into_its_room_fails() {
     kit.register_channel(relay).unwrap();
     kit.attach(&room_id(), &channel("relay")).await.unwrap();
     let first = InboundMessage::new(channel("relay"), "relay", EventContent::text("again"));
-    let result = tokio::time::timeout(BOUND, kit.process_inbound(first, Some(&room_id())))
+    let result = tokio::time::timeout(BOUND, kit.process_inbound_in(&room_id(), first))
         .await
         .unwrap_or_else(|_| panic!("the parse recursed"))
         .unwrap();
@@ -1193,7 +1193,7 @@ async fn an_off_lock_hook_routing_back_a_message_no_check_fires_for_fails() {
             if text_of(&event.content) == "hello" {
                 let forwarded =
                     InboundMessage::new(channel("ws"), "advisor", EventContent::text("forwarded"));
-                let routed = kit.process_inbound(forwarded, None).await;
+                let routed = kit.process_inbound(forwarded).await;
                 *refused.lock().unwrap() = Some(routed.err());
             }
             Ok(HookResult::allow())
@@ -1241,7 +1241,7 @@ async fn a_detached_run_s_turn_is_not_taken_by_a_finished_parse() {
                 if text_of(&event.content) == "hello" {
                     let ping =
                         InboundMessage::new(channel("relay"), "relay", EventContent::text("ping"));
-                    kit.process_inbound(ping, Some(&room_id())).await?;
+                    kit.process_inbound_in(&room_id(), ping).await?;
                 }
                 Ok(ChannelOutput::default())
             })
@@ -1281,7 +1281,7 @@ async fn a_detached_run_s_turn_is_not_taken_by_a_finished_parse() {
     for id in ["sms", "ws", "bot", "ai"] {
         kit.attach(&room_2, &channel(id)).await.unwrap();
     }
-    tokio::time::timeout(BOUND, kit.process_inbound(message("hello"), Some(&room_2)))
+    tokio::time::timeout(BOUND, kit.process_inbound_in(&room_2, message("hello")))
         .await
         .unwrap_or_else(|_| panic!("the call waited for itself"))
         .unwrap();
@@ -1554,7 +1554,7 @@ async fn a_message_a_turn_routes_into_its_own_room_returns_at_its_decision() {
     let seen = Arc::new(Mutex::new(None));
     let agent = calling_agent(&kit, &seen, |kit| {
         Box::pin(async move {
-            kit.process_inbound(message("forwarded"), None)
+            kit.process_inbound(message("forwarded"))
                 .await
                 .map(|result| result.event.map(|event| event.index))
         })

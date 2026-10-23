@@ -69,7 +69,7 @@ async fn next<T>(receiver: &mut mpsc::UnboundedReceiver<T>) -> T {
 #[tokio::test]
 async fn an_agent_s_answer_reaches_the_customer() {
     let (kit, sms) = sms_and_agent().await;
-    kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
         .await
         .unwrap();
     assert_eq!(sms.texts(), ["You said: Bonjour"]);
@@ -89,7 +89,7 @@ async fn the_timeline_reads_without_the_refused_events_by_default() {
         }
     })
     .unwrap();
-    kit.process_inbound(message(&sms, "Hello?"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), message(&sms, "Hello?"))
         .await
         .unwrap();
     let received = kit.store().list_events(&room_id(), false).await.unwrap();
@@ -101,8 +101,8 @@ async fn two_messages_sent_together_take_distinct_indexes() {
     let (kit, sms) = sms_and_agent().await;
     let room = room_id();
     let (first, second) = tokio::join!(
-        kit.process_inbound(message(&sms, "one"), Some(&room)),
-        kit.process_inbound(message(&sms, "two"), Some(&room)),
+        kit.process_inbound_in(&room, message(&sms, "one")),
+        kit.process_inbound_in(&room, message(&sms, "two")),
     );
     first.unwrap();
     second.unwrap();
@@ -125,7 +125,7 @@ async fn an_after_broadcast_observer_runs_after_the_delivery() {
         }
     })
     .unwrap();
-    kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
         .await
         .unwrap();
     assert_eq!(next(&mut observed).await, "Bonjour");
@@ -149,7 +149,7 @@ async fn a_hook_past_its_timeout_lets_the_message_through_and_is_reported() {
     })
     .unwrap();
     let result = kit
-        .process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        .process_inbound_in(&room_id(), message(&sms, "Bonjour"))
         .await
         .unwrap();
     let mut timed_out = false;
@@ -181,7 +181,7 @@ async fn a_hook_s_closure_reads_its_event_without_annotations() {
     })
     .unwrap();
     let result = kit
-        .process_inbound(message(&sms, "Cheap spam here"), Some(&room_id()))
+        .process_inbound_in(&room_id(), message(&sms, "Cheap spam here"))
         .await
         .unwrap();
     assert_eq!(result.reason.as_deref(), Some("spam"));
@@ -219,7 +219,7 @@ async fn a_hook_handler_of_its_own_type_is_registered_with_hook_handler() {
     );
     kit.hook_handler(spec, Blocklist("scam")).unwrap();
     let result = kit
-        .process_inbound(message(&sms, "Not a scam"), Some(&room_id()))
+        .process_inbound_in(&room_id(), message(&sms, "Not a scam"))
         .await
         .unwrap();
     assert_eq!(result.reason.as_deref(), Some("blocklisted \"scam\""));
@@ -230,7 +230,7 @@ async fn a_closed_room_refuses_the_next_message() {
     let (kit, sms) = sms_and_agent().await;
     kit.close_room(&room_id()).await.unwrap();
     let result = kit
-        .process_inbound(message(&sms, "Hello?"), Some(&room_id()))
+        .process_inbound_in(&room_id(), message(&sms, "Hello?"))
         .await
         .unwrap();
     assert_eq!(result.reason.as_deref(), Some("room_closed"));
@@ -241,7 +241,7 @@ async fn a_message_on_an_unregistered_channel_is_refused() {
     let (kit, _sms) = sms_and_agent().await;
     let stranger = RecordingTransport::new(channel("telegram"), ChannelType::Telegram);
     let refused = kit
-        .process_inbound(message(&stranger, "Hi"), Some(&room_id()))
+        .process_inbound_in(&room_id(), message(&stranger, "Hi"))
         .await;
     assert!(matches!(refused, Err(KitError::Inbound(_))));
 }
@@ -318,7 +318,7 @@ async fn an_inbound_event_is_committed_under_an_id_of_the_pipeline() {
             "+15551234567",
             EventContent::text(text),
         );
-        let result = kit.process_inbound(sent, Some(&room_id())).await.unwrap();
+        let result = kit.process_inbound_in(&room_id(), sent).await.unwrap();
         ids.push(result.event.unwrap().id.to_string());
     }
     assert!(
@@ -341,7 +341,7 @@ async fn a_channel_that_panics_fails_its_delivery_and_the_kit_goes_on() {
     .unwrap();
     kit.attach(&room_id(), &channel("broken")).await.unwrap();
     let result = kit
-        .process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        .process_inbound_in(&room_id(), message(&sms, "Bonjour"))
         .await
         .unwrap();
     let broken = result
@@ -366,7 +366,7 @@ async fn a_muted_agent_is_asked_and_its_answer_stored_blocked() {
     kit.attach_with(&room_id(), agent.id(), |binding| binding.muted = true)
         .await
         .unwrap();
-    kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
         .await
         .unwrap();
     let answer = timeline(&kit).await.pop().unwrap();
@@ -433,7 +433,7 @@ async fn a_kit_is_shared_by_its_clones() {
     let task = tokio::spawn(async move {
         let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
         clone
-            .process_inbound(message(&sms, "from a task"), Some(&room_id()))
+            .process_inbound_in(&room_id(), message(&sms, "from a task"))
             .await
             .unwrap();
     });

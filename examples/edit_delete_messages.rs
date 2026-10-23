@@ -109,7 +109,7 @@ impl Conversation {
         &self,
         message: InboundMessage,
     ) -> Result<roomkit::InboundResult, Box<dyn Error>> {
-        Ok(self.kit.process_inbound(message, Some(&self.room)).await?)
+        Ok(self.kit.process_inbound_in(&self.room, message).await?)
     }
 
     /// The customer writes [`MESSAGES`].

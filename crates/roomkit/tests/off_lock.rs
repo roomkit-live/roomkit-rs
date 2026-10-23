@@ -83,7 +83,7 @@ async fn message_held_in_its_hook(
     let call = {
         let kit = kit.clone();
         tokio::spawn(async move {
-            kit.process_inbound(message("Bonjour"), Some(&room_id()))
+            kit.process_inbound_in(&room_id(), message("Bonjour"))
                 .await
                 .unwrap()
         })
@@ -159,7 +159,7 @@ async fn texts(kit: &RoomKit) -> Vec<String> {
 fn sent(kit: &RoomKit, text: &'static str) -> tokio::task::JoinHandle<InboundResult> {
     let kit = kit.clone();
     tokio::spawn(async move {
-        kit.process_inbound(message(text), Some(&room_id()))
+        kit.process_inbound_in(&room_id(), message(text))
             .await
             .unwrap()
     })
@@ -257,7 +257,7 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
     let customer = sent(&kit, "Bonjour");
     tokio::time::timeout(BOUND, held.notified()).await.unwrap();
     let advisor = InboundMessage::new(channel("ws"), "advisor", EventContent::text("Hello"));
-    let during = tokio::time::timeout(BOUND, kit.process_inbound(advisor, Some(&room_id())))
+    let during = tokio::time::timeout(BOUND, kit.process_inbound_in(&room_id(), advisor))
         .await
         .unwrap_or_else(|_| panic!("the advisor's message waited for the customer's check"))
         .unwrap();
@@ -294,12 +294,12 @@ async fn a_call_cancelled_during_its_off_lock_check_releases_its_ticket() {
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
-        kit.process_inbound(message("Bonjour"), Some(&room_id())),
+        kit.process_inbound_in(&room_id(), message("Bonjour")),
     )
     .await;
     let next = tokio::time::timeout(
         BOUND,
-        kit.process_inbound(message("Still there?"), Some(&room_id())),
+        kit.process_inbound_in(&room_id(), message("Still there?")),
     )
     .await
     .unwrap_or_else(|_| panic!("the next call waited on a ticket left held"))
@@ -333,13 +333,13 @@ async fn a_call_cancelled_in_a_locked_hook_after_its_check_leaves_everything_fre
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
-        kit.process_inbound(message("Bonjour"), Some(&room_id())),
+        kit.process_inbound_in(&room_id(), message("Bonjour")),
     )
     .await;
     let paused = tokio::time::timeout(BOUND, kit.pause_room(&room_id())).await;
     let next = tokio::time::timeout(
         BOUND,
-        kit.process_inbound(message("Still there?"), Some(&room_id())),
+        kit.process_inbound_in(&room_id(), message("Still there?")),
     )
     .await
     .unwrap_or_else(|_| panic!("the next call waited on what the dropped one held"))
@@ -443,7 +443,7 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
         "+15551234567",
         EventContent::text("Mon NAS est 123-456-789"),
     );
-    let result = kit.process_inbound(sin, Some(&room_id())).await.unwrap();
+    let result = kit.process_inbound_in(&room_id(), sin).await.unwrap();
     B2 {
         timeline: kit.store().list_events(&room_id(), true).await.unwrap(),
         customer: customer.texts(),

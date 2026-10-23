@@ -56,7 +56,7 @@ async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
 async fn an_echo_agent_answers_an_instruction_the_room_never_stores() {
     let (kit, _app, sms) = room().await;
     let result = kit
-        .process_inbound(instruction("Introduce yourself."), Some(&room_id()))
+        .process_inbound_in(&room_id(), instruction("Introduce yourself."))
         .await
         .unwrap();
     let instruction = result.event.unwrap();
@@ -91,7 +91,7 @@ async fn an_echo_agent_answers_an_instruction_the_room_never_stores() {
 #[tokio::test]
 async fn no_transport_receives_the_instruction() {
     let (kit, app, sms) = room().await;
-    kit.process_inbound(instruction("Introduce yourself."), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), instruction("Introduce yourself."))
         .await
         .unwrap();
     assert_eq!(
@@ -109,10 +109,7 @@ async fn an_unaddressed_instruction_is_refused_and_reaches_nobody() {
     let (kit, _app, sms) = room().await;
     let mut message = instruction("Introduce yourself.");
     message.addressed_to = None;
-    let result = kit
-        .process_inbound(message, Some(&room_id()))
-        .await
-        .unwrap();
+    let result = kit.process_inbound_in(&room_id(), message).await.unwrap();
     assert_eq!(
         (
             result.blocked,

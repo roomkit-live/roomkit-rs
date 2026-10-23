@@ -120,7 +120,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     let says = async |text: &str| -> Result<InboundResult, Box<dyn Error>> {
         let message = InboundMessage::new(user.id().clone(), "user", EventContent::text(text));
-        let result = kit.process_inbound(message, Some(&room)).await?;
+        let result = kit.process_inbound_in(&room, message).await?;
         println!("The user writes {text:?}: blocked {}.", result.blocked);
         Ok(result)
     };

@@ -71,7 +71,7 @@ async fn checked_room() -> RoomKit {
 }
 
 async fn send(kit: &RoomKit, text: &str) -> InboundResult {
-    tokio::time::timeout(BOUND, kit.process_inbound(message(text), Some(&room_id())))
+    tokio::time::timeout(BOUND, kit.process_inbound_in(&room_id(), message(text)))
         .await
         .unwrap()
         .unwrap()
@@ -205,10 +205,7 @@ async fn a_call_releases_its_ticket_once_its_event_is_committed() {
         .unwrap();
     let call = {
         let kit = kit.clone();
-        tokio::spawn(async move {
-            kit.process_inbound(message("Bonjour"), Some(&room_id()))
-                .await
-        })
+        tokio::spawn(async move { kit.process_inbound_in(&room_id(), message("Bonjour")).await })
     };
     tokio::time::timeout(BOUND, delivering.notified())
         .await
@@ -276,7 +273,7 @@ fn a_call_whose_runtime_shuts_down_under_it_is_cancelled() {
     })
     .unwrap();
     let room = room_id();
-    let mut call = std::pin::pin!(kit.process_inbound(message("Bonjour"), Some(&room)));
+    let mut call = std::pin::pin!(kit.process_inbound_in(&room, message("Bonjour")));
     let started = first.block_on(async { tokio::time::timeout(TIMEOUT, call.as_mut()).await });
     drop(first);
     let cancelled = runtime().block_on(call);
@@ -310,10 +307,7 @@ async fn a_call_keeps_the_environment_it_started_with() {
     .unwrap();
     let call = {
         let kit = kit.clone();
-        tokio::spawn(async move {
-            kit.process_inbound(message("Bonjour"), Some(&room_id()))
-                .await
-        })
+        tokio::spawn(async move { kit.process_inbound_in(&room_id(), message("Bonjour")).await })
     };
     tokio::time::timeout(BOUND, reached.notified())
         .await

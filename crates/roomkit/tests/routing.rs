@@ -120,7 +120,7 @@ fn message(from: &str, text: &str) -> InboundMessage {
 
 /// Routes `message` and returns the room it landed in.
 async fn routed(kit: &RoomKit, message: InboundMessage) -> RoomId {
-    let result = kit.process_inbound(message, None).await.unwrap();
+    let result = kit.process_inbound(message).await.unwrap();
     result.event.unwrap().room_id
 }
 
@@ -310,7 +310,7 @@ async fn a_message_is_routed_among_its_caller_s_organization_only() {
     bank.attach(&banks, &channel("sms")).await.unwrap();
     let result = kit
         .for_organization("clinic")
-        .process_inbound(message(ALICE, "Bonjour"), None)
+        .process_inbound(message(ALICE, "Bonjour"))
         .await
         .unwrap();
     let landed = result.event.unwrap().room_id;
@@ -429,7 +429,7 @@ async fn a_custom_router_s_closed_room_gives_the_message_a_new_room() {
     let router = Arc::new(ByTicket::default());
     kit.set_router(SharedRouter(Arc::clone(&router)));
     let result = kit
-        .process_inbound(on_ticket(ALICE, "ticket_42"), None)
+        .process_inbound(on_ticket(ALICE, "ticket_42"))
         .await
         .unwrap();
     let landed = result.event.map(|event| event.room_id);
@@ -474,7 +474,7 @@ impl<S: ConversationStore> InboundRoomRouter<S> for Unreachable {
 async fn a_failing_router_fails_the_message_with_nothing_written() {
     let (kit, sms) = kit_with_agent();
     kit.set_router(Unreachable);
-    let failed = kit.process_inbound(message(ALICE, "Bonjour"), None).await;
+    let failed = kit.process_inbound(message(ALICE, "Bonjour")).await;
     let rooms = kit
         .store()
         .list_rooms(&RoomFilter::default())
@@ -669,7 +669,7 @@ async fn a_room_that_heard_another_sender_before_the_record_routes_the_message_o
         tokio::spawn(async move { routed(&kit, message(ALICE, "Bonjour")).await })
     };
     router.routed.notified().await;
-    kit.process_inbound(message(BOB, "Hello"), Some(&opened))
+    kit.process_inbound_in(&opened, message(BOB, "Hello"))
         .await
         .unwrap();
     router.go.notify_one();

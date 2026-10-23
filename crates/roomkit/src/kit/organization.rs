@@ -36,7 +36,7 @@ use crate::store::{ConversationStore, InMemoryStore};
 /// bank.create_room(&room).await?;
 /// bank.attach(&room, &sms).await?;
 /// let message = InboundMessage::new(sms, "+15551234567", EventContent::text("Bonjour"));
-/// bank.process_inbound(message, Some(&room)).await?;
+/// bank.process_inbound_in(&room, message).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -291,23 +291,37 @@ impl<S: ConversationStore> OrganizationKit<S> {
             .await
     }
 
-    /// Runs `message` as [`RoomKit::process_inbound`] does, for the
-    /// organization: a room of another organization, or of none, fails the
-    /// message with nothing written, a message is routed among the
-    /// organization's rooms and identities only, and a room the call
-    /// creates belongs to the organization.
+    /// Runs `message` into the room the kit's router finds for it among the
+    /// organization's rooms and identities, as [`RoomKit::process_inbound`]
+    /// does (RFC §10.4, §17.2); a room the call creates belongs to the
+    /// organization.
     ///
     /// # Errors
     ///
-    /// As [`RoomKit::process_inbound`], with
-    /// [`InboundError::OtherOrganization`](crate::InboundError::OtherOrganization)
-    /// for a room of another organization.
+    /// As [`RoomKit::process_inbound`].
     pub async fn process_inbound(
         &self,
         message: InboundMessage,
-        room_id: Option<&RoomId>,
     ) -> Result<InboundResult, KitError> {
-        self.scope().process_inbound(message, room_id).await
+        self.scope().process_inbound(message).await
+    }
+
+    /// Runs `message` into the room `room_id`, as
+    /// [`RoomKit::process_inbound_in`] does, for the organization: a room of
+    /// another organization, or of none, fails the message with nothing
+    /// written, and a room the call creates belongs to the organization.
+    ///
+    /// # Errors
+    ///
+    /// As [`RoomKit::process_inbound_in`], with
+    /// [`InboundError::OtherOrganization`](crate::InboundError::OtherOrganization)
+    /// for a room of another organization.
+    pub async fn process_inbound_in(
+        &self,
+        room_id: &RoomId,
+        message: InboundMessage,
+    ) -> Result<InboundResult, KitError> {
+        self.scope().process_inbound_in(room_id, message).await
     }
 
     /// Injects `event` into a room of the organization, as

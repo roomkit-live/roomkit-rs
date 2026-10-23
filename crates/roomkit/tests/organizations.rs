@@ -168,10 +168,7 @@ async fn an_event_is_never_brought_into_another_organization_s_room() {
     let clinic = kit.for_organization("clinic");
     let message = InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("Hi"));
     let refused = (
-        clinic
-            .process_inbound(message, Some(&room_id()))
-            .await
-            .err(),
+        clinic.process_inbound_in(&room_id(), message).await.err(),
         clinic
             .send_event(
                 &room_id(),
@@ -202,7 +199,7 @@ async fn a_stored_event_of_another_organization_s_room_is_never_changed() {
     let message = InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("Hi"));
     let committed = kit
         .for_organization("bank")
-        .process_inbound(message, Some(&room_id()))
+        .process_inbound_in(&room_id(), message)
         .await
         .unwrap()
         .event

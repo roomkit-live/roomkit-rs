@@ -35,7 +35,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "+15551234567",
         EventContent::text("Bonjour"),
     );
-    let result = kit.process_inbound(message, Some(&room)).await?;
+    let result = kit.process_inbound_in(&room, message).await?;
 
     let timeline = shared::timeline(&kit, &room).await?;
     shared::print_timeline(&timeline);

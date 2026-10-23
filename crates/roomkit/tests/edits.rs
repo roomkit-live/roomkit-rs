@@ -138,9 +138,7 @@ async fn room() -> Fixture {
 
 async fn say(kit: &RoomKit, sender: &str, text: &str) -> InboundResult {
     let message = InboundMessage::new(channel("wa"), sender, EventContent::text(text));
-    kit.process_inbound(message, Some(&room_id()))
-        .await
-        .unwrap()
+    kit.process_inbound_in(&room_id(), message).await.unwrap()
 }
 
 fn edit_from(sender: &str, text: &str) -> InboundMessage {
@@ -172,9 +170,7 @@ fn delete() -> InboundMessage {
 }
 
 async fn send(kit: &RoomKit, message: InboundMessage) -> InboundResult {
-    kit.process_inbound(message, Some(&room_id()))
-        .await
-        .unwrap()
+    kit.process_inbound_in(&room_id(), message).await.unwrap()
 }
 
 /// The stored `evt_1`, if it is still stored.
@@ -601,7 +597,7 @@ mod changes_at_once {
             let (edited, removed) = at_once(
                 round,
                 async move {
-                    kit.process_inbound(edit_from(CUSTOMER, "I need 50000$"), Some(&room_id()))
+                    kit.process_inbound_in(&room_id(), edit_from(CUSTOMER, "I need 50000$"))
                         .await
                 },
                 async move {

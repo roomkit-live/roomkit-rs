@@ -71,7 +71,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let run = async |message: InboundMessage| -> Result<InboundResult, Box<dyn Error>> {
         let (channel, text) = (&message.channel_id, text_of(&message.content));
         println!("{channel} sends {text:?} ({:?}).", message.event_type);
-        Ok(kit.process_inbound(message, Some(&room)).await?)
+        Ok(kit.process_inbound_in(&room, message).await?)
     };
 
     let introduced = run(instruction(app.id(), advisor.id(), INTRODUCE, false)).await?;

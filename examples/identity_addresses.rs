@@ -148,7 +148,7 @@ impl Bank {
         let result = self
             .kit
             .for_organization(organization)
-            .process_inbound(message, None)
+            .process_inbound(message)
             .await?;
         let room = result.event.ok_or("the message was refused")?.room_id;
         println!("{number} texts {organization}: routed to {room}.");

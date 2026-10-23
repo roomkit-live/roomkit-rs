@@ -61,7 +61,7 @@ async fn room_with_agent() -> RoomKit {
 /// free.
 async fn next_call_goes_through(kit: &RoomKit) -> roomkit::InboundResult {
     let room = room_id();
-    let next = kit.process_inbound(message("sms", "+15551234567", "Still there?"), Some(&room));
+    let next = kit.process_inbound_in(&room, message("sms", "+15551234567", "Still there?"));
     tokio::time::timeout(BOUND, next)
         .await
         .unwrap_or_else(|_| panic!("the next call waited on a lane or a lock left held"))
@@ -115,7 +115,7 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
         let (kit, start) = (kit.clone(), Arc::clone(&start));
         tokio::spawn(async move {
             start.wait().await;
-            kit.process_inbound(message("sms", sender, "Hi"), Some(&room_id()))
+            kit.process_inbound_in(&room_id(), message("sms", sender, "Hi"))
                 .await
         })
     });
@@ -195,7 +195,7 @@ async fn after_a_panic_in(in_on_event: bool) -> roomkit::InboundResult {
     let kit = room_with_agent().await;
     kit.register_channel(Panicking::new(in_on_event)).unwrap();
     kit.attach(&room_id(), &channel("broken")).await.unwrap();
-    kit.process_inbound(message("sms", "+15551234567", "Bonjour"), Some(&room_id()))
+    kit.process_inbound_in(&room_id(), message("sms", "+15551234567", "Bonjour"))
         .await
         .unwrap();
     next_call_goes_through(&kit).await
@@ -313,7 +313,7 @@ async fn a_call_dropped_during_its_delivery_still_delivers_its_event() {
     .unwrap();
     let mut events = kit.subscribe();
     let room = room_id();
-    let call = kit.process_inbound(message("sms", "+15551234567", "Bonjour"), Some(&room));
+    let call = kit.process_inbound_in(&room, message("sms", "+15551234567", "Bonjour"));
     tokio::select! {
         result = call => panic!("the call ended before its delivery: {result:?}"),
         () = slow.delivering.notified() => {}
@@ -349,7 +349,7 @@ async fn a_call_dropped_under_the_room_lock_leaves_the_lane_and_the_lock_free() 
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
-        kit.process_inbound(message("sms", "+15551234567", "Bonjour"), Some(&room_id())),
+        kit.process_inbound_in(&room_id(), message("sms", "+15551234567", "Bonjour")),
     )
     .await;
     let paused = tokio::time::timeout(BOUND, kit.pause_room(&room_id())).await;

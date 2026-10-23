@@ -121,7 +121,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         println!("{} writes {text:?}.", on.id());
         let message =
             InboundMessage::new(on.id().clone(), on.id().as_str(), EventContent::text(text));
-        kit.process_inbound(message, Some(&room)).await?;
+        kit.process_inbound_in(&room, message).await?;
         Ok(())
     };
     says(&alice, "Hey everyone, I just joined!").await?;

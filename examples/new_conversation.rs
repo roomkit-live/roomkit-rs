@@ -32,7 +32,7 @@ async fn customer_says(
 ) -> Result<RoomId, Box<dyn Error>> {
     println!("{from} writes {text:?}.");
     let message = InboundMessage::new(sms.id().clone(), from, EventContent::text(text));
-    let result = kit.process_inbound(message, None).await?;
+    let result = kit.process_inbound(message).await?;
     let room = result
         .event
         .map(|event| event.room_id)

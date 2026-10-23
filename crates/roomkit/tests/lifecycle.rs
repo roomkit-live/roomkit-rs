@@ -168,7 +168,7 @@ mod timers {
         let clock = Clock::new();
         let (kit, sms) = timed_room(&clock).await;
         clock.advance(50);
-        kit.process_inbound(message(&sms, "Still here"), Some(&room_id()))
+        kit.process_inbound_in(&room_id(), message(&sms, "Still here"))
             .await
             .unwrap();
         clock.advance(50);
@@ -181,7 +181,7 @@ mod timers {
         let (kit, sms) = timed_room(&clock).await;
         clock.advance(200);
         let result = kit
-            .process_inbound(message(&sms, "Hello?"), Some(&room_id()))
+            .process_inbound_in(&room_id(), message(&sms, "Hello?"))
             .await
             .unwrap();
         let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
@@ -277,12 +277,10 @@ mod a_paused_conversation {
     async fn its_sender_writing_again_lands_in_it_and_resumes_it() {
         let clock = Clock::new();
         let (kit, sms, ws) = with_websocket(&clock).await;
-        kit.process_inbound(message(&sms, "Bonjour"), None)
-            .await
-            .unwrap();
+        kit.process_inbound(message(&sms, "Bonjour")).await.unwrap();
         let (paused, reported) = paused_by_its_timer(&kit, &clock).await;
         let result = kit
-            .process_inbound(message(&sms, "Still there?"), None)
+            .process_inbound(message(&sms, "Still there?"))
             .await
             .unwrap();
         let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
@@ -315,10 +313,7 @@ mod a_paused_conversation {
         let clock = Clock::new();
         let (kit, sms, ws) = with_websocket(&clock).await;
         paused_by_its_timer(&kit, &clock).await;
-        let result = kit
-            .process_inbound(message(&sms, "Bonjour"), None)
-            .await
-            .unwrap();
+        let result = kit.process_inbound(message(&sms, "Bonjour")).await.unwrap();
         let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
         assert_eq!(
             (
@@ -340,16 +335,14 @@ mod a_paused_conversation {
         kit.attach_with(&room_id(), sms.id(), |binding| binding.group = true)
             .await
             .unwrap();
-        kit.process_inbound(message(&sms, "Bonjour"), None)
-            .await
-            .unwrap();
+        kit.process_inbound(message(&sms, "Bonjour")).await.unwrap();
         let (paused, _) = paused_by_its_timer(&kit, &clock).await;
         let other = InboundMessage::new(
             sms.id().clone(),
             "+15550000002",
             EventContent::text("Me too"),
         );
-        let result = kit.process_inbound(other, None).await.unwrap();
+        let result = kit.process_inbound(other).await.unwrap();
         let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
         assert_eq!(
             (
@@ -403,7 +396,7 @@ mod unregistering {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         kit.unregister_channel(sms.id()).unwrap();
         let refused = kit
-            .process_inbound(message(&sms, "Hello?"), Some(&room_id()))
+            .process_inbound_in(&room_id(), message(&sms, "Hello?"))
             .await;
         assert_eq!(
             refused,
@@ -420,7 +413,7 @@ mod unregistering {
         let (kit, sms, ws) = room_with_sms_and_ws().await;
         kit.unregister_channel(ws.id()).unwrap();
         let mut events = kit.subscribe();
-        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
             .await
             .unwrap();
         let mut failed = 0;
@@ -443,7 +436,7 @@ mod unregistering {
         kit.attach(&room_id(), &channel("ai")).await.unwrap();
         kit.unregister_channel(&channel("ai")).unwrap();
         let mut events = kit.subscribe();
-        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
             .await
             .unwrap();
         let failed = next_matching(&mut events, |event| {
@@ -482,7 +475,7 @@ mod unregistering {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         unregistering_during_the_call(&kit, "ws");
         let mut events = kit.subscribe();
-        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
             .await
             .unwrap();
         let mut failed = 0;
@@ -504,7 +497,7 @@ mod unregistering {
         kit.attach(&room_id(), &channel("ai")).await.unwrap();
         unregistering_during_the_call(&kit, "ai");
         let mut events = kit.subscribe();
-        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
             .await
             .unwrap();
         let failed = next_matching(&mut events, |event| {
@@ -538,7 +531,7 @@ mod unregistering {
         kit.unregister_channel(sms.id()).unwrap();
         let replacement = RecordingTransport::new(channel("sms"), ChannelType::Sms);
         kit.register_channel(replacement.clone()).unwrap();
-        kit.process_inbound(message(&replacement, "Back"), Some(&room_id()))
+        kit.process_inbound_in(&room_id(), message(&replacement, "Back"))
             .await
             .unwrap();
         assert_eq!(timeline_texts(&kit).await, ["Back"]);
@@ -642,7 +635,7 @@ mod metadata_updates {
         kit.create_room(&room_id()).await.unwrap();
         kit.attach(&room_id(), sms.id()).await.unwrap();
         kit.attach(&room_id(), &channel("crm")).await.unwrap();
-        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
             .await
             .unwrap();
         kit.store().get_room(&room_id()).await.unwrap().unwrap()
@@ -702,7 +695,7 @@ mod bindings {
     async fn a_detached_agent_is_asked_nothing_more() {
         let (kit, sms, agent) = sms_and_agent().await;
         kit.detach(&room_id(), agent.id()).await.unwrap();
-        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
             .await
             .unwrap();
         assert_eq!(sms.texts(), Vec::<String>::new());
@@ -740,7 +733,7 @@ mod bindings {
         let (kit, sms, _agent) = sms_and_agent().await;
         kit.close_room(&room_id()).await.unwrap();
         kit.reopen_room(&room_id()).await.unwrap();
-        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
             .await
             .unwrap();
         assert_eq!(sms.texts(), ["Hello back"]);
