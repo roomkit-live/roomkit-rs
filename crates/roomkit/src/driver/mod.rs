@@ -37,7 +37,7 @@ use std::task::Poll;
 
 use roomkit_core::model::{ErrorRecord, RoomId, Timestamp};
 use roomkit_core::ops::{
-    Effect, EffectId, EntryId, HoldRequest, Next, Operation, Outcome, Request, Settled,
+    Effect, EffectId, EntryId, Environment, HoldRequest, Next, Operation, Outcome, Request, Settled,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{self, AbortHandle, JoinError, JoinSet};
@@ -61,9 +61,10 @@ struct Clocks {
 }
 
 impl Clocks {
-    fn read<S>(inner: &Inner<S>) -> Self {
+    /// The run's clock, `environment`'s, and the runtime's, read together.
+    fn read(environment: &dyn Environment) -> Self {
         Self {
-            kit: inner.environment().now(),
+            kit: environment.now(),
             runtime: Instant::now(),
         }
     }
@@ -111,6 +112,7 @@ async fn drive<S: ConversationStore, O: Operation>(
     caller: Option<&mut Caller>,
 ) -> Result<O::Output, KitError> {
     let (shared, adoptions) = RunShared::new();
+    let environment = inner.environment();
     let driver = Driver {
         calls: JoinSet::new(),
         waits: Vec::new(),
@@ -123,7 +125,8 @@ async fn drive<S: ConversationStore, O: Operation>(
         effect_of_task: HashMap::new(),
         call_of_effect: HashMap::new(),
         callers: HashMap::new(),
-        clocks: Clocks::read(inner),
+        clocks: Clocks::read(&*environment),
+        environment,
         refused: None,
         caller,
     };
@@ -159,6 +162,9 @@ struct Driver<'kit, S> {
     /// The callers of the entries the operation adopted, until settled.
     callers: HashMap<EntryId, oneshot::Sender<Reply>>,
     clocks: Clocks,
+    /// The environment the run started with, which every poll of its
+    /// operation and every call it makes read.
+    environment: Arc<dyn Environment + Send + Sync>,
     /// The room whose lock or ticket's turn the run was refused, its context
     /// holding it.
     refused: Option<RoomId>,
@@ -189,10 +195,7 @@ enum Event<'kit> {
 impl<'kit, S: ConversationStore> Driver<'kit, S> {
     async fn drive<O: Operation>(mut self, mut operation: O) -> Result<O::Output, KitError> {
         loop {
-            let step = {
-                let mut environment = self.inner.environment();
-                operation.poll(&mut **environment)
-            };
+            let step = operation.poll(&*self.environment);
             for notice in step.notices {
                 calls::perform(self.inner, notice);
             }
@@ -288,9 +291,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             Request::Store(request) => self.spawn(id, work, deadline, async move {
                 calls::store(&inner.store, request).await
             }),
-            Request::Channel(request) => self.spawn(id, work, deadline, async move {
-                calls::channel(&inner, request).await
-            }),
+            Request::Channel(request) => {
+                let environment = Arc::clone(&self.environment);
+                self.spawn(id, work, deadline, async move {
+                    calls::channel(&inner, &*environment, request).await
+                });
+            }
             Request::Hook(request) => self.spawn(id, work, deadline, async move {
                 calls::hook(&inner, request).await
             }),

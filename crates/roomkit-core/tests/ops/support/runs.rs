@@ -298,7 +298,7 @@ impl Sim {
                 } => self.offer(operation, entry, origin, call),
             }
         }
-        let step = operation.poll(&mut self.env);
+        let step = operation.poll(&self.env);
         self.journal.extend(step.notices.iter().map(journal_line));
         self.notices.extend(step.notices);
         for settled in step.settled {

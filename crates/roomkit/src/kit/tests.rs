@@ -234,7 +234,7 @@ struct WaitsForNothing;
 impl Operation for WaitsForNothing {
     type Output = ();
 
-    fn poll(&mut self, _environment: &mut dyn Environment) -> Step<()> {
+    fn poll(&mut self, _environment: &dyn Environment) -> Step<()> {
         Step {
             notices: Vec::new(),
             settled: Vec::new(),
@@ -283,5 +283,55 @@ fn a_call_whose_runtime_shuts_down_under_it_is_cancelled() {
     assert_eq!(
         (started.is_err(), cancelled.map(|result| result.event)),
         (true, Err(KitError::Cancelled))
+    );
+}
+
+/// A call keeps the environment it started with: the host's new one, set
+/// while the call waits in a hook, serves the calls made from then on.
+#[tokio::test]
+async fn a_call_keeps_the_environment_it_started_with() {
+    let start = |millis| roomkit_core::model::Timestamp::from_unix_millis(millis).unwrap();
+    let (first, later) = (start(1_000_000), start(2_000_000));
+    let kit = checked_room().await;
+    kit.set_process_timeout(None);
+    kit.set_environment(roomkit_core::ops::SequentialEnvironment::new(first));
+    let (reached, open) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (hook_reached, hook_open) = (Arc::clone(&reached), Arc::clone(&open));
+    kit.before_broadcast("gate", move |event, _| {
+        let (reached, open) = (Arc::clone(&hook_reached), Arc::clone(&hook_open));
+        async move {
+            if roomkit_core::rules::transcoding::text_of(&event.content) == "Bonjour" {
+                reached.notify_one();
+                open.notified().await;
+            }
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    let call = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            kit.process_inbound(message("Bonjour"), Some(&room_id()))
+                .await
+        })
+    };
+    tokio::time::timeout(BOUND, reached.notified())
+        .await
+        .unwrap();
+    kit.set_environment(roomkit_core::ops::SequentialEnvironment::new(later));
+    open.notify_one();
+    tokio::time::timeout(BOUND, call)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let activity = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+    let next = send(&kit, "Still there?").await;
+    assert_eq!(
+        (
+            activity.timers.last_activity_at,
+            next.event.map(|event| event.created_at)
+        ),
+        (Some(first), Some(later))
     );
 }

@@ -111,7 +111,7 @@ use crate::rules::chain_depth::ReentryBudget;
 /// let message = InboundMessage::new(ChannelId::new("sms")?, "+15551234567", EventContent::text("Hi"));
 /// let room = InboundTarget::Room(RoomId::new("room_1")?);
 /// let mut inbound = Inbound::new(config, room, None, message);
-/// let step = inbound.poll(&mut SequentialEnvironment::default());
+/// let step = inbound.poll(&SequentialEnvironment::default());
 /// // No channel `sms` is registered: the operation ends at once.
 /// assert!(matches!(step.next, Next::Ready(Err(_))));
 /// # Ok::<(), roomkit_core::model::ModelError>(())
@@ -231,7 +231,7 @@ impl Inbound {
 impl Operation for Inbound {
     type Output = Result<InboundResult, InboundError>;
 
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
         let Self {
             config,
             io,

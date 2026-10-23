@@ -40,7 +40,7 @@ macro_rules! status_change {
         impl Operation for $name {
             type Output = Result<Room, LifecycleError>;
 
-            fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
+            fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
                 self.change
                     .poll(environment, |transitioned, _| transitioned.context.room)
             }
@@ -126,7 +126,7 @@ impl CheckTimers {
 impl Operation for CheckTimers {
     type Output = Result<TimersChecked, LifecycleError>;
 
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
         self.change
             .poll(environment, |context, transitions| TimersChecked {
                 room: context.room,

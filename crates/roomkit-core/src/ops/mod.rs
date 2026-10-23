@@ -13,7 +13,7 @@
 //! # fn perform(notice: Notice) {}
 //! # fn run<O: Operation>(
 //! #     mut operation: O,
-//! #     environment: &mut dyn Environment,
+//! #     environment: &dyn Environment,
 //! # ) -> Result<O::Output, roomkit_core::ops::ProtocolError> {
 //! let output = loop {
 //!     let step = operation.poll(environment);
@@ -70,7 +70,7 @@ use crate::rules::hook_registry::HookTrigger;
 /// What a sub-machine reads and writes while it advances.
 pub(crate) struct Cx<'op> {
     pub(crate) config: &'op KitConfig,
-    pub(crate) env: &'op mut dyn Environment,
+    pub(crate) env: &'op dyn Environment,
     pub(crate) io: &'op mut io::Io,
 }
 

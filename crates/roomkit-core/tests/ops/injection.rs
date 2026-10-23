@@ -1846,8 +1846,8 @@ mod an_adoption {
             None,
             hello(),
         );
-        let mut environment = SequentialEnvironment::default();
-        let read = first_effect(&mut inbound, &mut environment);
+        let environment = SequentialEnvironment::default();
+        let read = first_effect(&mut inbound, &environment);
         let context = roomkit_core::model::RoomContext {
             room: sim.room.clone(),
             bindings: sim.bindings.clone(),
@@ -1860,11 +1860,11 @@ mod an_adoption {
                 Outcome::Store(StoreOutcome::Context(Box::new(context))),
             )
             .unwrap();
-        let parse = first_effect(&mut inbound, &mut environment);
+        let parse = first_effect(&mut inbound, &environment);
         (inbound, read, parse)
     }
 
-    fn first_effect(inbound: &mut Inbound, environment: &mut SequentialEnvironment) -> EffectId {
+    fn first_effect(inbound: &mut Inbound, environment: &SequentialEnvironment) -> EffectId {
         let Next::Effects(effects) = inbound.poll(environment).next else {
             panic!("the operation asks for an effect");
         };
@@ -1881,7 +1881,7 @@ mod an_adoption {
             None,
             hello(),
         );
-        let read = first_effect(&mut inbound, &mut SequentialEnvironment::default());
+        let read = first_effect(&mut inbound, &SequentialEnvironment::default());
         assert!(inbound.adopt(send_event("Hi"), read).is_err());
     }
 

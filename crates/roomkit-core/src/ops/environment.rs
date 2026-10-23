@@ -1,6 +1,8 @@
 //! What an operation reads from its host besides effects: the clock and new
 //! identifiers.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::model::{EventId, ObservationId, RoomId, Timestamp};
@@ -10,48 +12,110 @@ use crate::model::{EventId, ObservationId, RoomId, Timestamp};
 ///
 /// Reading the clock and creating an id are not effects: they never fail and
 /// never wait. A driver gives the system clock and random ids; a test gives a
-/// fixed clock and sequential ids, so a trace is reproducible.
+/// fixed clock and sequential ids, so a trace is reproducible. The methods
+/// take `&self`: one environment serves the runs of many operations at
+/// once, each run keeping the one it started with.
 pub trait Environment {
     /// The current instant.
-    fn now(&mut self) -> Timestamp;
+    fn now(&self) -> Timestamp;
 
     /// A new, unique event id.
-    fn new_event_id(&mut self) -> EventId;
+    fn new_event_id(&self) -> EventId;
 
     /// A new, unique observation id.
-    fn new_observation_id(&mut self) -> ObservationId;
+    fn new_observation_id(&self) -> ObservationId;
 
     /// A new, unique room id, for the room the framework creates for a
     /// message no room was found for (RFC §10.1 step 2, §10.4).
-    fn new_room_id(&mut self) -> RoomId;
+    fn new_room_id(&self) -> RoomId;
+}
+
+/// A shared environment: a host keeps a handle on the environment its kit
+/// reads, to move a test's clock while the kit runs.
+impl<E: Environment + ?Sized> Environment for Arc<E> {
+    fn now(&self) -> Timestamp {
+        E::now(self)
+    }
+
+    fn new_event_id(&self) -> EventId {
+        E::new_event_id(self)
+    }
+
+    fn new_observation_id(&self) -> ObservationId {
+        E::new_observation_id(self)
+    }
+
+    fn new_room_id(&self) -> RoomId {
+        E::new_room_id(self)
+    }
 }
 
 /// A deterministic environment, for tests and examples: a clock that moves
 /// only when told to, and ids numbered in order (`evt_1`, `evt_2`, `obs_1`,
-/// `new_room_1`).
-#[derive(Clone, Debug)]
+/// `new_room_1`). Shared, it serves many runs at once: its clock and its
+/// counters are atomic, never locked.
+#[derive(Debug)]
 pub struct SequentialEnvironment {
-    now: Timestamp,
-    events: u64,
-    observations: u64,
-    rooms: u64,
+    start: Timestamp,
+    /// How far the clock moved since `start`, in nanoseconds.
+    elapsed: AtomicU64,
+    events: AtomicU64,
+    observations: AtomicU64,
+    rooms: AtomicU64,
 }
 
 impl SequentialEnvironment {
     /// An environment whose clock reads `now`.
     pub fn new(now: Timestamp) -> Self {
         Self {
-            now,
-            events: 0,
-            observations: 0,
-            rooms: 0,
+            start: now,
+            elapsed: AtomicU64::new(0),
+            events: AtomicU64::new(0),
+            observations: AtomicU64::new(0),
+            rooms: AtomicU64::new(0),
         }
     }
 
-    /// Moves the clock `duration` later; past the supported range it stays.
-    pub fn advance(&mut self, duration: Duration) {
-        if let Some(later) = self.now.checked_add(duration) {
-            self.now = later;
+    /// Moves the clock `duration` later; past the supported range, or some
+    /// 580 years past its start, it stays.
+    pub fn advance(&self, duration: Duration) {
+        let Ok(nanos) = u64::try_from(duration.as_nanos()) else {
+            return;
+        };
+        let mut elapsed = self.elapsed.load(Ordering::Relaxed);
+        loop {
+            let in_range = |later: &u64| {
+                self.start
+                    .checked_add(Duration::from_nanos(*later))
+                    .is_some()
+            };
+            let Some(later) = elapsed.checked_add(nanos).filter(in_range) else {
+                return;
+            };
+            match self.elapsed.compare_exchange_weak(
+                elapsed,
+                later,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(current) => elapsed = current,
+            }
+        }
+    }
+}
+
+impl Clone for SequentialEnvironment {
+    /// An environment reading what this one reads now, its clock and its
+    /// counters moving on their own from then on.
+    fn clone(&self) -> Self {
+        let read = |counter: &AtomicU64| AtomicU64::new(counter.load(Ordering::Relaxed));
+        Self {
+            start: self.start,
+            elapsed: read(&self.elapsed),
+            events: read(&self.events),
+            observations: read(&self.observations),
+            rooms: read(&self.rooms),
         }
     }
 }
@@ -63,24 +127,27 @@ impl Default for SequentialEnvironment {
     }
 }
 
+/// The next number of `counter`, from 1.
+fn next(counter: &AtomicU64) -> u64 {
+    counter.fetch_add(1, Ordering::Relaxed).saturating_add(1)
+}
+
 impl Environment for SequentialEnvironment {
-    fn now(&mut self) -> Timestamp {
-        self.now
+    fn now(&self) -> Timestamp {
+        let elapsed = Duration::from_nanos(self.elapsed.load(Ordering::Relaxed));
+        self.start.checked_add(elapsed).unwrap_or(self.start)
     }
 
-    fn new_event_id(&mut self) -> EventId {
-        self.events = self.events.saturating_add(1);
-        EventId::generated(format!("evt_{}", self.events))
+    fn new_event_id(&self) -> EventId {
+        EventId::generated(format!("evt_{}", next(&self.events)))
     }
 
-    fn new_observation_id(&mut self) -> ObservationId {
-        self.observations = self.observations.saturating_add(1);
-        ObservationId::generated(format!("obs_{}", self.observations))
+    fn new_observation_id(&self) -> ObservationId {
+        ObservationId::generated(format!("obs_{}", next(&self.observations)))
     }
 
-    fn new_room_id(&mut self) -> RoomId {
-        self.rooms = self.rooms.saturating_add(1);
-        RoomId::generated(format!("new_room_{}", self.rooms))
+    fn new_room_id(&self) -> RoomId {
+        RoomId::generated(format!("new_room_{}", next(&self.rooms)))
     }
 }
 
@@ -92,21 +159,21 @@ mod tests {
 
     #[test]
     fn event_ids_are_numbered_in_order() {
-        let mut environment = SequentialEnvironment::default();
+        let environment = SequentialEnvironment::default();
         let ids = [environment.new_event_id(), environment.new_event_id()];
         assert_eq!(ids.map(|id| id.to_string()), ["evt_1", "evt_2"]);
     }
 
     #[test]
     fn room_ids_are_numbered_in_order() {
-        let mut environment = SequentialEnvironment::default();
+        let environment = SequentialEnvironment::default();
         let ids = [environment.new_room_id(), environment.new_room_id()];
         assert_eq!(ids.map(|id| id.to_string()), ["new_room_1", "new_room_2"]);
     }
 
     #[test]
     fn the_clock_moves_only_when_advanced() {
-        let mut environment = SequentialEnvironment::default();
+        let environment = SequentialEnvironment::default();
         environment.advance(Duration::from_secs(2));
         assert_eq!(environment.now().as_unix_millis(), 2000);
     }

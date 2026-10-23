@@ -576,3 +576,11 @@ publishes a release.
   handler, and the runtime's call executor no longer has the branches a
   request of another family could reach. `StoreRequest::Commit` and
   `HookRequest::RunHook` carry their event boxed.
+- A call keeps the environment it started with: `RoomKit::set_environment`
+  serves the calls made after it, and no kit-wide lock is taken around each
+  poll of an operation any more; a call read the kit's environment anew at
+  every poll. `Environment`'s methods take `&self`, so one environment
+  serves many runs at once, and `set_environment` takes an environment that
+  is `Send + Sync`. `SequentialEnvironment` keeps its clock and counters in
+  atomics, `advance(&self, ..)` included, and an `Arc` of an environment is
+  one, for a host that keeps a handle on the clock its kit reads.

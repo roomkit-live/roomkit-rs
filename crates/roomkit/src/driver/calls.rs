@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use roomkit_core::model::{ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent};
 use roomkit_core::ops::{
-    CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, HookAnswer, HookRequest, Notice,
-    Outcome, StoreOutcome, StoreRequest,
+    CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Environment, HookAnswer, HookRequest,
+    Notice, Outcome, StoreOutcome, StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookTrigger};
@@ -103,9 +103,11 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
     answer.map_or_else(|error| Outcome::Failed(error.to_record()), Outcome::from)
 }
 
-/// Calls a channel (RFC §6.1): a parse, a turn or a delivery.
+/// Calls a channel (RFC §6.1): a parse, a turn or a delivery; a parse
+/// drafts its event at `environment`'s instant, the run's.
 pub(super) async fn channel<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
+    environment: &(dyn Environment + Send + Sync),
     request: ChannelRequest,
 ) -> Outcome {
     match request {
@@ -121,7 +123,7 @@ pub(super) async fn channel<S: ConversationStore>(
             let draft = EventDraft {
                 id,
                 room_id: context.room.id.clone(),
-                now: inner.environment().now(),
+                now: environment.now(),
             };
             match channel.handle_inbound(message, *context, draft).await {
                 Ok(event) => ChannelOutcome::Parsed(Box::new(event)).into(),

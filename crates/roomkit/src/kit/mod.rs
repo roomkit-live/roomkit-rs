@@ -20,7 +20,7 @@ mod tests;
 mod timers;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use roomkit_core::model::{ChannelId, InboundMessage, RoomEvent, RoomId};
@@ -96,7 +96,9 @@ pub(crate) struct Inner<S> {
     pub(crate) tickets: RoomTickets,
     /// The tasks the kit runs in the background: observers, inbound runs.
     pub(crate) tasks: Arc<Tasks>,
-    environment: Mutex<Box<dyn Environment + Send>>,
+    /// The environment the runs started from now on read: each run keeps
+    /// the one it started with.
+    environment: RwLock<Arc<dyn Environment + Send + Sync>>,
     events: broadcast::Sender<FrameworkEvent>,
 }
 
@@ -134,16 +136,18 @@ impl<S: ConversationStore> RoomKit<S> {
                 lanes: RoomLanes::default(),
                 tickets: RoomTickets::default(),
                 tasks: Arc::default(),
-                environment: Mutex::new(Box::new(SystemEnvironment)),
+                environment: RwLock::new(Arc::new(SystemEnvironment)),
                 events,
             }),
         }
     }
 
     /// Replaces the clock and the id source, for example with a
-    /// deterministic one in tests and examples.
-    pub fn set_environment(&self, environment: impl Environment + Send + 'static) {
-        *self.inner.environment() = Box::new(environment);
+    /// deterministic one in tests and examples. A call already running
+    /// keeps the environment it started with; the calls made from now on
+    /// read this one.
+    pub fn set_environment(&self, environment: impl Environment + Send + Sync + 'static) {
+        *write(&self.inner.environment) = Arc::new(environment);
     }
 
     /// Sets the chain-depth limit (RFC §8.3), 5 by default.
@@ -325,11 +329,9 @@ impl<S> Inner<S> {
         Ok(())
     }
 
-    /// The kit's environment, held only while the driver reads it.
-    pub(crate) fn environment(&self) -> MutexGuard<'_, Box<dyn Environment + Send>> {
-        self.environment
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+    /// The kit's environment, which a run starting now keeps.
+    pub(crate) fn environment(&self) -> Arc<dyn Environment + Send + Sync> {
+        Arc::clone(&read(&self.environment))
     }
 
     pub(crate) fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>> {

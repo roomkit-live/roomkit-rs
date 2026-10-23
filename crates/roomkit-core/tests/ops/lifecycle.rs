@@ -1469,7 +1469,7 @@ mod the_protocol {
             channel("ai"),
             BindingUpdate::visibility(Visibility::Internal),
         );
-        let step = update.poll(&mut SequentialEnvironment::default());
+        let step = update.poll(&SequentialEnvironment::default());
         assert_eq!(
             step.next,
             Next::Ready(Err(LifecycleError::InternalVisibility))

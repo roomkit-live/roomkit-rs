@@ -12,7 +12,7 @@ use roomkit_core::ops::Environment;
 pub struct SystemEnvironment;
 
 impl Environment for SystemEnvironment {
-    fn now(&mut self) -> Timestamp {
+    fn now(&self) -> Timestamp {
         let millis = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .ok()
@@ -27,15 +27,15 @@ impl Environment for SystemEnvironment {
         })
     }
 
-    fn new_event_id(&mut self) -> EventId {
+    fn new_event_id(&self) -> EventId {
         EventId::from_u128(uuid::Uuid::new_v4().as_u128())
     }
 
-    fn new_observation_id(&mut self) -> ObservationId {
+    fn new_observation_id(&self) -> ObservationId {
         ObservationId::from_u128(uuid::Uuid::new_v4().as_u128())
     }
 
-    fn new_room_id(&mut self) -> RoomId {
+    fn new_room_id(&self) -> RoomId {
         RoomId::from_u128(uuid::Uuid::new_v4().as_u128())
     }
 }

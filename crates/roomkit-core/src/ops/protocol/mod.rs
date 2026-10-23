@@ -202,7 +202,11 @@ pub trait Operation {
 
     /// Advances the operation with the outcomes completed since the last
     /// poll, and says what it needs next.
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output>;
+    ///
+    /// A driver hands every poll of an operation the environment it started
+    /// with: the operation's clock and its ids never change source midway,
+    /// whatever environment the host sets meanwhile.
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output>;
 
     /// Hands the driver's answer to effect `id`.
     ///

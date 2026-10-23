@@ -6,17 +6,17 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::future::{Future, ready};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventId, InboundMessage, Metadata, ObservationId, RoomContext, RoomEvent, RoomId,
-    RoomStatus, RoomTimers, Timestamp,
+    EventContent, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers,
+    Timestamp,
 };
 use roomkit::ops::{
-    CHANNEL_NOT_REGISTERED, ChannelDeclaration, Environment, FrameworkEvent, InboundError,
-    LifecycleError, SequentialEnvironment, TransitionReason,
+    CHANNEL_NOT_REGISTERED, ChannelDeclaration, FrameworkEvent, InboundError, LifecycleError,
+    SequentialEnvironment, TransitionReason,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{Channel, ChannelError, ConversationStore, HookTrigger, KitError, RoomKit};
@@ -43,38 +43,16 @@ fn message(from: &RecordingTransport, text: &str) -> InboundMessage {
 /// A sequential environment the test keeps a handle on, to move the kit's
 /// clock while the kit runs.
 #[derive(Clone, Debug)]
-struct Clock(Arc<Mutex<SequentialEnvironment>>);
+struct Clock(Arc<SequentialEnvironment>);
 
 impl Clock {
     fn new() -> Self {
         let start = Timestamp::from_unix_millis(START_MILLIS).unwrap();
-        Self(Arc::new(Mutex::new(SequentialEnvironment::new(start))))
+        Self(Arc::new(SequentialEnvironment::new(start)))
     }
 
     fn advance(&self, seconds: u64) {
-        self.environment().advance(Duration::from_secs(seconds));
-    }
-
-    fn environment(&self) -> std::sync::MutexGuard<'_, SequentialEnvironment> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl Environment for Clock {
-    fn now(&mut self) -> Timestamp {
-        self.environment().now()
-    }
-
-    fn new_event_id(&mut self) -> EventId {
-        self.environment().new_event_id()
-    }
-
-    fn new_observation_id(&mut self) -> ObservationId {
-        self.environment().new_observation_id()
-    }
-
-    fn new_room_id(&mut self) -> RoomId {
-        self.environment().new_room_id()
+        self.0.advance(Duration::from_secs(seconds));
     }
 }
 
@@ -83,7 +61,7 @@ impl Environment for Clock {
 /// after the pause.
 async fn timed_room(clock: &Clock) -> (RoomKit, RecordingTransport) {
     let kit = RoomKit::new();
-    kit.set_environment(clock.clone());
+    kit.set_environment(Arc::clone(&clock.0));
     let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
     kit.register_channel(sms.clone()).unwrap();
     kit.create_room_with(&room_id(), |room| {

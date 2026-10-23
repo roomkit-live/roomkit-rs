@@ -1780,7 +1780,7 @@ mod a_refused_operation {
 
     /// Polls `inbound`, which must ask for one effect, and answers it with
     /// `outcome`.
-    fn answer(inbound: &mut Inbound, environment: &mut SequentialEnvironment, outcome: Outcome) {
+    fn answer(inbound: &mut Inbound, environment: &SequentialEnvironment, outcome: Outcome) {
         let Next::Effects(effects) = inbound.poll(environment).next else {
             panic!("expected an effect");
         };
@@ -1798,7 +1798,7 @@ mod a_refused_operation {
             .unwrap();
         let target = InboundTarget::Room(room_id());
         let mut inbound = Inbound::new(Arc::new(config), target, None, Sim::message("sms", "Hi"));
-        let mut environment = SequentialEnvironment::default();
+        let environment = SequentialEnvironment::default();
         let context = Outcome::Store(StoreOutcome::Context(Box::new(
             roomkit_core::model::RoomContext {
                 room: sim.room.clone(),
@@ -1809,10 +1809,10 @@ mod a_refused_operation {
         )));
         let failure = Outcome::Failed(ErrorRecord::new("ParseError", "bad payload"));
         for outcome in [context, failure] {
-            answer(&mut inbound, &mut environment, outcome);
+            answer(&mut inbound, &environment, outcome);
         }
         assert!(matches!(
-            inbound.poll(&mut environment).next,
+            inbound.poll(&environment).next,
             Next::Ready(Err(InboundError::ChannelFailed { .. }))
         ));
     }
@@ -2112,8 +2112,7 @@ mod the_protocol {
         let config = Arc::new(std::mem::take(&mut sim.config));
         let target = InboundTarget::Room(room_id());
         let mut inbound = Inbound::new(config, target, None, Sim::message("sms", "Hi"));
-        let Next::Effects(effects) = inbound.poll(&mut SequentialEnvironment::default()).next
-        else {
+        let Next::Effects(effects) = inbound.poll(&SequentialEnvironment::default()).next else {
             panic!("expected step 2's read of the room");
         };
         (inbound, effects.first().unwrap().id)
@@ -2144,7 +2143,7 @@ mod the_protocol {
     fn polling_with_an_effect_outstanding_waits() {
         let (mut inbound, _) = started();
         assert_eq!(
-            inbound.poll(&mut SequentialEnvironment::default()).next,
+            inbound.poll(&SequentialEnvironment::default()).next,
             Next::Waiting
         );
     }

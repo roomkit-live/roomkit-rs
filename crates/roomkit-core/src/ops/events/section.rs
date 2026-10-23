@@ -85,7 +85,7 @@ impl EventSection {
     /// Advances the call; `output` reads its result from what it did.
     pub(super) fn poll<T>(
         &mut self,
-        environment: &mut dyn Environment,
+        environment: &dyn Environment,
         output: impl FnOnce(Done) -> Result<T, MutationError>,
     ) -> Step<Result<T, MutationError>> {
         let Self {

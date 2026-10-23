@@ -107,7 +107,7 @@ impl UpdateEvent {
 impl Operation for UpdateEvent {
     type Output = Result<Option<RoomEvent>, MutationError>;
 
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
         self.section
             .poll(environment, |done| Ok(done.events.into_iter().next()))
     }
@@ -158,7 +158,7 @@ impl DeleteEvent {
 impl Operation for DeleteEvent {
     type Output = Result<Vec<EventId>, MutationError>;
 
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
         self.section.poll(environment, |done| {
             Ok(done.events.into_iter().map(|event| event.id).collect())
         })
@@ -217,7 +217,7 @@ impl CommitRecord {
 impl Operation for CommitRecord {
     type Output = Result<RoomEvent, MutationError>;
 
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
         self.section.poll(environment, |done| {
             done.events.into_iter().next().ok_or_else(|| {
                 MutationError::Store(ErrorRecord::new("Internal", "the record went missing"))

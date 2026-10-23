@@ -124,7 +124,7 @@ impl CreateRoom {
     /// it.
     fn on_created(
         &mut self,
-        environment: &mut dyn Environment,
+        environment: &dyn Environment,
         outcome: Outcome,
     ) -> Option<Result<Room, LifecycleError>> {
         if let Err(error) = outcome.into_stored() {
@@ -146,7 +146,7 @@ impl CreateRoom {
     /// The `ON_ROOM_CREATED` hooks are over, what they raised the driver's
     /// to log: `room_created` is emitted. The room is created whatever they
     /// did.
-    fn on_observed(&mut self, environment: &mut dyn Environment, outcome: Outcome) -> Room {
+    fn on_observed(&mut self, environment: &dyn Environment, outcome: Outcome) -> Room {
         if let Err(error) = outcome.into_observed() {
             tracing::warn!(
                 target: "roomkit::core::lifecycle",
@@ -180,7 +180,7 @@ impl CreateRoom {
 impl Operation for CreateRoom {
     type Output = Result<Room, LifecycleError>;
 
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
         let mut result = if self.started { None } else { self.start() };
         while let Some((effect, outcome)) = self.io.next_outcome() {
             if self.creating == Some(effect) {

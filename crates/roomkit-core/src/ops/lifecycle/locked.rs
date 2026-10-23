@@ -86,7 +86,7 @@ impl<C: SectionChange<Refusal = LifecycleError>> LockedChange<C> {
     /// the change did and the timer transitions the gate applied.
     pub(super) fn poll<T>(
         &mut self,
-        environment: &mut dyn Environment,
+        environment: &dyn Environment,
         output: impl Fn(C::Done, &[DueTransition]) -> T,
     ) -> Step<Result<T, LifecycleError>> {
         let Self {

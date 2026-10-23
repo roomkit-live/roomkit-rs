@@ -40,7 +40,7 @@ impl AttachChannel {
 impl Operation for AttachChannel {
     type Output = Result<ChannelBinding, LifecycleError>;
 
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
         self.change
             .poll(environment, |attached, _| *attached.binding)
     }
@@ -75,7 +75,7 @@ impl DetachChannel {
 impl Operation for DetachChannel {
     type Output = Result<ChannelBinding, LifecycleError>;
 
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
         self.change
             .poll(environment, |detached, _| *detached.binding)
     }
@@ -124,7 +124,7 @@ impl UpdateBinding {
 impl Operation for UpdateBinding {
     type Output = Result<ChannelBinding, LifecycleError>;
 
-    fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
+    fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
         self.change.poll(environment, |updated, _| *updated.binding)
     }
 

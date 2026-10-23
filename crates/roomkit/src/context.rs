@@ -493,7 +493,7 @@ mod tests {
     /// An effect id, the first an operation issues: any id serves here.
     fn effect() -> EffectId {
         let mut operation = CheckTimers::new(Arc::new(KitConfig::new()), room_id());
-        match operation.poll(&mut SequentialEnvironment::default()).next {
+        match operation.poll(&SequentialEnvironment::default()).next {
             Next::Effects(effects) => effects.first().unwrap().id,
             Next::Waiting | Next::Ready(_) => panic!("a timer check asks for the lock first"),
         }
