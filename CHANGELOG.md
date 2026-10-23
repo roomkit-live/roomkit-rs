@@ -304,6 +304,10 @@ publishes a release.
   answering a `Through`, tells a sender's conversation for step 1, and
   `paused_room_takes` tells the lock what steps 1 and 3 would take.
   `DefaultRouter::candidates` reads the PAUSED rooms too.
+- A channel's response that carries the visibility `internal` is committed
+  with `none`, stored and shown to no channel, and a warning is logged; it
+  was committed with `internal`, the mark only the framework writes (gap
+  G-041).
 - The `roomkit` driver completes each effect as it finishes and polls the
   operation between completions, a lock, a lane or a ticket's turn waited
   for beside the calls, instead of waiting for a step's every effect.

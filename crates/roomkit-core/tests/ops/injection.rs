@@ -21,7 +21,7 @@ use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::transcoding::text_of;
 
 use crate::support::{
-    Answer, Called, HookChange, Reentry, Sim, calling, channel, notice_event, room_id,
+    Answer, Called, HookChange, Reentry, Sim, calling, channel, notice_event, response, room_id,
 };
 
 /// The room with the customer's `sms` and the advisor's `ws`.
@@ -1677,5 +1677,31 @@ mod the_visibility_internal {
         );
         sim.send(hello()).unwrap();
         assert_eq!(sim.timeline[0].visibility, Visibility::All);
+    }
+
+    /// A channel's response that carries `internal` is committed `none`:
+    /// stored and shown to no channel, as the channel meant, without the
+    /// framework's mark.
+    #[test]
+    fn on_a_channel_s_response_is_committed_none() {
+        let mut sim = room();
+        sim.agent(
+            "ai",
+            Box::new(|event, _| {
+                let mut answer = response("ai", event, "Noted");
+                answer.visibility = Visibility::Internal;
+                Ok(ChannelOutput::respond(vec![answer]))
+            }),
+        );
+        sim.send(hello()).unwrap();
+        let stored: Vec<Visibility> = sim
+            .timeline
+            .iter()
+            .map(|event| event.visibility.clone())
+            .collect();
+        assert_eq!(
+            (stored, sim.traced("deliver").len()),
+            (vec![Visibility::All, Visibility::None], 1)
+        );
     }
 }

@@ -131,7 +131,9 @@ pub(crate) fn stamp_direct(
 /// that claims another channel's source keeps nothing of it, its
 /// participant, provider, ids, raw payload and verification included: its
 /// source is the responder's alone (gap G-035), so another channel's
-/// provider message id is never acted on as the response's.
+/// provider message id is never acted on as the response's. A response
+/// keeps the visibility its channel gave it, except `internal`
+/// ([`without_internal`]).
 pub(crate) fn stamp_response(
     mut response: RoomEvent,
     responder: &ChannelBinding,
@@ -165,8 +167,28 @@ pub(crate) fn stamp_response(
     // Only an inbound message carries an idempotency key (RFC §13.4, gap
     // G-023): a response's key could otherwise shadow a later message's.
     response.idempotency_key = None;
+    without_internal(&mut response, responder);
     instructions::mark_response(&mut response, trigger);
     reset_commit_fields(response)
+}
+
+/// Puts `none` in place of the visibility `internal` on a response of
+/// `responder` (gap G-041): only the framework writes `internal`, on the
+/// records it writes itself, and a channel never forges that mark. The
+/// response is stored and shown to no channel, which is what the channel
+/// asked for.
+fn without_internal(response: &mut RoomEvent, responder: &ChannelBinding) {
+    if response.visibility != Visibility::Internal {
+        return;
+    }
+    tracing::warn!(
+        target: "roomkit::core::inbound",
+        room_id = %response.room_id,
+        responder = %responder.channel_id,
+        "a response carried the visibility internal, which only the framework writes; \
+         it is committed with none (gap G-041)"
+    );
+    response.visibility = Visibility::None;
 }
 
 /// Writes the pipeline's fields on an event a hook injected while deciding
