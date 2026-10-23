@@ -73,3 +73,9 @@ pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
 pub use self::store::{
     ConversationStore, EventFilter, InMemoryStore, RoomFilter, StoreError, StoreFailure,
 };
+
+/// The README's code, compiled and run as doctests, so that the first room
+/// it shows is one the crate runs.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+struct ReadmeDoctests;
