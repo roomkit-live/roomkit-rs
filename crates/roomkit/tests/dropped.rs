@@ -182,14 +182,14 @@ impl ConversationStore for GatedStore {
             .await
     }
 
-    async fn find_by_idempotency_key(
+    async fn get_event_by_idempotency_key(
         &self,
         room_id: &RoomId,
-        channel_id: &ChannelId,
+        channel_id: Option<&ChannelId>,
         key: &str,
     ) -> Result<Option<RoomEvent>, StoreError> {
         self.store
-            .find_by_idempotency_key(room_id, channel_id, key)
+            .get_event_by_idempotency_key(room_id, channel_id, key)
             .await
     }
 

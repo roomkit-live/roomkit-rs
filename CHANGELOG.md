@@ -176,7 +176,8 @@ as it stands.
   per organization, the routing lookups by binding and by participant, and
   events, a commit writing the event, the room's counters and an edit's or
   a delete's target in one transaction, an index below `event_count`
-  refused, the idempotency lookup, hard deletes and event counts.
+  refused, the idempotency lookup from a channel or within the room
+  (`get_event_by_idempotency_key`), hard deletes and event counts.
 - **Examples**, one runnable file each, every one checking what it shows:
   the RFC's Appendix B flows (`echo_room`, `new_conversation`,
   `block_and_inject`, `agent_chain`, `advisor_joins`,

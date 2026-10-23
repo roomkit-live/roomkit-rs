@@ -80,9 +80,9 @@ impl CommitPass {
             Some(key) if self.origin.is_entry() => State::CheckingKey {
                 effect: self.issue(
                     cx,
-                    StoreRequest::FindByIdempotencyKey {
+                    StoreRequest::GetEventByIdempotencyKey {
                         room_id: self.event.room_id.clone(),
-                        channel_id: self.event.source.channel_id.clone(),
+                        channel_id: Some(self.event.source.channel_id.clone()),
                         key,
                     },
                 ),

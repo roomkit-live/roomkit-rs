@@ -341,10 +341,10 @@ impl ConversationStore for InMemoryStore {
             .unlink(identity_id, channel_type, address, organization_id)
     }
 
-    async fn find_by_idempotency_key(
+    async fn get_event_by_idempotency_key(
         &self,
         room_id: &RoomId,
-        channel_id: &ChannelId,
+        channel_id: Option<&ChannelId>,
         key: &str,
     ) -> Result<Option<RoomEvent>, StoreError> {
         self.read(room_id, |record| {
@@ -353,7 +353,8 @@ impl ConversationStore for InMemoryStore {
                 .iter()
                 .find(|event| {
                     event.idempotency_key.as_deref() == Some(key)
-                        && &event.source.channel_id == channel_id
+                        && channel_id
+                            .is_none_or(|channel_id| &event.source.channel_id == channel_id)
                 })
                 .cloned()
         })

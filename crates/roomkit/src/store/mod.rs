@@ -446,12 +446,14 @@ pub trait ConversationStore: Send + Sync + 'static {
         organization_id: Option<&str>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
-    /// The event the room committed from `channel_id` with idempotency
-    /// `key` (RFC §13.4, gap G-023).
-    fn find_by_idempotency_key(
+    /// The event the room committed with idempotency `key`, a `BLOCKED` one
+    /// included (RFC §14.1 `get_event_by_idempotency_key`, §13.4): the one
+    /// `channel_id` committed, or, for `None`, the one any channel of the
+    /// room committed, as a proactive delivery's key is looked up (§22.1).
+    fn get_event_by_idempotency_key(
         &self,
         room_id: &RoomId,
-        channel_id: &ChannelId,
+        channel_id: Option<&ChannelId>,
         key: &str,
     ) -> impl Future<Output = Result<Option<RoomEvent>, StoreError>> + Send;
 

@@ -33,12 +33,12 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
                 Err(error) => Outcome::Failed(error.to_record()),
             };
         }
-        StoreRequest::FindByIdempotencyKey {
+        StoreRequest::GetEventByIdempotencyKey {
             room_id,
             channel_id,
             key,
         } => store
-            .find_by_idempotency_key(&room_id, &channel_id, &key)
+            .get_event_by_idempotency_key(&room_id, channel_id.as_ref(), &key)
             .await
             .map(|event| StoreOutcome::Idempotent(event.map(Box::new))),
         StoreRequest::GetEvent { event_id } => store

@@ -994,7 +994,7 @@ impl Sim {
             Request::Store(StoreRequest::LoadContext { room_id, .. }) => {
                 format!("load_context {room_id}")
             }
-            Request::Store(StoreRequest::FindByIdempotencyKey { key, .. }) => {
+            Request::Store(StoreRequest::GetEventByIdempotencyKey { key, .. }) => {
                 format!("find_key {key}")
             }
             Request::Store(StoreRequest::GetEvent { event_id }) => format!("get_event {event_id}"),
@@ -1319,7 +1319,7 @@ impl Sim {
             )
             | Request::Store(
                 StoreRequest::LoadContext { .. }
-                | StoreRequest::FindByIdempotencyKey { .. }
+                | StoreRequest::GetEventByIdempotencyKey { .. }
                 | StoreRequest::PersistSideEffects { .. },
             )
             | Request::Channel(_)
@@ -1473,7 +1473,7 @@ impl Sim {
                 }
                 Outcome::Store(StoreOutcome::Context(Box::new(self.context(recent_events))))
             }
-            StoreRequest::FindByIdempotencyKey {
+            StoreRequest::GetEventByIdempotencyKey {
                 channel_id, key, ..
             } => {
                 self.trace.push(format!("find_key {key}"));
@@ -1482,7 +1482,9 @@ impl Sim {
                     .iter()
                     .find(|event| {
                         event.idempotency_key.as_deref() == Some(key.as_str())
-                            && event.source.channel_id == channel_id
+                            && channel_id
+                                .as_ref()
+                                .is_none_or(|channel_id| &event.source.channel_id == channel_id)
                     })
                     .cloned()
                     .map(Box::new);
@@ -1696,7 +1698,7 @@ impl Sim {
 fn store_room(request: &StoreRequest) -> &RoomId {
     match request {
         StoreRequest::LoadContext { room_id, .. }
-        | StoreRequest::FindByIdempotencyKey { room_id, .. }
+        | StoreRequest::GetEventByIdempotencyKey { room_id, .. }
         | StoreRequest::PersistSideEffects { room_id, .. }
         | StoreRequest::UpdateRoom { room_id, .. }
         | StoreRequest::DeleteBinding { room_id, .. }

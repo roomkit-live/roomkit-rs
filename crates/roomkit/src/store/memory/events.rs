@@ -179,6 +179,36 @@ mod tests {
             }
         }
 
+        /// RFC §14.1 `get_event_by_idempotency_key`, §13.4, §22.1: a key is
+        /// looked up from its channel, or within the whole room for none.
+        #[tokio::test]
+        async fn a_key_is_found_from_its_channel_or_within_the_room() {
+            let store = InMemoryStore::new();
+            store
+                .create_room(Room::new(room_id(), Timestamp::UNIX_EPOCH))
+                .await
+                .unwrap();
+            let mut keyed = event(0, None);
+            keyed.idempotency_key = Some("key_1".to_owned());
+            store.commit(keyed, counters(0), None).await.unwrap();
+            let (sms, ws) = (
+                ChannelId::new("sms").unwrap(),
+                ChannelId::new("ws").unwrap(),
+            );
+            let mut found = Vec::new();
+            for channel in [Some(&sms), Some(&ws), None] {
+                let event = store
+                    .get_event_by_idempotency_key(&room_id(), channel, "key_1")
+                    .await
+                    .unwrap();
+                found.push(event.map(|event| event.id.to_string()));
+            }
+            assert_eq!(
+                found,
+                vec![Some("evt_0".to_owned()), None, Some("evt_0".to_owned())]
+            );
+        }
+
         /// RFC §10.1 step 12: the target and the edit are one write.
         #[tokio::test]
         async fn a_commit_updates_its_target_in_the_same_write() {

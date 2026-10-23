@@ -150,14 +150,16 @@ pub enum StoreRequest {
         /// How many of the latest events to read.
         recent_events: usize,
     },
-    /// Find the event the room committed from `channel_id` with an
-    /// idempotency key (RFC §13.4, scoped to the channel by gap G-023).
-    /// Answer [`StoreOutcome::Idempotent`].
-    FindByIdempotencyKey {
+    /// Read the event the room committed with an idempotency key, a
+    /// `BLOCKED` one included (RFC §14.1 `get_event_by_idempotency_key`,
+    /// §13.4): the one `channel_id` committed, or for `None` the one any
+    /// channel of the room committed (§22.1). Answer
+    /// [`StoreOutcome::Idempotent`].
+    GetEventByIdempotencyKey {
         /// The room.
         room_id: RoomId,
-        /// The channel the event came from.
-        channel_id: ChannelId,
+        /// The channel the event came from; `None` for any of the room's.
+        channel_id: Option<ChannelId>,
         /// The key.
         key: String,
     },

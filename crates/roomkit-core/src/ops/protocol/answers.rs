@@ -22,7 +22,7 @@ pub(crate) enum RequestKind {
     AwaitTicket,
     ReleaseTicket,
     LoadContext,
-    FindByIdempotencyKey,
+    GetEventByIdempotencyKey,
     GetEvent,
     DeleteEvent,
     Commit,
@@ -74,7 +74,7 @@ impl StoreRequest {
     fn kind(&self) -> RequestKind {
         match self {
             Self::LoadContext { .. } => RequestKind::LoadContext,
-            Self::FindByIdempotencyKey { .. } => RequestKind::FindByIdempotencyKey,
+            Self::GetEventByIdempotencyKey { .. } => RequestKind::GetEventByIdempotencyKey,
             Self::GetEvent { .. } => RequestKind::GetEvent,
             Self::DeleteEvent { .. } => RequestKind::DeleteEvent,
             Self::Commit { .. } => RequestKind::Commit,
@@ -102,7 +102,7 @@ impl RequestKind {
             Self::AwaitTicket => "Admitted",
             Self::ReleaseTicket => "TicketReleased",
             Self::LoadContext => "Context or RoomNotFound",
-            Self::FindByIdempotencyKey => "Idempotent",
+            Self::GetEventByIdempotencyKey => "Idempotent",
             Self::GetEvent => "Event",
             Self::DeleteEvent => "Deleted",
             Self::Commit => "Committed",
@@ -132,7 +132,7 @@ impl RequestKind {
                 outcome,
                 Outcome::Store(StoreOutcome::Context(_) | StoreOutcome::RoomNotFound)
             ),
-            Self::FindByIdempotencyKey => {
+            Self::GetEventByIdempotencyKey => {
                 matches!(outcome, Outcome::Store(StoreOutcome::Idempotent(_)))
             }
             Self::GetEvent => matches!(outcome, Outcome::Store(StoreOutcome::Event(_))),
