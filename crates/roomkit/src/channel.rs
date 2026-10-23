@@ -62,6 +62,26 @@ pub struct EventDraft {
 ///     }
 /// }
 /// ```
+///
+/// A transport declares how it writes its addresses: an SMS channel whose
+/// numbers written without a country code are French ones.
+///
+/// ```
+/// use roomkit::model::{ChannelCategory, ChannelDirection, ChannelId, ChannelType};
+/// use roomkit::{Addressing, ChannelDeclaration, CountryCode};
+///
+/// let mut declaration = ChannelDeclaration::new(
+///     ChannelId::new("sms")?,
+///     ChannelType::Sms,
+///     ChannelCategory::Transport,
+///     ChannelDirection::Bidirectional,
+/// );
+/// declaration.country_code = Some(CountryCode::new("+33")?);
+/// let form = declaration.form();
+/// assert_eq!(form.addressing, Addressing::PhoneNumber);
+/// assert_eq!(form.normalize("06 12 34 56 78"), "+33612345678");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub trait Channel: Send + Sync + 'static {
     /// What the kit knows of the channel: its id, type, category, direction
     /// and capabilities.

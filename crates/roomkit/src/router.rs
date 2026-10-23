@@ -101,10 +101,11 @@ impl<S: ConversationStore, R: InboundRoomRouter<S>> DynRouter<S> for R {
 /// It reads every ACTIVE and PAUSED room of the caller's organization the
 /// channel reaches, with its bindings and participants, and what the room
 /// has heard on the channel when it is the one room bound to it step 3
-/// considers; the rules of
-/// [`rules::routing`](roomkit_core::rules::routing) decide on what it read,
-/// comparing addresses in the channel's form. A message is routed in a
-/// number of store reads that grows with the rooms its channel reaches.
+/// considers ([`candidates`](Self::candidates)); [`default_route`](crate::default_route)
+/// decides on what it read, comparing addresses in the channel's form, so a
+/// strategy wrapping the default reads the same rooms and decides as it
+/// does. A message is routed in a number of store reads that grows with the
+/// rooms its channel reaches.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DefaultRouter;
 

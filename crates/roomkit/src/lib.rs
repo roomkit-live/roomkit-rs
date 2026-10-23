@@ -25,9 +25,11 @@
 //!
 //! The core's model is re-exported whole as [`model`]. Of its operations
 //! and rules, only what a caller names is: the results and errors of the
-//! kit's calls, the framework events, what a channel declares, the routing
-//! query a router answers, the environment, and the rules that read an
-//! event; the protocol the driver speaks with the core stays the core's.
+//! kit's calls, the framework events, what a channel declares and how it
+//! writes its addresses, the routing query a router answers and the default
+//! strategy's decision ([`default_route`]), the environment, and the rules
+//! that read an event; the protocol the driver speaks with the core stays
+//! the core's.
 
 mod channel;
 mod context;
@@ -50,11 +52,15 @@ pub use roomkit_core::ops::{
     MutationError, ProtocolError, RefusedOperation, SequentialEnvironment, TransitionReason,
     default_inbound_event,
 };
+pub use roomkit_core::rules::addresses::{
+    AddressForm, Addressing, CountryCode, InvalidCountryCode,
+};
 pub use roomkit_core::rules::edits::{is_deleted, is_edited};
 pub use roomkit_core::rules::hook_registry::{
     HookExecution, HookFilter, HookId, HookSpec, HookTrigger, RegistrationError,
 };
-pub use roomkit_core::rules::routing::{Candidate, RouteQuery};
+pub use roomkit_core::rules::lifecycle::Transition;
+pub use roomkit_core::rules::routing::{Candidate, RouteQuery, Sender, route as default_route};
 pub use roomkit_core::rules::transcoding::text_of;
 
 pub use self::channel::{Channel, ChannelError, EventDraft};
