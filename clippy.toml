@@ -8,3 +8,13 @@ allow-print-in-tests = true
 
 # Product names read as words in documentation, not as code.
 doc-valid-idents = ["RoomKit", "PyO3", "WhatsApp", ".."]
+
+# The clock is the operations' environment's (docs/architecture.md, "The
+# core"): nothing reads the system clock but the runtime's system
+# environment, which marks its one read. The core builds jiff without `std`,
+# so jiff's own `Timestamp::now` is not there to call
+# (scripts/check-core-deps.sh).
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "read the time from the Environment" },
+    { path = "std::time::Instant::now", reason = "read the time from the Environment" },
+]

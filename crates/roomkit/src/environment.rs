@@ -12,6 +12,10 @@ use roomkit_core::ops::Environment;
 pub struct SystemEnvironment;
 
 impl Environment for SystemEnvironment {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the system environment is where the kit reads the wall clock"
+    )]
     fn now(&self) -> Timestamp {
         let millis = SystemTime::now()
             .duration_since(UNIX_EPOCH)

@@ -10,7 +10,8 @@ publish.workspace = true
 
 [dependencies]
 # Behind `Timestamp` only, so its version never reaches the public API. No
-# default features: they read the system time zone.
+# default features, which read the system time zone, and no `std`, whose
+# `Timestamp::now` reads the system clock (scripts/check-core-deps.sh).
 jiff.workspace = true
 serde.workspace = true
 serde_json.workspace = true

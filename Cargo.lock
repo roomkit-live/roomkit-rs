@@ -194,7 +194,6 @@ dependencies = [
  "defmt",
  "jiff-core",
  "jiff-static",
- "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
