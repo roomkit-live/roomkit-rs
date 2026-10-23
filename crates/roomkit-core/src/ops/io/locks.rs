@@ -2,7 +2,7 @@
 //! lock at a time.
 //!
 //! An operation may run several sections at once: the entries it adopted
-//! run beside its lane's work (gap G-070). Two of its sections that want one
+//! run beside its own passes (gap G-070). Two of its sections that want one
 //! room's lock take it one after the other: the second's request is held
 //! back here, not sent, until the driver answers the first's release, so a
 //! driver never sees an operation ask for a lock it holds, nor wait for its

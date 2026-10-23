@@ -10,21 +10,22 @@
 //! takes, becomes an arrival, which runs within the context of the call
 //! that made it.
 //!
-//! A request for a lock or a lane another run holds, or a ticket's turn
-//! behind another run's ticket, waits: it is granted once the holder lets
-//! it go, in the order the requests came, or given up on at its deadline
-//! once no run has anything left to do. Runs that all wait for each other,
-//! with no deadline to pass, fail the test: a deadlock never hangs it.
+//! A request for a lock another run holds, a ticket's turn behind another
+//! run's ticket, or a set's turn behind another place of the room's lane,
+//! waits: it is granted once the holder lets it go, in the order the
+//! requests came, or given up on at its deadline once no run has anything
+//! left to do. Runs that all wait for each other, with no deadline to pass,
+//! fail the test: a deadlock never hangs it.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use roomkit_core::model::{RoomId, Timestamp};
+use roomkit_core::model::{EventId, RoomId, Timestamp};
 use roomkit_core::ops::{
     Decided, Effect, EffectId, Entry, EntryId, Environment, Inbound, InboundTarget, Next,
-    Operation, Outcome, Settled,
+    Operation, Outcome, Request, Settled,
 };
 
-use super::{Called, Caller, Running, Sim, Then, journal_line};
+use super::{Called, Caller, Sim, Then, journal_line};
 
 /// A run of the simulated driver, by the order it started in: the
 /// operation the test runs first.
@@ -33,20 +34,49 @@ pub(super) type RunId = usize;
 /// The operation the test runs.
 pub(super) const ROOT: RunId = 0;
 
-/// One frame of a call's execution context: the run, and its effect whose
-/// call this is.
+/// The holder of the place `place_ahead` names: another call, which runs
+/// nothing here.
+const ANOTHER_CALL: RunId = RunId::MAX;
+
+/// One frame of a call's execution context: the run, its effect whose call
+/// this is, and what the driver knows of that effect.
 #[derive(Clone, Debug)]
 pub(super) struct Frame {
     pub(super) run: RunId,
     pub(super) effect: EffectId,
+    /// The room whose lock the run holds on the effect's behalf.
+    locked: Option<RoomId>,
+    /// The room in whose admission order the effect runs.
+    admitted: Option<RoomId>,
+    /// The room a delivery set delivers in, for its calls.
+    delivering: Option<RoomId>,
 }
 
 impl Frame {
     fn of(run: RunId, effect: &Effect) -> Self {
+        let delivering = if let Request::OnEvent { binding, .. }
+        | Request::Deliver { binding, .. } = &effect.request
+        {
+            Some(binding.room_id.clone())
+        } else {
+            None
+        };
         Self {
             run,
             effect: effect.id,
+            locked: effect.locked.clone(),
+            admitted: effect.admitted.clone(),
+            delivering,
         }
+    }
+
+    /// Whether the frame's run takes a call into `room_id` its effect's code
+    /// makes: code under the room's lock, in its admission order, or a
+    /// delivery of its sets.
+    fn takes(&self, room_id: &RoomId) -> bool {
+        [&self.locked, &self.admitted, &self.delivering]
+            .into_iter()
+            .any(|room| room.as_ref() == Some(room_id))
     }
 }
 
@@ -80,7 +110,6 @@ enum Mail {
 
 /// What the driver keeps of one run.
 pub(super) struct RunState {
-    pub(super) kind: Running,
     /// The context the run is made within, the innermost frame last.
     context: Vec<Frame>,
     mail: VecDeque<Mail>,
@@ -96,16 +125,18 @@ pub(super) struct RunState {
     /// The call an arrival is, until its caller is answered.
     serves: Option<Call>,
     pub(super) locks: BTreeSet<RoomId>,
-    pub(super) lanes: BTreeSet<RoomId>,
+    /// The places it holds in the rooms' lanes, by room and event.
+    places: BTreeSet<(RoomId, EventId)>,
+    /// The places whose turn came.
+    turns: BTreeSet<(RoomId, EventId)>,
     pub(super) tickets: BTreeSet<RoomId>,
     /// The rooms whose ticket's turn came.
     pub(super) admitted: BTreeSet<RoomId>,
 }
 
 impl RunState {
-    fn new(kind: Running, context: Vec<Frame>, serves: Option<Call>) -> Self {
+    fn new(context: Vec<Frame>, serves: Option<Call>) -> Self {
         Self {
-            kind,
             context,
             mail: VecDeque::new(),
             started: false,
@@ -115,7 +146,8 @@ impl RunState {
             adopted: Vec::new(),
             serves,
             locks: BTreeSet::new(),
-            lanes: BTreeSet::new(),
+            places: BTreeSet::new(),
+            turns: BTreeSet::new(),
             tickets: BTreeSet::new(),
             admitted: BTreeSet::new(),
         }
@@ -131,7 +163,8 @@ impl RunState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Awaited {
     Lock(RoomId),
-    Lane(RoomId),
+    /// The turn of the run's place for the event in the room's lane.
+    Place(RoomId, EventId),
     /// The turn of the run's ticket of the room.
     Turn(RoomId),
 }
@@ -150,19 +183,19 @@ impl Awaited {
     fn line(&self) -> String {
         match self {
             Self::Lock(room_id) => format!("lock {room_id}"),
-            Self::Lane(room_id) => format!("enter lane {room_id}"),
+            Self::Place(room_id, event_id) => format!("await lane {room_id} {event_id}"),
             Self::Turn(room_id) => format!("await ticket {room_id}"),
         }
     }
 }
 
-/// What the driver holds for the runs: the room locks and lanes by
-/// holder, each room's tickets in the order they were taken, and the
+/// What the driver holds for the runs: the room locks by holder, each
+/// room's lane places and tickets in the order they were taken, and the
 /// requests waiting.
 #[derive(Debug, Default)]
 pub(super) struct Holders {
     locks: BTreeMap<RoomId, RunId>,
-    lanes: BTreeMap<RoomId, RunId>,
+    places: BTreeMap<RoomId, Vec<(RunId, EventId)>>,
     tickets: BTreeMap<RoomId, Vec<RunId>>,
     waits: Vec<Wait>,
 }
@@ -173,8 +206,12 @@ impl Sim {
     /// effect whose call made an entry or an arrival once its caller is
     /// answered.
     pub(crate) fn run<O: Operation>(&mut self, operation: O) -> O::Output {
-        self.runs = vec![RunState::new(self.running, Vec::new(), None)];
+        self.runs = vec![RunState::new(Vec::new(), None)];
         self.holders = Holders::default();
+        if let Some(event_id) = self.place_ahead.clone() {
+            let ahead = (ANOTHER_CALL, event_id);
+            self.holders.places.insert(super::room_id(), vec![ahead]);
+        }
         let mut root = operation;
         let mut arrivals: Vec<Inbound> = Vec::new();
         let mut output = None;
@@ -282,7 +319,7 @@ impl Sim {
     /// Hands `entry`, made by `call`, to the run its caller's context names
     /// for its room, or runs it as an arrival when none does.
     fn place_call(&mut self, entry: Entry, call: Call) {
-        match self.taker(&call.context, entry.room_id()) {
+        match Self::taker(&call.context, entry.room_id()) {
             Some(frame) => self.state_mut(frame.run).mail.push_back(Mail::Call {
                 entry,
                 origin: frame.effect,
@@ -293,12 +330,13 @@ impl Sim {
     }
 
     /// The frame of `context` whose run takes a call into `room_id`: the
-    /// innermost whose run holds the room's lane.
-    fn taker(&self, context: &[Frame], room_id: &RoomId) -> Option<Frame> {
+    /// innermost whose effect's code runs under the room's lock, in its
+    /// admission order, or delivers in it.
+    fn taker(context: &[Frame], room_id: &RoomId) -> Option<Frame> {
         context
             .iter()
             .rev()
-            .find(|frame| self.state(frame.run).lanes.contains(room_id))
+            .find(|frame| frame.takes(room_id))
             .cloned()
     }
 
@@ -350,8 +388,7 @@ impl Sim {
             } => Inbound::inject(config, room_id, organization_id, *event),
         };
         let context = call.context.clone();
-        self.runs
-            .push(RunState::new(Running::Inbound, context, Some(call)));
+        self.runs.push(RunState::new(context, Some(call)));
         self.spawned.push(operation);
     }
 
@@ -381,6 +418,13 @@ impl Sim {
         );
         self.state_mut(run).decided = true;
         self.decisions.push((self.trace.last().cloned(), decided));
+        if run == ROOT && self.place_ahead.is_some() {
+            self.note("another call's set is over".to_owned());
+            if let Some(places) = self.holders.places.get_mut(&super::room_id()) {
+                places.retain(|(holder, _)| *holder != ANOTHER_CALL);
+            }
+            self.grant_waits();
+        }
     }
 
     /// The arrival `run` is over: its caller is answered when it waits.
@@ -422,9 +466,9 @@ impl Sim {
             state.locks
         );
         assert!(
-            state.lanes.is_empty(),
-            "the operation ended holding the lane of {:?}",
-            state.lanes
+            state.places.is_empty(),
+            "the operation ended holding the places {:?}",
+            state.places
         );
         assert!(
             state.tickets.is_empty(),
@@ -468,7 +512,6 @@ impl Sim {
     /// that held it first would have.
     fn take_lock(&mut self, run: RunId, room_id: RoomId) {
         self.trace.push(format!("lock {room_id}"));
-        self.assert_in_lane(run, &room_id, "took the room lock");
         self.record_meanwhile(&room_id);
         self.holders.locks.insert(room_id.clone(), run);
         self.state_mut(run).locks.insert(room_id);
@@ -485,47 +528,92 @@ impl Sim {
         self.grant_waits();
     }
 
-    /// Enters the room's lane for the current run, or makes `effect` wait
-    /// for the run that holds it. An inbound operation holds one lane at a
-    /// time.
-    pub(super) fn enter(
+    /// Takes the current run's place for `event_id` in the room's lane,
+    /// behind every place taken before: under the room lock, so that the
+    /// places follow the commits (RFC §10.2). It never waits.
+    pub(super) fn take_place(&mut self, room_id: RoomId, event_id: EventId) {
+        let run = self.current;
+        assert!(
+            self.state(run).locks.contains(&room_id),
+            "a place in the room's lane was taken outside the room lock"
+        );
+        let place = (room_id.clone(), event_id.clone());
+        assert!(
+            self.state_mut(run).places.insert(place),
+            "an event's place was taken twice"
+        );
+        self.holders
+            .places
+            .entry(room_id)
+            .or_default()
+            .push((run, event_id));
+    }
+
+    /// The turn of the current run's place for `event_id`: at once when no
+    /// earlier place of the room is held, once they are left otherwise.
+    pub(super) fn await_place(
         &mut self,
         effect: EffectId,
         room_id: RoomId,
+        event_id: EventId,
         deadline: Option<Timestamp>,
     ) -> Option<Outcome> {
         let run = self.current;
-        let state = self.state(run);
+        let place = (room_id.clone(), event_id.clone());
         assert!(
-            state.kind == Running::Other || state.lanes.is_empty(),
-            "an inbound operation entered a second lane"
+            self.state(run).places.contains(&place),
+            "a set awaited the turn of a place it does not hold"
         );
-        assert!(
-            !state.lanes.contains(&room_id),
-            "the room's lane was entered twice"
-        );
-        if self.holders.lanes.contains_key(&room_id) {
-            return self.wait(effect, deadline, Awaited::Lane(room_id));
+        if !self.is_first_place(run, &room_id, &event_id) {
+            return self.wait(effect, deadline, Awaited::Place(room_id, event_id));
         }
-        self.take_lane(run, room_id);
-        Some(Outcome::Entered)
+        self.give_turn(run, room_id, event_id);
+        Some(Outcome::LaneTurn)
     }
 
-    fn take_lane(&mut self, run: RunId, room_id: RoomId) {
-        self.trace.push(format!("enter lane {room_id}"));
-        self.holders.lanes.insert(room_id.clone(), run);
-        self.state_mut(run).lanes.insert(room_id);
+    fn give_turn(&mut self, run: RunId, room_id: RoomId, event_id: EventId) {
+        self.trace.push(format!("await lane {room_id} {event_id}"));
+        self.state_mut(run).turns.insert((room_id, event_id));
     }
 
-    /// Lets the current run's lane of the room go, which it must hold.
-    pub(super) fn let_lane_go(&mut self, room_id: &RoomId) {
+    /// Whether `run`'s place for `event_id` is the room's first.
+    fn is_first_place(&self, run: RunId, room_id: &RoomId, event_id: &EventId) -> bool {
+        self.holders
+            .places
+            .get(room_id)
+            .and_then(|places| places.first())
+            .is_some_and(|(holder, first)| *holder == run && first == event_id)
+    }
+
+    /// Lets the current run's place for `event_id` go, which it must hold.
+    pub(super) fn leave_place(&mut self, room_id: &RoomId, event_id: &EventId) {
         let run = self.current;
+        let place = (room_id.clone(), event_id.clone());
+        let state = self.state_mut(run);
         assert!(
-            self.state_mut(run).lanes.remove(room_id),
-            "the room's lane was left without being held"
+            state.places.remove(&place),
+            "a place in the room's lane was left without being held"
         );
-        self.holders.lanes.remove(room_id);
+        state.turns.remove(&place);
+        if let Some(places) = self.holders.places.get_mut(room_id) {
+            places.retain(|(holder, held)| (*holder, held) != (run, event_id));
+        }
         self.grant_waits();
+    }
+
+    /// Checks that `run` calls a channel for `event_id` in the turn of the
+    /// event's place: one event's set completes before the next one's
+    /// begins (RFC §10.2). An event whose place could not be taken, or whose
+    /// turn could not be awaited, is delivered out of the lane.
+    pub(super) fn assert_in_turn(&self, run: RunId, room_id: &RoomId, event_id: &EventId) {
+        if self.placeless.contains(event_id) {
+            return;
+        }
+        let place = (room_id.clone(), event_id.clone());
+        assert!(
+            self.state(run).turns.contains(&place),
+            "a channel was called for {event_id} outside its place's turn"
+        );
     }
 
     /// Takes the room's next ticket for the current run: it never waits.
@@ -623,9 +711,9 @@ impl Sim {
                     self.take_lock(wait.run, room_id);
                     Outcome::Locked
                 }
-                Awaited::Lane(room_id) => {
-                    self.take_lane(wait.run, room_id);
-                    Outcome::Entered
+                Awaited::Place(room_id, event_id) => {
+                    self.give_turn(wait.run, room_id, event_id);
+                    Outcome::LaneTurn
                 }
                 Awaited::Turn(room_id) => {
                     self.admit(wait.run, room_id);
@@ -640,7 +728,7 @@ impl Sim {
     fn is_free(&self, wait: &Wait) -> bool {
         match &wait.awaited {
             Awaited::Lock(room_id) => !self.holders.locks.contains_key(room_id),
-            Awaited::Lane(room_id) => !self.holders.lanes.contains_key(room_id),
+            Awaited::Place(room_id, event_id) => self.is_first_place(wait.run, room_id, event_id),
             Awaited::Turn(room_id) => self.is_first(wait.run, room_id),
         }
     }
@@ -732,19 +820,6 @@ impl Sim {
         if let Some(outcome) = at_once {
             self.note(format!("{label} returns"));
             self.post(run, effect.id, outcome);
-        }
-    }
-
-    /// Checks that `run`, when it is an inbound operation, holds the lane
-    /// of `room_id` before it does `what` there: the lane comes before the
-    /// lock (RFC §10.2).
-    pub(super) fn assert_in_lane(&self, run: RunId, room_id: &RoomId, what: &str) {
-        let state = self.state(run);
-        if state.kind == Running::Inbound {
-            assert!(
-                state.lanes.contains(room_id),
-                "an inbound operation {what} outside the room's lane"
-            );
         }
     }
 }

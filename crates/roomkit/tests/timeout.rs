@@ -2,17 +2,17 @@
 //! G-068): a call past its `process_timeout` during an off-lock hook or a
 //! locked one writes nothing, lets go of what it held, and the next message
 //! goes through; a hook's own timeout stays a hook error; a slow delivery
-//! never times out a committed event; the wait for the room's previous call
-//! counts against the bound; a kit clock that stands still bounds the call
-//! all the same, and a timeout past the clocks' range bounds nothing.
+//! never times out a committed event, nor a later call into the room, which
+//! commits within its bound and waits for its turn in the lane after it; a
+//! kit clock that stands still bounds the call all the same, and a timeout
+//! past the clocks' range bounds nothing.
 //!
 //! A refusal is deterministic: what it waits for outlasts the bound by far.
 //! The call that follows, which shows what was left free, runs unbounded.
 //!
-//! The waits for the ticket and for the room lock cannot be made to last
-//! through the kit's calls, which the room's lane runs one at a time: the
-//! kit's own tests hold a ticket and the lock as an earlier holder would
-//! (`kit/tests.rs`).
+//! The waits for the ticket and for the room lock are made to last by the
+//! kit's own tests, which hold a ticket and the lock as an earlier holder
+//! would (`kit/tests.rs`).
 
 #![expect(
     clippy::unwrap_used,
@@ -294,11 +294,12 @@ async fn a_slow_delivery_never_times_out_the_committed_event() {
     );
 }
 
-/// Gap G-068: the room's lane is held for each call, so a call waiting
-/// behind the previous call's delivery counts that wait against its bound,
-/// and is refused with nothing written once it passed.
+/// Gap G-068: the room's lane is entered at the commit, so a call behind
+/// the previous call's slow delivery commits within its bound, and its own
+/// delivery waits for its turn after the commit, counting nothing against
+/// it: it is delivered once the previous set is over.
 #[tokio::test]
-async fn the_wait_for_the_room_s_previous_call_counts_against_the_bound() {
+async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
     let kit = room().await;
     kit.set_process_timeout(None);
     let slow = Slow::new(Duration::ZERO, true);
@@ -312,21 +313,36 @@ async fn the_wait_for_the_room_s_previous_call_counts_against_the_bound() {
                 .await
         })
     };
-    // The first call committed and hangs in its delivery, holding the lane.
+    // The first call committed and hangs in its delivery, its place first.
     tokio::time::timeout(BOUND, delivering.notified())
         .await
         .unwrap();
     kit.set_process_timeout(Some(TIMEOUT));
     let mut events = kit.subscribe();
-    let second = send(&kit, "Still there?").await;
+    let second = {
+        let kit = kit.clone();
+        tokio::spawn(async move { send(&kit, "Still there?").await })
+    };
+    // Nothing tells the commit apart from the outside: the store is read.
+    let deadline = tokio::time::Instant::now() + BOUND;
+    while timeline(&kit).await.len() < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the call never committed"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let delivered_yet = second.is_finished();
+    // The first call's place goes with its run.
     first.abort();
+    let second = tokio::time::timeout(BOUND, second).await.unwrap().unwrap();
     assert_eq!(
         (
-            refusal(&second),
-            timeline(&kit).await.len(),
+            delivered_yet,
+            second.event.map(|event| (event.index, event.status)),
             process_timeouts(&mut events)
         ),
-        (timed_out(), 1, vec![(true, false)])
+        (false, Some((1, EventStatus::Delivered)), Vec::new())
     );
 }
 

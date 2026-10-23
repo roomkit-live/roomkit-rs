@@ -4,9 +4,9 @@
 //!
 //! An instruction goes through the pipeline as a message does. Its pass
 //! applies the room's status gate, runs its hooks and checks its source
-//! under the room lock, and its delivery set joins the room's lane as any
-//! other, behind the room's latest committed event, since the operation
-//! holds the lane for the whole call (RFC §10.1.1 rule 5). The rest is
+//! under the room lock, and its delivery set takes its place in the room's
+//! lane there, as an event committed does, behind the room's latest
+//! committed event (RFC §10.1.1 rule 5). The rest is
 //! written by `rules::instructions` where the pipeline writes the matching
 //! fields of a message:
 //!

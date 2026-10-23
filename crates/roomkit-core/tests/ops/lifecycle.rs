@@ -957,13 +957,12 @@ mod the_status_gate {
         sim.env.advance(Duration::from_secs(121));
         sim.send(Sim::message("sms", "Still there?")).unwrap();
         assert_eq!(
-            sim.trace[3..],
+            sim.trace[2..],
             [
                 "lock room_1",
                 "load_context room_1",
                 "update room room_1 Closed",
                 "release room_1",
-                "leave lane room_1",
             ]
         );
     }
@@ -1092,11 +1091,11 @@ mod the_status_gate {
                 .map(str::to_owned)
                 .to_vec(),
                 [
+                    "leave lane room_1 evt_1",
                     "lock room_1",
                     "load_context room_1",
                     "update room room_1 Closed",
-                    "release room_1",
-                    "leave lane room_1"
+                    "release room_1"
                 ]
                 .map(str::to_owned)
                 .to_vec()
@@ -1302,7 +1301,7 @@ mod a_failed_store_write {
         assert_eq!(
             (
                 sent,
-                sim.trace[3..].to_vec(),
+                sim.trace[2..].to_vec(),
                 sim.notices,
                 sim.timeline.len()
             ),
@@ -1313,7 +1312,6 @@ mod a_failed_store_write {
                     "load_context room_1",
                     "update room room_1 failed",
                     "release room_1",
-                    "leave lane room_1"
                 ]
                 .map(str::to_owned)
                 .to_vec(),

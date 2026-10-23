@@ -36,9 +36,9 @@ use crate::environment::SystemEnvironment;
 use crate::error::KitError;
 use crate::hooks::HookHandler;
 use crate::locks::RoomMutexes;
+use crate::queues::{RoomLanes, RoomTickets};
 use crate::router::{DefaultRouter, DynRouter, InboundRoomRouter};
 use crate::store::{ConversationStore, InMemoryStore};
-use crate::tickets::RoomTickets;
 
 /// How many framework events a slow subscriber may fall behind before it
 /// misses some.
@@ -88,7 +88,7 @@ pub(crate) struct Inner<S> {
     router: RwLock<Arc<dyn DynRouter<S>>>,
     pub(crate) store: S,
     pub(crate) locks: RoomMutexes,
-    pub(crate) lanes: RoomMutexes,
+    pub(crate) lanes: RoomLanes,
     pub(crate) tickets: RoomTickets,
     environment: Mutex<Box<dyn Environment + Send>>,
     events: broadcast::Sender<FrameworkEvent>,
@@ -125,7 +125,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 router: RwLock::new(Arc::new(DefaultRouter)),
                 store,
                 locks: RoomMutexes::default(),
-                lanes: RoomMutexes::default(),
+                lanes: RoomLanes::default(),
                 tickets: RoomTickets::default(),
                 environment: Mutex::new(Box::new(SystemEnvironment)),
                 events,
@@ -152,9 +152,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `process_timeout` framework event. The commit and what follows it,
     /// the event's delivery and its responses, are never bounded.
     ///
-    /// The bound counts from the call's start: with the room's lane held
-    /// for each call (RFC §10.2), the wait for the previous call into the
-    /// room counts against it (gap G-068).
+    /// The bound counts from the call's start; the waits for the room's
+    /// admission ticket and its lock count against it, the wait for the
+    /// event's turn in the room's delivery lane, after the commit, does not
+    /// (gap G-068).
     pub fn set_process_timeout(&self, process_timeout: Option<Duration>) {
         self.inner
             .change_config(|config| config.process_timeout = process_timeout);
@@ -198,17 +199,19 @@ impl<S: ConversationStore> RoomKit<S> {
     /// channel attached when it does not bind it, unless it was detached from
     /// the room (RFC §7.5 rule 7).
     ///
-    /// Inbound messages of one room run one at a time, which keeps each
-    /// event's delivery set ahead of the next one's (RFC §10.2). Called from
-    /// inside that work, by a hook, a turn or a delivery of a call into the
-    /// room it names, the message is adopted by that call instead of
-    /// waiting for it: it returns at its commit, with no delivery result,
-    /// and its delivery set follows in the room's lane (RFC §13.5, §10.1
-    /// step 18). A call from inside a room's work that would wait for the
-    /// room's lane anyway, a message routed back into the room, fails with
+    /// Inbound messages of one room overlap up to the room lock: they
+    /// commit in lock order, each event taking its place in the room's
+    /// delivery lane at its commit, so that each event's delivery set runs
+    /// ahead of the next one's (RFC §10.2). Called from inside a call's work
+    /// in the room it names, by a hook, a parse, a turn or a delivery, the
+    /// message is adopted by that call instead of waiting for it: it returns
+    /// at its commit, with no delivery result, and its delivery set follows
+    /// in the room's lane (RFC §13.5, §10.1 step 18). A call from under the
+    /// room's lock or in its admission order that cannot be adopted, a
+    /// message routed back into the room, fails with
     /// [`KitError::Reentrant`]. A call into another room waits for that
-    /// room's lane as any call does: two rooms whose work calls into each
-    /// other at the same moment wait for each other.
+    /// room's delivery as any call does: two rooms whose work calls into
+    /// each other at the same moment wait for each other.
     ///
     /// A `BEFORE_BROADCAST` hook registered with `needs_lock = false` runs
     /// before the room lock, ordered by the room's admission ticket, so the
@@ -252,8 +255,8 @@ impl<S: ConversationStore> RoomKit<S> {
             .await
     }
 
-    /// Runs `message`, adopted by the call that holds its room's lane when
-    /// it comes from inside that call's work (RFC §13.5).
+    /// Runs `message`, adopted by the call whose work in its room made it,
+    /// when one did (RFC §13.5).
     async fn run_inbound(
         &self,
         room_id: Option<&RoomId>,

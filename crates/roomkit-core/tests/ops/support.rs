@@ -2,18 +2,17 @@
 //! closures, and a trace of every effect it executes.
 //!
 //! It also checks what every driver must hold for the protocol: a commit
-//! happens under its room's lock, an operation never asks for a lock or a
-//! lane it holds, and every lock and lane taken is let go when the
-//! operation ends. For an inbound operation it checks that the room's lane
-//! is held whenever the room's lock is taken, an event committed or a
-//! channel called, and that the lock is free while awaited observers run,
-//! so that they may take it. An inbound operation never holds two lanes at
-//! once, the lane of a room it was routed to included.
+//! happens under its room's lock, an operation never asks for a lock it
+//! holds, and every lock taken is let go when the operation ends. An event
+//! takes its place in the room's delivery lane under the room's lock, a
+//! channel is called for it only in its place's turn, and every place taken
+//! is left when the operation ends (RFC §10.2). The lock is free while
+//! awaited observers run, so that they may take it.
 //!
-//! An admission ticket (RFC §9.5.1) is taken in the room's lane and before
-//! the room lock, its turn awaited before the lock is taken, and it is
-//! released once the lock is let go, on every path: a ticket left held when
-//! the operation ends fails the test, as a lock or a lane does.
+//! An admission ticket (RFC §9.5.1) is taken before the room lock, its turn
+//! awaited before the lock is taken, and it is released once the lock is
+//! let go, on every path: a ticket left held when the operation ends fails
+//! the test, as a lock or a place does.
 //!
 //! Time is simulated: an effect named in `durations` moves the clock as it
 //! runs. An effect that carries a deadline (RFC §13.6) and would finish
@@ -40,7 +39,7 @@
 
 mod runs;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
@@ -137,14 +136,6 @@ struct Channel {
     deliver: Deliver,
 }
 
-/// What the driver runs: an inbound operation holds a lane for what it
-/// does in a room, another operation holds none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Running {
-    Inbound,
-    Other,
-}
-
 /// A room of the store other than `room_1`.
 struct StoredRoom {
     room: Room,
@@ -198,9 +189,16 @@ pub(crate) struct Sim {
     current: runs::RunId,
     /// The arrivals started since the driver last polled a run.
     spawned: Vec<Inbound>,
-    /// The locks, lanes and tickets the runs hold, and the requests that
+    /// The locks, places and tickets the runs hold, and the requests that
     /// wait for them.
     holders: runs::Holders,
+    /// The place another call holds in `room_1`'s lane, by its event, ahead
+    /// of every place the test's operation takes, until that operation
+    /// publishes its decision (`hold_a_place_ahead`).
+    place_ahead: Option<EventId>,
+    /// The events whose place in the lane could not be taken, or whose turn
+    /// could not be awaited, delivered out of it.
+    placeless: BTreeSet<EventId>,
     /// How long each effect takes on the simulated clock, named by the start
     /// of its trace line (`hook pii_scan`, `lock room_1`, `await ticket
     /// room_1`, `handle_inbound sms`); the first match counts.
@@ -216,9 +214,6 @@ pub(crate) struct Sim {
     pub(crate) in_admission_order: Vec<String>,
     /// The contexts the SYNC hooks ran with, by hook name, in order.
     pub(crate) hook_contexts: Vec<(String, RoomContext)>,
-    /// What the test runs: an inbound operation must hold the lane of every
-    /// room it acts in.
-    running: Running,
     /// The identities the store resolves addresses to (RFC §14.1).
     pub(crate) identities: Vec<Identity>,
     /// The router's answers, in order: a room, none, or a failure. Once
@@ -322,12 +317,13 @@ impl Sim {
             current: runs::ROOT,
             spawned: Vec::new(),
             holders: runs::Holders::default(),
+            place_ahead: None,
+            placeless: BTreeSet::new(),
             durations: Vec::new(),
             nth_durations: Vec::new(),
             bounded: Vec::new(),
             in_admission_order: Vec::new(),
             hook_contexts: Vec::new(),
-            running: Running::Other,
             identities: Vec::new(),
             routes: VecDeque::new(),
             route_queries: Vec::new(),
@@ -483,6 +479,14 @@ impl Sim {
         );
     }
 
+    /// Makes another call hold a place in `room_1`'s lane ahead of every
+    /// place the test's operation takes, until that operation publishes its
+    /// decision: the set of a call whose turn waits for this one, as an
+    /// agent's turn waits for its call into the room.
+    pub(crate) fn hold_a_place_ahead(&mut self) {
+        self.place_ahead = Some(EventId::new("another_call_s_event").unwrap());
+    }
+
     /// Registers a SYNC `BEFORE_BROADCAST` hook.
     pub(crate) fn sync_hook(&mut self, spec: HookSpec, hook: Hook) -> HookId {
         let id = self.config.hooks.register(spec).unwrap();
@@ -577,10 +581,7 @@ impl Sim {
         let organization = organization.map(str::to_owned);
         let room = RoomId::new(room).unwrap();
         let operation = Inbound::inject(config, room, organization, event);
-        self.running = Running::Inbound;
-        let result = self.run(operation);
-        self.running = Running::Other;
-        result
+        self.run(operation)
     }
 
     /// Commits `record` to `room` outside the pipeline, for a caller acting
@@ -676,10 +677,7 @@ impl Sim {
     ) -> Result<InboundResult, InboundError> {
         let config = Arc::new(self.config.clone());
         let organization = organization.map(str::to_owned);
-        self.running = Running::Inbound;
-        let result = self.run(Inbound::new(config, target, organization, message));
-        self.running = Running::Other;
-        result
+        self.run(Inbound::new(config, target, organization, message))
     }
 
     /// Scripts the router's next answer: `room`, or none.
@@ -949,8 +947,9 @@ impl Sim {
         match request {
             Request::AcquireLock { room_id } => format!("lock {room_id}"),
             Request::ReleaseLock { room_id } => format!("release {room_id}"),
-            Request::EnterLane { room_id } => format!("enter lane {room_id}"),
-            Request::LeaveLane { room_id } => format!("leave lane {room_id}"),
+            Request::EnterLane { room_id, event_id } => format!("enter lane {room_id} {event_id}"),
+            Request::AwaitLane { room_id, event_id } => format!("await lane {room_id} {event_id}"),
+            Request::LeaveLane { room_id, event_id } => format!("leave lane {room_id} {event_id}"),
             Request::TakeTicket { room_id } => format!("take ticket {room_id}"),
             Request::AwaitTicket { room_id } => format!("await ticket {room_id}"),
             Request::ReleaseTicket { room_id } => format!("release ticket {room_id}"),
@@ -998,12 +997,15 @@ impl Sim {
         }
         let outcome = match request {
             Request::AcquireLock { room_id } => return self.acquire(effect, room_id, deadline),
-            Request::EnterLane { room_id } => return self.enter_lane(effect, room_id, deadline),
+            Request::AwaitLane { room_id, event_id } => {
+                return self.await_place(effect, room_id, event_id, deadline);
+            }
             Request::AwaitTicket { room_id } => {
                 return self.await_ticket(effect, room_id, deadline);
             }
             Request::ReleaseLock { room_id } => self.release(&room_id),
-            Request::LeaveLane { room_id } => self.leave_lane(&room_id),
+            Request::EnterLane { room_id, event_id } => self.enter_lane(room_id, event_id),
+            Request::LeaveLane { room_id, event_id } => self.leave_lane(&room_id, &event_id),
             Request::TakeTicket { room_id } => self.take_ticket(room_id),
             Request::ReleaseTicket { room_id } => self.release_ticket(&room_id),
             Request::HandleInbound {
@@ -1120,10 +1122,7 @@ impl Sim {
         self.trace
             .push(format!("route {} {}", query.channel_id, query.sender_id));
         assert!(
-            {
-                let state = self.state(self.current);
-                state.locks.is_empty() && state.lanes.is_empty()
-            },
+            { self.state(self.current).locks.is_empty() },
             "the router was asked holding a lock or a lane"
         );
         self.route_queries.push(query);
@@ -1182,7 +1181,6 @@ impl Sim {
             !self.state(self.current).locks.contains(&event.room_id),
             "awaited observers ran under the room lock, which they may need"
         );
-        self.assert_in_lane(self.current, &event.room_id, "awaited observers");
         for hook in hooks {
             let Some(attached) = self.observer_attaches.get(hook).cloned() else {
                 continue;
@@ -1234,8 +1232,12 @@ impl Sim {
                 format!("route {}", query.channel_id),
                 ErrorRecord::new("RouterError", "the CRM is unreachable"),
             ),
-            Request::EnterLane { room_id } => (
-                format!("enter lane {room_id}"),
+            Request::EnterLane { room_id, event_id } => (
+                format!("enter lane {room_id} {event_id}"),
+                ErrorRecord::new("LaneUnavailable", "the lane manager is down"),
+            ),
+            Request::AwaitLane { room_id, event_id } => (
+                format!("await lane {room_id} {event_id}"),
                 ErrorRecord::new("LaneUnavailable", "the lane manager is down"),
             ),
             Request::TakeTicket { room_id } => (
@@ -1259,6 +1261,9 @@ impl Sim {
         };
         if !target.starts_with(failing) {
             return None;
+        }
+        if let Request::EnterLane { event_id, .. } | Request::AwaitLane { event_id, .. } = request {
+            self.placeless.insert(event_id.clone());
         }
         self.trace.push(format!("{target} failed"));
         Some(Outcome::Failed(error))
@@ -1297,32 +1302,27 @@ impl Sim {
         Outcome::Released
     }
 
-    /// Enters a room's delivery lane for the current run, or waits for the
-    /// run that holds it.
-    fn enter_lane(
-        &mut self,
-        effect: EffectId,
-        room_id: RoomId,
-        deadline: Option<Timestamp>,
-    ) -> Option<Outcome> {
-        self.enter(effect, room_id, deadline)
+    /// Takes the current run's place for `event_id` in the room's delivery
+    /// lane; it never waits.
+    fn enter_lane(&mut self, room_id: RoomId, event_id: EventId) -> Outcome {
+        self.trace.push(format!("enter lane {room_id} {event_id}"));
+        self.take_place(room_id, event_id);
+        Outcome::Entered
     }
 
-    /// Leaves the current run's lane of a room, which must be held.
-    fn leave_lane(&mut self, room_id: &RoomId) -> Outcome {
-        self.trace.push(format!("leave lane {room_id}"));
-        self.let_lane_go(room_id);
+    /// Leaves the current run's place for `event_id`, which must be held.
+    fn leave_lane(&mut self, room_id: &RoomId, event_id: &EventId) -> Outcome {
+        self.trace.push(format!("leave lane {room_id} {event_id}"));
+        self.leave_place(room_id, event_id);
         if self.leave_fails {
             return Outcome::Failed(ErrorRecord::new("LaneLost", "the lane was lost"));
         }
         Outcome::Left
     }
 
-    /// Takes the room's admission ticket, in the room's lane and before its
-    /// lock (RFC §9.5.1).
+    /// Takes the room's admission ticket, before its lock (RFC §9.5.1).
     fn take_ticket(&mut self, room_id: RoomId) -> Outcome {
         self.trace.push(format!("take ticket {room_id}"));
-        self.assert_in_lane(self.current, &room_id, "took an admission ticket");
         assert!(
             !self.state(self.current).locks.contains(&room_id),
             "an admission ticket was taken under the room lock"
@@ -1470,6 +1470,7 @@ impl Sim {
             Request::AcquireLock { .. }
             | Request::ReleaseLock { .. }
             | Request::EnterLane { .. }
+            | Request::AwaitLane { .. }
             | Request::LeaveLane { .. }
             | Request::TakeTicket { .. }
             | Request::AwaitTicket { .. }
@@ -1532,7 +1533,6 @@ impl Sim {
             self.state(self.current).locks.contains(&event.room_id),
             "an event was committed outside the room lock"
         );
-        self.assert_in_lane(self.current, &event.room_id, "committed an event");
         assert_eq!(
             event.index, self.room.event_count,
             "the index is the room's count"
@@ -1608,7 +1608,7 @@ impl Sim {
         self.env.advance(self.delivery_duration);
         self.trace
             .push(format!("on_event {} <- {}", binding.channel_id, event.id));
-        self.assert_in_lane(self.current, &binding.room_id, "called on_event()");
+        self.assert_in_turn(self.current, &binding.room_id, &event.id);
         let channel = self.channels.get_mut(&binding.channel_id).unwrap();
         let answer = (channel.on_event)(event, &context);
         self.on_event_contexts
@@ -1621,7 +1621,7 @@ impl Sim {
         self.env.advance(self.delivery_duration);
         self.trace
             .push(format!("deliver {} <- {}", binding.channel_id, event.id));
-        self.assert_in_lane(self.current, &binding.room_id, "called deliver()");
+        self.assert_in_turn(self.current, &binding.room_id, &event.id);
         let channel = self.channels.get_mut(&binding.channel_id).unwrap();
         output((channel.deliver)(event))
     }
@@ -1652,6 +1652,7 @@ fn store_room(request: &Request) -> &RoomId {
         Request::AcquireLock { .. }
         | Request::ReleaseLock { .. }
         | Request::EnterLane { .. }
+        | Request::AwaitLane { .. }
         | Request::LeaveLane { .. }
         | Request::TakeTicket { .. }
         | Request::AwaitTicket { .. }

@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use roomkit_core::model::{
-    ChannelOutput, DeliveryStatus, ErrorRecord, EventId, EventType, HookResult, InjectedEvent,
-    Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId, Timestamp, Visibility,
+    ChannelOutput, DeliveryStatus, ErrorRecord, EventId, EventStatus, EventType, HookResult,
+    InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId, Timestamp,
+    Visibility,
 };
 use roomkit_core::ops::{
     FrameworkEvent, Inbound, InboundError, InboundTarget, KitConfig, Next, Operation, Outcome,
@@ -43,7 +44,6 @@ mod an_allowed_message {
         assert_eq!(
             sim.trace,
             [
-                "enter lane room_1",
                 "load_context room_1",
                 "handle_inbound sms",
                 "lock room_1",
@@ -51,21 +51,26 @@ mod an_allowed_message {
                 "hook pii_scan",
                 "load_context room_1",
                 "commit #0 sms delivered \"Bonjour\"",
+                "enter lane room_1 evt_1",
                 "release room_1",
+                "await lane room_1 evt_1",
                 "on_event ws <- evt_1",
                 "on_event ai <- evt_1",
                 "deliver ws <- evt_1",
+                "leave lane room_1 evt_1",
                 "lock room_1",
                 "load_context room_1",
                 "hook pii_scan",
                 "load_context room_1",
                 "commit #1 ai delivered \"Hello back\"",
+                "enter lane room_1 evt_2",
                 "release room_1",
+                "await lane room_1 evt_2",
                 "on_event sms <- evt_2",
                 "on_event ws <- evt_2",
                 "deliver sms <- evt_2",
                 "deliver ws <- evt_2",
-                "leave lane room_1",
+                "leave lane room_1 evt_2",
             ]
         );
     }
@@ -840,8 +845,8 @@ mod metadata_updates {
             ),
             (
                 vec![
-                    "update room room_1 Active".to_owned(),
-                    "leave lane room_1".to_owned()
+                    "leave lane room_1 evt_1".to_owned(),
+                    "update room room_1 Active".to_owned()
                 ],
                 Some(&json!("gold"))
             )
@@ -886,13 +891,12 @@ mod a_source_that_cannot_write {
         );
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
-            sim.trace[5..],
+            sim.trace[4..],
             [
                 "hook audit",
                 "load_context room_1",
                 "commit #0 sms blocked:source_muted \"Bonjour\"",
                 "release room_1",
-                "leave lane room_1",
             ]
         );
     }
@@ -1011,13 +1015,12 @@ mod a_closed_room {
         sim.room.status = RoomStatus::Closed;
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
-            (sim.trace[3..].to_vec(), sim.timeline.len()),
+            (sim.trace[2..].to_vec(), sim.timeline.len()),
             (
                 vec![
                     "lock room_1".to_owned(),
                     "load_context room_1".to_owned(),
                     "release room_1".to_owned(),
-                    "leave lane room_1".to_owned()
                 ],
                 0
             )
@@ -1236,14 +1239,12 @@ mod a_duplicate_message {
         assert_eq!(
             sim.trace,
             [
-                "enter lane room_1",
                 "load_context room_1",
                 "handle_inbound sms",
                 "lock room_1",
                 "load_context room_1",
                 "find_key SM123",
                 "release room_1",
-                "leave lane room_1",
             ]
         );
     }
@@ -1258,12 +1259,12 @@ mod the_receiving_channel {
     fn parses_with_only_the_events_it_may_see() {
         let mut sim = room();
         let mut whispered = notice_event("whisper", "advisor only");
-        whispered.status = roomkit_core::model::EventStatus::Delivered;
+        whispered.status = EventStatus::Delivered;
         whispered.visibility = Visibility::channels([channel("ws")]).unwrap();
         let mut refused = notice_event("refused", "blocked text");
-        refused.status = roomkit_core::model::EventStatus::Blocked;
+        refused.status = EventStatus::Blocked;
         let mut seen = notice_event("seen", "for everyone");
-        seen.status = roomkit_core::model::EventStatus::Delivered;
+        seen.status = EventStatus::Delivered;
         sim.seed(whispered);
         sim.seed(refused);
         sim.seed(seen);
@@ -1540,10 +1541,7 @@ mod a_failure_after_the_commit {
                     .get("ws")
                     .map(|delivery| delivery.status)
             ),
-            (
-                Some(roomkit_core::model::EventStatus::Delivered),
-                Some(DeliveryStatus::Failed)
-            )
+            (Some(EventStatus::Delivered), Some(DeliveryStatus::Failed))
         );
     }
 
@@ -1613,7 +1611,7 @@ mod a_refused_operation {
     }
 
     #[test]
-    fn a_channel_that_cannot_parse_the_message_fails_it_and_leaves_the_lane() {
+    fn a_channel_that_cannot_parse_the_message_fails_it() {
         let sim = room();
         let mut config = KitConfig::new();
         config
@@ -1629,13 +1627,137 @@ mod a_refused_operation {
             recent_events: Vec::new(),
         }));
         let failure = Outcome::Failed(ErrorRecord::new("ParseError", "bad payload"));
-        for outcome in [Outcome::Entered, context, failure, Outcome::Left] {
+        for outcome in [context, failure] {
             answer(&mut inbound, &mut environment, outcome);
         }
         assert!(matches!(
             inbound.poll(&mut environment).next,
             Next::Ready(Err(InboundError::ChannelFailed { .. }))
         ));
+    }
+}
+
+/// RFC §10.2, §10.1 steps 12 to 14: an event delivered takes its place in
+/// the room's delivery lane at its commit, under the lock, and its set runs
+/// in that place's turn; a place is left on every path, and a lane request
+/// that fails is logged, the event delivered all the same (RFC §13.6).
+mod the_delivery_lane {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// The lines from the first commit on, the lane's and the lock's.
+    fn lane_and_lock(sim: &Sim) -> Vec<&str> {
+        sim.trace
+            .iter()
+            .map(String::as_str)
+            .skip_while(|line| !line.starts_with("commit"))
+            .filter(|line| {
+                [
+                    "commit",
+                    "release",
+                    "enter lane",
+                    "await lane",
+                    "leave lane",
+                ]
+                .iter()
+                .any(|kind| line.starts_with(kind))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn takes_the_event_s_place_between_its_commit_and_the_release() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.transport("ws");
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            lane_and_lock(&sim),
+            [
+                "commit #0 sms delivered \"Bonjour\"",
+                "enter lane room_1 evt_1",
+                "release room_1",
+                "await lane room_1 evt_1",
+                "leave lane room_1 evt_1",
+            ]
+        );
+    }
+
+    /// A record stored blocked has no delivery set, and no place.
+    #[test]
+    fn gives_a_record_stored_blocked_no_place() {
+        let mut sim = room();
+        sim.before_broadcast(
+            "policy",
+            Box::new(|_| HookOutcome::Returned(HookResult::block("not now"))),
+        );
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (sim.traced("enter lane"), sim.timeline_lines()),
+            (vec![], vec!["#0 sms blocked:policy \"Bonjour\"".to_owned()])
+        );
+    }
+
+    /// A set whose targets all fail leaves its place, and the next set
+    /// takes its turn.
+    #[test]
+    fn is_left_by_a_set_whose_targets_fail() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.transport_with(
+            "ws",
+            Box::new(|_, _| Err(ErrorRecord::new("SocketClosed", "the socket closed"))),
+        );
+        sim.echo_agent("ai", "Hello back");
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            sim.traced("leave lane"),
+            ["leave lane room_1 evt_1", "leave lane room_1 evt_2"]
+        );
+    }
+
+    #[test]
+    fn delivers_an_event_whose_place_could_not_be_taken() {
+        let mut sim = room();
+        sim.failing_effect = Some("enter lane room_1 evt_1");
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                result.event.map(|event| event.status),
+                result.error,
+                sim.traced("deliver"),
+                sim.traced("await lane room_1 evt_1")
+            ),
+            (
+                Some(EventStatus::Delivered),
+                None,
+                vec![
+                    "deliver ws <- evt_1",
+                    "deliver sms <- evt_2",
+                    "deliver ws <- evt_2"
+                ],
+                vec![]
+            )
+        );
+    }
+
+    #[test]
+    fn delivers_an_event_whose_turn_could_not_be_awaited_and_leaves_its_place() {
+        let mut sim = room();
+        sim.failing_effect = Some("await lane room_1 evt_1");
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                result.event.map(|event| event.status),
+                sim.traced("deliver ws <- evt_1"),
+                sim.traced("leave lane room_1 evt_1")
+            ),
+            (
+                Some(EventStatus::Delivered),
+                vec!["deliver ws <- evt_1"],
+                vec!["leave lane room_1 evt_1"]
+            )
+        );
     }
 }
 
@@ -1734,7 +1856,7 @@ mod the_protocol {
         let mut inbound = Inbound::new(config, target, None, Sim::message("sms", "Hi"));
         let Next::Effects(effects) = inbound.poll(&mut SequentialEnvironment::default()).next
         else {
-            panic!("expected the lane's entry");
+            panic!("expected step 2's read of the room");
         };
         (inbound, effects.first().unwrap().id)
     }
@@ -1751,9 +1873,9 @@ mod the_protocol {
     #[test]
     fn an_effect_completed_twice_is_refused() {
         let (mut inbound, effect) = started();
-        inbound.complete(effect, Outcome::Entered).unwrap();
+        inbound.complete(effect, Outcome::RoomNotFound).unwrap();
         assert_eq!(
-            inbound.complete(effect, Outcome::Entered),
+            inbound.complete(effect, Outcome::RoomNotFound),
             Err(ProtocolError::UnknownEffect(effect))
         );
     }

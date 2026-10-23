@@ -1,6 +1,6 @@
 //! How a call enters its room: a message's steps 1 to 4 (RFC §10.1), or a
-//! direct injection's way to its lane (RFC §10.5, `direct`), then its
-//! off-lock check or its pass.
+//! direct injection's way (RFC §10.5, `direct`), then its off-lock check or
+//! its pass.
 
 use super::arrival::{self, Arrival};
 use super::deadline::{self, Stopped};
@@ -34,8 +34,7 @@ impl Machine {
 
     /// Resolves the channel and the sender's form (RFC §10.1 step 1), and
     /// refuses a message that cannot be one before anything is read (RFC
-    /// §10.1.1, gap G-041), then starts the arrival, which enters the room's
-    /// lane once the room is known.
+    /// §10.1.1, gap G-041), then starts the arrival.
     pub(super) fn begin_message(
         &mut self,
         cx: &mut Cx<'_>,
@@ -67,8 +66,8 @@ impl Machine {
     }
 
     /// Takes an answer of the arrival; once it hands the event, the
-    /// trigger's off-lock check or its pass starts, in the room whose lane
-    /// the arrival entered.
+    /// trigger's off-lock check or its pass starts, in the room the arrival
+    /// came into.
     pub(super) fn on_arrival(
         &mut self,
         cx: &mut Cx<'_>,
@@ -80,7 +79,6 @@ impl Machine {
             self.stage = Stage::Arriving(arrival);
             return;
         };
-        self.holds_lane = arrival.lane().is_some();
         match arrived {
             Ok(arrived) => {
                 self.room_id = Some(arrived.event.room_id.clone());

@@ -1,7 +1,8 @@
 //! A room's lane and lock on the tokio driver (RFC §10.2, §13.5): calls
 //! from several tasks into one room, and the lane and lock left free for
 //! the next call whatever ended the last one: a channel that panicked, or a
-//! caller that dropped its call mid-cascade.
+//! caller that dropped its call mid-cascade, whose places in the lane go
+//! with it.
 
 #![expect(
     clippy::unwrap_used,
@@ -83,11 +84,13 @@ fn event_names(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<String> 
 }
 
 /// Two tasks on a multi-threaded runtime send at the same instant into one
-/// missing room. The room's lane runs them one after the other: the room is
-/// created, attached and its session started once, and the message that
-/// created it is its first event, its sender the binding's correspondent,
-/// although the creation's awaited hook leaves the other message time to
-/// get in, were the lane not held.
+/// missing room, overlapping up to the room lock (RFC §10.2). The room is
+/// created, attached and its session started once, the creation's awaited
+/// hook leaving the other message time to get in: that one finds the room
+/// created and may attach the channel first, at its defaults (step 2's read
+/// again after a creation refused), and the attach of the call that created
+/// the room then finds it bound. Each message commits once, with its own
+/// index.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
     let kit = RoomKit::new();
@@ -117,17 +120,12 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
         .unwrap();
     let timeline = kit.store().list_events(&room_id(), true).await.unwrap();
     let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
-    let first_sender = timeline
-        .first()
-        .and_then(|event| event.source.participant_id.clone());
     assert_eq!(
         (
             rooms.len(),
             event_names(&mut events),
             timeline.iter().map(|event| event.index).collect::<Vec<_>>(),
-            bindings
-                .first()
-                .and_then(|binding| binding.participant_id.clone()),
+            bindings.len(),
         ),
         (
             1,
@@ -135,7 +133,7 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
                 .map(str::to_owned)
                 .to_vec(),
             vec![0, 1],
-            first_sender
+            1
         )
     );
 }

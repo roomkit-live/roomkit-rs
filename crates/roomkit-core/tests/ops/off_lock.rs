@@ -102,7 +102,6 @@ mod an_off_lock_hook {
         assert_eq!(
             sim.trace,
             [
-                "enter lane room_1",
                 "load_context room_1",
                 "handle_inbound sms",
                 "take ticket room_1",
@@ -113,11 +112,13 @@ mod an_off_lock_hook {
                 "hook policy",
                 "load_context room_1",
                 "commit #0 sms delivered \"Bonjour\"",
+                "enter lane room_1 evt_1",
                 "release room_1",
                 "release ticket room_1",
+                "await lane room_1 evt_1",
                 "on_event ws <- evt_1",
                 "deliver ws <- evt_1",
-                "leave lane room_1",
+                "leave lane room_1 evt_1",
             ]
         );
     }
@@ -275,7 +276,6 @@ mod an_off_lock_block {
                 "commit #0 sms blocked:scanner \"Bonjour\"",
                 "release room_1",
                 "release ticket room_1",
-                "leave lane room_1",
             ]
         );
     }
@@ -603,12 +603,13 @@ mod the_ticket {
             .iter()
             .map(String::as_str)
             .skip_while(|line| !line.starts_with("commit"))
-            .take(3)
+            .take(4)
             .collect();
         assert_eq!(
             after_commit,
             [
                 "commit #0 sms delivered \"Bonjour\"",
+                "enter lane room_1 evt_1",
                 "release room_1",
                 "release ticket room_1"
             ]
@@ -670,13 +671,14 @@ mod the_ticket {
             .map(String::as_str)
             .skip_while(|line| *line != "hook policy")
             .skip(1)
-            .take(3)
+            .take(4)
             .collect();
         assert_eq!(
             (decided, ticket_lines(&sim)),
             (
                 vec![
                     "load_context room_1",
+                    "enter lane room_1 evt_1",
                     "release room_1",
                     "release ticket room_1"
                 ],
@@ -748,15 +750,10 @@ mod the_ticket {
             (
                 ticket_lines(&sim),
                 sim.timeline.len(),
-                sim.traced("leave lane"),
+                sim.traced("lock"),
                 matches!(failed, Err(InboundError::Ticket(_)))
             ),
-            (
-                vec!["take ticket room_1 failed"],
-                0,
-                vec!["leave lane room_1"],
-                true
-            )
+            (vec!["take ticket room_1 failed"], 0, vec![], true)
         );
     }
 

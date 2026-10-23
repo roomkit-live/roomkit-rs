@@ -92,10 +92,6 @@ pub enum InboundError {
     /// what was decided under the lock stands (gap G-025).
     #[error("the room lock failed: {0:?}")]
     Lock(ErrorRecord),
-    /// The room's delivery lane could not be entered. A failed leave is no
-    /// error: what the call decided stands.
-    #[error("the room's delivery lane failed: {0:?}")]
-    Lane(ErrorRecord),
     /// The room's admission ticket could not be taken or waited for (RFC
     /// §9.5.1). Nothing was written. A failed release is no error: what the
     /// call decided stands.

@@ -1,6 +1,8 @@
 //! Off-lock checks on the tokio driver (RFC §9.5.1, §10.1 step 5a, Appendix
 //! B.2): a hook registered with `needs_lock = false` keeps the room lock
-//! free while it runs, a call cancelled during it leaves no ticket behind,
+//! free while it runs, the checks of two calls into one room overlap and
+//! commit in ticket order, an event no check fires for is not ordered
+//! against them, a call cancelled during a check leaves no ticket behind,
 //! and B.2's scanner run off the lock gives the timeline it gives under it.
 
 #![expect(
@@ -143,6 +145,140 @@ async fn a_slow_locked_hook_holds_the_room_lock_from_a_lifecycle_change() {
     go.notify_one();
     tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
     assert!(paused.is_err(), "the pause should wait for the room lock");
+}
+
+/// The texts of `room_1`'s timeline, in index order.
+async fn texts(kit: &RoomKit) -> Vec<String> {
+    kit.store()
+        .list_events(&room_id(), true)
+        .await
+        .unwrap()
+        .iter()
+        .map(|event| text_of(&event.content))
+        .collect()
+}
+
+/// Runs `text` from the customer into `room_1` in a task of its own.
+fn sent(kit: &RoomKit, text: &'static str) -> tokio::task::JoinHandle<InboundResult> {
+    let kit = kit.clone();
+    tokio::spawn(async move {
+        kit.process_inbound(message(text), Some(&room_id()))
+            .await
+            .unwrap()
+    })
+}
+
+/// RFC §9.5.1, Order: the checks of two calls into one room overlap, the
+/// second's over while the first's still runs, and the two commit in the
+/// order their tickets were taken.
+#[tokio::test]
+async fn two_overlapping_checks_commit_in_ticket_order() {
+    let kit = room().await;
+    let (held, go, second_checked) = (
+        Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
+        Arc::new(Notify::new()),
+    );
+    let signals = (
+        Arc::clone(&held),
+        Arc::clone(&go),
+        Arc::clone(&second_checked),
+    );
+    kit.hook(
+        before_broadcast("scanner", false),
+        move |event: RoomEvent, _: RoomContext| {
+            let (held, go, second_checked) = (
+                Arc::clone(&signals.0),
+                Arc::clone(&signals.1),
+                Arc::clone(&signals.2),
+            );
+            async move {
+                if text_of(&event.content) == "first" {
+                    held.notify_one();
+                    go.notified().await;
+                } else {
+                    second_checked.notify_one();
+                }
+                Ok(HookResult::allow())
+            }
+        },
+    )
+    .unwrap();
+    let first = sent(&kit, "first");
+    tokio::time::timeout(BOUND, held.notified()).await.unwrap();
+    let second = sent(&kit, "second");
+    tokio::time::timeout(BOUND, second_checked.notified())
+        .await
+        .unwrap_or_else(|_| panic!("the second check waited for the first"));
+    let committed_meanwhile = texts(&kit).await;
+    go.notify_one();
+    let first = tokio::time::timeout(BOUND, first).await.unwrap().unwrap();
+    let second = tokio::time::timeout(BOUND, second).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            committed_meanwhile,
+            first.event.map(|event| event.index),
+            second.event.map(|event| event.index),
+            texts(&kit).await
+        ),
+        (
+            Vec::<String>::new(),
+            Some(0),
+            Some(1),
+            vec!["first".to_owned(), "second".to_owned()]
+        )
+    );
+}
+
+/// RFC §9.5.1, Order: an event no off-lock hook fires for takes no ticket,
+/// and is not ordered against ticketed ones: the advisor's message commits
+/// while the customer's check still runs.
+#[tokio::test]
+async fn a_message_no_check_fires_for_commits_during_another_s_check() {
+    let kit = room().await;
+    kit.register_channel(RecordingTransport::new(
+        channel("ws"),
+        ChannelType::Websocket,
+    ))
+    .unwrap();
+    kit.attach(&room_id(), &channel("ws")).await.unwrap();
+    let (held, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (hook_held, hook_go) = (Arc::clone(&held), Arc::clone(&go));
+    let spec = HookSpec {
+        filter: roomkit::HookFilter {
+            channel_ids: Some([channel("sms")].into()),
+            ..roomkit::HookFilter::default()
+        },
+        ..before_broadcast("scanner", false)
+    };
+    kit.hook(spec, move |_: RoomEvent, _: RoomContext| {
+        let (held, go) = (Arc::clone(&hook_held), Arc::clone(&hook_go));
+        async move {
+            held.notify_one();
+            go.notified().await;
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    let customer = sent(&kit, "Bonjour");
+    tokio::time::timeout(BOUND, held.notified()).await.unwrap();
+    let advisor = InboundMessage::new(channel("ws"), "advisor", EventContent::text("Hello"));
+    let during = tokio::time::timeout(BOUND, kit.process_inbound(advisor, Some(&room_id())))
+        .await
+        .unwrap_or_else(|_| panic!("the advisor's message waited for the customer's check"))
+        .unwrap();
+    go.notify_one();
+    let customer = tokio::time::timeout(BOUND, customer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (
+            during.event.map(|event| event.index),
+            customer.event.map(|event| event.index)
+        ),
+        (Some(0), Some(1))
+    );
 }
 
 /// RFC §9.5.1, Release: a call dropped while its off-lock check runs

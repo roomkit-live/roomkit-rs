@@ -292,14 +292,14 @@ impl CommitPass {
     }
 
     /// Waits for the commit to be durable; an instruction, which writes
-    /// nothing, releases the lock at once (RFC §10.1.1 rule 5).
+    /// nothing, goes on at once (RFC §10.1.1 rule 5).
     fn committing(&mut self, cx: &mut Cx<'_>, committing: Committing) -> State {
         match committing.effect {
             Some(effect) => State::Committing {
                 effect,
                 result: committing.result,
             },
-            None => self.release(cx, Ok(committing.result)),
+            None => self.place(cx, committing.result),
         }
     }
 
@@ -310,8 +310,51 @@ impl CommitPass {
         outcome: Outcome,
     ) -> State {
         match outcome.into_committed() {
-            Ok(()) => self.release(cx, Ok(result)),
+            Ok(()) => self.place(cx, result),
             Err(error) => self.release(cx, Err(Abort::Store(error))),
         }
+    }
+
+    /// An event delivered, committed or, for an instruction, decided, takes
+    /// its place in the room's delivery lane before the lock is released
+    /// (RFC §10.1 step 12), with no deadline: it is the room's already. A
+    /// record stored blocked has no delivery set, and no place.
+    fn place(&mut self, cx: &mut Cx<'_>, result: PassResult) -> State {
+        let PassResult::Delivered { event, .. } = &result else {
+            return self.release(cx, Ok(result));
+        };
+        let room_id = event.room_id.clone();
+        let request = Request::EnterLane {
+            room_id: room_id.clone(),
+            event_id: event.id.clone(),
+        };
+        State::Placing {
+            effect: cx.io.issue_under(request, None, Some(room_id)),
+            result,
+        }
+    }
+
+    /// The event's place is taken. A place that could not be taken is
+    /// logged, and the event delivered all the same, out of the lane's
+    /// order (RFC §13.6: an event stored is delivered).
+    pub(super) fn on_placed(
+        &mut self,
+        cx: &mut Cx<'_>,
+        result: PassResult,
+        outcome: Outcome,
+    ) -> State {
+        match outcome.into_entered() {
+            Ok(()) => self.placed = true,
+            Err(error) => tracing::warn!(
+                target: "roomkit::core::inbound",
+                room_id = %self.event.room_id,
+                event_id = %self.event.id,
+                error_type = %error.error_type,
+                message = %error.message,
+                "taking the event's place in the room's delivery lane failed; it is delivered \
+                 all the same"
+            ),
+        }
+        self.release(cx, Ok(result))
     }
 }

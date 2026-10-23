@@ -16,12 +16,11 @@
 //! effects, as if no hook had run (gap G-067).
 //!
 //! The call holds the ticket until its trigger's pass is over, and releases
-//! it on every path (`holds`). Within one process the room's lane already
-//! runs the room's calls one at a time (decision 4 of step 2), so two
-//! checks of one room do not overlap yet; their tickets are real effects
-//! all the same. A response, a hook's injected event, a refused record and
-//! an entry adopted from the room's own work run every hook under the lock,
-//! and take no ticket (RFC §9.5.1, gap G-070).
+//! it on every path (`holds`). The checks of two calls into one room
+//! overlap, and their tickets order their commits (RFC §9.5.1 Order). A
+//! response, a hook's injected event, a refused record and an entry adopted
+//! from the room's own work run every hook under the lock, and take no
+//! ticket (RFC §9.5.1, gap G-070).
 
 use std::mem;
 

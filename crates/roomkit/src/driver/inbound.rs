@@ -13,6 +13,7 @@ use std::sync::Arc;
 use roomkit_core::ops::{Inbound, InboundError, InboundResult};
 use tokio::task::JoinHandle;
 
+use super::Leases;
 use crate::context::ExecutionContext;
 use crate::error::KitError;
 use crate::kit::Inner;
@@ -23,19 +24,23 @@ use crate::store::ConversationStore;
 pub(crate) type InboundOutput = Result<Result<InboundResult, InboundError>, KitError>;
 
 /// Runs `inbound`, made by the kit's call `call`, on a task of its own,
-/// within the caller's execution context, and waits for its end.
+/// within the caller's execution context, and waits for its end. A lock its
+/// context holds a lease on is refused to it: a call nested under the lock
+/// is adopted by the section that holds it, and one that reaches the driver
+/// would commit within that section's tenure.
 ///
 /// # Errors
 ///
-/// As [`run`](super::run); [`KitError::Stalled`] when the runtime cancelled
-/// the run's task, as it does when it shuts down.
+/// As [`run`](super::run), and [`KitError::Reentrant`] for such a lock;
+/// [`KitError::Stalled`] when the runtime cancelled the run's task, as it
+/// does when it shuts down.
 pub(crate) async fn run_inbound<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     inbound: Inbound,
 ) -> InboundOutput {
     let inner = Arc::clone(inner);
-    let run = async move { super::run(&inner, call, inbound).await };
+    let run = async move { super::drive(&inner, call, inbound, Leases::Refused).await };
     let mut task = RunTask(tokio::spawn(ExecutionContext::current().scope(run)));
     match (&mut task.0).await {
         Ok(output) => output,

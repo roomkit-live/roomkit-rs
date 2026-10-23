@@ -12,6 +12,7 @@ pub(crate) enum RequestKind {
     AcquireLock,
     ReleaseLock,
     EnterLane,
+    AwaitLane,
     LeaveLane,
     TakeTicket,
     AwaitTicket,
@@ -37,6 +38,7 @@ impl Request {
             Self::AcquireLock { .. } => RequestKind::AcquireLock,
             Self::ReleaseLock { .. } => RequestKind::ReleaseLock,
             Self::EnterLane { .. } => RequestKind::EnterLane,
+            Self::AwaitLane { .. } => RequestKind::AwaitLane,
             Self::LeaveLane { .. } => RequestKind::LeaveLane,
             Self::TakeTicket { .. } => RequestKind::TakeTicket,
             Self::AwaitTicket { .. } => RequestKind::AwaitTicket,
@@ -69,6 +71,7 @@ impl RequestKind {
             Self::AcquireLock => "Locked",
             Self::ReleaseLock => "Released",
             Self::EnterLane => "Entered",
+            Self::AwaitLane => "LaneTurn",
             Self::LeaveLane => "Left",
             Self::TakeTicket => "Ticketed",
             Self::AwaitTicket => "Admitted",
@@ -104,6 +107,7 @@ impl RequestKind {
             | (Self::AcquireLock, Outcome::Locked)
             | (Self::ReleaseLock, Outcome::Released)
             | (Self::EnterLane, Outcome::Entered)
+            | (Self::AwaitLane, Outcome::LaneTurn)
             | (Self::LeaveLane, Outcome::Left)
             | (Self::TakeTicket, Outcome::Ticketed)
             | (Self::AwaitTicket, Outcome::Admitted)
@@ -125,6 +129,7 @@ impl RequestKind {
                 Self::AcquireLock
                 | Self::ReleaseLock
                 | Self::EnterLane
+                | Self::AwaitLane
                 | Self::LeaveLane
                 | Self::TakeTicket
                 | Self::AwaitTicket
@@ -185,6 +190,13 @@ impl Outcome {
     pub(crate) fn into_entered(self) -> Result<(), ErrorRecord> {
         match self {
             Self::Entered => Ok(()),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    pub(crate) fn into_lane_turn(self) -> Result<(), ErrorRecord> {
+        match self {
+            Self::LaneTurn => Ok(()),
             other => Err(other.into_failure()),
         }
     }
@@ -338,6 +350,7 @@ impl Outcome {
             Self::Locked => "Locked",
             Self::Released => "Released",
             Self::Entered => "Entered",
+            Self::LaneTurn => "LaneTurn",
             Self::Left => "Left",
             Self::Ticketed => "Ticketed",
             Self::Admitted => "Admitted",

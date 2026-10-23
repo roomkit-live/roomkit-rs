@@ -10,10 +10,8 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 /// nobody holds or waits for it, so rooms that come and go (or ids that name
 /// no room) leave nothing behind.
 ///
-/// The kit keeps two sets of them: the room locks the operations ask for
-/// through `AcquireLock`, and the room lanes they ask for through
-/// `EnterLane`, which run one inbound operation per room at a time (RFC
-/// §10.2). Both hold within one process only; a store shared across
+/// The kit keeps them as the room locks the operations ask for through
+/// `AcquireLock`. They hold within one process only; a store shared across
 /// processes needs a distributed lock (RFC §13.5).
 #[derive(Debug, Default)]
 pub(crate) struct RoomMutexes {

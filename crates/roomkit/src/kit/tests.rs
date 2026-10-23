@@ -1,9 +1,9 @@
 //! What the kit's calls cannot reach on their own: a call waiting for the
 //! room's admission ticket or for its lock while another holder keeps them,
 //! as an earlier ticketed event or a lifecycle change would, and the moment
-//! a call lets its ticket go (RFC §9.5.1, §13.6). The room's lane runs the
-//! kit's calls into one room one at a time, so these tests hold a ticket
-//! and the lock themselves, and run the real driver against them.
+//! a call lets its ticket go (RFC §9.5.1, §13.6). These tests hold a ticket
+//! and the lock themselves, as such a holder would at a chosen moment, and
+//! run the real driver against them.
 
 use std::future::Future;
 use std::sync::Arc;

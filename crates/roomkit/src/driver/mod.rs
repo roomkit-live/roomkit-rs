@@ -3,23 +3,24 @@
 //!
 //! An effect is carried out as soon as the operation asks for it, and
 //! completed as soon as it is answered: the driver polls the operation
-//! between completions. A release is carried out at once; a lock, a lane
-//! or a ticket's turn is a wait the driver polls itself (`holds`); a call
-//! on the store, a channel, a hook or the router is a task (`calls`), run
-//! within its execution context, so that code it runs may take the lock
-//! the operation holds on its behalf again, or call into the room whose
-//! lane the operation holds: such a call is handed to the operation, which
-//! adopts it, and its caller is answered when the operation settles it
-//! (RFC §13.5, §10.1 step 18). An inbound call's operation runs on a task
-//! of its own, within its caller's execution context (`inbound`).
+//! between completions. A release, a place in a room's lane and a ticket
+//! are carried out at once; a lock, a place's turn or a ticket's turn is a
+//! wait the driver polls itself (`holds`); a call on the store, a channel,
+//! a hook or the router is a task (`calls`), run within its execution
+//! context, so that code it runs may take the lock the operation holds on
+//! its behalf again, or call into the room it works in: such a call is
+//! handed to the operation, which adopts it, and its caller is answered
+//! when the operation settles it (RFC §13.5, §10.1 step 18). An inbound
+//! call's operation runs on a task of its own, within its caller's
+//! execution context (`inbound`).
 //!
-//! The driver never waits for what its own context holds: a lane a run of
-//! its context holds, or a ticket's turn in a room's admission order its
-//! context stands in, fails the call with [`KitError::Reentrant`], since
-//! that run waits for this one. An effect
-//! that carries a deadline (RFC §13.6) is given up on past it: a lock, a
-//! lane or a ticket's turn waited for is not taken, a call in flight is
-//! dropped, and the operation is answered `DeadlinePassed`.
+//! The driver never waits for what its own context holds: a lock its
+//! context holds a lease on, asked by an inbound call, or a ticket's turn
+//! in a room's admission order its context stands in, fails the call with
+//! [`KitError::Reentrant`], since that run waits for this one. An effect
+//! that carries a deadline (RFC §13.6) is given up on past it: a lock or a
+//! turn waited for is not taken, a call in flight is dropped, and the
+//! operation is answered `DeadlinePassed`.
 
 mod calls;
 mod holds;
@@ -36,7 +37,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{self, JoinError, JoinSet};
 use tokio::time::Instant;
 
-use self::holds::{Held, Hold, Rooms, Waited, Waiting};
+use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 pub(crate) use self::inbound::run_inbound;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared};
 use crate::error::KitError;
@@ -69,17 +70,31 @@ impl Clocks {
     }
 }
 
-/// Runs `operation`, made by the kit's call `call`, until it is ready.
+/// Runs `operation`, made by the kit's call `call`, until it is ready; a
+/// lock its execution context holds a live lease on is granted to it (RFC
+/// §13.5).
 ///
 /// # Errors
 ///
-/// Returns [`KitError::Reentrant`] when the operation waited for a lane or
-/// a ticket its own execution context holds, which was refused; a protocol
-/// error or a stall is a defect of this crate.
+/// Returns [`KitError::Reentrant`] when the operation waited for a ticket's
+/// turn in an admission order its own execution context stands in, which
+/// was refused; a protocol error or a stall is a defect of this crate.
 pub(crate) async fn run<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     operation: O,
+) -> Result<O::Output, KitError> {
+    drive(inner, call, operation, Leases::Granted).await
+}
+
+/// Runs `operation`, made by the kit's call `call`, until it is ready,
+/// treating a lock its execution context holds a live lease on as `leases`
+/// says.
+async fn drive<S: ConversationStore, O: Operation>(
+    inner: &Arc<Inner<S>>,
+    call: &'static str,
+    operation: O,
+    leases: Leases,
 ) -> Result<O::Output, KitError> {
     let (shared, adoptions) = RunShared::new();
     let driver = Driver {
@@ -88,7 +103,7 @@ pub(crate) async fn run<S: ConversationStore, O: Operation>(
         inner,
         call,
         context: ExecutionContext::current(),
-        held: Held::new(Arc::clone(&shared)),
+        held: Held::new(Arc::clone(&shared), leases),
         shared,
         adoptions,
         effect_of_task: HashMap::new(),
@@ -123,7 +138,7 @@ struct Driver<'kit, S> {
     /// The callers of the entries the operation adopted, until settled.
     callers: HashMap<EntryId, oneshot::Sender<Reply>>,
     clocks: Clocks,
-    /// The room whose lane or ticket the run was refused, its context
+    /// The room whose lock or ticket's turn the run was refused, its context
     /// holding it.
     refused: Option<RoomId>,
 }
@@ -201,6 +216,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             admitted,
         } = effect;
         let deadline = deadline.and_then(|deadline| self.clocks.instant_of(deadline));
+        let delivering = delivering_in(&request);
         let rooms = Rooms {
             locks: &self.inner.locks,
             lanes: &self.inner.lanes,
@@ -213,7 +229,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     target: "roomkit::driver",
                     call = self.call,
                     room_id = %room_id,
-                    "a call would wait for a lane or a ticket its own caller holds; it fails"
+                    "a call would wait for a lock or a ticket its own caller holds; it fails"
                 );
                 let error = holds::reentrant(&room_id);
                 self.refused.get_or_insert(room_id);
@@ -224,7 +240,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 None
             }
             Hold::Call(request) => {
-                let frame = Frame::new(&self.shared, id, locked.as_ref(), admitted);
+                let frame = Frame::new(&self.shared, id, locked.as_ref(), admitted, delivering);
                 self.spawn(frame, *request, deadline);
                 None
             }
@@ -351,6 +367,40 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }),
             None => Ok(output),
         }
+    }
+}
+
+/// The room a delivery set delivers in, for its `on_event()` and
+/// `deliver()` calls.
+fn delivering_in(request: &Request) -> Option<RoomId> {
+    match request {
+        Request::OnEvent { binding, .. } | Request::Deliver { binding, .. } => {
+            Some(binding.room_id.clone())
+        }
+        Request::AcquireLock { .. }
+        | Request::ReleaseLock { .. }
+        | Request::EnterLane { .. }
+        | Request::AwaitLane { .. }
+        | Request::LeaveLane { .. }
+        | Request::TakeTicket { .. }
+        | Request::AwaitTicket { .. }
+        | Request::ReleaseTicket { .. }
+        | Request::LoadContext { .. }
+        | Request::FindByIdempotencyKey { .. }
+        | Request::GetEvent { .. }
+        | Request::Commit { .. }
+        | Request::PersistSideEffects { .. }
+        | Request::CreateRoom { .. }
+        | Request::UpdateRoom { .. }
+        | Request::StoreBinding { .. }
+        | Request::DeleteBinding { .. }
+        | Request::UpdateEvent { .. }
+        | Request::DeleteEvent { .. }
+        | Request::ResolveIdentity { .. }
+        | Request::Route { .. }
+        | Request::HandleInbound { .. }
+        | Request::RunHook { .. }
+        | Request::RunObservers { .. } => None,
     }
 }
 

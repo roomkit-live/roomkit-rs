@@ -28,6 +28,7 @@ struct Outstanding {
     kind: RequestKind,
     bounded: bool,
     locked: Option<RoomId>,
+    admitted: Option<RoomId>,
 }
 
 /// An operation's side of the protocol.
@@ -35,7 +36,8 @@ struct Outstanding {
 pub(crate) struct Io {
     next_id: EffectId,
     /// Each effect not answered yet: its request's family, whether it
-    /// carried a deadline, and the room whose lock it was made under.
+    /// carried a deadline, the room whose lock it was made under, and the
+    /// room in whose admission order it was made.
     outstanding: BTreeMap<EffectId, Outstanding>,
     issued: Vec<Effect>,
     notices: Vec<Notice>,
@@ -107,6 +109,7 @@ impl Io {
             kind: request.kind(),
             bounded: deadline.is_some(),
             locked: locked.clone(),
+            admitted: self.admitted.clone(),
         };
         self.outstanding.insert(id, outstanding);
         let effect = Effect {
@@ -187,6 +190,20 @@ impl Io {
     /// effect not answered yet (`Effect::locked`).
     pub(crate) fn locked_for(&self, effect: EffectId) -> Option<&RoomId> {
         self.outstanding.get(&effect)?.locked.as_ref()
+    }
+
+    /// The room in whose admission order `effect`, an effect not answered
+    /// yet, was made (`Effect::admitted`).
+    pub(crate) fn admitted_for(&self, effect: EffectId) -> Option<&RoomId> {
+        self.outstanding.get(&effect)?.admitted.as_ref()
+    }
+
+    /// Whether `effect`, an effect not answered yet, calls a channel's
+    /// `on_event()` or `deliver()`.
+    pub(crate) fn is_channel_call(&self, effect: EffectId) -> bool {
+        self.outstanding
+            .get(&effect)
+            .is_some_and(|outstanding| outstanding.kind == RequestKind::ChannelCall)
     }
 
     /// Accepts the driver's answer to `id`, once and only if it answers the

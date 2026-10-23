@@ -1,27 +1,25 @@
 //! A message's way to the room's lock (RFC §10.1 steps 1 to 4): its channel
-//! and its sender in the channel's form, its room, the room's lane, the
-//! room's context, and the event its channel parses.
+//! and its sender in the channel's form, its room, the room's context, and
+//! the event its channel parses.
 //!
 //! Step 1 is pure and runs before anything is asked of the driver; steps 2
 //! to 4 are a sub-machine of their own, [`Arrival`], which hands the
-//! cascade the event of its first pass with the room's lane held.
+//! cascade the event of its first pass.
 //!
 //! A message that names no room is routed first (RFC §10.4): the identity
 //! its address resolves to is read once, then the kit's router is asked
-//! (`Route`). The lane of the room it answers is entered, and step 2 records
-//! the sender there under the room lock. A room no longer the message's by
-//! then (its binding names another sender, it is CLOSED or ARCHIVED, or
-//! PAUSED, neither the sender's conversation by step 1 nor bound to the
-//! channel as a group, or step 3 no longer admits the sender, someone else
-//! being heard there meanwhile) has its lane left, and the router is asked
-//! once more; a second such answer, or none, gives the message a new room
-//! (gaps G-045, G-055). The arrival never holds two lanes at once.
+//! (`Route`), and step 2 records the sender in the room it answers, under
+//! the room lock. A room no longer the message's by then (its binding names
+//! another sender, it is CLOSED or ARCHIVED, or PAUSED, neither the sender's
+//! conversation by step 1 nor bound to the channel as a group, or step 3 no
+//! longer admits the sender, someone else being heard there meanwhile) is
+//! left, and the router is asked once more; a second such answer, or none,
+//! gives the message a new room (gaps G-045, G-055).
 //!
 //! Every request of the arrival carries the call's deadline (RFC §13.6),
 //! but a write, a release, what completes a room step 2 creates, and the
 //! reads under step 2's lock, whose wait for the lock alone carries it: a
-//! deadline passed stops it with nothing of the event written, holding at
-//! most the room's lane, which its caller leaves.
+//! deadline passed stops it with nothing of the event written.
 
 use std::mem;
 
@@ -98,11 +96,9 @@ pub(super) struct Arrival {
     sender: Sender,
     /// How many times the router was asked.
     routes: u8,
-    /// The room whose lane the arrival holds.
-    lane: Option<RoomId>,
-    /// The room of a message the operation adopted, whose lane the
-    /// operation holds already (gap G-070).
-    within: Option<RoomId>,
+    /// The room step 2 works on or arrived in; `None` while the message is
+    /// routed.
+    room: Option<RoomId>,
     state: State,
 }
 
@@ -113,16 +109,8 @@ enum State {
     Resolving(EffectId),
     /// The router is asked (RFC §10.4).
     Routing(EffectId),
-    /// The lane of step 2's room is entered.
-    Entering {
-        effect: EffectId,
-        step: Box<NamedRoom>,
-    },
-    /// Step 2, with the room's lane held.
+    /// Step 2.
     Naming(Box<NamedRoom>),
-    /// The lane of a room no longer the message's is left before the
-    /// message is routed again.
-    Leaving(EffectId),
     /// Step 4.
     Parsing {
         effect: EffectId,
@@ -165,52 +153,33 @@ impl Arrival {
                 identity_id: None,
             },
             routes: 0,
-            lane: None,
-            within: None,
+            room: None,
             state: State::Start,
         }
     }
 
     /// The arrival of `message`, resolved on `channel`, into `room_id`,
-    /// whose lane the operation that adopted the message holds already (RFC
-    /// §13.5, gap G-070): step 2 runs at once, with no deadline, and the
-    /// arrival enters and leaves no lane.
-    pub(super) fn within_lane(
+    /// adopted by the operation whose work called into its room (RFC
+    /// §13.5, gap G-070): it carries no deadline.
+    pub(super) fn adopted(
         room_id: RoomId,
         organization_id: Option<String>,
         channel: ChannelDeclaration,
         message: InboundMessage,
     ) -> Self {
-        Self {
-            within: Some(room_id.clone()),
-            ..Self::new(
-                InboundTarget::Room(room_id),
-                organization_id,
-                channel,
-                message,
-                None,
-            )
-        }
+        Self::new(
+            InboundTarget::Room(room_id),
+            organization_id,
+            channel,
+            message,
+            None,
+        )
     }
 
-    /// The room whose lane the arrival holds, which its caller leaves when
-    /// the arrival fails.
-    pub(super) fn lane(&self) -> Option<&RoomId> {
-        self.lane.as_ref()
-    }
-
-    /// The room the arrival works on: the room whose lane it enters or
-    /// holds, `None` while the message is routed.
+    /// The room the arrival works on: the room step 2 works on or arrived
+    /// in, `None` while the message is routed.
     pub(super) fn room(&self) -> Option<&RoomId> {
-        match &self.state {
-            State::Entering { step, .. } | State::Naming(step) => Some(step.room_id()),
-            State::Start
-            | State::Resolving(_)
-            | State::Routing(_)
-            | State::Leaving(_)
-            | State::Parsing { .. }
-            | State::Done => self.lane.as_ref(),
-        }
+        self.room.as_ref()
     }
 
     /// Whether the arrival waits for `effect`.
@@ -218,10 +187,6 @@ impl Arrival {
         match &self.state {
             State::Resolving(awaited)
             | State::Routing(awaited)
-            | State::Leaving(awaited)
-            | State::Entering {
-                effect: awaited, ..
-            }
             | State::Parsing {
                 effect: awaited, ..
             } => *awaited == effect,
@@ -230,8 +195,7 @@ impl Arrival {
         }
     }
 
-    /// Starts step 2: the named room's lane is entered, or the message is
-    /// routed.
+    /// Starts step 2 in the named room, or routes the message.
     pub(super) fn start(&mut self, cx: &mut Cx<'_>) {
         if !matches!(self.state, State::Start) {
             return;
@@ -252,24 +216,19 @@ impl Arrival {
     ) -> Arriving {
         if outcome == Outcome::DeadlinePassed && !matches!(self.state, State::Naming(_)) {
             // Step 2 answers for its own requests; the arrival's own hold
-            // nothing but the lane.
+            // nothing.
             return Progress::Done(Err(Stopped::Expired));
         }
         match mem::replace(&mut self.state, State::Done) {
             State::Resolving(expected) if expected == effect => self.on_resolved(cx, outcome),
             State::Routing(expected) if expected == effect => self.on_routed(cx, outcome),
-            State::Entering {
-                effect: expected,
-                step,
-            } if expected == effect => self.on_entered(cx, step, outcome),
             State::Naming(mut step) => match step.accept(cx, effect, outcome) {
                 Progress::Waiting => {
                     self.state = State::Naming(step);
                     Progress::Waiting
                 }
-                Progress::Done(named) => self.on_named(cx, named),
+                Progress::Done(named) => self.on_named(cx, step.room_id(), named),
             },
-            State::Leaving(expected) if expected == effect => self.on_left(cx, outcome),
             State::Parsing {
                 effect: expected,
                 id,
@@ -278,8 +237,6 @@ impl Arrival {
             state @ (State::Start
             | State::Resolving(_)
             | State::Routing(_)
-            | State::Entering { .. }
-            | State::Leaving(_)
             | State::Parsing { .. }
             | State::Done) => {
                 debug_assert!(false, "the arrival received {effect:?} in {state:?}");
@@ -319,6 +276,7 @@ impl Arrival {
 
     /// Asks the kit's router which room the message belongs to (RFC §10.4).
     fn route(&mut self, cx: &mut Cx<'_>) {
+        self.room = None;
         self.routes = self.routes.saturating_add(1);
         let query = RouteQuery {
             channel_id: self.message.channel_id.clone(),
@@ -353,83 +311,38 @@ impl Arrival {
         self.enter(cx, room_id, Mode::Fresh);
     }
 
-    /// Enters the lane of the room step 2 works on, before anything is read
-    /// of it; within a lane held already, step 2 starts at once.
+    /// Starts step 2 in `room_id`, named as `mode` says.
     fn enter(&mut self, cx: &mut Cx<'_>, room_id: RoomId, mode: Mode) {
+        self.room = Some(room_id.clone());
         let mut step = Box::new(NamedRoom::new(
-            room_id.clone(),
+            room_id,
             mode,
             self.organization_id.clone(),
             self.channel.clone(),
             self.sender.clone(),
             self.deadline,
         ));
-        if self.within.is_some() {
-            step.start(cx);
-            self.state = State::Naming(step);
-            return;
-        }
-        let effect = cx
-            .io
-            .issue_within(Request::EnterLane { room_id }, self.deadline);
-        self.state = State::Entering { effect, step };
-    }
-
-    /// The room's lane is held: step 2 starts.
-    fn on_entered(
-        &mut self,
-        cx: &mut Cx<'_>,
-        mut step: Box<NamedRoom>,
-        outcome: Outcome,
-    ) -> Arriving {
-        if let Err(error) = outcome.into_entered() {
-            return failed(InboundError::Lane(error));
-        }
-        self.lane = Some(step.room_id().clone());
         step.start(cx);
         self.state = State::Naming(step);
-        Progress::Waiting
     }
 
     /// Step 2 is over: the room's context goes to the channel, or the room
-    /// is no longer the message's and its lane is left to route it again.
-    fn on_named(&mut self, cx: &mut Cx<'_>, named: Named) -> Arriving {
+    /// is no longer the message's and the message is routed again.
+    fn on_named(&mut self, cx: &mut Cx<'_>, room_id: &RoomId, named: Named) -> Arriving {
         match named {
             Named::Arrived(context) => self.parse(cx, context),
             Named::Failed(error) => failed(error),
             Named::Expired => Progress::Done(Err(Stopped::Expired)),
             Named::Rerouted => {
-                if let Some(room_id) = self.lane.clone() {
-                    tracing::debug!(
-                        target: "roomkit::core::inbound",
-                        room_id = %room_id,
-                        "the routed room is no longer the message's; it is routed once more"
-                    );
-                    self.state = State::Leaving(cx.io.issue(Request::LeaveLane { room_id }));
-                } else {
-                    self.route_again(cx);
-                }
+                tracing::debug!(
+                    target: "roomkit::core::inbound",
+                    room_id = %room_id,
+                    "the routed room is no longer the message's; it is routed once more"
+                );
+                self.route_again(cx);
                 Progress::Waiting
             }
         }
-    }
-
-    /// The lane is left. A failed leave changes nothing the call decided:
-    /// it is logged, as at the call's end, and the message is routed all the
-    /// same.
-    fn on_left(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arriving {
-        if let (Err(error), Some(room_id)) = (outcome.into_left(), &self.lane) {
-            tracing::warn!(
-                target: "roomkit::core::inbound",
-                room_id = %room_id,
-                error_type = %error.error_type,
-                message = %error.message,
-                "leaving the room's delivery lane failed; the message is routed all the same"
-            );
-        }
-        self.lane = None;
-        self.route_again(cx);
-        Progress::Waiting
     }
 
     /// Routes the message once more, or gives it a new room once it was
@@ -483,7 +396,7 @@ impl Arrival {
     }
 
     /// Stamps the event the channel parsed (RFC §10.1 step 4), in the room
-    /// whose lane the arrival holds.
+    /// step 2 arrived in.
     fn on_parsed(
         &self,
         id: EventId,
@@ -497,9 +410,7 @@ impl Arrival {
             })
         })?;
         let mut event = stamp::stamp_trigger(*parsed, &self.message, &self.channel, id);
-        if let Some(room_id) = self.lane.as_ref().or(self.within.as_ref()) {
-            event.room_id = room_id.clone();
-        }
+        event.room_id.clone_from(&context.room.id);
         Ok(Arrived { event, context })
     }
 }

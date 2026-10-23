@@ -34,9 +34,10 @@
 //! ```
 //!
 //! An asynchronous driver completes each effect as it finishes, and hands
-//! an operation that holds a room's lane the calls its own work makes into
-//! that room ([`Operation::adopt`]), answering each caller from
-//! [`Step::settled`] (docs/architecture.md, "Reentrancy").
+//! an operation the calls into its room that its own work makes under the
+//! room's lock or in its admission order ([`Operation::adopt`]), answering
+//! each caller from [`Step::settled`] (docs/architecture.md,
+//! "Reentrancy").
 
 mod config;
 mod environment;

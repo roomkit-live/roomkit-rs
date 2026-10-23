@@ -1,21 +1,18 @@
-//! The work items of a room's delivery lane, and how one advances.
+//! The passes of the cascade through the room lock, and how one advances.
 
-use super::delivery::{DeliverySet, SetOutcome};
 use super::pass::{CommitPass, PassOrigin, PassReport};
 use super::record::{RecordPass, RecordReport};
 use crate::model::{ChannelBinding, RoomEvent};
 use crate::ops::protocol::{EffectId, Outcome};
 use crate::ops::{Abort, Cx, Progress};
 
-/// One item of the room's delivery lane.
+/// One pass of the cascade.
 #[derive(Debug)]
 pub(super) enum Job {
     /// An event's pass through the locked section.
     Pass(Box<CommitPass>, PassOrigin),
     /// A refused record's commit.
     Record(Box<RecordPass>, RecordNote),
-    /// A committed event's delivery set.
-    Set(Box<DeliverySet>),
 }
 
 /// What a stored record stands for.
@@ -31,41 +28,38 @@ pub(super) enum RecordNote {
     Refused,
 }
 
-/// A job after a start or an answer: still running, or finished.
+/// A pass after an answer: still running, or finished.
 pub(super) enum Run {
     Running(Job),
     Finished(Box<Finished>),
 }
 
-/// What a finished job produced.
+/// What a finished pass produced.
 #[derive(Debug)]
 pub(super) enum Finished {
     Pass(Result<PassReport, Abort>, PassOrigin),
     Record(Result<RecordReport, Abort>, RecordNote),
-    Set(SetOutcome, Box<DeliverySet>),
 }
 
 impl Job {
-    /// Starts the job; a job that needs nothing comes back finished.
-    pub(super) fn start(self, cx: &mut Cx<'_>) -> Run {
+    /// Starts the pass: it asks for the room lock.
+    pub(super) fn start(&mut self, cx: &mut Cx<'_>) {
         match self {
-            Self::Pass(mut pass, origin) => {
-                pass.start(cx);
-                Run::Running(Self::Pass(pass, origin))
-            }
-            Self::Record(mut pass, note) => {
-                pass.start(cx);
-                Run::Running(Self::Record(pass, note))
-            }
-            Self::Set(mut set) => match set.start(cx) {
-                Progress::Waiting => Run::Running(Self::Set(set)),
-                Progress::Done(outcome) => Run::Finished(Box::new(Finished::Set(outcome, set))),
-            },
+            Self::Pass(pass, _) => pass.start(cx),
+            Self::Record(pass, _) => pass.start(cx),
         }
     }
 
-    /// Hands the job the outcome of one of its effects; a job that is over
-    /// comes back finished.
+    /// Whether the pass waits for `effect`.
+    pub(super) fn awaits(&self, effect: EffectId) -> bool {
+        match self {
+            Self::Pass(pass, _) => pass.awaits(effect),
+            Self::Record(pass, _) => pass.awaits(effect),
+        }
+    }
+
+    /// Hands the pass the outcome of one of its effects; a pass that is
+    /// over comes back finished.
     pub(super) fn accept(self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) -> Run {
         match self {
             Self::Pass(mut pass, origin) => match pass.accept(cx, effect, outcome) {
@@ -75,10 +69,6 @@ impl Job {
             Self::Record(mut pass, note) => match pass.accept(cx, effect, outcome) {
                 Progress::Waiting => Run::Running(Self::Record(pass, note)),
                 Progress::Done(result) => Run::Finished(Box::new(Finished::Record(result, note))),
-            },
-            Self::Set(mut set) => match set.accept(cx, effect, outcome) {
-                Progress::Waiting => Run::Running(Self::Set(set)),
-                Progress::Done(outcome) => Run::Finished(Box::new(Finished::Set(outcome, set))),
             },
         }
     }

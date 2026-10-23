@@ -61,7 +61,6 @@ mod a_missing_room {
         assert_eq!(
             sim.journal[..=until_parse],
             [
-                "enter lane room_1",
                 "load_context room_1",
                 "store room room_1 Active",
                 "emit room_created",
@@ -267,11 +266,9 @@ mod a_missing_room {
                     "the store is down"
                 ))),
                 [
-                    "enter lane room_1",
                     "load_context room_1",
                     "store room room_1 failed",
                     "load_context room_1",
-                    "leave lane room_1",
                 ]
                 .map(str::to_owned)
                 .to_vec()
@@ -358,13 +355,7 @@ mod another_organization {
             (sent, sim.trace, sim.notices.len()),
             (
                 Err(InboundError::OtherOrganization(room_id())),
-                [
-                    "enter lane room_1",
-                    "load_context room_1",
-                    "leave lane room_1"
-                ]
-                .map(str::to_owned)
-                .to_vec(),
+                ["load_context room_1"].map(str::to_owned).to_vec(),
                 0
             )
         );
@@ -433,9 +424,8 @@ mod an_existing_room {
         let mut sim = with_unbound_sms();
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
-            sim.trace[..7],
+            sim.trace[..6],
             [
-                "enter lane room_1",
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
@@ -487,18 +477,14 @@ mod an_existing_room {
         assert_eq!(
             (
                 result.reason.as_deref(),
-                sim.trace[..3].to_vec(),
+                sim.trace[..2].to_vec(),
                 sim.timeline_lines()
             ),
             (
                 Some("source_unbound"),
-                [
-                    "enter lane room_1",
-                    "load_context room_1",
-                    "handle_inbound sms"
-                ]
-                .map(str::to_owned)
-                .to_vec(),
+                ["load_context room_1", "handle_inbound sms"]
+                    .map(str::to_owned)
+                    .to_vec(),
                 vec!["#0 sms blocked:source_unbound \"Bonjour\"".to_owned()]
             )
         );
@@ -787,28 +773,30 @@ mod the_participants {
     }
 }
 
-/// RFC §10.2: the operation holds the room's delivery lane from the moment
-/// the room is known, and leaves it on every path.
+/// RFC §10.2: nothing of the room's delivery lane comes before the commit;
+/// every place taken is left.
 mod the_lane {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// RFC §10.2: each event delivered takes its place at its commit; none
+    /// is taken before the first commit, and the last is left last.
     #[test]
-    fn is_entered_before_the_room_is_read_and_left_after_the_last_effect() {
+    fn holds_a_place_per_event_delivered_from_its_commit_to_its_set_s_end() {
         let mut sim = Sim::new();
         sim.transport("sms");
         sim.echo_agent("ai", "Hello back");
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             (
-                sim.trace.first(),
-                sim.trace.last(),
-                sim.traced("enter lane").len()
+                sim.trace.first().map(String::as_str),
+                sim.trace.last().map(String::as_str),
+                sim.traced("enter lane")
             ),
             (
-                Some(&"enter lane room_1".to_owned()),
-                Some(&"leave lane room_1".to_owned()),
-                1
+                Some("load_context room_1"),
+                Some("leave lane room_1 evt_2"),
+                vec!["enter lane room_1 evt_1", "enter lane room_1 evt_2"]
             )
         );
     }
@@ -824,18 +812,22 @@ mod the_lane {
     }
 
     #[test]
-    fn is_left_when_step_2_s_attach_fails() {
+    fn is_never_entered_when_step_2_s_attach_fails() {
         let mut sim = no_room_yet();
         sim.failing_effect = Some("store binding");
         let sent = sim.send(Sim::message("sms", "Bonjour"));
         assert_eq!(
-            (sent.is_err(), sim.trace.last().map(String::as_str)),
-            (true, Some("leave lane room_1"))
+            (
+                sent.is_err(),
+                sim.trace.last().map(String::as_str),
+                sim.traced("enter lane")
+            ),
+            (true, Some("release room_1"), vec![])
         );
     }
 
     #[test]
-    fn is_left_when_step_2_s_attach_cannot_take_the_room_lock() {
+    fn is_never_entered_when_step_2_s_attach_cannot_take_the_room_lock() {
         let mut sim = Sim::new();
         sim.unbound_transport("sms", ChannelType::Sms);
         sim.failing_effect = Some("lock room_1");
@@ -847,20 +839,15 @@ mod the_lane {
                     "LockUnavailable",
                     "the lock manager is down"
                 ))),
-                [
-                    "enter lane room_1",
-                    "load_context room_1",
-                    "lock room_1 failed",
-                    "leave lane room_1",
-                ]
-                .map(str::to_owned)
-                .to_vec()
+                ["load_context room_1", "lock room_1 failed"]
+                    .map(str::to_owned)
+                    .to_vec()
             )
         );
     }
 
-    /// As a failed release of the room lock (gap G-025): what the call
-    /// decided stands, and the result carries the failure.
+    /// A place that fails to be left is logged: what the set delivered and
+    /// what the call decided stand, and the result reads as it would.
     #[test]
     fn that_fails_to_be_left_changes_nothing_the_call_decided() {
         let mut sim = Sim::new();
@@ -872,7 +859,7 @@ mod the_lane {
                 result.event.map(|event| event.index),
                 result.error.map(|error| error.error_type)
             ),
-            (Some(0), Some("LaneLost".to_owned()))
+            (Some(0), None)
         );
     }
 
@@ -887,7 +874,7 @@ mod the_lane {
                 .into_iter()
                 .chain(sim.traced("leave lane"))
                 .collect::<Vec<_>>(),
-            ["enter lane room_2", "leave lane room_2"]
+            ["enter lane room_2 evt_4", "leave lane room_2 evt_4"]
         );
     }
 }

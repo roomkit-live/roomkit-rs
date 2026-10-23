@@ -1,7 +1,7 @@
 //! Direct injection (RFC §10.5) and records committed outside the pipeline,
 //! and the way every call into a named room takes: adopted by the call
-//! whose work it runs within, when that call holds the room's lane (RFC
-//! §13.5, §10.1 step 18), run apart otherwise.
+//! whose work in that room it runs within (RFC §13.5, §10.1 step 18), run
+//! apart otherwise.
 
 use roomkit_core::model::{DirectEvent, RoomEvent, RoomId};
 use roomkit_core::ops::{CommitRecord, Entry, Inbound, InboundResult, InboundTarget};
@@ -49,7 +49,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// instruction's refusal; with another error when the event cannot be
     /// one (an unregistered channel, the visibility `internal`, `standalone`
     /// on a type other than an instruction) or the store, the lock or the
-    /// lane failed before its commit.
+    /// admission ticket failed before its commit.
     pub async fn send_event(
         &self,
         room_id: &RoomId,
@@ -81,8 +81,8 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Runs the injection of `event` into `room_id`, for a caller acting
-    /// for `organization_id`, adopted by the call that holds the room's lane
-    /// when it comes from inside that call's work (RFC §13.5).
+    /// for `organization_id`, adopted by the call whose work in the room
+    /// made it, when one did (RFC §13.5).
     async fn inject(
         &self,
         room_id: &RoomId,
@@ -134,9 +134,10 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Runs `entry`, a call into the room it names: adopted by the call of
-    /// the caller's execution context that holds the room's lane, if one
-    /// does, apart otherwise (RFC §13.5). A call run apart whose context
-    /// still holds the lane fails at the lane, rather than wait for itself.
+    /// the caller's execution context whose work in the room made it, if
+    /// one did, apart otherwise (RFC §13.5). A call run apart whose context
+    /// still holds the room's lock, or stands in its admission order, fails
+    /// there, rather than wait for itself.
     pub(super) async fn enter(
         &self,
         entry: Entry,

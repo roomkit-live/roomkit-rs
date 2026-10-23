@@ -1,18 +1,19 @@
-//! What each finished job of the lane adds to the cascade (RFC §10.1 steps
-//! 10 to 17): a pass's delivery set and the events its hooks injected, a
+//! What each finished pass and set adds to the cascade (RFC §10.1 steps 10
+//! to 17): a pass's delivery set and the events its hooks injected, a
 //! delivery set's responses and the records of the channels it could not
-//! ask, the side effects every job collected, and what the call's result
+//! ask, the side effects every one collected, and what the call's result
 //! reports.
 //!
-//! The lane carries every cascade of the operation, the call's and its
-//! adopted entries' (gap G-070). A delivery set joins the lane when its
-//! event commits, and commits follow one another under the room lock, so
-//! sets keep index order: one event's set completes before the next one's
-//! begins (RFC §10.2).
+//! The queues carry every cascade of the operation, the call's and its
+//! adopted entries' (gap G-070). An event takes its place in the room's
+//! delivery lane at its commit, and commits follow one another under the
+//! room lock, so sets keep index order: one event's set completes before
+//! the next one's begins (RFC §10.2).
 
 use super::delivery::{DeliverySet, Response, SetKind, SetOutcome};
 use super::job::{Finished, Job, RecordNote};
 use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
+use super::queues::Delivery;
 use super::record::{RecordPass, RecordReport, RecordResult};
 use super::{InboundError, InboundResult, Machine, instructions, report, stamp};
 use crate::model::{ChannelCategory, ErrorRecord, EventStatus, InjectedEvent, RoomEvent};
@@ -29,7 +30,6 @@ impl Machine {
         match finished {
             Finished::Pass(Ok(report), origin) => self.on_pass(cx, report, &origin),
             Finished::Record(Ok(report), note) => self.on_record(cx, report, note),
-            Finished::Set(outcome, set) => self.on_set(cx, outcome, &set),
             Finished::Pass(Err(abort), _) | Finished::Record(Err(abort), _) => {
                 self.abort(cx, abort);
             }
@@ -37,8 +37,9 @@ impl Machine {
     }
 
     /// A pass is over: its side effects are kept, the call's result written
-    /// when it is the call's own, and its delivery set and injected events
-    /// join the lane (RFC §10.1 steps 10 to 12).
+    /// and its decision published when it is the call's own, and its
+    /// delivery set and injected events are queued (RFC §10.1 steps 10 to
+    /// 12).
     pub(super) fn on_pass(&mut self, cx: &mut Cx<'_>, report: PassReport, origin: &PassOrigin) {
         let trigger = *origin == PassOrigin::Trigger;
         if trigger {
@@ -52,8 +53,9 @@ impl Machine {
     }
 
     /// What every pass adds to the cascade, whichever cascade it belongs
-    /// to: its tasks and observations, its delivery set at the back of the
-    /// lane, and the events its hooks injected behind it.
+    /// to: its tasks and observations, its delivery set, and the events its
+    /// hooks injected, which follow the set or, for a record stored blocked,
+    /// which has none, are queued at once.
     pub(super) fn add_to_cascade(
         &mut self,
         cx: &mut Cx<'_>,
@@ -73,37 +75,40 @@ impl Machine {
         self.tasks.extend(report.tasks);
         self.observations.extend(report.observations);
         self.note_error(report.release_error);
-        let trigger = match &report.result {
+        let injected = match &report.result {
             PassResult::Delivered { event, .. } | PassResult::Blocked { event, .. } => {
-                Some(event.clone())
+                self.injected(cx, report.injected_events, event)
             }
             PassResult::Refused { .. }
             | PassResult::Duplicate { .. }
-            | PassResult::EditRefused { .. } => None,
+            | PassResult::EditRefused { .. } => Vec::new(),
         };
-        if let PassResult::Delivered {
+        let PassResult::Delivered {
             event,
             plan,
             context,
             target,
         } = report.result
-        {
-            if let Some(target) = &target {
-                report::target_changed(cx, &event, target, &context);
+        else {
+            for job in injected {
+                self.queue(job);
             }
-            let kind = match origin {
-                PassOrigin::Trigger => SetKind::Root,
-                PassOrigin::Adopted(_) => SetKind::Adopted,
-                PassOrigin::Response => SetKind::Response,
-                PassOrigin::Injected { .. } => SetKind::Injected,
-            };
-            self.queue(Job::Set(Box::new(DeliverySet::new(
-                kind, *event, plan, context,
-            ))));
+            return;
+        };
+        if let Some(target) = &target {
+            report::target_changed(cx, &event, target, &context);
         }
-        if let Some(trigger) = trigger {
-            self.queue_injected(cx, report.injected_events, &trigger);
-        }
+        let kind = match origin {
+            PassOrigin::Trigger => SetKind::Root,
+            PassOrigin::Adopted(_) => SetKind::Adopted,
+            PassOrigin::Response => SetKind::Response,
+            PassOrigin::Injected { .. } => SetKind::Injected,
+        };
+        let set = DeliverySet::new(kind, *event, plan, context, report.placed);
+        self.queue_set(Delivery {
+            set: Box::new(set),
+            then: injected,
+        });
     }
 
     /// Writes what the trigger's pass decided into the result (RFC §10.1):
@@ -120,20 +125,20 @@ impl Machine {
         self.result.reason = entry.reason;
     }
 
-    /// Queues the events a pass's hooks injected, each a pass of the
-    /// cascade within its reentry budget (gap G-021), but an instruction
-    /// (gap G-042).
-    fn queue_injected(
+    /// The passes of the events a pass's hooks injected, each within the
+    /// cascade's reentry budget (gap G-021), but an instruction (gap G-042).
+    fn injected(
         &mut self,
         cx: &mut Cx<'_>,
         injected: Vec<InjectedEvent>,
         trigger: &RoomEvent,
-    ) {
+    ) -> Vec<Job> {
+        let mut jobs = Vec::new();
         for injected in instructions::without_instructions(injected, trigger) {
             let targets = injected.target_channel_ids.clone();
             let event = stamp::stamp_injected(injected, trigger, cx.env.new_event_id());
-            if self.budget.take() {
-                self.queue(Job::Pass(
+            let job = if self.budget.take() {
+                Job::Pass(
                     Box::new(CommitPass::new(
                         PassOrigin::Injected {
                             targets: targets.clone(),
@@ -141,16 +146,18 @@ impl Machine {
                         event,
                     )),
                     PassOrigin::Injected { targets },
-                ));
+                )
             } else {
                 let mut event = event;
                 event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
-                self.queue(Job::Record(
+                Job::Record(
                     Box::new(RecordPass::injected(event, targets)),
                     RecordNote::Refused,
-                ));
-            }
+                )
+            };
+            jobs.push(job);
         }
+        jobs
     }
 
     pub(super) fn on_record(&mut self, cx: &mut Cx<'_>, report: RecordReport, note: RecordNote) {
@@ -177,7 +184,7 @@ impl Machine {
     /// and the records of the channels not asked are queued (RFC §10.1 steps
     /// 14 to 17). The deliveries of an entry's event are reported, the
     /// call's own written into its result too.
-    fn on_set(&mut self, cx: &mut Cx<'_>, outcome: SetOutcome, set: &DeliverySet) {
+    pub(super) fn on_set(&mut self, cx: &mut Cx<'_>, outcome: SetOutcome, set: &DeliverySet) {
         let event = set.event();
         report::after_broadcast(cx, event, set.context());
         match set.kind() {

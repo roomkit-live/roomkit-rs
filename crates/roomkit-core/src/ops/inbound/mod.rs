@@ -9,24 +9,28 @@
 //! sender in the channel's form, its room, named or routed, created,
 //! attached to or recorded on when it must be, the room's context and the
 //! event the channel parses (`arrival`). A direct injection skips the
-//! channel's parse and step 2: it enters the room's lane at once (`direct`).
-//! Then the cascade: the call's pass, its delivery set, the responses that
-//! re-enter as passes of their own, the events hooks inject, and the
-//! records the room stores in place of responses it refuses (`cascade`).
+//! channel's parse and step 2 (`direct`). Then the cascade: the call's
+//! pass, its delivery set, the responses that re-enter as passes of their
+//! own, the events hooks inject, and the records the room stores in place of
+//! responses it refuses (`cascade`).
 //!
-//! The operation holds the room's delivery lane from the moment the room is
-//! known to its end, on every path: the lane is a FIFO of the cascade's
-//! work, so one event's delivery set completes before the next one's
-//! begins, and the next call into the room waits for it (RFC §10.2).
+//! The room's delivery lane is entered at each commit (RFC §10.1 step 12,
+//! §10.2): an event delivered takes its place under the room lock, and its
+//! delivery set waits for that place's turn once the lock is released, so
+//! one event's set completes before the next one's begins, whichever call
+//! committed it. Nothing of the lane comes before the commit: two calls
+//! into a room overlap up to the room lock, and commit in lock order. The
+//! operation runs its passes and its sets as two queues, one of each at a
+//! time (`queues`).
 //!
 //! A call into the room that the operation's own work makes, a hook, a turn
 //! or a delivery calling `send_event` or `process_inbound` for the room, is
 //! adopted (`adoption`): the operation runs it as an entry of its own,
-//! beside its lane's work, or nested in the pass whose hook made it, so
-//! that it commits ahead of that pass's event; its caller receives its
-//! result at its commit, and its delivery set joins the back of the lane
-//! (RFC §13.5, §10.1 step 18, gap G-070). The lane thus carries several
-//! cascades: the call's, and one per adopted entry.
+//! beside its work, or nested in the pass whose hook made it, so that it
+//! commits ahead of that pass's event; its caller receives its result at
+//! its commit, and its delivery set takes its place in the lane at that
+//! commit (RFC §13.5, §10.1 step 18, gap G-070). The queues thus carry
+//! several cascades: the call's, and one per adopted entry.
 //!
 //! Every pass checks an edit or a delete against its target (RFC §10.1 step
 //! 8a, §10.3), updates the target in its commit, and fires `ON_EVENT_UPDATED`
@@ -58,11 +62,11 @@ mod entry;
 mod holds;
 mod instructions;
 mod job;
-mod lane;
 mod named_room;
 mod off_lock;
 mod pass;
 mod persist;
+mod queues;
 mod record;
 mod report;
 mod result;
@@ -74,10 +78,11 @@ use std::sync::Arc;
 use self::adoption::Adoptions;
 use self::arrival::Arrival;
 pub use self::arrival::InboundTarget;
-use self::direct::DirectArrival;
+use self::direct::DirectRead;
 use self::holds::AfterTicket;
 use self::job::Job;
 use self::off_lock::OffLockCheck;
+use self::queues::Delivery;
 pub use self::result::{InboundError, InboundResult};
 pub use self::stamp::default_inbound_event;
 use super::io::Io;
@@ -176,11 +181,12 @@ impl Inbound {
                 channel_id: None,
                 direct: None,
                 deadline: None,
-                holds_lane: false,
                 ticket: None,
                 stage: Stage::Start(Box::new(call)),
-                lane: VecDeque::new(),
-                active: None,
+                passes: VecDeque::new(),
+                pass: None,
+                sets: VecDeque::new(),
+                delivery: None,
                 adopted: Adoptions::default(),
                 stopping: false,
                 budget,
@@ -263,15 +269,17 @@ struct Machine {
     /// The call's deadline, set at its start from `process_timeout` (RFC
     /// §13.6).
     deadline: Option<Timestamp>,
-    /// Whether the operation holds the room's delivery lane, which it
-    /// leaves before it ends.
-    holds_lane: bool,
     /// The room whose admission ticket the call holds, from its off-lock
     /// check to its trigger's pass's end (RFC §9.5.1).
     ticket: Option<RoomId>,
     stage: Stage,
-    lane: VecDeque<Job>,
-    active: Option<Job>,
+    /// The passes queued, and the one running.
+    passes: VecDeque<Job>,
+    pass: Option<Job>,
+    /// The delivery sets queued, in the order of their places, and the one
+    /// running.
+    sets: VecDeque<Delivery>,
+    delivery: Option<Delivery>,
     /// The entries adopted from the operation's own work (gap G-070).
     adopted: Adoptions,
     /// Whether the cascade stopped, failed or past its deadline: no pass
@@ -298,10 +306,10 @@ struct Machine {
 #[derive(Debug)]
 enum Stage {
     Start(Box<Call>),
-    /// A message's steps 2 to 4, which enter the room's lane.
+    /// A message's steps 2 to 4.
     Arriving(Box<Arrival>),
-    /// A direct injection's entry into the room's lane.
-    Entering(Box<DirectArrival>),
+    /// A direct injection's read of its room for its off-lock check.
+    Reading(Box<DirectRead>),
     /// Step 5a: the trigger's off-lock check, holding the room's ticket.
     Checking(Box<OffLockCheck>),
     Cascade,
@@ -318,18 +326,13 @@ enum Stage {
     /// The call's outcome waits for every entry it adopted to be settled,
     /// and every event committed to be delivered.
     Ending(Box<Result<InboundResult, InboundError>>),
-    /// The operation's outcome waits for the lane to be left.
-    LeavingLane {
-        effect: EffectId,
-        outcome: Box<Result<InboundResult, InboundError>>,
-    },
     Done,
 }
 
 impl Machine {
     /// Takes every answer in, starts the entries adopted since, and runs
-    /// the lane, until nothing is left to take in: a section nested under a
-    /// lock is answered at once, without the driver.
+    /// the queues, until nothing is left to take in: a section nested under
+    /// a lock is answered at once, without the driver.
     fn advance(&mut self, cx: &mut Cx<'_>) {
         if matches!(self.stage, Stage::Start(_)) {
             self.begin(cx);
@@ -339,8 +342,8 @@ impl Machine {
                 self.dispatch(cx, effect, outcome);
             }
             self.start_adopted(cx);
-            self.run_lane(cx);
-            self.end_once_settled(cx);
+            self.run_queues(cx);
+            self.end_once_settled();
             if !cx.io.has_outcomes() {
                 return;
             }
@@ -390,9 +393,17 @@ impl Machine {
         if self.adopted.awaits(effect) {
             return self.on_adopted_outcome(cx, effect, outcome);
         }
+        if self.pass.as_ref().is_some_and(|job| job.awaits(effect)) {
+            return self.on_pass_outcome(cx, effect, outcome);
+        }
+        if let Some(delivery) = &self.delivery
+            && delivery.set.awaits(effect)
+        {
+            return self.on_set_outcome(cx, effect, outcome);
+        }
         match std::mem::replace(&mut self.stage, Stage::Done) {
             Stage::Arriving(arrival) => self.on_arrival(cx, arrival, effect, outcome),
-            Stage::Entering(entering) => self.on_entering(cx, entering, effect, outcome),
+            Stage::Reading(read) => self.on_read(cx, read, effect, outcome),
             Stage::Checking(check) => self.on_check(cx, check, effect, outcome),
             Stage::ReleasingTicket {
                 effect: expected,
@@ -402,43 +413,14 @@ impl Machine {
                 side_effects,
                 metadata,
             } => self.on_persisting(cx, side_effects, metadata, effect, outcome),
-            Stage::Cascade => {
-                self.stage = Stage::Cascade;
-                self.dispatch_to_job(cx, effect, outcome);
-            }
-            Stage::Ending(ending) => {
-                // A committed event's delivery set runs while the call ends.
-                self.stage = Stage::Ending(ending);
-                self.dispatch_to_job(cx, effect, outcome);
-            }
-            Stage::LeavingLane {
-                effect: expected,
-                outcome: result,
-            } if expected == effect => self.on_left(*result, outcome),
             stage @ (Stage::Start(_)
+            | Stage::Cascade
             | Stage::ReleasingTicket { .. }
-            | Stage::LeavingLane { .. }
+            | Stage::Ending(_)
             | Stage::Done) => {
                 debug_assert!(false, "inbound received {effect:?} in {stage:?}");
                 self.stage = stage;
             }
-        }
-    }
-
-    /// The room whose lane the operation holds now: the arrival's while it
-    /// runs, the call's room once it arrived.
-    fn lane_room(&self) -> Option<&RoomId> {
-        match &self.stage {
-            Stage::Arriving(arrival) => arrival.lane(),
-            Stage::Entering(entering) => entering.lane(),
-            Stage::Start(_)
-            | Stage::Checking(_)
-            | Stage::Cascade
-            | Stage::ReleasingTicket { .. }
-            | Stage::Persisting { .. }
-            | Stage::Ending(_)
-            | Stage::LeavingLane { .. }
-            | Stage::Done => self.room_id.as_ref().filter(|_| self.holds_lane),
         }
     }
 }

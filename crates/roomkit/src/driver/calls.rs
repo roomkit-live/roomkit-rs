@@ -104,6 +104,7 @@ pub(super) async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: R
         Request::AcquireLock { .. }
         | Request::ReleaseLock { .. }
         | Request::EnterLane { .. }
+        | Request::AwaitLane { .. }
         | Request::LeaveLane { .. }
         | Request::TakeTicket { .. }
         | Request::AwaitTicket { .. }
@@ -193,6 +194,7 @@ async fn store_call<S: ConversationStore>(store: &S, request: Request) -> Outcom
         Request::AcquireLock { .. }
         | Request::ReleaseLock { .. }
         | Request::EnterLane { .. }
+        | Request::AwaitLane { .. }
         | Request::LeaveLane { .. }
         | Request::TakeTicket { .. }
         | Request::AwaitTicket { .. }

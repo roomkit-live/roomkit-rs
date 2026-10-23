@@ -113,7 +113,7 @@ mod expiring_during {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn the_channel_s_parse_writes_nothing_and_leaves_the_lane() {
+    fn the_channel_s_parse_writes_nothing() {
         let mut sim = room();
         slow(&mut sim, "handle_inbound sms");
         let result = sim.send(bonjour()).unwrap();
@@ -122,10 +122,8 @@ mod expiring_during {
             (
                 timed_out(),
                 vec![
-                    "enter lane room_1".to_owned(),
                     "load_context room_1".to_owned(),
                     "handle_inbound sms deadline passed".to_owned(),
-                    "leave lane room_1".to_owned(),
                 ],
                 0
             )
@@ -157,7 +155,6 @@ mod expiring_during {
                     "take ticket room_1",
                     "hook scanner deadline passed",
                     "release ticket room_1",
-                    "leave lane room_1",
                 ],
                 vec![&before_the_lock(Some(room_id()))]
             )
@@ -180,7 +177,6 @@ mod expiring_during {
                 vec![
                     "await ticket room_1 deadline passed",
                     "release ticket room_1",
-                    "leave lane room_1",
                 ],
                 vec![&before_the_lock(Some(room_id()))]
             )
@@ -200,11 +196,7 @@ mod expiring_during {
             ),
             (
                 timed_out(),
-                vec![
-                    "lock room_1 deadline passed",
-                    "release ticket room_1",
-                    "leave lane room_1",
-                ],
+                vec!["lock room_1 deadline passed", "release ticket room_1",],
                 vec![&before_the_lock(Some(room_id()))]
             )
         );
@@ -227,7 +219,6 @@ mod expiring_during {
                     "hook policy deadline passed",
                     "release room_1",
                     "release ticket room_1",
-                    "leave lane room_1",
                 ],
                 vec![&under_the_lock("evt_1")]
             )
@@ -285,7 +276,7 @@ mod expiring_during {
             ),
             (
                 timed_out(),
-                vec!["lock room_1 deadline passed", "leave lane room_1"],
+                vec!["lock room_1 deadline passed"],
                 None,
                 vec![&before_the_lock(Some(room_id()))]
             )
@@ -323,11 +314,7 @@ mod expiring_during {
             (refusal(&result), sim.trace.clone(), process_timeouts(&sim)),
             (
                 timed_out(),
-                vec![
-                    "enter lane room_1".to_owned(),
-                    "load_context room_1 deadline passed".to_owned(),
-                    "leave lane room_1".to_owned(),
-                ],
+                vec!["load_context room_1 deadline passed".to_owned()],
                 vec![&before_the_lock(Some(room_id()))]
             )
         );
@@ -351,12 +338,11 @@ mod expiring_during {
             .collect()
     }
 
-    fn lock_ticket_lane(expired: &str) -> Vec<String> {
+    fn lock_and_ticket(expired: &str) -> Vec<String> {
         vec![
             format!("{expired} deadline passed"),
             "release room_1".to_owned(),
             "release ticket room_1".to_owned(),
-            "leave lane room_1".to_owned(),
         ]
     }
 
@@ -368,7 +354,7 @@ mod expiring_during {
         assert_eq!(
             (released_after(&sim, "find_key"), process_timeouts(&sim)),
             (
-                lock_ticket_lane("find_key SM1"),
+                lock_and_ticket("find_key SM1"),
                 vec![&under_the_lock("evt_1")]
             )
         );
@@ -390,7 +376,7 @@ mod expiring_during {
         assert_eq!(
             (released_after(&sim, "get_event"), process_timeouts(&sim)),
             (
-                lock_ticket_lane("get_event evt_404"),
+                lock_and_ticket("get_event evt_404"),
                 vec![&under_the_lock("evt_1")]
             )
         );
@@ -414,7 +400,7 @@ mod expiring_during {
             ),
             (
                 timed_out(),
-                lock_ticket_lane("load_context room_1"),
+                lock_and_ticket("load_context room_1"),
                 vec![&under_the_lock("evt_1")],
                 0
             )
@@ -439,21 +425,6 @@ mod expiring_during {
                 timed_out(),
                 Vec::<&str>::new(),
                 vec![&before_the_lock(None)]
-            )
-        );
-    }
-
-    #[test]
-    fn the_lane_s_wait_names_the_room_it_waited_for() {
-        let mut sim = room();
-        slow(&mut sim, "enter lane room_1");
-        let result = sim.send(bonjour()).unwrap();
-        assert_eq!(
-            (refusal(&result), sim.trace.clone(), process_timeouts(&sim)),
-            (
-                timed_out(),
-                vec!["enter lane room_1 deadline passed".to_owned()],
-                vec![&before_the_lock(Some(room_id()))]
             )
         );
     }
@@ -590,7 +561,6 @@ mod after_the_commit {
         assert_eq!(
             sim.bounded,
             [
-                "enter lane room_1",
                 "load_context room_1",
                 "handle_inbound sms",
                 "hook scanner",

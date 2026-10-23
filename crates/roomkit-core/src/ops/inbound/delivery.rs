@@ -1,6 +1,13 @@
 //! The execution of one event's delivery set (RFC §10.2 step 3, §10.1 step
 //! 14).
 //!
+//! The set waits for its place's turn in the room's delivery lane, taken
+//! at its event's commit, and leaves its place once its last target
+//! answered, so that one event's set completes before the next one's
+//! begins (RFC §10.2). A place that could not be taken, or a turn that
+//! could not be awaited, is logged and the event delivered all the same:
+//! an event stored is delivered (RFC §13.6).
+//!
 //! Every target is called at once, so a driver may run them concurrently. A
 //! transport target is told through `on_event()`, then delivered to when it
 //! sends; an intelligence target is asked through `on_event()`, which is a
@@ -97,6 +104,24 @@ enum Call {
     Deliver,
 }
 
+/// Where a set stands in the room's delivery lane (RFC §10.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Place {
+    /// The event took a place: the set waits for its turn first.
+    Taken,
+    /// The event holds no place, its `EnterLane` having failed: the set
+    /// runs at once.
+    Missing,
+    /// The set waits for its place's turn.
+    Awaiting(EffectId),
+    /// Its turn came: it delivers, then leaves its place.
+    Turn,
+    /// It leaves its place.
+    Leaving(EffectId),
+    /// It left its place.
+    Left,
+}
+
 /// The delivery set of one committed event.
 #[derive(Debug)]
 pub(super) struct DeliverySet {
@@ -104,17 +129,20 @@ pub(super) struct DeliverySet {
     event: RoomEvent,
     context: Box<RoomContext>,
     targets: Vec<Target>,
+    place: Place,
     calls: BTreeMap<EffectId, (usize, Call)>,
     outcome: SetOutcome,
 }
 
 impl DeliverySet {
-    /// The set of `event`, planned as `plan`, with the room's whole context.
+    /// The set of `event`, planned as `plan`, with the room's whole context;
+    /// `placed` when the event took its place in the room's lane.
     pub(super) fn new(
         kind: SetKind,
         event: RoomEvent,
         plan: DeliveryPlan,
         context: Box<RoomContext>,
+        placed: bool,
     ) -> Self {
         let targets = targets_of(&plan, &event, &context);
         let outcome = SetOutcome {
@@ -127,8 +155,22 @@ impl DeliverySet {
             event,
             context,
             targets,
+            place: if placed { Place::Taken } else { Place::Missing },
             calls: BTreeMap::new(),
             outcome,
+        }
+    }
+
+    /// Whether the set waits for `effect`.
+    pub(super) fn awaits(&self, effect: EffectId) -> bool {
+        match self.place {
+            Place::Awaiting(awaited) | Place::Leaving(awaited) if awaited == effect => true,
+            Place::Taken
+            | Place::Missing
+            | Place::Awaiting(_)
+            | Place::Turn
+            | Place::Leaving(_)
+            | Place::Left => self.calls.contains_key(&effect),
         }
     }
 
@@ -147,9 +189,24 @@ impl DeliverySet {
         self.kind
     }
 
+    /// Waits for the set's turn in the room's lane, with no deadline: what
+    /// waits is committed already (RFC §13.6). A set with no place delivers
+    /// at once.
+    pub(super) fn start(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
+        if self.place != Place::Taken {
+            return self.deliver(cx);
+        }
+        let request = Request::AwaitLane {
+            room_id: self.event.room_id.clone(),
+            event_id: self.event.id.clone(),
+        };
+        self.place = Place::Awaiting(cx.io.issue(request));
+        Progress::Waiting
+    }
+
     /// Calls every registered target's `on_event()` at once; a target
     /// whose channel is not registered is not called (gap G-048).
-    pub(super) fn start(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
+    fn deliver(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
         for index in 0..self.targets.len() {
             let Some(target) = self.targets.get(index) else {
                 continue;
@@ -165,22 +222,32 @@ impl DeliverySet {
             });
             self.calls.insert(effect, (index, Call::OnEvent));
         }
-        self.progress()
+        self.progress(cx)
     }
 
-    /// Takes the driver's answer to one of the set's calls.
+    /// Takes the driver's answer to one of the set's requests.
     pub(super) fn accept(
         &mut self,
         cx: &mut Cx<'_>,
         effect: EffectId,
         outcome: Outcome,
     ) -> Progress<SetOutcome> {
+        match self.place {
+            Place::Awaiting(awaited) if awaited == effect => return self.on_turn(cx, outcome),
+            Place::Leaving(awaited) if awaited == effect => return self.on_left(outcome),
+            Place::Taken
+            | Place::Missing
+            | Place::Awaiting(_)
+            | Place::Turn
+            | Place::Leaving(_)
+            | Place::Left => {}
+        }
         let Some((index, call)) = self.calls.remove(&effect) else {
             debug_assert!(
                 false,
                 "delivery set received {effect:?}, which it did not issue"
             );
-            return self.progress();
+            return self.progress(cx);
         };
         match call {
             Call::OnEvent => match outcome.into_output() {
@@ -192,15 +259,60 @@ impl DeliverySet {
                 Err(error) => self.on_delivery_failed(index, &error),
             },
         }
-        self.progress()
+        self.progress(cx)
     }
 
-    fn progress(&mut self) -> Progress<SetOutcome> {
-        if self.calls.is_empty() {
-            Progress::Done(std::mem::take(&mut self.outcome))
-        } else {
-            Progress::Waiting
+    /// The set's turn came; a turn that could not be awaited is logged, and
+    /// the event delivered all the same (RFC §13.6).
+    fn on_turn(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
+        if let Err(error) = outcome.into_lane_turn() {
+            tracing::warn!(
+                target: "roomkit::core::delivery",
+                room_id = %self.event.room_id,
+                event_id = %self.event.id,
+                error_type = %error.error_type,
+                message = %error.message,
+                "waiting for the set's turn in the room's delivery lane failed; the event is \
+                 delivered all the same"
+            );
         }
+        self.place = Place::Turn;
+        self.deliver(cx)
+    }
+
+    /// The set left its place; a place that could not be left changes
+    /// nothing the set did.
+    fn on_left(&mut self, outcome: Outcome) -> Progress<SetOutcome> {
+        if let Err(error) = outcome.into_left() {
+            tracing::warn!(
+                target: "roomkit::core::delivery",
+                room_id = %self.event.room_id,
+                event_id = %self.event.id,
+                error_type = %error.error_type,
+                message = %error.message,
+                "leaving the set's place in the room's delivery lane failed; what the set \
+                 delivered stands"
+            );
+        }
+        self.place = Place::Left;
+        Progress::Done(std::mem::take(&mut self.outcome))
+    }
+
+    /// Once every target answered, the set leaves its place in the room's
+    /// lane, if it holds one, and is over.
+    fn progress(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
+        if !self.calls.is_empty() {
+            return Progress::Waiting;
+        }
+        if self.place != Place::Turn {
+            return Progress::Done(std::mem::take(&mut self.outcome));
+        }
+        let request = Request::LeaveLane {
+            room_id: self.event.room_id.clone(),
+            event_id: self.event.id.clone(),
+        };
+        self.place = Place::Leaving(cx.io.issue(request));
+        Progress::Waiting
     }
 
     /// A target's `on_event()` returned (RFC §10.2 step 3c).

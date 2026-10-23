@@ -1,12 +1,13 @@
 //! The calls into the room that the operation's own work makes (RFC §13.5,
 //! §9.5.1 Reentrance, §10.1 step 18, gap G-070).
 //!
-//! A hook, a turn or a delivery of the operation that calls `send_event` or
-//! `process_inbound` for the room whose lane the operation holds would wait
-//! for that lane until the operation ends, which waits for the call. The
-//! driver hands such a call to the operation instead: it is adopted, as an
-//! entry of its own, with its own result. Where it runs depends on the call
-//! that made it, its origin:
+//! A hook, a parse, a turn or a delivery of the operation that calls
+//! `send_event` or `process_inbound` for the operation's room would, run
+//! apart, wait for what the operation holds: the room lock its section
+//! holds, the admission ticket its check holds, a place in the room's lane
+//! ahead of its own. The driver hands such a call to the operation instead:
+//! it is adopted, as an entry of its own, with its own result. Where it runs
+//! depends on the call that made it, its origin:
 //!
 //! - a call the operation made under the room's lock (`Effect::locked`): a
 //!   hook a pass runs, or any call of an entry nested already. The entry is
@@ -17,11 +18,12 @@
 //!   section never goes on, nor lets the lock go, while an entry nested in
 //!   it works. Two entries nested under one call run one after the other,
 //!   never as two sections within one tenure;
-//! - any other call (an off-lock hook, a delivery set's turn or delivery,
-//!   step 2's awaited observers, a channel's parse): the entry runs beside
-//!   the lane's work, taking the room lock as any section does, after the
+//! - a call made in the room's admission order (`Effect::admitted`: an
+//!   off-lock hook, a message's parse, any call of an entry beside already),
+//!   or by one of the operation's delivery sets: the entry runs beside the
+//!   operation's work, taking the room lock as any section does, after the
 //!   operation's other section that holds it, if any, and every request it
-//!   makes stands in the room's admission order (`Effect::admitted`).
+//!   makes stands in the room's admission order.
 //!
 //! Either way the entry takes no admission ticket and runs every hook under
 //! the lock: the operation it joins stands in the room's order already (RFC
@@ -30,9 +32,9 @@
 //! as its arrival starts, before its channel's parse, and refused with no
 //! event past the budget. Its caller receives its result at its commit
 //! (detached completion: no delivery results, no completion handle), and
-//! its delivery set joins the back of the lane. A message's arrival runs in
-//! the lane the operation holds: its step 2, then its channel's parse. A
-//! direct injection is admitted and stamped at once.
+//! its event takes its place in the room's lane at that commit. A message's
+//! arrival runs its step 2, then its channel's parse. A direct injection is
+//! admitted and stamped at once.
 
 use std::mem;
 
@@ -88,7 +90,7 @@ struct AdoptedRun {
 
 #[derive(Debug)]
 enum RunState {
-    /// A message's steps 2 to 4, in the lane the operation holds.
+    /// A message's steps 2 to 4.
     Arriving(Box<Arrival>),
     /// The entry's pass.
     Passing(Box<CommitPass>),
@@ -210,26 +212,30 @@ fn within<T>(cx: &mut Cx<'_>, adopted: &Adopted, advance: impl FnOnce(&mut Cx<'_
 
 impl Machine {
     /// Adopts `entry`, a call into the room made by the code effect
-    /// `origin` runs (RFC §13.5): nested in the pass whose hook `origin` is,
-    /// beside the lane's work otherwise.
+    /// `origin` runs (RFC §13.5, §9.5.1 Reentrance): nested in the section
+    /// whose lock `origin` was made under, beside the operation's work when
+    /// `origin` stands in the room's admission order or is a call of one of
+    /// its delivery sets.
     ///
     /// # Errors
     ///
-    /// Hands `entry` back when the operation holds no lane of its room, or
-    /// `origin` is not outstanding.
+    /// Hands `entry` back when `origin` is not outstanding, or was made
+    /// neither under the room's lock, nor in its admission order, nor by a
+    /// delivery set in the room.
     pub(super) fn adopt(
         &mut self,
         io: &Io,
         entry: Entry,
         origin: EffectId,
     ) -> Result<EntryId, Box<Entry>> {
-        if self.lane_room() != Some(entry.room_id()) || !io.is_outstanding(origin) {
+        let room_id = entry.room_id();
+        let nested = io.locked_for(origin) == Some(room_id);
+        let delivers = io.is_channel_call(origin) && self.room_id.as_ref() == Some(room_id);
+        let beside = io.admitted_for(origin) == Some(room_id) || delivers;
+        if !io.is_outstanding(origin) || !(nested || beside) {
             return Err(Box::new(entry));
         }
-        let nested = io
-            .locked_for(origin)
-            .filter(|room_id| *room_id == entry.room_id())
-            .cloned();
+        let nested = nested.then(|| room_id.clone());
         let id = self.adopted.next_id();
         let adopted = Adopted {
             id,
@@ -278,7 +284,7 @@ impl Machine {
         }
     }
 
-    /// A message's steps 1 to 4 in the lane the operation holds; refused
+    /// A message's steps 1 to 4, in the operation's room; refused
     /// before anything is read when it cannot be one.
     fn arrive(
         &mut self,
@@ -309,12 +315,7 @@ impl Machine {
             };
             return self.settle_entry(cx, &adopted, Ok(refused));
         }
-        let mut arrival = Box::new(Arrival::within_lane(
-            room_id,
-            organization_id,
-            channel,
-            message,
-        ));
+        let mut arrival = Box::new(Arrival::adopted(room_id, organization_id, channel, message));
         within(cx, &adopted, |cx| arrival.start(cx));
         self.adopted.running.push(AdoptedRun {
             entry: adopted,
@@ -384,8 +385,8 @@ impl Machine {
     }
 
     /// The entry's pass is over: its caller is answered, and the pass adds
-    /// to the cascade as any pass does, its delivery set at the back of the
-    /// lane (RFC §10.1 step 18).
+    /// to the cascade as any pass does, its delivery set in the place its
+    /// event took at its commit (RFC §10.1 step 18).
     fn on_adopted_pass(&mut self, cx: &mut Cx<'_>, adopted: &Adopted, mut report: PassReport) {
         let mut result = entry_result(&report.result);
         result.error = report.release_error.take();

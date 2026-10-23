@@ -14,8 +14,8 @@ use roomkit_core::model::{
     Visibility,
 };
 use roomkit_core::ops::{
-    Entry, FrameworkEvent, Inbound, InboundError, InboundTarget, MutationError, Next, Operation,
-    RefusedOperation, SequentialEnvironment,
+    EffectId, Entry, FrameworkEvent, Inbound, InboundError, InboundTarget, MutationError, Next,
+    Operation, Outcome, RefusedOperation, SequentialEnvironment,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::transcoding::text_of;
@@ -60,6 +60,20 @@ fn committed(called: &Called) -> Option<RoomEvent> {
     called.as_ref().ok().and_then(|result| result.event.clone())
 }
 
+/// The trace of a locked section, from the line starting with `start` to
+/// its release, without the lines of the delivery sets that run beside it
+/// once their place's turn comes.
+fn section_from<'sim>(sim: &'sim Sim, start: &str) -> Vec<&'sim str> {
+    let delivering = ["on_event", "deliver", "await lane", "leave lane"];
+    sim.trace
+        .iter()
+        .map(String::as_str)
+        .skip_while(|line| !line.starts_with(start))
+        .take_while(|line| !line.starts_with("release"))
+        .filter(|line| !delivering.iter().any(|set| line.starts_with(set)))
+        .collect()
+}
+
 /// A locked hook that, on the customer's events, injects the console's
 /// "Heads up" into the room and allows; `seen` records what its call
 /// returned, `shown` the index the hook saw.
@@ -100,14 +114,15 @@ mod an_injected_event {
             (sim.trace.clone(), result.event.map(|event| event.index)),
             (
                 [
-                    "enter lane room_1",
                     "lock room_1",
                     "load_context room_1",
                     "commit #0 ws delivered \"Your card is on its way\"",
+                    "enter lane room_1 evt_1",
                     "release room_1",
+                    "await lane room_1 evt_1",
                     "on_event sms <- evt_1",
                     "deliver sms <- evt_1",
-                    "leave lane room_1",
+                    "leave lane room_1 evt_1",
                 ]
                 .map(str::to_owned)
                 .to_vec(),
@@ -330,9 +345,8 @@ mod an_injected_event {
         );
         sim.inject("room_1", from_console("Hi")).unwrap();
         assert_eq!(
-            sim.trace[..7].to_vec(),
+            sim.trace[..6].to_vec(),
             [
-                "enter lane room_1",
                 "load_context room_1",
                 "take ticket room_1",
                 "hook scanner",
@@ -504,7 +518,9 @@ mod an_entry_adopted_under_the_lock {
 
     /// Its pass runs within the outer pass's section: no lock of its own,
     /// every hook run on it, its commit ahead of the outer event's, whose
-    /// pass reads the room again once its hooks are over.
+    /// pass reads the room again once its hooks are over. Its event takes
+    /// its place in the lane ahead of the outer event's (RFC §10.2), and
+    /// its set runs in its turn, while the outer section still decides.
     #[test]
     fn commits_ahead_of_the_event_being_processed() {
         let (mut sim, _, _) = notified();
@@ -512,7 +528,6 @@ mod an_entry_adopted_under_the_lock {
         assert_eq!(
             sim.trace,
             [
-                "enter lane room_1",
                 "load_context room_1",
                 "handle_inbound sms",
                 "lock room_1",
@@ -522,16 +537,21 @@ mod an_entry_adopted_under_the_lock {
                 "hook notifier",
                 "load_context room_1",
                 "commit #0 ws delivered \"Heads up\"",
+                "enter lane room_1 evt_2",
                 "hook notifier settled",
                 "hook notifier returns",
+                "await lane room_1 evt_2",
                 "load_context room_1",
-                "commit #1 sms delivered \"hello\"",
-                "release room_1",
                 "on_event sms <- evt_2",
+                "commit #1 sms delivered \"hello\"",
                 "deliver sms <- evt_2",
+                "enter lane room_1 evt_1",
+                "leave lane room_1 evt_2",
+                "release room_1",
+                "await lane room_1 evt_1",
                 "on_event ws <- evt_1",
                 "deliver ws <- evt_1",
-                "leave lane room_1",
+                "leave lane room_1 evt_1",
             ]
         );
     }
@@ -667,15 +687,8 @@ mod an_entry_adopted_under_the_lock {
             },
         );
         sim.send(hello()).unwrap();
-        let section: Vec<&str> = sim
-            .trace
-            .iter()
-            .map(String::as_str)
-            .skip_while(|line| !line.starts_with("hook notifier calls"))
-            .take_while(|line| !line.starts_with("release"))
-            .collect();
         assert_eq!(
-            section,
+            section_from(&sim, "hook notifier calls"),
             [
                 "hook notifier calls send_event room_1 \"Heads up\"",
                 "hook notifier returns",
@@ -683,9 +696,11 @@ mod an_entry_adopted_under_the_lock {
                 "hook notifier",
                 "load_context room_1",
                 "commit #0 ws delivered \"Heads up\"",
+                "enter lane room_1 evt_2",
                 "hook notifier settled",
                 "load_context room_1",
                 "commit #1 sms delivered \"hello\"",
+                "enter lane room_1 evt_1",
             ]
         );
     }
@@ -703,24 +718,20 @@ mod an_entry_adopted_under_the_lock {
         sim.nth_durations
             .push(("load_context", 5, std::time::Duration::from_secs(11)));
         let result = sim.send(hello()).unwrap();
-        let after: Vec<&str> = sim
-            .trace
-            .iter()
-            .map(String::as_str)
-            .skip_while(|line| !line.ends_with("deadline passed"))
-            .collect();
         assert_eq!(
-            (result.reason, sim.timeline_lines(), after),
+            (
+                result.reason,
+                sim.timeline_lines(),
+                sim.traced("load_context room_1 deadline"),
+                sim.traced("deliver"),
+                sim.trace.last().map(String::as_str)
+            ),
             (
                 Some("process_timeout".to_owned()),
                 vec!["#0 ws delivered \"Heads up\"".to_owned()],
-                vec![
-                    "load_context room_1 deadline passed",
-                    "release room_1",
-                    "on_event sms <- evt_2",
-                    "deliver sms <- evt_2",
-                    "leave lane room_1",
-                ]
+                vec!["load_context room_1 deadline passed"],
+                vec!["deliver sms <- evt_2"],
+                Some("leave lane room_1 evt_2")
             )
         );
     }
@@ -745,15 +756,8 @@ mod an_entry_adopted_under_the_lock {
             },
         );
         sim.send(hello()).unwrap();
-        let section: Vec<&str> = sim
-            .trace
-            .iter()
-            .map(String::as_str)
-            .skip_while(|line| !line.starts_with("hook notifier calls"))
-            .take_while(|line| !line.starts_with("release"))
-            .collect();
         assert_eq!(
-            section,
+            section_from(&sim, "hook notifier calls"),
             [
                 "hook notifier calls send_event room_1 \"First\"",
                 "hook notifier calls send_event room_1 \"Second\"",
@@ -762,14 +766,17 @@ mod an_entry_adopted_under_the_lock {
                 "hook notifier",
                 "load_context room_1",
                 "commit #0 ws delivered \"First\"",
+                "enter lane room_1 evt_2",
                 "hook notifier settled",
                 "load_context room_1",
                 "hook notifier",
                 "load_context room_1",
                 "commit #1 ws delivered \"Second\"",
+                "enter lane room_1 evt_3",
                 "hook notifier settled",
                 "load_context room_1",
                 "commit #2 sms delivered \"hello\"",
+                "enter lane room_1 evt_1",
             ]
         );
     }
@@ -1058,14 +1065,17 @@ mod an_entry_adopted_from_a_delivery {
                 "lock room_1",
                 "load_context room_1",
                 "commit #1 ai delivered \"Let me check.\"",
+                "enter lane room_1 evt_2",
                 "release room_1",
                 "on_event ai <- evt_1 settled",
                 "on_event ai <- evt_1 returns",
+                "leave lane room_1 evt_1",
+                "await lane room_1 evt_2",
                 "on_event sms <- evt_2",
                 "on_event ws <- evt_2",
                 "deliver sms <- evt_2",
                 "deliver ws <- evt_2",
-                "leave lane room_1",
+                "leave lane room_1 evt_2",
             ]
         );
     }
@@ -1084,6 +1094,7 @@ mod an_entry_adopted_from_a_delivery {
                 "lock room_1 in room_1",
                 "load_context room_1 in room_1",
                 "commit in room_1",
+                "enter lane room_1 evt_2 in room_1",
                 "release room_1 in room_1",
             ]
         );
@@ -1168,7 +1179,7 @@ mod an_entry_adopted_from_a_delivery {
                     "lock room_1",
                     "load_context room_1",
                     "commit #1 sms delivered \"follow-up\"",
-                    "release room_1",
+                    "enter lane room_1 evt_2",
                 ],
                 Some(1),
                 0
@@ -1285,7 +1296,7 @@ mod an_entry_whose_caller_did_not_wait {
                     "on_event sms <- evt_2",
                     "on_event ws <- evt_2",
                 ],
-                Some("leave lane room_1")
+                Some("leave lane room_1 evt_2")
             )
         );
     }
@@ -1378,22 +1389,29 @@ mod an_entry_adopted_from_an_off_lock_hook {
                     "hook scanner",
                     "load_context room_1",
                     "commit #0 ws delivered \"Scanned\"",
+                    // The entry's place is taken at its commit, ahead of the
+                    // trigger's: its set runs in its turn, while the trigger
+                    // waits for its ticket's, and the trigger's pass never
+                    // waits behind it (RFC §10.2).
+                    "enter lane room_1 evt_2",
                     "release room_1",
                     "hook scanner settled",
                     "hook scanner returns",
+                    "await lane room_1 evt_2",
                     "await ticket room_1",
-                    // The entry's delivery set joined the lane at its commit,
-                    // ahead of the trigger's pass (RFC §10.2).
                     "on_event sms <- evt_2",
                     "deliver sms <- evt_2",
                     "lock room_1",
+                    "leave lane room_1 evt_2",
                     "load_context room_1",
                     "commit #1 sms delivered \"hello\"",
+                    "enter lane room_1 evt_1",
                     "release room_1",
                     "release ticket room_1",
+                    "await lane room_1 evt_1",
                     "on_event ws <- evt_1",
                     "deliver ws <- evt_1",
-                    "leave lane room_1",
+                    "leave lane room_1 evt_1",
                 ],
                 vec![
                     "#0 ws delivered \"Scanned\"".to_owned(),
@@ -1402,6 +1420,57 @@ mod an_entry_adopted_from_an_off_lock_hook {
             )
         );
     }
+}
+
+/// RFC §10.2: the set of the entry an off-lock hook made waits in the lane
+/// behind another call's set, which waits for this call's decision: the
+/// trigger's pass runs beside it, never behind it, the call is decided, and
+/// the two sets run in the order of their places.
+#[test]
+fn an_off_lock_entry_s_set_waiting_in_the_lane_leaves_the_trigger_s_pass_free() {
+    let mut sim = room();
+    sim.hold_a_place_ahead();
+    sim.reentrant_hook(
+        "scanner",
+        false,
+        Reentry {
+            entries: calling(|event| {
+                (event.source.channel_id.as_str() == "sms").then(|| send_event("Scanned"))
+            }),
+            answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+        },
+    );
+    sim.send(hello()).unwrap();
+    let lane: Vec<&str> = sim
+        .trace
+        .iter()
+        .map(String::as_str)
+        .filter(|line| {
+            [
+                "commit",
+                "enter lane",
+                "await lane",
+                "leave lane",
+                "another call",
+            ]
+            .iter()
+            .any(|kind| line.starts_with(kind))
+        })
+        .collect();
+    assert_eq!(
+        lane,
+        [
+            "commit #0 ws delivered \"Scanned\"",
+            "enter lane room_1 evt_2",
+            "commit #1 sms delivered \"hello\"",
+            "enter lane room_1 evt_1",
+            "another call's set is over",
+            "await lane room_1 evt_2",
+            "leave lane room_1 evt_2",
+            "await lane room_1 evt_1",
+            "leave lane room_1 evt_1",
+        ]
+    );
 }
 
 /// RFC §13.6: an entry an off-lock hook made is committed before the
@@ -1435,13 +1504,14 @@ fn an_off_lock_entry_is_delivered_when_its_caller_s_event_passes_its_deadline() 
             Some("process_timeout".to_owned()),
             vec!["#0 ws delivered \"Scanned\"".to_owned()],
             vec!["deliver sms <- evt_2"],
-            Some("leave lane room_1".to_owned())
+            Some("leave lane room_1 evt_2".to_owned())
         )
     );
 }
 
 /// RFC §13.5, gap G-070: a call no operation adopts runs as an operation of
-/// its own, and waits for the room's lane as any call does.
+/// its own, and waits for the room lock, then for its turn in the room's
+/// lane, as any call does.
 mod a_call_no_operation_adopts {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -1487,7 +1557,6 @@ mod a_call_no_operation_adopts {
             (
                 vec![
                     "hook relay calls process_inbound room_2 \"Relayed\"",
-                    "enter lane room_2",
                     "load_context room_2",
                     "store room room_2 Active",
                     "lock room_2",
@@ -1500,19 +1569,21 @@ mod a_call_no_operation_adopts {
                     "hook relay",
                     "load_context room_2",
                     "commit #0 sms delivered \"Relayed\"",
+                    "enter lane room_2 evt_5",
                     "release room_2",
-                    "leave lane room_2",
+                    "await lane room_2 evt_5",
+                    "leave lane room_2 evt_5",
                 ],
                 vec!["#0 sms delivered \"Relayed\"".to_owned()]
             )
         );
     }
 
-    /// A call made from a task outside its caller's context finds the
-    /// room's lane held by the call it was made from, waits for it, and
-    /// runs once that call is over.
+    /// A call made from a task outside its caller's context waits for the
+    /// room lock the section it was made from holds, commits once it is
+    /// released, and its set waits for its place's turn, behind that call's.
     #[test]
-    fn made_outside_its_caller_s_context_waits_for_the_lane() {
+    fn made_outside_its_caller_s_context_commits_after_the_section_and_is_delivered_after_it() {
         let mut sim = room();
         sim.reentrant_hook(
             "notifier",
@@ -1539,20 +1610,23 @@ mod a_call_no_operation_adopts {
                     "hook notifier returns",
                     "load_context room_1",
                     "commit #0 sms delivered \"hello\"",
+                    "enter lane room_1 evt_1",
                     "release room_1",
-                    "on_event ws <- evt_1",
-                    "deliver ws <- evt_1",
-                    "leave lane room_1",
-                    "enter lane room_1",
                     "lock room_1",
                     "load_context room_1",
                     "hook notifier",
                     "load_context room_1",
                     "commit #1 ws delivered \"Heads up\"",
+                    "enter lane room_1 evt_2",
                     "release room_1",
+                    "await lane room_1 evt_1",
+                    "on_event ws <- evt_1",
+                    "deliver ws <- evt_1",
+                    "leave lane room_1 evt_1",
+                    "await lane room_1 evt_2",
                     "on_event sms <- evt_2",
                     "deliver sms <- evt_2",
-                    "leave lane room_1",
+                    "leave lane room_1 evt_2",
                 ],
                 vec![
                     "#0 sms delivered \"hello\"".to_owned(),
@@ -1562,11 +1636,11 @@ mod a_call_no_operation_adopts {
         );
     }
 
-    /// Gap G-068: the wait for the lane counts against the call's
-    /// `process_timeout`; past it, the lane is not taken and nothing is
-    /// written.
+    /// Gap G-068: the wait for its turn in the room's lane comes after its
+    /// commit, and counts nothing against the call's `process_timeout`: a
+    /// set behind a slow one is delivered late, never refused.
     #[test]
-    fn made_outside_its_caller_s_context_is_refused_past_its_deadline() {
+    fn made_outside_its_caller_s_context_waits_for_its_turn_past_its_deadline() {
         let mut sim = room();
         sim.config.process_timeout = Some(std::time::Duration::from_secs(10));
         sim.delivery_duration = std::time::Duration::from_secs(6);
@@ -1588,19 +1662,25 @@ mod a_call_no_operation_adopts {
                 sim.framework_event_names().last().cloned()
             ),
             (
-                Some("enter lane room_1 deadline passed".to_owned()),
-                vec!["#0 sms delivered \"hello\"".to_owned()],
-                Some("process_timeout".to_owned())
+                Some("leave lane room_1 evt_2".to_owned()),
+                vec![
+                    "#0 sms delivered \"hello\"".to_owned(),
+                    "#1 ws delivered \"Heads up\"".to_owned()
+                ],
+                Some("event_processed".to_owned())
             )
         );
     }
 }
 
 /// RFC §10.1 step 18: the call's decision is published at its refusal,
-/// before the delivery sets of the entries it adopted, which still run.
+/// while the set of an entry it adopted still waits in the lane behind
+/// another call's set, which waits for that decision: the entry is
+/// delivered once it is published.
 #[test]
 fn a_call_past_its_deadline_is_decided_before_its_off_lock_entry_is_delivered() {
     let mut sim = room();
+    sim.hold_a_place_ahead();
     sim.config.process_timeout = Some(std::time::Duration::from_secs(10));
     sim.durations
         .push(("await ticket", std::time::Duration::from_secs(11)));
@@ -1623,25 +1703,41 @@ fn a_call_past_its_deadline_is_decided_before_its_off_lock_entry_is_delivered() 
             (line.clone(), reason)
         })
         .collect();
+    let after: Vec<&str> = sim
+        .trace
+        .iter()
+        .map(String::as_str)
+        .skip_while(|line| !line.ends_with("deadline passed"))
+        .collect();
     assert_eq!(
-        (decided, sim.traced("on_event")),
+        (decided, after),
         (
             vec![(
                 Some("await ticket room_1 deadline passed".to_owned()),
                 Some("process_timeout".to_owned())
             )],
-            vec!["on_event sms <- evt_2"]
+            vec![
+                "await ticket room_1 deadline passed",
+                "another call's set is over",
+                "await lane room_1 evt_2",
+                "release ticket room_1",
+                "on_event sms <- evt_2",
+                "deliver sms <- evt_2",
+                "leave lane room_1 evt_2",
+            ]
         )
     );
 }
 
-/// The operation adopts a call into the room it holds the lane of, made by
-/// an effect still outstanding; any other is handed back.
+/// RFC §9.5.1 Reentrance: the operation adopts a call into its room made
+/// by an effect still outstanding, under the room's lock or in its
+/// admission order; any other is handed back.
 mod an_adoption {
     use super::*;
 
-    /// An inbound operation polled up to its first request.
-    fn started() -> (Inbound, roomkit_core::ops::EffectId) {
+    /// An inbound operation polled up to its parse: step 2's read of the
+    /// room, then the parse, each still outstanding when asked for.
+    fn parsing() -> (Inbound, EffectId, EffectId) {
         let sim = room();
         let mut inbound = Inbound::new(
             sim.shared_config(),
@@ -1649,31 +1745,63 @@ mod an_adoption {
             None,
             hello(),
         );
-        let step = inbound.poll(&mut SequentialEnvironment::default());
-        let Next::Effects(effects) = step.next else {
-            panic!("the operation enters the lane first");
+        let mut environment = SequentialEnvironment::default();
+        let read = first_effect(&mut inbound, &mut environment);
+        let context = roomkit_core::model::RoomContext {
+            room: sim.room.clone(),
+            bindings: sim.bindings.clone(),
+            participants: Vec::new(),
+            recent_events: Vec::new(),
         };
-        (inbound, effects.first().unwrap().id)
+        inbound
+            .complete(read, Outcome::Context(Box::new(context)))
+            .unwrap();
+        let parse = first_effect(&mut inbound, &mut environment);
+        (inbound, read, parse)
+    }
+
+    fn first_effect(inbound: &mut Inbound, environment: &mut SequentialEnvironment) -> EffectId {
+        let Next::Effects(effects) = inbound.poll(environment).next else {
+            panic!("the operation asks for an effect");
+        };
+        effects.first().unwrap().id
+    }
+
+    /// Step 2's read of the room, outstanding, runs neither under the lock
+    /// nor in the admission order.
+    #[test]
+    fn of_a_call_made_neither_under_the_lock_nor_in_the_admission_order_is_refused() {
+        let mut inbound = Inbound::new(
+            room().shared_config(),
+            InboundTarget::Room(room_id()),
+            None,
+            hello(),
+        );
+        let read = first_effect(&mut inbound, &mut SequentialEnvironment::default());
+        assert!(inbound.adopt(send_event("Hi"), read).is_err());
     }
 
     #[test]
-    fn of_a_call_before_the_lane_is_held_is_refused() {
-        let (mut inbound, effect) = started();
-        assert!(inbound.adopt(send_event("Hi"), effect).is_err());
+    fn of_a_call_whose_effect_was_answered_is_refused() {
+        let (mut inbound, read, _) = parsing();
+        assert!(inbound.adopt(send_event("Hi"), read).is_err());
+    }
+
+    #[test]
+    fn of_a_call_its_parse_makes_into_its_room_is_accepted() {
+        let (mut inbound, _, parse) = parsing();
+        assert!(inbound.adopt(send_event("Hi"), parse).is_ok());
     }
 
     #[test]
     fn of_another_room_s_call_is_refused() {
-        let (mut inbound, effect) = started();
+        let (mut inbound, _, parse) = parsing();
         let entry = Entry::Direct {
             room_id: RoomId::new("room_2").unwrap(),
             organization_id: None,
             event: Box::new(from_console("Hi")),
         };
-        inbound
-            .complete(effect, roomkit_core::ops::Outcome::Entered)
-            .unwrap();
-        assert!(inbound.adopt(entry, effect).is_err());
+        assert!(inbound.adopt(entry, parse).is_err());
     }
 }
 

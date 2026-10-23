@@ -1,5 +1,5 @@
 //! Step 15 of the inbound pipeline (RFC §10.1 step 15): once the cascade's
-//! lane is empty, the tasks and observations every pass and delivery set
+//! passes and sets are over, the tasks and observations every pass and set
 //! collected are stored, the room metadata updates the channels returned
 //! are applied (gap G-049), and each stored task's `ON_TASK_CREATED`
 //! observers run. Then the operation ends.

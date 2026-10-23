@@ -89,7 +89,6 @@ mod a_routed_sender {
             [
                 "resolve_identity sms +15551234567",
                 "route sms +15551234567",
-                "enter lane room_1",
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
@@ -174,7 +173,6 @@ mod a_routed_sender {
             until_parse(&sim),
             [
                 "route sms system",
-                "enter lane room_1",
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
@@ -295,7 +293,7 @@ mod a_routed_sender {
                 sim.timeline_lines()
             ),
             (
-                ["route telegram 4242", "enter lane room_1"]
+                ["route telegram 4242", "load_context room_1"]
                     .map(str::to_owned)
                     .to_vec(),
                 None,
@@ -356,7 +354,7 @@ mod a_binding_taken_meanwhile {
     }
 
     #[test]
-    fn leaves_the_room_s_lane_and_routes_the_message_once_more() {
+    fn routes_the_message_once_more() {
         let mut sim = taken();
         sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
@@ -364,14 +362,11 @@ mod a_binding_taken_meanwhile {
             [
                 "resolve_identity sms +15551234567",
                 "route sms +15551234567",
-                "enter lane room_1",
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
                 "release room_1",
-                "leave lane room_1",
                 "route sms +15551234567",
-                "enter lane new_room_1",
                 "store room new_room_1 Active",
                 "lock new_room_1",
                 "load_context new_room_1",
@@ -432,33 +427,8 @@ mod a_binding_taken_meanwhile {
             ),
             (
                 vec!["route sms +15551234567"; 2],
-                vec![
-                    "enter lane room_1",
-                    "enter lane room_1",
-                    "enter lane new_room_1"
-                ],
+                vec!["enter lane new_room_1 evt_4"],
                 vec!["#0 sms delivered \"Bonjour\"".to_owned()]
-            )
-        );
-    }
-
-    /// A failed leave changes nothing the call decided: the message is
-    /// routed all the same, and the call's result carries the failure.
-    #[test]
-    fn whose_lane_fails_to_be_left_is_routed_all_the_same() {
-        let mut sim = taken();
-        sim.leave_fails = true;
-        let result = sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
-        assert_eq!(
-            (
-                result.event.map(|event| event.room_id.to_string()),
-                result.error.map(|error| error.error_type),
-                sim.traced("leave lane")
-            ),
-            (
-                Some("new_room_1".to_owned()),
-                Some("LaneLost".to_owned()),
-                vec!["leave lane room_1", "leave lane new_room_1"]
             )
         );
     }
@@ -491,7 +461,7 @@ mod a_room_that_heard_another_sender_meanwhile {
     }
 
     #[test]
-    fn leaves_the_room_s_lane_and_routes_the_message_once_more() {
+    fn routes_the_message_once_more() {
         let mut sim = heard_meanwhile();
         sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
@@ -499,14 +469,11 @@ mod a_room_that_heard_another_sender_meanwhile {
             [
                 "resolve_identity sms +15551234567",
                 "route sms +15551234567",
-                "enter lane room_1",
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
                 "release room_1",
-                "leave lane room_1",
                 "route sms +15551234567",
-                "enter lane new_room_1",
                 "store room new_room_1 Active",
                 "lock new_room_1",
                 "load_context new_room_1",
@@ -795,7 +762,6 @@ mod no_room_found {
                 vec![
                     "resolve_identity sms +15551234567",
                     "route sms +15551234567",
-                    "enter lane new_room_1",
                     "store room new_room_1 Active",
                     "lock new_room_1",
                     "load_context new_room_1",
@@ -869,13 +835,13 @@ mod no_room_found {
         ));
         let sent = sim.route(None, Sim::message("sms", "Bonjour"));
         assert_eq!(
-            (sent.map(|result| result.blocked), sim.traced("leave lane")),
+            (sent.map(|result| result.blocked), sim.traced("enter lane")),
             (
                 Err(InboundError::Store(ErrorRecord::new(
                     "RoomExists",
                     "a room with the id exists already"
                 ))),
-                vec!["leave lane new_room_1"]
+                vec![]
             )
         );
     }
@@ -1017,9 +983,7 @@ mod a_routed_room {
                 [
                     "resolve_identity sms +15551234567",
                     "route sms +15551234567",
-                    "enter lane room_1",
                     "load_context room_1",
-                    "leave lane room_1",
                 ]
                 .map(str::to_owned)
                 .to_vec()
@@ -1172,30 +1136,40 @@ mod a_chat_message {
     }
 }
 
-/// RFC §10.2: the lane of a routed room, left on every path.
+/// RFC §10.2: a routed message takes no place in a room's lane before its
+/// commit, and holds nothing of the room once it fails.
 mod the_lane {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// Its place is taken under the lock of its commit, in the room it
+    /// lands in: none while it is routed and recorded.
     #[test]
-    fn of_a_routed_room_that_cannot_be_entered_fails_the_message_with_nothing_held() {
+    fn of_the_room_the_message_lands_in_takes_its_place_at_the_commit() {
         let mut sim = routed_to_room_1();
-        sim.failing_effect = Some("enter lane room_1");
-        let sent = sim.route(None, Sim::message("sms", "Bonjour"));
+        sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        let placed: Vec<&str> = sim
+            .trace
+            .iter()
+            .map(String::as_str)
+            .skip_while(|line| !line.starts_with("commit"))
+            .take(3)
+            .collect();
         assert_eq!(
-            (sent.map(|result| result.blocked), sim.trace.last().cloned()),
+            (sim.traced("enter lane"), placed),
             (
-                Err(InboundError::Lane(ErrorRecord::new(
-                    "LaneUnavailable",
-                    "the lane manager is down"
-                ))),
-                Some("enter lane room_1 failed".to_owned())
+                vec!["enter lane room_1 evt_1"],
+                vec![
+                    "commit #0 sms delivered \"Bonjour\"",
+                    "enter lane room_1 evt_1",
+                    "release room_1"
+                ]
             )
         );
     }
 
     #[test]
-    fn is_left_when_the_record_cannot_take_the_room_lock() {
+    fn holds_nothing_when_the_record_cannot_take_the_room_lock() {
         let mut sim = routed_to_room_1();
         sim.failing_effect = Some("lock room_1");
         let sent = sim.route(None, Sim::message("sms", "Bonjour"));
@@ -1206,44 +1180,25 @@ mod the_lane {
                     "LockUnavailable",
                     "the lock manager is down"
                 ))),
-                Some("leave lane room_1".to_owned())
+                Some("lock room_1 failed".to_owned())
             )
         );
     }
 
     #[test]
-    fn is_left_when_the_record_cannot_be_stored() {
+    fn holds_nothing_when_the_record_cannot_be_stored() {
         let mut sim = routed_to_room_1();
         sim.failing_effect = Some("store binding sms");
         let sent = sim.route(None, Sim::message("sms", "Bonjour"));
         assert_eq!(
-            (
-                sent.map(|result| result.blocked),
-                sim.trace[sim.trace.len() - 2..].to_vec()
-            ),
+            (sent.map(|result| result.blocked), sim.trace.last().cloned()),
             (
                 Err(InboundError::Store(ErrorRecord::new(
                     "StoreUnavailable",
                     "the store is down"
                 ))),
-                ["release room_1", "leave lane room_1"]
-                    .map(str::to_owned)
-                    .to_vec()
+                Some("release room_1".to_owned())
             )
-        );
-    }
-
-    #[test]
-    fn of_the_room_the_message_lands_in_is_held_to_the_call_s_end() {
-        let mut sim = routed_to_room_1();
-        sim.echo_agent("ai", "Bonjour!");
-        sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
-        assert_eq!(
-            (
-                sim.traced("enter lane"),
-                sim.trace.last().map(String::as_str)
-            ),
-            (vec!["enter lane room_1"], Some("leave lane room_1"))
         );
     }
 }

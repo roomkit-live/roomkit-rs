@@ -168,8 +168,10 @@ mod an_accepted_edit {
                 "load_context room_1",
                 "get_event evt_1",
                 "commit #1 wa delivered \"Correction: I need 50000$\" updating evt_1",
+                "enter lane room_1 evt_2",
                 "release room_1",
                 "fire on_event_updated",
+                "await lane room_1 evt_2",
             ]
         );
     }
@@ -299,8 +301,10 @@ mod an_accepted_delete {
             (
                 vec![
                     "commit #1 wa delivered \"[Message deleted]\" updating evt_1",
+                    "enter lane room_1 evt_2",
                     "release room_1",
                     "fire on_event_deleted",
+                    "await lane room_1 evt_2",
                 ],
                 Some(json!(true))
             )
@@ -710,14 +714,12 @@ mod a_refused_change {
         assert_eq!(
             sim.trace,
             [
-                "enter lane room_1",
                 "load_context room_1",
                 "handle_inbound wa",
                 "lock room_1",
                 "load_context room_1",
                 "get_event evt_1",
                 "release room_1",
-                "leave lane room_1",
             ]
         );
     }

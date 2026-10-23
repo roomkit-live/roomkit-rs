@@ -12,8 +12,11 @@
 //! is checked, and it is committed with the room's counters, resuming a
 //! paused room and updating an edit's or a delete's target, and its
 //! broadcast planned (`decision`). An instruction takes every step but the
-//! write: it is decided, never committed (RFC §10.1.1). Every path that
-//! took the lock releases it.
+//! write: it is decided, never committed (RFC §10.1.1). An event delivered
+//! takes its place in the room's delivery lane before the lock is released
+//! (RFC §10.1 step 12, "appended to the room's delivery lane"), so the
+//! places follow the commits and the sets run in index order (RFC §10.2).
+//! Every path that took the lock releases it.
 //!
 //! Every request a pass makes while it holds the lock says so
 //! (`Effect::locked`), so that the code its hooks run may take the lock
@@ -130,6 +133,8 @@ pub(super) struct PassReport {
     /// The failure of the lock's release, which changes nothing the pass
     /// decided (gap G-025).
     pub(super) release_error: Option<ErrorRecord>,
+    /// Whether the event delivered took its place in the room's lane.
+    pub(super) placed: bool,
 }
 
 /// One event's pass through the locked section.
@@ -152,6 +157,8 @@ pub(super) struct CommitPass {
     tasks: Vec<Task>,
     observations: Vec<Observation>,
     release_error: Option<ErrorRecord>,
+    /// Whether the event took its place in the room's delivery lane.
+    placed: bool,
 }
 
 /// What the hooks decided, which the pass applies once it has read the room
@@ -203,6 +210,12 @@ enum State {
         effect: EffectId,
         result: PassResult,
     },
+    /// The event delivered takes its place in the room's lane, under the
+    /// lock.
+    Placing {
+        effect: EffectId,
+        result: PassResult,
+    },
     Releasing {
         effect: EffectId,
         result: Result<PassResult, Abort>,
@@ -224,6 +237,7 @@ impl State {
             | Self::Rereading { effect, .. }
             | Self::RereadingTarget { effect, .. }
             | Self::Committing { effect, .. }
+            | Self::Placing { effect, .. }
             | Self::Releasing { effect, .. } => Some(*effect),
             Self::Start | Self::Finished(_) | Self::Reported => None,
         }
@@ -245,6 +259,7 @@ impl CommitPass {
             tasks: Vec::new(),
             observations: Vec::new(),
             release_error: None,
+            placed: false,
         }
     }
 
@@ -320,6 +335,7 @@ impl CommitPass {
                 payload, context, ..
             } => self.on_target_reread(cx, *payload, context, outcome),
             State::Committing { result, .. } => self.on_committed(cx, result, outcome),
+            State::Placing { result, .. } => self.on_placed(cx, result, outcome),
             State::Releasing { result, .. } => {
                 let (result, release_error) =
                     ops::after_release(&self.event.room_id, result, outcome.into_released());
@@ -344,6 +360,7 @@ impl CommitPass {
             tasks: mem::take(&mut self.tasks),
             observations: mem::take(&mut self.observations),
             release_error: self.release_error.take(),
+            placed: self.placed,
         }))
     }
 
@@ -363,10 +380,11 @@ impl CommitPass {
                 let expired = Abort::DeadlinePassed(Some(self.event.id.clone()));
                 self.release(cx, Err(expired))
             }
-            // The commit and the release carry no deadline (RFC §13.6): `Io`
-            // answers them with no `DeadlinePassed`.
+            // The commit, the place and the release carry no deadline (RFC
+            // §13.6): `Io` answers them with no `DeadlinePassed`.
             state @ (State::Start
             | State::Committing { .. }
+            | State::Placing { .. }
             | State::Releasing { .. }
             | State::Finished(_)
             | State::Reported) => {

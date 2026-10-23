@@ -2,10 +2,10 @@
 //! (docs/architecture.md, "The effect protocol").
 //!
 //! An operation asks for [`Effect`]s, each answered by exactly one
-//! [`Outcome`], and emits [`Notice`]s, which need no answer. An operation
-//! that holds a room's lane adopts the calls into that room its own work
-//! makes ([`Entry`]), and reports each one's result once it is decided
-//! ([`Settled`]).
+//! [`Outcome`], and emits [`Notice`]s, which need no answer. An inbound
+//! operation adopts the calls into its room its own work makes ([`Entry`]),
+//! and reports each one's result once it is decided ([`Settled`]), and its
+//! own once it is ([`Decided`]).
 
 mod answers;
 mod entries;
@@ -95,17 +95,34 @@ pub enum Request {
         /// The room.
         room_id: RoomId,
     },
-    /// Enter the room's delivery lane, which one operation holds at a time,
-    /// so that one event's delivery set completes before the next one's
-    /// begins (RFC §10.2). Answer [`Outcome::Entered`] once it is held.
+    /// Take the event's place in the room's delivery lane, behind every
+    /// place of the room taken before in this process (RFC §10.2): issued
+    /// under the room lock once the event is committed, or an instruction
+    /// decided, before the lock's release, so that places follow the order
+    /// of the commits. It never waits. Answer [`Outcome::Entered`].
     EnterLane {
         /// The room.
         room_id: RoomId,
+        /// The event whose delivery set the place is for.
+        event_id: EventId,
     },
-    /// Leave the room's delivery lane. Answer [`Outcome::Left`].
+    /// Wait until every place of the room taken before the event's is
+    /// left: its delivery set's turn, so that one event's set completes
+    /// before the next one's begins (RFC §10.2). Answer
+    /// [`Outcome::LaneTurn`].
+    AwaitLane {
+        /// The room.
+        room_id: RoomId,
+        /// The event.
+        event_id: EventId,
+    },
+    /// Leave the event's place in the room's delivery lane, wherever it
+    /// stands. Answer [`Outcome::Left`].
     LeaveLane {
         /// The room.
         room_id: RoomId,
+        /// The event.
+        event_id: EventId,
     },
     /// Take the room's admission ticket, behind every ticket of the room
     /// taken earlier in this process (RFC §9.5.1): an event whose off-lock
@@ -347,9 +364,12 @@ pub enum Outcome {
     Locked,
     /// The room's lock is released.
     Released,
-    /// The room's delivery lane is held.
+    /// The event's place in the room's delivery lane is taken.
     Entered,
-    /// The room's delivery lane is left.
+    /// Every earlier place of the room's delivery lane is left: the event's
+    /// turn.
+    LaneTurn,
+    /// The event's place in the room's delivery lane is left.
     Left,
     /// The room's admission ticket is taken.
     Ticketed,
@@ -466,17 +486,19 @@ pub trait Operation {
     /// does not answer its request; the operation is unchanged then.
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError>;
 
-    /// Hands the operation a call into the room whose lane it holds, made
-    /// by the code effect `origin` runs, or by code that code awaits (RFC
-    /// §13.5). The operation runs it as an entry of its own and reports its
-    /// result in [`Step::settled`]; the next poll starts it.
+    /// Hands the operation a call into its room, made by the code effect
+    /// `origin` runs, or by code that code awaits (RFC §13.5, §9.5.1
+    /// Reentrance): code under the room's lock or in its admission order,
+    /// or a delivery of its own. The operation runs it as an entry of its
+    /// own and reports its result in [`Step::settled`]; the next poll starts
+    /// it.
     ///
     /// # Errors
     ///
-    /// Hands `entry` back when the operation does not adopt it: an operation
-    /// that holds no lane, another room's call, or an `origin` no longer
-    /// outstanding. The driver then fails the call rather than let it wait
-    /// for what its own caller holds.
+    /// Hands `entry` back when the operation does not adopt it: another
+    /// room's call, an `origin` no longer outstanding, or one made neither
+    /// under the room's lock nor in its admission order. The driver then
+    /// runs the call as an operation of its own.
     fn adopt(&mut self, entry: Entry, origin: EffectId) -> Result<EntryId, Box<Entry>> {
         let _ = origin;
         Err(Box::new(entry))

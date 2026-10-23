@@ -1,13 +1,14 @@
-//! Calls into a room made from inside the work of the operation that holds
-//! the room's lane (RFC §13.5, §9.5.1 Reentrance, §10.1 step 18).
+//! Calls into a room made from inside the work of the operation in that
+//! room (RFC §13.5, §9.5.1 Reentrance, §10.1 step 18).
 //!
-//! A hook, a turn or a delivery that calls `send_event` or
-//! `process_inbound` for its own room would wait for the lane its own
-//! operation holds until that operation ends, which waits for the call. The
-//! driver hands such a call to the running operation instead
-//! ([`Operation::adopt`](super::Operation::adopt)), which runs it as an
-//! entry of its own and reports its result once it is decided
-//! ([`Settled`]): detached completion, at the commit (gap G-070).
+//! A hook, a parse, a turn or a delivery that calls `send_event` or
+//! `process_inbound` for its own room would, run apart, wait for what its
+//! own operation holds: the room lock, the admission ticket, a place in the
+//! room's lane. The driver hands such a call to the running operation
+//! instead ([`Operation::adopt`](super::Operation::adopt)), which runs it as
+//! an entry of its own and reports its result once it is decided
+//! ([`Settled`]): detached completion, at the commit (gap G-070). An
+//! inbound call's own decision is published the same way ([`Decided`]).
 
 use crate::model::{DirectEvent, InboundMessage, RoomId};
 use crate::ops::inbound::{InboundError, InboundResult};
@@ -26,8 +27,8 @@ impl EntryId {
     }
 }
 
-/// A call into a room, made by code that the operation holding the room's
-/// lane awaits.
+/// A call into a room, made by code that the operation in that room
+/// awaits.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
     /// `process_inbound(message, room_id)` (RFC §10.1), for a caller acting

@@ -305,7 +305,15 @@ mod an_accepted_instruction {
         sim.send(instruction()).unwrap();
         assert_eq!(
             locked_section(&sim),
-            ["lock room_1", "load_context room_1", "release room_1",]
+            [
+                "lock room_1",
+                "load_context room_1",
+                // Decided, never committed, it takes its place in the lane
+                // all the same, behind the room's latest event (rule 5).
+                "enter lane room_1 evt_2",
+                "release room_1",
+                "await lane room_1 evt_2",
+            ]
         );
     }
 
@@ -426,9 +434,9 @@ mod an_accepted_instruction {
             tail,
             [
                 "on_event ai <- evt_2",
+                "leave lane room_1 evt_2",
                 "fire after_broadcast",
                 "emit event_processed",
-                "leave lane room_1"
             ]
         );
     }
