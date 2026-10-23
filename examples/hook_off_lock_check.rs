@@ -18,10 +18,7 @@ use std::error::Error;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use roomkit::model::{
-    ChannelId, ChannelType, EventContent, HookResult, InboundMessage, RoomContext, RoomEvent,
-    RoomId,
-};
+use roomkit::model::{ChannelId, ChannelType, EventContent, HookResult, InboundMessage, RoomId};
 use roomkit::ops::{FrameworkEvent, InboundResult};
 use roomkit::testing::RecordingTransport;
 use roomkit::{HookExecution, HookSpec, HookTrigger, KitError, RoomKit, text_of};
@@ -45,7 +42,7 @@ fn scan_off_the_lock(kit: &RoomKit, scans: &Log<String>) -> Result<(), Box<dyn E
         )
     };
     let scans = scans.clone();
-    kit.hook(spec, move |event: RoomEvent, _: RoomContext| {
+    kit.hook(spec, move |event, _| {
         let (scans, text) = (scans.clone(), text_of(&event.content));
         async move {
             scans.push(format!("{text} scan starts"));

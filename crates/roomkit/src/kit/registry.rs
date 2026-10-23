@@ -67,13 +67,51 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(())
     }
 
-    /// Registers a hook with its handler (RFC §9.1).
+    /// Registers a hook whose handler is a closure, given the payload and
+    /// the room (RFC §9.1). The closure's argument types are the ones it is
+    /// called with, so they need no annotation:
+    ///
+    /// ```
+    /// # fn register(kit: &roomkit::RoomKit) -> Result<(), roomkit::KitError> {
+    /// use roomkit::model::HookResult;
+    /// use roomkit::{HookExecution, HookSpec, HookTrigger, text_of};
+    ///
+    /// let spec = HookSpec::new("spam_filter", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    /// kit.hook(spec, |event, _context| {
+    ///     let spam = text_of(&event.content).contains("spam");
+    ///     async move { Ok(if spam { HookResult::block("spam") } else { HookResult::allow() }) }
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// A handler of a type of its own registers with
+    /// [`hook_handler`](Self::hook_handler).
     ///
     /// # Errors
     ///
     /// Returns [`KitError::Registration`] when the registration breaks a rule
     /// of RFC §9.1.
-    pub fn hook(&self, spec: HookSpec, handler: impl HookHandler) -> Result<HookId, KitError> {
+    pub fn hook<F, Fut>(&self, spec: HookSpec, handler: F) -> Result<HookId, KitError>
+    where
+        F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = HookReturn> + Send + 'static,
+    {
+        self.hook_handler(spec, handler)
+    }
+
+    /// Registers a hook whose handler is a type of its own implementing
+    /// [`HookHandler`] (RFC §9.1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KitError::Registration`] when the registration breaks a rule
+    /// of RFC §9.1.
+    pub fn hook_handler(
+        &self,
+        spec: HookSpec,
+        handler: impl HookHandler,
+    ) -> Result<HookId, KitError> {
         let handler: Arc<dyn HookHandler> = Arc::new(handler);
         let id = self.inner.try_change_config(|config| {
             let id = config.hooks.register(spec)?;
@@ -119,6 +157,6 @@ impl<S: ConversationStore> RoomKit<S> {
         Fut: Future<Output = ()> + Send + 'static,
     {
         let spec = HookSpec::new(name, trigger, HookExecution::Async);
-        self.hook(spec, Observer(handler))
+        self.hook_handler(spec, Observer(handler))
     }
 }

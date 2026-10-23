@@ -331,19 +331,16 @@ mod a_locked_hook {
         let (kit, audit) = room().await;
         let seen = Arc::new(Mutex::new(None));
         let (hook_kit, hook_seen) = (kit.clone(), Arc::clone(&seen));
-        kit.hook(
-            before_broadcast("notifier", true),
-            move |event: RoomEvent, _| {
-                let (kit, seen) = (hook_kit.clone(), Arc::clone(&hook_seen));
-                async move {
-                    if event.source.channel_id == channel("sms") {
-                        let injected = kit.send_event(&room_id(), from_console("Heads up")).await?;
-                        *seen.lock().unwrap() = Some(injected.index);
-                    }
-                    Ok(HookResult::allow())
+        kit.hook(before_broadcast("notifier", true), move |event, _| {
+            let (kit, seen) = (hook_kit.clone(), Arc::clone(&hook_seen));
+            async move {
+                if event.source.channel_id == channel("sms") {
+                    let injected = kit.send_event(&room_id(), from_console("Heads up")).await?;
+                    *seen.lock().unwrap() = Some(injected.index);
                 }
-            },
-        )
+                Ok(HookResult::allow())
+            }
+        })
         .unwrap();
         let result = send(&kit, "hello").await.unwrap();
         assert_eq!(
@@ -366,24 +363,21 @@ mod a_locked_hook {
     async fn that_injects_twice_at_once_commits_both_ahead() {
         let (kit, audit) = room().await;
         let hook_kit = kit.clone();
-        kit.hook(
-            before_broadcast("notifier", true),
-            move |event: RoomEvent, _| {
-                let kit = hook_kit.clone();
-                async move {
-                    if event.source.channel_id == channel("sms") {
-                        let room = room_id();
-                        let (first, second) = tokio::join!(
-                            kit.send_event(&room, from_console("First")),
-                            kit.send_event(&room, from_console("Second"))
-                        );
-                        first?;
-                        second?;
-                    }
-                    Ok(HookResult::allow())
+        kit.hook(before_broadcast("notifier", true), move |event, _| {
+            let kit = hook_kit.clone();
+            async move {
+                if event.source.channel_id == channel("sms") {
+                    let room = room_id();
+                    let (first, second) = tokio::join!(
+                        kit.send_event(&room, from_console("First")),
+                        kit.send_event(&room, from_console("Second"))
+                    );
+                    first?;
+                    second?;
                 }
-            },
-        )
+                Ok(HookResult::allow())
+            }
+        })
         .unwrap();
         let result = send(&kit, "hello").await.unwrap();
         let mut ahead = audit.texts();
@@ -405,19 +399,16 @@ mod a_locked_hook {
     async fn that_commits_a_record_leaves_the_event_the_next_index() {
         let (kit, audit) = room().await;
         let hook_kit = kit.clone();
-        kit.hook(
-            before_broadcast("tracer", true),
-            move |event: RoomEvent, _| {
-                let kit = hook_kit.clone();
-                async move {
-                    let mut record = event.clone();
-                    record.id = "trace_1".parse()?;
-                    record.content = EventContent::text("trace");
-                    kit.commit_event(&room_id(), record, None).await?;
-                    Ok(HookResult::allow())
-                }
-            },
-        )
+        kit.hook(before_broadcast("tracer", true), move |event, _| {
+            let kit = hook_kit.clone();
+            async move {
+                let mut record = event.clone();
+                record.id = "trace_1".parse()?;
+                record.content = EventContent::text("trace");
+                kit.commit_event(&room_id(), record, None).await?;
+                Ok(HookResult::allow())
+            }
+        })
         .unwrap();
         let result = send(&kit, "hello").await.unwrap();
         assert_eq!(
@@ -481,18 +472,15 @@ mod a_locked_hook {
 async fn an_off_lock_hook_injects_without_a_ticket() {
     let (kit, audit) = room().await;
     let hook_kit = kit.clone();
-    kit.hook(
-        before_broadcast("scanner", false),
-        move |event: RoomEvent, _| {
-            let kit = hook_kit.clone();
-            async move {
-                if event.source.channel_id == channel("sms") {
-                    kit.send_event(&room_id(), from_console("Scanned")).await?;
-                }
-                Ok(HookResult::allow())
+    kit.hook(before_broadcast("scanner", false), move |event, _| {
+        let kit = hook_kit.clone();
+        async move {
+            if event.source.channel_id == channel("sms") {
+                kit.send_event(&room_id(), from_console("Scanned")).await?;
             }
-        },
-    )
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     let result = send(&kit, "hello").await.unwrap();
     assert_eq!(
@@ -648,20 +636,17 @@ mod a_context {
         let (kit, _) = room().await;
         let spawned = Arc::new(Mutex::new(None));
         let (hook_kit, hook_spawned) = (kit.clone(), Arc::clone(&spawned));
-        kit.hook(
-            before_broadcast("closer", true),
-            move |event: RoomEvent, _| {
-                let (kit, spawned) = (hook_kit.clone(), Arc::clone(&hook_spawned));
-                async move {
-                    if event.source.channel_id == channel("sms") {
-                        let task = tokio::spawn(async move { kit.close_room(&room_id()).await });
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                        *spawned.lock().unwrap() = Some(task);
-                    }
-                    Ok(HookResult::allow())
+        kit.hook(before_broadcast("closer", true), move |event, _| {
+            let (kit, spawned) = (hook_kit.clone(), Arc::clone(&hook_spawned));
+            async move {
+                if event.source.channel_id == channel("sms") {
+                    let task = tokio::spawn(async move { kit.close_room(&room_id()).await });
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    *spawned.lock().unwrap() = Some(task);
                 }
-            },
-        )
+                Ok(HookResult::allow())
+            }
+        })
         .unwrap();
         let result = send(&kit, "hello").await.unwrap();
         let task = spawned.lock().unwrap().take().unwrap();
@@ -689,19 +674,16 @@ mod a_context {
         let (kit, _) = room().await;
         let in_hook = Arc::new(Notify::new());
         let hook_entered = Arc::clone(&in_hook);
-        kit.hook(
-            before_broadcast("slow_policy", true),
-            move |event: RoomEvent, _| {
-                let entered = Arc::clone(&hook_entered);
-                async move {
-                    if event.source.channel_id == channel("ai") {
-                        entered.notify_one();
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                    Ok(HookResult::allow())
+        kit.hook(before_broadcast("slow_policy", true), move |event, _| {
+            let entered = Arc::clone(&hook_entered);
+            async move {
+                if event.source.channel_id == channel("ai") {
+                    entered.notify_one();
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                 }
-            },
-        )
+                Ok(HookResult::allow())
+            }
+        })
         .unwrap();
         let outcome = Arc::new(Mutex::new(None));
         let (turn_kit, turn_outcome, turn_in_hook) =
@@ -751,19 +733,15 @@ async fn an_awaited_creation_hook_injects_into_the_room_being_created() {
     let (kit, _) = room().await;
     let new_room = RoomId::new("room_2").unwrap();
     let observer_kit = kit.clone();
-    kit.observe(
-        "welcome",
-        HookTrigger::OnRoomCreated,
-        move |event: RoomEvent, _| {
-            let kit = observer_kit.clone();
-            async move {
-                kit.attach(&event.room_id, &channel("ws")).await.unwrap();
-                kit.send_event(&event.room_id, from_console("Welcome"))
-                    .await
-                    .unwrap();
-            }
-        },
-    )
+    kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
+        let kit = observer_kit.clone();
+        async move {
+            kit.attach(&event.room_id, &channel("ws")).await.unwrap();
+            kit.send_event(&event.room_id, from_console("Welcome"))
+                .await
+                .unwrap();
+        }
+    })
     .unwrap();
     let created = kit.process_inbound(message("hello"), Some(&new_room));
     let result = tokio::time::timeout(BOUND, created)
@@ -795,19 +773,15 @@ async fn an_integrator_creation_hook_sends_into_the_room_being_created() {
     let (kit, _) = room().await;
     let new_room = RoomId::new("room_2").unwrap();
     let observer_kit = kit.clone();
-    kit.observe(
-        "welcome",
-        HookTrigger::OnRoomCreated,
-        move |event: RoomEvent, _| {
-            let kit = observer_kit.clone();
-            async move {
-                kit.attach(&event.room_id, &channel("ws")).await.unwrap();
-                kit.send_event(&event.room_id, from_console("Welcome"))
-                    .await
-                    .unwrap();
-            }
-        },
-    )
+    kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
+        let kit = observer_kit.clone();
+        async move {
+            kit.attach(&event.room_id, &channel("ws")).await.unwrap();
+            kit.send_event(&event.room_id, from_console("Welcome"))
+                .await
+                .unwrap();
+        }
+    })
     .unwrap();
     tokio::time::timeout(BOUND, kit.create_room(&new_room))
         .await
@@ -852,20 +826,17 @@ async fn an_entry_made_by_a_nested_entry_s_parse_is_nested_in_turn() {
     kit.register_channel(bot).unwrap();
     kit.attach(&room_id(), &channel("bot")).await.unwrap();
     let hook_kit = kit.clone();
-    kit.hook(
-        before_broadcast("relay", true),
-        move |event: RoomEvent, _| {
-            let kit = hook_kit.clone();
-            async move {
-                if event.source.channel_id == channel("sms") {
-                    let relayed =
-                        InboundMessage::new(channel("bot"), "relay", EventContent::text("Relayed"));
-                    kit.process_inbound(relayed, Some(&room_id())).await?;
-                }
-                Ok(HookResult::allow())
+    kit.hook(before_broadcast("relay", true), move |event, _| {
+        let kit = hook_kit.clone();
+        async move {
+            if event.source.channel_id == channel("sms") {
+                let relayed =
+                    InboundMessage::new(channel("bot"), "relay", EventContent::text("Relayed"));
+                kit.process_inbound(relayed, Some(&room_id())).await?;
             }
-        },
-    )
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     send(&kit, "hello").await.unwrap();
     assert_eq!(
@@ -959,19 +930,16 @@ async fn a_parse_that_calls_into_its_room_for_every_message_is_bounded() {
 async fn a_call_dropped_while_its_entry_works_leaves_the_room_free() {
     let (kit, _) = room().await;
     let hook_kit = kit.clone();
-    kit.hook(
-        before_broadcast("stuck", true),
-        move |event: RoomEvent, _| {
-            let kit = hook_kit.clone();
-            async move {
-                if text_of(&event.content) == "first" {
-                    kit.send_event(&room_id(), from_console("Heads up")).await?;
-                    tokio::time::sleep(Duration::from_secs(3600)).await;
-                }
-                Ok(HookResult::allow())
+    kit.hook(before_broadcast("stuck", true), move |event, _| {
+        let kit = hook_kit.clone();
+        async move {
+            if text_of(&event.content) == "first" {
+                kit.send_event(&room_id(), from_console("Heads up")).await?;
+                tokio::time::sleep(Duration::from_secs(3600)).await;
             }
-        },
-    )
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
@@ -992,33 +960,27 @@ async fn a_call_dropped_while_its_entry_works_leaves_the_room_free() {
 async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
     let (kit, _) = room().await;
     kit.set_process_timeout(Some(Duration::from_millis(100)));
-    kit.hook(
-        before_broadcast("slow", true),
-        |event: RoomEvent, _| async move {
-            if text_of(&event.content) == "Heads up" {
-                tokio::time::sleep(Duration::from_millis(300)).await;
-            }
-            Ok(HookResult::allow())
-        },
-    )
+    kit.hook(before_broadcast("slow", true), |event, _| async move {
+        if text_of(&event.content) == "Heads up" {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        Ok(HookResult::allow())
+    })
     .unwrap();
     let hook_kit = kit.clone();
-    kit.hook(
-        before_broadcast("notifier", false),
-        move |event: RoomEvent, _| {
-            let kit = hook_kit.clone();
-            async move {
-                if event.source.channel_id == channel("sms") {
-                    // Fired and not awaited: the entry runs beside the check.
-                    drop(tokio::spawn(roomkit::keep_context(async move {
-                        kit.send_event(&room_id(), from_console("Heads up")).await
-                    })));
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-                Ok(HookResult::allow())
+    kit.hook(before_broadcast("notifier", false), move |event, _| {
+        let kit = hook_kit.clone();
+        async move {
+            if event.source.channel_id == channel("sms") {
+                // Fired and not awaited: the entry runs beside the check.
+                drop(tokio::spawn(roomkit::keep_context(async move {
+                    kit.send_event(&room_id(), from_console("Heads up")).await
+                })));
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
-        },
-    )
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     let result = send(&kit, "hello").await.unwrap();
     assert_eq!(
@@ -1037,22 +999,19 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
 #[tokio::test]
 async fn a_hook_that_times_out_while_its_entry_works_is_heard_after_it() {
     let (kit, audit) = room().await;
-    kit.hook(
-        before_broadcast("slow", true),
-        |event: RoomEvent, _| async move {
-            if text_of(&event.content) == "Heads up" {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-            }
-            Ok(HookResult::allow())
-        },
-    )
+    kit.hook(before_broadcast("slow", true), |event, _| async move {
+        if text_of(&event.content) == "Heads up" {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        Ok(HookResult::allow())
+    })
     .unwrap();
     let hook_kit = kit.clone();
     let spec = HookSpec {
         timeout: Duration::from_millis(50),
         ..before_broadcast("notifier", true)
     };
-    kit.hook(spec, move |event: RoomEvent, _| {
+    kit.hook(spec, move |event, _| {
         let kit = hook_kit.clone();
         async move {
             if event.source.channel_id == channel("sms") {
@@ -1098,19 +1057,16 @@ async fn a_call_that_could_only_wait_for_itself_fails() {
     kit.set_router(ToRoom1);
     let refused = Arc::new(Mutex::new(None));
     let (hook_kit, hook_refused) = (kit.clone(), Arc::clone(&refused));
-    kit.hook(
-        before_broadcast("forwarder", true),
-        move |event: RoomEvent, _| {
-            let (kit, refused) = (hook_kit.clone(), Arc::clone(&hook_refused));
-            async move {
-                if text_of(&event.content) == "hello" {
-                    let routed = kit.process_inbound(message("forwarded"), None).await;
-                    *refused.lock().unwrap() = Some(routed.err());
-                }
-                Ok(HookResult::allow())
+    kit.hook(before_broadcast("forwarder", true), move |event, _| {
+        let (kit, refused) = (hook_kit.clone(), Arc::clone(&hook_refused));
+        async move {
+            if text_of(&event.content) == "hello" {
+                let routed = kit.process_inbound(message("forwarded"), None).await;
+                *refused.lock().unwrap() = Some(routed.err());
             }
-        },
-    )
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     let result = send(&kit, "hello").await.unwrap();
     assert_eq!(
@@ -1192,7 +1148,7 @@ async fn an_off_lock_hook_routing_back_a_message_no_check_fires_for_fails() {
         },
         ..before_broadcast("forwarder", false)
     };
-    kit.hook(customer_only, move |event: RoomEvent, _| {
+    kit.hook(customer_only, move |event, _| {
         let (kit, refused) = (hook_kit.clone(), Arc::clone(&hook_refused));
         async move {
             if text_of(&event.content) == "hello" {
@@ -1331,23 +1287,20 @@ async fn a_turn_s_call_ticketed_behind_another_message_commits_after_it() {
     let (kit, _) = room().await;
     let (a_checking, e_checking) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let (hook_a, hook_e) = (Arc::clone(&a_checking), Arc::clone(&e_checking));
-    kit.hook(
-        before_broadcast("scanner", false),
-        move |event: RoomEvent, _| {
-            let (a_checking, e_checking) = (Arc::clone(&hook_a), Arc::clone(&hook_e));
-            async move {
-                match text_of(&event.content).as_str() {
-                    "A" => {
-                        a_checking.notify_one();
-                        e_checking.notified().await;
-                    }
-                    "E" => e_checking.notify_one(),
-                    _ => {}
+    kit.hook(before_broadcast("scanner", false), move |event, _| {
+        let (a_checking, e_checking) = (Arc::clone(&hook_a), Arc::clone(&hook_e));
+        async move {
+            match text_of(&event.content).as_str() {
+                "A" => {
+                    a_checking.notify_one();
+                    e_checking.notified().await;
                 }
-                Ok(HookResult::allow())
+                "E" => e_checking.notify_one(),
+                _ => {}
             }
-        },
-    )
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     let seen = Arc::new(Mutex::new(None));
     let turning = Arc::new(Notify::new());
@@ -1404,15 +1357,12 @@ async fn a_turn_s_call_ticketed_behind_another_message_commits_after_it() {
 async fn a_turn_s_call_meets_its_own_process_timeout() {
     let (kit, _) = room().await;
     kit.set_process_timeout(Some(Duration::from_millis(100)));
-    kit.hook(
-        before_broadcast("scanner", false),
-        |event: RoomEvent, _| async move {
-            if text_of(&event.content) == "Let me check." {
-                tokio::time::sleep(Duration::from_secs(3600)).await;
-            }
-            Ok(HookResult::allow())
-        },
-    )
+    kit.hook(before_broadcast("scanner", false), |event, _| async move {
+        if text_of(&event.content) == "Let me check." {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
+        Ok(HookResult::allow())
+    })
     .unwrap();
     let seen = Arc::new(Mutex::new(None));
     let agent = calling_agent(&kit, &seen, |kit| {

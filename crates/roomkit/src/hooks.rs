@@ -16,8 +16,12 @@ pub type HookError = Box<dyn Error + Send + Sync>;
 
 /// The host code of a hook: given the payload and the room, it decides.
 ///
-/// Any `Fn(RoomEvent, RoomContext) -> impl Future<Output = Result<HookResult,
-/// HookError>>` is a handler. An observer's result is discarded.
+/// A closure, `Fn(RoomEvent, RoomContext) -> impl Future<Output =
+/// Result<HookResult, HookError>>`, registers with
+/// [`RoomKit::hook`](crate::RoomKit::hook), which infers its argument types;
+/// a type of its own implements this trait and registers with
+/// [`RoomKit::hook_handler`](crate::RoomKit::hook_handler). An observer's
+/// result is discarded.
 pub trait HookHandler: Send + Sync + 'static {
     /// Runs the hook on `event`.
     fn call(&self, event: RoomEvent, context: RoomContext) -> BoxFuture<'static, HookReturn>;

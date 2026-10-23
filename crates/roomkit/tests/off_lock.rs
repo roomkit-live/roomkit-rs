@@ -18,8 +18,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventStatus, EventType,
-    HookResult, InboundMessage, InjectedEvent, Observation, RoomContext, RoomEvent, RoomId,
-    RoomStatus, Timestamp,
+    HookResult, InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, RoomStatus,
+    Timestamp,
 };
 use roomkit::ops::{InboundResult, SequentialEnvironment};
 use roomkit::testing::RecordingTransport;
@@ -71,17 +71,14 @@ async fn message_held_in_its_hook(
 ) -> (Arc<Notify>, tokio::task::JoinHandle<InboundResult>) {
     let (started, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let (hook_started, hook_go) = (Arc::clone(&started), Arc::clone(&go));
-    kit.hook(
-        before_broadcast("scanner", needs_lock),
-        move |_: RoomEvent, _: RoomContext| {
-            let (started, go) = (Arc::clone(&hook_started), Arc::clone(&hook_go));
-            async move {
-                started.notify_one();
-                go.notified().await;
-                Ok(HookResult::allow())
-            }
-        },
-    )
+    kit.hook(before_broadcast("scanner", needs_lock), move |_, _| {
+        let (started, go) = (Arc::clone(&hook_started), Arc::clone(&hook_go));
+        async move {
+            started.notify_one();
+            go.notified().await;
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     let call = {
         let kit = kit.clone();
@@ -184,25 +181,22 @@ async fn two_overlapping_checks_commit_in_ticket_order() {
         Arc::clone(&go),
         Arc::clone(&second_checked),
     );
-    kit.hook(
-        before_broadcast("scanner", false),
-        move |event: RoomEvent, _: RoomContext| {
-            let (held, go, second_checked) = (
-                Arc::clone(&signals.0),
-                Arc::clone(&signals.1),
-                Arc::clone(&signals.2),
-            );
-            async move {
-                if text_of(&event.content) == "first" {
-                    held.notify_one();
-                    go.notified().await;
-                } else {
-                    second_checked.notify_one();
-                }
-                Ok(HookResult::allow())
+    kit.hook(before_broadcast("scanner", false), move |event, _| {
+        let (held, go, second_checked) = (
+            Arc::clone(&signals.0),
+            Arc::clone(&signals.1),
+            Arc::clone(&signals.2),
+        );
+        async move {
+            if text_of(&event.content) == "first" {
+                held.notify_one();
+                go.notified().await;
+            } else {
+                second_checked.notify_one();
             }
-        },
-    )
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     let first = sent(&kit, "first");
     tokio::time::timeout(BOUND, held.notified()).await.unwrap();
@@ -251,7 +245,7 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
         },
         ..before_broadcast("scanner", false)
     };
-    kit.hook(spec, move |_: RoomEvent, _: RoomContext| {
+    kit.hook(spec, move |_, _| {
         let (held, go) = (Arc::clone(&hook_held), Arc::clone(&hook_go));
         async move {
             held.notify_one();
@@ -288,18 +282,15 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
 async fn a_call_cancelled_during_its_off_lock_check_releases_its_ticket() {
     let kit = room().await;
     let hung = Arc::new(AtomicBool::new(false));
-    kit.hook(
-        before_broadcast("scanner", false),
-        move |_: RoomEvent, _: RoomContext| {
-            let first = !hung.swap(true, Ordering::SeqCst);
-            async move {
-                if first {
-                    tokio::time::sleep(Duration::from_secs(3600)).await;
-                }
-                Ok(HookResult::allow())
+    kit.hook(before_broadcast("scanner", false), move |_, _| {
+        let first = !hung.swap(true, Ordering::SeqCst);
+        async move {
+            if first {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
             }
-        },
-    )
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
@@ -325,24 +316,20 @@ async fn a_call_cancelled_during_its_off_lock_check_releases_its_ticket() {
 #[tokio::test]
 async fn a_call_cancelled_in_a_locked_hook_after_its_check_leaves_everything_free() {
     let kit = room().await;
-    kit.hook(
-        before_broadcast("scanner", false),
-        |_: RoomEvent, _: RoomContext| async { Ok(HookResult::allow()) },
-    )
+    kit.hook(before_broadcast("scanner", false), |_, _| async {
+        Ok(HookResult::allow())
+    })
     .unwrap();
     let hung = Arc::new(AtomicBool::new(false));
-    kit.hook(
-        before_broadcast("policy", true),
-        move |_: RoomEvent, _: RoomContext| {
-            let first = !hung.swap(true, Ordering::SeqCst);
-            async move {
-                if first {
-                    tokio::time::sleep(Duration::from_secs(3600)).await;
-                }
-                Ok(HookResult::allow())
+    kit.hook(before_broadcast("policy", true), move |_, _| {
+        let first = !hung.swap(true, Ordering::SeqCst);
+        async move {
+            if first {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
             }
-        },
-    )
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
@@ -420,7 +407,7 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
     let to_advisor = notice("The client attempted to send a SIN. Blocked.", now);
     kit.hook(
         before_broadcast("sensitivity_scanner", needs_lock),
-        move |event: RoomEvent, context: RoomContext| {
+        move |event, context| {
             let found = has_sin(&text_of(&event.content));
             let (to_customer, to_advisor) = (to_customer.clone(), to_advisor.clone());
             async move {

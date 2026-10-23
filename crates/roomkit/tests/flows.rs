@@ -9,6 +9,7 @@
 )]
 
 use std::future::{Future, ready};
+use std::pin::Pin;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -22,8 +23,8 @@ use roomkit::ops::{
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
-    Channel, ChannelError, ConversationStore, EventDraft, HookExecution, HookSpec, HookTrigger,
-    KitError, RoomKit,
+    Channel, ChannelError, ConversationStore, EventDraft, HookExecution, HookHandler, HookReturn,
+    HookSpec, HookTrigger, KitError, RoomKit, text_of,
 };
 use tokio::sync::mpsc;
 
@@ -122,7 +123,7 @@ async fn an_after_broadcast_observer_runs_after_the_delivery() {
     kit.observe("audit", HookTrigger::AfterBroadcast, move |event, _| {
         let seen = seen.clone();
         async move {
-            seen.send(roomkit::text_of(&event.content)).unwrap();
+            seen.send(text_of(&event.content)).unwrap();
         }
     })
     .unwrap();
@@ -144,7 +145,7 @@ async fn a_hook_past_its_timeout_lets_the_message_through_and_is_reported() {
             HookExecution::Sync,
         )
     };
-    kit.hook(spec, |_: RoomEvent, _: RoomContext| async {
+    kit.hook(spec, |_, _| async {
         tokio::time::sleep(Duration::from_secs(5)).await;
         Ok(HookResult::allow())
     })
@@ -158,6 +159,72 @@ async fn a_hook_past_its_timeout_lets_the_message_through_and_is_reported() {
         timed_out |= matches!(event, FrameworkEvent::HookTimeout { .. });
     }
     assert_eq!((result.blocked, timed_out), (false, true));
+}
+
+/// RFC §9.1: `hook` types its closure itself, so the closure reads its
+/// event without annotations.
+#[tokio::test]
+async fn a_hook_s_closure_reads_its_event_without_annotations() {
+    let (kit, sms) = sms_and_agent().await;
+    let spec = HookSpec::new(
+        "spam_filter",
+        HookTrigger::BeforeBroadcast,
+        HookExecution::Sync,
+    );
+    kit.hook(spec, |event, _| {
+        let spam = text_of(&event.content).contains("spam");
+        async move {
+            Ok(if spam {
+                HookResult::block("spam")
+            } else {
+                HookResult::allow()
+            })
+        }
+    })
+    .unwrap();
+    let result = kit
+        .process_inbound(message(&sms, "Cheap spam here"), Some(&room_id()))
+        .await
+        .unwrap();
+    assert_eq!(result.reason.as_deref(), Some("spam"));
+}
+
+/// A hook written as a type of its own, which blocks a message naming its
+/// word.
+struct Blocklist(&'static str);
+
+impl HookHandler for Blocklist {
+    fn call(
+        &self,
+        event: RoomEvent,
+        _context: RoomContext,
+    ) -> Pin<Box<dyn Future<Output = HookReturn> + Send>> {
+        let named = text_of(&event.content).contains(self.0);
+        let reason = format!("blocklisted {:?}", self.0);
+        Box::pin(async move {
+            Ok(if named {
+                HookResult::block(reason)
+            } else {
+                HookResult::allow()
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_hook_handler_of_its_own_type_is_registered_with_hook_handler() {
+    let (kit, sms) = sms_and_agent().await;
+    let spec = HookSpec::new(
+        "blocklist",
+        HookTrigger::BeforeBroadcast,
+        HookExecution::Sync,
+    );
+    kit.hook_handler(spec, Blocklist("scam")).unwrap();
+    let result = kit
+        .process_inbound(message(&sms, "Not a scam"), Some(&room_id()))
+        .await
+        .unwrap();
+    assert_eq!(result.reason.as_deref(), Some("blocklisted \"scam\""));
 }
 
 #[tokio::test]

@@ -15,8 +15,8 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventStatus, HookResult, InboundMessage, RoomContext,
-    RoomEvent, RoomId,
+    ChannelId, ChannelType, EventContent, EventStatus, HookResult, InboundMessage, RoomEvent,
+    RoomId,
 };
 use roomkit::ops::InboundResult;
 use roomkit::testing::RecordingTransport;
@@ -72,41 +72,35 @@ fn before_broadcast(name: &str, priority: i32) -> HookSpec {
 /// each notes in `ran` its name and the text it read.
 fn moderate(kit: &RoomKit, ran: &Log<String>) -> Result<(), Box<dyn Error>> {
     let noted = ran.clone();
-    kit.hook(
-        before_broadcast("profanity_filter", 0),
-        move |event: RoomEvent, _: RoomContext| {
-            let text = text_of(&event.content);
-            noted.push(format!("profanity_filter read {text:?}"));
-            let found = prohibited_word(&text);
-            async move {
-                Ok(match found {
-                    Some(word) => HookResult::block(format!("prohibited word {word:?}")),
-                    None => HookResult::allow(),
-                })
-            }
-        },
-    )?;
+    kit.hook(before_broadcast("profanity_filter", 0), move |event, _| {
+        let text = text_of(&event.content);
+        noted.push(format!("profanity_filter read {text:?}"));
+        let found = prohibited_word(&text);
+        async move {
+            Ok(match found {
+                Some(word) => HookResult::block(format!("prohibited word {word:?}")),
+                None => HookResult::allow(),
+            })
+        }
+    })?;
     let noted = ran.clone();
-    kit.hook(
-        before_broadcast("pii_redactor", 1),
-        move |event: RoomEvent, _: RoomContext| {
-            let text = text_of(&event.content);
-            noted.push(format!("pii_redactor read {text:?}"));
-            let clean = redacted(&text);
-            async move {
-                if clean == text {
-                    return Ok(HookResult::allow());
-                }
-                // The replacement is the event every channel receives, and the
-                // one the room stores.
-                let modified = RoomEvent {
-                    content: EventContent::text(clean),
-                    ..event
-                };
-                Ok(HookResult::modify(modified).with_reason("phone number redacted"))
+    kit.hook(before_broadcast("pii_redactor", 1), move |event, _| {
+        let text = text_of(&event.content);
+        noted.push(format!("pii_redactor read {text:?}"));
+        let clean = redacted(&text);
+        async move {
+            if clean == text {
+                return Ok(HookResult::allow());
             }
-        },
-    )?;
+            // The replacement is the event every channel receives, and the
+            // one the room stores.
+            let modified = RoomEvent {
+                content: EventContent::text(clean),
+                ..event
+            };
+            Ok(HookResult::modify(modified).with_reason("phone number redacted"))
+        }
+    })?;
     Ok(())
 }
 

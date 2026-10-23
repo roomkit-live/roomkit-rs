@@ -274,7 +274,7 @@ async fn a_call_dropped_during_its_delivery_leaves_the_lane_and_the_lock_free() 
 async fn a_call_dropped_under_the_room_lock_leaves_the_lane_and_the_lock_free() {
     let kit = room_with_agent().await;
     let hung = Arc::new(AtomicBool::new(false));
-    kit.before_broadcast("slow_scan", move |_: RoomEvent, _: RoomContext| {
+    kit.before_broadcast("slow_scan", move |_, _| {
         let first = !hung.swap(true, Ordering::SeqCst);
         async move {
             if first {

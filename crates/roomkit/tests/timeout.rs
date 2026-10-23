@@ -76,7 +76,7 @@ fn slow_the_first_time(kit: &RoomKit, needs_lock: bool) {
         ..HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync)
     };
     let slowed = Arc::new(AtomicBool::new(false));
-    kit.hook(spec, move |_: RoomEvent, _: RoomContext| {
+    kit.hook(spec, move |_, _| {
         let first = !slowed.swap(true, Ordering::SeqCst);
         async move {
             if first {
@@ -194,7 +194,7 @@ async fn a_hook_s_own_timeout_stays_a_hook_error() {
         timeout: Duration::from_millis(20),
         ..HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync)
     };
-    kit.hook(spec, |_: RoomEvent, _: RoomContext| async {
+    kit.hook(spec, |_, _| async {
         tokio::time::sleep(Duration::from_secs(3600)).await;
         Ok(HookResult::allow())
     })

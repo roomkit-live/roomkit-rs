@@ -500,3 +500,9 @@ publishes a release.
   answered with the room unchanged, so the reopen of an archived room
   answered as if it had succeeded (RFC §5.1, gap G-074).
   `Transition::refuses` and `Transition::is_done`.
+- `RoomKit::hook(spec, handler)` takes a closure, bound
+  `Fn(RoomEvent, RoomContext) -> Fut` as `before_broadcast` and `observe`
+  are, so its argument types are inferred and need no annotation. A handler
+  of a type of its own implementing `HookHandler` registers with the new
+  `RoomKit::hook_handler(spec, handler)`; code that passed one to `hook`
+  calls `hook_handler` instead.
