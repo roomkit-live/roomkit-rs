@@ -64,3 +64,17 @@ path = "channel_mute_unmute.rs"
 [[example]]
 name = "room_membership"
 path = "room_membership.rs"
+
+# Hooks.
+
+[[example]]
+name = "hook_moderation"
+path = "hook_moderation.rs"
+
+[[example]]
+name = "hook_inject_welcome"
+path = "hook_inject_welcome.rs"
+
+[[example]]
+name = "hook_off_lock_check"
+path = "hook_off_lock_check.rs"
