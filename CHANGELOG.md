@@ -528,3 +528,11 @@ publishes a release.
   runtime does, fails with `KitError::Cancelled`, and a direct injection
   that ended with neither its event nor a refusal, a defect too, with
   `KitError::NoEvent`; both were `Stalled`.
+- A caller that stops waiting for `process_inbound` or `send_event`, its
+  future dropped (a client gone, a `tokio::time::timeout` that expired), no
+  longer aborts the call once it is decided: the call goes on detached,
+  delivers its event and its cascade, runs their hooks and logs its end.
+  Before the decision it stops as before, nothing of its event written, but
+  only once a commit in flight is answered and a room its step 2 created is
+  attached (gap G-076). `Operation::completing` says while an operation
+  completes such a write.

@@ -148,6 +148,16 @@ impl NamedRoom {
         &self.room_id
     }
 
+    /// Whether step 2 is creating the room: its creation asked for, its
+    /// hooks running, or its channel being attached, which completes the
+    /// creation (gap G-068).
+    pub(super) fn creates_the_room(&self) -> bool {
+        matches!(
+            self.state,
+            State::Creating { .. } | State::Observing(_) | State::Changing { created: true, .. }
+        )
+    }
+
     /// Whether step 2 waits for `effect`.
     pub(super) fn awaits(&self, effect: EffectId) -> bool {
         match &self.state {

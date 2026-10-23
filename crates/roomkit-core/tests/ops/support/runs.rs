@@ -290,6 +290,7 @@ impl Sim {
             }
         }
         let step = operation.poll(&mut self.env);
+        let completing = operation.completing();
         self.journal.extend(step.notices.iter().map(journal_line));
         self.notices.extend(step.notices);
         for settled in step.settled {
@@ -312,6 +313,10 @@ impl Sim {
             }
             Next::Effects(effects) => {
                 for effect in effects {
+                    if completing {
+                        let label = self.label(&effect.request);
+                        self.while_completing.push(label);
+                    }
                     self.state_mut(run).outstanding.insert(effect.id);
                     self.execute_effect(effect);
                 }

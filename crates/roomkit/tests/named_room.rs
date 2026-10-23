@@ -1,8 +1,9 @@
 //! A message into a room its caller names, on the tokio runtime (RFC §10.1
 //! step 2, §10.2 step 3d, §17.2): a missing room created once however many
 //! messages name it, the `ON_ROOM_CREATED` hooks awaited before the channel
-//! is attached and bounded by their timeout, the recipient an SMS delivery
-//! needs, the caller's organization, and the participants the host stores.
+//! is attached and bounded by their timeout, a room created whole whoever
+//! stops waiting for its message, the recipient an SMS delivery needs, the
+//! caller's organization, and the participants the host stores.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -22,7 +23,7 @@ use roomkit::{
     Channel, ChannelError, ConversationStore, HookExecution, HookSpec, HookTrigger, KitError,
     RoomFilter, RoomKit,
 };
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{Notify, broadcast, mpsc};
 
 fn channel(id: &str) -> ChannelId {
     ChannelId::new(id).unwrap()
@@ -209,6 +210,62 @@ async fn an_on_room_created_hook_that_hangs_is_bounded_by_its_timeout() {
             kit.store().list_bindings(&room).await.unwrap().len()
         ),
         (Ok(Ok(false)), true, 1)
+    );
+}
+
+/// Decision 1 of step 2b, gap G-068: the caller gives up while the hooks of
+/// the room its message created run. The room is completed all the same:
+/// the hooks finish, the channel is attached with a binding naming the
+/// sender, and the session starts. The message, not decided by then, stops
+/// there, nothing of it committed.
+#[tokio::test]
+async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
+    let (kit, sms) = kit_without_rooms();
+    let (observing, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (started, released) = (Arc::clone(&observing), Arc::clone(&go));
+    kit.observe("welcome", HookTrigger::OnRoomCreated, move |_, _| {
+        let (started, released) = (Arc::clone(&started), Arc::clone(&released));
+        async move {
+            started.notify_one();
+            released.notified().await;
+        }
+    })
+    .unwrap();
+    let mut events = kit.subscribe();
+    let room = room_id();
+    let call = kit.process_inbound(message(&sms, "Bonjour"), Some(&room));
+    tokio::select! {
+        result = call => panic!("the call ended before its room's hooks: {result:?}"),
+        () = observing.notified() => {}
+    }
+    go.notify_one();
+    let session = async {
+        loop {
+            if let Ok(FrameworkEvent::SessionStarted { .. }) = events.recv().await {
+                return;
+            }
+        }
+    };
+    let started = tokio::time::timeout(Duration::from_secs(5), session).await;
+    let bindings = kit.store().list_bindings(&room).await.unwrap();
+    let timeline = kit.store().list_events(&room, true).await.unwrap();
+    assert_eq!(
+        (
+            started.is_ok(),
+            bindings
+                .iter()
+                .map(|binding| {
+                    let correspondent = binding.participant_id.as_ref().map(ToString::to_string);
+                    (binding.channel_id.to_string(), correspondent)
+                })
+                .collect::<Vec<_>>(),
+            timeline.len()
+        ),
+        (
+            true,
+            vec![("sms".to_owned(), Some("+15551234567".to_owned()))],
+            0
+        )
     );
 }
 

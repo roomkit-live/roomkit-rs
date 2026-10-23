@@ -220,14 +220,16 @@ async fn a_hook_s_own_timeout_stays_a_hook_error() {
     );
 }
 
-/// A transport whose deliveries each last `lasts`, the first one for an
-/// hour with `hangs_first`, each telling `delivering` it started.
+/// A transport whose deliveries each last `lasts`, the first one until
+/// `release` is notified with `hangs_first`, each telling `delivering` it
+/// started.
 struct Slow {
     declaration: ChannelDeclaration,
     lasts: Duration,
     /// Whether a delivery hung already, or none is to.
     hung: Arc<AtomicBool>,
     delivering: Arc<Notify>,
+    release: Arc<Notify>,
 }
 
 impl Slow {
@@ -242,6 +244,7 @@ impl Slow {
             lasts,
             hung: Arc::new(AtomicBool::new(!hangs_first)),
             delivering: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
         }
     }
 }
@@ -258,15 +261,15 @@ impl Channel for Slow {
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         let hangs = !self.hung.swap(true, Ordering::SeqCst);
-        let lasts = if hangs {
-            Duration::from_secs(3600)
-        } else {
-            self.lasts
-        };
-        let delivering = Arc::clone(&self.delivering);
+        let (delivering, release) = (Arc::clone(&self.delivering), Arc::clone(&self.release));
+        let lasts = self.lasts;
         async move {
             delivering.notify_one();
-            tokio::time::sleep(lasts).await;
+            if hangs {
+                release.notified().await;
+            } else {
+                tokio::time::sleep(lasts).await;
+            }
             Ok(ChannelOutput::default())
         }
     }
@@ -303,7 +306,7 @@ async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
     let kit = room().await;
     kit.set_process_timeout(None);
     let slow = Slow::new(Duration::ZERO, true);
-    let delivering = Arc::clone(&slow.delivering);
+    let (delivering, release) = (Arc::clone(&slow.delivering), Arc::clone(&slow.release));
     kit.register_channel(slow).unwrap();
     kit.attach(&room_id(), &channel("slow")).await.unwrap();
     let first = {
@@ -333,16 +336,23 @@ async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     let delivered_yet = second.is_finished();
-    // The first call's place goes with its run.
-    first.abort();
+    // The first call's delivery is over: its place is left.
+    release.notify_one();
+    let first = tokio::time::timeout(BOUND, first).await.unwrap().unwrap();
     let second = tokio::time::timeout(BOUND, second).await.unwrap().unwrap();
     assert_eq!(
         (
             delivered_yet,
+            first.map(|first| first.event.map(|event| event.index)),
             second.event.map(|event| (event.index, event.status)),
             process_timeouts(&mut events)
         ),
-        (false, Some((1, EventStatus::Delivered)), Vec::new())
+        (
+            false,
+            Ok(Some(0)),
+            Some((1, EventStatus::Delivered)),
+            Vec::new()
+        )
     );
 }
 

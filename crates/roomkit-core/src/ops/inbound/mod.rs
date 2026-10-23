@@ -252,6 +252,12 @@ impl Operation for Inbound {
     fn adopt(&mut self, entry: Entry, origin: EffectId) -> Result<EntryId, Box<Entry>> {
         self.machine.adopt(&self.io, entry, origin)
     }
+
+    /// A commit not answered yet, or the room step 2 creates for the call,
+    /// until its channel is attached (RFC §10.1 step 2).
+    fn completing(&self) -> bool {
+        self.io.commits() || self.machine.creates_its_room()
+    }
 }
 
 /// What the call brings into the room.
@@ -362,6 +368,12 @@ enum Stage {
 }
 
 impl Machine {
+    /// Whether the call's step 2 is creating its room: from the creation's
+    /// request to the channel's attach (RFC §10.1 step 2).
+    fn creates_its_room(&self) -> bool {
+        matches!(&self.stage, Stage::Arriving(arrival) if arrival.creates_its_room())
+    }
+
     /// Takes every answer in, starts the entries adopted since, and runs
     /// the queues, until nothing is left to take in: a section nested under
     /// a lock is answered at once, without the driver.

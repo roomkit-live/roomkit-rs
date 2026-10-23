@@ -510,6 +510,20 @@ pub trait Operation {
         let _ = origin;
         Err(Box::new(entry))
     }
+
+    /// Whether the operation is completing a write that a stop would leave
+    /// half done: a commit not answered yet, or a room step 2 created, until
+    /// its channel is attached (RFC §10.1 step 2, §13.6, gap G-068).
+    ///
+    /// A driver may stop an operation its caller no longer waits for, as
+    /// long as the call is not decided ([`Step::decided`]): a decided call
+    /// delivers what it committed whoever waits. It lets the operation run
+    /// while this holds, and stops it once it does not, so that a commit
+    /// is either answered or never made, and a room created is never left
+    /// without the channel it was created for.
+    fn completing(&self) -> bool {
+        false
+    }
 }
 
 /// A driver broke the protocol.

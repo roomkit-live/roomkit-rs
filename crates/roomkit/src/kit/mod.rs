@@ -231,6 +231,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// The kit's `process_timeout` bounds the call up to its decision (see
     /// [`set_process_timeout`](Self::set_process_timeout)).
     ///
+    /// Dropped before it returns, by a `tokio::time::timeout` for instance,
+    /// the call goes on once decided: its event is delivered and its
+    /// cascade runs. Dropped before its decision, it stops with nothing of
+    /// its event written, once a room it created is attached (gap G-076).
+    ///
     /// # Errors
     ///
     /// Returns [`KitError::Inbound`] when the pipeline refused or failed the

@@ -215,6 +215,10 @@ pub(crate) struct Sim {
     /// The label of every effect made under a room's lock
     /// (`Effect::locked`), with the room, in order: `commit under room_1`.
     pub(crate) under_lock: Vec<String>,
+    /// The label of every effect issued on a poll after which its operation
+    /// was completing a write a stop would leave half done
+    /// (`Operation::completing`), in order.
+    pub(crate) while_completing: Vec<String>,
     /// The contexts the SYNC hooks ran with, by hook name, in order.
     pub(crate) hook_contexts: Vec<(String, RoomContext)>,
     /// The identities the store resolves addresses to (RFC §14.1).
@@ -327,6 +331,7 @@ impl Sim {
             bounded: Vec::new(),
             in_admission_order: Vec::new(),
             under_lock: Vec::new(),
+            while_completing: Vec::new(),
             hook_contexts: Vec::new(),
             identities: Vec::new(),
             routes: VecDeque::new(),

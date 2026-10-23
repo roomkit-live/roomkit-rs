@@ -213,6 +213,15 @@ impl Io {
         self.has_decided
     }
 
+    /// Whether a commit is issued and not answered yet: the store may have
+    /// written it, so the operation waits for its answer before it stops
+    /// (`Operation::completing`).
+    pub(crate) fn commits(&self) -> bool {
+        self.outstanding
+            .values()
+            .any(|outstanding| outstanding.kind == RequestKind::Commit)
+    }
+
     /// Whether `effect` is issued and not answered yet.
     pub(crate) fn is_outstanding(&self, effect: EffectId) -> bool {
         self.outstanding.contains_key(&effect)

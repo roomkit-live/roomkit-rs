@@ -182,6 +182,12 @@ impl Arrival {
         self.room.as_ref()
     }
 
+    /// Whether step 2 is creating the room: from the creation's request to
+    /// the channel's attach (RFC §10.1 step 2).
+    pub(super) fn creates_its_room(&self) -> bool {
+        matches!(&self.state, State::Naming(step) if step.creates_the_room())
+    }
+
     /// Whether the arrival waits for `effect`.
     pub(super) fn awaits(&self, effect: EffectId) -> bool {
         match &self.state {

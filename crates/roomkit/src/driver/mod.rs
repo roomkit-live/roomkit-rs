@@ -12,8 +12,10 @@
 //! admission order: such a call is handed to the operation, which adopts
 //! it, and its caller is answered when the operation settles it (RFC §13.5,
 //! §9.5.1 Reentrance, §10.1 step 18). An inbound call's operation runs on a
-//! task of its own, within its caller's execution context, and answers a
-//! caller that cannot wait for its delivery at its decision (`inbound`).
+//! task of its own, within its caller's execution context, answers a
+//! caller that cannot wait for its delivery at its decision, and goes on
+//! detached when its caller stops waiting once the call is decided
+//! (`inbound`).
 //!
 //! The driver never waits for what its own context holds: a lock its
 //! context holds a lease on or stands in the admission order of, asked by
@@ -40,7 +42,7 @@ use tokio::task::{self, JoinError, JoinSet};
 use tokio::time::Instant;
 
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
-use self::inbound::Decision;
+use self::inbound::Caller;
 pub(crate) use self::inbound::run_inbound;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::KitError;
@@ -87,25 +89,21 @@ pub(crate) async fn run<S: ConversationStore, O: Operation>(
     call: &'static str,
     operation: O,
 ) -> Result<O::Output, KitError> {
-    drive(
-        inner,
-        call,
-        operation,
-        Leases::Granted,
-        &mut Decision::Unwanted,
-    )
-    .await
+    drive(inner, call, operation, Leases::Granted, None).await
 }
 
 /// Runs `operation`, made by the kit's call `call`, until it is ready,
 /// treating a lock its execution context holds a live lease on as `leases`
-/// says, and offering its decision to `decision`.
+/// says, and offering its decision to its `caller`, when the run is an
+/// inbound call's; such a run stops once its caller stopped waiting before
+/// the call's decision, and fails then with [`KitError::Cancelled`], which
+/// nobody reads.
 async fn drive<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     operation: O,
     leases: Leases,
-    decision: &mut Decision,
+    caller: Option<&mut Caller>,
 ) -> Result<O::Output, KitError> {
     let (shared, adoptions) = RunShared::new();
     let driver = Driver {
@@ -121,7 +119,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         callers: HashMap::new(),
         clocks: Clocks::read(inner),
         refused: None,
-        decision,
+        caller,
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -153,8 +151,9 @@ struct Driver<'kit, S> {
     /// The room whose lock or ticket's turn the run was refused, its context
     /// holding it.
     refused: Option<RoomId>,
-    /// Where the operation's decision goes.
-    decision: &'kit mut Decision,
+    /// The caller of an inbound call's run, which the operation's decision
+    /// goes to.
+    caller: Option<&'kit mut Caller>,
 }
 
 impl<S> Drop for Driver<'_, S> {
@@ -172,6 +171,8 @@ enum Event<'kit> {
     Waited(EffectId, Waited<'kit>),
     Joined(Result<(task::Id, Outcome), JoinError>),
     Adoption(Adoption),
+    /// The caller of an inbound call stopped waiting.
+    CallerGone,
 }
 
 impl<'kit, S: ConversationStore> Driver<'kit, S> {
@@ -187,41 +188,68 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             for settled in step.settled {
                 self.answer(settled);
             }
-            if let Some(decided) = step.decided {
-                let refused = self.refused.as_ref();
-                self.decision
-                    .offer(&self.context, self.call, decided, refused);
+            if let Some(decided) = step.decided
+                && let Some(caller) = self.caller.as_deref_mut()
+            {
+                caller.offer(&self.context, self.call, decided, self.refused.as_ref());
+            }
+            let effects = match step.next {
+                Next::Ready(output) => return self.finish(output),
+                Next::Waiting => Vec::new(),
+                Next::Effects(effects) => effects,
+            };
+            if self.stops_for_its_caller(&operation) {
+                return Err(KitError::Cancelled);
             }
             let mut answered = false;
-            match step.next {
-                Next::Ready(output) => return self.finish(output),
-                Next::Waiting => {}
-                Next::Effects(effects) => {
-                    for effect in effects {
-                        if let Some((id, outcome)) = self.start(effect) {
-                            operation.complete(id, outcome)?;
-                            answered = true;
-                        }
-                    }
+            for effect in effects {
+                if let Some((id, outcome)) = self.start(effect) {
+                    operation.complete(id, outcome)?;
+                    answered = true;
                 }
             }
-            if answered {
-                continue;
+            if !answered {
+                self.wait(&mut operation).await?;
             }
+        }
+    }
+
+    /// Waits for the next wait over, call finished or call into the room
+    /// handed to the run, and hands it to the operation. A caller gone
+    /// before the call's decision stops the run, unless the operation
+    /// completes what a stop would leave half done: it goes on detached.
+    async fn wait<O: Operation>(&mut self, operation: &mut O) -> Result<(), KitError> {
+        loop {
             match self.next_event().await {
+                Some(Event::CallerGone) if self.stops_for_its_caller(operation) => {
+                    return Err(KitError::Cancelled);
+                }
+                Some(Event::CallerGone) => {}
                 Some(Event::Waited(id, waited)) => {
                     let outcome = self.held.settle(waited);
-                    operation.complete(id, outcome)?;
+                    return Ok(operation.complete(id, outcome)?);
                 }
                 Some(Event::Joined(joined)) => {
                     let (id, outcome) = self.joined(joined)?;
-                    operation.complete(id, outcome)?;
+                    return Ok(operation.complete(id, outcome)?);
                 }
-                Some(Event::Adoption(adoption)) => self.adopt(&mut operation, adoption),
+                Some(Event::Adoption(adoption)) => {
+                    self.adopt(operation, adoption);
+                    return Ok(());
+                }
                 // The operation waits for effects that were never issued.
                 None => return Err(KitError::Stalled),
             }
         }
+    }
+
+    /// Whether the run stops: an inbound call's caller stopped waiting
+    /// before its decision, and the operation completes nothing a stop
+    /// would leave half done (decision 1 of step 2b).
+    fn stops_for_its_caller<O: Operation>(&self, operation: &O) -> bool {
+        self.caller
+            .as_deref()
+            .is_some_and(|caller| caller.stops(operation.completing()))
     }
 
     /// Starts `effect`: answered at once when it can be, a wait or a call
@@ -280,8 +308,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         self.effect_of_task.insert(task.id(), effect);
     }
 
-    /// The next wait over, call finished or call into the room handed to
-    /// the run; `None` when the run waits for nothing.
+    /// The next wait over, call finished, call into the room handed to the
+    /// run, or the run's caller gone; `None` when the run waits for
+    /// nothing.
     async fn next_event(&mut self) -> Option<Event<'kit>> {
         if self.waits.is_empty() && self.calls.is_empty() {
             return None;
@@ -290,9 +319,15 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             waits,
             calls,
             adoptions,
+            caller,
             ..
         } = self;
         poll_fn(|cx| {
+            if let Some(caller) = caller.as_deref_mut()
+                && caller.poll_gone(cx).is_ready()
+            {
+                return Poll::Ready(Some(Event::CallerGone));
+            }
             let ready = waits.iter_mut().enumerate().find_map(|(index, wait)| {
                 match wait.as_mut().poll(cx) {
                     Poll::Ready(waited) => Some((index, waited)),

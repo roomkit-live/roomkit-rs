@@ -1,8 +1,9 @@
 //! A room's lane and lock on the tokio driver (RFC §10.2, §13.5): calls
 //! from several tasks into one room, and the lane and lock left free for
 //! the next call whatever ended the last one: a channel that panicked, or a
-//! caller that dropped its call mid-cascade, whose places in the lane go
-//! with it.
+//! caller that dropped its call before its decision, whose run lets go of
+//! what it holds. A call dropped once decided goes on detached and delivers
+//! its event (RFC §13.6, decision 1 of step 2b).
 
 #![expect(
     clippy::unwrap_used,
@@ -11,8 +12,8 @@
 )]
 
 use std::future::{Future, ready};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -22,8 +23,10 @@ use roomkit::model::{
 };
 use roomkit::ops::{ChannelDeclaration, FrameworkEvent};
 use roomkit::testing::{EchoAgent, RecordingTransport};
-use roomkit::{Channel, ChannelError, ConversationStore, HookTrigger, RoomFilter, RoomKit};
-use tokio::sync::{Barrier, broadcast};
+use roomkit::{
+    Channel, ChannelError, ConversationStore, HookTrigger, RoomFilter, RoomKit, text_of,
+};
+use tokio::sync::{Barrier, Notify, broadcast};
 
 /// How long a call that should not wait may take before the test fails it.
 const BOUND: Duration = Duration::from_secs(5);
@@ -215,59 +218,115 @@ async fn a_channel_that_panics_in_deliver_leaves_the_lane_and_the_lock_free() {
     );
 }
 
-/// A transport whose first delivery hangs, as a provider that never
-/// answers.
-struct HangsOnce {
+/// A transport whose first delivery tells `delivering` it started, then
+/// waits for `go`, as a slow provider; it keeps the texts it delivered.
+#[derive(Clone)]
+struct Gated {
     declaration: ChannelDeclaration,
-    hung: Arc<AtomicBool>,
+    /// Whether the first delivery started.
+    started: Arc<AtomicBool>,
+    delivering: Arc<Notify>,
+    go: Arc<Notify>,
+    delivered: Arc<Mutex<Vec<String>>>,
 }
 
-impl Channel for HangsOnce {
+impl Gated {
+    fn new() -> Self {
+        Self {
+            declaration: ChannelDeclaration::new(
+                channel("slow"),
+                ChannelType::Websocket,
+                ChannelCategory::Transport,
+                ChannelDirection::Bidirectional,
+            ),
+            started: Arc::default(),
+            delivering: Arc::default(),
+            go: Arc::default(),
+            delivered: Arc::default(),
+        }
+    }
+}
+
+impl Channel for Gated {
     fn declaration(&self) -> ChannelDeclaration {
         self.declaration.clone()
     }
 
     fn deliver(
         &self,
-        _event: RoomEvent,
+        event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let first = !self.hung.swap(true, Ordering::SeqCst);
+        let first = !self.started.swap(true, Ordering::SeqCst);
+        let gate = self.clone();
         async move {
             if first {
-                tokio::time::sleep(Duration::from_secs(3600)).await;
+                gate.delivering.notify_one();
+                gate.go.notified().await;
             }
+            gate.delivered.lock().unwrap().push(text_of(&event.content));
             Ok(ChannelOutput::default())
         }
     }
 }
 
-/// The caller gives up while the event's delivery set runs, in the room's
-/// lane and off its lock.
+/// Whether `events` reports `event_processed` for the room's first event
+/// within the bound.
+async fn first_event_processed(
+    kit: &RoomKit,
+    events: &mut broadcast::Receiver<FrameworkEvent>,
+) -> bool {
+    let timeline = kit.store().list_events(&room_id(), true).await.unwrap();
+    let first = timeline.first().unwrap().id.clone();
+    let processed = async {
+        loop {
+            if let Ok(FrameworkEvent::EventProcessed { event_id, .. }) = events.recv().await
+                && event_id == first
+            {
+                return;
+            }
+        }
+    };
+    tokio::time::timeout(BOUND, processed).await.is_ok()
+}
+
+/// RFC §13.6, decision 1 of step 2b: the caller gives up once its event is
+/// committed and delivered, as a `tokio::time::timeout` that expires then
+/// drops its call. The run goes on detached: the event is delivered, its
+/// `AFTER_BROADCAST` hooks run, and `event_processed` is emitted.
 #[tokio::test]
-async fn a_call_dropped_during_its_delivery_leaves_the_lane_and_the_lock_free() {
+async fn a_call_dropped_during_its_delivery_still_delivers_its_event() {
     let kit = room_with_agent().await;
-    kit.register_channel(HangsOnce {
-        declaration: ChannelDeclaration::new(
-            channel("slow"),
-            ChannelType::Websocket,
-            ChannelCategory::Transport,
-            ChannelDirection::Bidirectional,
-        ),
-        hung: Arc::default(),
+    let slow = Gated::new();
+    kit.register_channel(slow.clone()).unwrap();
+    kit.attach(&room_id(), &channel("slow")).await.unwrap();
+    let broadcast_over = Arc::new(Notify::new());
+    let observed = Arc::clone(&broadcast_over);
+    kit.observe("audit", HookTrigger::AfterBroadcast, move |event, _| {
+        if text_of(&event.content) == "Bonjour" {
+            observed.notify_one();
+        }
+        ready(())
     })
     .unwrap();
-    kit.attach(&room_id(), &channel("slow")).await.unwrap();
-    let dropped = tokio::time::timeout(
-        Duration::from_millis(50),
-        kit.process_inbound(message("sms", "+15551234567", "Bonjour"), Some(&room_id())),
-    )
-    .await;
-    let next = next_call_goes_through(&kit).await;
+    let mut events = kit.subscribe();
+    let room = room_id();
+    let call = kit.process_inbound(message("sms", "+15551234567", "Bonjour"), Some(&room));
+    tokio::select! {
+        result = call => panic!("the call ended before its delivery: {result:?}"),
+        () = slow.delivering.notified() => {}
+    }
+    slow.go.notify_one();
+    let processed = first_event_processed(&kit, &mut events).await;
+    let observed = tokio::time::timeout(BOUND, broadcast_over.notified()).await;
     assert_eq!(
-        (dropped.is_err(), next.event.map(|event| event.index)),
-        (true, Some(1))
+        (
+            slow.delivered.lock().unwrap().first().cloned(),
+            observed.is_ok(),
+            processed
+        ),
+        (Some("Bonjour".to_owned()), true, true)
     );
 }
 

@@ -46,6 +46,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// agent's turn, the event is at least as deep as the turn's response,
     /// whatever `chain_depth` it was given (RFC §10.6, §8.3).
     ///
+    /// Dropped before it returns, the call goes on once its event is
+    /// committed, and delivers it; dropped before, it stops with nothing
+    /// written (gap G-076).
+    ///
     /// # Errors
     ///
     /// Returns [`KitError::Inbound`] with
