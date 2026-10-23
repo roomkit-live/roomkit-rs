@@ -86,8 +86,9 @@ pub enum StoreError {
         index: u64,
     },
     /// The store could not be reached or failed: the error it met is the
-    /// cause ([`std::error::Error::source`]), and shows in the message.
-    #[error("the store failed: {0}")]
+    /// cause ([`std::error::Error::source`]), which the message leaves to
+    /// a reader of the chain, [`to_record`](Self::to_record) among them.
+    #[error("the store failed")]
     Unavailable(#[source] StoreFailure),
 }
 
@@ -144,9 +145,8 @@ impl PartialEq for StoreError {
                     index: other_index,
                 },
             ) => room_id == other_room && index == other_index,
-            (Self::Unavailable(cause), Self::Unavailable(other)) => {
-                std::ptr::addr_eq(&raw const **cause, &raw const **other)
-            }
+            // The cause has no equality: one error is equal to itself.
+            (Self::Unavailable(_), Self::Unavailable(_)) => std::ptr::eq(self, other),
             (
                 Self::RoomExists(_)
                 | Self::RoomNotFound(_)
@@ -173,7 +173,8 @@ impl StoreError {
         Self::Unavailable(cause.into())
     }
 
-    /// The error as the core records it.
+    /// The error as the core records it, its message followed by each of
+    /// its causes': `the store failed: connection refused`.
     pub fn to_record(&self) -> ErrorRecord {
         let error_type = match self {
             Self::RoomExists(_) => "RoomExists",
@@ -187,8 +188,20 @@ impl StoreError {
             Self::IndexTaken { .. } => "IndexTaken",
             Self::Unavailable(_) => "StoreUnavailable",
         };
-        ErrorRecord::new(error_type, self.to_string())
+        ErrorRecord::new(error_type, with_causes(self))
     }
+}
+
+/// `error`'s message, then each of its causes', joined by `: `.
+fn with_causes(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        message.push_str(": ");
+        message.push_str(&next.to_string());
+        cause = next.source();
+    }
+    message
 }
 
 /// Which rooms [`ConversationStore::list_rooms`] returns; an empty filter
@@ -547,6 +560,8 @@ mod tests {
 
     use super::*;
 
+    /// The cause is the error's source, shown once: in the record the core
+    /// keeps, which reads the whole chain, not in the error's own message.
     #[test]
     fn an_unavailable_store_keeps_the_error_it_met_as_its_cause() {
         let met = io::Error::new(io::ErrorKind::ConnectionRefused, "connection refused");
@@ -556,28 +571,44 @@ mod tests {
             .and_then(|cause| cause.downcast_ref::<io::Error>())
             .map(io::Error::kind);
         assert_eq!(
-            (cause, error.to_string()),
+            (cause, error.to_string(), error.to_record().message),
             (
                 Some(io::ErrorKind::ConnectionRefused),
+                "the store failed".to_owned(),
                 "the store failed: connection refused".to_owned()
             )
         );
     }
 
+    /// A cause of no size takes no address of its own.
+    #[derive(Debug)]
+    struct Refused;
+
+    impl std::fmt::Display for Refused {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("refused")
+        }
+    }
+
+    impl Error for Refused {}
+
     /// An unavailable store's cause cannot be compared: the error equals
-    /// itself only, as a refusal equals the same refusal.
+    /// itself only, as a refusal equals the same refusal, whatever its cause
+    /// is, one of no size included.
     #[test]
     fn an_unavailable_store_equals_itself_only() {
-        let error = StoreError::unavailable("connection refused");
+        let error = StoreError::unavailable(Refused);
         let itself = &error;
         let room = RoomId::new("room_1").unwrap();
         assert_eq!(
             (
                 error == *itself,
-                error == StoreError::unavailable("connection refused"),
+                error == StoreError::unavailable(Refused),
+                StoreError::unavailable("connection refused")
+                    == StoreError::unavailable("connection refused"),
                 StoreError::RoomNotFound(room.clone()) == StoreError::RoomNotFound(room),
             ),
-            (true, false, true)
+            (true, false, false, true)
         );
     }
 }

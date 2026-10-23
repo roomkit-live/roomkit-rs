@@ -519,10 +519,12 @@ publishes a release.
   a pass, of a record stored `BLOCKED` in place of a refused response and
   of `commit_event`'s record carried none.
 - `StoreError::Unavailable` keeps the error the store met as its cause
-  (`std::error::Error::source`), a `StoreFailure`, shown in its message; it
-  held a string. `StoreError::unavailable(cause)` builds one from an error
-  or a message. `StoreError` and `KitError` are no longer `Clone`, and an
-  `Unavailable` error equals itself only.
+  (`std::error::Error::source`), a `StoreFailure`; it held a string. Its
+  message is `the store failed`, the cause shown once, by a reader of the
+  chain: `StoreError::to_record` writes `the store failed: <cause>`.
+  `StoreError::unavailable(cause)` builds one from an error or a message.
+  `StoreError` and `KitError` are no longer `Clone`, and an `Unavailable`
+  error equals itself only.
 - `KitError::Stalled` is a stall of the effect protocol only, a defect of
   the crate. A call whose run the runtime cancelled, as a shutting-down
   runtime does, fails with `KitError::Cancelled`, and a direct injection
