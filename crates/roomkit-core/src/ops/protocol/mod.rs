@@ -14,9 +14,9 @@ use thiserror::Error;
 
 use super::{Environment, FrameworkEvent};
 use crate::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventId, IdentityId,
-    InboundMessage, Observation, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
-    Timestamp,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventId, EventUpdates,
+    IdentityId, InboundMessage, Observation, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
+    Task, Timestamp,
 };
 use crate::rules::hook_chain::HookOutcome;
 use crate::rules::hook_registry::{HookId, HookTrigger};
@@ -99,14 +99,25 @@ pub enum Request {
         /// The key.
         key: String,
     },
+    /// Read the event `event_id`, whichever room holds it, refused ones
+    /// included (RFC §14.1 `get_event`). Answer [`Outcome::Event`].
+    GetEvent {
+        /// The event.
+        event_id: EventId,
+    },
     /// Store `event` and set the room's counters, as one atomic commit (RFC
-    /// §14.3). The store must refuse an index the room already holds (RFC
-    /// §8.1). Answer [`Outcome::Committed`].
+    /// §14.3), with the update an edit or a delete makes to its target in
+    /// the same transaction (RFC §10.1 step 12). The store must refuse an
+    /// index the room has given out already, a hard-deleted one included
+    /// (RFC §8.1), and fail the whole commit when the target is gone.
+    /// Answer [`Outcome::Committed`].
     Commit {
         /// The event, with its index and status.
         event: RoomEvent,
         /// The room's counters once the event is stored.
         counters: RoomCounters,
+        /// What an accepted edit or delete writes on its target.
+        target: Option<TargetUpdate>,
     },
     /// Store side effects (RFC §10.1 step 15). Answer
     /// [`Outcome::Persisted`].
@@ -146,6 +157,28 @@ pub enum Request {
         room_id: RoomId,
         /// The channel.
         channel_id: ChannelId,
+    },
+    /// Write the fields `updates` names on the stored event, keeping every
+    /// other one as stored (RFC §14.1 `update_event(event_id, updates)`).
+    /// Answer [`Outcome::Stored`].
+    UpdateEvent {
+        /// The event.
+        event_id: EventId,
+        /// What to write.
+        updates: EventUpdates,
+    },
+    /// Remove the room's event `event_id` and, with `cascade_replies`, the
+    /// replies of its thread (RFC §14.1 `delete_event(room_id, event_id,
+    /// cascade_replies)`): a hard delete, which leaves the room's counters
+    /// as they are. Answer [`Outcome::Deleted`] with the events removed,
+    /// none when the room holds no such event.
+    DeleteEvent {
+        /// The room.
+        room_id: RoomId,
+        /// The event.
+        event_id: EventId,
+        /// Whether the events whose thread it roots go with it.
+        cascade_replies: bool,
     },
     /// Find the identity an address belongs to on channels of a type, in an
     /// organization (RFC §14.1 `resolve_identity(channel_type, address,
@@ -233,7 +266,8 @@ pub enum Request {
 /// The room's counters after a commit (RFC §10.1 step 12).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoomCounters {
-    /// How many events the timeline holds.
+    /// How many indices the room has given out: the events its timeline
+    /// holds, and those a hard delete removed (gap G-064).
     pub event_count: u64,
     /// The highest index of the timeline.
     pub latest_index: u64,
@@ -242,6 +276,16 @@ pub struct RoomCounters {
     /// What else the commit writes on the room, in the same transaction: a
     /// delivered event resumes a PAUSED room (gap G-045). Empty otherwise.
     pub room: RoomUpdates,
+}
+
+/// What a commit writes on the event an accepted edit or delete targets
+/// (RFC §10.1 step 12, §10.3), in the commit's transaction.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TargetUpdate {
+    /// The target.
+    pub event_id: EventId,
+    /// What to write on it.
+    pub updates: EventUpdates,
 }
 
 /// The driver's answer to an effect.
@@ -263,6 +307,10 @@ pub enum Outcome {
     Bindings(Vec<ChannelBinding>),
     /// The event committed with the key, if any.
     Idempotent(Option<Box<RoomEvent>>),
+    /// The event read, if any.
+    Event(Option<Box<RoomEvent>>),
+    /// The events a delete removed, the target first.
+    Deleted(Vec<RoomEvent>),
     /// The commit is durable.
     Committed,
     /// The side effects are stored.

@@ -1,20 +1,22 @@
 //! The in-memory store (RFC §14.2): for tests, prototypes and single-process
 //! deployments.
 
+mod events;
 mod identities;
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ChannelType, EventStatus, Identity, IdentityId, Observation,
-    Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    ChannelBinding, ChannelId, ChannelType, EventId, EventStatus, EventUpdates, Identity,
+    IdentityId, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId,
+    RoomUpdates, Task,
 };
-use roomkit_core::ops::RoomCounters;
+use roomkit_core::ops::{RoomCounters, TargetUpdate};
 use roomkit_core::rules::routing;
 
 use self::identities::Identities;
-use super::{ConversationStore, RoomFilter, StoreError};
+use super::{ConversationStore, EventFilter, RoomFilter, StoreError};
 
 /// A store that keeps everything in memory, for one process.
 ///
@@ -346,15 +348,29 @@ impl ConversationStore for InMemoryStore {
         })
     }
 
-    async fn commit(&self, event: RoomEvent, counters: RoomCounters) -> Result<(), StoreError> {
+    async fn commit(
+        &self,
+        event: RoomEvent,
+        counters: RoomCounters,
+        target: Option<TargetUpdate>,
+    ) -> Result<(), StoreError> {
         let room_id = event.room_id.clone();
         self.write(&room_id, |record| {
-            let next = u64::try_from(record.events.len()).unwrap_or(u64::MAX);
-            if event.index != next {
+            // The room's count is the next index: a hard-deleted index is
+            // never given again (gap G-064).
+            if event.index != record.room.event_count {
                 return Err(StoreError::IndexTaken {
                     room_id: room_id.clone(),
                     index: event.index,
                 });
+            }
+            if let Some(TargetUpdate { event_id, updates }) = &target {
+                let stored = record
+                    .events
+                    .iter_mut()
+                    .find(|stored| &stored.id == event_id)
+                    .ok_or_else(|| StoreError::EventNotFound(event_id.clone()))?;
+                updates.apply(stored);
             }
             record.room.event_count = counters.event_count;
             record.room.latest_index = Some(counters.latest_index);
@@ -390,6 +406,60 @@ impl ConversationStore for InMemoryStore {
                 .filter(|event| include_blocked || event.status != EventStatus::Blocked)
                 .cloned()
                 .collect()
+        })
+    }
+
+    async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
+        Ok(self.rooms().values().find_map(|record| {
+            record
+                .events
+                .iter()
+                .find(|event| &event.id == event_id)
+                .cloned()
+        }))
+    }
+
+    async fn update_event(
+        &self,
+        event_id: &EventId,
+        updates: EventUpdates,
+    ) -> Result<RoomEvent, StoreError> {
+        let mut rooms = self.rooms();
+        let stored = rooms
+            .values_mut()
+            .find_map(|record| record.events.iter_mut().find(|event| &event.id == event_id))
+            .ok_or_else(|| StoreError::EventNotFound(event_id.clone()))?;
+        updates.apply(stored);
+        Ok(stored.clone())
+    }
+
+    async fn delete_event(
+        &self,
+        room_id: &RoomId,
+        event_id: &EventId,
+        cascade_replies: bool,
+    ) -> Result<Vec<RoomEvent>, StoreError> {
+        self.write(room_id, |record| {
+            Ok(events::remove(
+                &mut record.events,
+                event_id,
+                cascade_replies,
+            ))
+        })
+    }
+
+    async fn get_event_count(
+        &self,
+        room_id: &RoomId,
+        filter: Option<EventFilter>,
+    ) -> Result<u64, StoreError> {
+        self.read(room_id, |record| {
+            let counted = record
+                .events
+                .iter()
+                .filter(|event| filter.is_none_or(|filter| filter.matches(event)))
+                .count();
+            u64::try_from(counted).unwrap_or(u64::MAX)
         })
     }
 
@@ -465,7 +535,7 @@ mod tests {
     async fn a_commit_sets_the_room_s_counters() {
         let store = store_with_room().await;
         store
-            .commit(event(0, EventStatus::Delivered), counters(0))
+            .commit(event(0, EventStatus::Delivered), counters(0), None)
             .await
             .unwrap();
         let room = store.get_room(&room_id()).await.unwrap().unwrap();
@@ -476,11 +546,11 @@ mod tests {
     async fn an_index_the_room_holds_is_refused() {
         let store = store_with_room().await;
         store
-            .commit(event(0, EventStatus::Delivered), counters(0))
+            .commit(event(0, EventStatus::Delivered), counters(0), None)
             .await
             .unwrap();
         let again = store
-            .commit(event(0, EventStatus::Delivered), counters(0))
+            .commit(event(0, EventStatus::Delivered), counters(0), None)
             .await;
         assert_eq!(
             again,
@@ -495,11 +565,11 @@ mod tests {
     async fn a_timeline_read_leaves_refused_events_out_by_default() {
         let store = store_with_room().await;
         store
-            .commit(event(0, EventStatus::Blocked), counters(0))
+            .commit(event(0, EventStatus::Blocked), counters(0), None)
             .await
             .unwrap();
         store
-            .commit(event(1, EventStatus::Delivered), counters(1))
+            .commit(event(1, EventStatus::Delivered), counters(1), None)
             .await
             .unwrap();
         let received = store.list_events(&room_id(), false).await.unwrap();
@@ -513,7 +583,7 @@ mod tests {
     async fn a_timeline_read_serves_refused_events_when_asked() {
         let store = store_with_room().await;
         store
-            .commit(event(0, EventStatus::Blocked), counters(0))
+            .commit(event(0, EventStatus::Blocked), counters(0), None)
             .await
             .unwrap();
         assert_eq!(store.list_events(&room_id(), true).await.unwrap().len(), 1);
@@ -524,7 +594,7 @@ mod tests {
         let store = store_with_room().await;
         for index in 0..3 {
             store
-                .commit(event(index, EventStatus::Delivered), counters(index))
+                .commit(event(index, EventStatus::Delivered), counters(index), None)
                 .await
                 .unwrap();
         }
@@ -543,7 +613,7 @@ mod tests {
     async fn a_room_update_writes_only_the_fields_it_names() {
         let store = store_with_room().await;
         store
-            .commit(event(0, EventStatus::Delivered), counters(0))
+            .commit(event(0, EventStatus::Delivered), counters(0), None)
             .await
             .unwrap();
         let updates = RoomUpdates {
@@ -570,7 +640,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .commit(event(0, EventStatus::Delivered), resumed)
+            .commit(event(0, EventStatus::Delivered), resumed, None)
             .await
             .unwrap();
         let room = store.get_room(&room_id()).await.unwrap().unwrap();

@@ -27,6 +27,12 @@ pub enum HookTrigger {
     BeforeBroadcast,
     /// After every channel has processed an event.
     AfterBroadcast,
+    /// A stored event was changed: by an accepted edit, or by a host's
+    /// direct update (RFC §10.3).
+    OnEventUpdated,
+    /// A stored event was deleted: marked by an accepted delete, or removed
+    /// by a host's direct delete (RFC §10.3).
+    OnEventDeleted,
     /// A room was created.
     OnRoomCreated,
     /// A room transitioned to PAUSED, by the integrator or its timer.
@@ -67,6 +73,8 @@ impl HookTrigger {
             | Self::BeforeTts
             | Self::BeforeToolUse => HookExecution::Sync,
             Self::AfterBroadcast
+            | Self::OnEventUpdated
+            | Self::OnEventDeleted
             | Self::OnRoomCreated
             | Self::OnRoomPaused
             | Self::OnRoomClosed
@@ -87,6 +95,8 @@ impl HookTrigger {
             Self::OnTranscription | Self::BeforeTts | Self::BeforeToolUse => true,
             Self::BeforeBroadcast
             | Self::AfterBroadcast
+            | Self::OnEventUpdated
+            | Self::OnEventDeleted
             | Self::OnRoomCreated
             | Self::OnRoomPaused
             | Self::OnRoomClosed

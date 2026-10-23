@@ -7,12 +7,12 @@
 //! name or at another depth.
 
 use crate::model::{
-    ChannelBinding, ErrorRecord, EventContent, EventDirection, EventId, EventSource, EventStatus,
-    EventType, InboundMessage, InjectedEvent, Metadata, ParticipantId, RoomEvent, RoomId,
-    Timestamp, Visibility,
+    ChannelBinding, DeleteContent, EditContent, ErrorRecord, EventContent, EventDirection, EventId,
+    EventSource, EventStatus, EventType, InboundMessage, InjectedEvent, Metadata, ParticipantId,
+    RoomEvent, RoomId, Timestamp, Visibility,
 };
 use crate::ops::ChannelDeclaration;
-use crate::rules::chain_depth;
+use crate::rules::{chain_depth, edits};
 
 /// The event a channel that keeps no data of its own parses from `message`:
 /// its content, its provider data, and its sender, in the channel's form
@@ -135,8 +135,10 @@ pub(crate) fn stamp_injected(
 /// Keeps the identity and the bookkeeping of `original` on a payload a
 /// `BEFORE_BROADCAST` hook replaced (RFC §9.4): a hook may change what an
 /// event says, where it is addressed and who may see it, never which event it
-/// is, where it came from, how deep it is or what became of it.
+/// is, where it came from, how deep it is or what became of it. Nor what step
+/// 8a checked on an edit or a delete ([`kept_change`]).
 pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> RoomEvent {
+    modified.content = kept_change(&original.content, modified.content);
     modified.id = original.id.clone();
     modified.room_id = original.room_id.clone();
     modified.event_type = original.event_type;
@@ -155,6 +157,42 @@ pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> Ro
         .delivery_results
         .clone_from(&original.delivery_results);
     modified
+}
+
+/// The content a hook's replacement of `original` keeps (RFC §9.4, §10.1
+/// step 8a, gap G-062): an edit keeps its target and its `edit_source`, a
+/// delete its target and its `delete_type`, which step 8a checked; the
+/// hook's new content of an edit and reason of a delete stand. A
+/// replacement that drops an edit's or a delete's content, or that makes an
+/// edit or a delete appear anywhere else (another event's content, a
+/// composite's part, an edit's new content), leaves the original's: an
+/// event stays the change it was checked as, and no change gets past the
+/// check.
+fn kept_change(original: &EventContent, modified: EventContent) -> EventContent {
+    match (original, modified) {
+        (EventContent::Edit(original), EventContent::Edit(modified)) => {
+            let new_content = if edits::holds_change(&modified.new_content) {
+                original.new_content.clone()
+            } else {
+                modified.new_content
+            };
+            EventContent::Edit(EditContent {
+                target_event_id: original.target_event_id.clone(),
+                new_content,
+                edit_source: original.edit_source,
+            })
+        }
+        (EventContent::Delete(original), EventContent::Delete(modified)) => {
+            EventContent::Delete(DeleteContent {
+                target_event_id: original.target_event_id.clone(),
+                delete_type: original.delete_type,
+                reason: modified.reason,
+            })
+        }
+        (EventContent::Edit(_) | EventContent::Delete(_), _) => original.clone(),
+        (_, modified) if edits::holds_change(&modified) => original.clone(),
+        (_, modified) => modified,
+    }
 }
 
 /// The payload of `ON_ERROR` for a turn of `channel` that failed on
@@ -377,6 +415,104 @@ mod tests {
             .insert("sms".to_owned(), "delivered".into());
         let kept = keep_identity(&trigger(), modified);
         assert!(kept.delivery_results.is_empty());
+    }
+
+    fn edit_of(target: &str, text: &str) -> RoomEvent {
+        let mut edit = trigger();
+        edit.event_type = EventType::Edit;
+        edit.content = EventContent::Edit(EditContent {
+            target_event_id: EventId::new(target).unwrap(),
+            new_content: Box::new(EventContent::text(text)),
+            edit_source: Some(crate::model::EditSource::Sender),
+        });
+        edit
+    }
+
+    /// RFC §9.4: the event an edit targets is kept; its new content is the
+    /// hook's to change.
+    #[test]
+    fn a_modified_edit_keeps_its_target_and_takes_the_new_content() {
+        let kept = keep_identity(
+            &edit_of("evt_3", "I need 50000$"),
+            edit_of("evt_1", "I need [redacted]"),
+        );
+        assert_eq!(kept.content, edit_of("evt_3", "I need [redacted]").content);
+    }
+
+    #[test]
+    fn a_modified_edit_keeps_its_edit_source() {
+        let mut system = edit_of("evt_3", "x");
+        if let EventContent::Edit(edit) = &mut system.content {
+            edit.edit_source = Some(crate::model::EditSource::System);
+        }
+        let kept = keep_identity(&edit_of("evt_3", "x"), system);
+        assert_eq!(kept.content, edit_of("evt_3", "x").content);
+    }
+
+    #[test]
+    fn a_modified_delete_keeps_its_target_and_its_type_and_takes_the_reason() {
+        let delete = |target: &str, delete_type, reason: Option<&str>| {
+            let mut event = trigger();
+            event.event_type = EventType::Delete;
+            event.content = EventContent::Delete(DeleteContent {
+                target_event_id: EventId::new(target).unwrap(),
+                delete_type,
+                reason: reason.map(str::to_owned),
+            });
+            event
+        };
+        let kept = keep_identity(
+            &delete("evt_3", crate::model::DeleteType::Sender, None),
+            delete("evt_1", crate::model::DeleteType::Admin, Some("spam")),
+        );
+        assert_eq!(
+            kept.content,
+            delete("evt_3", crate::model::DeleteType::Sender, Some("spam")).content
+        );
+    }
+
+    #[test]
+    fn a_replacement_dropping_an_edit_s_content_keeps_the_original() {
+        let mut text = edit_of("evt_3", "x");
+        text.content = EventContent::text("plain");
+        let kept = keep_identity(&edit_of("evt_3", "x"), text);
+        assert_eq!(kept.content, edit_of("evt_3", "x").content);
+    }
+
+    #[test]
+    fn a_modified_edit_whose_new_content_is_a_delete_keeps_the_original_new_content() {
+        let mut nested = edit_of("evt_3", "x");
+        if let EventContent::Edit(edit) = &mut nested.content {
+            *edit.new_content = EventContent::Delete(DeleteContent {
+                target_event_id: EventId::new("evt_9").unwrap(),
+                delete_type: crate::model::DeleteType::Sender,
+                reason: None,
+            });
+        }
+        let kept = keep_identity(&edit_of("evt_3", "x"), nested);
+        assert_eq!(kept.content, edit_of("evt_3", "x").content);
+    }
+
+    #[test]
+    fn a_replacement_never_hides_an_edit_in_a_composite() {
+        let mut smuggled = trigger();
+        smuggled.content = EventContent::Composite(
+            crate::model::CompositeContent::new(vec![
+                EventContent::text("Hi"),
+                edit_of("evt_3", "x").content,
+            ])
+            .unwrap(),
+        );
+        let kept = keep_identity(&trigger(), smuggled);
+        assert_eq!(kept.content, trigger().content);
+    }
+
+    #[test]
+    fn a_replacement_never_turns_a_message_into_an_edit() {
+        let mut smuggled = trigger();
+        smuggled.content = edit_of("evt_3", "x").content;
+        let kept = keep_identity(&trigger(), smuggled);
+        assert_eq!(kept.content, trigger().content);
     }
 
     #[test]

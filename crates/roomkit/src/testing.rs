@@ -5,8 +5,9 @@ use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventDirection, EventSource, EventType, RoomContext, RoomEvent,
+    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
+    ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType, RoomContext,
+    RoomEvent,
 };
 use roomkit_core::ops::ChannelDeclaration;
 use roomkit_core::rules::transcoding::text_of;
@@ -52,6 +53,14 @@ impl RecordingTransport {
             },
             deliveries: Arc::default(),
         }
+    }
+
+    /// The same transport, declaring `capabilities`: one that edits and
+    /// deletes natively receives an edit or a delete as it is (RFC §6.6).
+    #[must_use]
+    pub fn with_capabilities(mut self, capabilities: ChannelCapabilities) -> Self {
+        self.declaration.capabilities = capabilities;
+        self
     }
 
     /// The channel's id.

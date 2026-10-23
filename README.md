@@ -7,9 +7,10 @@ for conversations between humans, AI agents and programs.
 > **Status: pre-alpha.** Step 1 is done: the text path of the RFC's inbound
 > and broadcast pipelines, with hooks, permissions, transcoding and the
 > chain-depth limit, on a tokio runtime and an in-memory store. Step 2, the
-> rest of Level 0, is in progress: the room lifecycle and its timers, and
-> a message naming its room, and routing a message that names no room to
-> its conversation are done. No provider yet, and the API will change.
+> rest of Level 0, is in progress: the room lifecycle and its timers, a
+> message naming its room, routing a message that names no room to its
+> conversation, and edits and deletes are done. No provider yet, and the API
+> will change.
 
 ## Why a Rust implementation
 
@@ -58,6 +59,7 @@ cargo run -p roomkit --example new_conversation  # B.1: two senders on one numbe
 cargo run -p roomkit --example block_and_inject  # B.2: a hook blocks and injects
 cargo run -p roomkit --example agent_chain       # B.4: the chain-depth limit
 cargo run -p roomkit --example advisor_joins     # B.5: mute, whisper to an advisor, unmute
+cargo run -p roomkit --example edit_and_delete   # B.6, B.7: an edit and a delete, native or as text
 ```
 
 ## Documentation

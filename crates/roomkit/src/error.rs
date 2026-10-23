@@ -1,7 +1,7 @@
 //! What a kit's operations fail with.
 
 use roomkit_core::model::ChannelId;
-use roomkit_core::ops::{ConfigError, InboundError, LifecycleError, ProtocolError};
+use roomkit_core::ops::{ConfigError, InboundError, LifecycleError, MutationError, ProtocolError};
 use roomkit_core::rules::hook_registry::RegistrationError;
 use thiserror::Error;
 
@@ -17,6 +17,9 @@ pub enum KitError {
     /// A room lifecycle change failed.
     #[error(transparent)]
     Lifecycle(#[from] LifecycleError),
+    /// A direct update or delete of a stored event failed (RFC §10.3).
+    #[error(transparent)]
+    Mutation(#[from] MutationError),
     /// The kit's configuration refused a channel.
     #[error(transparent)]
     Config(#[from] ConfigError),

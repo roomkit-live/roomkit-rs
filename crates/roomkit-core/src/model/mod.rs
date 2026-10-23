@@ -58,7 +58,7 @@ pub use participant::{
 pub use room::{AgentResponsePolicy, Room, RoomStatus, RoomTimers};
 pub use side_effects::{Confidence, Observation, Task, TaskStatus};
 pub use time::Timestamp;
-pub use updates::{BindingUpdate, RoomUpdates};
+pub use updates::{BindingUpdate, EventUpdates, RoomUpdates};
 pub use visibility::{ChannelSet, Visibility};
 
 /// Integrator-defined data: the RFC's `map<string, any>`.

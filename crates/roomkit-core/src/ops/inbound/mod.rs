@@ -16,11 +16,18 @@
 //! work, so one event's delivery set completes before the next one's
 //! begins, and the next call into the room waits for it (RFC §10.2).
 //!
+//! Every pass checks an edit or a delete against its target (RFC §10.1 step
+//! 8a, §10.3), updates the target in its commit, and fires `ON_EVENT_UPDATED`
+//! or `ON_EVENT_DELETED` with the target as the commit left it, once the lock
+//! is released.
+//!
 //! Not covered yet, and refused rather than half done: instructions (RFC
-//! §10.1.1), edits and deletes (RFC §10.3), off-lock hooks (RFC §9.5.1).
+//! §10.1.1), off-lock hooks (RFC §9.5.1).
 
 mod arrival;
+mod commit;
 mod delivery;
+mod edits;
 mod job;
 mod named_room;
 mod pass;
@@ -44,8 +51,8 @@ use super::io::Io;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Request, Step};
 use super::{Abort, Cx, Environment, KitConfig, Progress};
 use crate::model::{
-    ChannelCategory, ErrorRecord, EventContent, EventStatus, EventType, InboundMessage,
-    InjectedEvent, Metadata, Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    ChannelCategory, ErrorRecord, EventStatus, EventType, InboundMessage, InjectedEvent, Metadata,
+    Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
 };
 use crate::rules::chain_depth::{self, ReentryBudget};
 
@@ -308,9 +315,9 @@ impl Machine {
                 PassResult::Delivered { context, .. } | PassResult::Blocked { context, .. } => {
                     Some(context.clone())
                 }
-                PassResult::Refused { .. } | PassResult::Duplicate { .. } => {
-                    self.task_context.take()
-                }
+                PassResult::Refused { .. }
+                | PassResult::Duplicate { .. }
+                | PassResult::EditRefused { .. } => self.task_context.take(),
             };
         }
         self.tasks.extend(report.tasks);
@@ -320,7 +327,9 @@ impl Machine {
             PassResult::Delivered { event, .. } | PassResult::Blocked { event, .. } => {
                 Some(event.clone())
             }
-            PassResult::Refused { .. } | PassResult::Duplicate { .. } => None,
+            PassResult::Refused { .. }
+            | PassResult::Duplicate { .. }
+            | PassResult::EditRefused { .. } => None,
         };
         if *origin == PassOrigin::Trigger {
             self.settle_trigger(&report.result);
@@ -329,8 +338,12 @@ impl Machine {
             event,
             plan,
             context,
+            target,
         } = report.result
         {
+            if let Some(target) = &target {
+                report::target_changed(cx, &event, target, &context);
+            }
             let kind = match origin {
                 PassOrigin::Trigger => SetKind::Root,
                 PassOrigin::Response => SetKind::Response,
@@ -362,6 +375,12 @@ impl Machine {
             PassResult::Refused { .. } => {
                 self.result.blocked = true;
                 self.result.reason = Some("room_closed".to_owned());
+            }
+            PassResult::EditRefused { refusal } => {
+                // Nothing was stored: the result carries no event (RFC §10.1
+                // step 8a).
+                self.result.blocked = true;
+                self.result.reason = Some(refusal.reason().to_owned());
             }
             PassResult::Duplicate { event } => {
                 // The replay answers what the first delivery did, the stored
@@ -680,14 +699,6 @@ fn check_supported(message: &InboundMessage) -> Result<(), InboundError> {
     }
     if message.event_type == EventType::Instruction {
         return Err(InboundError::Unsupported("an instruction (RFC §10.1.1)"));
-    }
-    let edits = matches!(message.event_type, EventType::Edit | EventType::Delete)
-        || matches!(
-            message.content,
-            EventContent::Edit(_) | EventContent::Delete(_)
-        );
-    if edits {
-        return Err(InboundError::Unsupported("an edit or a delete (RFC §10.3)"));
     }
     Ok(())
 }

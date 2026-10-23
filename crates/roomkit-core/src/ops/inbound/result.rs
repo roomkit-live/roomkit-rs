@@ -11,14 +11,17 @@ use crate::model::{ChannelId, DeliveryResult, ErrorRecord, Metadata, RoomEvent, 
 pub struct InboundResult {
     /// The committed event: delivered, or the record stored `BLOCKED` when a
     /// hook or the source's permissions refused it (gap G-026). `None` when
-    /// nothing was committed, as when the room refused the message.
+    /// nothing was committed, as when the room refused the message or step
+    /// 8a refused an edit or a delete.
     pub event: Option<RoomEvent>,
-    /// Whether the message was blocked: refused by the room, a hook or its
-    /// source's permissions.
+    /// Whether the message was blocked: refused by the room, step 8a, a hook
+    /// or its source's permissions.
     pub blocked: bool,
-    /// Why it was blocked: `room_closed`, a hook's reason, `source_muted`,
-    /// `source_read_only`, `source_unbound`. A replay gives the record's
-    /// `blocked_by`, the hook's reason not being stored.
+    /// Why it was blocked: `room_closed`; one of step 8a's
+    /// `target_event_not_found`, `identity_required_for_edit`,
+    /// `not_authorized`, `not_original_author` (RFC §10.1 step 8a); a hook's
+    /// reason; `source_muted`, `source_read_only`, `source_unbound`. A replay
+    /// gives the record's `blocked_by`, the hook's reason not being stored.
     pub reason: Option<String>,
     /// The first error met once the message was decided: a turn's, a
     /// later commit's, or the room lock's release (gap G-025). What was

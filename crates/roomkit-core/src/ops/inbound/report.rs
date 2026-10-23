@@ -75,6 +75,33 @@ pub(super) fn after_broadcast(cx: &mut Cx<'_>, event: &RoomEvent, context: &Room
     });
 }
 
+/// Fires the mutation trigger of an edit or a delete committed as `change`,
+/// once the room lock is released (RFC §10.3): `ON_EVENT_UPDATED` for an
+/// edit, `ON_EVENT_DELETED` for a delete, with `target` as the commit left
+/// it. A blocked change never reaches here.
+pub(super) fn target_changed(
+    cx: &mut Cx<'_>,
+    change: &RoomEvent,
+    target: &RoomEvent,
+    context: &RoomContext,
+) {
+    let trigger = if change.event_type == EventType::Delete {
+        HookTrigger::OnEventDeleted
+    } else {
+        HookTrigger::OnEventUpdated
+    };
+    let hooks = cx.config.hooks.observers(trigger, &target.source);
+    if hooks.is_empty() {
+        return;
+    }
+    cx.io.notify(Notice::AsyncHooks {
+        trigger,
+        hooks,
+        event: Box::new(target.clone()),
+        context: Box::new(context.clone()),
+    });
+}
+
 /// Fires the `ON_TASK_CREATED` observers of each stored task (RFC §9.2),
 /// its payload a system event naming the task.
 pub(super) fn tasks_created(cx: &mut Cx<'_>, tasks: &[Task], context: &RoomContext) {

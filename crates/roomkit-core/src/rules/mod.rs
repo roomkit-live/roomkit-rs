@@ -16,6 +16,7 @@
 //! | [`hook_chain`] | §9.3, §9.4: how a chain of SYNC hook outcomes decides |
 //! | [`lifecycle`] | §5.1: which status each room transition leaves from, and what it writes |
 //! | [`timers`] | §5.1: which timer transition falls due, and when |
+//! | [`edits`] | §10.1 step 8a, §10.3: whether an edit or a delete may change its target, and what the commit writes on it |
 //!
 //! Visibility itself (§7.3) is a model type: see
 //! [`Visibility::admits`](crate::model::Visibility::admits) and
@@ -26,6 +27,7 @@
 pub mod addresses;
 pub mod attachment;
 pub mod chain_depth;
+pub mod edits;
 pub mod hook_chain;
 pub mod hook_registry;
 pub mod lifecycle;

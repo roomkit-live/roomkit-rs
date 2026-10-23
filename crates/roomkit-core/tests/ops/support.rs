@@ -21,19 +21,20 @@ use std::time::Duration;
 use roomkit_core::model::{
     Access, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelMediaType, ChannelOutput, ChannelType, ErrorRecord, EventContent, EventDirection,
-    EventId, EventSource, EventStatus, EventType, Identity, InboundMessage, Observation,
-    Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomStatus, Task, Timestamp,
+    EventId, EventSource, EventStatus, EventType, EventUpdates, Identity, InboundMessage,
+    Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomStatus,
+    Task, Timestamp,
 };
 use roomkit_core::ops::{
-    ChannelDeclaration, Environment, FrameworkEvent, Inbound, InboundError, InboundResult,
-    InboundTarget, KitConfig, Next, Notice, Operation, Outcome, Request, RoomCounters,
-    SequentialEnvironment, default_inbound_event,
+    ChannelDeclaration, DeleteEvent, Environment, FrameworkEvent, Inbound, InboundError,
+    InboundResult, InboundTarget, KitConfig, MutationError, Next, Notice, Operation, Outcome,
+    Request, RoomCounters, SequentialEnvironment, TargetUpdate, UpdateEvent, default_inbound_event,
 };
-use roomkit_core::rules::attachment;
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
 use roomkit_core::rules::routing::RouteQuery;
 use roomkit_core::rules::transcoding::text_of;
+use roomkit_core::rules::{attachment, edits};
 
 /// What a channel answers to `on_event()`.
 pub(crate) type OnEvent =
@@ -428,6 +429,36 @@ impl Sim {
         self.inbound(InboundTarget::Routed, organization, message)
     }
 
+    /// Runs a host's direct update of `event_id` in `room_1` (RFC §10.3).
+    pub(crate) fn update_event(
+        &mut self,
+        event_id: &str,
+        updates: EventUpdates,
+    ) -> Result<Option<RoomEvent>, MutationError> {
+        let operation = UpdateEvent::new(
+            self.shared_config(),
+            room_id(),
+            EventId::new(event_id).unwrap(),
+            updates,
+        );
+        self.run(operation)
+    }
+
+    /// Runs a host's direct delete of `event_id` from `room_1` (RFC §10.3).
+    pub(crate) fn delete_event(
+        &mut self,
+        event_id: &str,
+        cascade_replies: bool,
+    ) -> Result<Vec<EventId>, MutationError> {
+        let operation = DeleteEvent::new(
+            self.shared_config(),
+            room_id(),
+            EventId::new(event_id).unwrap(),
+            cascade_replies,
+        );
+        self.run(operation)
+    }
+
     fn inbound(
         &mut self,
         target: InboundTarget,
@@ -504,6 +535,13 @@ impl Sim {
         self.room.event_count += 1;
         self.room.latest_index = Some(event.index);
         self.timeline.push(event);
+    }
+
+    /// Commits `event` to the timeline of the room `room`, stored apart from
+    /// `room_1`, before the test runs, at its next index.
+    pub(crate) fn seed_other(&mut self, room: &str, event: RoomEvent) {
+        let room_id = RoomId::new(room).unwrap();
+        self.on_room(&room_id, |sim| sim.seed(event));
     }
 
     /// Stores `room`, apart from `room_1`, before the test runs.
@@ -658,6 +696,11 @@ impl Sim {
                 organization_id,
             } => self.resolve_identity(channel_type, &address, organization_id.as_deref()),
             Request::Route { query } => self.execute_route(*query),
+            Request::GetEvent { event_id } => self.get_event(&event_id),
+            Request::UpdateEvent { event_id, updates } => {
+                let room = self.room_of_event(&event_id);
+                self.on_room(&room, |sim| sim.update_stored_event(&event_id, &updates))
+            }
             Request::LoadContext { .. }
             | Request::LoadBindings { .. }
             | Request::FindByIdempotencyKey { .. }
@@ -666,11 +709,47 @@ impl Sim {
             | Request::CreateRoom { .. }
             | Request::UpdateRoom { .. }
             | Request::StoreBinding { .. }
-            | Request::DeleteBinding { .. } => {
+            | Request::DeleteBinding { .. }
+            | Request::DeleteEvent { .. } => {
                 let room = store_room(&request).clone();
                 self.on_room(&room, |sim| sim.execute_store(request))
             }
         }
+    }
+
+    /// The event `event_id`, whichever room holds it (RFC §14.1 `get_event`).
+    fn get_event(&mut self, event_id: &EventId) -> Outcome {
+        self.trace.push(format!("get_event {event_id}"));
+        let found = self
+            .timeline
+            .iter()
+            .chain(
+                self.others
+                    .values()
+                    .flat_map(|stored| stored.timeline.iter()),
+            )
+            .find(|event| &event.id == event_id)
+            .cloned();
+        Outcome::Event(found.map(Box::new))
+    }
+
+    /// The room whose timeline holds `event_id`, `room_1` when none does.
+    fn room_of_event(&self, event_id: &EventId) -> RoomId {
+        self.others
+            .iter()
+            .find(|(_, stored)| stored.timeline.iter().any(|event| &event.id == event_id))
+            .map_or_else(room_id, |(id, _)| id.clone())
+    }
+
+    /// Writes `updates` on the stored event `event_id` of the room the
+    /// fields hold (RFC §14.1 `update_event`).
+    fn update_stored_event(&mut self, event_id: &EventId, updates: &EventUpdates) -> Outcome {
+        self.trace.push(format!("update event {event_id}"));
+        let Some(stored) = self.timeline.iter_mut().find(|event| &event.id == event_id) else {
+            return Outcome::Failed(ErrorRecord::new("EventNotFound", "no such event"));
+        };
+        updates.apply(stored);
+        Outcome::Stored
     }
 
     /// The identity of `organization` that uses `address` on channels of
@@ -780,6 +859,13 @@ impl Sim {
             }
             Request::CreateRoom { room } => (format!("store room {}", room.id), store_down()),
             Request::Commit { .. } => ("commit".to_owned(), store_down()),
+            Request::GetEvent { event_id } => (format!("get_event {event_id}"), store_down()),
+            Request::UpdateEvent { event_id, .. } => {
+                (format!("update event {event_id}"), store_down())
+            }
+            Request::DeleteEvent { event_id, .. } => {
+                (format!("delete event {event_id}"), store_down())
+            }
             Request::AcquireLock { room_id } => (
                 format!("lock {room_id}"),
                 ErrorRecord::new("LockUnavailable", "the lock manager is down"),
@@ -957,7 +1043,16 @@ impl Sim {
                     .map(Box::new);
                 Outcome::Idempotent(found)
             }
-            Request::Commit { event, counters } => self.commit(event, &counters),
+            Request::Commit {
+                event,
+                counters,
+                target,
+            } => self.commit(event, &counters, target.as_ref()),
+            Request::DeleteEvent {
+                event_id,
+                cascade_replies,
+                ..
+            } => self.delete_stored_event(&event_id, cascade_replies),
             Request::PersistSideEffects {
                 tasks,
                 observations,
@@ -1006,12 +1101,54 @@ impl Sim {
             | Request::RunHook { .. }
             | Request::RunObservers { .. }
             | Request::ResolveIdentity { .. }
-            | Request::Route { .. } => panic!("not a store request"),
+            | Request::Route { .. }
+            | Request::GetEvent { .. }
+            | Request::UpdateEvent { .. } => panic!("not a room's store request"),
         }
     }
 
-    /// Commits `event` with the room's counters, under the room's lock.
-    fn commit(&mut self, event: RoomEvent, counters: &RoomCounters) -> Outcome {
+    /// Removes `event_id` from the timeline under the room's lock, with the
+    /// replies of its thread when `cascade_replies` is set and the edits and
+    /// deletes of what it removes (RFC §14.1 `delete_event`, gap G-063). The
+    /// counters stay as they are.
+    fn delete_stored_event(&mut self, event_id: &EventId, cascade_replies: bool) -> Outcome {
+        self.trace.push(format!("delete event {event_id}"));
+        assert!(
+            self.locks_held.contains(&self.room.id),
+            "an event was deleted outside the room lock"
+        );
+        let Some(at) = self.timeline.iter().position(|event| &event.id == event_id) else {
+            return Outcome::Deleted(Vec::new());
+        };
+        let mut removed = vec![self.timeline.remove(at)];
+        let mut gone = vec![event_id.clone()];
+        while let Some(next) = self.timeline.iter().position(|event| {
+            let reply = cascade_replies
+                && event
+                    .parent_event_id
+                    .as_ref()
+                    .is_some_and(|parent| gone.contains(parent));
+            let change = edits::mutation(event)
+                .ok()
+                .flatten()
+                .is_some_and(|mutation| gone.contains(mutation.target_event_id()));
+            reply || change
+        }) {
+            let next = self.timeline.remove(next);
+            gone.push(next.id.clone());
+            removed.push(next);
+        }
+        Outcome::Deleted(removed)
+    }
+
+    /// Commits `event` with the room's counters, under the room's lock, with
+    /// the update an edit or a delete makes to its target in the same write.
+    fn commit(
+        &mut self,
+        event: RoomEvent,
+        counters: &RoomCounters,
+        target: Option<&TargetUpdate>,
+    ) -> Outcome {
         assert!(
             self.locks_held.contains(&event.room_id),
             "an event was committed outside the room lock"
@@ -1021,11 +1158,25 @@ impl Sim {
             event.index, self.room.event_count,
             "the index is the room's count"
         );
+        if let Some(update) = target {
+            let Some(stored) = self
+                .timeline
+                .iter_mut()
+                .find(|stored| stored.id == update.event_id)
+            else {
+                return Outcome::Failed(ErrorRecord::new("EventNotFound", "the target is gone"));
+            };
+            update.updates.apply(stored);
+        }
         self.room.event_count = counters.event_count;
         self.room.latest_index = Some(counters.latest_index);
         self.room.timers.last_activity_at = counters.last_activity_at;
         counters.room.apply(&mut self.room);
-        self.trace.push(format!("commit {}", describe(&event)));
+        let updating = target.map_or_else(String::new, |update| {
+            format!(" updating {}", update.event_id)
+        });
+        self.trace
+            .push(format!("commit {}{updating}", describe(&event)));
         self.timeline.push(event);
         Outcome::Committed
     }
@@ -1115,7 +1266,8 @@ fn store_room(request: &Request) -> &RoomId {
         | Request::FindByIdempotencyKey { room_id, .. }
         | Request::PersistSideEffects { room_id, .. }
         | Request::UpdateRoom { room_id, .. }
-        | Request::DeleteBinding { room_id, .. } => room_id,
+        | Request::DeleteBinding { room_id, .. }
+        | Request::DeleteEvent { room_id, .. } => room_id,
         Request::Commit { event, .. } => &event.room_id,
         Request::CreateRoom { room } => &room.id,
         Request::StoreBinding { binding } => &binding.room_id,
@@ -1129,7 +1281,9 @@ fn store_room(request: &Request) -> &RoomId {
         | Request::RunHook { .. }
         | Request::RunObservers { .. }
         | Request::ResolveIdentity { .. }
-        | Request::Route { .. } => panic!("not a store request"),
+        | Request::Route { .. }
+        | Request::GetEvent { .. }
+        | Request::UpdateEvent { .. } => panic!("not a room's store request"),
     }
 }
 

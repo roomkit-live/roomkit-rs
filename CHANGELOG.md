@@ -113,6 +113,42 @@ publishes a release.
   numbers rooms `new_room_1`, `new_room_2`, ...
 - `BindingUpdate::participant_id` and `BindingUpdate::is_empty`.
 - Example `new_conversation`, after the RFC's Appendix B.1 with two senders.
+- Edits and deletes (RFC §10.3, §10.1 steps 8a and 12): every pass, the
+  inbound message's, a response's or a hook's injected event, checks an
+  `EDIT` or a `DELETE` against its target under the room lock
+  (`rules::edits`). The target is a received event of the room, neither
+  deleted nor itself an edit or a delete; a sender's change comes from the
+  target's author (the same participant on their channel, or the same sender
+  id on the same channel, an agent's response being its channel's); an
+  `ADMIN` delete from an OWNER or an AGENT on their channel; a `SYSTEM`
+  change from a SYSTEM channel or a hook, which may make no other. An edit
+  or a delete held anywhere but as an `EDIT`'s or a `DELETE`'s whole content
+  (an edit's new content, a composite's part) is refused. A refused
+  change stores nothing, and the inbound result reports
+  `target_event_not_found`, `identity_required_for_edit`, `not_authorized`
+  or `not_original_author`. An accepted change updates its target in its own
+  commit (the new content and `metadata.edited`, or `metadata.deleted`),
+  reaches no channel that could not see the target, and fires
+  `ON_EVENT_UPDATED` or `ON_EVENT_DELETED` with the target as the commit left
+  it once the lock is released; a blocked one changes and fires nothing.
+- The host's direct calls (RFC §10.3): `RoomKit::update_event`, which
+  replaces the fields an `EventUpdates` names and adds no marker, and
+  `RoomKit::delete_event`, a hard delete that takes the event's thread
+  replies by default, and always the edits and deletes of what it removes,
+  and returns the removed ids; both under the room lock,
+  firing their trigger after it. A missing target is a no-op. The core's
+  `UpdateEvent` and `DeleteEvent`, `MutationError` and `KitError::Mutation`.
+- The store's `get_event`, `update_event`, `delete_event` and
+  `get_event_count` with an `EventFilter`, and `StoreError::EventNotFound`. A
+  hard delete leaves the room's counters as they are: an index is never
+  given again, and `get_event_count` then counts fewer rows than
+  `event_count`.
+- `model::EventUpdates`; the protocol's `GetEvent`, `UpdateEvent` and
+  `DeleteEvent` requests, `Outcome::Event`, `Outcome::Deleted` and
+  `TargetUpdate`; `HookTrigger::OnEventUpdated` and
+  `HookTrigger::OnEventDeleted`; `rules::edits::is_edited`, `is_deleted` and `holds_change`;
+  `RecordingTransport::with_capabilities`.
+- Example `edit_and_delete`, after the RFC's Appendix B.6 and B.7.
 
 ### Changed
 
@@ -123,6 +159,19 @@ publishes a release.
   `RoomKit::process_inbound_for(organization_id, message, room_id)` take the
   RFC's order, the room optional: `None` routes the message.
 - `RoomFilter::matches` takes the room's bindings and participants.
+- An `EDIT` or a `DELETE` message is processed instead of refused
+  `InboundError::Unsupported`.
+- `ConversationStore::commit(event, counters, target)` and `Request::Commit`
+  carry what an accepted edit or delete writes on its target, in the same
+  transaction. `InMemoryStore` refuses an index below the room's
+  `event_count` (it compared with the timeline's length), so a hard-deleted
+  index is never reused.
+- A `BEFORE_BROADCAST` modify keeps an edit's or a delete's target, its
+  `edit_source` and its `delete_type`; it never turns an event into an edit
+  or a delete, nor an edit or a delete into another event, nor slips one
+  into an edit's new content or a composite.
+- `StoreError::IndexTaken` reads "index N is not room R's next index": the
+  commit's index is not the room's next one.
 - `Environment` requires `new_room_id`.
 - A room step 2 creates for a chat message names the chat on its binding;
   a chat message without its chat still names neither.

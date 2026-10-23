@@ -171,6 +171,7 @@ impl RecordPass {
         State::Committing(cx.io.issue(Request::Commit {
             event: self.record.clone(),
             counters,
+            target: None,
         }))
     }
 

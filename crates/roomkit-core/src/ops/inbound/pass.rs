@@ -3,25 +3,28 @@
 //!
 //! Under the room's lock, a pass applies the room's due timer transitions
 //! (gap G-045), checks the room still accepts events, answers a duplicate,
-//! assigns the index, runs the `BEFORE_BROADCAST` chain, checks the source
-//! may write, commits the event with the room's counters, resuming a paused
-//! room, and plans its broadcast. Every path that took the lock releases
-//! it.
+//! assigns the index, checks an edit or a delete against its target (step
+//! 8a), runs the `BEFORE_BROADCAST` chain, checks the source may write,
+//! commits the event with the room's counters, resuming a paused room and
+//! updating an edit's or a delete's target, and plans its broadcast. Every
+//! path that took the lock releases it.
 
 use std::collections::VecDeque;
 use std::mem;
 
+use super::commit::{self, Committing};
+use super::edits::{self, Accepted};
 use super::stamp;
 use crate::model::{
-    ChannelBinding, ChannelId, ErrorRecord, EventStatus, InjectedEvent, Observation, RoomContext,
-    RoomEvent, RoomStatus, RoomUpdates, Task, Timestamp,
+    ChannelBinding, ChannelId, ErrorRecord, InjectedEvent, Observation, RoomContext, RoomEvent,
+    RoomStatus, Task,
 };
 use crate::ops::lifecycle::gate::{self, Gate, Pending};
-use crate::ops::protocol::{EffectId, Outcome, Request, RoomCounters};
+use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::ops::{self, Abort, Cx, FrameworkEvent, Notice, Progress, RefusedOperation};
+use crate::rules::edits::EditRefusal;
 use crate::rules::hook_chain::{ChainDecision, ChainVerdict, HookChain};
 use crate::rules::hook_registry::{HookId, HookTrigger};
-use crate::rules::lifecycle::{self, Transition};
 use crate::rules::permissions::{self, DeliveryPlan, WriteRefusal};
 
 /// Where the event of a pass comes from.
@@ -47,8 +50,12 @@ pub(super) enum PassResult {
         event: Box<RoomEvent>,
         /// Whom its broadcast reaches.
         plan: DeliveryPlan,
-        /// The room's context at the commit, bindings as the hooks left them.
+        /// The room's context at the commit, bindings as the hooks left them
+        /// and an edit's or a delete's target as the commit left it.
         context: Box<RoomContext>,
+        /// The target of an edit or a delete, as the commit left it (RFC
+        /// §10.3), for its mutation trigger.
+        target: Option<Box<RoomEvent>>,
     },
     /// Committed blocked, by a hook or by a source that cannot write.
     Blocked {
@@ -68,6 +75,12 @@ pub(super) enum PassResult {
     Duplicate {
         /// The event the first delivery committed.
         event: Box<RoomEvent>,
+    },
+    /// An edit or a delete refused at step 8a: nothing was stored (RFC
+    /// §10.1 step 8a).
+    EditRefused {
+        /// Why.
+        refusal: EditRefusal,
     },
 }
 
@@ -89,6 +102,8 @@ pub(super) struct CommitPass {
     origin: PassOrigin,
     event: RoomEvent,
     state: State,
+    /// The edit or the delete step 8a accepted, with its target.
+    accepted: Option<Accepted>,
     injected_events: Vec<InjectedEvent>,
     tasks: Vec<Task>,
     observations: Vec<Observation>,
@@ -105,6 +120,11 @@ enum State {
         pending: Box<Pending>,
     },
     CheckingKey {
+        effect: EffectId,
+        context: Box<RoomContext>,
+    },
+    /// Step 8a reads the target of an edit or a delete.
+    ReadingTarget {
         effect: EffectId,
         context: Box<RoomContext>,
     },
@@ -140,6 +160,7 @@ impl State {
             | Self::LoadingContext(effect)
             | Self::ApplyingTimers { effect, .. }
             | Self::CheckingKey { effect, .. }
+            | Self::ReadingTarget { effect, .. }
             | Self::RunningHook { effect, .. }
             | Self::LoadingBindings { effect, .. }
             | Self::Committing { effect, .. }
@@ -156,6 +177,7 @@ impl CommitPass {
             origin,
             event,
             state: State::Start,
+            accepted: None,
             injected_events: Vec::new(),
             tasks: Vec::new(),
             observations: Vec::new(),
@@ -190,6 +212,7 @@ impl CommitPass {
                 Err(error) => self.release(cx, Err(Abort::Store(error))),
             },
             State::CheckingKey { context, .. } => self.on_key(cx, context, outcome),
+            State::ReadingTarget { context, .. } => self.on_target(cx, context, outcome),
             State::RunningHook {
                 hook,
                 rest,
@@ -253,7 +276,7 @@ impl CommitPass {
     }
 
     /// The room's status gate, on the room as its due timers left it, then
-    /// the idempotency check or the hooks (RFC §10.1 steps 6 to 8).
+    /// the idempotency check, step 8a or the hooks (RFC §10.1 steps 6 to 8).
     fn on_gate(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
         let status = context.room.status;
         if !status.accepts_events() {
@@ -270,16 +293,50 @@ impl CommitPass {
                 }),
                 context,
             },
-            _ => self.start_hooks(cx, context),
+            _ => self.check_edit(cx, context),
         }
     }
 
     fn on_key(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>, outcome: Outcome) -> State {
         match outcome.into_idempotent() {
             Ok(Some(event)) => self.release(cx, Ok(PassResult::Duplicate { event })),
-            Ok(None) => self.start_hooks(cx, context),
+            Ok(None) => self.check_edit(cx, context),
             Err(error) => self.release(cx, Err(Abort::Store(error))),
         }
+    }
+
+    /// Step 8a: an edit or a delete reads its target, under the lock; any
+    /// other event goes to the hooks (RFC §10.1 step 8a).
+    fn check_edit(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
+        match edits::target_of(&self.event) {
+            Ok(None) => self.start_hooks(cx, context),
+            Ok(Some(event_id)) => State::ReadingTarget {
+                effect: cx.io.issue(Request::GetEvent { event_id }),
+                context,
+            },
+            Err(refusal) => self.refuse_edit(cx, refusal),
+        }
+    }
+
+    /// The target is read: an accepted edit or delete goes to the hooks, a
+    /// refused one ends the pass with nothing stored (RFC §10.1 step 8a).
+    fn on_target(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>, outcome: Outcome) -> State {
+        let target = match outcome.into_event() {
+            Ok(target) => target.map(|target| *target),
+            Err(error) => return self.release(cx, Err(Abort::Store(error))),
+        };
+        match edits::check(&self.event, &self.origin, target, &context.participants) {
+            Ok(accepted) => {
+                self.accepted = Some(accepted);
+                self.start_hooks(cx, context)
+            }
+            Err(refusal) => self.refuse_edit(cx, refusal),
+        }
+    }
+
+    fn refuse_edit(&mut self, cx: &mut Cx<'_>, refusal: EditRefusal) -> State {
+        edits::log_refusal(&self.event, &self.origin, refusal);
+        self.release(cx, Ok(PassResult::EditRefused { refusal }))
     }
 
     fn start_hooks(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
@@ -355,7 +412,7 @@ impl CommitPass {
         let payload = stamp::keep_identity(&self.event, verdict.payload);
         match verdict.decision {
             ChainDecision::Blocked { by, reason } => {
-                commit_blocked(cx, payload, by, reason, &context)
+                committing(commit::blocked(cx, payload, by, reason, &context))
             }
             ChainDecision::Allowed => State::LoadingBindings {
                 effect: cx.io.issue(Request::LoadBindings {
@@ -383,17 +440,27 @@ impl CommitPass {
         let planned = self.plan(cx, &mut event, &bindings, &context);
         context.bindings = bindings;
         match planned {
-            Ok(plan) => commit_delivered(cx, event, plan, context),
+            Ok(plan) => {
+                let written = match self.accepted.take().map(|accepted| accepted.write(&event)) {
+                    Some(None) => return self.refuse_edit(cx, EditRefusal::TargetNotFound),
+                    Some(Some(written)) => Some(written),
+                    None => None,
+                };
+                committing(commit::delivered(cx, event, plan, context, written))
+            }
             Err(refusal) => {
                 let blocked_by = refusal.blocked_by().to_owned();
-                commit_blocked(cx, event, blocked_by.clone(), Some(blocked_by), &context)
+                let blocked =
+                    commit::blocked(cx, event, blocked_by.clone(), Some(blocked_by), &context);
+                committing(blocked)
             }
         }
     }
 
     /// Whom the event reaches, once its source may write; the event is
     /// committed with the visibility its source binding allows (RFC §7.5
-    /// rules 2 and 4, gap G-009).
+    /// rules 2 and 4, gap G-009), within its target's for an edit or a
+    /// delete (gap G-062).
     fn plan(
         &self,
         cx: &Cx<'_>,
@@ -404,11 +471,12 @@ impl CommitPass {
         // An injected event is the hook's, not a channel's: it takes no source
         // check and reaches its transport targets only (gap G-021).
         if let PassOrigin::Injected { targets } = &self.origin {
-            return Ok(permissions::plan_targets(
-                event,
-                targets.as_deref(),
-                bindings,
-            ));
+            let mut plan = permissions::plan_targets(event, targets.as_deref(), bindings);
+            if let Some(accepted) = &self.accepted {
+                accepted.narrow(event, bindings);
+                accepted.narrow_plan(&mut plan);
+            }
+            return Ok(plan);
         }
         let source = bindings
             .iter()
@@ -418,6 +486,9 @@ impl CommitPass {
             return Err(refusal);
         }
         event.visibility = permissions::effective_visibility(&event.visibility, source, bindings);
+        if let Some(accepted) = &self.accepted {
+            accepted.narrow(event, bindings);
+        }
         Ok(permissions::plan_delivery(
             event,
             bindings,
@@ -460,83 +531,7 @@ impl CommitPass {
     }
 }
 
-/// Commits `event` delivered with the room's counters, its activity moved
-/// (RFC §10.1 step 12). A paused room is resumed in the same commit (gap
-/// G-045), and the delivery set reads it active.
-fn commit_delivered(
-    cx: &mut Cx<'_>,
-    mut event: RoomEvent,
-    plan: DeliveryPlan,
-    mut context: Box<RoomContext>,
-) -> State {
-    event.status = EventStatus::Delivered;
-    let now = cx.env.now();
-    let counters = RoomCounters {
-        event_count: context.room.event_count.saturating_add(1),
-        latest_index: event.index,
-        last_activity_at: Some(now),
-        room: resume(&mut context, now),
-    };
-    let effect = cx.io.issue(Request::Commit {
-        event: event.clone(),
-        counters,
-    });
-    State::Committing {
-        effect,
-        result: PassResult::Delivered {
-            event: Box::new(event),
-            plan,
-            context,
-        },
-    }
-}
-
-/// Commits `event` blocked by `blocked_by` (RFC §10.1 steps 10 and 11): the
-/// record takes its index and counts in the room, without moving its
-/// activity.
-fn commit_blocked(
-    cx: &mut Cx<'_>,
-    mut event: RoomEvent,
-    blocked_by: String,
-    reason: Option<String>,
-    context: &RoomContext,
-) -> State {
-    event.status = EventStatus::Blocked;
-    event.blocked_by = Some(blocked_by.clone());
-    cx.io
-        .notify(Notice::FrameworkEvent(FrameworkEvent::EventBlocked {
-            room_id: event.room_id.clone(),
-            event_id: event.id.clone(),
-            channel_id: event.source.channel_id.clone(),
-            reason: reason.clone(),
-            blocked_by,
-        }));
-    let counters = RoomCounters {
-        event_count: context.room.event_count.saturating_add(1),
-        latest_index: event.index,
-        last_activity_at: context.room.timers.last_activity_at,
-        room: RoomUpdates::default(),
-    };
-    let effect = cx.io.issue(Request::Commit {
-        event: event.clone(),
-        counters,
-    });
-    State::Committing {
-        effect,
-        result: PassResult::Blocked {
-            event: Box::new(event),
-            reason,
-            context: Box::new(context.clone()),
-        },
-    }
-}
-
-/// The write that resumes the room of `context` at `now` when it is paused,
-/// applied to `context` too; empty for a room that is not (gap G-045).
-fn resume(context: &mut RoomContext, now: Timestamp) -> RoomUpdates {
-    if !lifecycle::apply(&mut context.room, Transition::Resume, now) {
-        return RoomUpdates::default();
-    }
-    context.room.updated_at = now;
-    RoomUpdates::lifecycle(&context.room)
+/// The state that waits for a commit to be durable.
+fn committing(Committing { effect, result }: Committing) -> State {
+    State::Committing { effect, result }
 }

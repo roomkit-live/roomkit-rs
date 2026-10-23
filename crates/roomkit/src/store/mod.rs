@@ -9,11 +9,11 @@ mod memory;
 use std::future::Future;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ChannelType, ErrorRecord, Identity, IdentityId, Observation,
-    Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomStatus, RoomUpdates,
-    Task,
+    ChannelBinding, ChannelId, ChannelType, ErrorRecord, EventId, EventStatus, EventUpdates,
+    Identity, IdentityId, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent,
+    RoomId, RoomStatus, RoomUpdates, Task,
 };
-use roomkit_core::ops::RoomCounters;
+use roomkit_core::ops::{RoomCounters, TargetUpdate};
 use roomkit_core::rules::timers;
 use thiserror::Error;
 
@@ -62,9 +62,14 @@ pub enum StoreError {
         /// The identity that uses it.
         identity_id: IdentityId,
     },
-    /// The room's timeline holds the index already (RFC §8.1): another
-    /// writer committed first.
-    #[error("room {room_id} holds index {index} already")]
+    /// No event has the id (RFC §14.1 `update_event`), or the target of
+    /// an edit or a delete is gone by its commit.
+    #[error("event {0} does not exist")]
+    EventNotFound(EventId),
+    /// The commit's index is not the room's next one (RFC §8.1): another
+    /// writer committed first, or the index was given out already, a
+    /// hard-deleted one included, which is never given again.
+    #[error("index {index} is not room {room_id}'s next index")]
     IndexTaken {
         /// The room.
         room_id: RoomId,
@@ -87,6 +92,7 @@ impl StoreError {
             Self::IdentityExists(_) => "IdentityExists",
             Self::IdentityNotFound(_) => "IdentityNotFound",
             Self::AddressLinked { .. } => "AddressLinked",
+            Self::EventNotFound(_) => "EventNotFound",
             Self::IndexTaken { .. } => "IndexTaken",
             Self::Unavailable(_) => "StoreUnavailable",
         };
@@ -134,6 +140,23 @@ impl RoomFilter {
             && self.status.is_none_or(|status| room.status == status)
             && (!self.timers_armed || timers::armed(room))
             && reached
+    }
+}
+
+/// Which of a room's events a count stands for (RFC §14.1 `EventFilter`):
+/// the rows [`ConversationStore::list_events`] serves under the same
+/// criteria.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EventFilter {
+    /// Whether the events stored `BLOCKED` count; a timeline read serves
+    /// what the room received by default.
+    pub include_blocked: bool,
+}
+
+impl EventFilter {
+    /// Whether `event` passes the filter.
+    pub fn matches(&self, event: &RoomEvent) -> bool {
+        self.include_blocked || event.status != EventStatus::Blocked
     }
 }
 
@@ -317,15 +340,63 @@ pub trait ConversationStore: Send + Sync + 'static {
         key: &str,
     ) -> impl Future<Output = Result<Option<RoomEvent>, StoreError>> + Send;
 
-    /// Stores `event`, sets the room's counters and writes the room updates
-    /// they carry (a paused room's resume), as one atomic commit (RFC
-    /// §14.3). Refuses with [`StoreError::IndexTaken`] an index the room's
-    /// timeline holds already (RFC §8.1).
+    /// Stores `event`, sets the room's counters, writes the room updates
+    /// they carry (a paused room's resume) and the update an edit or a
+    /// delete makes to its target, as one atomic commit (RFC §10.1 step 12,
+    /// §14.3). Refuses with [`StoreError::IndexTaken`] an index the room has
+    /// given out already: one its timeline holds, or one a hard delete
+    /// removed, since the counters count both (RFC §8.1, gap G-064). Refuses
+    /// with [`StoreError::EventNotFound`] a target the room no longer holds,
+    /// writing nothing.
     fn commit(
         &self,
         event: RoomEvent,
         counters: RoomCounters,
+        target: Option<TargetUpdate>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The event `event_id`, whichever room holds it, refused ones included
+    /// (RFC §14.1 `get_event`).
+    fn get_event(
+        &self,
+        event_id: &EventId,
+    ) -> impl Future<Output = Result<Option<RoomEvent>, StoreError>> + Send;
+
+    /// Writes the fields `updates` names on the stored event, keeping every
+    /// other one, and returns the event as it now stands (RFC §14.1
+    /// `update_event(event_id, updates)`). An event no room holds is refused
+    /// with [`StoreError::EventNotFound`].
+    fn update_event(
+        &self,
+        event_id: &EventId,
+        updates: EventUpdates,
+    ) -> impl Future<Output = Result<RoomEvent, StoreError>> + Send;
+
+    /// Removes the room's event `event_id` for good, with, when
+    /// `cascade_replies` is set, the events whose thread it roots
+    /// (`parent_event_id`, a reply's replies included), and always the edits
+    /// and deletes of every event removed (gap G-063). Returns the events
+    /// removed, the target first (RFC §14.1 `delete_event(room_id, event_id,
+    /// cascade_replies)`, which names their ids; the records let the kit fire
+    /// `ON_EVENT_DELETED` for each, gap G-064). An event the room does not
+    /// hold removes nothing. The room's counters are left as they are.
+    fn delete_event(
+        &self,
+        room_id: &RoomId,
+        event_id: &EventId,
+        cascade_replies: bool,
+    ) -> impl Future<Output = Result<Vec<RoomEvent>, StoreError>> + Send;
+
+    /// How many of the room's events `filter` admits, or how many rows the
+    /// timeline holds, the refused ones included, with no filter (RFC §14.1
+    /// `get_event_count`). Once events are hard-deleted, the count is lower
+    /// than the room's `event_count`, which counts every index given out
+    /// (gap G-064).
+    fn get_event_count(
+        &self,
+        room_id: &RoomId,
+        filter: Option<EventFilter>,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
 
     /// Stores side effects (RFC §10.1 step 15).
     fn persist_side_effects(

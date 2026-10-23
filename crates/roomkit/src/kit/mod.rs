@@ -4,8 +4,10 @@
 //! - this module: the kit itself and the inbound pipeline;
 //! - `registry`: registering and unregistering channels and hooks;
 //! - `rooms`: the room lifecycle and channel bindings;
+//! - `events`: the host's direct changes to stored events;
 //! - `timers`: applying room timers, on demand or in the background.
 
+mod events;
 mod registry;
 mod rooms;
 mod timers;

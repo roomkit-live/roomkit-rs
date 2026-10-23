@@ -33,6 +33,7 @@
 
 mod config;
 mod environment;
+mod events;
 mod framework_events;
 mod inbound;
 mod io;
@@ -41,6 +42,7 @@ mod protocol;
 
 pub use config::{ChannelDeclaration, ConfigError, DEFAULT_CONTEXT_WINDOW, KitConfig};
 pub use environment::{Environment, SequentialEnvironment};
+pub use events::{DeleteEvent, MutationError, UpdateEvent};
 pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation, TransitionReason};
 pub use inbound::{Inbound, InboundError, InboundResult, InboundTarget, default_inbound_event};
 pub use lifecycle::{
@@ -49,6 +51,7 @@ pub use lifecycle::{
 };
 pub use protocol::{
     Effect, EffectId, Next, Notice, Operation, Outcome, ProtocolError, Request, RoomCounters, Step,
+    TargetUpdate,
 };
 
 use crate::model::{ErrorRecord, RoomId};

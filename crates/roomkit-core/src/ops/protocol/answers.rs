@@ -18,6 +18,8 @@ pub(crate) enum RequestKind {
     LoadContext,
     LoadBindings,
     FindByIdempotencyKey,
+    GetEvent,
+    DeleteEvent,
     Commit,
     PersistSideEffects,
     Store,
@@ -39,12 +41,15 @@ impl Request {
             Self::LoadContext { .. } => RequestKind::LoadContext,
             Self::LoadBindings { .. } => RequestKind::LoadBindings,
             Self::FindByIdempotencyKey { .. } => RequestKind::FindByIdempotencyKey,
+            Self::GetEvent { .. } => RequestKind::GetEvent,
+            Self::DeleteEvent { .. } => RequestKind::DeleteEvent,
             Self::Commit { .. } => RequestKind::Commit,
             Self::PersistSideEffects { .. } => RequestKind::PersistSideEffects,
             Self::CreateRoom { .. }
             | Self::UpdateRoom { .. }
             | Self::StoreBinding { .. }
-            | Self::DeleteBinding { .. } => RequestKind::Store,
+            | Self::DeleteBinding { .. }
+            | Self::UpdateEvent { .. } => RequestKind::Store,
             Self::HandleInbound { .. } => RequestKind::HandleInbound,
             Self::OnEvent { .. } | Self::Deliver { .. } => RequestKind::ChannelCall,
             Self::RunHook { .. } => RequestKind::RunHook,
@@ -66,6 +71,8 @@ impl RequestKind {
             Self::LoadContext => "Context or RoomNotFound",
             Self::LoadBindings => "Bindings",
             Self::FindByIdempotencyKey => "Idempotent",
+            Self::GetEvent => "Event",
+            Self::DeleteEvent => "Deleted",
             Self::Commit => "Committed",
             Self::PersistSideEffects => "Persisted",
             Self::Store => "Stored",
@@ -89,6 +96,8 @@ impl RequestKind {
             | (Self::LoadContext, Outcome::Context(_) | Outcome::RoomNotFound)
             | (Self::LoadBindings, Outcome::Bindings(_))
             | (Self::FindByIdempotencyKey, Outcome::Idempotent(_))
+            | (Self::GetEvent, Outcome::Event(_))
+            | (Self::DeleteEvent, Outcome::Deleted(_))
             | (Self::Commit, Outcome::Committed)
             | (Self::PersistSideEffects, Outcome::Persisted)
             | (Self::Store, Outcome::Stored)
@@ -106,6 +115,8 @@ impl RequestKind {
                 | Self::LoadContext
                 | Self::LoadBindings
                 | Self::FindByIdempotencyKey
+                | Self::GetEvent
+                | Self::DeleteEvent
                 | Self::Commit
                 | Self::PersistSideEffects
                 | Self::Store
@@ -199,6 +210,22 @@ impl Outcome {
         }
     }
 
+    /// The event read, `None` when the store holds none with the id.
+    pub(crate) fn into_event(self) -> Result<Option<Box<RoomEvent>>, ErrorRecord> {
+        match self {
+            Self::Event(event) => Ok(event),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    /// The events a delete removed, the target first.
+    pub(crate) fn into_deleted(self) -> Result<Vec<RoomEvent>, ErrorRecord> {
+        match self {
+            Self::Deleted(events) => Ok(events),
+            other => Err(other.into_failure()),
+        }
+    }
+
     pub(crate) fn into_committed(self) -> Result<(), ErrorRecord> {
         match self {
             Self::Committed => Ok(()),
@@ -286,6 +313,8 @@ impl Outcome {
             Self::RoomNotFound => "RoomNotFound",
             Self::Bindings(_) => "Bindings",
             Self::Idempotent(_) => "Idempotent",
+            Self::Event(_) => "Event",
+            Self::Deleted(_) => "Deleted",
             Self::Committed => "Committed",
             Self::Persisted => "Persisted",
             Self::Stored => "Stored",
@@ -337,6 +366,35 @@ mod tests {
                     .is_err()
             ),
             (Ok(()), true)
+        );
+    }
+
+    #[test]
+    fn an_event_or_none_answers_an_event_read_only() {
+        assert_eq!(
+            (
+                RequestKind::GetEvent.check(EffectId::first(), &Outcome::Event(None)),
+                RequestKind::GetEvent
+                    .check(EffectId::first(), &Outcome::Stored)
+                    .is_err()
+            ),
+            (Ok(()), true)
+        );
+    }
+
+    #[test]
+    fn the_events_removed_answer_a_delete_only() {
+        assert_eq!(
+            (
+                RequestKind::DeleteEvent.check(EffectId::first(), &Outcome::Deleted(Vec::new())),
+                RequestKind::DeleteEvent
+                    .check(EffectId::first(), &Outcome::Stored)
+                    .is_err(),
+                RequestKind::Store
+                    .check(EffectId::first(), &Outcome::Deleted(Vec::new()))
+                    .is_err()
+            ),
+            (Ok(()), true, true)
         );
     }
 

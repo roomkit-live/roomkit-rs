@@ -85,6 +85,9 @@ async fn execute<'kit, S: ConversationStore>(
             request @ (Request::LoadContext { .. }
             | Request::LoadBindings { .. }
             | Request::FindByIdempotencyKey { .. }
+            | Request::GetEvent { .. }
+            | Request::UpdateEvent { .. }
+            | Request::DeleteEvent { .. }
             | Request::Commit { .. }
             | Request::PersistSideEffects { .. }
             | Request::CreateRoom { .. }
@@ -205,6 +208,9 @@ async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: Request) -> 
         Request::LoadContext { .. }
         | Request::LoadBindings { .. }
         | Request::FindByIdempotencyKey { .. }
+        | Request::GetEvent { .. }
+        | Request::UpdateEvent { .. }
+        | Request::DeleteEvent { .. }
         | Request::Commit { .. }
         | Request::PersistSideEffects { .. }
         | Request::CreateRoom { .. }
@@ -246,10 +252,30 @@ async fn store_call<S: ConversationStore>(store: &S, request: Request) -> Outcom
             .find_by_idempotency_key(&room_id, &channel_id, &key)
             .await
             .map(|event| Outcome::Idempotent(event.map(Box::new))),
-        Request::Commit { event, counters } => store
-            .commit(event, counters)
+        Request::GetEvent { event_id } => store
+            .get_event(&event_id)
+            .await
+            .map(|event| Outcome::Event(event.map(Box::new))),
+        Request::Commit {
+            event,
+            counters,
+            target,
+        } => store
+            .commit(event, counters, target)
             .await
             .map(|()| Outcome::Committed),
+        Request::UpdateEvent { event_id, updates } => store
+            .update_event(&event_id, updates)
+            .await
+            .map(|_| Outcome::Stored),
+        Request::DeleteEvent {
+            room_id,
+            event_id,
+            cascade_replies,
+        } => store
+            .delete_event(&room_id, &event_id, cascade_replies)
+            .await
+            .map(Outcome::Deleted),
         Request::PersistSideEffects {
             room_id,
             tasks,

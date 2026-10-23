@@ -1,8 +1,10 @@
 //! Partial updates of the records a store keeps: a room (RFC §14.1
-//! `update_room(room_id, updates)`) and a binding (RFC §7.5 rule 6).
+//! `update_room(room_id, updates)`), an event (RFC §14.1
+//! `update_event(event_id, updates)`) and a binding (RFC §7.5 rule 6).
 
 use super::{
-    Access, ChannelBinding, Metadata, ParticipantId, Room, RoomStatus, Timestamp, Visibility,
+    Access, ChannelBinding, EventContent, EventSource, Metadata, ParticipantId, Room, RoomEvent,
+    RoomStatus, Timestamp, Visibility,
 };
 
 /// A partial update of a room (RFC §14.1 `update_room(room_id, updates)`):
@@ -75,6 +77,46 @@ impl RoomUpdates {
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
+    }
+}
+
+/// A partial update of a stored event (RFC §14.1 `update_event(event_id,
+/// updates)`): each field it names replaces the stored one whole, every
+/// other one is kept as stored.
+///
+/// It writes what an event says and who sent it, never which event it is,
+/// where it stands in the timeline or what became of it: its id, room,
+/// type, index, status and visibility are the commit's (RFC §4.3). An
+/// accepted edit writes its target's content and metadata with it, and a
+/// delete its metadata (RFC §10.3); a host's direct `update_event` writes
+/// what it names (RFC §10.3 "Direct mutation").
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EventUpdates {
+    /// The event's new content.
+    pub content: Option<EventContent>,
+    /// The event's new source.
+    pub source: Option<EventSource>,
+    /// The event's new metadata, replacing the stored map whole.
+    pub metadata: Option<Metadata>,
+}
+
+impl EventUpdates {
+    /// Whether the update writes nothing.
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Writes the update on `event`, as a store applies it.
+    pub fn apply(&self, event: &mut RoomEvent) {
+        if let Some(content) = &self.content {
+            event.content.clone_from(content);
+        }
+        if let Some(source) = &self.source {
+            event.source.clone_from(source);
+        }
+        if let Some(metadata) = &self.metadata {
+            event.metadata.clone_from(metadata);
+        }
     }
 }
 
@@ -162,7 +204,10 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::model::{ChannelCategory, ChannelDirection, ChannelId, ChannelType, RoomId};
+    use crate::model::{
+        ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventDirection, EventId,
+        EventType, RoomId,
+    };
 
     fn room() -> Room {
         let mut room = Room::new(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH);
@@ -240,6 +285,62 @@ mod tests {
         let mut stored = room();
         RoomUpdates::lifecycle(&changed).apply(&mut stored);
         assert_eq!(stored, changed);
+    }
+
+    fn event() -> RoomEvent {
+        let mut event = RoomEvent::new(
+            EventId::new("evt_3").unwrap(),
+            RoomId::new("room_1").unwrap(),
+            EventType::Message,
+            EventSource::new(
+                ChannelId::new("wa").unwrap(),
+                ChannelType::Whatsapp,
+                EventDirection::Inbound,
+            ),
+            EventContent::text("I need 5000$"),
+            Timestamp::UNIX_EPOCH,
+        );
+        event.metadata.insert("crm".to_owned(), json!("c_1"));
+        event
+    }
+
+    #[test]
+    fn an_empty_event_update_writes_nothing() {
+        let mut stored = event();
+        EventUpdates::default().apply(&mut stored);
+        assert_eq!(stored, event());
+    }
+
+    #[test]
+    fn an_event_update_replaces_the_metadata_whole() {
+        let mut stored = event();
+        let update = EventUpdates {
+            metadata: Some([("edited".to_owned(), json!(true))].into_iter().collect()),
+            ..EventUpdates::default()
+        };
+        update.apply(&mut stored);
+        assert_eq!(
+            serde_json::Value::Object(stored.metadata),
+            json!({ "edited": true })
+        );
+    }
+
+    #[test]
+    fn an_event_update_keeps_what_it_does_not_name() {
+        let mut stored = event();
+        let update = EventUpdates {
+            content: Some(EventContent::text("I need 50000$")),
+            ..EventUpdates::default()
+        };
+        update.apply(&mut stored);
+        assert_eq!(
+            (stored.content, stored.metadata, stored.source),
+            (
+                EventContent::text("I need 50000$"),
+                event().metadata,
+                event().source
+            )
+        );
     }
 
     #[test]
