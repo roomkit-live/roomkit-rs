@@ -238,9 +238,12 @@ impl<S: ConversationStore> RoomKit<S> {
     /// [`set_process_timeout`](Self::set_process_timeout)).
     ///
     /// Dropped before it returns, by a `tokio::time::timeout` for instance,
-    /// the call goes on once decided: its event is delivered and its
-    /// cascade runs. Dropped before its decision, it stops with nothing of
-    /// its event written, once a room it created is attached (gap G-076).
+    /// the call goes on, detached. Decided, its event is delivered and its
+    /// cascade runs. Before its decision it expires as one past its
+    /// `process_timeout`, nothing more of its event written, and every event
+    /// it committed is delivered all the same, its own when its commit was
+    /// in flight, a hook's; a room it created is attached first (gap
+    /// G-076).
     ///
     /// # Errors
     ///

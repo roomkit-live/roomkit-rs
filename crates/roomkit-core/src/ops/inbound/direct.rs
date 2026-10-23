@@ -23,7 +23,8 @@ use super::arrival::Arrived;
 use super::deadline::Stopped;
 use super::instructions::{self, Admission};
 use super::{InboundError, InboundResult, Machine, Stage, stamp};
-use crate::model::{DirectEvent, RoomContext, RoomEvent, RoomId, Timestamp};
+use crate::model::{DirectEvent, RoomContext, RoomEvent, RoomId};
+use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::ops::{Cx, Progress};
 use crate::rules::organizations;
@@ -75,12 +76,12 @@ impl DirectRead {
     }
 
     /// Reads the room, within the call's `deadline`.
-    pub(super) fn start(&mut self, cx: &mut Cx<'_>, deadline: Option<Timestamp>) {
+    pub(super) fn start(&mut self, cx: &mut Cx<'_>, bound: Bound) {
         let request = Request::LoadContext {
             room_id: self.event.room_id.clone(),
             recent_events: cx.config.context_window,
         };
-        self.effect = Some(cx.io.issue_within(request, deadline));
+        self.effect = Some(cx.io.issue_within(request, bound));
     }
 
     /// Takes the driver's answer to the read: the room as the off-lock check
@@ -180,7 +181,7 @@ impl Machine {
             return self.start_trigger(event, None);
         }
         let mut read = Box::new(DirectRead::new(event, call));
-        read.start(cx, self.deadline);
+        read.start(cx, self.bound);
         self.stage = Stage::Reading(read);
     }
 

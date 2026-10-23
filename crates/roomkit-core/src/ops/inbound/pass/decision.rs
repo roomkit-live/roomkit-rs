@@ -50,7 +50,7 @@ impl CommitPass {
         context: Box<RoomContext>,
     ) -> State {
         let locked = Some(&self.event.room_id);
-        if let Some(effect) = run.ask_next(cx, &self.event, &context, self.deadline, locked) {
+        if let Some(effect) = run.ask_next(cx, &self.event, &context, self.bound, locked) {
             return State::RunningHook {
                 effect,
                 run,

@@ -530,12 +530,17 @@ publishes a release.
   `KitError::NoEvent`; both were `Stalled`.
 - A caller that stops waiting for `process_inbound` or `send_event`, its
   future dropped (a client gone, a `tokio::time::timeout` that expired), no
-  longer aborts the call once it is decided: the call goes on detached,
-  delivers its event and its cascade, runs their hooks and logs its end.
-  Before the decision it stops as before, nothing of its event written, but
-  only once a commit in flight is answered and a room its step 2 created is
-  attached (gap G-076). `Operation::completing` says while an operation
-  completes such a write.
+  longer aborts the call: the call goes on detached, and is never dropped
+  once anything it ran is committed. Decided, it delivers its event and its
+  cascade, runs their hooks and logs its end. Before its decision it
+  expires as one past its `process_timeout` does, without the
+  `process_timeout` event: its requests within the call's bound are given
+  up on, nothing more of its event is written, what it holds is let go,
+  and every event it committed is delivered, its own when its commit was in
+  flight, an entry's it adopted; a room its step 2 created is attached
+  first (gap G-076). The runtime aborted the call wherever it stood, which
+  left an event stored and never delivered. `Operation::expire` expires an
+  operation whose caller is gone.
 - The kit tracks the work it runs in the background: the observer hooks it
   runs after the fact and every inbound call, those that go on detached
   included; they were bare tokio tasks. `RoomKit::idle()` waits until none

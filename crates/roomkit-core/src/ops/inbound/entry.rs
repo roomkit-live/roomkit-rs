@@ -6,6 +6,7 @@ use super::arrival::{self, Admitted, Arrival};
 use super::deadline::{self, Stopped};
 use super::{Call, InboundTarget, Machine, Stage};
 use crate::model::InboundMessage;
+use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome};
 use crate::ops::{Cx, Progress};
 
@@ -16,7 +17,7 @@ impl Machine {
         let Stage::Start(call) = std::mem::replace(&mut self.stage, Stage::Done) else {
             return;
         };
-        self.deadline = deadline::of_call(cx.config, cx.env.now());
+        self.bound = Bound::Call(deadline::of_call(cx.config, cx.env.now()));
         match *call {
             Call::Message {
                 target,
@@ -55,7 +56,7 @@ impl Machine {
             organization_id,
             channel,
             message,
-            self.deadline,
+            self.bound,
         ));
         arrival.start(cx);
         self.stage = Stage::Arriving(arrival);

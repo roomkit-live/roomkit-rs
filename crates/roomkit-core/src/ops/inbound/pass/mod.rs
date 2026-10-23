@@ -37,8 +37,8 @@ use super::direct::DirectCall;
 use super::edits::Accepted;
 use crate::model::{
     ChannelId, ErrorRecord, InjectedEvent, Observation, RoomContext, RoomEvent, RoomStatus, Task,
-    Timestamp,
 };
+use crate::ops::io::Bound;
 use crate::ops::lifecycle::gate::Pending;
 use crate::ops::protocol::{EffectId, EntryId, Outcome, Request};
 use crate::ops::{self, Abort, Cx, Progress};
@@ -147,7 +147,7 @@ pub(super) struct CommitPass {
     accepted: Option<Accepted>,
     /// The call's deadline, which the trigger's pass carries up to its
     /// commit (RFC §13.6).
-    deadline: Option<Timestamp>,
+    bound: Bound,
     /// The chain the trigger's off-lock check left, which step 9 goes on
     /// with (RFC §9.5.1).
     checked: Option<Box<HookChain<RoomEvent>>>,
@@ -252,7 +252,7 @@ impl CommitPass {
             event,
             state: State::Start,
             accepted: None,
-            deadline: None,
+            bound: Bound::Unbounded,
             checked: None,
             direct: None,
             injected_events: Vec::new(),
@@ -268,11 +268,11 @@ impl CommitPass {
     /// left, if it ran one (RFC §9.5.1).
     pub(super) fn trigger(
         event: RoomEvent,
-        deadline: Option<Timestamp>,
+        bound: Bound,
         checked: Option<HookChain<RoomEvent>>,
     ) -> Self {
         Self {
-            deadline,
+            bound,
             checked: checked.map(Box::new),
             ..Self::new(PassOrigin::Trigger, event)
         }
@@ -294,7 +294,7 @@ impl CommitPass {
         if matches!(self.state, State::Start) {
             let room_id = self.event.room_id.clone();
             let request = Request::AcquireLock { room_id };
-            self.state = State::Locking(cx.io.issue_within(request, self.deadline));
+            self.state = State::Locking(cx.io.issue_within(request, self.bound));
         }
     }
 
@@ -302,7 +302,7 @@ impl CommitPass {
     /// deadline: what precedes the commit is bounded by it (RFC §13.6).
     fn issue(&self, cx: &mut Cx<'_>, request: Request) -> EffectId {
         let locked = Some(self.event.room_id.clone());
-        cx.io.issue_under(request, self.deadline, locked)
+        cx.io.issue_under(request, self.bound, locked)
     }
 
     /// Takes the driver's answer to the pass's outstanding effect.

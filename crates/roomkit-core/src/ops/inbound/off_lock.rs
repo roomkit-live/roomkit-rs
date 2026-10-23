@@ -28,7 +28,8 @@ use super::arrival::Arrived;
 use super::chain::HookRun;
 use super::deadline::Stopped;
 use super::{InboundError, Machine, Stage, report};
-use crate::model::{RoomContext, RoomEvent, RoomId, Timestamp};
+use crate::model::{RoomContext, RoomEvent, RoomId};
+use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::ops::{Cx, Progress};
 use crate::rules::hook_chain::HookChain;
@@ -41,7 +42,7 @@ pub(super) struct OffLockCheck {
     /// The room's context as step 2 left it, which the hooks read (RFC
     /// §9.5.1).
     context: Box<RoomContext>,
-    deadline: Option<Timestamp>,
+    bound: Bound,
     /// Whether the check holds the room's admission ticket.
     ticketed: bool,
     state: State,
@@ -71,12 +72,12 @@ type Checking = Progress<Result<Checked, Stopped>>;
 impl OffLockCheck {
     /// The check of the event that `arrived`, running `hooks`, the
     /// off-lock hooks that fire for it, within the call's `deadline`.
-    pub(super) fn new(hooks: Vec<HookId>, arrived: Arrived, deadline: Option<Timestamp>) -> Self {
+    pub(super) fn new(hooks: Vec<HookId>, arrived: Arrived, bound: Bound) -> Self {
         let run = Box::new(HookRun::of(hooks, &arrived.event));
         Self {
             event: arrived.event,
             context: arrived.context,
-            deadline,
+            bound,
             ticketed: false,
             state: State::Start(run),
         }
@@ -164,7 +165,7 @@ impl OffLockCheck {
     fn next_hook(&mut self, cx: &mut Cx<'_>, mut run: Box<HookRun>) -> Checking {
         let room_id = self.event.room_id.clone();
         let asked = cx.in_admission_order(&room_id, |cx| {
-            run.ask_next(cx, &self.event, &self.context, self.deadline, None)
+            run.ask_next(cx, &self.event, &self.context, self.bound, None)
         });
         if let Some(effect) = asked {
             self.state = State::Running { effect, run };
@@ -173,7 +174,7 @@ impl OffLockCheck {
         let room_id = self.event.room_id.clone();
         let effect = cx
             .io
-            .issue_within(Request::AwaitTicket { room_id }, self.deadline);
+            .issue_within(Request::AwaitTicket { room_id }, self.bound);
         self.state = State::Awaiting { effect, run };
         Progress::Waiting
     }
@@ -202,7 +203,7 @@ impl Machine {
         if hooks.is_empty() {
             return self.start_trigger(arrived.event, None);
         }
-        let mut check = Box::new(OffLockCheck::new(hooks, arrived, self.deadline));
+        let mut check = Box::new(OffLockCheck::new(hooks, arrived, self.bound));
         check.start(cx);
         self.stage = Stage::Checking(check);
     }

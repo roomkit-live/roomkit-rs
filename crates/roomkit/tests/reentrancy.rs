@@ -923,33 +923,73 @@ async fn a_parse_that_calls_into_its_room_for_every_message_is_bounded() {
     );
 }
 
-/// A call dropped while an entry its hook made works under its lock leaves
-/// the room free: the lock and the lane are let go, and the next call goes
-/// through.
+/// RFC §13.6, gap G-076: a call dropped while its hook works under the
+/// lock, once the event the hook sent into the room is committed and its
+/// delivery under way, expires: the hook is given up on, the lock let go,
+/// nothing more of the call's event written, and the hook's event is
+/// delivered all the same. The next call goes through.
 #[tokio::test]
-async fn a_call_dropped_while_its_entry_works_leaves_the_room_free() {
+async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
     let (kit, _) = room().await;
+    let (delivering, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let delivered = Arc::new(Mutex::new(Vec::new()));
+    let (started, released, kept) = (
+        Arc::clone(&delivering),
+        Arc::clone(&go),
+        Arc::clone(&delivered),
+    );
+    let slow = Scripted::transport(
+        "slow",
+        Arc::new(move |event| {
+            let (started, released, kept) = (
+                Arc::clone(&started),
+                Arc::clone(&released),
+                Arc::clone(&kept),
+            );
+            Box::pin(async move {
+                let text = text_of(&event.content);
+                if text == "Heads up" {
+                    started.notify_one();
+                    released.notified().await;
+                }
+                kept.lock().unwrap().push(text);
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(slow).unwrap();
+    kit.attach(&room_id(), &channel("slow")).await.unwrap();
     let hook_kit = kit.clone();
     kit.hook(before_broadcast("stuck", true), move |event, _| {
         let kit = hook_kit.clone();
         async move {
             if text_of(&event.content) == "first" {
                 kit.send_event(&room_id(), from_console("Heads up")).await?;
-                tokio::time::sleep(Duration::from_secs(3600)).await;
+                std::future::pending::<()>().await;
             }
             Ok(HookResult::allow())
         }
     })
     .unwrap();
-    let dropped = tokio::time::timeout(
-        Duration::from_millis(50),
-        kit.process_inbound(message("first"), Some(&room_id())),
-    )
-    .await;
+    let room = room_id();
+    let call = kit.process_inbound(message("first"), Some(&room));
+    tokio::select! {
+        result = call => panic!("the call ended before its hook's event: {result:?}"),
+        () = delivering.notified() => {}
+    }
+    go.notify_one();
+    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    let delivered = delivered.lock().unwrap().clone();
     let next = send(&kit, "second").await.unwrap();
     assert_eq!(
-        (dropped.is_err(), next.event.map(|event| event.status)),
-        (true, Some(EventStatus::Delivered))
+        (
+            delivered,
+            next.event.map(|event| (event.index, event.status))
+        ),
+        (
+            vec!["Heads up".to_owned()],
+            Some((1, EventStatus::Delivered))
+        )
     );
 }
 

@@ -110,6 +110,9 @@ pub(super) struct Call {
 enum Mail {
     /// The answer to one of its effects.
     Answer(EffectId, Outcome),
+    /// Its operation answered effects of its own, given up on: it is
+    /// polled again to take them in.
+    Expired,
     /// A call into its room, made within its effect `origin`, for it to
     /// adopt.
     Call {
@@ -131,6 +134,8 @@ pub(super) struct RunState {
     done: bool,
     /// Its effects not answered yet.
     outstanding: BTreeSet<EffectId>,
+    /// The effects it gave up on, expired: never answered.
+    given_up: BTreeSet<EffectId>,
     /// The entries it adopted, until they are settled.
     pub(super) adopted: Vec<(EntryId, Call)>,
     /// The call an arrival is, until its caller is answered.
@@ -154,6 +159,7 @@ impl RunState {
             decided: false,
             done: false,
             outstanding: BTreeSet::new(),
+            given_up: BTreeSet::new(),
             adopted: Vec::new(),
             serves,
             locks: BTreeSet::new(),
@@ -282,6 +288,8 @@ impl Sim {
                     self.state_mut(run).outstanding.remove(&effect);
                     operation.complete(effect, outcome).unwrap();
                 }
+                // Its answers are its operation's own: the poll takes them.
+                Mail::Expired => {}
                 Mail::Call {
                     entry,
                     origin,
@@ -290,7 +298,6 @@ impl Sim {
             }
         }
         let step = operation.poll(&mut self.env);
-        let completing = operation.completing();
         self.journal.extend(step.notices.iter().map(journal_line));
         self.notices.extend(step.notices);
         for settled in step.settled {
@@ -313,9 +320,12 @@ impl Sim {
             }
             Next::Effects(effects) => {
                 for effect in effects {
-                    if completing {
-                        let label = self.label(&effect.request);
-                        self.while_completing.push(label);
+                    if run == ROOT && self.caller_leaves_before(&effect.request) {
+                        let given_up = operation.expire();
+                        self.drop_given_up(run, &given_up);
+                    }
+                    if self.state(run).given_up.contains(&effect.id) {
+                        continue;
                     }
                     self.state_mut(run).outstanding.insert(effect.id);
                     self.execute_effect(effect);
@@ -325,11 +335,46 @@ impl Sim {
         None
     }
 
-    /// Posts `outcome`, the answer to `effect`, to the run `run`.
+    /// Posts `outcome`, the answer to `effect`, to the run `run`, unless
+    /// the run gave the effect up.
     pub(super) fn post(&mut self, run: RunId, effect: EffectId, outcome: Outcome) {
-        self.state_mut(run)
-            .mail
-            .push_back(Mail::Answer(effect, outcome));
+        let state = self.state_mut(run);
+        if !state.given_up.contains(&effect) {
+            state.mail.push_back(Mail::Answer(effect, outcome));
+        }
+    }
+
+    /// Whether the call's caller stops waiting before `request` is
+    /// executed: once, before the first request whose label starts with
+    /// `leaves_before`.
+    fn caller_leaves_before(&mut self, request: &Request) -> bool {
+        let leaves = self
+            .leaves_before
+            .is_some_and(|start| self.label(request).starts_with(start));
+        if leaves {
+            self.leaves_before = None;
+            self.note("caller gone".to_owned());
+        }
+        leaves
+    }
+
+    /// Drops what the run `run` gave up on: its waits, the answers posted
+    /// to it, and any answer to come. It is polled again, its operation
+    /// having answered them itself.
+    fn drop_given_up(&mut self, run: RunId, given_up: &[EffectId]) {
+        self.holders
+            .waits
+            .retain(|wait| wait.run != run || !given_up.contains(&wait.effect));
+        let state = self.state_mut(run);
+        state.given_up.extend(given_up.iter().copied());
+        state
+            .outstanding
+            .retain(|effect| !given_up.contains(effect));
+        state.mail.retain(|mail| match mail {
+            Mail::Answer(effect, _) => !given_up.contains(effect),
+            Mail::Expired | Mail::Call { .. } => true,
+        });
+        state.mail.push_back(Mail::Expired);
     }
 
     /// Hands `entry`, made by `call`, to the run its caller's context names

@@ -95,8 +95,9 @@ use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, Pro
 use super::{Cx, Environment, KitConfig};
 use crate::model::{
     ChannelId, DirectEvent, InboundMessage, Metadata, Observation, RoomContext, RoomId, Task,
-    Timestamp, Visibility,
+    Visibility,
 };
+use crate::ops::io::Bound;
 use crate::rules::chain_depth::ReentryBudget;
 
 /// The inbound pipeline for one call (RFC §10.1, §10.5).
@@ -203,7 +204,7 @@ impl Inbound {
                 channel_id: None,
                 direct: None,
                 answers_within: None,
-                deadline: None,
+                bound: Bound::Unbounded,
                 ticket: None,
                 stage: Stage::Start(Box::new(call)),
                 passes: VecDeque::new(),
@@ -253,10 +254,14 @@ impl Operation for Inbound {
         self.machine.adopt(&self.io, entry, origin)
     }
 
-    /// A commit not answered yet, or the room step 2 creates for the call,
-    /// until its channel is attached (RFC §10.1 step 2).
-    fn completing(&self) -> bool {
-        self.io.commits() || self.machine.creates_its_room()
+    /// Expires the call when it is not decided yet: every request within
+    /// its bound is given up on (`Io::expire`), and the call ends as one
+    /// past its deadline, with no `process_timeout` event.
+    fn expire(&mut self) -> Vec<EffectId> {
+        if self.io.has_decided() {
+            return Vec::new();
+        }
+        self.io.expire()
     }
 }
 
@@ -300,9 +305,9 @@ struct Machine {
     /// visibility (RFC §5.12, gap G-073); `None` for anywhere, and for a
     /// direct injection.
     answers_within: Option<Visibility>,
-    /// The call's deadline, set at its start from `process_timeout` (RFC
-    /// §13.6).
-    deadline: Option<Timestamp>,
+    /// The call's bound, its deadline set at its start from
+    /// `process_timeout` (RFC §13.6).
+    bound: Bound,
     /// The room whose admission ticket the call holds, from its off-lock
     /// check to its trigger's pass's end (RFC §9.5.1).
     ticket: Option<RoomId>,
@@ -368,12 +373,6 @@ enum Stage {
 }
 
 impl Machine {
-    /// Whether the call's step 2 is creating its room: from the creation's
-    /// request to the channel's attach (RFC §10.1 step 2).
-    fn creates_its_room(&self) -> bool {
-        matches!(&self.stage, Stage::Arriving(arrival) if arrival.creates_its_room())
-    }
-
     /// Takes every answer in, starts the entries adopted since, and runs
     /// the queues, until nothing is left to take in: a section nested under
     /// a lock is answered at once, without the driver.

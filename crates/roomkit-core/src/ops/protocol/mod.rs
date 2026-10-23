@@ -539,18 +539,22 @@ pub trait Operation {
         Err(Box::new(entry))
     }
 
-    /// Whether the operation is completing a write that a stop would leave
-    /// half done: a commit not answered yet, or a room step 2 created, until
-    /// its channel is attached (RFC §10.1 step 2, §13.6, gap G-068).
+    /// The call's caller stopped waiting before its decision
+    /// ([`Step::decided`]): the call expires as one past its
+    /// `process_timeout` does (RFC §13.6, gap G-076). Nothing more of its
+    /// trigger is written, what it holds is let go, its decision is
+    /// published, and every event it committed, its trigger's when the
+    /// commit was answered, an adopted entry's, is delivered. A commit not
+    /// answered yet, and what completes a room step 2 created, run to their
+    /// end first: they are never within the call's bound.
     ///
-    /// A driver may stop an operation its caller no longer waits for, as
-    /// long as the call is not decided ([`Step::decided`]): a decided call
-    /// delivers what it committed whoever waits. It lets the operation run
-    /// while this holds, and stops it once it does not, so that a commit
-    /// is either answered or never made, and a room created is never left
-    /// without the channel it was created for.
-    fn completing(&self) -> bool {
-        false
+    /// Returns the effects the operation gives up on, requests within the
+    /// call's bound it was waiting for: the driver drops them and never
+    /// answers them. The operation goes on to its end through `poll`, the
+    /// driver answering its other effects as before. An operation decided
+    /// already, or that has no caller to lose, gives up on nothing.
+    fn expire(&mut self) -> Vec<EffectId> {
+        Vec::new()
     }
 }
 

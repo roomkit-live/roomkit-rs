@@ -52,7 +52,7 @@ impl Machine {
         event: RoomEvent,
         checked: Option<HookChain<RoomEvent>>,
     ) {
-        let pass = CommitPass::trigger(event, self.deadline, checked).checking(self.direct.clone());
+        let pass = CommitPass::trigger(event, self.bound, checked).checking(self.direct.clone());
         self.passes
             .push_front(Job::Pass(Box::new(pass), PassOrigin::Trigger));
         self.stage = Stage::Cascade;

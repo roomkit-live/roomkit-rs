@@ -27,7 +27,8 @@ use super::deadline::Stopped;
 use super::instructions::{self, Admission};
 use super::named_room::{Mode, Named, NamedRoom};
 use super::{InboundError, InboundResult, result, stamp};
-use crate::model::{EventId, InboundMessage, RoomContext, RoomEvent, RoomId, Timestamp};
+use crate::model::{EventId, InboundMessage, RoomContext, RoomEvent, RoomId};
+use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
 use crate::rules::chain_depth::ReentryBudget;
@@ -132,7 +133,7 @@ pub(super) struct Arrived {
 pub(super) struct Arrival {
     target: InboundTarget,
     /// The call's deadline (RFC §13.6).
-    deadline: Option<Timestamp>,
+    bound: Bound,
     organization_id: Option<String>,
     message: Box<InboundMessage>,
     channel: Box<ChannelDeclaration>,
@@ -179,7 +180,7 @@ impl Arrival {
         organization_id: Option<String>,
         channel: ChannelDeclaration,
         message: InboundMessage,
-        deadline: Option<Timestamp>,
+        bound: Bound,
     ) -> Self {
         let address = routing::routing_address(
             channel.addressing(),
@@ -189,7 +190,7 @@ impl Arrival {
         );
         Self {
             target,
-            deadline,
+            bound,
             organization_id,
             message: Box::new(message),
             channel: Box::new(channel),
@@ -217,7 +218,7 @@ impl Arrival {
             organization_id,
             channel,
             message,
-            None,
+            Bound::Unbounded,
         )
     }
 
@@ -225,12 +226,6 @@ impl Arrival {
     /// in, `None` while the message is routed.
     pub(super) fn room(&self) -> Option<&RoomId> {
         self.room.as_ref()
-    }
-
-    /// Whether step 2 is creating the room: from the creation's request to
-    /// the channel's attach (RFC §10.1 step 2).
-    pub(super) fn creates_its_room(&self) -> bool {
-        matches!(&self.state, State::Naming(step) if step.creates_the_room())
     }
 
     /// Whether the arrival waits for `effect`.
@@ -309,7 +304,7 @@ impl Arrival {
             address,
             organization_id: self.organization_id.clone(),
         };
-        self.state = State::Resolving(cx.io.issue_within(request, self.deadline));
+        self.state = State::Resolving(cx.io.issue_within(request, self.bound));
     }
 
     /// The identity is read; a store that fails it fails the message, with
@@ -341,7 +336,7 @@ impl Arrival {
         let request = Request::Route {
             query: Box::new(query),
         };
-        self.state = State::Routing(cx.io.issue_within(request, self.deadline));
+        self.state = State::Routing(cx.io.issue_within(request, self.bound));
     }
 
     /// The router answered: its room, or a new one when it found none (RFC
@@ -371,7 +366,7 @@ impl Arrival {
             self.organization_id.clone(),
             self.channel.clone(),
             self.sender.clone(),
-            self.deadline,
+            self.bound,
         ));
         step.start(cx);
         self.state = State::Naming(step);
@@ -418,9 +413,9 @@ impl Arrival {
             context: self.receiver_context((*context).clone()),
             id: id.clone(),
         };
-        let deadline = self.deadline;
+        let bound = self.bound;
         let effect =
-            cx.in_admission_order(&context.room.id, |cx| cx.io.issue_within(request, deadline));
+            cx.in_admission_order(&context.room.id, |cx| cx.io.issue_within(request, bound));
         self.state = State::Parsing {
             effect,
             id,

@@ -52,6 +52,23 @@ impl RoomLocks {
         Some(effect)
     }
 
+    /// Withdraws `effect`, an acquire held back here, from the queue it
+    /// waits in: it never goes out. Whether it was held back.
+    pub(super) fn withdraw(&mut self, effect: EffectId) -> bool {
+        let Some((room_id, Step::Acquire)) = self.requests.get(&effect).cloned() else {
+            return false;
+        };
+        let Some(held_back) = self.rooms.get_mut(&room_id) else {
+            return false;
+        };
+        let Some(at) = held_back.iter().position(|held| held.id == effect) else {
+            return false;
+        };
+        held_back.remove(at);
+        self.requests.remove(&effect);
+        true
+    }
+
     /// The driver answered `effect` with `outcome`. When it let the room's
     /// lock go (a release, answered whatever way, or an acquire that did
     /// not take it), the acquire held back first goes out now.
@@ -140,6 +157,19 @@ mod tests {
             locks.answered(acquire(0).id, &Outcome::DeadlinePassed),
             Some(acquire(1))
         );
+    }
+
+    /// A call that expires gives up on the acquire it holds back: it never
+    /// goes out, and the one behind it does once the lock is let go.
+    #[test]
+    fn a_withdrawn_acquire_never_goes_out() {
+        let mut locks = RoomLocks::default();
+        locks.admit(acquire(0));
+        locks.admit(acquire(1));
+        locks.admit(acquire(2));
+        let withdrawn = locks.withdraw(acquire(1).id);
+        let next = locks.answered(acquire(0).id, &Outcome::DeadlinePassed);
+        assert_eq!((withdrawn, next), (true, Some(acquire(2))));
     }
 
     #[test]

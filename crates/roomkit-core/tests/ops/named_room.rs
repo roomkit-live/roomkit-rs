@@ -79,26 +79,34 @@ mod a_missing_room {
         );
     }
 
-    /// RFC §10.1 step 2, gap G-068: from its creation's request to its
-    /// channel's attach, then while its commit is not answered, the call is
-    /// completing a write a stop would leave half done, and its driver does
-    /// not stop it there (`Operation::completing`).
+    /// RFC §10.1 step 2, §13.6, gap G-076: a caller that stops waiting
+    /// while the room's hooks are due expires the call, and the room is
+    /// completed all the same: its hooks run, its channel is attached and
+    /// its session starts, none of it within the call's bound. The message
+    /// stops before its parse, nothing of it written.
     #[test]
-    fn is_completing_from_its_creation_to_its_attach_and_during_its_commit() {
+    fn is_completed_when_its_caller_stops_waiting_before_its_hooks() {
         let mut sim = no_room_yet();
         sim.observer("welcome", HookTrigger::OnRoomCreated);
-        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        sim.leaves_before = Some("await on_room_created");
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
-            sim.while_completing,
-            [
-                "store room room_1",
-                "await on_room_created",
-                "lock room_1",
-                "load_context room_1",
-                "store binding sms",
-                "release room_1",
-                "commit",
-            ]
+            (
+                result.reason,
+                binding_of(&sim, "sms").map(|binding| binding.channel_id.to_string()),
+                sim.timeline_lines(),
+                sim.traced("handle_inbound"),
+                sim.framework_event_names(),
+            ),
+            (
+                Some("process_timeout".to_owned()),
+                Some("sms".to_owned()),
+                Vec::<String>::new(),
+                Vec::<&str>::new(),
+                ["room_created", "room_channel_attached", "session_started"]
+                    .map(str::to_owned)
+                    .to_vec()
+            )
         );
     }
 

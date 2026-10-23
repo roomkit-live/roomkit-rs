@@ -9,6 +9,13 @@
 //! lock are answered here, and never reach the driver. The requests of a
 //! section that stands in a room's admission order (RFC §9.5.1) say so, as
 //! those of a section under a lock do.
+//!
+//! A request within the call's bound, from its start to its decision (RFC
+//! §13.6), is given up on past its deadline, by the driver, and when the
+//! call expires before it, its caller gone (`expire`), here: it is
+//! answered `DeadlinePassed` as the driver would answer it, and so is every
+//! one asked for afterwards. A write, a release and a commit are never
+//! within it.
 
 mod locks;
 
@@ -23,11 +30,41 @@ use super::{InboundError, InboundResult};
 use crate::model::{RoomId, Timestamp};
 use crate::rules::chain_depth::ReentryBudget;
 
+/// What bounds a request in time (RFC §13.6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Bound {
+    /// Nothing but its own timeouts: a write, a release, a commit, what
+    /// completes a room step 2 creates, what follows a call's decision, and
+    /// every request of an operation that has no call's bound, an entry
+    /// adopted among them.
+    Unbounded,
+    /// The call's bound, from its start to its decision: the deadline of
+    /// its `process_timeout`, `None` when the kit sets none. The request is
+    /// given up on past it, and when the call expires before it, its caller
+    /// gone ([`Io::expire`]).
+    Call(Option<Timestamp>),
+}
+
+impl Bound {
+    /// The deadline the effect carries (`Effect::deadline`).
+    fn deadline(self) -> Option<Timestamp> {
+        match self {
+            Self::Unbounded => None,
+            Self::Call(deadline) => deadline,
+        }
+    }
+}
+
 /// What `Io` keeps of an effect until it is answered.
 #[derive(Debug)]
 struct Outstanding {
     kind: RequestKind,
+    /// Whether it carried a deadline, which the driver may answer
+    /// `DeadlinePassed` past.
     bounded: bool,
+    /// Whether it is within the call's bound, given up on when the call
+    /// expires.
+    within_call: bool,
     locked: Option<RoomId>,
     admitted: Option<RoomId>,
 }
@@ -55,6 +92,9 @@ pub(crate) struct Io {
     /// The room in whose admission order the section being advanced runs
     /// (RFC §9.5.1).
     admitted: Option<RoomId>,
+    /// Whether the call expired before its decision, its caller gone: a
+    /// request within its bound is answered `DeadlinePassed` at once.
+    expired: bool,
 }
 
 impl Io {
@@ -71,43 +111,40 @@ impl Io {
             locks: RoomLocks::default(),
             nested: None,
             admitted: None,
+            expired: false,
         }
     }
 
-    /// Asks the driver for `request`; the effect goes out on the next step.
+    /// Asks the driver for `request`, which nothing bounds; the effect goes
+    /// out on the next step.
     pub(crate) fn issue(&mut self, request: Request) -> EffectId {
-        self.issue_within(request, None)
+        self.issue_within(request, Bound::Unbounded)
     }
 
-    /// Asks the driver for `request`, to be given up on past `deadline`
-    /// (RFC §13.6); `None` bounds it by nothing.
-    pub(crate) fn issue_within(
-        &mut self,
-        request: Request,
-        deadline: Option<Timestamp>,
-    ) -> EffectId {
-        self.issue_under(request, deadline, None)
+    /// Asks the driver for `request`, within `bound` (RFC §13.6).
+    pub(crate) fn issue_within(&mut self, request: Request, bound: Bound) -> EffectId {
+        self.issue_under(request, bound, None)
     }
 
-    /// Asks the driver for `request`, within `deadline`, on behalf of a
-    /// section that holds the lock of `locked` (RFC §13.5). A request of a
-    /// nested section runs under the lock it is nested in, and its own
-    /// requests for that lock are answered at once, without the driver.
+    /// Asks the driver for `request`, within `bound`, on behalf of a section
+    /// that holds the lock of `locked` (RFC §13.5). A request of a nested
+    /// section runs under the lock it is nested in, and its own requests
+    /// for that lock are answered at once, without the driver.
     pub(crate) fn issue_under(
         &mut self,
         request: Request,
-        deadline: Option<Timestamp>,
+        bound: Bound,
         locked: Option<RoomId>,
     ) -> EffectId {
-        self.issue_effect(request, deadline, locked, None)
+        self.issue_effect(request, bound, locked, None)
     }
 
     /// Asks the driver for `request` on behalf of a section that holds
-    /// `room_id`'s lock (`Effect::locked`, RFC §13.5), with no deadline: a
-    /// commit, or the place its event takes in the room's lane, which
-    /// nothing bounds (RFC §13.6).
+    /// `room_id`'s lock (`Effect::locked`, RFC §13.5), unbounded: a commit,
+    /// or the place its event takes in the room's lane, which nothing
+    /// bounds (RFC §13.6).
     pub(crate) fn issue_locked(&mut self, request: Request, room_id: RoomId) -> EffectId {
-        self.issue_under(request, None, Some(room_id))
+        self.issue_under(request, Bound::Unbounded, Some(room_id))
     }
 
     /// Asks the driver for `request`, a delivery set's `OnEvent` or
@@ -119,13 +156,13 @@ impl Io {
         request: Request,
         budget: &ReentryBudget,
     ) -> EffectId {
-        self.issue_effect(request, None, None, Some(budget.clone()))
+        self.issue_effect(request, Bound::Unbounded, None, Some(budget.clone()))
     }
 
     fn issue_effect(
         &mut self,
         request: Request,
-        deadline: Option<Timestamp>,
+        bound: Bound,
         locked: Option<RoomId>,
         budget: Option<ReentryBudget>,
     ) -> EffectId {
@@ -135,10 +172,17 @@ impl Io {
             self.inbox.push_back((id, outcome));
             return id;
         }
+        let within_call = matches!(bound, Bound::Call(_));
+        if self.expired && within_call {
+            self.inbox.push_back((id, Outcome::DeadlinePassed));
+            return id;
+        }
+        let deadline = bound.deadline();
         let locked = locked.or_else(|| self.nested.clone());
         let outstanding = Outstanding {
             kind: request.kind(),
             bounded: deadline.is_some(),
+            within_call,
             locked: locked.clone(),
             admitted: self.admitted.clone(),
         };
@@ -213,13 +257,44 @@ impl Io {
         self.has_decided
     }
 
-    /// Whether a commit is issued and not answered yet: the store may have
-    /// written it, so the operation waits for its answer before it stops
-    /// (`Operation::completing`).
-    pub(crate) fn commits(&self) -> bool {
-        self.outstanding
-            .values()
-            .any(|outstanding| outstanding.kind == RequestKind::Commit)
+    /// Expires the call before its decision, its caller gone (RFC §13.6,
+    /// gap G-076): every request within the call's bound not answered yet
+    /// is given up on, as the driver gives up on one past its deadline, and
+    /// answered `DeadlinePassed` here; so is every one asked for from now
+    /// on. An acquire held back here leaves the queue it waits in. Returns
+    /// the effects the driver holds among them: it drops them, and never
+    /// answers them.
+    pub(crate) fn expire(&mut self) -> Vec<EffectId> {
+        self.expired = true;
+        let given_up: Vec<EffectId> = self
+            .outstanding
+            .iter()
+            .filter(|(_, outstanding)| outstanding.within_call)
+            .map(|(id, _)| *id)
+            .collect();
+        // The acquires held back leave first: the answer to the one the
+        // driver holds would otherwise hand the next of them on.
+        let held: Vec<EffectId> = given_up
+            .iter()
+            .copied()
+            .filter(|id| self.locks.withdraw(*id))
+            .collect();
+        for id in &given_up {
+            self.outstanding.remove(id);
+            if let Some(next) = self.locks.answered(*id, &Outcome::DeadlinePassed) {
+                self.issued.push(next);
+            }
+            self.inbox.push_back((*id, Outcome::DeadlinePassed));
+        }
+        given_up
+            .into_iter()
+            .filter(|id| !held.contains(id))
+            .collect()
+    }
+
+    /// Whether the call expired, its caller gone before its decision.
+    pub(crate) fn is_expired(&self) -> bool {
+        self.expired
     }
 
     /// Whether `effect` is issued and not answered yet.

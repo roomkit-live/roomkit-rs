@@ -46,9 +46,8 @@
 use std::mem;
 
 use super::InboundError;
-use crate::model::{
-    ChannelBinding, ChannelType, ErrorRecord, Room, RoomContext, RoomId, Timestamp,
-};
+use crate::model::{ChannelBinding, ChannelType, ErrorRecord, Room, RoomContext, RoomId};
+use crate::ops::io::Bound;
 use crate::ops::lifecycle::change::{Change, Changed, SenderRecord};
 use crate::ops::lifecycle::locked::LockedSection;
 use crate::ops::lifecycle::report::{self, Reported};
@@ -78,7 +77,7 @@ pub(super) struct NamedRoom {
     sender: Sender,
     mode: Mode,
     /// The call's deadline (RFC §13.6).
-    deadline: Option<Timestamp>,
+    bound: Bound,
     state: State,
 }
 
@@ -130,7 +129,7 @@ impl NamedRoom {
         organization_id: Option<String>,
         channel: Box<ChannelDeclaration>,
         sender: Sender,
-        deadline: Option<Timestamp>,
+        bound: Bound,
     ) -> Self {
         Self {
             room_id,
@@ -138,7 +137,7 @@ impl NamedRoom {
             channel,
             sender,
             mode,
-            deadline,
+            bound,
             state: State::Start,
         }
     }
@@ -146,16 +145,6 @@ impl NamedRoom {
     /// The room step 2 works on.
     pub(super) fn room_id(&self) -> &RoomId {
         &self.room_id
-    }
-
-    /// Whether step 2 is creating the room: its creation asked for, its
-    /// hooks running, or its channel being attached, which completes the
-    /// creation (gap G-068).
-    pub(super) fn creates_the_room(&self) -> bool {
-        matches!(
-            self.state,
-            State::Creating { .. } | State::Observing(_) | State::Changing { created: true, .. }
-        )
     }
 
     /// Whether step 2 waits for `effect`.
@@ -194,7 +183,7 @@ impl NamedRoom {
             room_id: self.room_id.clone(),
             recent_events: cx.config.context_window,
         };
-        cx.io.issue_within(request, self.deadline)
+        cx.io.issue_within(request, self.bound)
     }
 
     /// Takes the driver's answer to step 2's outstanding effect.
@@ -373,9 +362,13 @@ impl NamedRoom {
     /// call's deadline unless step 2 created the room, whose attach
     /// completes its creation.
     fn change(&mut self, cx: &mut Cx<'_>, change: Change, created: bool) -> Progress<Named> {
-        let deadline = if created { None } else { self.deadline };
+        let bound = if created {
+            Bound::Unbounded
+        } else {
+            self.bound
+        };
         let mut section =
-            Box::new(LockedSection::new(self.room_id.clone(), change).waiting_within(deadline));
+            Box::new(LockedSection::new(self.room_id.clone(), change).waiting_within(bound));
         section.start(cx);
         self.state = State::Changing { section, created };
         Progress::Waiting

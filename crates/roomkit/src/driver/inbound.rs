@@ -12,15 +12,17 @@
 //! detached, its end logged.
 //!
 //! A caller that stops waiting, its future dropped (a client gone, a
-//! `tokio::time::timeout` that expired), detaches the run once the call is
-//! decided, its event committed or its instruction decided: the run goes
-//! on, delivers the event and the cascade it starts, and logs its end, since
-//! an event stored is delivered (RFC §13.6, decision 1 of step 2b). Before
-//! the decision the run stops at its next wait, as a run its caller drove
-//! itself would be dropped, and lets go of what it holds; but it first
-//! completes what a stop would leave half done (`Operation::completing`):
-//! a commit not answered yet, which may decide the call, and a room its step
-//! 2 created, whose creation hooks run and whose channel is attached.
+//! `tokio::time::timeout` that expired), detaches the run, which is never
+//! dropped for its caller (decision 1 of step 2b, gap G-076). Once the call
+//! is decided, its event committed or its instruction decided, the run
+//! goes on, delivers the event and the cascade it starts, and logs its end:
+//! an event stored is delivered (RFC §13.6). Before the decision the call
+//! expires as one past its `process_timeout` does (`Operation::expire`):
+//! its requests within the call's bound are given up on, nothing more of
+//! its trigger is written, what it holds is let go, and every event it
+//! committed is delivered all the same, an adopted entry's, or its own when
+//! its commit was in flight. A room its step 2 created is completed first,
+//! its creation never within the call's bound.
 
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -41,8 +43,8 @@ use crate::store::ConversationStore;
 pub(crate) type InboundOutput = Result<Result<InboundResult, InboundError>, KitError>;
 
 /// The caller of an inbound call's run, as the run sees it: where the
-/// call's decision goes, and whether the call is decided and its caller
-/// still waits (decision 1 of step 2b).
+/// call's decision goes, whether the call is decided, and whether its
+/// caller still waits (decision 1 of step 2b).
 #[derive(Debug)]
 pub(super) struct Caller {
     /// Where the call's answer goes at its decision, when the caller's
@@ -52,6 +54,9 @@ pub(super) struct Caller {
     decided: bool,
     /// Whether the run saw that its caller stopped waiting.
     gone: bool,
+    /// Whether the run expired its operation, its caller gone before the
+    /// decision.
+    expired: bool,
 }
 
 impl Caller {
@@ -62,6 +67,7 @@ impl Caller {
             answer: Some(answer),
             decided: false,
             gone: false,
+            expired: false,
         }
     }
 
@@ -115,11 +121,12 @@ impl Caller {
         Poll::Ready(())
     }
 
-    /// Whether the run stops: its caller stopped waiting before the call's
-    /// decision, and the operation completes nothing a stop would leave
-    /// half done (`completing`).
-    pub(super) fn stops(&self, completing: bool) -> bool {
-        self.gone && !self.decided && !completing
+    /// Whether the run expires its operation now: its caller stopped
+    /// waiting before the call's decision, and it did not yet.
+    pub(super) fn expires(&mut self) -> bool {
+        let expires = self.gone && !self.decided && !self.expired;
+        self.expired |= expires;
+        expires
     }
 
     /// Whether nobody reads the run's output: its caller was answered at
@@ -134,11 +141,6 @@ impl Caller {
             return;
         }
         match output {
-            Err(KitError::Cancelled) if !self.decided => tracing::debug!(
-                target: "roomkit::driver",
-                call,
-                "the caller stopped waiting before the call's decision; the call stopped"
-            ),
             Ok(Ok(result)) => tracing::debug!(
                 target: "roomkit::driver",
                 call,
@@ -169,8 +171,8 @@ impl Caller {
 /// driver would commit within that section's tenure. A call made within a
 /// delivery set's code, a turn or a transport's delivery, draws on the
 /// reentry budget of the cascade that delivers (gap G-070). A caller that
-/// stops waiting detaches the run once the call is decided, and stops it
-/// before, once it completes what a stop would leave half done.
+/// stops waiting detaches the run, which expires its call when it is not
+/// decided yet (gap G-076).
 ///
 /// # Errors
 ///

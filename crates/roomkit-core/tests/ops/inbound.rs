@@ -2023,6 +2023,83 @@ mod the_decision {
     }
 }
 
+/// RFC §13.6, gap G-076: a caller that stops waiting before the call's
+/// decision expires it, as a passed `process_timeout` does, without the
+/// `process_timeout` event; once anything is committed, it is delivered.
+mod a_caller_that_stops_waiting {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// A room whose SYNC hook allows every event.
+    fn scanned_room() -> Sim {
+        let mut sim = room();
+        sim.before_broadcast(
+            "scanner",
+            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+        );
+        sim
+    }
+
+    /// The hook a pass waits for under the lock is given up on: the pass
+    /// lets the lock go, and nothing of the event is written.
+    #[test]
+    fn during_a_hook_under_the_lock_writes_nothing_and_lets_the_lock_go() {
+        let mut sim = scanned_room();
+        sim.leaves_before = Some("hook scanner");
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                result.reason,
+                sim.trace.clone(),
+                sim.timeline_lines(),
+                sim.framework_event_names()
+            ),
+            (
+                Some("process_timeout".to_owned()),
+                [
+                    "load_context room_1",
+                    "handle_inbound sms",
+                    "lock room_1",
+                    "load_context room_1",
+                    "caller gone",
+                    "release room_1",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                Vec::<String>::new(),
+                Vec::<String>::new()
+            )
+        );
+    }
+
+    /// A commit is never within the call's bound: the caller gone while it
+    /// is in flight, it is answered, the call is decided, and the event is
+    /// delivered, the agent's answer after it.
+    #[test]
+    fn during_its_commit_has_its_event_delivered() {
+        let mut sim = scanned_room();
+        sim.leaves_before = Some("commit");
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        let processed = sim
+            .framework_event_names()
+            .contains(&"event_processed".to_owned());
+        assert_eq!(
+            (
+                result.event.map(|event| event.status),
+                sim.timeline_lines().first().cloned(),
+                sim.traced("deliver ws"),
+                processed
+            ),
+            (
+                Some(EventStatus::Delivered),
+                Some("#0 sms delivered \"Bonjour\"".to_owned()),
+                vec!["deliver ws <- evt_1", "deliver ws <- evt_2"],
+                true
+            )
+        );
+    }
+}
+
 /// The protocol a driver follows (docs/architecture.md).
 mod the_protocol {
     use super::*;

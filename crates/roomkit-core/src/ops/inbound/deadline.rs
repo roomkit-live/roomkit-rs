@@ -47,13 +47,37 @@ pub(super) fn of_call(config: &KitConfig, now: Timestamp) -> Option<Timestamp> {
 }
 
 impl Machine {
-    /// The call's deadline passed before its decision (RFC §13.6): it emits
-    /// `process_timeout`, naming the message's channel before the room lock
-    /// and `locked_event`, the event whose pass held the lock, under it,
-    /// then ends `blocked` with the reason `process_timeout` and no event,
-    /// once its ticket is released. The pass that held the lock released it
-    /// already.
+    /// The call's deadline passed before its decision (RFC §13.6), or its
+    /// caller stopped waiting then (gap G-076): it reports it, then ends
+    /// `blocked` with the reason `process_timeout` and no event, once its
+    /// ticket is released, and the events it committed, an adopted entry's,
+    /// are delivered. The pass that held the lock released it already.
     pub(super) fn expire(&mut self, cx: &mut Cx<'_>, locked_event: Option<EventId>) {
+        self.report_expiry(cx, locked_event);
+        // The result as the call left it, an error met already included.
+        let refused = InboundResult {
+            event: None,
+            blocked: true,
+            reason: Some(PROCESS_TIMEOUT.to_owned()),
+            ..std::mem::take(&mut self.result)
+        };
+        self.end(cx, Ok(refused));
+    }
+
+    /// Reports the call's expiry: `process_timeout`, naming the message's
+    /// channel before the room lock and `locked_event`, the event whose
+    /// pass held the lock, under it (RFC §8.2); a caller that stopped
+    /// waiting is logged only, no deadline having passed.
+    fn report_expiry(&self, cx: &mut Cx<'_>, locked_event: Option<EventId>) {
+        if cx.io.is_expired() {
+            tracing::info!(
+                target: "roomkit::core::inbound",
+                room_id = ?self.room_id,
+                event_id = ?locked_event,
+                "the call's caller stopped waiting before its decision; nothing of its event is written"
+            );
+            return;
+        }
         let timeout = cx
             .config
             .process_timeout
@@ -77,13 +101,5 @@ impl Machine {
                 event_id: locked_event,
                 timeout,
             }));
-        // The result as the call left it, an error met already included.
-        let refused = InboundResult {
-            event: None,
-            blocked: true,
-            reason: Some(PROCESS_TIMEOUT.to_owned()),
-            ..std::mem::take(&mut self.result)
-        };
-        self.end(cx, Ok(refused));
     }
 }

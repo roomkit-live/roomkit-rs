@@ -556,6 +556,25 @@ mod an_entry_adopted_under_the_lock {
         );
     }
 
+    /// RFC §13.6, gap G-076: a caller that stops waiting once the entry is
+    /// committed, before the event being processed is, expires the call:
+    /// the hook is given up on, nothing more of the event is written, and
+    /// the entry's event is delivered all the same.
+    #[test]
+    fn is_delivered_when_the_caller_stops_waiting_after_its_commit() {
+        let (mut sim, _, _) = notified();
+        sim.leaves_before = Some("enter lane room_1 evt_2");
+        let result = sim.send(hello()).unwrap();
+        assert_eq!(
+            (result.reason, sim.timeline_lines(), sim.traced("deliver"),),
+            (
+                Some("process_timeout".to_owned()),
+                vec!["#0 ws delivered \"Heads up\"".to_owned()],
+                vec!["deliver sms <- evt_2"]
+            )
+        );
+    }
+
     /// RFC §13.4, gap G-023: an adopted entry's key is checked as any
     /// direct injection's: a replay answers the event its key committed,
     /// and nothing more is stored.

@@ -38,7 +38,7 @@ use std::task::Poll;
 use roomkit_core::model::{ErrorRecord, RoomId, Timestamp};
 use roomkit_core::ops::{Effect, EffectId, EntryId, Next, Operation, Outcome, Request, Settled};
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::{self, JoinError, JoinSet};
+use tokio::task::{self, AbortHandle, JoinError, JoinSet};
 use tokio::time::Instant;
 
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
@@ -97,9 +97,10 @@ pub(crate) async fn run<S: ConversationStore, O: Operation>(
 /// Runs `operation`, made by the kit's call `call`, until it is ready,
 /// treating a lock its execution context holds a live lease on as `leases`
 /// says, and offering its decision to its `caller`, when the run is an
-/// inbound call's; such a run stops once its caller stopped waiting before
-/// the call's decision, and fails then with [`KitError::Cancelled`], which
-/// nobody reads.
+/// inbound call's. Such a run is never dropped for its caller: a caller
+/// gone before the call's decision expires the operation
+/// (`Operation::expire`), which goes on to its end, delivering what it
+/// committed (gap G-076).
 async fn drive<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
@@ -118,6 +119,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         shared,
         adoptions,
         effect_of_task: HashMap::new(),
+        call_of_effect: HashMap::new(),
         callers: HashMap::new(),
         clocks: Clocks::read(inner),
         refused: None,
@@ -136,7 +138,8 @@ async fn drive<S: ConversationStore, O: Operation>(
 /// lets go of what it holds: the fields drop in that order.
 struct Driver<'kit, S> {
     calls: JoinSet<Outcome>,
-    waits: Vec<Waiting<'kit>>,
+    /// The waits the run polls, each by its effect.
+    waits: Vec<(EffectId, Waiting<'kit>)>,
     inner: &'kit Arc<Inner<S>>,
     /// The kit's call the run serves, which an error names.
     call: &'static str,
@@ -146,7 +149,11 @@ struct Driver<'kit, S> {
     shared: Arc<RunShared>,
     /// The calls into the room its work hands the run.
     adoptions: mpsc::UnboundedReceiver<Adoption>,
+    /// The effect each call answers, by its task.
     effect_of_task: HashMap<task::Id, EffectId>,
+    /// The call of each effect, until it finishes, to abort it when the
+    /// operation gives the effect up.
+    call_of_effect: HashMap<EffectId, AbortHandle>,
     /// The callers of the entries the operation adopted, until settled.
     callers: HashMap<EntryId, oneshot::Sender<Reply>>,
     clocks: Clocks,
@@ -200,9 +207,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 Next::Waiting => Vec::new(),
                 Next::Effects(effects) => effects,
             };
-            if self.stops_for_its_caller(&operation) {
-                return Err(KitError::Cancelled);
-            }
             let mut answered = false;
             for effect in effects {
                 if let Some((id, outcome)) = self.start(effect) {
@@ -218,22 +222,28 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
 
     /// Waits for the next wait over, call finished or call into the room
     /// handed to the run, and hands it to the operation. A caller gone
-    /// before the call's decision stops the run, unless the operation
-    /// completes what a stop would leave half done: it goes on detached.
+    /// before the call's decision expires the operation, whose requests
+    /// within the call's bound the run then drops: the operation goes on to
+    /// its end, detached (decision 1 of step 2b, gap G-076).
     async fn wait<O: Operation>(&mut self, operation: &mut O) -> Result<(), KitError> {
         loop {
             match self.next_event().await {
-                Some(Event::CallerGone) if self.stops_for_its_caller(operation) => {
-                    return Err(KitError::Cancelled);
+                Some(Event::CallerGone) => {
+                    if self.caller.as_deref_mut().is_some_and(Caller::expires) {
+                        let given_up = operation.expire();
+                        self.give_up(&given_up);
+                        return Ok(());
+                    }
                 }
-                Some(Event::CallerGone) => {}
                 Some(Event::Waited(id, waited)) => {
                     let outcome = self.held.settle(waited);
                     return Ok(operation.complete(id, outcome)?);
                 }
                 Some(Event::Joined(joined)) => {
-                    let (id, outcome) = self.joined(joined)?;
-                    return Ok(operation.complete(id, outcome)?);
+                    // A call the operation gave up on answers nothing.
+                    if let Some((id, outcome)) = self.joined(joined) {
+                        return Ok(operation.complete(id, outcome)?);
+                    }
                 }
                 Some(Event::Adoption(adoption)) => {
                     self.adopt(operation, adoption);
@@ -245,13 +255,18 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         }
     }
 
-    /// Whether the run stops: an inbound call's caller stopped waiting
-    /// before its decision, and the operation completes nothing a stop
-    /// would leave half done (decision 1 of step 2b).
-    fn stops_for_its_caller<O: Operation>(&self, operation: &O) -> bool {
-        self.caller
-            .as_deref()
-            .is_some_and(|caller| caller.stops(operation.completing()))
+    /// Drops the waits and the calls of `effects`, which the operation gave
+    /// up on: a call is aborted, its frame standing in no admission order
+    /// any more, and neither is ever answered.
+    fn give_up(&mut self, effects: &[EffectId]) {
+        self.waits.retain(|(effect, _)| !effects.contains(effect));
+        for effect in effects {
+            if let Some(call) = self.call_of_effect.remove(effect) {
+                call.abort();
+                self.effect_of_task.remove(&call.id());
+                self.shared.answered(*effect);
+            }
+        }
     }
 
     /// Starts `effect`: answered at once when it can be, a wait or a call
@@ -284,7 +299,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 Some((id, Outcome::Failed(error)))
             }
             Hold::Wait(wait) => {
-                self.waits.push(wait);
+                self.waits.push((id, wait));
                 None
             }
             Hold::Call(request) => {
@@ -308,6 +323,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 .unwrap_or(Outcome::DeadlinePassed)
         }));
         self.effect_of_task.insert(task.id(), effect);
+        self.call_of_effect.insert(effect, task);
     }
 
     /// The next wait over, call finished, call into the room handed to the
@@ -330,7 +346,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             {
                 return Poll::Ready(Some(Event::CallerGone));
             }
-            let ready = waits.iter_mut().enumerate().find_map(|(index, wait)| {
+            let ready = waits.iter_mut().enumerate().find_map(|(index, (_, wait))| {
                 match wait.as_mut().poll(cx) {
                     Poll::Ready(waited) => Some((index, waited)),
                     Poll::Pending => None,
@@ -353,10 +369,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
 
     /// The effect a finished call answers, and its outcome: a call that
     /// panicked or was cancelled fails its effect instead of the kit.
+    /// `None` for a call the operation gave up on.
     fn joined(
         &mut self,
         joined: Result<(task::Id, Outcome), JoinError>,
-    ) -> Result<(EffectId, Outcome), KitError> {
+    ) -> Option<(EffectId, Outcome)> {
         let (task, outcome) = match joined {
             Ok(finished) => finished,
             Err(failure) => {
@@ -368,9 +385,10 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 (failure.id(), Outcome::Failed(error))
             }
         };
-        let effect = self.effect_of_task.remove(&task).ok_or(KitError::Stalled)?;
+        let effect = self.effect_of_task.remove(&task)?;
+        self.call_of_effect.remove(&effect);
         self.shared.answered(effect);
-        Ok((effect, outcome))
+        Some((effect, outcome))
     }
 
     /// Hands the operation a call into its room made by one of its calls;

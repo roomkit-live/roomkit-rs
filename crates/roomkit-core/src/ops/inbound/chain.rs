@@ -7,8 +7,9 @@
 use std::collections::VecDeque;
 
 use super::stamp;
-use crate::model::{RoomContext, RoomEvent, RoomId, Timestamp};
+use crate::model::{RoomContext, RoomEvent, RoomId};
 use crate::ops::Cx;
+use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::rules::hook_chain::HookChain;
 use crate::rules::hook_registry::{HookId, HookTrigger};
@@ -57,7 +58,7 @@ impl HookRun {
         cx: &mut Cx<'_>,
         original: &RoomEvent,
         context: &RoomContext,
-        deadline: Option<Timestamp>,
+        bound: Bound,
         locked: Option<&RoomId>,
     ) -> Option<EffectId> {
         self.running = None;
@@ -77,7 +78,7 @@ impl HookRun {
             context: Box::new(context.clone()),
             timeout,
         };
-        Some(cx.io.issue_under(request, deadline, locked.cloned()))
+        Some(cx.io.issue_under(request, bound, locked.cloned()))
     }
 
     /// Applies what the running hook produced (RFC §9.3).

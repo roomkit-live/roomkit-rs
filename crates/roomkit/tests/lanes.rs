@@ -1,9 +1,10 @@
 //! A room's lane and lock on the tokio driver (RFC §10.2, §13.5): calls
 //! from several tasks into one room, and the lane and lock left free for
 //! the next call whatever ended the last one: a channel that panicked, or a
-//! caller that dropped its call before its decision, whose run lets go of
-//! what it holds. A call dropped once decided goes on detached and delivers
-//! its event (RFC §13.6, decision 1 of step 2b).
+//! caller that dropped its call before its decision, which then expires
+//! and lets go of what it holds. A call dropped once decided goes on
+//! detached and delivers its event (RFC §13.6, decision 1 of step 2b, gap
+//! G-076).
 
 #![expect(
     clippy::unwrap_used,
