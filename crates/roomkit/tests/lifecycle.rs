@@ -459,6 +459,32 @@ mod unregistering {
         );
     }
 
+    /// Gap G-048, RFC §10.2 (0871aec): an agent the event does not solicit
+    /// is owed no turn, so its channel unregistered fails nothing; the agent
+    /// the event addresses answers.
+    #[tokio::test]
+    async fn skips_an_unregistered_agent_the_event_does_not_solicit() {
+        let (kit, sms, _ws) = room_with_sms_and_ws().await;
+        for agent in ["ai", "bot"] {
+            kit.register_channel(EchoAgent::new(channel(agent), "Hello"))
+                .unwrap();
+            kit.attach(&room_id(), &channel(agent)).await.unwrap();
+        }
+        kit.unregister_channel(&channel("ai")).unwrap();
+        let mut events = kit.subscribe();
+        let mut addressed = message(&sms, "Bonjour");
+        addressed.addressed_to = Some(vec![channel("bot")]);
+        kit.process_inbound_in(&room_id(), addressed).await.unwrap();
+        kit.idle().await;
+        let mut failed = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let FrameworkEvent::DeliveryFailed { channel_id, .. } = event {
+                failed.push(channel_id);
+            }
+        }
+        assert_eq!((failed, sms.texts()), (vec![], vec!["Hello".to_owned()]));
+    }
+
     /// A `BEFORE_BROADCAST` hook that unregisters `channel_id` while the
     /// message it decides on is under the lock: the call goes on with the
     /// configuration it started with, which still holds the channel.
