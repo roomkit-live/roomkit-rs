@@ -22,10 +22,10 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventContent, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
-use roomkit::ops::{ChannelDeclaration, FrameworkEvent};
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
-    Channel, ChannelError, ConversationStore, HookTrigger, RoomFilter, RoomKit, text_of,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, FrameworkEvent, HookTrigger,
+    RoomFilter, RoomKit, text_of,
 };
 use tokio::sync::{Barrier, Notify, broadcast};
 
@@ -59,7 +59,7 @@ async fn room_with_agent() -> RoomKit {
 
 /// The next call into `room_1` finishes in time: the lane and the lock are
 /// free.
-async fn next_call_goes_through(kit: &RoomKit) -> roomkit::ops::InboundResult {
+async fn next_call_goes_through(kit: &RoomKit) -> roomkit::InboundResult {
     let room = room_id();
     let next = kit.process_inbound(message("sms", "+15551234567", "Still there?"), Some(&room));
     tokio::time::timeout(BOUND, next)
@@ -191,7 +191,7 @@ impl Channel for Panicking {
     }
 }
 
-async fn after_a_panic_in(in_on_event: bool) -> roomkit::ops::InboundResult {
+async fn after_a_panic_in(in_on_event: bool) -> roomkit::InboundResult {
     let kit = room_with_agent().await;
     kit.register_channel(Panicking::new(in_on_event)).unwrap();
     kit.attach(&room_id(), &channel("broken")).await.unwrap();

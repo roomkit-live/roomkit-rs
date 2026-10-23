@@ -584,3 +584,19 @@ publishes a release.
   is `Send + Sync`. `SequentialEnvironment` keeps its clock and counters in
   atomics, `advance(&self, ..)` included, and an `Arc` of an environment is
   one, for a host that keeps a handle on the clock its kit reads.
+- `roomkit` re-exports the core's model whole, as `roomkit::model`, and of
+  its operations and rules only what a caller names, at the crate's root:
+  the results and errors of the kit's calls (`InboundResult`,
+  `InboundError`, `LifecycleError`, `MutationError`, `ConfigError`,
+  `RegistrationError`, `ProtocolError`), the framework events and their
+  parts (`FrameworkEvent`, `ChainDepthData`, `RefusedOperation`,
+  `TransitionReason`, `LifecyclePayload`, `LifecycleChange`,
+  `CHANNEL_NOT_REGISTERED`), what a channel declares (`ChannelDeclaration`,
+  `default_inbound_event`), what a router answers (`RouteQuery`,
+  `Candidate`), the environment (`Environment`, `SequentialEnvironment`)
+  and the readers of an event (`is_edited`, `is_deleted`, `text_of`); the
+  store's `RoomCounters` and `TargetUpdate` are `roomkit::store`'s. The
+  modules `roomkit::ops` and `roomkit::rules`, which carried the protocol
+  the driver speaks with the core, are gone: `roomkit::ops::FrameworkEvent`
+  is `roomkit::FrameworkEvent`, `roomkit::rules::edits::is_deleted`
+  `roomkit::is_deleted`.

@@ -32,9 +32,8 @@ use roomkit::model::{
     EventContent, EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent,
     RoomId, Visibility,
 };
-use roomkit::ops::ChannelDeclaration;
 use roomkit::testing::RecordingTransport;
-use roomkit::{Channel, ChannelError, RoomKit, text_of};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, RoomKit, text_of};
 
 use shared::Checks;
 

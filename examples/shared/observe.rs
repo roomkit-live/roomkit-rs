@@ -3,10 +3,10 @@
 //! the background, an observer hook or a call that went on detached, is
 //! waited for with `RoomKit::idle` before it is read.
 
+use roomkit::FrameworkEvent;
 use std::sync::Arc;
 use std::time::Duration;
 
-use roomkit::ops::FrameworkEvent;
 use tokio::sync::{broadcast, watch};
 
 /// How long an example waits for a hook of a call still running to note

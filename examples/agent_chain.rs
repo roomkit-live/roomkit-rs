@@ -10,8 +10,8 @@
 use std::error::Error;
 use std::process::ExitCode;
 
+use roomkit::FrameworkEvent;
 use roomkit::model::{ChannelId, ChannelType, EventContent, EventStatus, InboundMessage, RoomId};
-use roomkit::ops::FrameworkEvent;
 use roomkit::testing::{EchoAgent, RecordingTransport};
 
 use shared::Checks;

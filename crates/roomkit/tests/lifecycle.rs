@@ -14,12 +14,12 @@ use roomkit::model::{
     EventContent, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers,
     Timestamp,
 };
-use roomkit::ops::{
-    CHANNEL_NOT_REGISTERED, ChannelDeclaration, FrameworkEvent, InboundError, LifecycleError,
+use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::{
+    CHANNEL_NOT_REGISTERED, Channel, ChannelDeclaration, ChannelError, ConversationStore,
+    FrameworkEvent, HookTrigger, InboundError, KitError, LifecycleError, RoomKit,
     SequentialEnvironment, TransitionReason,
 };
-use roomkit::testing::{EchoAgent, RecordingTransport};
-use roomkit::{Channel, ChannelError, ConversationStore, HookTrigger, KitError, RoomKit};
 use tokio::sync::{broadcast, mpsc};
 
 const START_MILLIS: i64 = 1_792_677_780_000;

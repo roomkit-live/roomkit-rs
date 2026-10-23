@@ -15,9 +15,8 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, EventContent, InboundMessage, RoomId};
-use roomkit::ops::FrameworkEvent;
 use roomkit::testing::EchoAgent;
-use roomkit::{ConversationStore, HookTrigger, RoomKit, text_of};
+use roomkit::{ConversationStore, FrameworkEvent, HookTrigger, RoomKit, text_of};
 
 use shared::{Checks, SmsNumber};
 

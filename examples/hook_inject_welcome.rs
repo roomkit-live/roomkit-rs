@@ -20,9 +20,8 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType, HookResult,
     InboundMessage, InjectedEvent, RoomEvent, RoomId, SystemContent,
 };
-use roomkit::ops::LifecyclePayload;
 use roomkit::testing::RecordingTransport;
-use roomkit::{HookTrigger, RoomKit};
+use roomkit::{HookTrigger, LifecyclePayload, RoomKit};
 
 use shared::{Checks, Log};
 

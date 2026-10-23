@@ -18,9 +18,8 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomId};
-use roomkit::ops::InboundResult;
 use roomkit::testing::RecordingTransport;
-use roomkit::text_of;
+use roomkit::{InboundResult, text_of};
 
 use shared::{Checks, Script, ScriptedAgent};
 

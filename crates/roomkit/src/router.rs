@@ -48,8 +48,7 @@ pub type RouterError = Box<dyn Error + Send + Sync>;
 ///
 /// ```
 /// use roomkit::model::RoomId;
-/// use roomkit::rules::routing::RouteQuery;
-/// use roomkit::{ConversationStore, InboundRoomRouter, RouterError};
+/// use roomkit::{ConversationStore, InboundRoomRouter, RouteQuery, RouterError};
 ///
 /// /// Routes a message to the room its `ticket` metadata names, when the
 /// /// room exists; any other message gets a new room.

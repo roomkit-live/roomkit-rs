@@ -15,9 +15,8 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventContent, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
-use roomkit::ops::ChannelDeclaration;
 use roomkit::testing::RecordingTransport;
-use roomkit::{Channel, ChannelError, HookTrigger, KitError, RoomKit, text_of};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, HookTrigger, KitError, RoomKit, text_of};
 use tokio::sync::Notify;
 
 /// How long a call that should not wait may take before the test fails it.

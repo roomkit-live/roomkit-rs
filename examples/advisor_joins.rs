@@ -21,9 +21,8 @@ use std::process::ExitCode;
 use roomkit::model::{
     Access, BindingUpdate, ChannelId, ChannelType, EventContent, InboundMessage, RoomId, Visibility,
 };
-use roomkit::ops::FrameworkEvent;
 use roomkit::testing::RecordingTransport;
-use roomkit::{HookTrigger, RoomKit, text_of};
+use roomkit::{FrameworkEvent, HookTrigger, RoomKit, text_of};
 use tokio::sync::broadcast;
 
 use shared::{Checks, Log, Script, ScriptedAgent};

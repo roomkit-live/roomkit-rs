@@ -18,13 +18,11 @@ use roomkit::model::{
     EventContent, EventId, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
     Timestamp,
 };
-use roomkit::ops::{
-    ChannelDeclaration, FrameworkEvent, SequentialEnvironment, default_inbound_event,
-};
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
-    Channel, ChannelError, ConversationStore, EventDraft, HookExecution, HookHandler, HookReturn,
-    HookSpec, HookTrigger, KitError, RoomKit, text_of,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, EventDraft, FrameworkEvent,
+    HookExecution, HookHandler, HookReturn, HookSpec, HookTrigger, KitError, RoomKit,
+    SequentialEnvironment, default_inbound_event, text_of,
 };
 use tokio::sync::mpsc;
 

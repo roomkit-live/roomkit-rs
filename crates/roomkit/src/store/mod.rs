@@ -13,9 +13,10 @@ use roomkit_core::model::{
     Identity, IdentityId, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent,
     RoomId, RoomStatus, RoomUpdates, Task,
 };
-use roomkit_core::ops::{RoomCounters, TargetUpdate};
 use roomkit_core::rules::timers;
 use thiserror::Error;
+
+pub use roomkit_core::ops::{RoomCounters, TargetUpdate};
 
 pub use self::memory::InMemoryStore;
 

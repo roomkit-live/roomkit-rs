@@ -18,9 +18,8 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventStatus, HookResult, InboundMessage, RoomEvent,
     RoomId,
 };
-use roomkit::ops::InboundResult;
 use roomkit::testing::RecordingTransport;
-use roomkit::{HookExecution, HookSpec, HookTrigger, RoomKit, text_of};
+use roomkit::{HookExecution, HookSpec, HookTrigger, InboundResult, RoomKit, text_of};
 
 use shared::{Checks, Log};
 

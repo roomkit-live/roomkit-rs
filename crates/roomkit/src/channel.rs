@@ -36,12 +36,11 @@ pub struct EventDraft {
 /// event, deliver nothing.
 ///
 /// ```
-/// use roomkit::{Channel, ChannelError};
+/// use roomkit::{Channel, ChannelDeclaration, ChannelError};
 /// use roomkit::model::{
 ///     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
 ///     ChannelOutput, ChannelType, RoomContext, RoomEvent,
 /// };
-/// use roomkit::ops::ChannelDeclaration;
 ///
 /// struct Console {
 ///     declaration: ChannelDeclaration,

@@ -19,9 +19,8 @@ use roomkit::model::{
     ChannelCapabilities, ChannelId, ChannelType, DeleteContent, DeleteType, EditContent,
     EditSource, EventContent, EventId, EventType, HookResult, InboundMessage, RoomEvent, RoomId,
 };
-use roomkit::rules::edits;
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, HookTrigger, RoomKit, text_of};
+use roomkit::{ConversationStore, HookTrigger, RoomKit, is_deleted, is_edited, text_of};
 
 use shared::{Checks, Log, ScriptedAgent};
 
@@ -109,7 +108,7 @@ impl Conversation {
     async fn send(
         &self,
         message: InboundMessage,
-    ) -> Result<roomkit::ops::InboundResult, Box<dyn Error>> {
+    ) -> Result<roomkit::InboundResult, Box<dyn Error>> {
         Ok(self.kit.process_inbound(message, Some(&self.room)).await?)
     }
 
@@ -241,7 +240,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "the edit is stored after its target, which now reads \"I need 50000$\" and is marked edited",
         edited.event.is_some_and(|event| event.index == 6)
             && target.as_ref().is_some_and(|target| target.content == EventContent::text("I need 50000$"))
-            && target.as_ref().is_some_and(edits::is_edited),
+            && target.as_ref().is_some_and(is_edited),
     );
     checks.expect(
         "the WebSocket receives the edit natively",
@@ -274,7 +273,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     checks.expect(
         "the delete is stored after its target, which is marked deleted",
         deleted.event.is_some_and(|event| event.index == 7)
-            && target.as_ref().is_some_and(edits::is_deleted),
+            && target.as_ref().is_some_and(is_deleted),
     );
     checks.expect(
         "the WebSocket receives the delete natively, SMS as \"[Message deleted]\"",

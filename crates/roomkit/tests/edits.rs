@@ -16,11 +16,10 @@ use roomkit::model::{
     EventId, EventType, EventUpdates, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
     Timestamp,
 };
-use roomkit::ops::{ChannelDeclaration, InboundResult, SequentialEnvironment};
-use roomkit::rules::edits;
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    Channel, ChannelError, ConversationStore, EventFilter, HookTrigger, RoomKit, text_of,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, EventFilter, HookTrigger,
+    InboundResult, RoomKit, SequentialEnvironment, is_deleted, is_edited, text_of,
 };
 use tokio::sync::{Barrier, Notify, mpsc};
 
@@ -228,7 +227,7 @@ mod an_edit {
             (
                 result.event.map(|event| (event.index, event.event_type)),
                 target.content.clone(),
-                Some(edits::is_edited(&target))
+                Some(is_edited(&target))
             ),
             (
                 Some((1, EventType::Edit)),
@@ -341,7 +340,7 @@ mod a_delete {
         send(&room.kit, delete()).await;
         let target = target(&room.kit).await.unwrap();
         assert_eq!(
-            (target.content.clone(), Some(edits::is_deleted(&target))),
+            (target.content.clone(), Some(is_deleted(&target))),
             (EventContent::text("I need 5000$"), Some(true))
         );
     }
@@ -384,7 +383,7 @@ mod a_delete {
         send(&room.kit, delete()).await;
         let payload = next(&mut deleted).await;
         assert_eq!(
-            (payload.id.as_str(), Some(edits::is_deleted(&payload))),
+            (payload.id.as_str(), Some(is_deleted(&payload))),
             ("evt_1", Some(true))
         );
     }
@@ -574,7 +573,7 @@ mod changes_at_once {
             )
             .await;
             let target = target(&room.kit).await.unwrap();
-            let marked = edits::is_deleted(&target);
+            let marked = is_deleted(&target);
             let outcome = match (edited.event, deleted.event) {
                 (Some(edit), Some(delete)) if edit.index < delete.index => {
                     target.content == EventContent::text("I need 50000$") && marked

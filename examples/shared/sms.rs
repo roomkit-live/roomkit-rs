@@ -6,8 +6,7 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     RoomContext, RoomEvent,
 };
-use roomkit::ops::ChannelDeclaration;
-use roomkit::{Channel, ChannelError, text_of};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, text_of};
 
 use crate::Log;
 

@@ -21,9 +21,11 @@ use std::time::Duration;
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, InboundMessage, Room, RoomId, RoomStatus, RoomTimers,
 };
-use roomkit::ops::{FrameworkEvent, InboundResult, LifecycleError, TransitionReason};
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, HookTrigger, KitError, RoomKit, text_of};
+use roomkit::{
+    ConversationStore, FrameworkEvent, HookTrigger, InboundResult, KitError, LifecycleError,
+    RoomKit, TransitionReason, text_of,
+};
 
 use shared::{Checks, Clock, Log};
 

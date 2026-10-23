@@ -17,11 +17,10 @@ use roomkit::model::{
     EventContent, HookResult, InboundMessage, Participant, ParticipantId, RoomContext, RoomEvent,
     RoomId, Timestamp,
 };
-use roomkit::ops::{ChannelDeclaration, FrameworkEvent, InboundError, SequentialEnvironment};
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
-    Channel, ChannelError, ConversationStore, HookExecution, HookSpec, HookTrigger, KitError,
-    RoomFilter, RoomKit,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, FrameworkEvent, HookExecution,
+    HookSpec, HookTrigger, InboundError, KitError, RoomFilter, RoomKit, SequentialEnvironment,
 };
 use tokio::sync::{Notify, broadcast, mpsc};
 

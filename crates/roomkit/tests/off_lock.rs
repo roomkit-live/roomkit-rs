@@ -21,10 +21,10 @@ use roomkit::model::{
     HookResult, InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, RoomStatus,
     Timestamp,
 };
-use roomkit::ops::{InboundResult, SequentialEnvironment};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    ConversationStore, HookExecution, HookReturn, HookSpec, HookTrigger, RoomKit, text_of,
+    ConversationStore, HookExecution, HookReturn, HookSpec, HookTrigger, InboundResult, RoomKit,
+    SequentialEnvironment, text_of,
 };
 use tokio::sync::Notify;
 

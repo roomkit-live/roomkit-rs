@@ -16,9 +16,11 @@ use roomkit::model::{
     EventUpdates, Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId,
     Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
 };
-use roomkit::ops::{FrameworkEvent, RoomCounters, TargetUpdate};
+use roomkit::store::{RoomCounters, TargetUpdate};
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, EventFilter, InMemoryStore, RoomFilter, RoomKit, StoreError};
+use roomkit::{
+    ConversationStore, EventFilter, FrameworkEvent, InMemoryStore, RoomFilter, RoomKit, StoreError,
+};
 use tokio::sync::{Notify, broadcast};
 
 /// How long a call that should not wait may take before the test fails it.

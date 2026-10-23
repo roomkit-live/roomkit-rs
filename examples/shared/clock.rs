@@ -4,9 +4,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use roomkit::RoomKit;
 use roomkit::model::Timestamp;
-use roomkit::ops::{Environment, SequentialEnvironment};
+use roomkit::{Environment, RoomKit, SequentialEnvironment};
 
 /// The instant every example starts at, 2026-10-22 14:03 UTC.
 const START_MILLIS: i64 = 1_792_677_780_000;

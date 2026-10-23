@@ -23,12 +23,11 @@ use roomkit::model::{
     DirectEvent, EventContent, EventDirection, EventSource, EventStatus, EventType, HookResult,
     InboundMessage, RoomContext, RoomEvent, RoomId, RoomStatus, Timestamp,
 };
-use roomkit::ops::{ChannelDeclaration, FrameworkEvent, InboundError, default_inbound_event};
-use roomkit::rules::routing::RouteQuery;
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    Channel, ChannelError, ConversationStore, EventDraft, HookExecution, HookSpec, HookTrigger,
-    InboundRoomRouter, KitError, RoomKit, RouterError, text_of,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, EventDraft, FrameworkEvent,
+    HookExecution, HookSpec, HookTrigger, InboundError, InboundRoomRouter, KitError, RoomKit,
+    RouteQuery, RouterError, default_inbound_event, text_of,
 };
 use tokio::sync::Notify;
 
@@ -205,7 +204,7 @@ async fn room() -> (RoomKit, RecordingTransport) {
 }
 
 /// Runs `message` into `room_1`, failing the test past [`BOUND`].
-async fn send(kit: &RoomKit, text: &str) -> Result<roomkit::ops::InboundResult, KitError> {
+async fn send(kit: &RoomKit, text: &str) -> Result<roomkit::InboundResult, KitError> {
     tokio::time::timeout(BOUND, kit.process_inbound(message(text), Some(&room_id())))
         .await
         .unwrap_or_else(|_| panic!("the call waited for itself"))

@@ -31,10 +31,10 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventContent, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
-use roomkit::ops::{ChannelDeclaration, FrameworkEvent, InboundResult, SequentialEnvironment};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    Channel, ChannelError, ConversationStore, HookExecution, HookSpec, HookTrigger, RoomKit,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, FrameworkEvent, HookExecution,
+    HookSpec, HookTrigger, InboundResult, RoomKit, SequentialEnvironment,
 };
 use tokio::sync::{Notify, broadcast};
 

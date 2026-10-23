@@ -21,8 +21,11 @@
 //! - [`testing`]: a recording transport and an echo agent, for tests and
 //!   examples.
 //!
-//! The core's model, operations and rules are re-exported as [`model`],
-//! [`ops`] and [`rules`].
+//! The core's model is re-exported whole as [`model`]. Of its operations
+//! and rules, only what a caller names is: the results and errors of the
+//! kit's calls, the framework events, what a channel declares, the routing
+//! query a router answers, the environment, and the rules that read an
+//! event; the protocol the driver speaks with the core stays the core's.
 
 mod channel;
 mod context;
@@ -38,11 +41,19 @@ pub mod store;
 mod tasks;
 pub mod testing;
 
-pub use roomkit_core::rules::hook_registry::{
-    HookExecution, HookFilter, HookId, HookSpec, HookTrigger,
+pub use roomkit_core::model;
+pub use roomkit_core::ops::{
+    CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, ConfigError, Environment,
+    FrameworkEvent, InboundError, InboundResult, LifecycleChange, LifecycleError, LifecyclePayload,
+    MutationError, ProtocolError, RefusedOperation, SequentialEnvironment, TransitionReason,
+    default_inbound_event,
 };
+pub use roomkit_core::rules::edits::{is_deleted, is_edited};
+pub use roomkit_core::rules::hook_registry::{
+    HookExecution, HookFilter, HookId, HookSpec, HookTrigger, RegistrationError,
+};
+pub use roomkit_core::rules::routing::{Candidate, RouteQuery};
 pub use roomkit_core::rules::transcoding::text_of;
-pub use roomkit_core::{model, ops, rules};
 
 pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::context::keep_context;

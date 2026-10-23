@@ -19,9 +19,10 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{ChannelId, ChannelType, EventContent, HookResult, InboundMessage, RoomId};
-use roomkit::ops::{FrameworkEvent, InboundResult};
 use roomkit::testing::RecordingTransport;
-use roomkit::{HookExecution, HookSpec, HookTrigger, KitError, RoomKit, text_of};
+use roomkit::{
+    FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundResult, KitError, RoomKit, text_of,
+};
 
 use shared::{Checks, Log};
 

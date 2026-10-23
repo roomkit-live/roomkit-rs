@@ -8,8 +8,7 @@ use roomkit::model::{
     ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType, RoomContext,
     RoomEvent,
 };
-use roomkit::ops::ChannelDeclaration;
-use roomkit::{Channel, ChannelError, text_of};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, text_of};
 
 use crate::Log;
 

@@ -25,10 +25,8 @@ use roomkit::model::{
     HookResult, InboundMessage, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
     RoomId,
 };
-use roomkit::ops::InboundResult;
-use roomkit::rules::edits;
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, RoomKit, StoreError};
+use roomkit::{ConversationStore, InboundResult, RoomKit, StoreError, is_deleted};
 
 use shared::{Checks, Clock, Log};
 
@@ -140,7 +138,7 @@ impl Team {
     /// Whether the stored event `id` is marked deleted.
     async fn is_deleted(&self, id: &EventId) -> Result<bool, Box<dyn Error>> {
         let event = self.kit.store().get_event(id).await?;
-        Ok(event.as_ref().is_some_and(edits::is_deleted))
+        Ok(event.as_ref().is_some_and(is_deleted))
     }
 }
 

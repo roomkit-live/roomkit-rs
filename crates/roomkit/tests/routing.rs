@@ -17,12 +17,11 @@ use roomkit::model::{
     ErrorRecord, EventContent, Identity, IdentityId, InboundMessage, Participant, ParticipantId,
     RoomContext, RoomEvent, RoomId, Timestamp,
 };
-use roomkit::ops::{ChannelDeclaration, InboundError, SequentialEnvironment};
-use roomkit::rules::routing::RouteQuery;
 use roomkit::testing::EchoAgent;
 use roomkit::{
-    Channel, ChannelError, ConversationStore, DefaultRouter, HookTrigger, InMemoryStore,
-    InboundRoomRouter, KitError, RoomFilter, RoomKit, RouterError, text_of,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, DefaultRouter, HookTrigger,
+    InMemoryStore, InboundError, InboundRoomRouter, KitError, RoomFilter, RoomKit, RouteQuery,
+    RouterError, SequentialEnvironment, text_of,
 };
 use tokio::sync::{Barrier, Notify};
 

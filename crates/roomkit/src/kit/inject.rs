@@ -54,7 +54,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// Returns [`KitError::Inbound`] with
-    /// [`InboundError::Refused`](roomkit_core::ops::InboundError::Refused)
+    /// [`InboundError::Refused`](crate::InboundError::Refused)
     /// when the room refused the event before its commit, nothing written:
     /// `source_unbound` for a channel the room does not bind, `room_closed`,
     /// `process_timeout`, one of the refusals of an edit or a delete, an
@@ -79,7 +79,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// Returns [`KitError::Inbound`] with
-    /// [`InboundError::OtherOrganization`](roomkit_core::ops::InboundError::OtherOrganization)
+    /// [`InboundError::OtherOrganization`](crate::InboundError::OtherOrganization)
     /// for a room of another organization, and otherwise as
     /// [`send_event`](Self::send_event) does.
     pub async fn send_event_for(

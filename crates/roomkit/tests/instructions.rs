@@ -8,9 +8,8 @@ use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomEvent, RoomId, Timestamp,
 };
-use roomkit::ops::SequentialEnvironment;
 use roomkit::testing::{EchoAgent, RecordingTransport};
-use roomkit::{ConversationStore, RoomKit};
+use roomkit::{ConversationStore, RoomKit, SequentialEnvironment};
 
 fn channel(id: &str) -> ChannelId {
     ChannelId::new(id).unwrap()

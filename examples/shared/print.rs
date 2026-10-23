@@ -1,8 +1,7 @@
 //! The room an example left, as it prints it.
 
 use roomkit::model::{EventStatus, RoomEvent, RoomId, Visibility};
-use roomkit::rules::edits;
-use roomkit::{ConversationStore, RoomKit, StoreError, text_of};
+use roomkit::{ConversationStore, RoomKit, StoreError, is_deleted, is_edited, text_of};
 
 /// A room's whole timeline, refused events included, as the store holds it.
 ///
@@ -23,9 +22,9 @@ pub fn print_timeline(events: &[RoomEvent]) {
             (EventStatus::Blocked, Some(blocked_by)) => format!("blocked by {blocked_by}"),
             (status, _) => format!("{status:?}").to_lowercase(),
         };
-        let changed = if edits::is_deleted(event) {
+        let changed = if is_deleted(event) {
             " (deleted)"
-        } else if edits::is_edited(event) {
+        } else if is_edited(event) {
             " (edited)"
         } else {
             ""
