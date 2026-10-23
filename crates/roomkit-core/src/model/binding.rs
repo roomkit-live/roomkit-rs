@@ -143,12 +143,6 @@ impl ChannelBinding {
             metadata: Metadata::new(),
         }
     }
-
-    /// Whether the channel's events may be broadcast: it can write and is not
-    /// muted (RFC §7.5 rule 2).
-    pub fn can_write(&self) -> bool {
-        self.access.writes() && !self.muted
-    }
 }
 
 #[cfg(test)]
@@ -157,17 +151,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-
-    fn binding() -> ChannelBinding {
-        ChannelBinding::new(
-            ChannelId::new("sms").unwrap(),
-            RoomId::new("room_1").unwrap(),
-            ChannelType::Sms,
-            ChannelCategory::Transport,
-            ChannelDirection::Bidirectional,
-            Timestamp::UNIX_EPOCH,
-        )
-    }
 
     #[test]
     fn read_only_access_reads() {
@@ -182,20 +165,6 @@ mod tests {
     #[test]
     fn write_only_access_does_not_read() {
         assert!(!Access::WriteOnly.reads());
-    }
-
-    #[test]
-    fn a_muted_binding_cannot_write() {
-        let muted = ChannelBinding {
-            muted: true,
-            ..binding()
-        };
-        assert!(!muted.can_write());
-    }
-
-    #[test]
-    fn a_new_binding_can_write() {
-        assert!(binding().can_write());
     }
 
     #[test]

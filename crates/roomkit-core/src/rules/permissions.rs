@@ -320,11 +320,7 @@ pub fn plan_targets(
         .filter(|binding| {
             targets.contains(&binding.channel_id)
                 && binding.category == ChannelCategory::Transport
-                && binding.access.reads()
-                && binding.channel_id != event.source.channel_id
-                && event
-                    .visibility
-                    .admits(&binding.channel_id, binding.category)
+                && receives(binding, event)
         })
         .collect();
     readers.sort_by(|first, second| first.channel_id.cmp(&second.channel_id));

@@ -29,8 +29,9 @@
 //! channel, under the room lock ([`recording`]). A binding found naming
 //! another sender by then sends the message to be routed once more (gap
 //! G-055), and so does a room found PAUSED that neither is the sender's
-//! conversation by step 1 nor binds the channel as a group: the lock tells
-//! it by [`paused_room_takes`], the tests of the strategy's steps 1 and 3.
+//! conversation by step 1 nor binds the channel as a group, or found CLOSED
+//! or ARCHIVED: the lock tells it by [`kept_by_status`], which applies
+//! [`paused_room_takes`], the tests of the strategy's steps 1 and 3.
 
 use std::cmp::Ordering;
 
@@ -368,6 +369,32 @@ pub fn paused_room_takes(
 ) -> bool {
     declared_group(binding)
         || conversation_through(sender, form, channel_id, binding, participants).is_some()
+}
+
+/// Whether a room in `status`, as its lock finds it, stays the routed
+/// message's from `sender`, its binding of `channel_id` being `binding` and
+/// its participants `participants` (RFC §5.1, §10.4, gaps G-045, G-055). An
+/// ACTIVE room does. A PAUSED room does when it takes the sender
+/// ([`paused_room_takes`]), the message's commit then resuming it; any other
+/// PAUSED room is no longer the message's, whatever strategy chose it. A
+/// CLOSED or ARCHIVED room never is.
+///
+/// A room the default strategy read ACTIVE is found PAUSED by the lock when
+/// its gate applied a pause that fell due meanwhile, and is kept by the
+/// same test.
+pub fn kept_by_status(
+    status: RoomStatus,
+    sender: &Sender,
+    form: &AddressForm,
+    channel_id: &ChannelId,
+    binding: Option<&ChannelBinding>,
+    participants: &[Participant],
+) -> bool {
+    match status {
+        RoomStatus::Active => true,
+        RoomStatus::Paused => paused_room_takes(sender, form, channel_id, binding, participants),
+        RoomStatus::Closed | RoomStatus::Archived => false,
+    }
 }
 
 /// Steps 3 and 4: the one room bound to the channel, when it admits the
@@ -1373,6 +1400,42 @@ mod tests {
                 .map(|order| routed(&query(ALICE), order))
                 .collect();
             assert_eq!(answers, vec![None; 6]);
+        }
+    }
+
+    /// RFC §5.1, §10.4, gaps G-045, G-055: whether a routed room's status,
+    /// as the lock finds it, keeps the message.
+    mod a_routed_room_s_status {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        #[test]
+        fn keeps_the_message_active_or_paused_as_its_conversation_and_never_closed() {
+            let room_id = RoomId::new("room_1").unwrap();
+            let mut alices = sms_binding(&room_id, "sms");
+            alices.participant_id = Some(ParticipantId::new(ALICE).unwrap());
+            let nobodys = sms_binding(&room_id, "sms");
+            let kept = |status, binding: &ChannelBinding| {
+                let sender = query(ALICE).sender;
+                kept_by_status(
+                    status,
+                    &sender,
+                    &sms_form(),
+                    &channel("sms"),
+                    Some(binding),
+                    &[],
+                )
+            };
+            assert_eq!(
+                [
+                    kept(RoomStatus::Active, &nobodys),
+                    kept(RoomStatus::Paused, &alices),
+                    kept(RoomStatus::Paused, &nobodys),
+                    kept(RoomStatus::Closed, &alices),
+                    kept(RoomStatus::Archived, &alices),
+                ],
+                [true, true, false, false, false]
+            );
         }
     }
 

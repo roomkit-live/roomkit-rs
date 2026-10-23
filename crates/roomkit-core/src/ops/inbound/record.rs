@@ -19,7 +19,7 @@ use std::mem;
 
 use super::direct::DirectCall;
 use super::{commit, report};
-use crate::model::{ChannelId, ErrorRecord, EventStatus, RoomContext, RoomEvent, RoomUpdates};
+use crate::model::{ChannelId, ErrorRecord, EventStatus, RoomContext, RoomEvent};
 use crate::ops::lifecycle::gate::{self, Gate, Pending};
 use crate::ops::protocol::{EffectId, Outcome, Request, RoomCounters};
 use crate::ops::{self, Abort, Cx, Progress, RefusedOperation};
@@ -237,17 +237,12 @@ impl RecordPass {
         }
         self.record.index = context.room.event_count;
         self.record.visibility = match &self.narrowing {
-            Narrowing::SourceBinding => commit::stored_visibility(&self.record, &context.bindings),
+            Narrowing::SourceBinding => commit::stored_visibility(&self.record, context),
             Narrowing::Targets(targets) => {
                 permissions::targets_visibility(targets.as_deref(), &context.bindings)
             }
         };
-        let counters = RoomCounters {
-            event_count: context.room.event_count.saturating_add(1),
-            latest_index: self.record.index,
-            last_activity_at: context.room.timers.last_activity_at,
-            room: RoomUpdates::default(),
-        };
+        let counters = RoomCounters::after_commit(&context.room, self.record.index);
         let request = Request::Commit {
             event: self.record.clone(),
             counters,

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelBinding, Participant, Room, RoomEvent};
+use super::{ChannelBinding, ChannelId, Participant, Room, RoomEvent};
 
 /// A room's state as one reader receives it (RFC §10.1 step 3).
 ///
@@ -33,5 +33,13 @@ impl RoomContext {
             participants: Vec::new(),
             recent_events: Vec::new(),
         }
+    }
+
+    /// The room's binding of `channel_id`, if it binds the channel: a room
+    /// binds a channel once at most (RFC §5.7).
+    pub fn binding(&self, channel_id: &ChannelId) -> Option<&ChannelBinding> {
+        self.bindings
+            .iter()
+            .find(|binding| &binding.channel_id == channel_id)
     }
 }

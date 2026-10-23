@@ -5,9 +5,7 @@ use std::collections::VecDeque;
 
 use super::LifecycleError;
 use super::report::Reported;
-use crate::model::{
-    BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomStatus, RoomUpdates, Timestamp,
-};
+use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomUpdates, Timestamp};
 use crate::ops::protocol::Request;
 use crate::rules::addresses::AddressForm;
 use crate::rules::attachment;
@@ -217,16 +215,24 @@ fn attach_automatically(binding: &ChannelBinding, mut context: Box<RoomContext>)
 
 /// Records a routed message's sender on the room as the lock finds it (RFC
 /// §10.1 step 2, §10.4, gap G-061). A room whose status no longer keeps it
-/// the message's ([`kept_by_status`]), whose binding names another sender
-/// by now, or which no longer admits the sender a record would name on a
-/// binding naming no one, is no longer the message's: the message is routed
-/// once more (gap G-055). A room that does not bind the channel has it
-/// attached naming the sender, unless rule 7 refuses; one that binds it has
-/// the sender recorded through rule 6, unless the binding is declared
+/// the message's ([`routing::kept_by_status`]), whose binding names another
+/// sender by now, or which no longer admits the sender a record would name
+/// on a binding naming no one, is no longer the message's: the message is
+/// routed once more (gap G-055). A room that does not bind the channel has
+/// it attached naming the sender, unless rule 7 refuses; one that binds it
+/// has the sender recorded through rule 6, unless the binding is declared
 /// `group` or has them already.
 fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision {
-    let current = bound(&context, &record.binding.channel_id).ok();
-    if !kept_by_status(record, current.as_ref(), &context) {
+    let current = context.binding(&record.binding.channel_id).cloned();
+    let kept = routing::kept_by_status(
+        context.room.status,
+        &record.sender,
+        &record.form,
+        &record.binding.channel_id,
+        current.as_ref(),
+        &context.participants,
+    );
+    if !kept {
         return rerouted(context);
     }
     let Some(current) = current else {
@@ -248,37 +254,6 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision {
             store_updated(&current, updated, context)
         }
         Recording::Taken | Recording::Write(_) => rerouted(context),
-    }
-}
-
-/// Whether the room's status, as its lock finds it, keeps the room the
-/// routed message's, `current` being its binding of the channel (RFC §5.1,
-/// §10.4, gaps G-045, G-055). An ACTIVE room does. A PAUSED room does when
-/// it is the sender's conversation by step 1 (its binding names the sender,
-/// or the sender is a participant reached through the channel), or when its
-/// binding is declared `group`, told as the default strategy's steps 1 and
-/// 3 tell them ([`routing::paused_room_takes`]); the message's commit then
-/// resumes it. Any other PAUSED room is no longer the message's, whatever
-/// strategy chose it. A CLOSED or ARCHIVED room never is.
-///
-/// A room the default strategy read ACTIVE is found PAUSED here when the
-/// lock's gate applied a pause that fell due meanwhile, and is kept by the
-/// same test.
-fn kept_by_status(
-    record: &SenderRecord,
-    current: Option<&ChannelBinding>,
-    context: &RoomContext,
-) -> bool {
-    match context.room.status {
-        RoomStatus::Active => true,
-        RoomStatus::Paused => routing::paused_room_takes(
-            &record.sender,
-            &record.form,
-            &record.binding.channel_id,
-            current,
-            &context.participants,
-        ),
-        RoomStatus::Closed | RoomStatus::Archived => false,
     }
 }
 
@@ -437,9 +412,7 @@ fn transition_room(
 /// The room's binding of `channel_id`.
 fn bound(context: &RoomContext, channel_id: &ChannelId) -> Result<ChannelBinding, LifecycleError> {
     context
-        .bindings
-        .iter()
-        .find(|binding| &binding.channel_id == channel_id)
+        .binding(channel_id)
         .cloned()
         .ok_or_else(|| LifecycleError::ChannelNotBound {
             room_id: context.room.id.clone(),

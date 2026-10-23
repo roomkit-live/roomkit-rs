@@ -9,8 +9,7 @@
 
 use super::pass::PassResult;
 use crate::model::{
-    ChannelBinding, EventStatus, EventType, RoomContext, RoomEvent, RoomUpdates, Timestamp,
-    Visibility,
+    EventStatus, EventType, RoomContext, RoomEvent, RoomUpdates, Timestamp, Visibility,
 };
 use crate::ops::protocol::{EffectId, Request, RoomCounters, TargetUpdate};
 use crate::ops::{Cx, FrameworkEvent, Notice};
@@ -54,12 +53,8 @@ pub(super) fn delivered(
         };
     }
     let now = cx.env.now();
-    let counters = RoomCounters {
-        event_count: context.room.event_count.saturating_add(1),
-        latest_index: event.index,
-        last_activity_at: Some(now),
-        room: resume(&mut context, now),
-    };
+    let counters = RoomCounters::after_commit(&context.room, event.index)
+        .moving_activity(now, resume(&mut context, now));
     let (target, changed) = match written {
         Some((update, changed)) => {
             for recent in &mut context.recent_events {
@@ -122,12 +117,7 @@ pub(super) fn blocked(
             result,
         };
     }
-    let counters = RoomCounters {
-        event_count: context.room.event_count.saturating_add(1),
-        latest_index: event.index,
-        last_activity_at: context.room.timers.last_activity_at,
-        room: RoomUpdates::default(),
-    };
+    let counters = RoomCounters::after_commit(&context.room, event.index);
     let room_id = event.room_id.clone();
     let request = Request::Commit {
         event,
@@ -143,17 +133,14 @@ pub(super) fn blocked(
 
 /// The visibility a channel's record stored `BLOCKED` keeps: the one step
 /// 12 would have given it, its own intersected with its source binding's
-/// (RFC §7.3), when its source is bound in `bindings`; its own when it is
-/// not (gap G-036). A muted or read-only source's record is narrowed so,
-/// and a reader that sees it later sees no more than it would have.
-pub(super) fn stored_visibility(event: &RoomEvent, bindings: &[ChannelBinding]) -> Visibility {
-    bindings
-        .iter()
-        .find(|binding| binding.channel_id == event.source.channel_id)
-        .map_or_else(
-            || event.visibility.clone(),
-            |source| permissions::effective_visibility(&event.visibility, source, bindings),
-        )
+/// (RFC §7.3), when the room of `context` binds its source; its own when it
+/// does not (gap G-036). A muted or read-only source's record is narrowed
+/// so, and a reader that sees it later sees no more than it would have.
+pub(super) fn stored_visibility(event: &RoomEvent, context: &RoomContext) -> Visibility {
+    context.binding(&event.source.channel_id).map_or_else(
+        || event.visibility.clone(),
+        |source| permissions::effective_visibility(&event.visibility, source, &context.bindings),
+    )
 }
 
 /// The write that resumes the room of `context` at `now` when it is paused,

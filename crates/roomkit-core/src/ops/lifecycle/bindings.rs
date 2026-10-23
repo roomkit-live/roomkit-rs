@@ -141,10 +141,7 @@ impl Operation for UpdateBinding {
         let channel_id = &self.channel_id;
         self.change.poll(environment, |changed, _| match changed {
             Changed::BindingUpdated { binding, .. } => Some(*binding),
-            Changed::Unchanged(context) => context
-                .bindings
-                .into_iter()
-                .find(|binding| &binding.channel_id == channel_id),
+            Changed::Unchanged(context) => context.binding(channel_id).cloned(),
             Changed::Attached { .. }
             | Changed::Detached { .. }
             | Changed::Transitioned { .. }

@@ -355,6 +355,34 @@ pub struct RoomCounters {
     pub room: RoomUpdates,
 }
 
+impl RoomCounters {
+    /// The counters of `room` once an event of index `index` is committed to
+    /// it (RFC §10.1 step 12, §14.3): one more index given out, `index` the
+    /// latest, the room's activity as it is and nothing else written. So
+    /// commit a record stored `BLOCKED` and a record committed outside the
+    /// pipeline (gap G-071); a delivered event moves the activity too
+    /// ([`moving_activity`](Self::moving_activity)).
+    pub(crate) fn after_commit(room: &Room, index: u64) -> Self {
+        Self {
+            event_count: room.event_count.saturating_add(1),
+            latest_index: index,
+            last_activity_at: room.timers.last_activity_at,
+            room: RoomUpdates::default(),
+        }
+    }
+
+    /// The same counters, the room's activity moved to `now`, with `room`
+    /// written on it in the same commit: a delivered event's, which resumes
+    /// a PAUSED room (gap G-045).
+    pub(crate) fn moving_activity(self, now: Timestamp, room: RoomUpdates) -> Self {
+        Self {
+            last_activity_at: Some(now),
+            room,
+            ..self
+        }
+    }
+}
+
 /// What a commit writes on the event an accepted edit or delete targets
 /// (RFC §10.1 step 12, §10.3), in the commit's transaction.
 #[derive(Clone, Debug, PartialEq)]

@@ -61,19 +61,7 @@ pub(super) fn root_deliveries(cx: &mut Cx<'_>, event: &RoomEvent, outcome: &SetO
 /// Fires the `AFTER_BROADCAST` observers of an event whose delivery set
 /// completed (RFC §10.1 step 16).
 pub(super) fn after_broadcast(cx: &mut Cx<'_>, event: &RoomEvent, context: &RoomContext) {
-    let hooks = cx
-        .config
-        .hooks
-        .observers(HookTrigger::AfterBroadcast, &event.source);
-    if hooks.is_empty() {
-        return;
-    }
-    cx.io.notify(Notice::AsyncHooks {
-        trigger: HookTrigger::AfterBroadcast,
-        hooks,
-        event: Box::new(event.clone()),
-        context: Box::new(context.clone()),
-    });
+    cx.fire_observers(HookTrigger::AfterBroadcast, event, context);
 }
 
 /// Fires the mutation trigger of an edit or a delete committed as `change`,
@@ -91,16 +79,7 @@ pub(super) fn target_changed(
     } else {
         HookTrigger::OnEventUpdated
     };
-    let hooks = cx.config.hooks.observers(trigger, &target.source);
-    if hooks.is_empty() {
-        return;
-    }
-    cx.io.notify(Notice::AsyncHooks {
-        trigger,
-        hooks,
-        event: Box::new(target.clone()),
-        context: Box::new(context.clone()),
-    });
+    cx.fire_observers(trigger, target, context);
 }
 
 /// Fires the `ON_TASK_CREATED` observers of each stored task (RFC §9.2),
@@ -108,19 +87,7 @@ pub(super) fn target_changed(
 pub(super) fn tasks_created(cx: &mut Cx<'_>, tasks: &[Task], context: &RoomContext) {
     for task in tasks {
         let payload = task_payload(cx, task);
-        let hooks = cx
-            .config
-            .hooks
-            .observers(HookTrigger::OnTaskCreated, &payload.source);
-        if hooks.is_empty() {
-            return;
-        }
-        cx.io.notify(Notice::AsyncHooks {
-            trigger: HookTrigger::OnTaskCreated,
-            hooks,
-            event: Box::new(payload),
-            context: Box::new(context.clone()),
-        });
+        cx.fire_observers(HookTrigger::OnTaskCreated, &payload, context);
     }
 }
 

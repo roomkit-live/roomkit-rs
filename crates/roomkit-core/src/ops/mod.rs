@@ -63,7 +63,8 @@ pub use protocol::{
     Outcome, ProtocolError, Request, RoomCounters, Settled, Step, TargetUpdate,
 };
 
-use crate::model::{ErrorRecord, EventId, RoomId};
+use crate::model::{ErrorRecord, EventId, RoomContext, RoomEvent, RoomId};
+use crate::rules::hook_registry::HookTrigger;
 
 /// What a sub-machine reads and writes while it advances.
 pub(crate) struct Cx<'op> {
@@ -73,6 +74,28 @@ pub(crate) struct Cx<'op> {
 }
 
 impl Cx<'_> {
+    /// Fires `trigger`'s observers of `payload` (RFC §9.3): the hooks the
+    /// registry runs on an event of its source, in one notice, with
+    /// `context`, which they read whole. Nothing fires when no hook
+    /// observes it.
+    pub(crate) fn fire_observers(
+        &mut self,
+        trigger: HookTrigger,
+        payload: &RoomEvent,
+        context: &RoomContext,
+    ) {
+        let hooks = self.config.hooks.observers(trigger, &payload.source);
+        if hooks.is_empty() {
+            return;
+        }
+        self.io.notify(Notice::AsyncHooks {
+            trigger,
+            hooks,
+            event: Box::new(payload.clone()),
+            context: Box::new(context.clone()),
+        });
+    }
+
     /// Runs `advance` with the requests it issues made in the admission
     /// order of `room_id` (RFC §9.5.1, `Effect::admitted`).
     pub(crate) fn in_admission_order<T>(

@@ -44,8 +44,7 @@ use std::mem;
 use super::arrival::{self, Arrival};
 use super::cascade::{self, entry_result};
 use super::deadline::Stopped;
-use super::direct::{self, Admitted, DirectCall};
-use super::instructions::{self, Admission};
+use super::direct::{self, DirectCall};
 use super::pass::{CommitPass, PassOrigin, PassReport};
 use super::record::{RecordPass, RecordReport};
 use super::{InboundError, InboundResult, Machine, result};
@@ -279,11 +278,13 @@ impl Machine {
                 organization_id,
                 event,
             } => match direct::admit(cx, room_id, *event) {
-                Ok(Admitted::Event(event)) => {
+                Ok(direct::Admitted::Event(event)) => {
                     let call = DirectCall { organization_id };
                     self.enter_pass(cx, adopted, *event, Some(call));
                 }
-                Ok(Admitted::Refused(refused)) => self.settle_entry(cx, &adopted, Ok(*refused)),
+                Ok(direct::Admitted::Refused(refused)) => {
+                    self.settle_entry(cx, &adopted, Ok(*refused));
+                }
                 Err(error) => self.settle_entry(cx, &adopted, Err(error)),
             },
             Entry::Message {
@@ -294,8 +295,10 @@ impl Machine {
         }
     }
 
-    /// A message's steps 1 to 4, in the operation's room; refused
-    /// before anything is read when it cannot be one.
+    /// A message's steps 1 to 4, in the operation's room, once admitted
+    /// (`arrival::admit`). It is charged on the operation's budget before
+    /// its parse: a channel whose parse calls into its room for every
+    /// message is bounded too.
     fn arrive(
         &mut self,
         cx: &mut Cx<'_>,
@@ -304,22 +307,13 @@ impl Machine {
         organization_id: Option<String>,
         message: InboundMessage,
     ) {
-        let (channel, message) = match arrival::resolve(cx.config, message) {
-            Ok(resolved) => resolved,
-            Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
-        };
-        match instructions::admit(cx.config, (&message).into()) {
-            Ok(Admission::Admitted) => {}
-            Ok(Admission::Refused(refusal)) => {
-                return self.settle_entry(cx, &adopted, Ok(instructions::refused(refusal)));
+        let (channel, message) = match arrival::admit(cx.config, message, Some(&self.budget)) {
+            Ok(arrival::Admitted::Message { channel, message }) => (*channel, *message),
+            Ok(arrival::Admitted::Refused(refused)) => {
+                return self.settle_entry(cx, &adopted, Ok(*refused));
             }
             Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
-        }
-        // Charged before its parse: a channel whose parse calls into its room
-        // for every message is bounded too.
-        if !self.budget.take() {
-            return self.settle_entry(cx, &adopted, Ok(result::past_the_budget()));
-        }
+        };
         let mut arrival = Box::new(Arrival::adopted(room_id, organization_id, channel, message));
         within(cx, &adopted, |cx| arrival.start(cx));
         self.adopted.running.push(AdoptedRun {

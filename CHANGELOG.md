@@ -546,3 +546,7 @@ publishes a release.
   its end. A timer sweeper stops when its kit shuts down, and
   `check_timers` returns `KitError::ShutDown`. The examples wait for the
   observers they check with `idle()` instead of a timeout.
+- `ChannelBinding::can_write` is removed: `rules::permissions::write_refusal`
+  says whether a source may write, and why not. `RoomContext::binding(channel_id)`
+  reads a room's binding of a channel, and `rules::routing::kept_by_status`
+  whether a routed room's status, as its lock finds it, keeps the message.

@@ -154,20 +154,11 @@ struct Observers {
 /// G-027). A room just created has the bindings its creation made.
 pub(crate) fn report(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) {
     announce(cx, reported, &context.room.id);
-    let Some(Observers {
-        trigger,
-        hooks,
-        payload,
-    }) = observers(cx, reported, context)
-    else {
+    let Some(trigger) = reported.trigger() else {
         return;
     };
-    cx.io.notify(Notice::AsyncHooks {
-        trigger,
-        hooks,
-        event: Box::new(payload),
-        context: Box::new(context.clone()),
-    });
+    let payload = payload(cx, reported, &context.room.id);
+    cx.fire_observers(trigger, &payload, context);
 }
 
 /// Asks for the change's trigger's hooks to be run and awaited, as every

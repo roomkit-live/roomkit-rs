@@ -26,7 +26,7 @@ use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, DeliveryResult, DeliveryStatus,
     ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
 };
-use crate::ops::protocol::{CHANNEL_NOT_REGISTERED, EffectId, Notice, Outcome, Request};
+use crate::ops::protocol::{CHANNEL_NOT_REGISTERED, EffectId, Outcome, Request};
 use crate::ops::{Cx, Progress};
 use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::HookTrigger;
@@ -425,18 +425,7 @@ impl DeliverySet {
         let now = cx.env.now();
         let within = self.answers_within.as_ref();
         let payload = stamp::error_event(id, &target.binding, &self.event, within, error, now);
-        let hooks = cx
-            .config
-            .hooks
-            .observers(HookTrigger::OnError, &payload.source);
-        if !hooks.is_empty() {
-            cx.io.notify(Notice::AsyncHooks {
-                trigger: HookTrigger::OnError,
-                hooks,
-                event: Box::new(payload),
-                context: target.context.clone(),
-            });
-        }
+        cx.fire_observers(HookTrigger::OnError, &payload, &target.context);
         if self.outcome.error.is_none() {
             self.outcome.error = Some(error.clone());
         }

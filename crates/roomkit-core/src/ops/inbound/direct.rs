@@ -46,10 +46,7 @@ impl DirectCall {
         if !organizations::admits(self.organization_id.as_deref(), &context.room) {
             return Some(InboundError::OtherOrganization(context.room.id.clone()));
         }
-        let bound = context
-            .bindings
-            .iter()
-            .any(|binding| binding.channel_id == event.source.channel_id);
+        let bound = context.binding(&event.source.channel_id).is_some();
         (!bound).then(|| InboundError::Refused {
             reason: WriteRefusal::Unbound.blocked_by().to_owned(),
         })

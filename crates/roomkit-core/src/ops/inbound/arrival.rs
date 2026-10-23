@@ -23,13 +23,14 @@
 
 use std::mem;
 
-use super::InboundError;
 use super::deadline::Stopped;
+use super::instructions::{self, Admission};
 use super::named_room::{Mode, Named, NamedRoom};
-use super::stamp;
+use super::{InboundError, InboundResult, result, stamp};
 use crate::model::{EventId, InboundMessage, RoomContext, RoomEvent, RoomId, Timestamp};
 use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
+use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::routing::{self, RouteQuery, Sender};
 use crate::rules::{addresses, permissions};
 
@@ -49,6 +50,50 @@ pub enum InboundTarget {
     Routed,
 }
 
+/// What a message's admission comes to, before anything is read.
+#[derive(Debug)]
+pub(super) enum Admitted {
+    /// The message arrives, on its channel, its sender in the channel's
+    /// form (step 1).
+    Message {
+        channel: Box<ChannelDeclaration>,
+        message: Box<InboundMessage>,
+    },
+    /// The message is refused, nothing read or written: the call's result.
+    Refused(Box<InboundResult>),
+}
+
+/// Admits `message`, the call's own or an entry's, before anything is
+/// read: step 1, then the refusals of an instruction that cannot be one
+/// (RFC §10.1.1) and of a visibility only the framework writes (gap
+/// G-041), then the charge on `budget`, the reentry budget the message
+/// draws on as its arrival starts, before its parse, when it draws on one
+/// (RFC §8.3, gap G-070): a message past it is refused `reentry_loop_cap`,
+/// with no event.
+///
+/// # Errors
+///
+/// Returns why the message cannot be one: an unregistered channel, the
+/// visibility `internal`, `standalone` on a type other than an
+/// instruction.
+pub(super) fn admit(
+    config: &KitConfig,
+    message: InboundMessage,
+    budget: Option<&ReentryBudget>,
+) -> Result<Admitted, InboundError> {
+    let (channel, message) = resolve(config, message)?;
+    if let Admission::Refused(refusal) = instructions::admit(config, (&message).into())? {
+        return Ok(Admitted::Refused(Box::new(instructions::refused(refusal))));
+    }
+    if budget.is_some_and(|budget| !budget.take()) {
+        return Ok(Admitted::Refused(Box::new(result::past_the_budget())));
+    }
+    Ok(Admitted::Message {
+        channel: Box::new(channel),
+        message: Box::new(message),
+    })
+}
+
 /// Step 1: the registered channel, and the message with its sender written
 /// in the channel's form, before anything reads it (RFC §5.7, §10.1 step 1,
 /// gap G-052). The raw payload keeps the provider's own spelling.
@@ -57,7 +102,7 @@ pub enum InboundTarget {
 ///
 /// Returns [`InboundError::UnknownChannel`] when no channel has the
 /// message's channel id.
-pub(super) fn resolve(
+fn resolve(
     config: &KitConfig,
     mut message: InboundMessage,
 ) -> Result<(ChannelDeclaration, InboundMessage), InboundError> {
@@ -388,11 +433,7 @@ impl Arrival {
     /// (RFC §7.5 rule 8), and no event when the room does not bind it (RFC
     /// §10.1 step 3).
     fn receiver_context(&self, context: RoomContext) -> Box<RoomContext> {
-        let receiver = context
-            .bindings
-            .iter()
-            .find(|binding| binding.channel_id == self.message.channel_id);
-        Box::new(match receiver {
+        Box::new(match context.binding(&self.message.channel_id) {
             Some(receiver) => permissions::context_for(receiver, &context),
             None => RoomContext {
                 recent_events: Vec::new(),

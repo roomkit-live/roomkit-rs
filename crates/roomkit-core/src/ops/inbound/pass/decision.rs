@@ -168,7 +168,7 @@ impl CommitPass {
             Some((by, reason)) => {
                 // A blocked record is stored as step 12 would have stored it
                 // when its source is bound (gap G-036).
-                payload.visibility = self.stored_visibility(&payload, &context.bindings);
+                payload.visibility = self.stored_visibility(&payload, &context);
                 let blocked = commit::blocked(cx, payload, by, reason, &context);
                 self.committing(cx, blocked)
             }
@@ -206,7 +206,7 @@ impl CommitPass {
             }
             Err(refusal) => {
                 let blocked_by = refusal.blocked_by().to_owned();
-                event.visibility = self.stored_visibility(&event, &context.bindings);
+                event.visibility = self.stored_visibility(&event, &context);
                 let blocked =
                     commit::blocked(cx, event, blocked_by.clone(), Some(blocked_by), &context);
                 self.committing(cx, blocked)
@@ -219,13 +219,13 @@ impl CommitPass {
     /// when its source is bound; its own otherwise. An event a hook
     /// injected is no channel's: it keeps the targets the room binds, as
     /// its hooks narrowed them (gaps G-031, G-036).
-    fn stored_visibility(&self, event: &RoomEvent, bindings: &[ChannelBinding]) -> Visibility {
+    fn stored_visibility(&self, event: &RoomEvent, context: &RoomContext) -> Visibility {
         match &self.origin {
             PassOrigin::Injected { targets } => {
-                self.injected_visibility(event, targets.as_deref(), bindings)
+                self.injected_visibility(event, targets.as_deref(), &context.bindings)
             }
             PassOrigin::Trigger | PassOrigin::Adopted(_) | PassOrigin::Response => {
-                commit::stored_visibility(event, bindings)
+                commit::stored_visibility(event, context)
             }
         }
     }
@@ -272,9 +272,8 @@ impl CommitPass {
                 bindings,
             ));
         }
-        let source = bindings
-            .iter()
-            .find(|binding| binding.channel_id == event.source.channel_id)
+        let source = context
+            .binding(&event.source.channel_id)
             .ok_or(WriteRefusal::Unbound)?;
         if let Some(refusal) = permissions::write_refusal(source) {
             return Err(refusal);

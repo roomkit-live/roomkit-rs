@@ -6,9 +6,9 @@
 
 use super::MutationError;
 use super::section::{self, State};
-use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId, RoomUpdates};
+use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId};
+use crate::ops::Cx;
 use crate::ops::protocol::{Outcome, Request, RoomCounters};
-use crate::ops::{Cx, Notice};
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::organizations;
 
@@ -130,12 +130,7 @@ fn commit(
     }
     let mut record = record.clone();
     record.index = context.room.event_count;
-    let counters = RoomCounters {
-        event_count: context.room.event_count.saturating_add(1),
-        latest_index: record.index,
-        last_activity_at: context.room.timers.last_activity_at,
-        room: RoomUpdates::default(),
-    };
+    let counters = RoomCounters::after_commit(&context.room, record.index);
     let request = Request::Commit {
         event: record.clone(),
         counters,
@@ -244,15 +239,6 @@ pub(super) fn report(cx: &mut Cx<'_>, change: &Change, done: &Done) {
         return;
     };
     for event in &done.events {
-        let hooks = cx.config.hooks.observers(trigger, &event.source);
-        if hooks.is_empty() {
-            continue;
-        }
-        cx.io.notify(Notice::AsyncHooks {
-            trigger,
-            hooks,
-            event: Box::new(event.clone()),
-            context: context.clone(),
-        });
+        cx.fire_observers(trigger, event, context);
     }
 }

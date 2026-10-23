@@ -54,10 +54,7 @@ pub fn revoked(room: &Room, channel: &ChannelId) -> bool {
 /// detached from the room, never over a binding the room has (RFC §7.5 rule
 /// 7), and never to a room whose status refuses the message (gap G-053).
 pub fn may_attach_automatically(context: &RoomContext, channel: &ChannelId) -> bool {
-    let bound = context
-        .bindings
-        .iter()
-        .any(|binding| &binding.channel_id == channel);
+    let bound = context.binding(channel).is_some();
     !bound && !revoked(&context.room, channel) && context.room.status.accepts_events()
 }
 
