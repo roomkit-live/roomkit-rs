@@ -14,9 +14,9 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventId, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
-    Timestamp,
+    BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
+    ChannelType, EventContent, EventId, EventStatus, HookResult, InboundMessage, RoomContext,
+    RoomEvent, RoomId, Timestamp,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
@@ -363,7 +363,11 @@ async fn a_muted_agent_is_asked_and_its_answer_stored_blocked() {
     kit.register_channel(agent.clone()).unwrap();
     kit.create_room(&room_id()).await.unwrap();
     kit.attach(&room_id(), sms.id()).await.unwrap();
-    kit.attach_with(&room_id(), agent.id(), |binding| binding.muted = true)
+    let muted = BindingOptions {
+        muted: true,
+        ..BindingOptions::default()
+    };
+    kit.attach_with(&room_id(), agent.id(), muted)
         .await
         .unwrap();
     kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
@@ -378,26 +382,6 @@ async fn a_muted_agent_is_asked_and_its_answer_stored_blocked() {
         ),
         (EventStatus::Blocked, Some("source_muted"), 0)
     );
-}
-
-#[tokio::test]
-async fn configuring_a_binding_cannot_move_it_to_another_room() {
-    let kit = RoomKit::new();
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
-    kit.register_channel(sms.clone()).unwrap();
-    let other = RoomId::new("room_2").unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.create_room(&other).await.unwrap();
-    kit.attach_with(&room_id(), sms.id(), |binding| {
-        binding.room_id = other.clone();
-    })
-    .await
-    .unwrap();
-    let bound = (
-        kit.store().list_bindings(&room_id()).await.unwrap().len(),
-        kit.store().list_bindings(&other).await.unwrap().len(),
-    );
-    assert_eq!(bound, (1, 0));
 }
 
 #[tokio::test]

@@ -28,9 +28,9 @@ use std::future::{Future, ready};
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent,
-    RoomId, Visibility,
+    BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
+    ChannelType, EventContent, EventDirection, EventSource, EventType, InboundMessage, RoomContext,
+    RoomEvent, RoomId, Visibility,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{Channel, ChannelDeclaration, ChannelError, RoomKit, text_of};
@@ -141,10 +141,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.attach(&room, &assistant).await?;
     // What the supervisor writes is for the people in the room, not for
     // its agents.
-    kit.attach_with(&room, supervisor.id(), |binding| {
-        binding.visibility = Visibility::Transport;
-    })
-    .await?;
+    let for_people = BindingOptions {
+        visibility: Visibility::Transport,
+        ..BindingOptions::default()
+    };
+    kit.attach_with(&room, supervisor.id(), for_people).await?;
 
     let spoken = "What time is it?";
     writes(&kit, &room, message(&call, spoken, Visibility::All)).await?;

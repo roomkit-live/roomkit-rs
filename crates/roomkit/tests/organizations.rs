@@ -11,8 +11,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     BindingUpdate, ChannelId, ChannelType, DirectEvent, EventContent, EventDirection, EventSource,
-    EventType, EventUpdates, InboundMessage, Room, RoomEvent, RoomId, RoomStatus, RoomTimers,
-    Timestamp, Visibility,
+    EventType, EventUpdates, InboundMessage, RoomEvent, RoomId, RoomOptions, RoomStatus, Timestamp,
+    Visibility,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -43,18 +43,16 @@ async fn room_of(owner: Option<&str>) -> (RoomKit, Arc<SequentialEnvironment>) {
         kit.register_channel(RecordingTransport::new(channel(id), channel_type))
             .unwrap();
     }
-    let timers = |room: &mut Room| {
-        room.timers = RoomTimers {
-            inactive_after_seconds: Some(60),
-            ..RoomTimers::default()
-        };
+    let timers = || RoomOptions {
+        inactive_after_seconds: Some(60),
+        ..RoomOptions::default()
     };
     if let Some(owner) = owner {
         let owner = kit.for_organization(owner);
-        owner.create_room_with(&room_id(), timers).await.unwrap();
+        owner.create_room_with(&room_id(), timers()).await.unwrap();
         owner.attach(&room_id(), &channel("sms")).await.unwrap();
     } else {
-        kit.create_room_with(&room_id(), timers).await.unwrap();
+        kit.create_room_with(&room_id(), timers()).await.unwrap();
         kit.attach(&room_id(), &channel("sms")).await.unwrap();
     }
     (kit, clock)

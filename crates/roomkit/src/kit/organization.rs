@@ -2,8 +2,8 @@
 //! a handle whose every call is scoped to the organization.
 
 use roomkit_core::model::{
-    BindingUpdate, ChannelBinding, ChannelId, DirectEvent, EventId, EventUpdates, InboundMessage,
-    Room, RoomEvent, RoomId,
+    BindingOptions, BindingUpdate, ChannelBinding, ChannelId, DirectEvent, EventId, EventUpdates,
+    InboundMessage, Room, RoomEvent, RoomId, RoomOptions,
 };
 use roomkit_core::ops::InboundResult;
 
@@ -93,7 +93,9 @@ impl<S: ConversationStore> OrganizationKit<S> {
     ///
     /// As [`RoomKit::create_room`].
     pub async fn create_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
-        self.scope().create_room_with(room_id, |_| {}).await
+        self.scope()
+            .create_room_with(room_id, RoomOptions::default())
+            .await
     }
 
     /// Creates the room `room_id`, belonging to the organization, as
@@ -105,9 +107,9 @@ impl<S: ConversationStore> OrganizationKit<S> {
     pub async fn create_room_with(
         &self,
         room_id: &RoomId,
-        configure: impl FnOnce(&mut Room),
+        options: RoomOptions,
     ) -> Result<Room, KitError> {
-        self.scope().create_room_with(room_id, configure).await
+        self.scope().create_room_with(room_id, options).await
     }
 
     /// Attaches a registered channel to a room of the organization, as
@@ -121,7 +123,9 @@ impl<S: ConversationStore> OrganizationKit<S> {
         room_id: &RoomId,
         channel_id: &ChannelId,
     ) -> Result<ChannelBinding, KitError> {
-        self.scope().attach_with(room_id, channel_id, |_| {}).await
+        self.scope()
+            .attach_with(room_id, channel_id, BindingOptions::default())
+            .await
     }
 
     /// Attaches a registered channel to a room of the organization, as
@@ -135,11 +139,9 @@ impl<S: ConversationStore> OrganizationKit<S> {
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
-        configure: impl FnOnce(&mut ChannelBinding),
+        options: BindingOptions,
     ) -> Result<ChannelBinding, KitError> {
-        self.scope()
-            .attach_with(room_id, channel_id, configure)
-            .await
+        self.scope().attach_with(room_id, channel_id, options).await
     }
 
     /// Detaches a channel from a room of the organization, as

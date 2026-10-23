@@ -28,7 +28,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, EventContent, Identity, IdentityId, InboundMessage,
+    BindingOptions, ChannelId, ChannelType, EventContent, Identity, IdentityId, InboundMessage,
     Participant, ParticipantId, RoomId,
 };
 use roomkit::testing::EchoAgent;
@@ -88,17 +88,13 @@ impl Bank {
         Ok(identity_id)
     }
 
-    /// A room of the bank, bound to its agent and to its number with the
-    /// binding `configure` adjusts.
-    async fn open(
-        &self,
-        room: &str,
-        configure: impl FnOnce(&mut ChannelBinding),
-    ) -> Result<RoomId, Box<dyn Error>> {
+    /// A room of the bank, bound to its agent, and to its number with
+    /// `options`.
+    async fn open(&self, room: &str, options: BindingOptions) -> Result<RoomId, Box<dyn Error>> {
         let room_id = RoomId::new(room)?;
         let bank = self.kit.for_organization(BANK);
         bank.create_room(&room_id).await?;
-        bank.attach_with(&room_id, self.sms.id(), configure).await?;
+        bank.attach_with(&room_id, self.sms.id(), options).await?;
         bank.attach(&room_id, self.agent.id()).await?;
         Ok(room_id)
     }
@@ -111,7 +107,7 @@ impl Bank {
         identity_id: &IdentityId,
         room: &str,
     ) -> Result<RoomId, Box<dyn Error>> {
-        let room_id = self.open(room, |_| {}).await?;
+        let room_id = self.open(room, BindingOptions::default()).await?;
         let member = Participant {
             identity_id: Some(identity_id.clone()),
             ..Participant::new(
@@ -134,10 +130,11 @@ impl Bank {
         room: &str,
     ) -> Result<RoomId, Box<dyn Error>> {
         let correspondent = ParticipantId::new(identity_id.as_str())?;
-        self.open(room, |binding| {
-            binding.participant_id = Some(correspondent);
-        })
-        .await
+        let naming = BindingOptions {
+            participant_id: Some(correspondent),
+            ..BindingOptions::default()
+        };
+        self.open(room, naming).await
     }
 
     /// A text from `number` to the SMS number of `organization`'s rooms;

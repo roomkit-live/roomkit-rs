@@ -622,6 +622,15 @@ publishes a release.
   `process_inbound_in(room_id, message)` runs it into the room the caller
   names (RFC §10.1 step 2); the one call took the room as an `Option`, `None`
   routing the message. An organization's handle has both.
+- `create_room_with` and `attach_with` take what they set as a value,
+  `model::RoomOptions` (the room's timers, agent response policy and
+  metadata) and `model::BindingOptions` (the binding's access, mute,
+  visibility, correspondent, `group`, category, capabilities, limits and
+  metadata), in place of a closure given the whole `&mut Room` or `&mut
+  ChannelBinding`: what the framework owns, a room's id, organization,
+  status, instants and counters, a binding's channel, room, type,
+  direction and attach instant, cannot be named. `RoomOptions::room` and
+  `BindingOptions::apply` build the record.
 - A call acting for an organization writes nothing in another
   organization's room, its due timers included: an injected event and a
   record's commit applied the room's due timer transitions before they

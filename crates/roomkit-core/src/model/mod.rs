@@ -22,6 +22,7 @@ mod hook;
 mod identity;
 mod ids;
 mod inbound;
+mod options;
 mod output;
 mod participant;
 mod room;
@@ -53,6 +54,7 @@ pub use hook::{HookDecision, HookResult, InjectedEvent};
 pub use identity::Identity;
 pub use ids::{ChannelId, EventId, IdentityId, ObservationId, ParticipantId, RoomId, TaskId};
 pub use inbound::InboundMessage;
+pub use options::{BindingOptions, RoomOptions};
 pub use output::{ChannelOutput, ErrorRecord};
 pub use participant::{
     IdentificationStatus, Participant, ParticipantRole, ParticipantStatus, VerificationStatus,

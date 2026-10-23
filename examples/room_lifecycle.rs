@@ -19,7 +19,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, InboundMessage, Room, RoomId, RoomStatus, RoomTimers,
+    ChannelId, ChannelType, EventContent, InboundMessage, Room, RoomId, RoomOptions, RoomStatus,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -55,11 +55,9 @@ impl Helpdesk {
         })
     }
 
-    /// Creates `room` with `timers`, Alice's SMS and the advisor attached.
-    async fn open(&self, room: &RoomId, timers: RoomTimers) -> Result<(), Box<dyn Error>> {
-        self.kit
-            .create_room_with(room, |room| room.timers = timers)
-            .await?;
+    /// Creates `room` with `options`, Alice's SMS and the advisor attached.
+    async fn open(&self, room: &RoomId, options: RoomOptions) -> Result<(), Box<dyn Error>> {
+        self.kit.create_room_with(room, options).await?;
         self.kit.attach(room, self.sms.id()).await?;
         self.kit.attach(room, self.advisor.id()).await?;
         Ok(())
@@ -99,7 +97,7 @@ fn observe_transitions(kit: &RoomKit, transitions: &Log<String>) -> Result<(), B
 async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     let (kit, room) = (&desk.kit, RoomId::new("support")?);
     println!("The integrator runs the room `support` through its lifecycle.");
-    desk.open(&room, RoomTimers::default()).await?;
+    desk.open(&room, RoomOptions::default()).await?;
     desk.alice_says(&room, "Hello").await?;
 
     let paused = kit.pause_room(&room).await?;
@@ -175,10 +173,10 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
 async fn by_timers(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     let (kit, room) = (&desk.kit, RoomId::new("timed")?);
     println!("The room `timed` pauses after 60 s without activity, and closes 120 s later.");
-    let timers = RoomTimers {
+    let timers = RoomOptions {
         inactive_after_seconds: Some(60),
         closed_after_seconds: Some(120),
-        last_activity_at: None,
+        ..RoomOptions::default()
     };
     desk.open(&room, timers).await?;
     desk.alice_says(&room, "Hello").await?;

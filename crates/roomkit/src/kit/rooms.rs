@@ -1,7 +1,9 @@
 //! The room lifecycle and channel bindings (RFC §5.1, §5.7, §7.2): the
 //! kit's calls for each lifecycle operation of the core.
 
-use roomkit_core::model::{BindingUpdate, ChannelBinding, ChannelId, Room, RoomId};
+use roomkit_core::model::{
+    BindingOptions, BindingUpdate, ChannelBinding, ChannelId, Room, RoomId, RoomOptions,
+};
 use roomkit_core::ops::{
     ArchiveRoom, AttachChannel, CloseRoom, CreateRoom, DetachChannel, PauseRoom, ReopenRoom,
     ResumeRoom, UpdateBinding,
@@ -26,13 +28,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// Returns [`KitError::Lifecycle`] when the room exists already.
     pub async fn create_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
-        self.unscoped().create_room_with(room_id, |_| {}).await
+        self.unscoped()
+            .create_room_with(room_id, RoomOptions::default())
+            .await
     }
 
-    /// Creates the room `room_id`, with what `configure` sets: its timers
-    /// (RFC §5.1), its agent response policy and its metadata. Its id, its
-    /// organization, none, its status, instants and counters stay those of
-    /// a new room. Its `ON_ROOM_CREATED` hooks are awaited, as
+    /// Creates the room `room_id` with `options`: its timers (RFC §5.1), its
+    /// agent response policy and its metadata. It belongs to no
+    /// organization, and its status, instants and counters are a new
+    /// room's. Its `ON_ROOM_CREATED` hooks are awaited, as
     /// [`create_room`](Self::create_room)'s.
     ///
     /// # Errors
@@ -43,9 +47,9 @@ impl<S: ConversationStore> RoomKit<S> {
     pub async fn create_room_with(
         &self,
         room_id: &RoomId,
-        configure: impl FnOnce(&mut Room),
+        options: RoomOptions,
     ) -> Result<Room, KitError> {
-        self.unscoped().create_room_with(room_id, configure).await
+        self.unscoped().create_room_with(room_id, options).await
     }
 
     /// Attaches a registered channel to a room with the RFC's default
@@ -61,16 +65,15 @@ impl<S: ConversationStore> RoomKit<S> {
         channel_id: &ChannelId,
     ) -> Result<ChannelBinding, KitError> {
         self.unscoped()
-            .attach_with(room_id, channel_id, |_| {})
+            .attach_with(room_id, channel_id, BindingOptions::default())
             .await
     }
 
-    /// Attaches a registered channel to a room, with the binding `configure`
-    /// adjusts from the default: its access, mute, visibility, category,
-    /// capabilities and metadata. The channel, the room, and the channel's
-    /// type and direction stay what they are. An attach is explicit: it
-    /// clears the channel's revocation if the channel was detached from the
-    /// room (RFC §7.5 rule 7).
+    /// Attaches a registered channel to a room with the binding `options`
+    /// make of the channel's default: its access, mute, visibility,
+    /// correspondent, category, capabilities, limits and metadata. An
+    /// attach is explicit: it clears the channel's revocation if the channel
+    /// was detached from the room (RFC §7.5 rule 7).
     ///
     /// A transport that delivers to a recipient finds it in the binding's
     /// metadata, under the key its declaration names (`phone_number`,
@@ -87,10 +90,10 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
-        configure: impl FnOnce(&mut ChannelBinding),
+        options: BindingOptions,
     ) -> Result<ChannelBinding, KitError> {
         self.unscoped()
-            .attach_with(room_id, channel_id, configure)
+            .attach_with(room_id, channel_id, options)
             .await
     }
 
@@ -227,26 +230,11 @@ impl<S: ConversationStore> Scope<'_, S> {
     pub(super) async fn create_room_with(
         &self,
         room_id: &RoomId,
-        configure: impl FnOnce(&mut Room),
+        options: RoomOptions,
     ) -> Result<Room, KitError> {
         let inner = &self.kit.inner;
         let now = inner.environment().now();
-        let mut room = Room::new(room_id.clone(), now);
-        configure(&mut room);
-        let Room {
-            mut timers,
-            agent_response_policy,
-            metadata,
-            ..
-        } = room;
-        timers.last_activity_at = None;
-        let room = Room {
-            organization_id: self.organization_id(),
-            timers,
-            agent_response_policy,
-            metadata,
-            ..Room::new(room_id.clone(), now)
-        };
+        let room = options.room(room_id.clone(), self.organization_id(), now);
         let create = CreateRoom::new(self.kit.config(), room);
         Ok(driver::run(inner, "create_room", create).await??)
     }
@@ -256,21 +244,14 @@ impl<S: ConversationStore> Scope<'_, S> {
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
-        configure: impl FnOnce(&mut ChannelBinding),
+        options: BindingOptions,
     ) -> Result<ChannelBinding, KitError> {
         let config = self.kit.config();
         let declaration = config
             .channel(channel_id)
             .ok_or_else(|| KitError::UnknownChannel(channel_id.clone()))?;
         let now = self.kit.inner.environment().now();
-        let mut binding = declaration.binding(room_id.clone(), now);
-        configure(&mut binding);
-        // `configure` adjusts the binding's permissions and data, never which
-        // channel it binds to which room, nor what the channel is.
-        binding.channel_id = channel_id.clone();
-        binding.room_id = room_id.clone();
-        binding.channel_type = declaration.channel_type;
-        binding.direction = declaration.direction;
+        let binding = options.apply(declaration.binding(room_id.clone(), now));
         let attach = AttachChannel::new(config, binding, self.organization_id());
         Ok(driver::run(&self.kit.inner, "attach", attach).await??)
     }

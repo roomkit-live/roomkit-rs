@@ -162,7 +162,7 @@ impl<S: ConversationStore> RoomKit<S> {
 mod tests {
     use std::time::Duration;
 
-    use roomkit_core::model::{RoomId, RoomStatus};
+    use roomkit_core::model::{RoomId, RoomOptions, RoomStatus};
     use roomkit_core::ops::FrameworkEvent;
 
     use super::*;
@@ -181,11 +181,11 @@ mod tests {
     /// A kit whose room's inactivity timer fell due at its creation.
     async fn timed_kit() -> RoomKit {
         let kit = RoomKit::new();
-        kit.create_room_with(&room_id(), |room| {
-            room.timers.inactive_after_seconds = Some(0);
-        })
-        .await
-        .unwrap();
+        let options = RoomOptions {
+            inactive_after_seconds: Some(0),
+            ..RoomOptions::default()
+        };
+        kit.create_room_with(&room_id(), options).await.unwrap();
         kit
     }
 

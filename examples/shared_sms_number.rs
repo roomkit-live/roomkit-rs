@@ -16,7 +16,10 @@
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, ParticipantId, RoomId};
+use roomkit::model::{
+    BindingOptions, ChannelId, ChannelType, EventContent, InboundMessage, Metadata, ParticipantId,
+    RoomId,
+};
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{HookTrigger, RoomKit};
 
@@ -76,13 +79,13 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.create_room(&appointment).await?;
     let alice = ParticipantId::new(ALICE)?;
     // The binding names its correspondent, and the number it delivers to.
-    kit.attach_with(&appointment, sms.id(), |binding| {
-        binding.participant_id = Some(alice);
-        binding
-            .metadata
-            .insert("phone_number".to_owned(), ALICE.into());
-    })
-    .await?;
+    let alice_s_binding = BindingOptions {
+        participant_id: Some(alice),
+        metadata: Metadata::from_iter([("phone_number".to_owned(), ALICE.into())]),
+        ..BindingOptions::default()
+    };
+    kit.attach_with(&appointment, sms.id(), alice_s_binding)
+        .await?;
 
     let bobs = text(&kit, sms.id(), BOB, "I would like an appointment.").await?;
     checks.expect(
@@ -103,8 +106,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     println!("The team's number is dedicated to the team's room, bound as a group.");
     let team_room = RoomId::new("team")?;
     kit.create_room(&team_room).await?;
-    kit.attach_with(&team_room, team.id(), |binding| binding.group = true)
-        .await?;
+    kit.attach_with(
+        &team_room,
+        team.id(),
+        BindingOptions {
+            group: true,
+            ..BindingOptions::default()
+        },
+    )
+    .await?;
     let mut landed = Vec::new();
     for sender in [ALICE, BOB, CAROL] {
         landed.push(text(&kit, team.id(), sender, "Hi team").await?);

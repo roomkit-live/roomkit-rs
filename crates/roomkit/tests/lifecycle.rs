@@ -10,9 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers,
-    Timestamp,
+    BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
+    ChannelType, EventContent, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId,
+    RoomOptions, RoomStatus, Timestamp,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
@@ -64,15 +64,12 @@ async fn timed_room(clock: &Clock) -> (RoomKit, RecordingTransport) {
     kit.set_environment(Arc::clone(&clock.0));
     let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
     kit.register_channel(sms.clone()).unwrap();
-    kit.create_room_with(&room_id(), |room| {
-        room.timers = RoomTimers {
-            inactive_after_seconds: Some(60),
-            closed_after_seconds: Some(120),
-            last_activity_at: None,
-        };
-    })
-    .await
-    .unwrap();
+    let timers = RoomOptions {
+        inactive_after_seconds: Some(60),
+        closed_after_seconds: Some(120),
+        ..RoomOptions::default()
+    };
+    kit.create_room_with(&room_id(), timers).await.unwrap();
     kit.attach(&room_id(), sms.id()).await.unwrap();
     (kit, sms)
 }
@@ -332,9 +329,16 @@ mod a_paused_conversation {
     async fn bound_as_a_group_takes_another_member_s_message_and_is_resumed() {
         let clock = Clock::new();
         let (kit, sms, ws) = with_websocket(&clock).await;
-        kit.attach_with(&room_id(), sms.id(), |binding| binding.group = true)
-            .await
-            .unwrap();
+        kit.attach_with(
+            &room_id(),
+            sms.id(),
+            BindingOptions {
+                group: true,
+                ..BindingOptions::default()
+            },
+        )
+        .await
+        .unwrap();
         kit.process_inbound(message(&sms, "Bonjour")).await.unwrap();
         let (paused, _) = paused_by_its_timer(&kit, &clock).await;
         let other = InboundMessage::new(
@@ -661,10 +665,16 @@ mod metadata_updates {
     async fn a_room_created_with_a_reserved_key_is_refused() {
         let kit = RoomKit::new();
         let refused = kit
-            .create_room_with(&room_id(), |room| {
-                room.metadata
-                    .insert("roomkit:detached".to_owned(), Metadata::new().into());
-            })
+            .create_room_with(
+                &room_id(),
+                RoomOptions {
+                    metadata: Metadata::from_iter([(
+                        "roomkit:detached".to_owned(),
+                        Metadata::new().into(),
+                    )]),
+                    ..RoomOptions::default()
+                },
+            )
             .await;
         assert_eq!(
             refused,

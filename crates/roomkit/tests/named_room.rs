@@ -13,9 +13,9 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, HookResult, InboundMessage, Participant, ParticipantId, RoomContext, RoomEvent,
-    RoomId, Timestamp,
+    BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
+    ChannelType, EventContent, HookResult, InboundMessage, Metadata, Participant, ParticipantId,
+    RoomContext, RoomEvent, RoomId, Timestamp,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
@@ -334,13 +334,13 @@ async fn sms_room(attach_sms: Option<&str>) -> (RoomKit, Sms) {
     kit.create_room(&room_id()).await.unwrap();
     kit.attach(&room_id(), &channel("ai")).await.unwrap();
     if let Some(number) = attach_sms {
-        kit.attach_with(&room_id(), &channel("sms"), |binding| {
-            binding
-                .metadata
-                .insert("phone_number".to_owned(), number.into());
-        })
-        .await
-        .unwrap();
+        let recipient = BindingOptions {
+            metadata: Metadata::from_iter([("phone_number".to_owned(), number.into())]),
+            ..BindingOptions::default()
+        };
+        kit.attach_with(&room_id(), &channel("sms"), recipient)
+            .await
+            .unwrap();
     }
     (kit, sms)
 }

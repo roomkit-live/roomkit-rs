@@ -18,7 +18,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, InboundMessage, Room, RoomId, RoomStatus, RoomTimers,
+    BindingOptions, ChannelId, ChannelType, EventContent, InboundMessage, Room, RoomId,
+    RoomOptions, RoomStatus,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{ConversationStore, HookTrigger, RoomKit};
@@ -29,11 +30,11 @@ const ALICE: &str = "+15550000001";
 const BOB: &str = "+15550000002";
 
 /// An hour without activity pauses a room; a day paused closes it.
-fn hourly() -> RoomTimers {
-    RoomTimers {
+fn hourly() -> RoomOptions {
+    RoomOptions {
         inactive_after_seconds: Some(3600),
         closed_after_seconds: Some(86_400),
-        last_activity_at: None,
+        ..RoomOptions::default()
     }
 }
 
@@ -100,8 +101,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let mut checks = Checks::default();
 
     let support = RoomId::new("support")?;
-    kit.create_room_with(&support, |room| room.timers = hourly())
-        .await?;
+    kit.create_room_with(&support, hourly()).await?;
     kit.attach(&support, sms.id()).await?;
     text(&kit, sms.id(), ALICE, "Hello").await?;
     let paused = two_hours_later(&kit, &clock).await?;
@@ -131,10 +131,16 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     println!("The team's number is dedicated to its room, bound as a group.");
     let team_room = RoomId::new("team")?;
-    kit.create_room_with(&team_room, |room| room.timers = hourly())
-        .await?;
-    kit.attach_with(&team_room, team.id(), |binding| binding.group = true)
-        .await?;
+    kit.create_room_with(&team_room, hourly()).await?;
+    kit.attach_with(
+        &team_room,
+        team.id(),
+        BindingOptions {
+            group: true,
+            ..BindingOptions::default()
+        },
+    )
+    .await?;
     text(&kit, team.id(), ALICE, "Meeting at 3?").await?;
     two_hours_later(&kit, &clock).await?;
     let paused_group = status(&kit, &team_room).await?;

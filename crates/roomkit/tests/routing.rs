@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    ErrorRecord, EventContent, Identity, IdentityId, InboundMessage, Participant, ParticipantId,
-    RoomContext, RoomEvent, RoomId, Timestamp,
+    BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
+    ChannelType, ErrorRecord, EventContent, Identity, IdentityId, InboundMessage, Participant,
+    ParticipantId, RoomContext, RoomEvent, RoomId, Timestamp,
 };
 use roomkit::testing::EchoAgent;
 use roomkit::{
@@ -404,9 +404,16 @@ async fn a_custom_router_s_group_room_takes_every_sender() {
     let (kit, _sms) = kit_with_agent();
     let group = room("group");
     kit.create_room(&group).await.unwrap();
-    kit.attach_with(&group, &channel("sms"), |binding| binding.group = true)
-        .await
-        .unwrap();
+    kit.attach_with(
+        &group,
+        &channel("sms"),
+        BindingOptions {
+            group: true,
+            ..BindingOptions::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.set_router(ByTicket::default());
     let landed = [
         routed(&kit, on_ticket(ALICE, "group")).await,
