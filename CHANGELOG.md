@@ -374,8 +374,11 @@ publishes a release.
   index is never reused.
 - A `BEFORE_BROADCAST` modify keeps an edit's or a delete's target, its
   `edit_source` and its `delete_type`; it never turns an event into an edit
-  or a delete, nor an edit or a delete into another event, nor slips one
-  into an edit's new content or a composite.
+  or a delete, nor a delete into another event, nor slips one into an
+  edit's new content or a composite. A hook's content of another kind in
+  place of an edit is the edit's new content, so a hook that redacts as
+  text redacts an edit too, and its target; it left the original edit,
+  whose unredacted text reached the target (RFC §9.4, §10.3, gap G-062).
 - `StoreError::IndexTaken` reads "index N is not room R's next index": the
   commit's index is not the room's next one.
 - `Environment` requires `new_room_id`.

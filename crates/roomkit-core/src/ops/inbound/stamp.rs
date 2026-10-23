@@ -252,27 +252,20 @@ pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> Ro
 }
 
 /// The content a hook's replacement of `original` keeps (RFC §9.4, §10.1
-/// step 8a, gap G-062): an edit keeps its target and its `edit_source`, a
-/// delete its target and its `delete_type`, which step 8a checked; the
-/// hook's new content of an edit and reason of a delete stand. A
-/// replacement that drops an edit's or a delete's content, or that makes an
-/// edit or a delete appear anywhere else (another event's content, a
-/// composite's part, an edit's new content), leaves the original's: an
-/// event stays the change it was checked as, and no change gets past the
-/// check.
+/// step 8a, §10.3, gap G-062): an edit keeps its target and its
+/// `edit_source`, a delete its target and its `delete_type`, which step 8a
+/// checked; the hook's new content of an edit and reason of a delete stand.
+/// A replacement of an edit by content of another kind is the edit's new
+/// content, so that a hook that redacts an event as text redacts an edit
+/// too. A replacement that is or holds a change where it may not (in place
+/// of an edit, in an edit's new content, a composite's part, another
+/// event's content), and any replacement of a delete by another kind of
+/// content, leave the original's: an event stays the change it was checked
+/// as, and no change gets past the check.
 fn kept_change(original: &EventContent, modified: EventContent) -> EventContent {
     match (original, modified) {
         (EventContent::Edit(original), EventContent::Edit(modified)) => {
-            let new_content = if edits::holds_change(&modified.new_content) {
-                original.new_content.clone()
-            } else {
-                modified.new_content
-            };
-            EventContent::Edit(EditContent {
-                target_event_id: original.target_event_id.clone(),
-                new_content,
-                edit_source: original.edit_source,
-            })
+            edit_with(original, modified.new_content)
         }
         (EventContent::Delete(original), EventContent::Delete(modified)) => {
             EventContent::Delete(DeleteContent {
@@ -281,10 +274,26 @@ fn kept_change(original: &EventContent, modified: EventContent) -> EventContent 
                 reason: modified.reason,
             })
         }
-        (EventContent::Edit(_) | EventContent::Delete(_), _) => original.clone(),
+        (EventContent::Edit(original), modified) => edit_with(original, Box::new(modified)),
+        (EventContent::Delete(_), _) => original.clone(),
         (_, modified) if edits::holds_change(&modified) => original.clone(),
         (_, modified) => modified,
     }
+}
+
+/// `original`, the edit step 8a checked, with the hook's `new_content`, or
+/// its own when the hook's is or holds a change.
+fn edit_with(original: &EditContent, new_content: Box<EventContent>) -> EventContent {
+    let new_content = if edits::holds_change(&new_content) {
+        original.new_content.clone()
+    } else {
+        new_content
+    };
+    EventContent::Edit(EditContent {
+        target_event_id: original.target_event_id.clone(),
+        new_content,
+        edit_source: original.edit_source,
+    })
 }
 
 /// The payload of `ON_ERROR` for a turn of `channel` that failed on
@@ -669,12 +678,45 @@ mod tests {
         );
     }
 
+    /// RFC §9.4, §10.3: a replacement of an edit by content of another
+    /// kind is the edit's new content, its target and `edit_source` kept.
     #[test]
-    fn a_replacement_dropping_an_edit_s_content_keeps_the_original() {
-        let mut text = edit_of("evt_3", "x");
-        text.content = EventContent::text("plain");
+    fn a_text_in_place_of_an_edit_is_the_edit_s_new_content() {
+        let mut text = edit_of("evt_1", "x");
+        text.content = EventContent::text("[redacted]");
         let kept = keep_identity(&edit_of("evt_3", "x"), text);
-        assert_eq!(kept.content, edit_of("evt_3", "x").content);
+        assert_eq!(kept.content, edit_of("evt_3", "[redacted]").content);
+    }
+
+    /// RFC §10.3: a replacement that is or holds a change leaves an edit's
+    /// content, and any replacement of another kind leaves a delete's.
+    #[test]
+    fn a_change_in_place_of_an_edit_or_anything_in_place_of_a_delete_keeps_the_original() {
+        let delete = EventContent::Delete(DeleteContent {
+            target_event_id: EventId::new("evt_3").unwrap(),
+            delete_type: crate::model::DeleteType::Sender,
+            reason: None,
+        });
+        let smuggling = EventContent::Composite(
+            crate::model::CompositeContent::new(vec![
+                EventContent::text("Hi"),
+                edit_of("evt_9", "x").content,
+            ])
+            .unwrap(),
+        );
+        let cases = [
+            (edit_of("evt_3", "x").content, delete.clone()),
+            (edit_of("evt_3", "x").content, smuggling),
+            (delete, EventContent::text("[redacted]")),
+        ];
+        for (original, replacement) in cases {
+            let mut event = trigger();
+            event.content = original.clone();
+            let mut modified = trigger();
+            modified.content = replacement;
+            let kept = keep_identity(&event, modified);
+            assert_eq!(kept.content, original);
+        }
     }
 
     #[test]

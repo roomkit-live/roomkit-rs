@@ -941,6 +941,35 @@ mod a_hook {
         );
     }
 
+    /// RFC §9.4, §10.3, gap G-062: a hook that redacts an event as text
+    /// redacts an edit too: its text is the edit's new content, of the same
+    /// target and `edit_source`, and the target takes it.
+    #[test]
+    fn s_redaction_as_text_is_an_edit_s_new_content() {
+        let mut sim = room();
+        sim.before_broadcast(
+            "redactor",
+            Box::new(|event| {
+                let mut redacted = event.clone();
+                redacted.content = EventContent::text("I need [redacted]");
+                HookOutcome::Returned(HookResult::modify(redacted))
+            }),
+        );
+        sim.send(edit()).unwrap();
+        let redacted = EventContent::Edit(EditContent {
+            target_event_id: id("evt_1"),
+            new_content: Box::new(EventContent::text("I need [redacted]")),
+            edit_source: Some(EditSource::Sender),
+        });
+        assert_eq!(
+            (
+                stored(&sim, "evt_2").content.clone(),
+                stored(&sim, "evt_1").content.clone()
+            ),
+            (redacted, EventContent::text("I need [redacted]"))
+        );
+    }
+
     /// Gap G-062: a modify cannot slip a change into an edit's new content;
     /// the target takes the new content step 8a saw.
     #[test]
