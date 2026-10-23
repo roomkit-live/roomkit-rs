@@ -6,13 +6,12 @@ for conversations between humans, AI agents and programs.
 
 > **Status: pre-alpha.** Step 1 is done: the text path of the RFC's inbound
 > and broadcast pipelines, with hooks, permissions, transcoding and the
-> chain-depth limit, on a tokio runtime and an in-memory store. Step 2, the
-> rest of Level 0, is in progress: the room lifecycle and its timers, a
-> message naming its room, routing a message that names no room to its
-> conversation, edits and deletes, instructions, off-lock checks with the
-> processing timeout, and direct injection with the reentrant lock are
-> implemented, the last in review. No provider yet, and the API will
-> change.
+> chain-depth limit, on a tokio runtime and an in-memory store. Step 2 is
+> done: the rest of Level 0, from the room lifecycle and its timers,
+> routing, edits and deletes and instructions to off-lock checks, the
+> processing timeout, direct injection and the reentrant lock. The turn
+> backend and streamed responses come with step 4. No provider yet, and
+> the API will change.
 
 ## Why a Rust implementation
 
@@ -70,7 +69,7 @@ cargo run -p roomkit --example edit_and_delete   # B.6, B.7: an edit and a delet
   the crates and their rules.
 - [Roadmap](docs/roadmap.md): the steps, from the text path to voice.
 - [Step 1](docs/steps/step-01.md): the text path, done.
-- [Step 2](docs/steps/step-02.md): the rest of Level 0, the current step.
+- [Step 2](docs/steps/step-02.md): the rest of Level 0, done.
 - [RFC gaps](docs/rfc-gaps.md): what the specification leaves open, and the
   decisions taken here.
 
