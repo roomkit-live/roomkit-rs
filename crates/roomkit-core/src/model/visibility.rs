@@ -432,4 +432,80 @@ mod tests {
     fn deserialization_applies_the_grammar() {
         assert!(serde_json::from_value::<Visibility>(json!("sms,")).is_err());
     }
+
+    /// Properties over every visibility of a room binding `sms`, `ws`, `crm`
+    /// (transports), `ai` and `bot` (intelligence channels).
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// The room's channels, with their categories.
+        const ROOM: [(&str, ChannelCategory); 5] = [
+            ("sms", ChannelCategory::Transport),
+            ("ws", ChannelCategory::Transport),
+            ("crm", ChannelCategory::Transport),
+            ("ai", ChannelCategory::Intelligence),
+            ("bot", ChannelCategory::Intelligence),
+        ];
+
+        fn category_of(id: &ChannelId) -> Option<ChannelCategory> {
+            ROOM.iter()
+                .find(|(room, _)| *room == id.as_str())
+                .map(|(_, category)| *category)
+        }
+
+        /// Any visibility: a keyword, or a list of the room's channels.
+        fn visibility() -> impl Strategy<Value = Visibility> {
+            let listed =
+                proptest::sample::subsequence(ROOM.to_vec(), 1..=ROOM.len()).prop_map(|channels| {
+                    Visibility::channels(channels.into_iter().map(|(id, _)| channel(id))).unwrap()
+                });
+            prop_oneof![
+                Just(Visibility::All),
+                Just(Visibility::None),
+                Just(Visibility::Internal),
+                Just(Visibility::Transport),
+                Just(Visibility::Intelligence),
+                listed,
+            ]
+        }
+
+        proptest! {
+            #[test]
+            fn an_intersection_does_not_depend_on_the_order(
+                first in visibility(),
+                second in visibility(),
+            ) {
+                prop_assert_eq!(
+                    first.intersect(&second, category_of),
+                    second.intersect(&first, category_of)
+                );
+            }
+
+            /// Gap G-009: the intersection admits exactly the channels both
+            /// admit.
+            #[test]
+            fn an_intersection_admits_what_both_admit(
+                first in visibility(),
+                second in visibility(),
+            ) {
+                let both = first.intersect(&second, category_of);
+                for (id, category) in ROOM {
+                    let id = channel(id);
+                    prop_assert_eq!(
+                        both.admits(&id, category),
+                        first.admits(&id, category) && second.admits(&id, category),
+                        "{} on {} and {}", id, first, second
+                    );
+                }
+            }
+
+            /// RFC §7.3: a visibility reads back from its text form.
+            #[test]
+            fn a_visibility_reads_back_from_its_text(visibility in visibility()) {
+                prop_assert_eq!(parse(&visibility.to_string()).unwrap(), visibility);
+            }
+        }
+    }
 }

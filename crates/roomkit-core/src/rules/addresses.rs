@@ -748,4 +748,44 @@ mod tests {
     fn a_whatsapp_personal_group_message_carries_its_group_under_group_jid() {
         assert_eq!(chat_key(ChannelType::WhatsappPersonal), Some("group_jid"));
     }
+
+    /// Properties of the form a channel writes its addresses in.
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// What a phone number is written with: digits, `+`, the
+        /// separators, and a scheme.
+        fn written_number() -> impl Strategy<Value = String> {
+            let characters = proptest::collection::vec(
+                proptest::sample::select("0123456789+ -.()".chars().collect::<Vec<_>>()),
+                0..20,
+            );
+            let scheme = proptest::sample::select(vec!["", "tel:", "whatsapp:"]);
+            (scheme, characters).prop_map(|(scheme, characters)| {
+                format!("{scheme}{}", characters.into_iter().collect::<String>())
+            })
+        }
+
+        fn country_code() -> impl Strategy<Value = Option<CountryCode>> {
+            proptest::option::of(
+                proptest::sample::select(vec!["1", "33", "39", "44", "86"]).prop_map(code),
+            )
+        }
+
+        proptest! {
+            /// RFC §5.7: a number in its channel's form stays in it, so
+            /// comparing addresses compares their forms once.
+            #[test]
+            fn a_phone_number_s_form_is_its_own_form(
+                written in written_number(),
+                country_code in country_code(),
+            ) {
+                let once = normalize(&written, Addressing::PhoneNumber, country_code.as_ref());
+                let twice = normalize(&once, Addressing::PhoneNumber, country_code.as_ref());
+                prop_assert_eq!(twice, once);
+            }
+        }
+    }
 }

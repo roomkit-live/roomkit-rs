@@ -150,4 +150,23 @@ mod tests {
     fn a_malformed_timestamp_does_not_deserialize() {
         assert!(serde_json::from_value::<Timestamp>(json!("yesterday")).is_err());
     }
+
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        proptest! {
+            /// A timestamp reads back from its text form, to the
+            /// millisecond, from year 1 to year 9999.
+            #[test]
+            fn a_timestamp_reads_back_from_its_text(
+                millis in -62_135_596_800_000_i64..253_402_300_800_000,
+            ) {
+                let instant = Timestamp::from_unix_millis(millis).unwrap();
+                let read: Timestamp = instant.to_string().parse().unwrap();
+                prop_assert_eq!(read.as_unix_millis(), millis);
+            }
+        }
+    }
 }

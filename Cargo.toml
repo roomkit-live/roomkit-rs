@@ -25,6 +25,9 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", 
 uuid = { version = "1", features = ["v4"] }
 
 pretty_assertions = "1"
+# Property tests (decision 3 of step 2b). No default features: no forking
+# test runner, no regex strategies, no persisted failure files.
+proptest = { version = "1", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
