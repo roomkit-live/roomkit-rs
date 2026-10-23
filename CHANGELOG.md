@@ -71,8 +71,9 @@ publishes a release.
   `teams_conversation_id` for Teams, `telegram_chat_id` for Telegram; none
   for a channel that delivers to a destination of its own (WebSocket,
   webhook, voice). The integrator may declare another key, or none.
-- The protocol's `EnterLane`, `LeaveLane` and `RunObservers` requests,
-  `HookTrigger::OnSessionStarted` and `FrameworkEvent::SessionStarted`.
+- The protocol's `EnterLane`, `AwaitLane`, `LeaveLane` and `RunObservers`
+  requests, `Outcome::LaneTurn`, `HookTrigger::OnSessionStarted` and
+  `FrameworkEvent::SessionStarted`.
 - Participants in the store (`create_participant`, `get_participant`,
   `update_participant`, `delete_participant`, `list_participants`), and in
   every room context.
@@ -187,10 +188,10 @@ publishes a release.
   `HookChain::take_incidents`.
 - The processing timeout (RFC §13.6, §10.4): `KitConfig::process_timeout`
   and `RoomKit::set_process_timeout`, off by default, bound a call from its
-  start to its decision: routing, the room's lane, the parse, the off-lock
-  hooks, the ticket's turn, the room lock and the locked section up to the
-  commit. Past it nothing of the event is written, the hooks' injected
-  events and side effects are dropped, what the call holds is released,
+  start to its decision: routing, the parse, the off-lock hooks, the
+  ticket's turn, the room lock and the locked section up to the commit.
+  Past it nothing of the event is written, the hooks' injected events and
+  side effects are dropped, what the call holds is released,
   `process_timeout` is emitted (`FrameworkEvent::ProcessTimeout`, naming
   the channel before the room lock and the event under it), and the result
   is `blocked` with the reason `process_timeout`. The commit and what
@@ -224,16 +225,23 @@ publishes a release.
   itself. A lifecycle change, a direct mutation or `commit_event` made from a
   hook under the lock takes the lock again at once, within the hook's
   execution context, a tokio task-local the driver scopes into every call it
-  makes. `send_event` or `process_inbound` naming the room, made by a hook, a
-  turn, a delivery or an awaited `ON_ROOM_CREATED` hook, is adopted by the
-  call that holds the room's lane: from a locked hook it commits ahead of the
-  event being decided, which takes the next index; from anywhere else it
-  commits beside the running work; either way its caller receives it at its
-  commit, and its delivery follows in the lane. A call that would wait for
-  what its own context holds fails with `KitError::Reentrant` (gap G-070).
+  makes. `send_event` or `process_inbound` naming the room, made under its
+  lock or in its admission order (an off-lock hook's body, the message's
+  parse), is adopted by the call whose work made it: from a locked hook it
+  commits ahead of the event being decided, which takes the next index;
+  from the admission order it commits beside the running work; either way
+  its caller receives it at its commit. One made by a turn, a delivery or
+  an awaited `ON_ROOM_CREATED` hook is a new arrival, a call of its own;
+  one a turn or a delivery makes into its own room is answered at its
+  decision, its delivery waiting behind its caller's. A call that would
+  wait for what its own context holds fails with `KitError::Reentrant` (gap
+  G-070).
 - The protocol's adoption: `Operation::adopt(entry, origin)`, `Entry`,
   `EntryId`, `Step::settled` and `Settled`; `Effect::locked`, the room lock
-  an operation holds on a request's behalf.
+  an operation holds on a request's behalf, and `Effect::admitted`, the
+  room in whose admission order a request stands; `Step::decided` and
+  `Decided`, an inbound call's decision, published once, before its
+  deliveries.
 - `roomkit::keep_context(future)`: a task a hook or a turn spawns and
   awaits as its own keeps the call's execution context (RFC §13.5).
   `KitError::Reentrant` and `KitError::Abandoned`.
@@ -385,13 +393,45 @@ publishes a release.
 - `Inbound::new(config, target, organization_id, message)` takes an
   `InboundTarget` and the organization the caller acts for. A message naming
   a missing room creates it instead of failing.
-- The room's delivery lane is an effect: an inbound operation enters it once
-  the room is known and leaves it on every path, and the driver holds it in
-  between.
+- The room's delivery lane is an effect, taken at the commit (RFC §10.2):
+  an event takes its place under the room lock, between its `Commit` and
+  the release (`EnterLane`), its delivery set waits for the place's turn
+  (`AwaitLane`) and leaves it once over (`LeaveLane`), each naming the
+  event; an instruction takes its place at its decision. The runtime keeps
+  one queue of places per room. Calls into one room overlap until the room
+  lock, commit in lock order and deliver in index order, and another call's
+  commit may land between a trigger and its responses; the lane was a
+  per-room mutex held for the whole call (gap G-070).
 - `source_unbound` marks the event of a channel detached from the room: step
   2 attaches any other unbound channel.
 - The default `handle_inbound` names the sender as the event source's
   `participant_id`.
+- Two calls into one room run their off-lock checks at the same time and
+  commit in ticket order, whichever check finishes first; an event no
+  off-lock hook fires for may commit during another call's check. Two
+  checks of one room never overlapped (gap G-067).
+- `process_timeout` no longer counts the wait for an earlier call's
+  cascade: a call behind a slow delivery commits within its bound, and its
+  delivery waits after the commit. A call into a busy room was refused past
+  its bound (gap G-068).
+- A call that an agent's turn or a delivery makes into a room is a new
+  arrival: its own operation, admission ticket, `process_timeout` and
+  reentry budget, its off-lock hooks run off the lock; it was adopted
+  beside the running work. Into its caller's own room it is answered at its
+  decision, `send_event` returning the committed event with no delivery
+  results, its delivery run after its caller's set and its end logged; a
+  message a turn routes back into its room is answered so too, where it
+  failed `KitError::Reentrant`. A `send_event` from an awaited
+  `ON_ROOM_CREATED` hook waits for its delivery and reports it (gap G-070).
+- A call made within an agent's turn is at least as deep as the turn's
+  response, so an agent that injects into its room on every turn, through
+  any channel, stops at the chain-depth limit (RFC §10.6, §8.3, gap G-070).
+- An inbound call runs on a task of its own, within its caller's execution
+  context; a caller that stops waiting aborts it. `KitError::Stalled` also
+  reports a run the runtime cancelled, as it does when it shuts down.
+- A lane request that fails is logged and the event delivered all the same
+  (RFC §13.6); a failed leave no longer sets the result's `error`.
+  `InboundError::Lane` is removed.
 - `ChannelDeclaration` has `recipient_key` and `country_code`;
   `RecordingTransport` declares no recipient key, its record being its
   destination.
