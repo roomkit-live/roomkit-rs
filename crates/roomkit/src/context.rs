@@ -8,10 +8,10 @@
 //! that hands it calls into its room), the effect whose call this is, when
 //! the operation made the request under a room's lock (`Effect::locked`),
 //! a lease on that lock's tenure, the room in whose admission order the
-//! request runs (`Effect::admitted`), and the room a delivery set delivers
-//! in, for its `on_event()` and `deliver()` calls. A call made inside a call
-//! keeps the outer frames: a hook of room S run inside a hook of room R's
-//! pass holds R's lease too.
+//! request runs (`Effect::admitted`), the room a delivery set delivers in,
+//! for its `on_event()` and `deliver()` calls, and, for a turn, the depth
+//! of its response. A call made inside a call keeps the outer frames: a hook
+//! of room S run inside a hook of room R's pass holds R's lease too.
 //!
 //! The driver reads the context of the task that runs it:
 //!
@@ -27,7 +27,10 @@
 //! - an inbound call into a room its context works in, under the room's
 //!   lock, in its admission order or delivering in it, returns at its
 //!   decision rather than wait for its delivery, which may wait in the
-//!   room's lane behind its own caller's set (RFC §10.1 step 18).
+//!   room's lane behind its own caller's set (RFC §10.1 step 18);
+//! - a call made within a turn is at least as deep as the turn's response
+//!   (RFC §10.6), so that an agent that calls into its room on every turn
+//!   stops at the chain-depth limit (RFC §8.3).
 //!
 //! A refusal fails the call ([`KitError::Reentrant`](crate::KitError::Reentrant))
 //! rather than let it wait for itself.
@@ -46,8 +49,9 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use roomkit_core::model::RoomId;
-use roomkit_core::ops::{EffectId, Entry, InboundError, InboundResult};
+use roomkit_core::model::{ChannelCategory, RoomId};
+use roomkit_core::ops::{Effect, EffectId, Entry, InboundError, InboundResult, Request};
+use roomkit_core::rules::chain_depth;
 use tokio::sync::{mpsc, oneshot};
 
 tokio::task_local! {
@@ -117,12 +121,24 @@ pub(crate) struct Frame {
     run: Arc<RunShared>,
     effect: EffectId,
     lease: Option<Lease>,
-    /// The room in whose admission order the effect's request runs (RFC
-    /// §9.5.1).
-    admitted: Option<RoomId>,
-    /// The room a delivery set delivers in, when the effect's request is
-    /// one of its calls (RFC §10.2).
-    delivering: Option<RoomId>,
+    work: Work,
+}
+
+/// What a frame records of the request whose call it is.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Work {
+    /// The room whose lock the operation holds on the call's behalf
+    /// (`Effect::locked`).
+    pub(crate) locked: Option<RoomId>,
+    /// The room in whose admission order the call runs (`Effect::admitted`,
+    /// RFC §9.5.1).
+    pub(crate) admitted: Option<RoomId>,
+    /// The room a delivery set delivers in, for its `on_event()` and
+    /// `deliver()` calls (RFC §10.2).
+    pub(crate) delivering: Option<RoomId>,
+    /// The depth of a turn's response, for a turn: an intelligence
+    /// channel's `on_event()` (RFC §8.3, §10.6).
+    pub(crate) response_depth: Option<u32>,
 }
 
 /// The frames of the calls the current task runs within, the innermost
@@ -213,24 +229,62 @@ impl Lease {
     }
 }
 
+impl Work {
+    /// What the frame of `effect`'s call records.
+    pub(crate) fn of(effect: &Effect) -> Self {
+        let (delivering, response_depth) = match &effect.request {
+            Request::OnEvent { binding, event, .. } => {
+                let turn = binding.category == ChannelCategory::Intelligence;
+                let depth = turn.then(|| chain_depth::response_depth(event));
+                (Some(binding.room_id.clone()), depth)
+            }
+            Request::Deliver { binding, .. } => (Some(binding.room_id.clone()), None),
+            Request::AcquireLock { .. }
+            | Request::ReleaseLock { .. }
+            | Request::EnterLane { .. }
+            | Request::AwaitLane { .. }
+            | Request::LeaveLane { .. }
+            | Request::TakeTicket { .. }
+            | Request::AwaitTicket { .. }
+            | Request::ReleaseTicket { .. }
+            | Request::LoadContext { .. }
+            | Request::FindByIdempotencyKey { .. }
+            | Request::GetEvent { .. }
+            | Request::Commit { .. }
+            | Request::PersistSideEffects { .. }
+            | Request::CreateRoom { .. }
+            | Request::UpdateRoom { .. }
+            | Request::StoreBinding { .. }
+            | Request::DeleteBinding { .. }
+            | Request::UpdateEvent { .. }
+            | Request::DeleteEvent { .. }
+            | Request::ResolveIdentity { .. }
+            | Request::Route { .. }
+            | Request::HandleInbound { .. }
+            | Request::RunHook { .. }
+            | Request::RunObservers { .. } => (None, None),
+        };
+        Self {
+            locked: effect.locked.clone(),
+            admitted: effect.admitted.clone(),
+            delivering,
+            response_depth,
+        }
+    }
+}
+
 impl Frame {
-    /// The frame of the call for `effect`, made by `run`, under the lock of
-    /// `locked` when the operation holds it on the call's behalf, in the
-    /// admission order of `admitted` when it runs in one, delivering in
-    /// `delivering` for a delivery set's call.
-    pub(crate) fn new(
-        run: &Arc<RunShared>,
-        effect: EffectId,
-        locked: Option<&RoomId>,
-        admitted: Option<RoomId>,
-        delivering: Option<RoomId>,
-    ) -> Self {
+    /// The frame of the call for `effect`, made by `run`, recording `work`;
+    /// a call under a lock the run holds takes a lease on its tenure.
+    pub(crate) fn new(run: &Arc<RunShared>, effect: EffectId, work: Work) -> Self {
         Self {
             run: Arc::clone(run),
             effect,
-            lease: locked.and_then(|room_id| run.lease_of(room_id)),
-            admitted,
-            delivering,
+            lease: work
+                .locked
+                .as_ref()
+                .and_then(|room_id| run.lease_of(room_id)),
+            work,
         }
     }
 
@@ -239,7 +293,7 @@ impl Frame {
     /// adopt (RFC §9.5.1 Reentrance).
     fn adopts_into(&self, room_id: &RoomId) -> bool {
         self.lease.as_ref().map(Lease::room_id) == Some(room_id)
-            || self.admitted.as_ref() == Some(room_id)
+            || self.work.admitted.as_ref() == Some(room_id)
     }
 
     /// The effect whose call this is.
@@ -305,7 +359,7 @@ impl ExecutionContext {
     pub(crate) fn is_admitted_to(&self, room_id: &RoomId) -> bool {
         self.frames
             .iter()
-            .any(|frame| frame.admitted.as_ref() == Some(room_id))
+            .any(|frame| frame.work.admitted.as_ref() == Some(room_id))
     }
 
     /// Whether an inbound call of this context into `room_id` returns at
@@ -315,9 +369,20 @@ impl ExecutionContext {
     pub(crate) fn detaches(&self, room_id: &RoomId) -> bool {
         self.lease(room_id).is_some()
             || self.frames.iter().any(|frame| {
-                frame.delivering.as_ref() == Some(room_id)
-                    || frame.admitted.as_ref() == Some(room_id)
+                frame.work.delivering.as_ref() == Some(room_id)
+                    || frame.work.admitted.as_ref() == Some(room_id)
             })
+    }
+
+    /// The least chain depth of a call made in this context: the response
+    /// depth of the deepest turn it runs within, `None` outside every turn
+    /// (RFC §10.6: a call a turn makes is at least as deep as the turn's
+    /// response).
+    pub(crate) fn turn_depth(&self) -> Option<u32> {
+        self.frames
+            .iter()
+            .filter_map(|frame| frame.work.response_depth)
+            .max()
     }
 
     /// The innermost frame that runs under `room_id`'s lock or in its
@@ -340,6 +405,17 @@ pub(crate) async fn adopt(entry: Entry) -> Adopting {
         return Adopting::Apart(entry);
     };
     frame.adopt(entry).await
+}
+
+/// Raises `chain_depth`, the depth of a call the current task makes into a
+/// room, to the response depth of the deepest turn the task runs within
+/// (RFC §10.6: a call a turn makes is at least as deep as the turn's
+/// response), so that an agent calling into its room on every turn stops at
+/// the chain-depth limit, as its responses do (RFC §8.3).
+pub(crate) fn as_deep_as_its_turn(chain_depth: &mut u32) {
+    if let Some(depth) = ExecutionContext::current().turn_depth() {
+        *chain_depth = (*chain_depth).max(depth);
+    }
 }
 
 /// Runs `future` within the execution context of the current task, for a
@@ -373,7 +449,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use roomkit_core::ops::{CheckTimers, KitConfig, Next, Operation, SequentialEnvironment};
+    use roomkit_core::model::{
+        ChannelDirection, ChannelId, ChannelType, EventContent, EventDirection, EventSource,
+        EventType, Room, RoomContext, RoomEvent, Timestamp,
+    };
+    use roomkit_core::ops::{
+        ChannelDeclaration, CheckTimers, KitConfig, Next, Operation, SequentialEnvironment,
+    };
 
     use super::*;
 
@@ -397,9 +479,10 @@ mod tests {
         let context = ExecutionContext::default().within(Frame::new(
             &run,
             effect(),
-            Some(&room_id()),
-            None,
-            None,
+            Work {
+                locked: Some(room_id()),
+                ..Work::default()
+            },
         ));
         assert!(context.lease(&room_id()).is_some());
     }
@@ -412,9 +495,10 @@ mod tests {
         let context = ExecutionContext::default().within(Frame::new(
             &run,
             effect(),
-            Some(&room_id()),
-            None,
-            None,
+            Work {
+                locked: Some(room_id()),
+                ..Work::default()
+            },
         ));
         run.released(&room_id());
         assert!(context.lease(&room_id()).is_none());
@@ -428,9 +512,10 @@ mod tests {
         let context = ExecutionContext::default().within(Frame::new(
             &run,
             effect(),
-            Some(&room_id()),
-            None,
-            None,
+            Work {
+                locked: Some(room_id()),
+                ..Work::default()
+            },
         ));
         run.released(&room_id());
         run.locked(room_id());
@@ -442,7 +527,7 @@ mod tests {
         let (run, _queue) = RunShared::new();
         run.locked(room_id());
         let context =
-            ExecutionContext::default().within(Frame::new(&run, effect(), None, None, None));
+            ExecutionContext::default().within(Frame::new(&run, effect(), Work::default()));
         assert!(context.lease(&room_id()).is_none());
     }
 
@@ -454,9 +539,10 @@ mod tests {
         let context = ExecutionContext::default().within(Frame::new(
             &run,
             effect(),
-            None,
-            Some(room_id()),
-            None,
+            Work {
+                admitted: Some(room_id()),
+                ..Work::default()
+            },
         ));
         let other = RoomId::new("room_2").unwrap();
         assert_eq!(
@@ -475,13 +561,21 @@ mod tests {
         outer.locked(room_id());
         let other = RoomId::new("room_2").unwrap();
         let context = ExecutionContext::default()
-            .within(Frame::new(&outer, effect(), Some(&room_id()), None, None))
+            .within(Frame::new(
+                &outer,
+                effect(),
+                Work {
+                    locked: Some(room_id()),
+                    ..Work::default()
+                },
+            ))
             .within(Frame::new(
                 &inner,
                 effect(),
-                None,
-                Some(other.clone()),
-                None,
+                Work {
+                    admitted: Some(other.clone()),
+                    ..Work::default()
+                },
             ));
         let taker = |room_id: &RoomId| {
             context
@@ -498,6 +592,63 @@ mod tests {
         );
     }
 
+    /// The effect of `on_event()` to a channel of `category`, for an event
+    /// at `depth`.
+    fn on_event(category: ChannelCategory, depth: u32) -> Effect {
+        let channel = ChannelId::new("ai").unwrap();
+        let declaration = ChannelDeclaration::new(
+            channel.clone(),
+            ChannelType::Ai,
+            category,
+            ChannelDirection::Bidirectional,
+        );
+        let source = EventSource::new(channel, ChannelType::Ai, EventDirection::Inbound);
+        let mut event = RoomEvent::new(
+            "evt_1".parse().unwrap(),
+            room_id(),
+            EventType::Message,
+            source,
+            EventContent::text("Hi"),
+            Timestamp::UNIX_EPOCH,
+        );
+        event.chain_depth = depth;
+        Effect {
+            id: effect(),
+            request: Request::OnEvent {
+                binding: declaration.binding(room_id(), Timestamp::UNIX_EPOCH),
+                event,
+                context: Box::new(RoomContext::new(Room::new(
+                    room_id(),
+                    Timestamp::UNIX_EPOCH,
+                ))),
+            },
+            deadline: None,
+            locked: None,
+            admitted: None,
+        }
+    }
+
+    /// RFC §10.6, §8.3: a turn's frame gives the calls made within it the
+    /// depth of the turn's response; a transport told of the event gives
+    /// none.
+    #[test]
+    fn a_turn_gives_the_calls_made_within_it_its_response_depth() {
+        let (run, _queue) = RunShared::new();
+        let depth_within = |category| {
+            let work = Work::of(&on_event(category, 2));
+            ExecutionContext::default()
+                .within(Frame::new(&run, effect(), work))
+                .turn_depth()
+        };
+        assert_eq!(
+            (
+                depth_within(ChannelCategory::Intelligence),
+                depth_within(ChannelCategory::Transport)
+            ),
+            (Some(3), None)
+        );
+    }
+
     /// RFC §10.1 step 18: a turn's call into its own room returns at its
     /// decision, and is not adopted; one into another room waits for its
     /// delivery.
@@ -507,9 +658,10 @@ mod tests {
         let context = ExecutionContext::default().within(Frame::new(
             &run,
             effect(),
-            None,
-            None,
-            Some(room_id()),
+            Work {
+                delivering: Some(room_id()),
+                ..Work::default()
+            },
         ));
         assert_eq!(
             (

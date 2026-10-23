@@ -41,7 +41,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Reentrance). Called from a turn or a delivery in the room, it is a
     /// new arrival, with its own ticket, `process_timeout` and reentry
     /// budget, and returns at its decision, its delivery following the
-    /// caller's own set in the lane (RFC §10.1 step 18).
+    /// caller's own set in the lane (RFC §10.1 step 18). Made within an
+    /// agent's turn, the event is at least as deep as the turn's response,
+    /// whatever `chain_depth` it was given (RFC §10.6, §8.3).
     ///
     /// # Errors
     ///
@@ -137,16 +139,22 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(driver::run(&self.inner, "commit_event", operation).await??)
     }
 
-    /// Runs `entry`, a call into the room it names: adopted by the call of
+    /// Runs `entry`, a call into the room it names, at least as deep as the
+    /// turn it is made within, if any (RFC §10.6): adopted by the call of
     /// the caller's execution context whose work in the room made it, if
     /// one did, apart otherwise (RFC §13.5). A call run apart whose context
     /// still holds the room's lock, or stands in its admission order, fails
     /// there, rather than wait for itself.
     pub(super) async fn enter(
         &self,
-        entry: Entry,
+        mut entry: Entry,
         call: &'static str,
     ) -> Result<InboundResult, KitError> {
+        let chain_depth = match &mut entry {
+            Entry::Message { message, .. } => &mut message.chain_depth,
+            Entry::Direct { event, .. } => &mut event.chain_depth,
+        };
+        context::as_deep_as_its_turn(chain_depth);
         let room_id = entry.room_id().clone();
         let entry = match context::adopt(entry).await {
             Adopting::Settled(result) => return Ok((*result)?),

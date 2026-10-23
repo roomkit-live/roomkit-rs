@@ -41,7 +41,7 @@ use tokio::time::Instant;
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::inbound::Decision;
 pub(crate) use self::inbound::run_inbound;
-use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared};
+use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::KitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
@@ -226,15 +226,14 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// Starts `effect`: answered at once when it can be, a wait or a call
     /// otherwise.
     fn start(&mut self, effect: Effect) -> Option<(EffectId, Outcome)> {
+        let work = Work::of(&effect);
         let Effect {
             id,
             request,
             deadline,
-            locked,
-            admitted,
+            ..
         } = effect;
         let deadline = deadline.and_then(|deadline| self.clocks.instant_of(deadline));
-        let delivering = delivering_in(&request);
         let rooms = Rooms {
             locks: &self.inner.locks,
             lanes: &self.inner.lanes,
@@ -258,7 +257,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 None
             }
             Hold::Call(request) => {
-                let frame = Frame::new(&self.shared, id, locked.as_ref(), admitted, delivering);
+                let frame = Frame::new(&self.shared, id, work);
                 self.spawn(frame, *request, deadline);
                 None
             }
@@ -385,40 +384,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }),
             None => Ok(output),
         }
-    }
-}
-
-/// The room a delivery set delivers in, for its `on_event()` and
-/// `deliver()` calls.
-fn delivering_in(request: &Request) -> Option<RoomId> {
-    match request {
-        Request::OnEvent { binding, .. } | Request::Deliver { binding, .. } => {
-            Some(binding.room_id.clone())
-        }
-        Request::AcquireLock { .. }
-        | Request::ReleaseLock { .. }
-        | Request::EnterLane { .. }
-        | Request::AwaitLane { .. }
-        | Request::LeaveLane { .. }
-        | Request::TakeTicket { .. }
-        | Request::AwaitTicket { .. }
-        | Request::ReleaseTicket { .. }
-        | Request::LoadContext { .. }
-        | Request::FindByIdempotencyKey { .. }
-        | Request::GetEvent { .. }
-        | Request::Commit { .. }
-        | Request::PersistSideEffects { .. }
-        | Request::CreateRoom { .. }
-        | Request::UpdateRoom { .. }
-        | Request::StoreBinding { .. }
-        | Request::DeleteBinding { .. }
-        | Request::UpdateEvent { .. }
-        | Request::DeleteEvent { .. }
-        | Request::ResolveIdentity { .. }
-        | Request::Route { .. }
-        | Request::HandleInbound { .. }
-        | Request::RunHook { .. }
-        | Request::RunObservers { .. } => None,
     }
 }
 

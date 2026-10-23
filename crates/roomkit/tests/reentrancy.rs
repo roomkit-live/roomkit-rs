@@ -1277,6 +1277,59 @@ async fn a_turn_s_call_draws_on_its_own_reentry_budget() {
     );
 }
 
+/// RFC §10.6, §8.3: a call an agent's turn makes is at least as deep as the
+/// turn's response, whatever depth it was given: an agent that injects
+/// through another channel on every turn stops at the chain-depth limit,
+/// where it is no longer asked, as for its own responses.
+#[tokio::test]
+async fn an_agent_injecting_on_every_turn_stops_at_the_chain_depth_limit() {
+    let (kit, _) = room().await;
+    kit.set_max_chain_depth(3);
+    let (turn_kit, depths) = (kit.clone(), Arc::new(Mutex::new(Vec::new())));
+    let turn_depths = Arc::clone(&depths);
+    let agent = Scripted::agent(
+        "ai",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, depths) = (turn_kit.clone(), Arc::clone(&turn_depths));
+            Box::pin(async move {
+                let injected = kit.send_event(&room_id(), from_console("Again")).await?;
+                depths
+                    .lock()
+                    .unwrap()
+                    .push((event.chain_depth, injected.chain_depth));
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(agent).unwrap();
+    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    send(&kit, "hello").await.unwrap();
+    // The chain ends in the record of the agent not asked; nothing awaits it.
+    let deadline = tokio::time::Instant::now() + BOUND;
+    let mut lines = timeline(&kit).await;
+    while !lines.iter().any(|line| line.contains("blocked")) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the chain never ended: {lines:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        lines = timeline(&kit).await;
+    }
+    let depths = depths.lock().unwrap().clone();
+    assert_eq!(
+        (depths, lines),
+        (
+            vec![(0, 1), (1, 2)],
+            vec![
+                "#0 sms delivered hello".to_owned(),
+                "#1 ws delivered Again".to_owned(),
+                "#2 ws delivered Again".to_owned(),
+                "#3 ai blocked ".to_owned()
+            ]
+        )
+    );
+}
+
 /// RFC §10.1 step 18: a message a turn routes back into its own room is a
 /// new arrival, and returns at its decision, its delivery following the
 /// turn's own set in the lane: it waits for nothing its caller holds.

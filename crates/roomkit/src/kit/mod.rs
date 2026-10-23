@@ -31,6 +31,7 @@ use tokio::sync::broadcast;
 
 pub use self::timers::TimerSweeper;
 use crate::channel::DynChannel;
+use crate::context;
 use crate::driver;
 use crate::environment::SystemEnvironment;
 use crate::error::KitError;
@@ -215,7 +216,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// routed back into the room, fails with [`KitError::Reentrant`]. A call
     /// into another room waits for its delivery as any call does: two rooms
     /// whose deliveries call into each other at the same moment wait for
-    /// each other.
+    /// each other. Made within an agent's turn, the message is at least as
+    /// deep as the turn's response, whatever depth it was given (RFC §10.6),
+    /// so an agent that calls into its room on every turn stops at the
+    /// chain-depth limit, as its responses do (RFC §8.3).
     ///
     /// A `BEFORE_BROADCAST` hook registered with `needs_lock = false` runs
     /// before the room lock, ordered by the room's admission ticket, so the
@@ -259,15 +263,17 @@ impl<S: ConversationStore> RoomKit<S> {
             .await
     }
 
-    /// Runs `message`, adopted by the call whose work in its room made it,
-    /// when one did (RFC §13.5).
+    /// Runs `message`, at least as deep as the turn it is made within, if any
+    /// (RFC §10.6), adopted by the call whose work in its room made it, when
+    /// one did (RFC §13.5).
     async fn run_inbound(
         &self,
         room_id: Option<&RoomId>,
         organization_id: Option<String>,
-        message: InboundMessage,
+        mut message: InboundMessage,
     ) -> Result<InboundResult, KitError> {
         let Some(room_id) = room_id else {
+            context::as_deep_as_its_turn(&mut message.chain_depth);
             let inbound = Inbound::new(
                 self.config(),
                 InboundTarget::Routed,
