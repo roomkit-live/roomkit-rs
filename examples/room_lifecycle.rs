@@ -25,16 +25,16 @@ use roomkit::{ConversationStore, HookTrigger, RoomKit, text_of};
 
 use shared::{Checks, Clock, Log};
 
-/// The kit, Alice's SMS and the advisor's WebSocket, which every room of the
-/// example binds.
-struct Support {
+/// The helpdesk's kit, with Alice's SMS and the advisor's WebSocket, which
+/// every room of the example binds.
+struct Helpdesk {
     kit: RoomKit,
     clock: Clock,
     sms: RecordingTransport,
     advisor: RecordingTransport,
 }
 
-impl Support {
+impl Helpdesk {
     fn new() -> Result<Self, Box<dyn Error>> {
         let clock = Clock::new();
         let kit = clock.kit();
@@ -92,15 +92,15 @@ fn observe_transitions(kit: &RoomKit, transitions: &Log<String>) -> Result<(), B
 
 /// The integrator pauses, closes, reopens and archives the room `support`,
 /// while Alice writes.
-async fn by_hand(support: &Support, checks: &mut Checks) -> Result<(), Box<dyn Error>> {
-    let (kit, room) = (&support.kit, RoomId::new("support")?);
+async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    let (kit, room) = (&desk.kit, RoomId::new("support")?);
     println!("The integrator runs the room `support` through its lifecycle.");
-    support.open(&room, RoomTimers::default()).await?;
-    support.alice_says(&room, "Hello").await?;
+    desk.open(&room, RoomTimers::default()).await?;
+    desk.alice_says(&room, "Hello").await?;
 
     let paused = kit.pause_room(&room).await?;
     println!("  Paused.");
-    let while_paused = support.alice_says(&room, "Anyone there?").await?;
+    let while_paused = desk.alice_says(&room, "Anyone there?").await?;
     let after_message = kit.store().get_room(&room).await?;
     checks.expect(
         "a paused room takes a message, and the message delivered resumes it",
@@ -119,7 +119,7 @@ async fn by_hand(support: &Support, checks: &mut Checks) -> Result<(), Box<dyn E
 
     kit.close_room(&room).await?;
     println!("  Closed.");
-    let while_closed = support.alice_says(&room, "Hello?").await?;
+    let while_closed = desk.alice_says(&room, "Hello?").await?;
     checks.expect(
         "a closed room refuses a message room_closed, writing nothing",
         while_closed.blocked
@@ -129,7 +129,7 @@ async fn by_hand(support: &Support, checks: &mut Checks) -> Result<(), Box<dyn E
 
     kit.reopen_room(&room).await?;
     println!("  Reopened.");
-    let after_reopen = support.alice_says(&room, "Back again").await?;
+    let after_reopen = desk.alice_says(&room, "Back again").await?;
     checks.expect(
         "a reopened room takes messages again",
         after_reopen.event.is_some(),
@@ -137,7 +137,7 @@ async fn by_hand(support: &Support, checks: &mut Checks) -> Result<(), Box<dyn E
 
     kit.archive_room(&room).await?;
     println!("  Archived.");
-    let while_archived = support.alice_says(&room, "Still here?").await?;
+    let while_archived = desk.alice_says(&room, "Still here?").await?;
     let reopened = kit.reopen_room(&room).await?;
     checks.expect(
         "an archived room refuses messages as a closed one does, and stays archived",
@@ -145,8 +145,8 @@ async fn by_hand(support: &Support, checks: &mut Checks) -> Result<(), Box<dyn E
             && reopened.status == RoomStatus::Archived,
     );
     checks.expect(
-        "the advisor received the three messages delivered, and the room holds them only",
-        support.advisor.texts() == ["Hello", "Anyone there?", "Back again"]
+        "the advisor received the three messages delivered, and the room holds nothing it refused",
+        desk.advisor.texts() == ["Hello", "Anyone there?", "Back again"]
             && shared::timeline(kit, &room).await?.len() == 3,
     );
     Ok(())
@@ -154,22 +154,22 @@ async fn by_hand(support: &Support, checks: &mut Checks) -> Result<(), Box<dyn E
 
 /// The room `timed` pauses after a minute without activity and closes two
 /// minutes after the pause; the host checks its timers as the clock moves.
-async fn by_timers(support: &Support, checks: &mut Checks) -> Result<(), Box<dyn Error>> {
-    let (kit, room) = (&support.kit, RoomId::new("timed")?);
+async fn by_timers(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    let (kit, room) = (&desk.kit, RoomId::new("timed")?);
     println!("The room `timed` pauses after 60 s without activity, and closes 120 s later.");
     let timers = RoomTimers {
         inactive_after_seconds: Some(60),
         closed_after_seconds: Some(120),
         last_activity_at: None,
     };
-    support.open(&room, timers).await?;
-    support.alice_says(&room, "Hello").await?;
+    desk.open(&room, timers).await?;
+    desk.alice_says(&room, "Hello").await?;
     let mut events = kit.subscribe();
 
-    support.clock.advance(Duration::from_secs(90));
+    desk.clock.advance(Duration::from_secs(90));
     let paused = kit.check_timers().await?;
     println!("  90 s later, check_timers changes {:?}", statuses(&paused));
-    support.clock.advance(Duration::from_secs(150));
+    desk.clock.advance(Duration::from_secs(150));
     let closed = kit.check_timers().await?;
     println!(
         "  240 s later, check_timers changes {:?}",
@@ -213,13 +213,13 @@ fn statuses(rooms: &[Room]) -> Vec<(String, RoomStatus)> {
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
-    let support = Support::new()?;
+    let desk = Helpdesk::new()?;
     let transitions = Log::new();
-    observe_transitions(&support.kit, &transitions)?;
+    observe_transitions(&desk.kit, &transitions)?;
     let mut checks = Checks::default();
 
-    by_hand(&support, &mut checks).await?;
-    by_timers(&support, &mut checks).await?;
+    by_hand(&desk, &mut checks).await?;
+    by_timers(&desk, &mut checks).await?;
 
     let mut fired = transitions.wait_for(5).await;
     fired.sort();
