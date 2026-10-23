@@ -196,7 +196,16 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     let kit = Arc::clone(inner);
     let run = async move {
         let mut caller = Caller::new(answer);
-        let output = super::drive(&kit, call, inbound, Leases::Refused, Some(&mut caller)).await;
+        let environment = kit.environment();
+        let output = super::drive(
+            &kit,
+            environment,
+            call,
+            inbound,
+            Leases::Refused,
+            Some(&mut caller),
+        )
+        .await;
         caller.log_unread_end(call, &output);
         output
     };

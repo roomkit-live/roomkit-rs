@@ -93,8 +93,24 @@ pub(crate) async fn run<S: ConversationStore, O: Operation>(
     call: &'static str,
     operation: O,
 ) -> Result<O::Output, KitError> {
+    run_on(inner, inner.environment(), call, operation).await
+}
+
+/// Runs `operation` as [`run`] does, on `environment`: the environment its
+/// call read when it started, to stamp what it hands the operation, a new
+/// room's instants or a binding's, with the clock the run reads.
+///
+/// # Errors
+///
+/// As [`run`].
+pub(crate) async fn run_on<S: ConversationStore, O: Operation>(
+    inner: &Arc<Inner<S>>,
+    environment: Arc<dyn Environment + Send + Sync>,
+    call: &'static str,
+    operation: O,
+) -> Result<O::Output, KitError> {
     inner.open()?;
-    drive(inner, call, operation, Leases::Granted, None).await
+    drive(inner, environment, call, operation, Leases::Granted, None).await
 }
 
 /// Runs `operation`, made by the kit's call `call`, until it is ready,
@@ -106,13 +122,13 @@ pub(crate) async fn run<S: ConversationStore, O: Operation>(
 /// committed (gap G-076).
 async fn drive<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
+    environment: Arc<dyn Environment + Send + Sync>,
     call: &'static str,
     operation: O,
     leases: Leases,
     caller: Option<&mut Caller>,
 ) -> Result<O::Output, KitError> {
     let (shared, adoptions) = RunShared::new();
-    let environment = inner.environment();
     let driver = Driver {
         calls: JoinSet::new(),
         waits: Vec::new(),

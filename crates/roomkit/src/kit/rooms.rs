@@ -233,10 +233,10 @@ impl<S: ConversationStore> Scope<'_, S> {
         options: RoomOptions,
     ) -> Result<Room, KitError> {
         let inner = &self.kit.inner;
-        let now = inner.environment().now();
-        let room = options.room(room_id.clone(), self.organization_id(), now);
+        let environment = inner.environment();
+        let room = options.room(room_id.clone(), self.organization_id(), environment.now());
         let create = CreateRoom::new(self.kit.config(), room);
-        Ok(driver::run(inner, "create_room", create).await??)
+        Ok(driver::run_on(inner, environment, "create_room", create).await??)
     }
 
     /// Attaches the channel to a room the scope reaches.
@@ -250,10 +250,10 @@ impl<S: ConversationStore> Scope<'_, S> {
         let declaration = config
             .channel(channel_id)
             .ok_or_else(|| KitError::UnknownChannel(channel_id.clone()))?;
-        let now = self.kit.inner.environment().now();
-        let binding = options.apply(declaration.binding(room_id.clone(), now));
+        let environment = self.kit.inner.environment();
+        let binding = options.apply(declaration.binding(room_id.clone(), environment.now()));
         let attach = AttachChannel::new(config, binding, self.organization_id());
-        Ok(driver::run(&self.kit.inner, "attach", attach).await??)
+        Ok(driver::run_on(&self.kit.inner, environment, "attach", attach).await??)
     }
 
     /// Detaches the channel from a room the scope reaches.

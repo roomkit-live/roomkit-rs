@@ -8,6 +8,7 @@
 //! [`TimerSweeper`] started by [`RoomKit::run_timers`]. A transition the
 //! sweeper applies late still takes the instant it fell due.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit_core::model::Room;
@@ -75,7 +76,10 @@ impl<S: ConversationStore> RoomKit<S> {
             ..RoomFilter::default()
         };
         let rooms = self.inner.store.list_rooms(&filter).await?;
-        let now = self.inner.environment().now();
+        // The sweep reads the environment once: each room's check runs on
+        // the clock its due transitions were read with.
+        let environment = self.inner.environment();
+        let now = environment.now();
         let mut changed = Vec::new();
         // A room read off the lock with nothing due needs no lock; one with a
         // transition due is checked again under it.
@@ -84,7 +88,9 @@ impl<S: ConversationStore> RoomKit<S> {
                 continue;
             }
             let check = CheckTimers::new(self.config(), room.id.clone());
-            match driver::run(&self.inner, "check_timers", check).await {
+            let checked =
+                driver::run_on(&self.inner, Arc::clone(&environment), "check_timers", check).await;
+            match checked {
                 Ok(Ok(checked)) if !checked.transitions.is_empty() => changed.push(checked.room),
                 Ok(Ok(_)) => {}
                 Err(KitError::ShutDown) => return Err(KitError::ShutDown),
