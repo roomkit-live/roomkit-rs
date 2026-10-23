@@ -1,18 +1,18 @@
-//! A room's lifecycle transitions: which status each one leaves from, and
-//! what it writes (RFC §5.1, gap G-045).
+//! A room's lifecycle transitions: which status each one leaves from, which
+//! it has nothing to do in, which it refuses, and what it writes (RFC §5.1,
+//! gaps G-045, G-074).
 //!
-//! | Transition | Leaves from | Goes to |
-//! |---|---|---|
-//! | pause | ACTIVE | PAUSED |
-//! | resume | PAUSED | ACTIVE |
-//! | reopen | CLOSED | ACTIVE |
-//! | close | ACTIVE, PAUSED | CLOSED |
-//! | archive | ACTIVE, PAUSED, CLOSED | ARCHIVED |
+//! | Transition | Leaves from | Goes to | Done already in | Refuses |
+//! |---|---|---|---|---|
+//! | pause | ACTIVE | PAUSED | PAUSED | CLOSED, ARCHIVED |
+//! | resume | PAUSED | ACTIVE | ACTIVE | CLOSED, ARCHIVED |
+//! | reopen | CLOSED | ACTIVE | none | ACTIVE, PAUSED, ARCHIVED |
+//! | close | ACTIVE, PAUSED | CLOSED | CLOSED | ARCHIVED |
+//! | archive | ACTIVE, PAUSED, CLOSED | ARCHIVED | ARCHIVED | none |
 //!
-//! A reopen from any other status is refused: only a CLOSED room is reopened,
-//! and ARCHIVED is never left (gap G-074). Any other transition from a
-//! status it does not leave from does not apply and changes nothing, as
-//! closing a closed room does.
+//! A transition done already changes nothing; one called on a status it
+//! refuses fails. A reopen is never done already: only a CLOSED room is
+//! reopened. ARCHIVED is never left.
 
 use serde::{Deserialize, Serialize};
 
@@ -45,13 +45,31 @@ impl Transition {
         }
     }
 
-    /// Whether the transition is refused on a room in `status`, rather than
-    /// leaving it as it is (RFC §5.1, gap G-074): a reopen of a room that is
-    /// not CLOSED, since only a CLOSED room is reopened and ARCHIVED is
-    /// never left. Any other transition that does not leave from `status`
-    /// changes nothing, as closing a closed room does.
+    /// Whether the transition is refused on a room in `status` (RFC §5.1,
+    /// gap G-074): it neither leaves from the status nor is done in it
+    /// already. A pause of a CLOSED room, for instance, would answer with a
+    /// room that is not paused, and a reopen of an ARCHIVED one would leave
+    /// it ARCHIVED, a state never left.
     pub fn refuses(self, status: RoomStatus) -> bool {
-        self == Self::Reopen && !self.leaves_from(status)
+        !self.leaves_from(status) && !self.is_done(status)
+    }
+
+    /// Whether a room in `status` is where the transition takes it already,
+    /// so that it has nothing to do: a pause of a PAUSED room, a resume of
+    /// an ACTIVE one, a close of a CLOSED one, an archive of an ARCHIVED one
+    /// (gap G-074). A reopen never is: an ACTIVE room was not reopened, it
+    /// was never closed.
+    pub fn is_done(self, status: RoomStatus) -> bool {
+        match (self, status) {
+            (Self::Pause, RoomStatus::Paused)
+            | (Self::Resume, RoomStatus::Active)
+            | (Self::Close, RoomStatus::Closed)
+            | (Self::Archive, RoomStatus::Archived) => true,
+            (
+                Self::Pause | Self::Resume | Self::Reopen | Self::Close | Self::Archive,
+                RoomStatus::Active | RoomStatus::Paused | RoomStatus::Closed | RoomStatus::Archived,
+            ) => false,
+        }
     }
 
     /// Whether the transition applies to a room in `status`.
@@ -114,6 +132,14 @@ mod tests {
         RoomStatus::Archived,
     ];
 
+    const TRANSITIONS: [Transition; 5] = [
+        Transition::Pause,
+        Transition::Resume,
+        Transition::Reopen,
+        Transition::Close,
+        Transition::Archive,
+    ];
+
     fn leaves_from(transition: Transition) -> Vec<RoomStatus> {
         STATUSES
             .into_iter()
@@ -163,41 +189,36 @@ mod tests {
         );
     }
 
+    /// The pairs a transition refuses, every one it neither leaves from nor
+    /// is done in; a reopen is never done (gap G-074).
     #[test]
-    fn only_a_reopen_is_refused_where_it_does_not_leave_from() {
-        let refused: Vec<(Transition, RoomStatus)> = [
-            Transition::Pause,
-            Transition::Resume,
-            Transition::Reopen,
-            Transition::Close,
-            Transition::Archive,
-        ]
-        .into_iter()
-        .flat_map(|transition| STATUSES.map(|status| (transition, status)))
-        .filter(|(transition, status)| transition.refuses(*status))
-        .collect();
+    fn a_transition_refuses_what_it_neither_leaves_from_nor_is_done_in() {
+        let refused: Vec<(Transition, RoomStatus)> = TRANSITIONS
+            .into_iter()
+            .flat_map(|transition| STATUSES.map(|status| (transition, status)))
+            .filter(|(transition, status)| transition.refuses(*status))
+            .collect();
         assert_eq!(
             refused,
             [
+                (Transition::Pause, RoomStatus::Closed),
+                (Transition::Pause, RoomStatus::Archived),
+                (Transition::Resume, RoomStatus::Closed),
+                (Transition::Resume, RoomStatus::Archived),
                 (Transition::Reopen, RoomStatus::Active),
                 (Transition::Reopen, RoomStatus::Paused),
                 (Transition::Reopen, RoomStatus::Archived),
+                (Transition::Close, RoomStatus::Archived),
             ]
         );
     }
 
     #[test]
     fn archived_is_never_left() {
-        let leaving: Vec<Transition> = [
-            Transition::Pause,
-            Transition::Resume,
-            Transition::Reopen,
-            Transition::Close,
-            Transition::Archive,
-        ]
-        .into_iter()
-        .filter(|transition| transition.leaves_from(RoomStatus::Archived))
-        .collect();
+        let leaving: Vec<Transition> = TRANSITIONS
+            .into_iter()
+            .filter(|transition| transition.leaves_from(RoomStatus::Archived))
+            .collect();
         assert_eq!(leaving, []);
     }
 

@@ -1,10 +1,11 @@
 //! The room lifecycle (RFC §5.1, §8.2). The integrator pauses a room, which
 //! still takes messages and is resumed by the first one delivered; closes
 //! it, so that it refuses every message with nothing written; reopens it;
-//! then archives it for good: a reopen of the archived room is refused,
-//! since only a closed room is reopened. A second room has timers: a
-//! minute without activity pauses it, two minutes paused close it, and
-//! `check_timers` applies both, each at the instant it fell due.
+//! then archives it for good: a reopen or a close of the archived room is
+//! refused, since a room never leaves ARCHIVED, and archiving it again
+//! does nothing. A second room has timers: a minute without activity
+//! pauses it, two minutes paused close it, and `check_timers` applies both,
+//! each at the instant it fell due.
 //! `ON_ROOM_PAUSED` and `ON_ROOM_CLOSED` fire with every transition.
 //!
 //! ```sh
@@ -139,21 +140,25 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
     kit.archive_room(&room).await?;
     println!("  Archived.");
     let while_archived = desk.alice_says(&room, "Still here?").await?;
-    let reopened = kit.reopen_room(&room).await;
-    if let Err(error) = &reopened {
-        println!("  Reopening it fails: {error}.");
-    }
-    let after_reopen = kit.store().get_room(&room).await?;
     checks.expect(
-        "an archived room refuses messages as a closed one does, and a reopen is refused",
-        while_archived.reason.as_deref() == Some("room_closed")
-            && matches!(
-                reopened,
+        "an archived room refuses messages as a closed one does",
+        while_archived.reason.as_deref() == Some("room_closed"),
+    );
+    let refused = [kit.reopen_room(&room).await, kit.close_room(&room).await];
+    for error in refused.iter().filter_map(|result| result.as_ref().err()) {
+        println!("  {error}.");
+    }
+    let archived_again = kit.archive_room(&room).await?;
+    checks.expect(
+        "an archived room is never left: a reopen or a close is refused, a new archive does nothing",
+        refused.iter().all(|result| {
+            matches!(
+                result,
                 Err(KitError::Lifecycle(
                     LifecycleError::TransitionRefused { .. }
                 ))
             )
-            && after_reopen.is_some_and(|room| room.status == RoomStatus::Archived),
+        }) && archived_again.status == RoomStatus::Archived,
     );
     checks.expect(
         "the advisor received the three messages delivered, and the room holds nothing it refused",

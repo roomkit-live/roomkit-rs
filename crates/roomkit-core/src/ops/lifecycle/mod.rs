@@ -57,9 +57,10 @@ pub enum LifecycleError {
     /// it writes itself (gap G-041).
     #[error("only the framework writes the visibility internal")]
     InternalVisibility,
-    /// The room's status is not one the transition leaves from, and the
-    /// transition refuses it: only a CLOSED room is reopened, and ARCHIVED
-    /// is never left (RFC §5.1, gap G-074).
+    /// The room's status is neither one the transition leaves from nor the
+    /// one it names: a pause or a resume of a CLOSED or ARCHIVED room, a
+    /// reopen of a room that is not CLOSED, a close of an ARCHIVED room
+    /// (RFC §5.1, gap G-074). Nothing was written.
     #[error("room {room_id} is {status:?}, which {transition:?} does not leave from")]
     TransitionRefused {
         /// The room.

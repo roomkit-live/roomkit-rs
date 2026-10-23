@@ -490,8 +490,13 @@ publishes a release.
   `response_visibility` is `internal` is refused
   `InboundError::InternalVisibility` before anything is read (gaps G-041,
   G-073). `rules::permissions::answer_visibility`.
-- `RoomKit::reopen_room` on a room that is not CLOSED fails with
-  `LifecycleError::TransitionRefused`, nothing written or reported: only a
-  closed room is reopened, and an archived one is never left. It returned
-  the room unchanged, so the reopen of an archived room answered as if it
-  had succeeded (RFC §5.1, gap G-074). `Transition::refuses`.
+- A room transition called on a status it neither leaves from nor leads
+  to fails with `LifecycleError::TransitionRefused`, nothing written or
+  reported: `pause_room` and `resume_room` of a closed or archived room,
+  `reopen_room` of a room that is not closed, `close_room` of an archived
+  one. A transition whose room is in its status already (a pause of a
+  paused room, a resume of an active one, a close of a closed one, an
+  archive of an archived one) still succeeds and does nothing. Each
+  answered with the room unchanged, so the reopen of an archived room
+  answered as if it had succeeded (RFC §5.1, gap G-074).
+  `Transition::refuses` and `Transition::is_done`.

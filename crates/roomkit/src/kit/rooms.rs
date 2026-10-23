@@ -193,22 +193,27 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Pauses an active room (RFC §5.1); it still accepts events, the first
-    /// one delivered resumes it. Returns the room as it now stands.
+    /// one delivered resumes it. A paused room is left as it is. Returns the
+    /// room as it now stands.
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist.
+    /// Returns [`KitError::Lifecycle`] when the room does not exist, and
+    /// `LifecycleError::TransitionRefused`, nothing written, when it is
+    /// CLOSED or ARCHIVED (gap G-074).
     pub async fn pause_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let pause = PauseRoom::new(self.config(), room_id.clone());
         Ok(driver::run(&self.inner, "pause_room", pause).await??)
     }
 
-    /// Resumes a paused room (RFC §5.1), restarting its inactivity timer.
-    /// Returns the room as it now stands.
+    /// Resumes a paused room (RFC §5.1), restarting its inactivity timer. An
+    /// active room is left as it is. Returns the room as it now stands.
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist.
+    /// Returns [`KitError::Lifecycle`] when the room does not exist, and
+    /// `LifecycleError::TransitionRefused`, nothing written, when it is
+    /// CLOSED or ARCHIVED (gap G-074).
     pub async fn resume_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let resume = ResumeRoom::new(self.config(), room_id.clone());
         Ok(driver::run(&self.inner, "resume_room", resume).await??)
@@ -227,19 +232,22 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(driver::run(&self.inner, "reopen_room", reopen).await??)
     }
 
-    /// Closes a room: it refuses every new event from now on (RFC §5.1).
-    /// Returns the room as it now stands.
+    /// Closes a room: it refuses every new event from now on (RFC §5.1). A
+    /// closed room is left as it is. Returns the room as it now stands.
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist.
+    /// Returns [`KitError::Lifecycle`] when the room does not exist, and
+    /// `LifecycleError::TransitionRefused`, nothing written, when it is
+    /// ARCHIVED: an archived room is never left (gap G-074).
     pub async fn close_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let close = CloseRoom::new(self.config(), room_id.clone());
         Ok(driver::run(&self.inner, "close_room", close).await??)
     }
 
     /// Archives a room: a terminal, read-only state it never leaves (RFC
-    /// §5.1). Returns the room as it now stands.
+    /// §5.1). An archived room is left as it is. Returns the room as it now
+    /// stands.
     ///
     /// # Errors
     ///

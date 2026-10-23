@@ -3,9 +3,10 @@
 //!
 //! Each runs under the room's lock and applies a transition of
 //! [`rules::lifecycle`](crate::rules::lifecycle) when it leaves from the
-//! room's status; otherwise the room is left as it is, as closing a closed
-//! room is, but a reopen of a room that is not CLOSED fails (gap G-074).
-//! Its output is the room as it now stands.
+//! room's status. A room in the status the transition names already is left
+//! as it is, as closing a closed room is; one in any other status fails the
+//! change with [`LifecycleError::TransitionRefused`], nothing written or
+//! reported (gap G-074). Its output is the room as it now stands.
 
 use std::sync::Arc;
 
@@ -55,13 +56,15 @@ status_change!(
     /// Pauses an active room, then fires `ON_ROOM_PAUSED`. The integrator's
     /// pause emits no `room_paused`, which reports the inactivity timer's
     /// (RFC §8.2, §26.1). The close timer counts from the pause (gap G-045).
+    /// A CLOSED or ARCHIVED room refuses it (gap G-074).
     PauseRoom,
     Transition::Pause
 );
 
 status_change!(
     /// Resumes a paused room, which restarts its inactivity timer (gap
-    /// G-045). The RFC names no trigger or framework event for it.
+    /// G-045). The RFC names no trigger or framework event for it. A CLOSED
+    /// or ARCHIVED room refuses it (gap G-074).
     ResumeRoom,
     Transition::Resume
 );
@@ -70,8 +73,7 @@ status_change!(
     /// Reopens a closed room: it accepts events again (RFC §5.1), and its
     /// inactivity timer restarts (gap G-045). The RFC names no trigger or
     /// framework event for it. A room in any other status, ARCHIVED among
-    /// them, fails it with [`LifecycleError::TransitionRefused`], nothing
-    /// written (gap G-074).
+    /// them, refuses it (gap G-074).
     ReopenRoom,
     Transition::Reopen
 );
@@ -79,7 +81,8 @@ status_change!(
 status_change!(
     /// Closes an active or paused room, then fires `ON_ROOM_CLOSED` and
     /// emits `room_closed`: the room refuses every new event from now on
-    /// (RFC §5.1).
+    /// (RFC §5.1). An ARCHIVED room refuses it, a state never left (gap
+    /// G-074).
     CloseRoom,
     Transition::Close
 );

@@ -396,10 +396,9 @@ fn store_updated(
     }
 }
 
-/// Applies the transition when it leaves from the room's status; otherwise
-/// the room is left as it is (RFC §5.1), or the transition is refused when
-/// it refuses that status, a reopen of a room that is not CLOSED (gap
-/// G-074).
+/// Applies the transition when it leaves from the room's status; leaves the
+/// room as it is when the transition is done in that status already, and
+/// refuses it otherwise (RFC §5.1, gap G-074).
 fn transition_room(
     transition: Transition,
     mut context: Box<RoomContext>,

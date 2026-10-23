@@ -675,61 +675,61 @@ mod room_transitions {
         );
     }
 
+    /// RFC §5.1, gap G-074: a transition called from a status it does not
+    /// leave from fails, writing and reporting nothing, unless the room is
+    /// in the status the transition names already. Only a CLOSED room is
+    /// reopened, and ARCHIVED is never left.
     #[test]
-    fn an_archived_room_is_never_left() {
-        let mut sim = in_status(RoomStatus::Archived);
-        let statuses: Vec<RoomStatus> = [
-            Transition::Pause,
-            Transition::Resume,
-            Transition::Reopen,
-            Transition::Close,
-            Transition::Archive,
-        ]
-        .into_iter()
-        .map(|transition| {
-            // A reopen is refused (below); the room stays as it is either way.
-            drop(attempt(&mut sim, transition));
-            sim.room.status
-        })
-        .collect();
-        assert_eq!(
-            (statuses, sim.traced("update room").len()),
-            (vec![RoomStatus::Archived; 5], 0)
-        );
-    }
-
-    /// Only a CLOSED room is reopened, and ARCHIVED is never left (RFC §5.1,
-    /// gap G-074): a reopen of a room in another status fails, writing and
-    /// reporting nothing.
-    #[test]
-    fn a_reopen_of_a_room_that_is_not_closed_is_refused() {
-        for status in [RoomStatus::Active, RoomStatus::Paused, RoomStatus::Archived] {
+    fn from_a_status_it_does_not_leave_from_is_refused() {
+        let refused = [
+            (Transition::Pause, RoomStatus::Closed),
+            (Transition::Pause, RoomStatus::Archived),
+            (Transition::Resume, RoomStatus::Closed),
+            (Transition::Resume, RoomStatus::Archived),
+            (Transition::Reopen, RoomStatus::Active),
+            (Transition::Reopen, RoomStatus::Paused),
+            (Transition::Reopen, RoomStatus::Archived),
+            (Transition::Close, RoomStatus::Archived),
+        ];
+        for (transition, status) in refused {
             let mut sim = in_status(status);
-            let refused = attempt(&mut sim, Transition::Reopen);
+            let result = attempt(&mut sim, transition);
             assert_eq!(
-                (refused, sim.trace, sim.notices.len()),
+                (result, sim.trace, sim.notices.len()),
                 (
                     Err(LifecycleError::TransitionRefused {
                         room_id: room_id(),
-                        transition: Transition::Reopen,
+                        transition,
                         status,
                     }),
                     read_only_section(),
                     0
                 ),
-                "a reopen of a room {status:?}"
+                "a {transition:?} of a room {status:?}"
             );
         }
     }
 
+    /// Gap G-074: a transition whose room is in its status already has
+    /// nothing to do, as closing a closed room does not close it twice.
     #[test]
-    fn a_transition_that_does_not_apply_writes_nothing_and_reports_nothing() {
-        let mut sim = in_status(RoomStatus::Closed);
-        let room = run(&mut sim, Transition::Pause);
-        assert_eq!(
-            (room.status, sim.trace, sim.notices.len()),
-            (RoomStatus::Closed, read_only_section(), 0)
-        );
+    fn already_done_succeeds_writing_and_reporting_nothing() {
+        let done = [
+            (Transition::Pause, RoomStatus::Paused),
+            (Transition::Resume, RoomStatus::Active),
+            (Transition::Close, RoomStatus::Closed),
+            (Transition::Archive, RoomStatus::Archived),
+        ];
+        for (transition, status) in done {
+            let mut sim = in_status(status);
+            let before = sim.room.clone();
+            let room = attempt(&mut sim, transition);
+            assert_eq!(
+                (room, sim.trace, sim.notices.len()),
+                (Ok(before), read_only_section(), 0),
+                "a {transition:?} of a room {status:?}"
+            );
+        }
     }
 }
 
@@ -772,18 +772,6 @@ mod close_room {
         sim.run(CloseRoom::new(sim.shared_config(), room_id()))
             .unwrap();
         assert_eq!(sim.async_contexts()[0].recent_events.len(), 1);
-    }
-
-    #[test]
-    fn changes_nothing_when_the_room_is_already_closed() {
-        let mut sim = Sim::new();
-        sim.room.status = RoomStatus::Archived;
-        sim.run(CloseRoom::new(sim.shared_config(), room_id()))
-            .unwrap();
-        assert_eq!(
-            (sim.room.status, sim.framework_event_names()),
-            (RoomStatus::Archived, Vec::<String>::new())
-        );
     }
 
     #[test]
