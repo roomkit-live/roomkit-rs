@@ -13,7 +13,7 @@ use std::time::Duration;
 use roomkit_core::model::Room;
 use roomkit_core::ops::CheckTimers;
 use roomkit_core::rules::timers;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use tokio::time::MissedTickBehavior;
 
 use super::RoomKit;
@@ -22,8 +22,8 @@ use crate::error::KitError;
 use crate::store::{ConversationStore, RoomFilter};
 
 /// A background task checking the rooms' timers on a period, started by
-/// [`RoomKit::run_timers`]. Dropping it stops the task, and so does the
-/// kit's [`shutdown`](RoomKit::shutdown).
+/// [`RoomKit::run_timers`]. Dropping it stops the task and ends its sweep
+/// under way, and so does the kit's [`shutdown`](RoomKit::shutdown).
 #[derive(Debug)]
 #[must_use = "dropping the sweeper stops it"]
 pub struct TimerSweeper {
@@ -31,9 +31,10 @@ pub struct TimerSweeper {
 }
 
 impl TimerSweeper {
-    /// Stops the sweeper. A check under way is abandoned at its next wait:
-    /// the room lock it holds is let go, and a transition it wrote but did
-    /// not report yet goes unreported.
+    /// Stops the sweeper. Its sweep under way is abandoned at its next wait,
+    /// with the room it checks: the room lock it holds or waits for is let
+    /// go, the rooms it did not reach yet are left to the next check, and a
+    /// transition it wrote but did not report yet goes unreported.
     pub fn stop(self) {
         drop(self);
     }
@@ -42,6 +43,16 @@ impl TimerSweeper {
 impl Drop for TimerSweeper {
     fn drop(&mut self) {
         self.task.abort();
+    }
+}
+
+/// Aborts a task when dropped: a sweep whose sweeper's loop is dropped
+/// while it waits for the sweep would otherwise run on, detached.
+struct AbortOnDrop(AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -131,7 +142,8 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Runs one sweep as a task the kit tracks, and waits for it; `false`
-    /// once the kit is shut down, which ends the sweeper.
+    /// once the kit is shut down, which ends the sweeper. The sweep belongs
+    /// to the sweeper: a sweeper stopped while it waits ends it too.
     async fn sweep(&self) -> bool {
         let kit = self.clone();
         let Some(sweep) = self
@@ -141,6 +153,7 @@ impl<S: ConversationStore> RoomKit<S> {
         else {
             return false;
         };
+        let _owned = AbortOnDrop(sweep.abort_handle());
         match sweep.await {
             Ok(Ok(_)) => true,
             Ok(Err(KitError::ShutDown)) => false,
@@ -231,6 +244,21 @@ mod tests {
             (stopped.is_ok_and(|ended| ended.is_ok()), room.status),
             (true, RoomStatus::Active)
         );
+    }
+
+    /// Stopping the sweeper ends its sweep under way: the kit is idle at
+    /// once, and the sweep writes nothing once the lock it waits for is let
+    /// go.
+    #[tokio::test]
+    async fn stopping_the_sweeper_ends_its_sweep_under_way() {
+        let kit = timed_kit().await;
+        let held = kit.inner.locks.lock(&room_id()).await;
+        sweep_under_way(&kit).await.stop();
+        let idle = tokio::time::timeout(BOUND, kit.idle()).await;
+        drop(held);
+        kit.idle().await;
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        assert_eq!((idle.is_ok(), room.status), (true, RoomStatus::Active));
     }
 
     /// A sweeper stops when its kit shuts down, rather than at its next

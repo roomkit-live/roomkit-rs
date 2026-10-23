@@ -554,7 +554,8 @@ publishes a release.
   `check_timers` returns `KitError::ShutDown`. Each sweep of a timer
   sweeper is tracked work too: `idle()` waits for one under way, and
   `shutdown()` ends it, the room lock it holds let go, and waits for it; a
-  sweep could hold a lock and write after the shutdown returned. The
+  sweep could hold a lock and write after the shutdown returned. Stopping
+  or dropping the sweeper ends its sweep under way the same way. The
   examples wait for the observers they check with `idle()` instead of a
   timeout.
 - `ChannelBinding::can_write` is removed: `rules::permissions::write_refusal`
