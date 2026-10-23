@@ -219,7 +219,7 @@ impl NamedRoom {
                     self.state = State::Changing { section, created };
                     Progress::Waiting
                 }
-                Progress::Done(changed) => self.on_changed(cx, changed, created),
+                Progress::Done(changed) => self.on_changed(cx, changed.result, created),
             },
             state @ (State::Start
             | State::Reading(_)
@@ -376,8 +376,9 @@ impl NamedRoom {
         } else {
             self.bound
         };
-        let mut section =
-            Box::new(LockedSection::new(self.room_id.clone(), change).waiting_within(bound));
+        let mut section = Box::new(
+            LockedSection::changing(self.room_id.clone(), None, change).waiting_within(bound),
+        );
         section.start(cx);
         self.state = State::Changing { section, created };
         Progress::Waiting

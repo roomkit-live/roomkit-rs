@@ -15,14 +15,12 @@
 //! the room is another organization's or binds no channel it names: nothing
 //! is stored (gap G-069).
 
-use std::mem;
-
 use super::direct::DirectCall;
 use super::{commit, report};
-use crate::model::{ChannelId, ErrorRecord, EventStatus, RoomContext, RoomEvent};
-use crate::ops::lifecycle::gate::{self, Gate, Pending};
-use crate::ops::protocol::{EffectId, HoldRequest, Outcome, RoomCounters, StoreRequest};
-use crate::ops::{self, Abort, Cx, Progress, RefusedOperation};
+use crate::model::{ChannelId, ErrorRecord, EventStatus, Room, RoomContext, RoomEvent, RoomId};
+use crate::ops::protocol::{EffectId, Outcome, RoomCounters, StoreRequest};
+use crate::ops::section::{Failure, Section, SectionWork};
+use crate::ops::{Abort, Cx, Progress, RefusedOperation};
 use crate::rules::permissions;
 
 /// What became of a record.
@@ -43,9 +41,16 @@ pub(super) struct RecordReport {
     pub(super) release_error: Option<ErrorRecord>,
 }
 
-/// The commit of one blocked record.
+/// The commit of one blocked record, in the locked-section frame
+/// (`ops::section`).
 #[derive(Debug)]
 pub(super) struct RecordPass {
+    section: Section<RecordWork>,
+}
+
+/// What a record's commit does under the room's lock.
+#[derive(Debug)]
+struct RecordWork {
     record: RoomEvent,
     /// What a refusal of the record by the room's status reports it as.
     refused_as: RefusedOperation,
@@ -54,8 +59,8 @@ pub(super) struct RecordPass {
     /// What a direct injection's record is checked for at the gate (gap
     /// G-069).
     direct: Option<DirectCall>,
-    state: State,
-    release_error: Option<ErrorRecord>,
+    /// The commit outstanding.
+    committing: Option<EffectId>,
 }
 
 /// What a record's visibility is narrowed to at its commit, on the room as
@@ -68,37 +73,6 @@ enum Narrowing {
     /// A hook's injected event for these targets, `None` stored only: the
     /// targets the room binds (gap G-031).
     Targets(Option<Vec<ChannelId>>),
-}
-
-#[derive(Debug)]
-enum State {
-    Start,
-    Locking(EffectId),
-    LoadingRoom(EffectId),
-    ApplyingTimers {
-        effect: EffectId,
-        pending: Box<Pending>,
-    },
-    Committing(EffectId),
-    Releasing {
-        effect: EffectId,
-        result: Result<RecordResult, Abort>,
-    },
-    Finished(Result<RecordResult, Abort>),
-    Reported,
-}
-
-impl State {
-    fn awaits(&self) -> Option<EffectId> {
-        match self {
-            Self::Locking(effect)
-            | Self::LoadingRoom(effect)
-            | Self::ApplyingTimers { effect, .. }
-            | Self::Committing(effect)
-            | Self::Releasing { effect, .. } => Some(*effect),
-            Self::Start | Self::Finished(_) | Self::Reported => None,
-        }
-    }
 }
 
 impl RecordPass {
@@ -114,43 +88,43 @@ impl RecordPass {
     /// refuses it.
     pub(super) fn refusing(mut record: RoomEvent, refused_as: RefusedOperation) -> Self {
         record.status = EventStatus::Blocked;
-        Self {
+        let room_id = record.room_id.clone();
+        let work = RecordWork {
             record,
             refused_as,
             narrowing: Narrowing::SourceBinding,
             direct: None,
-            state: State::Start,
-            release_error: None,
+            committing: None,
+        };
+        Self {
+            section: Section::new(room_id, work),
         }
     }
 
     /// The record of a direct injection for `direct`, which the room refuses
     /// before anything is stored as its pass would have (gap G-069); `None`
     /// for any other record.
-    pub(super) fn checking(self, direct: Option<DirectCall>) -> Self {
-        Self { direct, ..self }
+    pub(super) fn checking(mut self, direct: Option<DirectCall>) -> Self {
+        self.section.work_mut().direct = direct;
+        self
     }
 
     /// The commit of `record`, an event a hook injected for `targets`,
     /// visible to the targets the room binds (gap G-031).
     pub(super) fn injected(record: RoomEvent, targets: Option<Vec<ChannelId>>) -> Self {
-        Self {
-            narrowing: Narrowing::Targets(targets),
-            ..Self::new(record)
-        }
+        let mut pass = Self::new(record);
+        pass.section.work_mut().narrowing = Narrowing::Targets(targets);
+        pass
     }
 
     /// Whether the record's commit waits for `effect`.
     pub(super) fn awaits(&self, effect: EffectId) -> bool {
-        self.state.awaits() == Some(effect)
+        self.section.awaits(effect)
     }
 
     /// Takes the room's lock.
     pub(super) fn start(&mut self, cx: &mut Cx<'_>) {
-        if matches!(self.state, State::Start) {
-            let room_id = self.record.room_id.clone();
-            self.state = State::Locking(cx.io.issue(HoldRequest::AcquireLock { room_id }));
-        }
+        self.section.start(cx);
     }
 
     /// Takes the driver's answer to the pass's outstanding effect.
@@ -160,95 +134,63 @@ impl RecordPass {
         effect: EffectId,
         outcome: Outcome,
     ) -> Progress<Result<RecordReport, Abort>> {
-        if !self.awaits(effect) {
-            debug_assert!(false, "record pass received {effect:?} in {:?}", self.state);
-            return Progress::Waiting;
+        match self.section.accept(cx, effect, outcome) {
+            Progress::Waiting => Progress::Waiting,
+            Progress::Done(ended) => Progress::Done(ended.result.map(|result| RecordReport {
+                result,
+                release_error: ended.release_error,
+            })),
         }
-        self.state = match mem::replace(&mut self.state, State::Reported) {
-            // The context holds the recent events the hooks of a due timer
-            // transition read (gap G-027).
-            State::Locking(_) => match outcome.into_locked() {
-                Ok(()) => State::LoadingRoom(cx.io.issue(StoreRequest::LoadContext {
-                    room_id: self.record.room_id.clone(),
-                    recent_events: cx.config.context_window,
-                })),
-                Err(error) => State::Finished(Err(Abort::Lock(error))),
-            },
-            State::LoadingRoom(_) => self.on_room(cx, outcome),
-            State::ApplyingTimers { pending, .. } => match pending.stored(cx, outcome) {
-                Ok(opened) => self.on_gate(cx, &opened.context),
-                Err(error) => self.release(cx, Err(Abort::Store(error))),
-            },
-            State::Committing(_) => match outcome.into_committed() {
-                Ok(()) => {
-                    let committed = RecordResult::Committed(Box::new(self.record.clone()));
-                    self.release(cx, Ok(committed))
-                }
-                Err(error) => self.release(cx, Err(Abort::Store(error))),
-            },
-            State::Releasing { result, .. } => {
-                let (result, release_error) =
-                    ops::after_release(&self.record.room_id, result, outcome.into_released());
-                self.release_error = release_error;
-                State::Finished(result)
-            }
-            state @ (State::Start | State::Finished(_) | State::Reported) => state,
-        };
-        if !matches!(self.state, State::Finished(_)) {
-            return Progress::Waiting;
+    }
+}
+
+impl SectionWork for RecordWork {
+    type Output = RecordResult;
+    type Error = Abort;
+
+    fn failure(failure: Failure) -> Abort {
+        match failure {
+            Failure::Store(error) => Abort::Store(error),
+            Failure::Lock(error) => Abort::Lock(error),
         }
-        let State::Finished(result) = mem::replace(&mut self.state, State::Reported) else {
-            return Progress::Waiting;
-        };
-        Progress::Done(result.map(|result| RecordReport {
-            result,
-            release_error: self.release_error.take(),
-        }))
     }
 
-    /// The room as the lock found it goes through the timer gate first,
-    /// unless a direct injection's caller does not reach it: another
-    /// organization's room refuses the record before its due timers are
-    /// applied, nothing written in it (RFC §17.2, gap G-069).
-    fn on_room(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
-        let context = match outcome.into_context() {
-            Ok(Some(context)) => context,
-            Ok(None) => return self.release(cx, Err(Abort::RoomNotFound)),
-            Err(error) => return self.release(cx, Err(Abort::Store(error))),
-        };
-        let foreign = self
-            .direct
-            .as_ref()
-            .and_then(|direct| direct.foreign(&context.room));
-        if let Some(refusal) = foreign {
-            return self.release(cx, Err(Abort::Refused(refusal)));
-        }
-        match gate::open(cx, context) {
-            Gate::Clear(context) => self.on_gate(cx, &context),
-            Gate::Writing { effect, pending } => State::ApplyingTimers { effect, pending },
-        }
+    fn missing(&self, _room_id: &RoomId) -> Result<RecordResult, Abort> {
+        Err(Abort::RoomNotFound)
+    }
+
+    /// A direct injection's caller that does not reach the room has its
+    /// record refused before the room's due timers are applied, nothing
+    /// written in it (RFC §17.2, gap G-069).
+    fn refuses(&self, room: &Room) -> Option<Result<RecordResult, Abort>> {
+        let refusal = self.direct.as_ref()?.foreign(room)?;
+        Some(Err(Abort::Refused(refusal)))
     }
 
     /// The status gate, then the commit with the next index and the
     /// visibility step 12 would have given the record (gap G-036); a direct
     /// injection into a room that binds no channel it names is refused
     /// first (gap G-069).
-    fn on_gate(&mut self, cx: &mut Cx<'_>, context: &RoomContext) -> State {
+    fn begin(
+        &mut self,
+        cx: &mut Cx<'_>,
+        context: Box<RoomContext>,
+    ) -> Progress<Result<RecordResult, Abort>> {
         let refusal = self
             .direct
             .as_ref()
-            .and_then(|_| DirectCall::unbound(&self.record, context));
+            .and_then(|_| DirectCall::unbound(&self.record, &context));
         if let Some(refusal) = refusal {
-            return self.release(cx, Err(Abort::Refused(refusal)));
+            return Progress::Done(Err(Abort::Refused(refusal)));
         }
         let status = context.room.status;
         if !status.accepts_events() {
             report::room_refused_as(cx, &self.record, self.refused_as, status);
-            return self.release(cx, Ok(RecordResult::Refused));
+            return Progress::Done(Ok(RecordResult::Refused));
         }
         self.record.index = context.room.event_count;
         self.record.visibility = match &self.narrowing {
-            Narrowing::SourceBinding => commit::stored_visibility(&self.record, context),
+            Narrowing::SourceBinding => commit::stored_visibility(&self.record, &context),
             Narrowing::Targets(targets) => {
                 permissions::targets_visibility(targets.as_deref(), &context.bindings)
             }
@@ -259,13 +201,31 @@ impl RecordPass {
             counters,
             target: None,
         };
-        State::Committing(cx.io.issue_locked(request, self.record.room_id.clone()))
+        self.committing = Some(cx.io.issue_locked(request, self.record.room_id.clone()));
+        Progress::Waiting
     }
 
-    fn release(&mut self, cx: &mut Cx<'_>, result: Result<RecordResult, Abort>) -> State {
-        let effect = cx.io.issue(HoldRequest::ReleaseLock {
-            room_id: self.record.room_id.clone(),
-        });
-        State::Releasing { effect, result }
+    fn accept(
+        &mut self,
+        _cx: &mut Cx<'_>,
+        _effect: EffectId,
+        outcome: Outcome,
+    ) -> Progress<Result<RecordResult, Abort>> {
+        self.committing = None;
+        match outcome.into_committed() {
+            Ok(()) => {
+                let committed = RecordResult::Committed(Box::new(self.record.clone()));
+                Progress::Done(Ok(committed))
+            }
+            Err(error) => Progress::Done(Err(Abort::Store(error))),
+        }
     }
+
+    fn awaits(&self, effect: EffectId) -> bool {
+        self.committing == Some(effect)
+    }
+
+    /// A record reports its refusal by the room's status under the lock,
+    /// and nothing once it is released.
+    fn report(&self, _cx: &mut Cx<'_>, _result: &Result<RecordResult, Abort>) {}
 }

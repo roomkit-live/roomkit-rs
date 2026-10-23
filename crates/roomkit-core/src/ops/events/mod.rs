@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use self::change::Change;
+use self::change::{Commit, Delete, Update};
 use self::section::EventSection;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use super::{Environment, KitConfig};
@@ -81,7 +81,7 @@ pub enum MutationError {
 /// G-063).
 #[derive(Debug)]
 pub struct UpdateEvent {
-    section: EventSection,
+    section: EventSection<Update>,
 }
 
 impl UpdateEvent {
@@ -94,10 +94,7 @@ impl UpdateEvent {
         updates: EventUpdates,
         organization_id: Option<String>,
     ) -> Self {
-        let change = Change::Update {
-            event_id,
-            updates: Box::new(updates),
-        };
+        let change = Update::new(event_id, updates);
         Self {
             section: EventSection::new(config, room_id, organization_id, change),
         }
@@ -108,8 +105,7 @@ impl Operation for UpdateEvent {
     type Output = Result<Option<RoomEvent>, MutationError>;
 
     fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
-        self.section
-            .poll(environment, |done| Ok(done.events.into_iter().next()))
+        self.section.poll(environment, |updated| updated)
     }
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
@@ -134,7 +130,7 @@ impl Operation for UpdateEvent {
 /// counts (gap G-064).
 #[derive(Debug)]
 pub struct DeleteEvent {
-    section: EventSection,
+    section: EventSection<Delete>,
 }
 
 impl DeleteEvent {
@@ -148,10 +144,7 @@ impl DeleteEvent {
         cascade_replies: bool,
         organization_id: Option<String>,
     ) -> Self {
-        let change = Change::Delete {
-            event_id,
-            cascade_replies,
-        };
+        let change = Delete::new(event_id, cascade_replies);
         Self {
             section: EventSection::new(config, room_id, organization_id, change),
         }
@@ -162,8 +155,8 @@ impl Operation for DeleteEvent {
     type Output = Result<Vec<EventId>, MutationError>;
 
     fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
-        self.section.poll(environment, |done| {
-            Ok(done.events.into_iter().map(|event| event.id).collect())
+        self.section.poll(environment, |removed| {
+            removed.into_iter().map(|event| event.id).collect()
         })
     }
 
@@ -186,7 +179,7 @@ impl Operation for DeleteEvent {
 /// runs on (gap G-071). The room's delivery lane never waits for it.
 #[derive(Debug)]
 pub struct CommitRecord {
-    section: EventSection,
+    section: EventSection<Commit>,
 }
 
 impl CommitRecord {
@@ -199,9 +192,7 @@ impl CommitRecord {
         organization_id: Option<String>,
     ) -> Self {
         let other_room = (record.room_id != room_id).then(|| record.room_id.clone());
-        let change = Change::Commit {
-            record: Box::new(record),
-        };
+        let change = Commit::new(record);
         let section = match other_room {
             Some(record) => {
                 let error = MutationError::OtherRoom {
@@ -220,11 +211,7 @@ impl Operation for CommitRecord {
     type Output = Result<RoomEvent, MutationError>;
 
     fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
-        self.section.poll(environment, |done| {
-            done.events.into_iter().next().ok_or_else(|| {
-                MutationError::Store(ErrorRecord::new("Internal", "the record went missing"))
-            })
-        })
+        self.section.poll(environment, |committed| committed)
     }
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {

@@ -47,6 +47,7 @@ mod inbound;
 mod io;
 mod lifecycle;
 mod protocol;
+mod section;
 
 pub use config::{ChannelDeclaration, ConfigError, DEFAULT_CONTEXT_WINDOW, KitConfig};
 pub use environment::{Environment, SequentialEnvironment};

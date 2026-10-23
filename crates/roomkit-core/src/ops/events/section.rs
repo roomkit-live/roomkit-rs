@@ -1,76 +1,47 @@
-//! The shape the direct calls share: take the room's lock, read the room,
-//! apply its due timers (gap G-045), change the event or commit the record,
-//! release the lock, then report (RFC §10.3, §10.5, §13.5).
+//! A direct call as an operation: its change made in the locked-section
+//! frame (`ops::section`), which takes the room's lock, reads the room,
+//! refuses a room the caller does not reach, applies its due timers (gap
+//! G-045), changes the event or commits the record, releases the lock,
+//! then reports (RFC §10.3, §10.5, §13.5).
 
-use std::mem;
 use std::sync::Arc;
 
 use super::MutationError;
-use super::change::{self, Change, Done};
-use crate::model::{RoomContext, RoomId};
+use super::change::EventChange;
+use crate::model::{Room, RoomContext, RoomId};
 use crate::ops::io::Io;
-use crate::ops::lifecycle::gate::{self, Gate, Opened, Pending};
-use crate::ops::protocol::{EffectId, HoldRequest, Outcome, ProtocolError, Step, StoreRequest};
-use crate::ops::{self, Cx, Environment, KitConfig};
+use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Step};
+use crate::ops::section::{Failure, Section, SectionWork};
+use crate::ops::{Cx, Environment, KitConfig, Progress};
 use crate::rules::organizations;
 
-/// The shape the direct calls share: take the lock, read the room, apply
-/// its due timers, change the event or commit the record, release the lock,
-/// then report.
+/// A direct call on a room's timeline, as an operation's whole work.
 #[derive(Debug)]
-pub(super) struct EventSection {
+pub(super) struct EventSection<C: EventChange> {
     config: Arc<KitConfig>,
     io: Io,
-    room_id: RoomId,
-    /// The organization the caller acts for, whose rooms only it reaches
-    /// (RFC §17.2); `None` reads the room unscoped.
-    organization_id: Option<String>,
-    change: Change,
-    state: State,
+    section: Section<EventWork<C>>,
+    result: Option<Result<C::Output, MutationError>>,
 }
 
-#[derive(Debug)]
-pub(super) enum State {
-    Start,
-    Locking(EffectId),
-    Loading(EffectId),
-    ApplyingTimers {
-        effect: EffectId,
-        pending: Box<Pending>,
-    },
-    /// The update reads the event first.
-    Reading {
-        effect: EffectId,
-        context: Box<RoomContext>,
-    },
-    /// The update's write, or the delete, is outstanding.
-    Writing {
-        effect: EffectId,
-        done: Box<Done>,
-    },
-    Releasing {
-        effect: EffectId,
-        result: Result<Box<Done>, MutationError>,
-    },
-    Finished(Result<Box<Done>, MutationError>),
-    Reported,
-}
-
-impl EventSection {
-    /// The call on `room_id`, for a caller acting for `organization_id`.
+impl<C: EventChange> EventSection<C> {
+    /// The call making `change` in `room_id`, for a caller acting for
+    /// `organization_id`; `None` reads the room unscoped.
     pub(super) fn new(
         config: Arc<KitConfig>,
         room_id: RoomId,
         organization_id: Option<String>,
-        change: Change,
+        change: C,
     ) -> Self {
+        let work = EventWork {
+            change,
+            organization_id,
+        };
         Self {
             config,
             io: Io::new(),
-            room_id,
-            organization_id,
-            change,
-            state: State::Start,
+            section: Section::new(room_id, work),
+            result: None,
         }
     }
 
@@ -79,12 +50,18 @@ impl EventSection {
     pub(super) fn refused(
         config: Arc<KitConfig>,
         room_id: RoomId,
-        change: Change,
+        change: C,
         error: MutationError,
     ) -> Self {
+        let work = EventWork {
+            change,
+            organization_id: None,
+        };
         Self {
-            state: State::Finished(Err(error)),
-            ..Self::new(config, room_id, None, change)
+            config,
+            io: Io::new(),
+            section: Section::ended(room_id, work),
+            result: Some(Err(error)),
         }
     }
 
@@ -93,176 +70,97 @@ impl EventSection {
         self.io.complete(id, outcome)
     }
 
-    /// Advances the call; `output` reads its result from what it did.
+    /// Advances the call; `output` reads its result from what it gave.
     pub(super) fn poll<T>(
         &mut self,
         environment: &dyn Environment,
-        output: impl FnOnce(Done) -> Result<T, MutationError>,
+        output: impl FnOnce(C::Output) -> T,
     ) -> Step<Result<T, MutationError>> {
         let Self {
             config,
             io,
-            room_id,
-            organization_id,
-            change,
-            state,
+            section,
+            result,
         } = self;
         let mut cx = Cx {
             config,
             env: environment,
             io,
         };
-        if matches!(state, State::Start) {
-            let room_id = room_id.clone();
-            *state = State::Locking(cx.io.issue(HoldRequest::AcquireLock { room_id }));
-        }
+        section.start(&mut cx);
         while let Some((effect, outcome)) = cx.io.next_outcome() {
-            *state = advance(
-                &mut cx,
-                room_id,
-                organization_id.as_deref(),
-                change,
-                mem::replace(state, State::Reported),
-                effect,
-                outcome,
-            );
-        }
-        let ready = if matches!(state, State::Finished(_)) {
-            match mem::replace(state, State::Reported) {
-                State::Finished(result) => Some(result.and_then(|done| output(*done))),
-                State::Start
-                | State::Locking(_)
-                | State::Loading(_)
-                | State::ApplyingTimers { .. }
-                | State::Reading { .. }
-                | State::Writing { .. }
-                | State::Releasing { .. }
-                | State::Reported => None,
+            if let Progress::Done(ended) = section.accept(&mut cx, effect, outcome) {
+                // A failed release is logged, and changes nothing the call
+                // did (gap G-025).
+                *result = Some(ended.result);
             }
-        } else {
-            None
-        };
+        }
+        let ready = result.take().map(|result| result.map(output));
         self.io.step(ready)
     }
 }
 
-/// The section's next state once `effect` is answered with `outcome`, for
-/// a caller acting for `organization_id`.
-fn advance(
-    cx: &mut Cx<'_>,
-    room_id: &RoomId,
-    organization_id: Option<&str>,
-    change: &Change,
-    state: State,
-    effect: EffectId,
-    outcome: Outcome,
-) -> State {
-    match state {
-        State::Locking(expected) if expected == effect => match outcome.into_locked() {
-            Ok(()) => State::Loading(cx.io.issue(StoreRequest::LoadContext {
-                room_id: room_id.clone(),
-                recent_events: cx.config.context_window,
-            })),
-            Err(error) => State::Finished(Err(MutationError::Lock(error))),
-        },
-        State::Loading(expected) if expected == effect => {
-            on_loaded(cx, room_id, organization_id, change, outcome)
-        }
-        State::ApplyingTimers {
-            effect: expected,
-            pending,
-        } if expected == effect => match pending.stored(cx, outcome) {
-            Ok(Opened { context, .. }) => change::act(cx, room_id, change, context),
-            Err(error) => release(cx, room_id, Err(MutationError::Store(error))),
-        },
-        State::Reading {
-            effect: expected,
-            context,
-        } if expected == effect => change::on_read(cx, room_id, change, context, outcome),
-        State::Writing {
-            effect: expected,
-            done,
-        } if expected == effect => change::on_written(cx, room_id, change, done, outcome),
-        State::Releasing {
-            effect: expected,
-            result,
-        } if expected == effect => on_released(cx, room_id, change, result, outcome),
-        state @ (State::Start
-        | State::Locking(_)
-        | State::Loading(_)
-        | State::ApplyingTimers { .. }
-        | State::Reading { .. }
-        | State::Writing { .. }
-        | State::Releasing { .. }
-        | State::Finished(_)
-        | State::Reported) => {
-            debug_assert!(
-                false,
-                "a direct event change received {effect:?} in {state:?}"
-            );
-            state
-        }
-    }
+/// A direct call's change as the work of a locked section.
+#[derive(Debug)]
+struct EventWork<C: EventChange> {
+    change: C,
+    /// The organization the caller acts for, whose rooms only it reaches
+    /// (RFC §17.2); `None` reads the room unscoped.
+    organization_id: Option<String>,
 }
 
-/// The room as the lock found it goes through the timer gate first. A
-/// missing room makes a change of a stored event a no-op, as a target the
-/// room does not hold does, and fails a record's commit (gap G-063). A room
-/// the caller's organization does not reach is a missing one, nothing
-/// written in it, its due timers included (RFC §17.2).
-fn on_loaded(
-    cx: &mut Cx<'_>,
-    room_id: &RoomId,
-    organization_id: Option<&str>,
-    change: &Change,
-    outcome: Outcome,
-) -> State {
-    let context = match outcome.into_context() {
-        Ok(Some(context)) if organizations::admits(organization_id, &context.room) => context,
-        Ok(_) if change.changes_a_stored_event() => {
-            return release(cx, room_id, Ok(Box::new(Done::nothing())));
-        }
-        Ok(_) => {
-            return release(
-                cx,
-                room_id,
-                Err(MutationError::RoomNotFound(room_id.clone())),
-            );
-        }
-        Err(error) => return release(cx, room_id, Err(MutationError::Store(error))),
-    };
-    match gate::open(cx, context) {
-        Gate::Clear(context) => change::act(cx, room_id, change, context),
-        Gate::Writing { effect, pending } => State::ApplyingTimers { effect, pending },
-    }
-}
+impl<C: EventChange> SectionWork for EventWork<C> {
+    type Output = C::Output;
+    type Error = MutationError;
 
-/// Reports the change once the lock is released. A failed release changes
-/// nothing the call did, and is only logged (gap G-025).
-fn on_released(
-    cx: &mut Cx<'_>,
-    room_id: &RoomId,
-    change: &Change,
-    result: Result<Box<Done>, MutationError>,
-    outcome: Outcome,
-) -> State {
-    let (result, _logged) = ops::after_release(room_id, result, outcome.into_released());
-    if let Ok(done) = &result
-        && done.changed
-    {
-        change::report(cx, change, done);
+    fn failure(failure: Failure) -> MutationError {
+        match failure {
+            Failure::Store(error) => MutationError::Store(error),
+            Failure::Lock(error) => MutationError::Lock(error),
+        }
     }
-    State::Finished(result)
-}
 
-/// Releases the room's lock before the call reports `result`.
-pub(super) fn release(
-    cx: &mut Cx<'_>,
-    room_id: &RoomId,
-    result: Result<Box<Done>, MutationError>,
-) -> State {
-    let effect = cx.io.issue(HoldRequest::ReleaseLock {
-        room_id: room_id.clone(),
-    });
-    State::Releasing { effect, result }
+    /// A missing room makes a change of a stored event a no-op, as a target
+    /// the room does not hold does, and fails a record's commit (gap
+    /// G-063).
+    fn missing(&self, room_id: &RoomId) -> Result<C::Output, MutationError> {
+        self.change.missing(room_id)
+    }
+
+    /// A room the caller's organization does not reach is a missing one,
+    /// nothing written in it, its due timers included (RFC §17.2).
+    fn refuses(&self, room: &Room) -> Option<Result<C::Output, MutationError>> {
+        let admitted = organizations::admits(self.organization_id.as_deref(), room);
+        (!admitted).then(|| self.change.missing(&room.id))
+    }
+
+    fn begin(
+        &mut self,
+        cx: &mut Cx<'_>,
+        context: Box<RoomContext>,
+    ) -> Progress<Result<C::Output, MutationError>> {
+        let room_id = context.room.id.clone();
+        self.change.begin(cx, &room_id, context)
+    }
+
+    fn accept(
+        &mut self,
+        cx: &mut Cx<'_>,
+        _effect: EffectId,
+        outcome: Outcome,
+    ) -> Progress<Result<C::Output, MutationError>> {
+        self.change.accept(cx, outcome)
+    }
+
+    fn awaits(&self, effect: EffectId) -> bool {
+        self.change.awaits(effect)
+    }
+
+    /// The change's trigger fires for what it wrote; a call that wrote
+    /// nothing fires nothing (gap G-063).
+    fn report(&self, cx: &mut Cx<'_>, result: &Result<C::Output, MutationError>) {
+        if result.is_ok() {
+            self.change.report(cx);
+        }
+    }
 }
