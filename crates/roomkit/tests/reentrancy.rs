@@ -211,6 +211,20 @@ async fn send(kit: &RoomKit, text: &str) -> Result<roomkit::ops::InboundResult, 
         .unwrap_or_else(|_| panic!("the call waited for itself"))
 }
 
+/// The texts `audit` delivered, once it delivered `count` of them or the
+/// bound passed: a call answered at its decision is delivered after its
+/// caller's call, and nothing awaits its delivery.
+async fn delivered(audit: &RecordingTransport, count: usize) -> Vec<String> {
+    let deadline = tokio::time::Instant::now() + BOUND;
+    loop {
+        let texts = audit.texts();
+        if texts.len() >= count || tokio::time::Instant::now() >= deadline {
+            return texts;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 /// The room's timeline, BLOCKED records included, as `index source status
 /// text` lines.
 async fn timeline(kit: &RoomKit) -> Vec<String> {
@@ -493,9 +507,10 @@ on_both_runtimes!(
     agent_injects
 );
 
-/// RFC §10.1 step 18: an agent's turn injects into its own room and
-/// receives its event at once, at the commit; the event's delivery follows
-/// in the lane, after the turn's own set.
+/// RFC §10.1 step 18, §9.5.1 Reentrance: an agent's turn injects into its
+/// own room, a new arrival, and receives its event at once, at its
+/// decision; the event's delivery follows in the lane, after the turn's own
+/// set.
 async fn agent_injects() {
     let (kit, audit) = room().await;
     let seen = Arc::new(Mutex::new(None));
@@ -525,8 +540,9 @@ async fn agent_injects() {
     kit.register_channel(agent).unwrap();
     kit.attach(&room_id(), &channel("ai")).await.unwrap();
     send(&kit, "hello").await.unwrap();
+    let texts = delivered(&audit, 2).await;
     assert_eq!(
-        (*seen.lock().unwrap(), audit.texts()),
+        (*seen.lock().unwrap(), texts),
         (
             Some((1, EventStatus::Delivered, EventDirection::Outbound, false)),
             vec!["hello".to_owned(), "Let me check.".to_owned()]
@@ -535,8 +551,8 @@ async fn agent_injects() {
 }
 
 /// RFC §10.1, §13.5: a channel's call to `process_inbound` for its own room
-/// is adopted, returns at its commit with no delivery result, and its
-/// delivery follows in the lane.
+/// from its delivery is a new arrival, returns at its decision with no
+/// delivery result, and its delivery follows in the lane.
 #[tokio::test]
 async fn process_inbound_from_a_channel_into_its_own_room_returns_at_its_commit() {
     let (kit, audit) = room().await;
@@ -562,8 +578,9 @@ async fn process_inbound_from_a_channel_into_its_own_room_returns_at_its_commit(
     kit.register_channel(bot).unwrap();
     kit.attach(&room_id(), &channel("bot")).await.unwrap();
     send(&kit, "hello").await.unwrap();
+    let texts = delivered(&audit, 2).await;
     assert_eq!(
-        (*seen.lock().unwrap(), audit.texts()),
+        (*seen.lock().unwrap(), texts),
         (
             Some((Some(1), 0)),
             vec!["hello".to_owned(), "follow-up".to_owned()]
@@ -843,8 +860,9 @@ async fn a_task_a_turn_awaits_as_its_own_keeps_the_turn_s_context() {
     kit.register_channel(agent).unwrap();
     kit.attach(&room_id(), &channel("ai")).await.unwrap();
     send(&kit, "hello").await.unwrap();
+    let texts = delivered(&audit, 2).await;
     assert_eq!(
-        (*seen.lock().unwrap(), audit.texts()),
+        (*seen.lock().unwrap(), texts),
         (Some(1), vec!["hello".to_owned(), "Looked up.".to_owned()])
     );
 }
@@ -1023,9 +1041,10 @@ impl<S: ConversationStore> InboundRoomRouter<S> for ToRoom1 {
     }
 }
 
-/// RFC §13.5: a call that could only wait for what its own caller holds, a
-/// message routed back into the room whose lane the caller's call holds,
-/// fails instead of hanging.
+/// RFC §13.5, §9.5.1 Reentrance: a message routed back into the room from
+/// under its lock cannot be adopted, the room being known only once it is
+/// routed: it fails at the lock its own caller's section holds, instead of
+/// committing within that section's tenure.
 #[tokio::test]
 async fn a_call_that_could_only_wait_for_itself_fails() {
     let (kit, _) = room().await;
@@ -1060,6 +1079,223 @@ async fn a_call_that_could_only_wait_for_itself_fails() {
             Some(0)
         )
     );
+}
+
+/// An agent whose turn, on the customer's `hello`, runs `call` with the kit
+/// and records what it returned.
+fn calling_agent<T: Send + 'static>(
+    kit: &RoomKit,
+    seen: &Arc<Mutex<Option<T>>>,
+    call: impl Fn(RoomKit) -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync + 'static,
+) -> Scripted {
+    let (turn_kit, turn_seen) = (kit.clone(), Arc::clone(seen));
+    let call = Arc::new(call);
+    Scripted::agent(
+        "ai",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, seen, call) = (turn_kit.clone(), Arc::clone(&turn_seen), Arc::clone(&call));
+            Box::pin(async move {
+                if text_of(&event.content) == "hello" {
+                    *seen.lock().unwrap() = Some(call(kit).await);
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    )
+}
+
+/// RFC §9.5.1 Reentrance: a turn's call is a new arrival, which takes the
+/// room's admission ticket behind a message whose check started first, and
+/// commits after it, while the turn's own set, ahead in the lane, waits for
+/// the call's decision; nothing waits for itself.
+#[tokio::test]
+async fn a_turn_s_call_ticketed_behind_another_message_commits_after_it() {
+    let (kit, _) = room().await;
+    let (a_checking, e_checking) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (hook_a, hook_e) = (Arc::clone(&a_checking), Arc::clone(&e_checking));
+    kit.hook(
+        before_broadcast("scanner", false),
+        move |event: RoomEvent, _| {
+            let (a_checking, e_checking) = (Arc::clone(&hook_a), Arc::clone(&hook_e));
+            async move {
+                match text_of(&event.content).as_str() {
+                    "A" => {
+                        a_checking.notify_one();
+                        e_checking.notified().await;
+                    }
+                    "E" => e_checking.notify_one(),
+                    _ => {}
+                }
+                Ok(HookResult::allow())
+            }
+        },
+    )
+    .unwrap();
+    let seen = Arc::new(Mutex::new(None));
+    let turning = Arc::new(Notify::new());
+    let (turn_turning, turn_a) = (Arc::clone(&turning), Arc::clone(&a_checking));
+    let agent = calling_agent(&kit, &seen, move |kit| {
+        let (turning, a_checking) = (Arc::clone(&turn_turning), Arc::clone(&turn_a));
+        Box::pin(async move {
+            turning.notify_one();
+            a_checking.notified().await;
+            kit.send_event(&room_id(), from_console("E"))
+                .await
+                .map(|event| event.index)
+        })
+    });
+    kit.register_channel(agent).unwrap();
+    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    let c = {
+        let kit = kit.clone();
+        tokio::spawn(async move { send(&kit, "hello").await })
+    };
+    // C is committed and its turn runs, in C's set, ahead in the lane.
+    tokio::time::timeout(BOUND, turning.notified())
+        .await
+        .unwrap();
+    let a = send(&kit, "A").await.unwrap();
+    tokio::time::timeout(BOUND, c)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let lines = timeline(&kit).await;
+    assert_eq!(
+        (
+            a.event.map(|event| event.index),
+            seen.lock().unwrap().clone(),
+            lines
+        ),
+        (
+            Some(1),
+            Some(Ok(2)),
+            vec![
+                "#0 sms delivered hello".to_owned(),
+                "#1 sms delivered A".to_owned(),
+                "#2 ws delivered E".to_owned()
+            ]
+        )
+    );
+}
+
+/// RFC §13.6, §9.5.1 Reentrance: a turn's call is bounded by its own
+/// `process_timeout`: its slow check refuses it, nothing written, while the
+/// turn's trigger stays delivered.
+#[tokio::test]
+async fn a_turn_s_call_meets_its_own_process_timeout() {
+    let (kit, _) = room().await;
+    kit.set_process_timeout(Some(Duration::from_millis(100)));
+    kit.hook(
+        before_broadcast("scanner", false),
+        |event: RoomEvent, _| async move {
+            if text_of(&event.content) == "Let me check." {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+            }
+            Ok(HookResult::allow())
+        },
+    )
+    .unwrap();
+    let seen = Arc::new(Mutex::new(None));
+    let agent = calling_agent(&kit, &seen, |kit| {
+        Box::pin(async move {
+            let thought = DirectEvent::new(channel("ai"), EventContent::text("Let me check."));
+            kit.send_event(&room_id(), thought).await.err()
+        })
+    });
+    kit.register_channel(agent).unwrap();
+    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    let result = send(&kit, "hello").await.unwrap();
+    let lines = timeline(&kit).await;
+    assert_eq!(
+        (
+            result.event.map(|event| event.status),
+            seen.lock().unwrap().clone(),
+            lines
+        ),
+        (
+            Some(EventStatus::Delivered),
+            Some(Some(KitError::Inbound(InboundError::Refused {
+                reason: "process_timeout".to_owned()
+            }))),
+            vec!["#0 sms delivered hello".to_owned()]
+        )
+    );
+}
+
+/// RFC §8.3, §9.5.1 Reentrance: a turn's calls draw on their own reentry
+/// budgets, not on their trigger's: the turn's own response re-enters as it
+/// would without them, although the calls spend as many passes as the
+/// trigger's budget holds, ten times the chain-depth limit.
+#[tokio::test]
+async fn a_turn_s_call_draws_on_its_own_reentry_budget() {
+    const LIMIT: u32 = 2;
+    let (kit, _) = room().await;
+    kit.set_max_chain_depth(LIMIT);
+    let (turn_kit, injected) = (kit.clone(), Arc::new(Mutex::new(None)));
+    let turn_injected = Arc::clone(&injected);
+    let agent = Scripted::agent(
+        "ai",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, injected) = (turn_kit.clone(), Arc::clone(&turn_injected));
+            Box::pin(async move {
+                if text_of(&event.content) != "hello" {
+                    return Ok(ChannelOutput::default());
+                }
+                let mut sent = 0;
+                for _ in 0..LIMIT * 10 {
+                    let thought = DirectEvent::new(channel("ai"), EventContent::text("Checking."));
+                    if kit.send_event(&room_id(), thought).await.is_ok() {
+                        sent += 1;
+                    }
+                }
+                *injected.lock().unwrap() = Some(sent);
+                let source =
+                    EventSource::new(channel("ai"), ChannelType::Ai, EventDirection::Outbound);
+                let reply = RoomEvent::new(
+                    "ai_reply".parse().unwrap(),
+                    room_id(),
+                    EventType::Message,
+                    source,
+                    EventContent::text("Hello back"),
+                    Timestamp::UNIX_EPOCH,
+                );
+                Ok(ChannelOutput::respond(vec![reply]))
+            })
+        }),
+    );
+    kit.register_channel(agent).unwrap();
+    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    send(&kit, "hello").await.unwrap();
+    let last = timeline(&kit).await.last().cloned();
+    assert_eq!(
+        (*injected.lock().unwrap(), last),
+        (
+            Some(LIMIT * 10),
+            Some("#21 ai delivered Hello back".to_owned())
+        )
+    );
+}
+
+/// RFC §10.1 step 18: a message a turn routes back into its own room is a
+/// new arrival, and returns at its decision, its delivery following the
+/// turn's own set in the lane: it waits for nothing its caller holds.
+#[tokio::test]
+async fn a_message_a_turn_routes_into_its_own_room_returns_at_its_decision() {
+    let (kit, _) = room().await;
+    kit.set_router(ToRoom1);
+    let seen = Arc::new(Mutex::new(None));
+    let agent = calling_agent(&kit, &seen, |kit| {
+        Box::pin(async move {
+            kit.process_inbound(message("forwarded"), None)
+                .await
+                .map(|result| result.event.map(|event| event.index))
+        })
+    });
+    kit.register_channel(agent).unwrap();
+    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    send(&kit, "hello").await.unwrap();
+    assert_eq!(*seen.lock().unwrap(), Some(Ok(Some(1))));
 }
 
 /// RFC §10.5: from outside, `send_event` waits for its delivery set and

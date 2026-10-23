@@ -21,9 +21,13 @@
 //! - a ticket's turn in the admission order of a room a frame stands in is
 //!   never waited for: the frame's run holds the room's ticket, or is about
 //!   to take it, and waits for this call (RFC §9.5.1 Reentrance);
-//! - a call into a room is handed to the innermost frame working in that
-//!   room, under its lock, in its admission order or delivering in it, whose
-//!   run's operation adopts it or declines it.
+//! - a call into a room is handed to the innermost frame that runs under
+//!   the room's lock or in its admission order, whose run's operation adopts
+//!   it or declines it;
+//! - an inbound call into a room its context works in, under the room's
+//!   lock, in its admission order or delivering in it, returns at its
+//!   decision rather than wait for its delivery, which may wait in the
+//!   room's lane behind its own caller's set (RFC §10.1 step 18).
 //!
 //! A refusal fails the call ([`KitError::Reentrant`](crate::KitError::Reentrant))
 //! rather than let it wait for itself.
@@ -230,12 +234,12 @@ impl Frame {
         }
     }
 
-    /// Whether the frame's call works in `room_id`: under its lock, in its
-    /// admission order, or delivering in it.
-    fn works_in(&self, room_id: &RoomId) -> bool {
+    /// Whether the frame's call runs under `room_id`'s lock or in its
+    /// admission order: a call it makes into the room is its run's to
+    /// adopt (RFC §9.5.1 Reentrance).
+    fn adopts_into(&self, room_id: &RoomId) -> bool {
         self.lease.as_ref().map(Lease::room_id) == Some(room_id)
             || self.admitted.as_ref() == Some(room_id)
-            || self.delivering.as_ref() == Some(room_id)
     }
 
     /// The effect whose call this is.
@@ -304,19 +308,32 @@ impl ExecutionContext {
             .any(|frame| frame.admitted.as_ref() == Some(room_id))
     }
 
-    /// The innermost frame working in `room_id`, whose run a call into the
-    /// room is handed to.
+    /// Whether an inbound call of this context into `room_id` returns at
+    /// its decision: a frame delivers in the room, stands in its admission
+    /// order, or holds a live lease on its lock, and its run's set or
+    /// section would wait for this call (RFC §10.1 step 18).
+    pub(crate) fn detaches(&self, room_id: &RoomId) -> bool {
+        self.lease(room_id).is_some()
+            || self.frames.iter().any(|frame| {
+                frame.delivering.as_ref() == Some(room_id)
+                    || frame.admitted.as_ref() == Some(room_id)
+            })
+    }
+
+    /// The innermost frame that runs under `room_id`'s lock or in its
+    /// admission order, whose run a call into the room is handed to.
     fn taker(&self, room_id: &RoomId) -> Option<&Frame> {
         self.frames
             .iter()
             .rev()
-            .find(|frame| frame.works_in(room_id))
+            .find(|frame| frame.adopts_into(room_id))
     }
 }
 
-/// Hands `entry` to the run of the current task's context whose work in
-/// its room made it, if any: the call is adopted by that run's operation, or
-/// declined (RFC §13.5, §10.1 step 18).
+/// Hands `entry` to the run of the current task's context whose work under
+/// its room's lock or in its admission order made it, if any: the call is
+/// adopted by that run's operation, or declined (RFC §13.5, §9.5.1
+/// Reentrance).
 pub(crate) async fn adopt(entry: Entry) -> Adopting {
     let context = ExecutionContext::current();
     let Some(frame) = context.taker(entry.room_id()).cloned() else {
@@ -452,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn a_call_is_handed_to_the_innermost_frame_working_in_its_room() {
+    fn a_call_is_handed_to_the_innermost_frame_under_its_room_s_lock_or_in_its_order() {
         let (outer, _outer_queue) = RunShared::new();
         let (inner, _inner_queue) = RunShared::new();
         outer.locked(room_id());
@@ -463,8 +480,8 @@ mod tests {
                 &inner,
                 effect(),
                 None,
-                None,
                 Some(other.clone()),
+                None,
             ));
         let taker = |room_id: &RoomId| {
             context
@@ -478,6 +495,29 @@ mod tests {
                 taker(&RoomId::new("room_3").unwrap())
             ),
             (Some(true), Some(false), None)
+        );
+    }
+
+    /// RFC §10.1 step 18: a turn's call into its own room returns at its
+    /// decision, and is not adopted; one into another room waits for its
+    /// delivery.
+    #[test]
+    fn a_context_delivering_in_a_room_detaches_from_that_room_only() {
+        let (run, _queue) = RunShared::new();
+        let context = ExecutionContext::default().within(Frame::new(
+            &run,
+            effect(),
+            None,
+            None,
+            Some(room_id()),
+        ));
+        assert_eq!(
+            (
+                context.detaches(&room_id()),
+                context.detaches(&RoomId::new("room_2").unwrap()),
+                context.taker(&room_id()).is_some()
+            ),
+            (true, false, false)
         );
     }
 }

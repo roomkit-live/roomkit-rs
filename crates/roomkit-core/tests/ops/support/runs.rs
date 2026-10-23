@@ -71,12 +71,19 @@ impl Frame {
     }
 
     /// Whether the frame's run takes a call into `room_id` its effect's code
-    /// makes: code under the room's lock, in its admission order, or a
-    /// delivery of its sets.
+    /// makes: code under the room's lock or in its admission order (RFC
+    /// §9.5.1 Reentrance).
     fn takes(&self, room_id: &RoomId) -> bool {
-        [&self.locked, &self.admitted, &self.delivering]
+        [&self.locked, &self.admitted]
             .into_iter()
             .any(|room| room.as_ref() == Some(room_id))
+    }
+
+    /// Whether the frame's code works in `room_id`, under its lock, in its
+    /// admission order or delivering in it: a call it makes into the room
+    /// returns at its decision (RFC §10.1 step 18).
+    fn works_in(&self, room_id: &RoomId) -> bool {
+        self.takes(room_id) || self.delivering.as_ref() == Some(room_id)
     }
 }
 
@@ -330,8 +337,8 @@ impl Sim {
     }
 
     /// The frame of `context` whose run takes a call into `room_id`: the
-    /// innermost whose effect's code runs under the room's lock, in its
-    /// admission order, or delivers in it.
+    /// innermost whose effect's code runs under the room's lock or in its
+    /// admission order.
     fn taker(context: &[Frame], room_id: &RoomId) -> Option<Frame> {
         context
             .iter()
@@ -409,7 +416,9 @@ impl Sim {
         self.settled.push(settled);
     }
 
-    /// Records the current run's decision, which it publishes once.
+    /// Records the current run's decision, which it publishes once, and
+    /// answers the caller of an arrival with it when the caller's context
+    /// works in the call's room, as the runtime does.
     fn record_decision(&mut self, decided: Decided) {
         let run = self.current;
         assert!(
@@ -417,6 +426,16 @@ impl Sim {
             "an operation published its decision twice"
         );
         self.state_mut(run).decided = true;
+        let detaches = self.state(run).serves.as_ref().is_some_and(|call| {
+            call.waits
+                && decided
+                    .room_id
+                    .as_ref()
+                    .is_some_and(|room_id| call.context.iter().any(|frame| frame.works_in(room_id)))
+        });
+        if detaches && let Some(call) = self.state_mut(run).serves.take() {
+            self.answer_call(&call, &decided.result);
+        }
         self.decisions.push((self.trace.last().cloned(), decided));
         if run == ROOT && self.place_ahead.is_some() {
             self.note("another call's set is over".to_owned());

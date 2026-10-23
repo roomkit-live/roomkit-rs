@@ -23,14 +23,18 @@
 //! operation runs its passes and its sets as two queues, one of each at a
 //! time (`queues`).
 //!
-//! A call into the room that the operation's own work makes, a hook, a turn
-//! or a delivery calling `send_event` or `process_inbound` for the room, is
-//! adopted (`adoption`): the operation runs it as an entry of its own,
-//! beside its work, or nested in the pass whose hook made it, so that it
-//! commits ahead of that pass's event; its caller receives its result at
-//! its commit, and its delivery set takes its place in the lane at that
-//! commit (RFC §13.5, §10.1 step 18, gap G-070). The queues thus carry
-//! several cascades: the call's, and one per adopted entry.
+//! A call into the room that the operation's own work makes under the
+//! room's lock or in its admission order, a hook or a parse calling
+//! `send_event` or `process_inbound` for the room, is adopted (`adoption`):
+//! the operation runs it as an entry of its own, beside its work, or nested
+//! in the pass whose hook made it, so that it commits ahead of that pass's
+//! event; its caller receives its result at its commit, and its delivery
+//! set takes its place in the lane at that commit (RFC §13.5, §10.1 step 18,
+//! gap G-070). The queues thus carry several cascades: the call's, and one
+//! per adopted entry. A turn's or a delivery's call is a new arrival, an
+//! operation of its own (RFC §9.5.1 Reentrance), whose caller may take the
+//! call's decision, published once it is known (`Step::decided`), rather
+//! than wait for its delivery.
 //!
 //! Every pass checks an edit or a delete against its target (RFC §10.1 step
 //! 8a, §10.3), updates the target in its commit, and fires `ON_EVENT_UPDATED`

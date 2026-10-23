@@ -8,11 +8,12 @@
 //! wait the driver polls itself (`holds`); a call on the store, a channel,
 //! a hook or the router is a task (`calls`), run within its execution
 //! context, so that code it runs may take the lock the operation holds on
-//! its behalf again, or call into the room it works in: such a call is
-//! handed to the operation, which adopts it, and its caller is answered
-//! when the operation settles it (RFC §13.5, §10.1 step 18). An inbound
-//! call's operation runs on a task of its own, within its caller's
-//! execution context (`inbound`).
+//! its behalf again, or call into the room under its lock or in its
+//! admission order: such a call is handed to the operation, which adopts
+//! it, and its caller is answered when the operation settles it (RFC §13.5,
+//! §9.5.1 Reentrance, §10.1 step 18). An inbound call's operation runs on a
+//! task of its own, within its caller's execution context, and answers a
+//! caller that cannot wait for its delivery at its decision (`inbound`).
 //!
 //! The driver never waits for what its own context holds: a lock its
 //! context holds a lease on, asked by an inbound call, or a ticket's turn
@@ -38,6 +39,7 @@ use tokio::task::{self, JoinError, JoinSet};
 use tokio::time::Instant;
 
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
+use self::inbound::Decision;
 pub(crate) use self::inbound::run_inbound;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared};
 use crate::error::KitError;
@@ -84,17 +86,25 @@ pub(crate) async fn run<S: ConversationStore, O: Operation>(
     call: &'static str,
     operation: O,
 ) -> Result<O::Output, KitError> {
-    drive(inner, call, operation, Leases::Granted).await
+    drive(
+        inner,
+        call,
+        operation,
+        Leases::Granted,
+        &mut Decision::Unwanted,
+    )
+    .await
 }
 
 /// Runs `operation`, made by the kit's call `call`, until it is ready,
 /// treating a lock its execution context holds a live lease on as `leases`
-/// says.
+/// says, and offering its decision to `decision`.
 async fn drive<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     operation: O,
     leases: Leases,
+    decision: &mut Decision,
 ) -> Result<O::Output, KitError> {
     let (shared, adoptions) = RunShared::new();
     let driver = Driver {
@@ -110,6 +120,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         callers: HashMap::new(),
         clocks: Clocks::read(inner),
         refused: None,
+        decision,
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -141,6 +152,8 @@ struct Driver<'kit, S> {
     /// The room whose lock or ticket's turn the run was refused, its context
     /// holding it.
     refused: Option<RoomId>,
+    /// Where the operation's decision goes.
+    decision: &'kit mut Decision,
 }
 
 impl<S> Drop for Driver<'_, S> {
@@ -172,6 +185,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
             for settled in step.settled {
                 self.answer(settled);
+            }
+            if let Some(decided) = step.decided {
+                let refused = self.refused.as_ref();
+                self.decision
+                    .offer(&self.context, self.call, decided, refused);
             }
             let mut answered = false;
             match step.next {

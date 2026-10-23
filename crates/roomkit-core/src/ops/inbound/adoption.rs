@@ -1,13 +1,15 @@
 //! The calls into the room that the operation's own work makes (RFC §13.5,
 //! §9.5.1 Reentrance, §10.1 step 18, gap G-070).
 //!
-//! A hook, a parse, a turn or a delivery of the operation that calls
-//! `send_event` or `process_inbound` for the operation's room would, run
-//! apart, wait for what the operation holds: the room lock its section
-//! holds, the admission ticket its check holds, a place in the room's lane
-//! ahead of its own. The driver hands such a call to the operation instead:
-//! it is adopted, as an entry of its own, with its own result. Where it runs
-//! depends on the call that made it, its origin:
+//! A hook or a parse of the operation that calls `send_event` or
+//! `process_inbound` for the operation's room, under the room's lock or in
+//! its admission order, would, run apart, wait for what the operation
+//! holds: the room lock its section holds, the admission ticket its check
+//! holds or is about to take. The driver hands such a call to the operation
+//! instead: it is adopted, as an entry of its own, with its own result
+//! (RFC §9.5.1 Reentrance). A call from a turn or a delivery waits for
+//! nothing the operation holds: it is a new arrival, its own operation.
+//! Where an entry runs depends on the call that made it, its origin:
 //!
 //! - a call the operation made under the room's lock (`Effect::locked`): a
 //!   hook a pass runs, or any call of an entry nested already. The entry is
@@ -19,11 +21,10 @@
 //!   it works. Two entries nested under one call run one after the other,
 //!   never as two sections within one tenure;
 //! - a call made in the room's admission order (`Effect::admitted`: an
-//!   off-lock hook, a message's parse, any call of an entry beside already),
-//!   or by one of the operation's delivery sets: the entry runs beside the
-//!   operation's work, taking the room lock as any section does, after the
-//!   operation's other section that holds it, if any, and every request it
-//!   makes stands in the room's admission order.
+//!   off-lock hook, a message's parse, any call of an entry beside already):
+//!   the entry runs beside the operation's work, taking the room lock as any
+//!   section does, after the operation's other section that holds it, if
+//!   any, and every request it makes stands in the room's admission order.
 //!
 //! Either way the entry takes no admission ticket and runs every hook under
 //! the lock: the operation it joins stands in the room's order already (RFC
@@ -214,14 +215,13 @@ impl Machine {
     /// Adopts `entry`, a call into the room made by the code effect
     /// `origin` runs (RFC §13.5, §9.5.1 Reentrance): nested in the section
     /// whose lock `origin` was made under, beside the operation's work when
-    /// `origin` stands in the room's admission order or is a call of one of
-    /// its delivery sets.
+    /// `origin` stands in the room's admission order.
     ///
     /// # Errors
     ///
     /// Hands `entry` back when `origin` is not outstanding, or was made
-    /// neither under the room's lock, nor in its admission order, nor by a
-    /// delivery set in the room.
+    /// neither under the room's lock nor in its admission order: a turn's or
+    /// a delivery's call is a new arrival.
     pub(super) fn adopt(
         &mut self,
         io: &Io,
@@ -230,8 +230,7 @@ impl Machine {
     ) -> Result<EntryId, Box<Entry>> {
         let room_id = entry.room_id();
         let nested = io.locked_for(origin) == Some(room_id);
-        let delivers = io.is_channel_call(origin) && self.room_id.as_ref() == Some(room_id);
-        let beside = io.admitted_for(origin) == Some(room_id) || delivers;
+        let beside = io.admitted_for(origin) == Some(room_id);
         if !io.is_outstanding(origin) || !(nested || beside) {
             return Err(Box::new(entry));
         }

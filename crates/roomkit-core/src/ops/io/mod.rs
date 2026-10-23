@@ -198,14 +198,6 @@ impl Io {
         self.outstanding.get(&effect)?.admitted.as_ref()
     }
 
-    /// Whether `effect`, an effect not answered yet, calls a channel's
-    /// `on_event()` or `deliver()`.
-    pub(crate) fn is_channel_call(&self, effect: EffectId) -> bool {
-        self.outstanding
-            .get(&effect)
-            .is_some_and(|outstanding| outstanding.kind == RequestKind::ChannelCall)
-    }
-
     /// Accepts the driver's answer to `id`, once and only if it answers the
     /// effect's request.
     pub(crate) fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {

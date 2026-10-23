@@ -488,10 +488,9 @@ pub trait Operation {
 
     /// Hands the operation a call into its room, made by the code effect
     /// `origin` runs, or by code that code awaits (RFC §13.5, §9.5.1
-    /// Reentrance): code under the room's lock or in its admission order,
-    /// or a delivery of its own. The operation runs it as an entry of its
-    /// own and reports its result in [`Step::settled`]; the next poll starts
-    /// it.
+    /// Reentrance): code under the room's lock or in its admission order.
+    /// The operation runs it as an entry of its own and reports its result
+    /// in [`Step::settled`]; the next poll starts it.
     ///
     /// # Errors
     ///

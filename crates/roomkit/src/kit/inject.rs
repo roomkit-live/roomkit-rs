@@ -32,12 +32,16 @@ impl<S: ConversationStore> RoomKit<S> {
     /// committed first. An instruction is returned uncommitted, as it is
     /// never stored (RFC §10.1.1).
     ///
-    /// Called from inside the room's own work, by a hook, a turn or a
-    /// delivery, the event is adopted by that work's call instead of
-    /// waiting for it: it takes no admission ticket, runs every hook under
-    /// the lock, commits ahead of the event a locked hook is deciding on,
-    /// and returns at its commit, its delivery following in the room's lane
-    /// (RFC §13.5, §9.5.1 Reentrance).
+    /// Called from inside the room's own work under the room's lock or in
+    /// its admission order, by a hook or a channel's parse, the event is
+    /// adopted by that work's call instead of waiting for it: it takes no
+    /// admission ticket, runs every hook under the lock, commits ahead of
+    /// the event a locked hook is deciding on, and returns at its commit,
+    /// its delivery following in the room's lane (RFC §13.5, §9.5.1
+    /// Reentrance). Called from a turn or a delivery in the room, it is a
+    /// new arrival, with its own ticket, `process_timeout` and reentry
+    /// budget, and returns at its decision, its delivery following the
+    /// caller's own set in the lane (RFC §10.1 step 18).
     ///
     /// # Errors
     ///

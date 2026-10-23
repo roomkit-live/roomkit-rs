@@ -11,7 +11,9 @@
 //!   room their router finds, inject events and commit records directly. A
 //!   hook, a turn or a delivery that calls into its own room never waits for
 //!   itself: the room lock is reentrant within the call's execution context,
-//!   and a call into the room is adopted by the work that holds it.
+//!   a call made under the lock or in the room's admission order is adopted
+//!   by the call whose work made it, and a turn's or a delivery's call
+//!   returns at its decision.
 //! - [`InboundRoomRouter`]: a routing strategy; [`DefaultRouter`] is the
 //!   RFC's.
 //! - [`store`]: where rooms live, in memory by default.

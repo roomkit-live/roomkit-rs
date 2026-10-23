@@ -1010,10 +1010,12 @@ mod an_entry_adopted_under_the_lock {
     }
 }
 
-/// RFC §13.5, §10.1 step 18, gap G-070: an entry the operation's delivery
-/// makes into its own room runs beside the running delivery set, takes the
-/// lock for its own commit, and is delivered after the set.
-mod an_entry_adopted_from_a_delivery {
+/// RFC §9.5.1 Reentrance, §10.1 step 18, gap G-070: a call an agent's turn
+/// makes into its own room is a new arrival, an operation of its own: it
+/// takes the room's admission ticket when an off-lock hook fires for it,
+/// draws on its own reentry budget, returns at its decision, and is
+/// delivered after its caller's set.
+mod an_arrival_from_a_delivery {
     use super::*;
     use pretty_assertions::assert_eq;
 
@@ -1027,14 +1029,7 @@ mod an_entry_adopted_from_a_delivery {
             "ai",
             Reentry {
                 entries: calling(|event| {
-                    (event.source.channel_id.as_str() == "sms").then(|| Entry::Direct {
-                        room_id: room_id(),
-                        organization_id: None,
-                        event: Box::new(DirectEvent::new(
-                            channel("ai"),
-                            EventContent::text("Let me check."),
-                        )),
-                    })
+                    (event.source.channel_id.as_str() == "sms").then(|| thought("Let me check."))
                 }),
                 answer: Answer::Awaits(Box::new(move |called| {
                     seen.borrow_mut().extend(committed(called));
@@ -1045,30 +1040,46 @@ mod an_entry_adopted_from_a_delivery {
         sim
     }
 
+    /// The call `send_event(room_1, ...)` of the agent's `text`.
+    fn thought(text: &str) -> Entry {
+        Entry::Direct {
+            room_id: room_id(),
+            organization_id: None,
+            event: Box::new(DirectEvent::new(channel("ai"), EventContent::text(text))),
+        }
+    }
+
     #[test]
-    fn commits_beside_the_running_set_and_is_delivered_after_it() {
+    fn takes_its_own_ticket_returns_at_its_decision_and_is_delivered_after_the_set() {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let mut sim = checking(&seen);
+        sim.off_lock_check(
+            "scanner",
+            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+        );
         sim.send(hello()).unwrap();
         let cascade: Vec<&str> = sim
             .trace
             .iter()
             .map(String::as_str)
-            .skip_while(|line| !line.starts_with("on_event"))
+            .skip_while(|line| !line.starts_with("on_event ai"))
             .collect();
         assert_eq!(
             cascade,
             [
-                "on_event ws <- evt_1",
                 "on_event ai <- evt_1 calls send_event room_1 \"Let me check.\"",
-                "deliver ws <- evt_1",
+                "load_context room_1",
+                "take ticket room_1",
+                "hook scanner",
+                "await ticket room_1",
                 "lock room_1",
                 "load_context room_1",
                 "commit #1 ai delivered \"Let me check.\"",
                 "enter lane room_1 evt_2",
                 "release room_1",
-                "on_event ai <- evt_1 settled",
+                "release ticket room_1",
                 "on_event ai <- evt_1 returns",
+                "deliver ws <- evt_1",
                 "leave lane room_1 evt_1",
                 "await lane room_1 evt_2",
                 "on_event sms <- evt_2",
@@ -1080,28 +1091,101 @@ mod an_entry_adopted_from_a_delivery {
         );
     }
 
-    /// RFC §9.5.1 Reentrance: every request of an entry adopted beside the
-    /// operation's work stands in the room's admission order.
+    /// RFC §10.2: the entry the arrival's off-lock hook makes waits in the
+    /// lane behind the turn's set, which waits for the arrival's decision:
+    /// the arrival's pass runs beside that set, never behind it, and the
+    /// sets then run in the order of their places.
     #[test]
-    fn stands_in_the_room_s_admission_order() {
+    fn whose_off_lock_entry_waits_behind_the_turn_s_set_is_decided_all_the_same() {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let mut sim = checking(&seen);
+        sim.reentrant_hook(
+            "scanner",
+            false,
+            Reentry {
+                entries: calling(|event| {
+                    (text_of(&event.content) == "Let me check.").then(|| send_event("Scanned"))
+                }),
+                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
         sim.send(hello()).unwrap();
+        let lane: Vec<&str> = sim
+            .trace
+            .iter()
+            .map(String::as_str)
+            .filter(|line| {
+                [
+                    "commit",
+                    "enter lane",
+                    "await lane",
+                    "leave lane",
+                    "on_event ai <- evt_1",
+                ]
+                .iter()
+                .any(|kind| line.starts_with(kind))
+            })
+            .take(14)
+            .collect();
         assert_eq!(
-            sim.in_admission_order,
+            lane,
             [
-                "handle_inbound sms in room_1",
-                "lock room_1 in room_1",
-                "load_context room_1 in room_1",
-                "commit in room_1",
-                "enter lane room_1 evt_2 in room_1",
-                "release room_1 in room_1",
+                "commit #0 sms delivered \"hello\"",
+                "enter lane room_1 evt_1",
+                "await lane room_1 evt_1",
+                "on_event ai <- evt_1 calls send_event room_1 \"Let me check.\"",
+                "commit #1 ws delivered \"Scanned\"",
+                "enter lane room_1 evt_3",
+                "commit #2 ai delivered \"Let me check.\"",
+                "enter lane room_1 evt_2",
+                "on_event ai <- evt_1 returns",
+                "leave lane room_1 evt_1",
+                "await lane room_1 evt_3",
+                "leave lane room_1 evt_3",
+                "await lane room_1 evt_2",
+                "leave lane room_1 evt_2",
             ]
         );
     }
 
+    /// RFC §8.3: its budget is its own: the turn's calls, as many as its
+    /// trigger's budget holds, leave the turn's response to re-enter.
+    #[test]
+    fn draws_on_its_own_reentry_budget() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 2;
+        sim.echo_agent("ai", "unused");
+        sim.reentrant_channel(
+            "ai",
+            Reentry {
+                entries: Box::new(|event| {
+                    if event.source.channel_id.as_str() != "sms" {
+                        return Vec::new();
+                    }
+                    (0..20).map(|_| thought("Checking.")).collect()
+                }),
+                answer: Answer::AtOnce(Box::new(|| {
+                    Ok(crate::support::respond(
+                        "ai",
+                        &notice_event("x", "x"),
+                        "Hello back",
+                    ))
+                })),
+            },
+        );
+        sim.send(hello()).unwrap();
+        let lines = sim.timeline_lines();
+        assert_eq!(
+            (
+                lines.len(),
+                lines.iter().filter(|line| line.contains("blocked")).count()
+            ),
+            (22, 0)
+        );
+    }
+
     /// RFC §10.1 step 18: the call's result reports its own event's
-    /// deliveries, none of the entry's.
+    /// deliveries, none of the arrival's.
     #[test]
     fn leaves_the_call_s_result_its_own_deliveries() {
         let seen = Rc::new(RefCell::new(Vec::new()));
@@ -1117,9 +1201,9 @@ mod an_entry_adopted_from_a_delivery {
         );
     }
 
-    /// RFC §10.1 step 18: detached completion, at the commit.
+    /// RFC §10.1 step 18: detached completion, at the decision.
     #[test]
-    fn returns_at_its_commit() {
+    fn returns_at_its_decision() {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let mut sim = checking(&seen);
         sim.send(hello()).unwrap();
@@ -1132,11 +1216,11 @@ mod an_entry_adopted_from_a_delivery {
         );
     }
 
-    /// A channel's call into its own room (RFC §10.1): the message arrives
-    /// in the lane the operation holds, its step 2 and its parse, and its
-    /// caller is answered at its commit, with no delivery result.
+    /// A channel's call into its own room (RFC §10.1): the message takes its
+    /// step 2 and its parse as any message, and its caller is answered at
+    /// its decision, with no delivery result.
     #[test]
-    fn a_message_arrives_and_returns_at_its_commit_with_no_delivery() {
+    fn a_message_arrives_and_returns_at_its_decision_with_no_delivery() {
         let mut sim = room();
         let results: Rc<RefCell<Vec<Called>>> = Rc::new(RefCell::new(Vec::new()));
         let kept = Rc::clone(&results);
@@ -1164,7 +1248,7 @@ mod an_entry_adopted_from_a_delivery {
             .map(String::as_str)
             .skip_while(|line| !line.contains("calls process_inbound"))
             .skip(1)
-            .take(6)
+            .take(8)
             .collect();
         assert_eq!(
             (
@@ -1180,6 +1264,8 @@ mod an_entry_adopted_from_a_delivery {
                     "load_context room_1",
                     "commit #1 sms delivered \"follow-up\"",
                     "enter lane room_1 evt_2",
+                    "release room_1",
+                    "on_event ws <- evt_1 returns",
                 ],
                 Some(1),
                 0
@@ -1188,39 +1274,35 @@ mod an_entry_adopted_from_a_delivery {
     }
 }
 
+/// An off-lock hook that injects the console's "Scanned" on the customer's
+/// events and answers `answer`.
+fn scanning(sim: &mut Sim, answer: Answer<HookOutcome<RoomEvent>>) {
+    sim.reentrant_hook(
+        "scanner",
+        false,
+        Reentry {
+            entries: calling(|event| {
+                (event.source.channel_id.as_str() == "sms").then(|| send_event("Scanned"))
+            }),
+            answer,
+        },
+    );
+}
+
 /// Gap G-070: two sections of one operation take the room lock one after
 /// the other, the second's request held back until the first's release.
 mod two_sections_of_one_operation {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    /// The agent injects without waiting and answers: its response's pass
-    /// asks for the lock while the entry's pass holds it.
+    /// The off-lock hook injects without waiting: the trigger's pass asks
+    /// for the lock while the entry's pass holds it.
     #[test]
     fn take_the_lock_one_after_the_other() {
         let mut sim = room();
-        sim.echo_agent("ai", "unused");
-        sim.reentrant_channel(
-            "ai",
-            Reentry {
-                entries: calling(|event| {
-                    (event.source.channel_id.as_str() == "sms").then(|| Entry::Direct {
-                        room_id: room_id(),
-                        organization_id: None,
-                        event: Box::new(DirectEvent::new(
-                            channel("ai"),
-                            EventContent::text("Let me check."),
-                        )),
-                    })
-                }),
-                answer: Answer::AtOnce(Box::new(|| {
-                    Ok(crate::support::respond(
-                        "ai",
-                        &notice_event("x", "x"),
-                        "Found it.",
-                    ))
-                })),
-            },
+        scanning(
+            &mut sim,
+            Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
         );
         sim.send(hello()).unwrap();
         let locked: Vec<&str> = sim
@@ -1229,37 +1311,27 @@ mod two_sections_of_one_operation {
             .map(String::as_str)
             .filter(|line| {
                 line.starts_with("lock")
-                    || line.starts_with("release")
+                    || line.starts_with("release room")
                     || line.starts_with("commit")
             })
             .collect();
         assert_eq!(
-            (locked, sim.timeline_lines()),
-            (
-                vec![
-                    "lock room_1",
-                    "commit #0 sms delivered \"hello\"",
-                    "release room_1",
-                    "lock room_1",
-                    "commit #1 ai delivered \"Let me check.\"",
-                    "release room_1",
-                    "lock room_1",
-                    "commit #2 ai delivered \"Found it.\"",
-                    "release room_1",
-                ],
-                vec![
-                    "#0 sms delivered \"hello\"".to_owned(),
-                    "#1 ai delivered \"Let me check.\"".to_owned(),
-                    "#2 ai delivered \"Found it.\"".to_owned(),
-                ]
-            )
+            locked,
+            [
+                "lock room_1",
+                "commit #0 ws delivered \"Scanned\"",
+                "release room_1",
+                "lock room_1",
+                "commit #1 sms delivered \"hello\"",
+                "release room_1",
+            ]
         );
     }
 }
 
 /// Gap G-070: an entry whose caller did not wait for it is settled all the
-/// same, and the call ends only once it is: its delivery set still joins the
-/// lane.
+/// same, and the call ends only once it is: its event is delivered before
+/// the call's end.
 mod an_entry_whose_caller_did_not_wait {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -1267,36 +1339,26 @@ mod an_entry_whose_caller_did_not_wait {
     #[test]
     fn is_delivered_before_the_call_ends() {
         let mut sim = room();
-        sim.echo_agent("ai", "unused");
-        sim.reentrant_channel(
-            "ai",
-            Reentry {
-                entries: calling(|event| {
-                    (event.source.channel_id.as_str() == "sms").then(|| Entry::Direct {
-                        room_id: room_id(),
-                        organization_id: None,
-                        event: Box::new(DirectEvent::new(
-                            channel("ai"),
-                            EventContent::text("Let me check."),
-                        )),
-                    })
-                }),
-                answer: Answer::AtOnce(Box::new(|| Ok(ChannelOutput::default()))),
-            },
+        scanning(
+            &mut sim,
+            Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
         );
         sim.send(hello()).unwrap();
         assert_eq!(
-            (sim.traced("on_event"), sim.trace.last().map(String::as_str)),
+            (
+                sim.traced("hook scanner"),
+                sim.traced("leave lane"),
+                sim.trace.last().map(String::as_str)
+            ),
             (
                 vec![
-                    "on_event ws <- evt_1",
-                    "on_event ai <- evt_1 calls send_event room_1 \"Let me check.\"",
-                    "on_event ai <- evt_1 returns",
-                    "on_event ai <- evt_1 settled",
-                    "on_event sms <- evt_2",
-                    "on_event ws <- evt_2",
+                    "hook scanner calls send_event room_1 \"Scanned\"",
+                    "hook scanner returns",
+                    "hook scanner",
+                    "hook scanner settled",
                 ],
-                Some("leave lane room_1 evt_2")
+                vec!["leave lane room_1 evt_2", "leave lane room_1 evt_1"],
+                Some("leave lane room_1 evt_1")
             )
         );
     }
@@ -1306,23 +1368,10 @@ mod an_entry_whose_caller_did_not_wait {
     #[test]
     fn has_the_side_effects_of_its_delivery_stored() {
         let mut sim = room();
-        sim.echo_agent("ai", "unused");
-        crm_filing_a_task_on(&mut sim, "Let me check.");
-        sim.reentrant_channel(
-            "ai",
-            Reentry {
-                entries: calling(|event| {
-                    (event.source.channel_id.as_str() == "sms").then(|| Entry::Direct {
-                        room_id: room_id(),
-                        organization_id: None,
-                        event: Box::new(DirectEvent::new(
-                            channel("ai"),
-                            EventContent::text("Let me check."),
-                        )),
-                    })
-                }),
-                answer: Answer::AtOnce(Box::new(|| Ok(ChannelOutput::default()))),
-            },
+        crm_filing_a_task_on(&mut sim, "Scanned");
+        scanning(
+            &mut sim,
+            Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
         );
         sim.send(hello()).unwrap();
         assert_eq!(sim.tasks.len(), 1);
@@ -1357,6 +1406,32 @@ mod an_entry_whose_caller_did_not_wait {
 mod an_entry_adopted_from_an_off_lock_hook {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    /// Every request of an entry adopted beside the operation's work stands
+    /// in the room's admission order, its locked hooks' too.
+    #[test]
+    fn stands_in_the_room_s_admission_order() {
+        let mut sim = room();
+        scanning(
+            &mut sim,
+            Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+        );
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            sim.in_admission_order,
+            [
+                "handle_inbound sms in room_1",
+                "hook scanner in room_1",
+                "lock room_1 in room_1",
+                "load_context room_1 in room_1",
+                "hook scanner in room_1",
+                "load_context room_1 in room_1",
+                "commit in room_1",
+                "enter lane room_1 evt_2 in room_1",
+                "release room_1 in room_1",
+            ]
+        );
+    }
 
     #[test]
     fn takes_no_ticket_and_commits_ahead() {

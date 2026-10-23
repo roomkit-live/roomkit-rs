@@ -1,14 +1,16 @@
 //! Calls into a room made from inside the work of the operation in that
 //! room (RFC §13.5, §9.5.1 Reentrance, §10.1 step 18).
 //!
-//! A hook, a parse, a turn or a delivery that calls `send_event` or
-//! `process_inbound` for its own room would, run apart, wait for what its
-//! own operation holds: the room lock, the admission ticket, a place in the
-//! room's lane. The driver hands such a call to the running operation
+//! A hook or a parse that calls `send_event` or `process_inbound` for its
+//! own room, under the room's lock or in its admission order, would, run
+//! apart, wait for what its own operation holds: the room lock, or the
+//! admission ticket. The driver hands such a call to the running operation
 //! instead ([`Operation::adopt`](super::Operation::adopt)), which runs it as
 //! an entry of its own and reports its result once it is decided
-//! ([`Settled`]): detached completion, at the commit (gap G-070). An
-//! inbound call's own decision is published the same way ([`Decided`]).
+//! ([`Settled`]): detached completion, at the commit (gap G-070). A call
+//! from a turn or a delivery is a new arrival, an operation of its own,
+//! whose caller receives its decision ([`Decided`]) when it cannot wait for
+//! its delivery.
 
 use crate::model::{DirectEvent, InboundMessage, RoomId};
 use crate::ops::inbound::{InboundError, InboundResult};

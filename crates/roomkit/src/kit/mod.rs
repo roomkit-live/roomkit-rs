@@ -203,15 +203,19 @@ impl<S: ConversationStore> RoomKit<S> {
     /// commit in lock order, each event taking its place in the room's
     /// delivery lane at its commit, so that each event's delivery set runs
     /// ahead of the next one's (RFC §10.2). Called from inside a call's work
-    /// in the room it names, by a hook, a parse, a turn or a delivery, the
-    /// message is adopted by that call instead of waiting for it: it returns
-    /// at its commit, with no delivery result, and its delivery set follows
-    /// in the room's lane (RFC §13.5, §10.1 step 18). A call from under the
-    /// room's lock or in its admission order that cannot be adopted, a
-    /// message routed back into the room, fails with
-    /// [`KitError::Reentrant`]. A call into another room waits for that
-    /// room's delivery as any call does: two rooms whose work calls into
-    /// each other at the same moment wait for each other.
+    /// in the room it names, under the room's lock or in its admission order
+    /// (a hook, a channel's parse), the message is adopted by that call
+    /// instead of waiting for it: it returns at its commit, with no delivery
+    /// result, and its delivery set follows in the room's lane (RFC §13.5,
+    /// §9.5.1 Reentrance, §10.1 step 18). Called from a turn or a delivery,
+    /// it is a new arrival, with its own admission ticket, `process_timeout`
+    /// and reentry budget, and returns at its decision when it comes into
+    /// the room that turn or delivery works in. A call from under the room's
+    /// lock or in its admission order that cannot be adopted, a message
+    /// routed back into the room, fails with [`KitError::Reentrant`]. A call
+    /// into another room waits for its delivery as any call does: two rooms
+    /// whose deliveries call into each other at the same moment wait for
+    /// each other.
     ///
     /// A `BEFORE_BROADCAST` hook registered with `needs_lock = false` runs
     /// before the room lock, ordered by the room's admission ticket, so the
