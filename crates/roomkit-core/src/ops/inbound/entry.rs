@@ -17,7 +17,7 @@ impl Machine {
         let Stage::Start(call) = std::mem::replace(&mut self.stage, Stage::Done) else {
             return;
         };
-        self.bound = Bound::Call(deadline::of_call(cx.config, cx.env.now()));
+        self.call.bound = Bound::Call(deadline::of_call(cx.config, cx.env.now()));
         match *call {
             Call::Message {
                 target,
@@ -43,9 +43,11 @@ impl Machine {
         organization_id: Option<String>,
         message: InboundMessage,
     ) {
-        self.channel_id = Some(message.channel_id.clone());
-        self.answers_within.clone_from(&message.response_visibility);
-        let budget = self.drawn.then_some(&self.budget);
+        self.call.channel_id = Some(message.channel_id.clone());
+        self.call
+            .answers_within
+            .clone_from(&message.response_visibility);
+        let budget = self.cascade.drawn_on();
         let (channel, message) = match arrival::admit(cx.config, message, budget) {
             Ok(Admitted::Message { channel, message }) => (*channel, *message),
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),
@@ -56,7 +58,7 @@ impl Machine {
             organization_id,
             channel,
             message,
-            self.bound,
+            self.call.bound,
         ));
         arrival.start(cx);
         self.stage = Stage::Arriving(arrival);
@@ -78,11 +80,11 @@ impl Machine {
         };
         match arrived {
             Ok(arrived) => {
-                self.room_id = Some(arrived.event.room_id.clone());
+                self.call.room_id = Some(arrived.event.room_id.clone());
                 self.after_arrival(cx, arrived);
             }
             Err(stopped) => {
-                self.room_id = arrival.room().cloned();
+                self.call.room_id = arrival.room().cloned();
                 self.stop(cx, stopped);
             }
         }

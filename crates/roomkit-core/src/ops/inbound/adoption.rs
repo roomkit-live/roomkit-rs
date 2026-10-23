@@ -307,13 +307,14 @@ impl Machine {
         organization_id: Option<String>,
         message: InboundMessage,
     ) {
-        let (channel, message) = match arrival::admit(cx.config, message, Some(&self.budget)) {
-            Ok(arrival::Admitted::Message { channel, message }) => (*channel, *message),
-            Ok(arrival::Admitted::Refused(refused)) => {
-                return self.settle_entry(cx, &adopted, Ok(*refused));
-            }
-            Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
-        };
+        let (channel, message) =
+            match arrival::admit(cx.config, message, Some(&self.cascade.budget)) {
+                Ok(arrival::Admitted::Message { channel, message }) => (*channel, *message),
+                Ok(arrival::Admitted::Refused(refused)) => {
+                    return self.settle_entry(cx, &adopted, Ok(*refused));
+                }
+                Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
+            };
         let mut arrival = Box::new(Arrival::adopted(room_id, organization_id, channel, message));
         within(cx, &adopted, |cx| arrival.start(cx));
         self.adopted.running.push(AdoptedRun {
@@ -334,7 +335,7 @@ impl Machine {
         direct: Option<DirectCall>,
     ) {
         let charged = direct.is_none();
-        let state = if charged || self.budget.take() {
+        let state = if charged || self.cascade.budget.take() {
             let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event).checking(direct);
             let mut pass = Box::new(pass);
             within(cx, &adopted, |cx| pass.start(cx));
@@ -376,7 +377,7 @@ impl Machine {
             Advanced::Stopped(error) => self.settle_entry(cx, &adopted, Err(error)),
             Advanced::Passed(Ok(report)) => self.on_adopted_pass(cx, &adopted, report),
             Advanced::Passed(Err(abort)) | Advanced::Recorded(Err(abort)) => {
-                let error = cascade::failure(abort, self.room_id.clone());
+                let error = cascade::failure(abort, self.call.room_id.clone());
                 self.settle_entry(cx, &adopted, Err(error));
             }
             Advanced::Recorded(Ok(report)) => self.on_adopted_record(cx, &adopted, report),

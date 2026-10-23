@@ -203,7 +203,7 @@ impl Machine {
         if hooks.is_empty() {
             return self.start_trigger(arrived.event, None);
         }
-        let mut check = Box::new(OffLockCheck::new(hooks, arrived, self.bound));
+        let mut check = Box::new(OffLockCheck::new(hooks, arrived, self.call.bound));
         check.start(cx);
         self.stage = Stage::Checking(check);
     }
@@ -222,7 +222,7 @@ impl Machine {
             self.stage = Stage::Checking(check);
             return;
         };
-        self.ticket = check.ticket().cloned();
+        self.trigger.ticket = check.ticket().cloned();
         match done {
             Ok(Checked { event, chain }) => self.start_trigger(event, Some(chain)),
             Err(Stopped::Failed(error)) => self.end(cx, Err(error)),

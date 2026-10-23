@@ -59,7 +59,7 @@ impl Machine {
             event: None,
             blocked: true,
             reason: Some(PROCESS_TIMEOUT.to_owned()),
-            ..std::mem::take(&mut self.result)
+            ..std::mem::take(&mut self.trigger.result)
         };
         self.end(cx, Ok(refused));
     }
@@ -72,7 +72,7 @@ impl Machine {
         if cx.io.is_expired() {
             tracing::info!(
                 target: "roomkit::core::inbound",
-                room_id = ?self.room_id,
+                room_id = ?self.call.room_id,
                 event_id = ?locked_event,
                 "the call's caller stopped waiting before its decision; nothing of its event is written"
             );
@@ -84,11 +84,11 @@ impl Machine {
             .map_or(0.0, |timeout| timeout.as_secs_f64());
         let channel_id = match locked_event {
             Some(_) => None,
-            None => self.channel_id.clone(),
+            None => self.call.channel_id.clone(),
         };
         tracing::info!(
             target: "roomkit::core::inbound",
-            room_id = ?self.room_id,
+            room_id = ?self.call.room_id,
             channel_id = ?channel_id,
             event_id = ?locked_event,
             timeout,
@@ -96,7 +96,7 @@ impl Machine {
         );
         cx.io
             .notify(Notice::FrameworkEvent(FrameworkEvent::ProcessTimeout {
-                room_id: self.room_id.clone(),
+                room_id: self.call.room_id.clone(),
                 channel_id,
                 event_id: locked_event,
                 timeout,

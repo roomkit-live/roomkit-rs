@@ -177,10 +177,10 @@ impl Machine {
         organization_id: Option<String>,
         event: DirectEvent,
     ) {
-        self.channel_id = Some(event.channel_id.clone());
-        self.room_id = Some(room_id.clone());
+        self.call.channel_id = Some(event.channel_id.clone());
+        self.call.room_id = Some(room_id.clone());
         let call = DirectCall { organization_id };
-        self.direct = Some(call.clone());
+        self.call.direct = Some(call.clone());
         let event = match admit(cx, room_id, event) {
             Ok(Admitted::Event(event)) => *event,
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),
@@ -189,14 +189,14 @@ impl Machine {
         // An event a delivery's code injects is charged on the cascade that
         // delivers, as an adopted one is: past it, it is stored capped, and
         // no hook runs for it (gap G-070).
-        if self.drawn && !self.budget.take() {
+        if self.cascade.drawn_on().is_some_and(|budget| !budget.take()) {
             return self.start_capped_trigger(event, call);
         }
         if cx.config.hooks.off_lock_checks(&event.source).is_empty() {
             return self.start_trigger(event, None);
         }
         let mut read = Box::new(DirectRead::new(event, call));
-        read.start(cx, self.bound);
+        read.start(cx, self.call.bound);
         self.stage = Stage::Reading(read);
     }
 

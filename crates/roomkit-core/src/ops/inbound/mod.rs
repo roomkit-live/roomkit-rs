@@ -78,25 +78,22 @@ mod report;
 mod result;
 mod stamp;
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use self::adoption::Adoptions;
 use self::arrival::Arrival;
 pub use self::arrival::InboundTarget;
+use self::cascade::Trigger;
 use self::direct::DirectRead;
 use self::holds::AfterTicket;
-use self::job::Job;
 use self::off_lock::OffLockCheck;
-use self::queues::Delivery;
+use self::persist::SideEffects;
+use self::queues::Cascade;
 pub use self::stamp::default_inbound_event;
 use super::io::Io;
 use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
 use super::{Cx, Environment, KitConfig};
-use crate::model::{
-    ChannelId, DirectEvent, InboundMessage, Metadata, Observation, RoomContext, RoomId, Task,
-    Visibility,
-};
+use crate::model::{ChannelId, DirectEvent, InboundMessage, RoomId, Task, Visibility};
 use crate::ops::io::Bound;
 pub use crate::ops::protocol::{InboundError, InboundResult};
 use crate::rules::chain_depth::ReentryBudget;
@@ -185,8 +182,7 @@ impl Inbound {
     /// The call keeps its own admission ticket and `process_timeout`.
     #[must_use]
     pub fn drawing_on(mut self, budget: ReentryBudget) -> Self {
-        self.machine.budget = budget;
-        self.machine.drawn = true;
+        self.machine.cascade.draw_on(budget);
         self
     }
 
@@ -200,28 +196,12 @@ impl Inbound {
             config,
             io: Io::new(),
             machine: Machine {
-                room_id: None,
-                entry,
-                channel_id: None,
-                direct: None,
-                answers_within: None,
-                bound: Bound::Unbounded,
-                ticket: None,
+                call: CallFacts::new(entry),
                 stage: Stage::Start(Box::new(call)),
-                passes: VecDeque::new(),
-                pass: None,
-                sets: VecDeque::new(),
-                delivery: None,
+                trigger: Trigger::default(),
+                cascade: Cascade::new(budget),
                 adopted: Adoptions::default(),
-                stopping: false,
-                budget,
-                drawn: false,
-                decided: false,
-                result: InboundResult::default(),
-                tasks: Vec::new(),
-                observations: Vec::new(),
-                metadata_updates: Metadata::new(),
-                task_context: None,
+                side_effects: SideEffects::default(),
                 outcome: None,
             },
         }
@@ -290,8 +270,26 @@ enum EntryKind {
     Direct,
 }
 
+/// One call's state, grouped by what owns it: the facts the call learns
+/// as it goes, its stage, what its trigger decided, its cascade, the
+/// entries it adopted, and the side effects its passes and sets collected.
 #[derive(Debug)]
 struct Machine {
+    call: CallFacts,
+    stage: Stage,
+    trigger: Trigger,
+    cascade: Cascade,
+    /// The entries adopted from the operation's own work (gap G-070).
+    adopted: Adoptions,
+    side_effects: SideEffects,
+    outcome: Option<Result<InboundResult, InboundError>>,
+}
+
+/// What the call is, learned as it goes: its room, its kind, its channel,
+/// what a direct injection is checked for, where its answers may go, and
+/// its bound.
+#[derive(Debug)]
+struct CallFacts {
     /// The call's room, once it arrived there.
     room_id: Option<RoomId>,
     /// What the call brings: a direct injection's refusal before its commit
@@ -309,42 +307,20 @@ struct Machine {
     /// The call's bound, its deadline set at its start from
     /// `process_timeout` (RFC §13.6).
     bound: Bound,
-    /// The room whose admission ticket the call holds, from its off-lock
-    /// check to its trigger's pass's end (RFC §9.5.1).
-    ticket: Option<RoomId>,
-    stage: Stage,
-    /// The passes queued, and the one running.
-    passes: VecDeque<Job>,
-    pass: Option<Job>,
-    /// The delivery sets queued, in the order of their places, and the one
-    /// running.
-    sets: VecDeque<Delivery>,
-    delivery: Option<Delivery>,
-    /// The entries adopted from the operation's own work (gap G-070).
-    adopted: Adoptions,
-    /// Whether the cascade stopped, failed or past its deadline: no pass
-    /// runs any more, committed events are still delivered.
-    stopping: bool,
-    /// The reentry budget every cascade of the operation draws on, an
-    /// adopted entry's on its caller's (RFC §8.3), and the calls its
-    /// delivery sets' targets make into a room too (gap G-070).
-    budget: ReentryBudget,
-    /// Whether the call draws on the budget of the cascade whose delivery
-    /// made it, which charges its trigger as it starts (gap G-070).
-    drawn: bool,
-    /// Whether the trigger is decided: committed or, for an instruction,
-    /// which is never committed, delivered or blocked by its pass. A failure
-    /// after it no longer voids the result (RFC §13.6, gap G-065).
-    decided: bool,
-    result: InboundResult,
-    tasks: Vec<Task>,
-    observations: Vec<Observation>,
-    /// The room metadata updates the channels returned (RFC §6.1).
-    metadata_updates: Metadata,
-    /// The context of the last pass or delivery set that filed tasks, which
-    /// their `ON_TASK_CREATED` observers read.
-    task_context: Option<Box<RoomContext>>,
-    outcome: Option<Result<InboundResult, InboundError>>,
+}
+
+impl CallFacts {
+    /// The facts of a call bringing `entry`, before it learned anything.
+    fn new(entry: EntryKind) -> Self {
+        Self {
+            room_id: None,
+            entry,
+            channel_id: None,
+            direct: None,
+            answers_within: None,
+            bound: Bound::Unbounded,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -406,7 +382,7 @@ impl Machine {
         &self,
         outcome: Result<InboundResult, InboundError>,
     ) -> Result<InboundResult, InboundError> {
-        if self.entry == EntryKind::Direct {
+        if self.call.entry == EntryKind::Direct {
             outcome.and_then(result::committed)
         } else {
             outcome
@@ -423,7 +399,7 @@ impl Machine {
             return;
         }
         cx.io.decide(Decided {
-            room_id: self.room_id.clone(),
+            room_id: self.call.room_id.clone(),
             result: self.for_caller(outcome.clone()),
         });
     }
@@ -437,12 +413,10 @@ impl Machine {
         if self.adopted.awaits(effect) {
             return self.on_adopted_outcome(cx, effect, outcome);
         }
-        if self.pass.as_ref().is_some_and(|job| job.awaits(effect)) {
+        if self.cascade.pass_awaits(effect) {
             return self.on_pass_outcome(cx, effect, outcome);
         }
-        if let Some(delivery) = &self.delivery
-            && delivery.set.awaits(effect)
-        {
+        if self.cascade.set_awaits(effect) {
             return self.on_set_outcome(cx, effect, outcome);
         }
         match std::mem::replace(&mut self.stage, Stage::Done) {

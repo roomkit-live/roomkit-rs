@@ -21,6 +21,8 @@
 //! stops, failed or past its deadline, runs no pass any more, and still
 //! delivers every event committed (RFC §13.6).
 
+use std::collections::VecDeque;
+
 use super::delivery::{DeliverySet, SetOutcome};
 use super::direct::DirectCall;
 use super::job::{Job, RecordNote, Run};
@@ -30,7 +32,7 @@ use super::{Machine, Stage};
 use crate::model::RoomEvent;
 use crate::ops::protocol::{EffectId, Outcome};
 use crate::ops::{Cx, Progress, RefusedOperation};
-use crate::rules::chain_depth;
+use crate::rules::chain_depth::{self, ReentryBudget};
 use crate::rules::hook_chain::HookChain;
 
 /// A committed event's delivery set, and the passes that follow it.
@@ -42,32 +44,59 @@ pub(super) struct Delivery {
     pub(super) then: Vec<Job>,
 }
 
-impl Machine {
-    /// Queues the trigger's pass at the head of the passes, ahead of what
-    /// the sets of its adopted entries queued meanwhile, bounded by the
-    /// call's deadline and going on with the chain its off-lock check left,
-    /// if any.
-    pub(super) fn start_trigger(
-        &mut self,
-        event: RoomEvent,
-        checked: Option<HookChain<RoomEvent>>,
-    ) {
-        let pass = CommitPass::trigger(event, self.bound, checked).checking(self.direct.clone());
-        self.passes
-            .push_front(Job::Pass(Box::new(pass), PassOrigin::Trigger));
-        self.stage = Stage::Cascade;
+/// The operation's cascades, the call's and its adopted entries' (gap
+/// G-070), as two queues: the passes queued and the one running, and the
+/// delivery sets queued, in the order of their places, and the one running;
+/// whether the cascade stopped; and the reentry budget its passes draw on.
+#[derive(Debug)]
+pub(super) struct Cascade {
+    passes: VecDeque<Job>,
+    pass: Option<Job>,
+    sets: VecDeque<Delivery>,
+    delivery: Option<Delivery>,
+    /// Whether the cascade stopped, failed or past its deadline: no pass
+    /// runs any more, committed events are still delivered.
+    stopping: bool,
+    /// The reentry budget every cascade of the operation draws on, an
+    /// adopted entry's on its caller's (RFC §8.3), and the calls its
+    /// delivery sets' targets make into a room too (gap G-070).
+    pub(super) budget: ReentryBudget,
+    /// Whether the call draws on the budget of the cascade whose delivery
+    /// made it, which charges its trigger as it starts (gap G-070).
+    drawn: bool,
+}
+
+impl Cascade {
+    /// An empty cascade drawing on a budget of its own.
+    pub(super) fn new(budget: ReentryBudget) -> Self {
+        Self {
+            passes: VecDeque::new(),
+            pass: None,
+            sets: VecDeque::new(),
+            delivery: None,
+            stopping: false,
+            budget,
+            drawn: false,
+        }
     }
 
-    /// Queues the trigger, past the reentry budget it draws on, as its
-    /// record at the head of the passes: stored `BLOCKED` with
-    /// `reentry_loop_cap`, checked first for the refusals `direct` names,
-    /// with no hook run for it (RFC §8.3, gap G-070).
-    pub(super) fn start_capped_trigger(&mut self, mut event: RoomEvent, direct: DirectCall) {
-        event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
-        let record = RecordPass::refusing(event, RefusedOperation::Inbound).checking(Some(direct));
-        self.passes
-            .push_front(Job::Record(Box::new(record), RecordNote::Trigger));
-        self.stage = Stage::Cascade;
+    /// Draws on `budget`, the budget of the cascade whose delivery made the
+    /// call (gap G-070).
+    pub(super) fn draw_on(&mut self, budget: ReentryBudget) {
+        self.budget = budget;
+        self.drawn = true;
+    }
+
+    /// The budget of the cascade whose delivery made the call, when it
+    /// draws on one, which charges the call's trigger as it starts.
+    pub(super) fn drawn_on(&self) -> Option<&ReentryBudget> {
+        self.drawn.then_some(&self.budget)
+    }
+
+    /// Queues `job` at the head of the passes, ahead of what the sets of
+    /// the adopted entries queued meanwhile: the trigger's pass or record.
+    fn lead(&mut self, job: Job) {
+        self.passes.push_front(job);
     }
 
     /// Queues `job` behind the cascade's passes; once the cascade stops, no
@@ -91,7 +120,7 @@ impl Machine {
     /// delivery set of every event committed already still runs, in index
     /// order, so an event that is stored is delivered (RFC §13.6), an
     /// adopted entry's caller having been told it is committed.
-    pub(super) fn stop_cascade(&mut self) {
+    pub(super) fn stop(&mut self) {
         self.stopping = true;
         self.passes.clear();
         for delivery in self.sets.iter_mut().chain(self.delivery.as_mut()) {
@@ -107,26 +136,68 @@ impl Machine {
             && self.delivery.is_none()
     }
 
+    /// Whether the running pass waits for `effect`.
+    pub(super) fn pass_awaits(&self, effect: EffectId) -> bool {
+        self.pass.as_ref().is_some_and(|job| job.awaits(effect))
+    }
+
+    /// Whether the running set waits for `effect`.
+    pub(super) fn set_awaits(&self, effect: EffectId) -> bool {
+        self.delivery
+            .as_ref()
+            .is_some_and(|delivery| delivery.set.awaits(effect))
+    }
+}
+
+impl Machine {
+    /// Queues the trigger's pass at the head of the passes, ahead of what
+    /// the sets of its adopted entries queued meanwhile, bounded by the
+    /// call's deadline and going on with the chain its off-lock check left,
+    /// if any.
+    pub(super) fn start_trigger(
+        &mut self,
+        event: RoomEvent,
+        checked: Option<HookChain<RoomEvent>>,
+    ) {
+        let pass =
+            CommitPass::trigger(event, self.call.bound, checked).checking(self.call.direct.clone());
+        self.cascade
+            .lead(Job::Pass(Box::new(pass), PassOrigin::Trigger));
+        self.stage = Stage::Cascade;
+    }
+
+    /// Queues the trigger, past the reentry budget it draws on, as its
+    /// record at the head of the passes: stored `BLOCKED` with
+    /// `reentry_loop_cap`, checked first for the refusals `direct` names,
+    /// with no hook run for it (RFC §8.3, gap G-070).
+    pub(super) fn start_capped_trigger(&mut self, mut event: RoomEvent, direct: DirectCall) {
+        event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
+        let record = RecordPass::refusing(event, RefusedOperation::Inbound).checking(Some(direct));
+        self.cascade
+            .lead(Job::Record(Box::new(record), RecordNote::Trigger));
+        self.stage = Stage::Cascade;
+    }
+
     /// Hands the running pass the answer to one of its effects.
     pub(super) fn on_pass_outcome(&mut self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) {
-        let Some(job) = self.pass.take() else {
+        let Some(job) = self.cascade.pass.take() else {
             debug_assert!(false, "inbound received {effect:?} with no pass running");
             return;
         };
         match job.accept(cx, effect, outcome) {
-            Run::Running(job) => self.pass = Some(job),
+            Run::Running(job) => self.cascade.pass = Some(job),
             Run::Finished(finished) => self.settle(cx, *finished),
         }
     }
 
     /// Hands the running set the answer to one of its effects.
     pub(super) fn on_set_outcome(&mut self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) {
-        let Some(mut delivery) = self.delivery.take() else {
+        let Some(mut delivery) = self.cascade.delivery.take() else {
             debug_assert!(false, "inbound received {effect:?} with no set running");
             return;
         };
         match delivery.set.accept(cx, effect, outcome) {
-            Progress::Waiting => self.delivery = Some(delivery),
+            Progress::Waiting => self.cascade.delivery = Some(delivery),
             Progress::Done(outcome) => self.set_over(cx, outcome, delivery),
         }
     }
@@ -136,7 +207,7 @@ impl Machine {
     fn set_over(&mut self, cx: &mut Cx<'_>, outcome: SetOutcome, delivery: Delivery) {
         let Delivery { set, then } = delivery;
         for job in then {
-            self.queue(job);
+            self.cascade.queue(job);
         }
         self.on_set(cx, outcome, &set);
     }
@@ -149,25 +220,26 @@ impl Machine {
         loop {
             let passing = matches!(self.stage, Stage::Cascade | Stage::Ending(_));
             if passing
-                && self.pass.is_none()
-                && let Some(mut job) = self.passes.pop_front()
+                && self.cascade.pass.is_none()
+                && let Some(mut job) = self.cascade.passes.pop_front()
             {
                 job.start(cx);
-                self.pass = Some(job);
+                self.cascade.pass = Some(job);
                 continue;
             }
-            if self.delivery.is_none()
-                && let Some(mut delivery) = self.sets.pop_front()
+            if self.cascade.delivery.is_none()
+                && let Some(mut delivery) = self.cascade.sets.pop_front()
             {
                 match delivery.set.start(cx) {
-                    Progress::Waiting => self.delivery = Some(delivery),
+                    Progress::Waiting => self.cascade.delivery = Some(delivery),
                     Progress::Done(outcome) => self.set_over(cx, outcome, delivery),
                 }
                 continue;
             }
             break;
         }
-        if matches!(self.stage, Stage::Cascade) && self.is_idle() && self.adopted.is_idle() {
+        if matches!(self.stage, Stage::Cascade) && self.cascade.is_idle() && self.adopted.is_idle()
+        {
             self.persist_side_effects(cx);
         }
     }

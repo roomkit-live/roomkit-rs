@@ -5,9 +5,73 @@
 //! observers run. Then the operation ends.
 
 use super::{Machine, Stage, report};
-use crate::model::{RoomUpdates, Task};
+use crate::model::{Metadata, Observation, RoomContext, RoomUpdates, Task};
 use crate::ops::Cx;
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
+
+/// What the call's passes and sets collected to store at step 15: tasks,
+/// observations and room metadata updates, and the room as the last pass or
+/// set that filed tasks left it, which their `ON_TASK_CREATED` observers
+/// read.
+#[derive(Debug, Default)]
+pub(super) struct SideEffects {
+    tasks: Vec<Task>,
+    observations: Vec<Observation>,
+    /// The room metadata updates the channels returned (RFC §6.1).
+    metadata_updates: Metadata,
+    task_context: Option<Box<RoomContext>>,
+}
+
+impl SideEffects {
+    /// Keeps the tasks and observations a pass or a set collected; the
+    /// room as `context` holds it is the one their tasks' observers read,
+    /// when it filed tasks and left a room.
+    pub(super) fn collect(
+        &mut self,
+        tasks: Vec<Task>,
+        observations: Vec<Observation>,
+        context: Option<&RoomContext>,
+    ) {
+        if !tasks.is_empty()
+            && let Some(context) = context
+        {
+            self.task_context = Some(Box::new(context.clone()));
+        }
+        self.tasks.extend(tasks);
+        self.observations.extend(observations);
+    }
+
+    /// Keeps an observation the call makes itself.
+    pub(super) fn observe(&mut self, observation: Observation) {
+        self.observations.push(observation);
+    }
+
+    /// Keeps the room metadata updates a set's channels returned.
+    pub(super) fn update_metadata(&mut self, updates: Metadata) {
+        self.metadata_updates.extend(updates);
+    }
+
+    /// The tasks and observations to store, none once taken.
+    fn take_stored(&mut self) -> Option<(Vec<Task>, Vec<Observation>)> {
+        if self.tasks.is_empty() && self.observations.is_empty() {
+            return None;
+        }
+        Some((
+            std::mem::take(&mut self.tasks),
+            std::mem::take(&mut self.observations),
+        ))
+    }
+
+    /// The room metadata updates to write, none once taken.
+    fn take_metadata(&mut self) -> Option<Metadata> {
+        (!self.metadata_updates.is_empty()).then(|| std::mem::take(&mut self.metadata_updates))
+    }
+
+    /// The room the observers of the stored tasks read.
+    fn task_context(&self) -> Option<&RoomContext> {
+        self.task_context.as_deref()
+    }
+}
 
 impl Machine {
     /// Stores the side effects every pass and set collected, and applies the
@@ -23,30 +87,25 @@ impl Machine {
 
     /// Asks for the collected tasks and observations to be stored, if any.
     fn issue_side_effects(&mut self, cx: &mut Cx<'_>) -> Option<(EffectId, Vec<Task>)> {
-        if self.tasks.is_empty() && self.observations.is_empty() {
-            return None;
-        }
-        let room_id = self.room_id.clone()?;
-        let tasks = std::mem::take(&mut self.tasks);
+        let room_id = self.call.room_id.clone()?;
+        let (tasks, observations) = self.side_effects.take_stored()?;
         let effect = cx.io.issue(StoreRequest::PersistSideEffects {
             room_id,
             tasks: tasks.clone(),
-            observations: std::mem::take(&mut self.observations),
+            observations,
         });
         Some((effect, tasks))
     }
 
     /// Asks for the collected room metadata updates to be written, if any.
     fn issue_metadata_updates(&mut self, cx: &mut Cx<'_>) -> Option<EffectId> {
-        if self.metadata_updates.is_empty() {
-            return None;
-        }
-        let room_id = self.room_id.clone()?;
+        let room_id = self.call.room_id.clone()?;
+        let metadata = self.side_effects.take_metadata()?;
         Some(cx.io.issue(StoreRequest::UpdateRoom {
             room_id,
             updates: RoomUpdates {
                 updated_at: Some(cx.env.now()),
-                metadata: std::mem::take(&mut self.metadata_updates),
+                metadata,
                 ..RoomUpdates::default()
             },
         }))
@@ -68,7 +127,7 @@ impl Machine {
             }
             (side_effects, Some(expected)) if expected == effect => {
                 if let Err(error) = outcome.into_stored() {
-                    self.note_error(Some(error));
+                    self.trigger.note_error(Some(error));
                 }
                 self.await_persisted(cx, side_effects, None);
             }
@@ -90,7 +149,7 @@ impl Machine {
         metadata: Option<EffectId>,
     ) {
         if side_effects.is_none() && metadata.is_none() {
-            let result = std::mem::take(&mut self.result);
+            let result = std::mem::take(&mut self.trigger.result);
             return self.end(cx, Ok(result));
         }
         self.stage = Stage::Persisting {
@@ -104,11 +163,11 @@ impl Machine {
     fn on_persisted(&mut self, cx: &mut Cx<'_>, outcome: Outcome, tasks: &[Task]) {
         match outcome.into_persisted() {
             Ok(()) => {
-                if let Some(context) = &self.task_context {
+                if let Some(context) = self.side_effects.task_context() {
                     report::tasks_created(cx, tasks, context);
                 }
             }
-            Err(error) => self.note_error(Some(error)),
+            Err(error) => self.trigger.note_error(Some(error)),
         }
     }
 }

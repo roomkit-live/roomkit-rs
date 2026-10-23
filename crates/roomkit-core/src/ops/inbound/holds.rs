@@ -42,8 +42,8 @@ impl Machine {
     /// event it committed delivered.
     pub(super) fn end(&mut self, cx: &mut Cx<'_>, outcome: Result<InboundResult, InboundError>) {
         self.publish(cx, &outcome);
-        self.stop_cascade();
-        if self.ticket.is_some() {
+        self.cascade.stop();
+        if self.trigger.ticket.is_some() {
             return self.release_ticket(cx, AfterTicket::End(Box::new(outcome)));
         }
         self.end_after_the_cascade(outcome);
@@ -52,7 +52,7 @@ impl Machine {
     /// Ends with `outcome` once the last adopted entry is settled and the
     /// last committed event delivered.
     fn end_after_the_cascade(&mut self, outcome: Result<InboundResult, InboundError>) {
-        if !self.adopted.is_idle() || !self.is_idle() {
+        if !self.adopted.is_idle() || !self.cascade.is_idle() {
             self.stage = Stage::Ending(Box::new(outcome));
             return;
         }
@@ -62,7 +62,7 @@ impl Machine {
     /// Goes on ending once the last adopted entry is settled and the last
     /// committed event delivered.
     pub(super) fn end_once_settled(&mut self) {
-        let over = self.adopted.is_idle() && self.is_idle();
+        let over = self.adopted.is_idle() && self.cascade.is_idle();
         if !matches!(self.stage, Stage::Ending(_)) || !over {
             return;
         }
@@ -73,7 +73,7 @@ impl Machine {
 
     /// Releases the ticket the call holds, then goes on as `then` says.
     pub(super) fn release_ticket(&mut self, cx: &mut Cx<'_>, then: AfterTicket) {
-        let Some(room_id) = self.ticket.take() else {
+        let Some(room_id) = self.trigger.ticket.take() else {
             return self.after_ticket(cx, then, None);
         };
         let effect = cx.io.issue(HoldRequest::ReleaseTicket { room_id });
@@ -94,7 +94,7 @@ impl Machine {
         if let Some(error) = &failure {
             tracing::warn!(
                 target: "roomkit::core::inbound",
-                room_id = ?self.room_id,
+                room_id = ?self.call.room_id,
                 error_type = %error.error_type,
                 message = %error.message,
                 "releasing the room's admission ticket failed; what the call decided stands"
@@ -107,7 +107,7 @@ impl Machine {
         match then {
             AfterTicket::Settle(finished) => {
                 self.stage = Stage::Cascade;
-                self.note_error(failure);
+                self.trigger.note_error(failure);
                 self.settle(cx, *finished);
             }
             AfterTicket::End(outcome) => {

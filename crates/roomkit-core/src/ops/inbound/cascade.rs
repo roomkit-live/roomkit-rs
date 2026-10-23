@@ -17,16 +17,53 @@ use super::queues::Delivery;
 use super::record::{RecordPass, RecordReport, RecordResult};
 use super::{InboundError, InboundResult, Machine, instructions, report, stamp};
 use crate::model::{
-    ChannelCategory, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, Visibility,
+    ChannelCategory, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId, Visibility,
 };
 use crate::ops::{Abort, Cx};
 use crate::rules::chain_depth;
+
+/// What the call's trigger decided, and what the call holds for it.
+#[derive(Debug, Default)]
+pub(super) struct Trigger {
+    /// The room whose admission ticket the call holds, from its off-lock
+    /// check to its trigger's pass's end (RFC §9.5.1).
+    pub(super) ticket: Option<RoomId>,
+    /// Whether the trigger is decided: committed or, for an instruction,
+    /// which is never committed, delivered or blocked by its pass. A failure
+    /// after it no longer voids the result (RFC §13.6, gap G-065).
+    pub(super) decided: bool,
+    /// The call's result: the trigger's event, its deliveries, and the
+    /// first error met once it is decided.
+    pub(super) result: InboundResult,
+}
+
+impl Trigger {
+    /// Writes what the trigger's pass or record `settled` into the result
+    /// (RFC §10.1): its event, whether it was blocked and why; `decided`
+    /// once it is.
+    fn settle(&mut self, settled: InboundResult, decided: bool) {
+        self.decided = decided;
+        self.result.event = settled.event;
+        self.result.blocked = settled.blocked;
+        self.result.reason = settled.reason;
+    }
+
+    /// Keeps the first error met once the trigger was decided: the result
+    /// reports one (RFC §13.6).
+    pub(super) fn note_error(&mut self, error: Option<ErrorRecord>) {
+        if self.result.error.is_none() {
+            self.result.error = error;
+        }
+    }
+}
 
 impl Machine {
     /// Settles a finished job; the trigger's pass once the call's ticket is
     /// released (RFC §9.5.1).
     pub(super) fn settle(&mut self, cx: &mut Cx<'_>, finished: Finished) {
-        if self.ticket.is_some() && matches!(finished, Finished::Pass(_, PassOrigin::Trigger)) {
+        if self.trigger.ticket.is_some()
+            && matches!(finished, Finished::Pass(_, PassOrigin::Trigger))
+        {
             return self.release_ticket(cx, super::AfterTicket::Settle(Box::new(finished)));
         }
         match finished {
@@ -45,16 +82,22 @@ impl Machine {
     pub(super) fn on_pass(&mut self, cx: &mut Cx<'_>, report: PassReport, origin: &PassOrigin) {
         let trigger = *origin == PassOrigin::Trigger;
         if trigger {
-            self.settle_trigger(&report.result);
+            // The committed event, or the uncommitted instruction (RFC
+            // §10.1.1 rule 5).
+            let decided = matches!(
+                report.result,
+                PassResult::Delivered { .. } | PassResult::Blocked { .. }
+            );
+            self.trigger.settle(entry_result(&report.result), decided);
         }
         let answers_within = if trigger {
-            self.answers_within.clone()
+            self.call.answers_within.clone()
         } else {
             None
         };
         self.add_to_cascade(cx, report, origin, answers_within);
         if trigger {
-            let decided = Ok(self.result.clone());
+            let decided = Ok(self.trigger.result.clone());
             self.publish(cx, &decided);
         }
     }
@@ -72,19 +115,17 @@ impl Machine {
         origin: &PassOrigin,
         answers_within: Option<Visibility>,
     ) {
-        if !report.tasks.is_empty() {
-            self.task_context = match &report.result {
-                PassResult::Delivered { context, .. } | PassResult::Blocked { context, .. } => {
-                    Some(context.clone())
-                }
-                PassResult::Refused { .. }
-                | PassResult::Duplicate { .. }
-                | PassResult::EditRefused { .. } => self.task_context.take(),
-            };
-        }
-        self.tasks.extend(report.tasks);
-        self.observations.extend(report.observations);
-        self.note_error(report.release_error);
+        let context = match &report.result {
+            PassResult::Delivered { context, .. } | PassResult::Blocked { context, .. } => {
+                Some(&**context)
+            }
+            PassResult::Refused { .. }
+            | PassResult::Duplicate { .. }
+            | PassResult::EditRefused { .. } => None,
+        };
+        self.side_effects
+            .collect(report.tasks, report.observations, context);
+        self.trigger.note_error(report.release_error);
         let injected = match &report.result {
             PassResult::Delivered { event, .. } | PassResult::Blocked { event, .. } => {
                 self.injected(cx, report.injected_events, event)
@@ -101,7 +142,7 @@ impl Machine {
         } = report.result
         else {
             for job in injected {
-                self.queue(job);
+                self.cascade.queue(job);
             }
             return;
         };
@@ -114,27 +155,13 @@ impl Machine {
             PassOrigin::Response => SetKind::Response,
             PassOrigin::Injected { .. } => SetKind::Injected,
         };
-        let budget = self.budget.clone();
+        let budget = self.cascade.budget.clone();
         let set = DeliverySet::new(kind, *event, plan, context, report.placed, budget)
             .answering_within(answers_within);
-        self.queue_set(Delivery {
+        self.cascade.queue_set(Delivery {
             set: Box::new(set),
             then: injected,
         });
-    }
-
-    /// Writes what the trigger's pass decided into the result (RFC §10.1):
-    /// the committed event, or the uncommitted instruction (RFC §10.1.1
-    /// rule 5).
-    fn settle_trigger(&mut self, result: &PassResult) {
-        self.decided = matches!(
-            result,
-            PassResult::Delivered { .. } | PassResult::Blocked { .. }
-        );
-        let entry = entry_result(result);
-        self.result.event = entry.event;
-        self.result.blocked = entry.blocked;
-        self.result.reason = entry.reason;
     }
 
     /// The passes of the events a pass's hooks injected, each within the
@@ -149,7 +176,7 @@ impl Machine {
         for injected in instructions::without_instructions(injected, trigger) {
             let targets = injected.target_channel_ids.clone();
             let event = stamp::stamp_injected(injected, trigger, cx.env.new_event_id());
-            let job = if self.budget.take() {
+            let job = if self.cascade.budget.take() {
                 Job::Pass(
                     Box::new(CommitPass::new(
                         PassOrigin::Injected {
@@ -180,22 +207,23 @@ impl Machine {
             if matches!(note, RecordNote::Trigger) {
                 return self.settle_capped_trigger(cx, report);
             }
-            return self.note_error(report.release_error);
+            return self.trigger.note_error(report.release_error);
         };
-        self.note_error(report.release_error);
+        self.trigger.note_error(report.release_error);
         let RecordResult::Committed(record) = report.result else {
             return;
         };
         let id = cx.env.new_observation_id();
         let now = cx.env.now();
         let max_chain_depth = cx.config.max_chain_depth;
-        self.observations.push(chain_depth::not_asked_observation(
-            id,
-            &trigger,
-            &agent,
-            max_chain_depth,
-            now,
-        ));
+        self.side_effects
+            .observe(chain_depth::not_asked_observation(
+                id,
+                &trigger,
+                &agent,
+                max_chain_depth,
+                now,
+            ));
         report::chain_depth_exceeded(cx, &record, &agent);
     }
 
@@ -203,13 +231,12 @@ impl Machine {
     /// or refused by the room's status, is its result, published as its
     /// decision (gap G-070).
     fn settle_capped_trigger(&mut self, cx: &mut Cx<'_>, report: RecordReport) {
-        let result = record_result(report);
-        self.decided = result.event.is_some();
-        self.result.event = result.event;
-        self.result.blocked = result.blocked;
-        self.result.reason = result.reason;
-        self.note_error(result.error);
-        let decided = Ok(self.result.clone());
+        let mut result = record_result(report);
+        let error = result.error.take();
+        let committed = result.event.is_some();
+        self.trigger.settle(result, committed);
+        self.trigger.note_error(error);
+        let decided = Ok(self.trigger.result.clone());
         self.publish(cx, &decided);
     }
 
@@ -225,16 +252,13 @@ impl Machine {
             SetKind::Adopted => report::root_deliveries(cx, event, &outcome),
             SetKind::Response | SetKind::Injected => {}
         }
-        if !outcome.tasks.is_empty() {
-            self.task_context = Some(Box::new(set.context().clone()));
-        }
-        self.tasks.extend(outcome.tasks);
-        self.observations.extend(outcome.observations);
-        self.metadata_updates.extend(outcome.metadata_updates);
+        self.side_effects
+            .collect(outcome.tasks, outcome.observations, Some(set.context()));
+        self.side_effects.update_metadata(outcome.metadata_updates);
         for agent in outcome.not_asked {
             let id = cx.env.new_event_id();
             let record = chain_depth::not_asked_record(id, event, &agent, cx.env.now());
-            self.queue(Job::Record(
+            self.cascade.queue(Job::Record(
                 Box::new(RecordPass::new(record)),
                 RecordNote::NotAsked {
                     agent: Box::new(agent),
@@ -251,13 +275,15 @@ impl Machine {
     /// result (RFC §10.1 step 18).
     fn settle_root(&mut self, cx: &mut Cx<'_>, event: &RoomEvent, outcome: &SetOutcome) {
         report::root_deliveries(cx, event, outcome);
-        self.result
+        self.trigger
+            .result
             .delivery_results
             .clone_from(&outcome.delivery_results);
-        self.result
+        self.trigger
+            .result
             .response_metadata
             .clone_from(&outcome.response_metadata);
-        self.note_error(outcome.error.clone());
+        self.trigger.note_error(outcome.error.clone());
     }
 
     /// Queues one channel's responses to the event `set` delivered: each
@@ -278,8 +304,8 @@ impl Machine {
                 // Only a transport is asked at the limit; what it answers is
                 // stored refused (RFC §8.3).
                 self.queue_refused(event, chain_depth::CHAIN_DEPTH_LIMIT);
-            } else if self.budget.take() {
-                self.queue(Job::Pass(
+            } else if self.cascade.budget.take() {
+                self.cascade.queue(Job::Pass(
                     Box::new(CommitPass::new(PassOrigin::Response, event)),
                     PassOrigin::Response,
                 ));
@@ -291,18 +317,10 @@ impl Machine {
 
     fn queue_refused(&mut self, mut event: RoomEvent, blocked_by: &str) {
         event.blocked_by = Some(blocked_by.to_owned());
-        self.queue(Job::Record(
+        self.cascade.queue(Job::Record(
             Box::new(RecordPass::new(event)),
             RecordNote::Refused,
         ));
-    }
-
-    /// Keeps the first error met once the trigger was decided: the result
-    /// reports one (RFC §13.6).
-    pub(super) fn note_error(&mut self, error: Option<ErrorRecord>) {
-        if self.result.error.is_none() {
-            self.result.error = error;
-        }
     }
 
     /// A pass or a record failed. Before the trigger was decided nothing of
@@ -311,15 +329,15 @@ impl Machine {
     /// error (RFC §13.6). Either way the cascade stops: no pass runs any
     /// more, and the events committed already are still delivered.
     pub(super) fn abort(&mut self, cx: &mut Cx<'_>, abort: Abort) {
-        self.stop_cascade();
+        self.cascade.stop();
         if let Abort::DeadlinePassed(locked_event) = abort {
             // Only the trigger's pass carries a deadline, and it is undecided.
             return self.expire(cx, locked_event);
         }
-        if self.decided {
-            return self.note_error(Some(abort.into_record()));
+        if self.trigger.decided {
+            return self.trigger.note_error(Some(abort.into_record()));
         }
-        let error = failure(abort, self.room_id.clone());
+        let error = failure(abort, self.call.room_id.clone());
         self.end(cx, Err(error));
     }
 }
@@ -389,7 +407,7 @@ pub(super) fn entry_result(result: &PassResult) -> InboundResult {
 
 /// What a pass or a record that failed before the call was decided fails
 /// it with.
-pub(super) fn failure(abort: Abort, room_id: Option<crate::model::RoomId>) -> InboundError {
+pub(super) fn failure(abort: Abort, room_id: Option<RoomId>) -> InboundError {
     match (abort, room_id) {
         (Abort::RoomNotFound, Some(room_id)) => InboundError::RoomNotFound(room_id),
         (Abort::Store(error), _) => InboundError::Store(error),
