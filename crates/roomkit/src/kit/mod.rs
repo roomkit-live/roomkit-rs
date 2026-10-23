@@ -213,10 +213,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `process_timeout`, drawing on the reentry budget of the cascade that
     /// delivers, so that a channel that calls into a room on every delivery
     /// stops at the cap (gap G-070), and returns at its decision when it
-    /// comes into the room that turn or delivery works in. A call from under the room's
-    /// lock or in its admission order that cannot be adopted, a message
-    /// routed back into the room, fails with [`KitError::Reentrant`]. A call
-    /// into another room waits for its delivery as any call does: two rooms
+    /// comes into the room that turn or delivery works in. A call from under
+    /// the room's lock or in its admission order that cannot be adopted, a
+    /// message a hook, an off-lock hook's body or a parse routes back into
+    /// the room, fails with [`KitError::Reentrant`]. A call into another
+    /// room waits for its delivery as any call does: two rooms
     /// whose deliveries call into each other at the same moment wait for
     /// each other. Made within an agent's turn, the message is at least as
     /// deep as the turn's response, whatever depth it was given (RFC §10.6),

@@ -18,6 +18,13 @@
 //!   lock is adopted by the section that holds it, so one that reaches the
 //!   driver, a message routed back into the room, would commit within that
 //!   section's tenure, and would wait for its own caller's delivery;
+//! - the lock of a room a frame of the context stands in the admission
+//!   order of is refused to an inbound call too: a call made there into the
+//!   room is adopted beside the frame's work, so one that reaches the
+//!   driver, a message routed back into the room (gap G-070, decision 4),
+//!   would commit ahead of the event the frame's call works for outside
+//!   every order, and a parse that routes every message back would recurse
+//!   without bound;
 //! - a ticket's turn in the admission order of a room a frame of the
 //!   context stands in is never waited for (RFC §9.5.1 Reentrance): the
 //!   ticket that frame's run holds, or takes once the frame's call is over,
@@ -182,8 +189,9 @@ impl<'kit> Held<'kit> {
     }
 
     /// The room's lock: on a live lease of the context, granted at once
-    /// (RFC §13.5) or refused, as the run's `leases` say; waited for
-    /// otherwise.
+    /// (RFC §13.5) or refused, as the run's `leases` say; refused to an
+    /// inbound call whose context stands in the room's admission order;
+    /// waited for otherwise.
     fn acquire(
         &mut self,
         rooms: Rooms<'kit>,
@@ -192,6 +200,9 @@ impl<'kit> Held<'kit> {
         room_id: RoomId,
         deadline: Option<Instant>,
     ) -> Hold<'kit> {
+        if self.leases == Leases::Refused && context.is_admitted_to(&room_id) {
+            return Hold::Refused(room_id);
+        }
         if let Some(lease) = context.lease(&room_id) {
             if self.leases == Leases::Refused {
                 return Hold::Refused(room_id);

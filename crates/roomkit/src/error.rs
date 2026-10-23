@@ -39,12 +39,14 @@ pub enum KitError {
     #[error("the timer sweeper's period must be longer than zero")]
     ZeroPeriod,
     /// A call made from inside a room's own work, under the room's lock or
-    /// in its admission order, would have waited for what its own caller
-    /// holds: the room's lock or its admission ticket (RFC §13.5, §9.5.1
-    /// Reentrance). A call into the room it names is adopted by the
-    /// operation whose work made it instead; this one was not, a message
-    /// routed back into the room among others, so it fails rather than wait
-    /// for itself.
+    /// in its admission order, could not be adopted: it would have waited
+    /// for what its own caller holds, the room's lock or its admission
+    /// ticket, or committed outside the order its caller stands in (RFC
+    /// §13.5, §9.5.1 Reentrance). A call into the room it names is adopted
+    /// by the operation whose work made it instead; this one was not, a
+    /// message a hook, an off-lock hook's body or a parse routed back into
+    /// the room, whose room is known only once routed, so it fails rather
+    /// than wait for itself or recurse.
     #[error("{call} from inside room {room_id}'s own work would wait for itself")]
     Reentrant {
         /// The room whose lock or admission order the caller holds.

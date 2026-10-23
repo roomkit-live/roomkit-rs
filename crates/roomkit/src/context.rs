@@ -20,7 +20,10 @@
 //!   holder's release only), and refused to an inbound call;
 //! - a ticket's turn in the admission order of a room a frame stands in is
 //!   never waited for: the frame's run holds the room's ticket, or is about
-//!   to take it, and waits for this call (RFC §9.5.1 Reentrance);
+//!   to take it, and waits for this call (RFC §9.5.1 Reentrance); nor is
+//!   that room's lock given to an inbound call, which would commit ahead of
+//!   the event the frame works for, outside every order (gap G-070,
+//!   decision 4);
 //! - a call into a room is handed to the innermost frame that runs under
 //!   the room's lock or in its admission order, whose run's operation adopts
 //!   it or declines it;
@@ -36,7 +39,10 @@
 //! rather than let it wait for itself.
 //!
 //! A lease is live while the run that holds the lock keeps the tenure it
-//! was given under, so a context kept past the release grants nothing.
+//! was given under, so a context kept past the release grants nothing. A
+//! frame stands in an admission order while its call runs, so a context
+//! kept past the call's end, by a run the call started that goes on
+//! detached, stands in none.
 //!
 //! tokio hands no task-local to a spawned task. A call that spawns a task
 //! and awaits it as its own (RFC §13.5: "the tasks it awaits as its own")
@@ -44,7 +50,7 @@
 //! call's context; a task spawned without it, awaited or not, has none, and
 //! waits for the room as any task does.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -86,6 +92,9 @@ pub(crate) enum Reply {
 #[derive(Debug, Default)]
 struct Holdings {
     locks: HashMap<RoomId, Tenure>,
+    /// The effects whose calls run now: the operation has not been answered
+    /// them yet.
+    calls: HashSet<EffectId>,
 }
 
 /// How a run holds a room's lock.
@@ -198,6 +207,22 @@ impl RunShared {
         self.holdings().locks.remove(room_id);
     }
 
+    /// Records that the call for `effect` runs.
+    pub(crate) fn calling(&self, effect: EffectId) {
+        self.holdings().calls.insert(effect);
+    }
+
+    /// Records that the call for `effect` is over, its effect answered:
+    /// its frame stands in no admission order any more.
+    pub(crate) fn answered(&self, effect: EffectId) {
+        self.holdings().calls.remove(&effect);
+    }
+
+    /// Whether the call for `effect` still runs.
+    fn is_calling(&self, effect: EffectId) -> bool {
+        self.holdings().calls.contains(&effect)
+    }
+
     /// Forgets everything the run held: it is over.
     pub(crate) fn clear(&self) {
         *self.holdings() = Holdings::default();
@@ -296,8 +321,17 @@ impl Frame {
     /// admission order: a call it makes into the room is its run's to
     /// adopt (RFC §9.5.1 Reentrance).
     fn adopts_into(&self, room_id: &RoomId) -> bool {
-        self.lease.as_ref().map(Lease::room_id) == Some(room_id)
-            || self.work.admitted.as_ref() == Some(room_id)
+        self.lease.as_ref().map(Lease::room_id) == Some(room_id) || self.is_admitted_to(room_id)
+    }
+
+    /// Whether the frame's call stands in `room_id`'s admission order: it
+    /// was made there (`Effect::admitted`) and still runs, its run's
+    /// operation not answered it yet, as a lease lives while its tenure
+    /// does. A frame kept past its call's end, by a run the call started
+    /// that goes on detached, stands in no order: the ticket its run held,
+    /// or was about to take, waits for nothing that run does any more.
+    fn is_admitted_to(&self, room_id: &RoomId) -> bool {
+        self.work.admitted.as_ref() == Some(room_id) && self.run.is_calling(self.effect)
     }
 
     /// The effect whose call this is.
@@ -363,7 +397,7 @@ impl ExecutionContext {
     pub(crate) fn is_admitted_to(&self, room_id: &RoomId) -> bool {
         self.frames
             .iter()
-            .any(|frame| frame.work.admitted.as_ref() == Some(room_id))
+            .any(|frame| frame.is_admitted_to(room_id))
     }
 
     /// Whether an inbound call of this context into `room_id` returns at
@@ -373,8 +407,7 @@ impl ExecutionContext {
     pub(crate) fn detaches(&self, room_id: &RoomId) -> bool {
         self.lease(room_id).is_some()
             || self.frames.iter().any(|frame| {
-                frame.work.delivering.as_ref() == Some(room_id)
-                    || frame.work.admitted.as_ref() == Some(room_id)
+                frame.work.delivering.as_ref() == Some(room_id) || frame.is_admitted_to(room_id)
             })
     }
 
@@ -550,6 +583,7 @@ mod tests {
     #[test]
     fn a_call_made_in_a_room_s_admission_order_stands_in_it() {
         let (run, _queue) = RunShared::new();
+        run.calling(effect());
         let context = ExecutionContext::default().within(Frame::new(
             &run,
             effect(),
@@ -568,11 +602,38 @@ mod tests {
         );
     }
 
+    /// Gap G-070: a frame kept past its call's end, by a run the call
+    /// started that goes on detached, stands in no admission order: it
+    /// takes no call, refuses no ticket's turn and detaches no call.
+    #[test]
+    fn a_call_over_stands_in_no_admission_order() {
+        let (run, _queue) = RunShared::new();
+        run.calling(effect());
+        let context = ExecutionContext::default().within(Frame::new(
+            &run,
+            effect(),
+            Work {
+                admitted: Some(room_id()),
+                ..Work::default()
+            },
+        ));
+        run.answered(effect());
+        assert_eq!(
+            (
+                context.is_admitted_to(&room_id()),
+                context.taker(&room_id()).is_some(),
+                context.detaches(&room_id())
+            ),
+            (false, false, false)
+        );
+    }
+
     #[test]
     fn a_call_is_handed_to_the_innermost_frame_under_its_room_s_lock_or_in_its_order() {
         let (outer, _outer_queue) = RunShared::new();
         let (inner, _inner_queue) = RunShared::new();
         outer.locked(room_id());
+        inner.calling(effect());
         let other = RoomId::new("room_2").unwrap();
         let context = ExecutionContext::default()
             .within(Frame::new(

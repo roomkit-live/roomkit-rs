@@ -16,9 +16,10 @@
 //! caller that cannot wait for its delivery at its decision (`inbound`).
 //!
 //! The driver never waits for what its own context holds: a lock its
-//! context holds a lease on, asked by an inbound call, or a ticket's turn
-//! in a room's admission order its context stands in, fails the call with
-//! [`KitError::Reentrant`], since that run waits for this one. An effect
+//! context holds a lease on or stands in the admission order of, asked by
+//! an inbound call, or a ticket's turn in a room's admission order its
+//! context stands in, fails the call with [`KitError::Reentrant`], since
+//! that run waits for this one. An effect
 //! that carries a deadline (RFC §13.6) is given up on past it: a lock or a
 //! turn waited for is not taken, a call in flight is dropped, and the
 //! operation is answered `DeadlinePassed`.
@@ -268,6 +269,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// `frame` for its effect.
     fn spawn(&mut self, frame: Frame, request: Request, deadline: Option<Instant>) {
         let effect = frame.effect();
+        self.shared.calling(effect);
         let context = self.context.within(frame);
         let inner = Arc::clone(self.inner);
         let task = self.calls.spawn(context.scope(async move {
@@ -330,6 +332,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
         };
         let effect = self.effect_of_task.remove(&task).ok_or(KitError::Stalled)?;
+        self.shared.answered(effect);
         Ok((effect, outcome))
     }
 

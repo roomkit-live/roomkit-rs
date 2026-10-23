@@ -431,6 +431,13 @@ publishes a release.
 - A call made within an agent's turn is at least as deep as the turn's
   response, so an agent that injects into its room on every turn, through
   any channel, stops at the chain-depth limit (RFC §10.6, §8.3, gap G-070).
+- A message that a hook, an off-lock hook's body or a channel's parse
+  routes back into its room fails with `KitError::Reentrant`, one no
+  off-lock hook fires for included: it is refused the lock of a room its
+  context stands in the admission order of. A parse that routed every
+  message back recursed without bound. A frame of the execution context
+  stands in an admission order only while its call runs, so a run the call
+  started that goes on detached is not handed to it (gap G-070).
 - An inbound call runs on a task of its own, within its caller's execution
   context; a caller that stops waiting aborts it. `KitError::Stalled` also
   reports a run the runtime cancelled, as it does when it shuts down.

@@ -1128,6 +1128,177 @@ async fn a_call_that_could_only_wait_for_itself_fails() {
     );
 }
 
+/// RFC §9.5.1 Reentrance, gap G-070 decision 4: a parse that routes a
+/// message back into its room cannot have it adopted, the room being known
+/// only once routed: it fails at the lock step 2's record of the routed
+/// sender takes, the parse standing in the room's admission order, rather
+/// than recurse on every message.
+#[tokio::test]
+async fn a_parse_that_routes_a_message_back_into_its_room_fails() {
+    let (kit, _) = room().await;
+    kit.set_router(ToRoom1);
+    let failed = Arc::new(Mutex::new(Vec::new()));
+    let (relay_kit, relay_failed) = (kit.clone(), Arc::clone(&failed));
+    let relay = Scripted::transport(
+        "relay",
+        Arc::new(|_| Box::pin(ready(Ok(ChannelOutput::default())))),
+    )
+    .parsing(Arc::new(move |_| {
+        let (kit, failed) = (relay_kit.clone(), Arc::clone(&relay_failed));
+        Box::pin(async move {
+            let again = InboundMessage::new(channel("relay"), "relay", EventContent::text("again"));
+            let routed = kit.process_inbound(again, None).await;
+            failed.lock().unwrap().push(routed.err());
+            Ok(ChannelOutput::default())
+        })
+    }));
+    kit.register_channel(relay).unwrap();
+    kit.attach(&room_id(), &channel("relay")).await.unwrap();
+    let first = InboundMessage::new(channel("relay"), "relay", EventContent::text("again"));
+    let result = tokio::time::timeout(BOUND, kit.process_inbound(first, Some(&room_id())))
+        .await
+        .unwrap_or_else(|_| panic!("the parse recursed"))
+        .unwrap();
+    let reentrant = KitError::Reentrant {
+        room_id: room_id(),
+        call: "process_inbound",
+    };
+    let stored = timeline(&kit).await.len();
+    assert_eq!(
+        (
+            failed.lock().unwrap().clone(),
+            result.event.map(|event| event.index),
+            stored
+        ),
+        (vec![Some(reentrant)], Some(0), 1)
+    );
+}
+
+/// RFC §9.5.1 Reentrance, gap G-070 decision 4: an off-lock hook's body
+/// that routes a message back into its room fails as well, even when no
+/// off-lock hook fires for that message, which then takes no ticket: the
+/// hook stands in the room's admission order, and the message would commit
+/// ahead of the event the hook runs for, outside every order.
+#[tokio::test]
+async fn an_off_lock_hook_routing_back_a_message_no_check_fires_for_fails() {
+    let (kit, _) = room().await;
+    kit.set_router(ToRoom1);
+    let refused = Arc::new(Mutex::new(None));
+    let (hook_kit, hook_refused) = (kit.clone(), Arc::clone(&refused));
+    let customer_only = HookSpec {
+        filter: roomkit::HookFilter {
+            channel_ids: Some([channel("sms")].into()),
+            ..roomkit::HookFilter::default()
+        },
+        ..before_broadcast("forwarder", false)
+    };
+    kit.hook(customer_only, move |event: RoomEvent, _| {
+        let (kit, refused) = (hook_kit.clone(), Arc::clone(&hook_refused));
+        async move {
+            if text_of(&event.content) == "hello" {
+                let forwarded =
+                    InboundMessage::new(channel("ws"), "advisor", EventContent::text("forwarded"));
+                let routed = kit.process_inbound(forwarded, None).await;
+                *refused.lock().unwrap() = Some(routed.err());
+            }
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    let result = send(&kit, "hello").await.unwrap();
+    let reentrant = KitError::Reentrant {
+        room_id: room_id(),
+        call: "process_inbound",
+    };
+    let stored = timeline(&kit).await.len();
+    assert_eq!(
+        (
+            refused.lock().unwrap().clone(),
+            result.event.map(|event| event.index),
+            stored
+        ),
+        (Some(Some(reentrant)), Some(0), 1)
+    );
+}
+
+/// RFC §9.5.1 Reentrance, gap G-070: a frame stands in a room's admission
+/// order only while its call runs. A parse in `room_1`, run for a delivery
+/// in `room_2`, injects into `room_2`: that new arrival is answered at its
+/// decision and goes on detached, its context keeping the parse's frame.
+/// Once the parse is over, the turn the arrival's delivery runs calls into
+/// `room_1`: no finished parse takes the call nor refuses its ticket's turn,
+/// and it commits.
+#[tokio::test]
+async fn a_detached_run_s_turn_is_not_taken_by_a_finished_parse() {
+    let (kit, _) = room().await;
+    let room_2 = RoomId::new("room_2").unwrap();
+    kit.create_room(&room_2).await.unwrap();
+    kit.hook(before_broadcast("scanner", false), |_, _| async {
+        Ok(HookResult::allow())
+    })
+    .unwrap();
+    let bot_kit = kit.clone();
+    let bot = Scripted::transport(
+        "bot",
+        Arc::new(move |event: RoomEvent| {
+            let kit = bot_kit.clone();
+            Box::pin(async move {
+                if text_of(&event.content) == "hello" {
+                    let ping =
+                        InboundMessage::new(channel("relay"), "relay", EventContent::text("ping"));
+                    kit.process_inbound(ping, Some(&room_id())).await?;
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    let (relay_kit, relay_room) = (kit.clone(), room_2.clone());
+    let relay = Scripted::transport(
+        "relay",
+        Arc::new(|_| Box::pin(ready(Ok(ChannelOutput::default())))),
+    )
+    .parsing(Arc::new(move |_| {
+        let (kit, room_2) = (relay_kit.clone(), relay_room.clone());
+        Box::pin(async move {
+            kit.send_event(&room_2, from_console("pong")).await?;
+            Ok(ChannelOutput::default())
+        })
+    }));
+    let seen = Arc::new(Mutex::new(None));
+    let (turn_kit, turn_seen) = (kit.clone(), Arc::clone(&seen));
+    let agent = Scripted::agent(
+        "ai",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, seen) = (turn_kit.clone(), Arc::clone(&turn_seen));
+            Box::pin(async move {
+                if text_of(&event.content) == "pong" {
+                    let noted = kit.send_event(&room_id(), from_console("Noted")).await;
+                    *seen.lock().unwrap() = Some(noted.map(|event| event.index));
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    for channel_ in [bot, relay, agent] {
+        kit.register_channel(channel_).unwrap();
+    }
+    kit.attach(&room_id(), &channel("relay")).await.unwrap();
+    for id in ["sms", "ws", "bot", "ai"] {
+        kit.attach(&room_2, &channel(id)).await.unwrap();
+    }
+    tokio::time::timeout(BOUND, kit.process_inbound(message("hello"), Some(&room_2)))
+        .await
+        .unwrap_or_else(|_| panic!("the call waited for itself"))
+        .unwrap();
+    // The arrival goes on detached: nothing awaits its turn.
+    let deadline = tokio::time::Instant::now() + BOUND;
+    while seen.lock().unwrap().is_none() {
+        assert!(tokio::time::Instant::now() < deadline, "the turn never ran");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(*seen.lock().unwrap(), Some(Ok(1)));
+}
+
 /// An agent whose turn, on the customer's `hello`, runs `call` with the kit
 /// and records what it returned.
 fn calling_agent<T: Send + 'static>(

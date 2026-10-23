@@ -91,7 +91,8 @@ impl Decision {
 ///
 /// # Errors
 ///
-/// As [`run`](super::run), and [`KitError::Reentrant`] for such a lock;
+/// As [`run`](super::run), and [`KitError::Reentrant`] for such a lock, or
+/// the lock of a room its context stands in the admission order of;
 /// [`KitError::Stalled`] when the runtime cancelled the run's task, as it
 /// does when it shuts down.
 pub(crate) async fn run_inbound<S: ConversationStore>(
