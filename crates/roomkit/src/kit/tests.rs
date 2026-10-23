@@ -3,7 +3,9 @@
 //! as an earlier ticketed event or a lifecycle change would, and the moment
 //! a call lets its ticket go (RFC §9.5.1, §13.6). These tests hold a ticket
 //! and the lock themselves, as such a holder would at a chosen moment, and
-//! run the real driver against them.
+//! run the real driver against them. They also run the driver on an
+//! operation that breaks the protocol, and a call on a runtime that shuts
+//! down under it.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -14,12 +16,17 @@ use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventContent, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
-use roomkit_core::ops::{ChannelDeclaration, FrameworkEvent, InboundResult};
+use roomkit_core::ops::{
+    ChannelDeclaration, EffectId, Environment, FrameworkEvent, InboundResult, Next, Operation,
+    Outcome, ProtocolError, Step,
+};
 use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
 use tokio::sync::Notify;
 
 use super::RoomKit;
 use crate::channel::{Channel, ChannelError};
+use crate::driver;
+use crate::error::KitError;
 use crate::store::ConversationStore;
 use crate::testing::RecordingTransport;
 
@@ -218,5 +225,63 @@ async fn a_call_releases_its_ticket_once_its_event_is_committed() {
     assert_eq!(
         (turn.is_ok(), delivered.event.map(|event| event.status)),
         (true, Some(EventStatus::Delivered))
+    );
+}
+
+/// An operation that waits for an effect it never asked for.
+struct WaitsForNothing;
+
+impl Operation for WaitsForNothing {
+    type Output = ();
+
+    fn poll(&mut self, _environment: &mut dyn Environment) -> Step<()> {
+        Step {
+            notices: Vec::new(),
+            settled: Vec::new(),
+            decided: None,
+            next: Next::Waiting,
+        }
+    }
+
+    fn complete(&mut self, id: EffectId, _outcome: Outcome) -> Result<(), ProtocolError> {
+        Err(ProtocolError::UnknownEffect(id))
+    }
+}
+
+/// A run that waits for an effect the driver never received fails as a
+/// stall, a defect of the operation's, not as a cancelled run.
+#[tokio::test]
+async fn a_run_waiting_for_an_effect_never_asked_for_stalls() {
+    let kit = RoomKit::new();
+    let stalled = driver::run(&kit.inner, "test", WaitsForNothing).await;
+    assert_eq!(stalled, Err(KitError::Stalled));
+}
+
+/// A call whose run the runtime cancels, as a runtime shutting down does,
+/// fails as cancelled: whether its event was committed is not known.
+#[test]
+fn a_call_whose_runtime_shuts_down_under_it_is_cancelled() {
+    let runtime = || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    };
+    let first = runtime();
+    let kit = first.block_on(checked_room());
+    kit.set_process_timeout(None);
+    kit.before_broadcast("stuck", |_, _| async {
+        std::future::pending::<()>().await;
+        Ok(HookResult::allow())
+    })
+    .unwrap();
+    let room = room_id();
+    let mut call = std::pin::pin!(kit.process_inbound(message("Bonjour"), Some(&room)));
+    let started = first.block_on(async { tokio::time::timeout(TIMEOUT, call.as_mut()).await });
+    drop(first);
+    let cancelled = runtime().block_on(call);
+    assert_eq!(
+        (started.is_err(), cancelled.map(|result| result.event)),
+        (true, Err(KitError::Cancelled))
     );
 }

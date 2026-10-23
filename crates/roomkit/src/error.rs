@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::store::StoreError;
 
 /// Why a kit call failed.
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Debug, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum KitError {
     /// The inbound pipeline refused or failed the message.
@@ -67,9 +67,17 @@ pub enum KitError {
     /// The driver broke the effect protocol: a defect of this crate.
     #[error("the driver broke the effect protocol: {0}")]
     Protocol(#[from] ProtocolError),
-    /// An operation's run ended without its output: it waited for effects
-    /// the driver never received, a defect of this crate, or the runtime
-    /// cancelled it, as it does when it shuts down.
-    #[error("an operation's run ended without its output")]
+    /// An operation's run waited for effects the driver never received, or
+    /// was answered for a call it never made: a defect of this crate.
+    #[error("an operation's run stalled: it waited for effects the driver never received")]
     Stalled,
+    /// The runtime cancelled the call's run before it ended, as a tokio
+    /// runtime does when it shuts down: what the call wrote by then is not
+    /// known.
+    #[error("the runtime cancelled the call's run before it ended")]
+    Cancelled,
+    /// A direct injection's run ended with neither its event nor a refusal
+    /// (RFC §10.5): a defect of this crate.
+    #[error("a direct injection ended with neither its event nor a refusal")]
+    NoEvent,
 }

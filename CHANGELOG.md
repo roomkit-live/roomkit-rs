@@ -518,3 +518,13 @@ publishes a release.
   its behalf (`Effect::locked`), as the doc of `locked` says: the commit of
   a pass, of a record stored `BLOCKED` in place of a refused response and
   of `commit_event`'s record carried none.
+- `StoreError::Unavailable` keeps the error the store met as its cause
+  (`std::error::Error::source`), a `StoreFailure`, shown in its message; it
+  held a string. `StoreError::unavailable(cause)` builds one from an error
+  or a message. `StoreError` and `KitError` are no longer `Clone`, and an
+  `Unavailable` error equals itself only.
+- `KitError::Stalled` is a stall of the effect protocol only, a defect of
+  the crate. A call whose run the runtime cancelled, as a shutting-down
+  runtime does, fails with `KitError::Cancelled`, and a direct injection
+  that ended with neither its event nor a refusal, a defect too, with
+  `KitError::NoEvent`; both were `Stalled`.

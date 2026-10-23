@@ -93,7 +93,7 @@ impl Decision {
 ///
 /// As [`run`](super::run), and [`KitError::Reentrant`] for such a lock, or
 /// the lock of a room its context stands in the admission order of;
-/// [`KitError::Stalled`] when the runtime cancelled the run's task, as it
+/// [`KitError::Cancelled`] when the runtime cancelled the run's task, as it
 /// does when it shuts down.
 pub(crate) async fn run_inbound<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
@@ -117,7 +117,7 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     };
     let mut task = RunTask(Some(tokio::spawn(context.scope(run))));
     let Some(handle) = task.0.as_mut() else {
-        return Err(KitError::Stalled);
+        return Err(KitError::Cancelled);
     };
     let answered = tokio::select! {
         biased;
@@ -148,7 +148,7 @@ fn ended(joined: Result<InboundOutput, JoinError>) -> InboundOutput {
         // A panic of the driver's own loop is a defect of this crate: the
         // caller receives it as it would from a run it drove itself.
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
-        Err(_cancelled) => Err(KitError::Stalled),
+        Err(_cancelled) => Err(KitError::Cancelled),
     }
 }
 

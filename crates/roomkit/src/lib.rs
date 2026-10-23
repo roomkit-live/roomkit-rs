@@ -49,4 +49,6 @@ pub use self::error::KitError;
 pub use self::hooks::{HookError, HookHandler, HookReturn};
 pub use self::kit::{RoomKit, TimerSweeper};
 pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
-pub use self::store::{ConversationStore, EventFilter, InMemoryStore, RoomFilter, StoreError};
+pub use self::store::{
+    ConversationStore, EventFilter, InMemoryStore, RoomFilter, StoreError, StoreFailure,
+};

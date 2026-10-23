@@ -19,8 +19,17 @@ use thiserror::Error;
 
 pub use self::memory::InMemoryStore;
 
+/// What a store that could not be reached or failed reports as its cause:
+/// a database driver's error, an I/O error, or a message (`"connection
+/// refused".into()`).
+pub type StoreFailure = Box<dyn std::error::Error + Send + Sync>;
+
 /// Why a store refused or failed a request.
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+///
+/// Two errors are equal when they are the same refusal, field for field; an
+/// [`Unavailable`](Self::Unavailable) error only to itself, since its cause
+/// cannot be compared.
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StoreError {
     /// A room with the id exists already.
@@ -76,12 +85,94 @@ pub enum StoreError {
         /// The index.
         index: u64,
     },
-    /// The store could not be reached or failed.
+    /// The store could not be reached or failed: the error it met is the
+    /// cause ([`std::error::Error::source`]), and shows in the message.
     #[error("the store failed: {0}")]
-    Unavailable(String),
+    Unavailable(#[source] StoreFailure),
 }
 
+impl PartialEq for StoreError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::RoomExists(room), Self::RoomExists(other))
+            | (Self::RoomNotFound(room), Self::RoomNotFound(other)) => room == other,
+            (
+                Self::ParticipantExists {
+                    room_id,
+                    participant_id,
+                },
+                Self::ParticipantExists {
+                    room_id: other_room,
+                    participant_id: other_participant,
+                },
+            )
+            | (
+                Self::ParticipantNotFound {
+                    room_id,
+                    participant_id,
+                },
+                Self::ParticipantNotFound {
+                    room_id: other_room,
+                    participant_id: other_participant,
+                },
+            ) => room_id == other_room && participant_id == other_participant,
+            (Self::IdentityExists(identity), Self::IdentityExists(other))
+            | (Self::IdentityNotFound(identity), Self::IdentityNotFound(other)) => {
+                identity == other
+            }
+            (
+                Self::AddressLinked {
+                    channel_type,
+                    address,
+                    identity_id,
+                },
+                Self::AddressLinked {
+                    channel_type: other_type,
+                    address: other_address,
+                    identity_id: other_identity,
+                },
+            ) => {
+                channel_type == other_type
+                    && address == other_address
+                    && identity_id == other_identity
+            }
+            (Self::EventNotFound(event), Self::EventNotFound(other)) => event == other,
+            (
+                Self::IndexTaken { room_id, index },
+                Self::IndexTaken {
+                    room_id: other_room,
+                    index: other_index,
+                },
+            ) => room_id == other_room && index == other_index,
+            (Self::Unavailable(cause), Self::Unavailable(other)) => {
+                std::ptr::addr_eq(&raw const **cause, &raw const **other)
+            }
+            (
+                Self::RoomExists(_)
+                | Self::RoomNotFound(_)
+                | Self::ParticipantExists { .. }
+                | Self::ParticipantNotFound { .. }
+                | Self::IdentityExists(_)
+                | Self::IdentityNotFound(_)
+                | Self::AddressLinked { .. }
+                | Self::EventNotFound(_)
+                | Self::IndexTaken { .. }
+                | Self::Unavailable(_),
+                _,
+            ) => false,
+        }
+    }
+}
+
+impl Eq for StoreError {}
+
 impl StoreError {
+    /// A store that could not be reached or failed, with `cause`, the error
+    /// it met, or a message.
+    pub fn unavailable(cause: impl Into<StoreFailure>) -> Self {
+        Self::Unavailable(cause.into())
+    }
+
     /// The error as the core records it.
     pub fn to_record(&self) -> ErrorRecord {
         let error_type = match self {
@@ -445,4 +536,48 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         room_id: &RoomId,
     ) -> impl Future<Output = Result<Vec<Observation>, StoreError>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::io;
+
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn an_unavailable_store_keeps_the_error_it_met_as_its_cause() {
+        let met = io::Error::new(io::ErrorKind::ConnectionRefused, "connection refused");
+        let error = StoreError::unavailable(met);
+        let cause = error
+            .source()
+            .and_then(|cause| cause.downcast_ref::<io::Error>())
+            .map(io::Error::kind);
+        assert_eq!(
+            (cause, error.to_string()),
+            (
+                Some(io::ErrorKind::ConnectionRefused),
+                "the store failed: connection refused".to_owned()
+            )
+        );
+    }
+
+    /// An unavailable store's cause cannot be compared: the error equals
+    /// itself only, as a refusal equals the same refusal.
+    #[test]
+    fn an_unavailable_store_equals_itself_only() {
+        let error = StoreError::unavailable("connection refused");
+        let itself = &error;
+        let room = RoomId::new("room_1").unwrap();
+        assert_eq!(
+            (
+                error == *itself,
+                error == StoreError::unavailable("connection refused"),
+                StoreError::RoomNotFound(room.clone()) == StoreError::RoomNotFound(room),
+            ),
+            (true, false, true)
+        );
+    }
 }

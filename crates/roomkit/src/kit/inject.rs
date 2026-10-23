@@ -102,7 +102,7 @@ impl<S: ConversationStore> RoomKit<S> {
             event: Box::new(event),
         };
         let result = self.enter(entry, SEND_EVENT).await?;
-        result.event.ok_or(KitError::Stalled)
+        result.event.ok_or(KitError::NoEvent)
     }
 
     /// Commits `event` to the room `room_id` outside the pipeline (RFC

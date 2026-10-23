@@ -1071,7 +1071,7 @@ async fn a_call_that_could_only_wait_for_itself_fails() {
     let result = send(&kit, "hello").await.unwrap();
     assert_eq!(
         (
-            refused.lock().unwrap().clone(),
+            refused.lock().unwrap().take(),
             result.event.map(|event| event.index)
         ),
         (
@@ -1122,7 +1122,7 @@ async fn a_parse_that_routes_a_message_back_into_its_room_fails() {
     let stored = timeline(&kit).await.len();
     assert_eq!(
         (
-            failed.lock().unwrap().clone(),
+            std::mem::take(&mut *failed.lock().unwrap()),
             result.event.map(|event| event.index),
             stored
         ),
@@ -1169,7 +1169,7 @@ async fn an_off_lock_hook_routing_back_a_message_no_check_fires_for_fails() {
     let stored = timeline(&kit).await.len();
     assert_eq!(
         (
-            refused.lock().unwrap().clone(),
+            refused.lock().unwrap().take(),
             result.event.map(|event| event.index),
             stored
         ),
@@ -1335,7 +1335,7 @@ async fn a_turn_s_call_ticketed_behind_another_message_commits_after_it() {
     assert_eq!(
         (
             a.event.map(|event| event.index),
-            seen.lock().unwrap().clone(),
+            seen.lock().unwrap().take(),
             lines
         ),
         (
@@ -1378,7 +1378,7 @@ async fn a_turn_s_call_meets_its_own_process_timeout() {
     assert_eq!(
         (
             result.event.map(|event| event.status),
-            seen.lock().unwrap().clone(),
+            seen.lock().unwrap().take(),
             lines
         ),
         (
