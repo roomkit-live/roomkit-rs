@@ -92,3 +92,17 @@ path = "response_visibility.rs"
 [[example]]
 name = "send_event"
 path = "send_event.rs"
+
+# Routing and identities.
+
+[[example]]
+name = "shared_sms_number"
+path = "shared_sms_number.rs"
+
+[[example]]
+name = "paused_conversation"
+path = "paused_conversation.rs"
+
+[[example]]
+name = "identity_addresses"
+path = "identity_addresses.rs"
