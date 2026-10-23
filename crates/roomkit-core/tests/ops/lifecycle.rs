@@ -142,7 +142,7 @@ mod attach_channel {
     #[test]
     fn stores_the_binding_under_the_room_lock() {
         let mut sim = Sim::new();
-        sim.run(AttachChannel::new(sim.shared_config(), sms_binding()))
+        sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None))
             .unwrap();
         assert_eq!(
             sim.trace,
@@ -158,7 +158,7 @@ mod attach_channel {
     #[test]
     fn emits_room_channel_attached_with_the_binding_s_permissions() {
         let mut sim = Sim::new();
-        sim.run(AttachChannel::new(sim.shared_config(), sms_binding()))
+        sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None))
             .unwrap();
         assert_eq!(
             sim.framework_events(),
@@ -176,7 +176,7 @@ mod attach_channel {
         let mut sim = Sim::new();
         sim.transport("ws");
         sim.observer("greeter", HookTrigger::OnChannelAttached);
-        sim.run(AttachChannel::new(sim.shared_config(), sms_binding()))
+        sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None))
             .unwrap();
         assert_eq!(bound(&sim.async_contexts()[0].bindings), ["ws", "sms"]);
     }
@@ -186,7 +186,7 @@ mod attach_channel {
     fn fires_on_channel_attached_with_a_payload_naming_the_channel() {
         let mut sim = Sim::new();
         sim.observer("greeter", HookTrigger::OnChannelAttached);
-        sim.run(AttachChannel::new(sim.shared_config(), sms_binding()))
+        sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None))
             .unwrap();
         assert_eq!(
             LifecyclePayload::of(sim.async_payloads()[0]),
@@ -204,7 +204,7 @@ mod attach_channel {
     fn whose_lock_release_fails_still_attaches_and_reports() {
         let mut sim = Sim::new();
         sim.release_fails = true;
-        let attached = sim.run(AttachChannel::new(sim.shared_config(), sms_binding()));
+        let attached = sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None));
         assert_eq!(
             (attached, sim.framework_event_names()),
             (Ok(sms_binding()), vec!["room_channel_attached".to_owned()])
@@ -216,7 +216,7 @@ mod attach_channel {
         let mut sim = Sim::new();
         sim.room_exists = false;
         sim.release_fails = true;
-        let attached = sim.run(AttachChannel::new(sim.shared_config(), sms_binding()));
+        let attached = sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None));
         assert_eq!(attached, Err(LifecycleError::RoomNotFound(room_id())));
     }
 
@@ -224,7 +224,7 @@ mod attach_channel {
     fn to_a_missing_room_fails_once_the_lock_is_released_writing_nothing() {
         let mut sim = Sim::new();
         sim.room_exists = false;
-        let attached = sim.run(AttachChannel::new(sim.shared_config(), sms_binding()));
+        let attached = sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None));
         assert_eq!(
             (attached, sim.trace),
             (
@@ -243,10 +243,11 @@ mod attach_channel {
             sim.shared_config(),
             room_id(),
             channel("sms"),
+            None,
         ))
         .unwrap();
         sim.trace.clear();
-        sim.run(AttachChannel::new(sim.shared_config(), sms_binding()))
+        sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None))
             .unwrap();
         assert_eq!(
             (
@@ -274,7 +275,7 @@ mod attach_channel {
             visibility: Visibility::Internal,
             ..sms_binding()
         };
-        let attached = sim.run(AttachChannel::new(sim.shared_config(), binding));
+        let attached = sim.run(AttachChannel::new(sim.shared_config(), binding, None));
         assert_eq!(
             (attached, sim.trace.len()),
             (Err(LifecycleError::InternalVisibility), 0)
@@ -296,6 +297,7 @@ mod detach_channel {
             sim.shared_config(),
             room_id(),
             channel("sms"),
+            None,
         ))
         .unwrap();
         sim
@@ -361,6 +363,7 @@ mod detach_channel {
             sim.shared_config(),
             room_id(),
             channel("sms"),
+            None,
         ));
         assert_eq!(detached, Ok(binding));
     }
@@ -384,6 +387,7 @@ mod detach_channel {
             sim.shared_config(),
             room_id(),
             channel("sms"),
+            None,
         ));
         assert_eq!(
             (detached, sim.trace),
@@ -417,6 +421,7 @@ mod update_binding {
             room_id(),
             channel("ai"),
             update,
+            None,
         ))
     }
 
@@ -561,11 +566,11 @@ mod room_transitions {
     fn attempt(sim: &mut Sim, transition: Transition) -> Result<Room, LifecycleError> {
         let config = sim.shared_config();
         match transition {
-            Transition::Pause => sim.run(PauseRoom::new(config, room_id())),
-            Transition::Resume => sim.run(ResumeRoom::new(config, room_id())),
-            Transition::Reopen => sim.run(ReopenRoom::new(config, room_id())),
-            Transition::Close => sim.run(CloseRoom::new(config, room_id())),
-            Transition::Archive => sim.run(ArchiveRoom::new(config, room_id())),
+            Transition::Pause => sim.run(PauseRoom::new(config, room_id(), None)),
+            Transition::Resume => sim.run(ResumeRoom::new(config, room_id(), None)),
+            Transition::Reopen => sim.run(ReopenRoom::new(config, room_id(), None)),
+            Transition::Close => sim.run(CloseRoom::new(config, room_id(), None)),
+            Transition::Archive => sim.run(ArchiveRoom::new(config, room_id(), None)),
         }
     }
 
@@ -744,7 +749,7 @@ mod close_room {
     fn closes_the_room_under_its_lock() {
         let mut sim = Sim::new();
         let closed = sim
-            .run(CloseRoom::new(sim.shared_config(), room_id()))
+            .run(CloseRoom::new(sim.shared_config(), room_id(), None))
             .unwrap();
         assert_eq!(
             (closed.status, closed.closed_at.is_some(), sim.room.status),
@@ -757,7 +762,7 @@ mod close_room {
         let mut sim = Sim::new();
         sim.transport("sms");
         sim.observer("archive", HookTrigger::OnRoomClosed);
-        sim.run(CloseRoom::new(sim.shared_config(), room_id()))
+        sim.run(CloseRoom::new(sim.shared_config(), room_id(), None))
             .unwrap();
         let context = sim.async_contexts()[0];
         assert_eq!(
@@ -772,7 +777,7 @@ mod close_room {
         sim.transport("sms");
         sim.seed(notice_event("evt_1", "Goodbye"));
         sim.observer("summarizer", HookTrigger::OnRoomClosed);
-        sim.run(CloseRoom::new(sim.shared_config(), room_id()))
+        sim.run(CloseRoom::new(sim.shared_config(), room_id(), None))
             .unwrap();
         assert_eq!(sim.async_contexts()[0].recent_events.len(), 1);
     }
@@ -781,7 +786,7 @@ mod close_room {
     fn then_refuses_the_next_message() {
         let mut sim = Sim::new();
         sim.transport("sms");
-        sim.run(CloseRoom::new(sim.shared_config(), room_id()))
+        sim.run(CloseRoom::new(sim.shared_config(), room_id(), None))
             .unwrap();
         let result = sim.send(Sim::message("sms", "Hello?")).unwrap();
         assert_eq!(result.reason.as_deref(), Some("room_closed"));
@@ -1152,6 +1157,7 @@ mod the_status_gate {
             sim.shared_config(),
             room_id(),
             channel("sms"),
+            None,
         ))
         .unwrap();
         assert_eq!(
@@ -1183,6 +1189,7 @@ mod the_status_gate {
             room_id(),
             channel("sms"),
             BindingUpdate::mute(),
+            None,
         ))
         .unwrap();
         let mute_context = sim.async_contexts()[1].room.status;
@@ -1203,7 +1210,7 @@ mod the_status_gate {
             channel_id: channel("ws"),
             ..sms_binding()
         };
-        sim.run(AttachChannel::new(sim.shared_config(), ws))
+        sim.run(AttachChannel::new(sim.shared_config(), ws, None))
             .unwrap();
         assert_eq!(
             (sim.room.status, sim.framework_event_names()),
@@ -1227,7 +1234,7 @@ mod an_explicit_change_on_a_room_whose_timer_is_due {
         sim.observer("on_paused", HookTrigger::OnRoomPaused);
         sim.env.advance(Duration::from_secs(90));
         let paused = sim
-            .run(PauseRoom::new(sim.shared_config(), room_id()))
+            .run(PauseRoom::new(sim.shared_config(), room_id(), None))
             .unwrap();
         assert_eq!(
             (
@@ -1251,7 +1258,7 @@ mod an_explicit_change_on_a_room_whose_timer_is_due {
         let mut sim = timed_room();
         sim.env.advance(Duration::from_secs(90));
         let closed = sim
-            .run(CloseRoom::new(sim.shared_config(), room_id()))
+            .run(CloseRoom::new(sim.shared_config(), room_id(), None))
             .unwrap();
         assert_eq!(
             (closed.closed_at, sim.framework_events()),
@@ -1276,7 +1283,7 @@ mod an_explicit_change_on_a_room_whose_timer_is_due {
         let mut sim = paused_room();
         sim.env.advance(Duration::from_secs(121));
         let reopened = sim
-            .run(ReopenRoom::new(sim.shared_config(), room_id()))
+            .run(ReopenRoom::new(sim.shared_config(), room_id(), None))
             .unwrap();
         assert_eq!(
             (
@@ -1372,6 +1379,7 @@ mod a_failed_store_write {
             sim.shared_config(),
             room_id(),
             channel("sms"),
+            None,
         ));
         assert_eq!(
             (
@@ -1468,6 +1476,7 @@ mod the_protocol {
             room_id(),
             channel("ai"),
             BindingUpdate::visibility(Visibility::Internal),
+            None,
         );
         let step = update.poll(&SequentialEnvironment::default());
         assert_eq!(

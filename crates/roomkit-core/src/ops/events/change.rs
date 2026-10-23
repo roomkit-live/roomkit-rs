@@ -10,7 +10,6 @@ use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId};
 use crate::ops::Cx;
 use crate::ops::protocol::{Outcome, RoomCounters, StoreRequest};
 use crate::rules::hook_registry::HookTrigger;
-use crate::rules::organizations;
 
 /// What a direct call changes.
 #[derive(Clone, Debug)]
@@ -23,12 +22,8 @@ pub(super) enum Change {
         event_id: EventId,
         cascade_replies: bool,
     },
-    /// A record committed outside the pipeline, for a caller acting for
-    /// `organization_id` (RFC §10.5 `commit_event`).
-    Commit {
-        record: Box<RoomEvent>,
-        organization_id: Option<String>,
-    },
+    /// A record committed outside the pipeline (RFC §10.5 `commit_event`).
+    Commit { record: Box<RoomEvent> },
 }
 
 /// What a direct call did.
@@ -77,10 +72,7 @@ pub(super) fn act(
     context: Box<RoomContext>,
 ) -> State {
     match change {
-        Change::Commit {
-            record,
-            organization_id,
-        } => commit(cx, room_id, record, organization_id.as_deref(), context),
+        Change::Commit { record } => commit(cx, room_id, record, context),
         Change::Update { event_id, .. } => State::Reading {
             effect: cx.io.issue(StoreRequest::GetEvent {
                 event_id: event_id.clone(),
@@ -105,21 +97,15 @@ pub(super) fn act(
     }
 }
 
-/// Commits `record` with the room's next index, unless the room is not the
-/// caller's or its status refuses events (RFC §10.5, §5.1, §17.2): another
-/// organization's room is not found. The record moves the room's counters
-/// only: it is no activity, and a paused room stays paused (gap G-071).
+/// Commits `record` with the room's next index, unless its status refuses
+/// events (RFC §10.5, §5.1). The record moves the room's counters only: it
+/// is no activity, and a paused room stays paused (gap G-071).
 fn commit(
     cx: &mut Cx<'_>,
     room_id: &RoomId,
     record: &RoomEvent,
-    organization_id: Option<&str>,
     context: Box<RoomContext>,
 ) -> State {
-    if !organizations::admits(organization_id, &context.room) {
-        let error = MutationError::RoomNotFound(room_id.clone());
-        return section::release(cx, room_id, Err(error));
-    }
     let status = context.room.status;
     if !status.accepts_events() {
         let error = MutationError::Refused {

@@ -8,13 +8,18 @@
 //! - `inject`: direct injection and records committed outside the
 //!   pipeline;
 //! - `timers`: applying room timers, on demand or in the background;
-//! - `background`: waiting for the kit's background work, and ending it.
+//! - `background`: waiting for the kit's background work, and ending it;
+//! - `organization`: the kit acting for one organization;
+//! - `scope`: the organization a call acts for, which every call is
+//!   written once for.
 
 mod background;
 mod events;
 mod inject;
+mod organization;
 mod registry;
 mod rooms;
+mod scope;
 #[cfg(test)]
 mod tests;
 mod timers;
@@ -31,6 +36,8 @@ use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookTrigger};
 use tokio::sync::broadcast;
 
+pub use self::organization::OrganizationKit;
+use self::scope::Scope;
 pub use self::timers::TimerSweeper;
 use crate::channel::DynChannel;
 use crate::context;
@@ -192,7 +199,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// Runs `message` through the inbound pipeline (RFC §10.1), into the
     /// room `room_id` names or, with none, the room the kit's router finds
     /// for it, and the whole cascade it starts. The call reads rooms
-    /// unscoped, whatever their organization (RFC §17.2).
+    /// unscoped, whatever their organization, and a room it creates belongs
+    /// to none (RFC §17.2); an organization's
+    /// [`process_inbound`](OrganizationKit::process_inbound) reaches its own
+    /// rooms only.
     ///
     /// The sender is written in the channel's form first: a phone number in
     /// E.164, an email address lower-case (RFC §5.7). A message that names
@@ -259,60 +269,39 @@ impl<S: ConversationStore> RoomKit<S> {
         message: InboundMessage,
         room_id: Option<&RoomId>,
     ) -> Result<InboundResult, KitError> {
-        self.run_inbound(room_id, None, message).await
-    }
-
-    /// Runs `message` as [`process_inbound`](Self::process_inbound) does,
-    /// for a caller acting for `organization_id` (RFC §17.2): a room of
-    /// another organization, or of none, fails the message with nothing
-    /// written, a message is routed among the organization's rooms and
-    /// identities only, and a room the call creates belongs to the
-    /// organization.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::Inbound`] when the pipeline refused or failed the
-    /// message before committing it, the room belonging to another
-    /// organization among others.
-    pub async fn process_inbound_for(
-        &self,
-        organization_id: &str,
-        message: InboundMessage,
-        room_id: Option<&RoomId>,
-    ) -> Result<InboundResult, KitError> {
-        self.run_inbound(room_id, Some(organization_id.to_owned()), message)
-            .await
-    }
-
-    /// Runs `message`, at least as deep as the turn it is made within, if any
-    /// (RFC §10.6), adopted by the call whose work in its room made it, when
-    /// one did (RFC §13.5).
-    async fn run_inbound(
-        &self,
-        room_id: Option<&RoomId>,
-        organization_id: Option<String>,
-        mut message: InboundMessage,
-    ) -> Result<InboundResult, KitError> {
-        let Some(room_id) = room_id else {
-            context::as_deep_as_its_turn(&mut message.chain_depth);
-            let inbound = Inbound::new(
-                self.config(),
-                InboundTarget::Routed,
-                organization_id,
-                message,
-            );
-            return Ok(driver::run_inbound(&self.inner, PROCESS_INBOUND, inbound).await??);
-        };
-        let entry = Entry::Message {
-            room_id: room_id.clone(),
-            organization_id,
-            message: Box::new(message),
-        };
-        self.enter(entry, PROCESS_INBOUND).await
+        self.unscoped().process_inbound(message, room_id).await
     }
 
     fn config(&self) -> Arc<KitConfig> {
         Arc::clone(&read(&self.inner.config))
+    }
+}
+
+impl<S: ConversationStore> Scope<'_, S> {
+    /// Runs `message` for the scope's organization, at least as deep as the
+    /// turn it is made within, if any (RFC §10.6), adopted by the call whose
+    /// work in its room made it, when one did (RFC §13.5).
+    async fn process_inbound(
+        &self,
+        mut message: InboundMessage,
+        room_id: Option<&RoomId>,
+    ) -> Result<InboundResult, KitError> {
+        let Some(room_id) = room_id else {
+            context::as_deep_as_its_turn(&mut message.chain_depth);
+            let inbound = Inbound::new(
+                self.kit.config(),
+                InboundTarget::Routed,
+                self.organization_id(),
+                message,
+            );
+            return Ok(driver::run_inbound(&self.kit.inner, PROCESS_INBOUND, inbound).await??);
+        };
+        let entry = Entry::Message {
+            room_id: room_id.clone(),
+            organization_id: self.organization_id(),
+            message: Box::new(message),
+        };
+        self.kit.enter(entry, PROCESS_INBOUND).await
     }
 }
 

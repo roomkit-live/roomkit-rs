@@ -38,8 +38,8 @@ use crate::model::{ErrorRecord, EventId, EventUpdates, RoomEvent, RoomId, RoomSt
 #[non_exhaustive]
 pub enum MutationError {
     /// For a record's commit, the room does not exist or belongs to another
-    /// organization than the caller's (RFC §17.2). An update or a delete in
-    /// a room that does not exist is a no-op instead (gap G-063).
+    /// organization than the caller's, or to none (RFC §17.2). An update or
+    /// a delete in such a room is a no-op instead (gap G-063).
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
     /// The record names another room than the one it is committed to (RFC
@@ -74,7 +74,8 @@ pub enum MutationError {
 /// fires `ON_EVENT_UPDATED` with the event as it now stands. It adds no
 /// `edited` marker. Its output is the event as it now stands, `None` when
 /// the room holds no such event or does not exist, which is a no-op that
-/// fires nothing (gap G-063).
+/// fires nothing (gap G-063); a room the caller's organization does not
+/// reach is one that does not exist (RFC §17.2).
 ///
 /// An update that changes nothing writes nothing and fires nothing (gap
 /// G-063).
@@ -84,22 +85,21 @@ pub struct UpdateEvent {
 }
 
 impl UpdateEvent {
-    /// The update of `event_id` in `room_id` with `updates`.
+    /// The update of `event_id` in `room_id` with `updates`, for a caller
+    /// acting for `organization_id`; `None` reads the room unscoped.
     pub fn new(
         config: Arc<KitConfig>,
         room_id: RoomId,
         event_id: EventId,
         updates: EventUpdates,
+        organization_id: Option<String>,
     ) -> Self {
+        let change = Change::Update {
+            event_id,
+            updates: Box::new(updates),
+        };
         Self {
-            section: EventSection::new(
-                config,
-                room_id,
-                Change::Update {
-                    event_id,
-                    updates: Box::new(updates),
-                },
-            ),
+            section: EventSection::new(config, room_id, organization_id, change),
         }
     }
 }
@@ -126,7 +126,8 @@ impl Operation for UpdateEvent {
 /// `ON_EVENT_DELETED` once for each event removed, the target first, each
 /// as it was stored (gap G-063). Its output is the ids removed, the
 /// target's first; none when the room holds no such event or does not
-/// exist, which fires nothing (gap G-063).
+/// exist, which fires nothing (gap G-063), a room the caller's organization
+/// does not reach being one that does not exist (RFC §17.2).
 ///
 /// The room's counters are left as they are: an index is never given out
 /// again, and the timeline then holds fewer events than `event_count`
@@ -138,19 +139,21 @@ pub struct DeleteEvent {
 
 impl DeleteEvent {
     /// The delete of `event_id` from `room_id`, with its thread's replies
-    /// when `cascade_replies` is set (the RFC's default).
+    /// when `cascade_replies` is set (the RFC's default), for a caller
+    /// acting for `organization_id`; `None` reads the room unscoped.
     pub fn new(
         config: Arc<KitConfig>,
         room_id: RoomId,
         event_id: EventId,
         cascade_replies: bool,
+        organization_id: Option<String>,
     ) -> Self {
         let change = Change::Delete {
             event_id,
             cascade_replies,
         };
         Self {
-            section: EventSection::new(config, room_id, change),
+            section: EventSection::new(config, room_id, organization_id, change),
         }
     }
 }
@@ -176,8 +179,8 @@ impl Operation for DeleteEvent {
 ///
 /// A record naming another room is refused before anything is read; a room
 /// missing or of another organization than the caller's is not found
-/// (§17.2); a room whose status refuses events refuses it before anything
-/// is written (§5.1). The record is stored as the caller gives it, its
+/// (§17.2), before its due timers are applied; a room whose status refuses
+/// events refuses it before anything is written (§5.1). The record is stored as the caller gives it, its
 /// index aside; it moves the room's `event_count` and `latest_index`, not
 /// its activity, so a paused room stays paused and its inactivity timer
 /// runs on (gap G-071). The room's delivery lane never waits for it.
@@ -198,7 +201,6 @@ impl CommitRecord {
         let other_room = (record.room_id != room_id).then(|| record.room_id.clone());
         let change = Change::Commit {
             record: Box::new(record),
-            organization_id,
         };
         let section = match other_room {
             Some(record) => {
@@ -208,7 +210,7 @@ impl CommitRecord {
                 };
                 EventSection::refused(config, room_id, change, error)
             }
-            None => EventSection::new(config, room_id, change),
+            None => EventSection::new(config, room_id, organization_id, change),
         };
         Self { section }
     }

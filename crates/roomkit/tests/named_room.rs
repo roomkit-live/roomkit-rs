@@ -115,7 +115,8 @@ async fn an_agent_attached_by_an_on_room_created_hook_answers_the_first_message(
 #[tokio::test]
 async fn a_room_created_for_an_organization_belongs_to_it() {
     let (kit, sms) = kit_without_rooms();
-    kit.process_inbound_for("bank", message(&sms, "Bonjour"), Some(&room_id()))
+    kit.for_organization("bank")
+        .process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
         .await
         .unwrap();
     let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
@@ -127,13 +128,13 @@ async fn a_room_created_for_an_organization_belongs_to_it() {
 #[tokio::test]
 async fn a_room_of_another_organization_is_refused_with_nothing_written() {
     let (kit, sms) = kit_without_rooms();
-    kit.create_room_with(&room_id(), |room| {
-        room.organization_id = Some("bank".to_owned());
-    })
-    .await
-    .unwrap();
+    kit.for_organization("bank")
+        .create_room(&room_id())
+        .await
+        .unwrap();
     let refused = kit
-        .process_inbound_for("clinic", message(&sms, "Bonjour"), Some(&room_id()))
+        .for_organization("clinic")
+        .process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
         .await;
     assert_eq!(
         (

@@ -42,7 +42,8 @@ use crate::rules::lifecycle::Transition;
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum LifecycleError {
-    /// The room does not exist.
+    /// The room does not exist, or belongs to another organization than
+    /// the one the caller acts for, or to none (RFC §17.2).
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
     /// The channel has no binding in the room to detach or update (gap

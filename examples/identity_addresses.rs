@@ -96,15 +96,10 @@ impl Bank {
         configure: impl FnOnce(&mut ChannelBinding),
     ) -> Result<RoomId, Box<dyn Error>> {
         let room_id = RoomId::new(room)?;
-        self.kit
-            .create_room_with(&room_id, |room| {
-                room.organization_id = Some(BANK.to_owned());
-            })
-            .await?;
-        self.kit
-            .attach_with(&room_id, self.sms.id(), configure)
-            .await?;
-        self.kit.attach(&room_id, self.agent.id()).await?;
+        let bank = self.kit.for_organization(BANK);
+        bank.create_room(&room_id).await?;
+        bank.attach_with(&room_id, self.sms.id(), configure).await?;
+        bank.attach(&room_id, self.agent.id()).await?;
         Ok(room_id)
     }
 
@@ -152,7 +147,8 @@ impl Bank {
             InboundMessage::new(self.sms.id().clone(), number, EventContent::text("Bonjour"));
         let result = self
             .kit
-            .process_inbound_for(organization, message, None)
+            .for_organization(organization)
+            .process_inbound(message, None)
             .await?;
         let room = result.event.ok_or("the message was refused")?.room_id;
         println!("{number} texts {organization}: routed to {room}.");

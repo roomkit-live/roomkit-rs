@@ -7,6 +7,7 @@ use roomkit_core::model::{DirectEvent, RoomEvent, RoomId};
 use roomkit_core::ops::{CommitRecord, Entry, Inbound, InboundResult, InboundTarget};
 
 use super::RoomKit;
+use super::scope::Scope;
 use crate::context::{self, Adopting};
 use crate::driver;
 use crate::error::KitError;
@@ -24,8 +25,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// room and channel, as an inbound message's (RFC §13.4). A room that
     /// does not exist is not created, and a channel the room does not bind
     /// is not attached: its event is refused, nothing written (gap G-069).
-    /// The room is read unscoped; [`send_event_for`](Self::send_event_for)
-    /// acts for an organization.
+    /// The room is read unscoped; an organization's
+    /// [`send_event`](crate::OrganizationKit::send_event) reaches its own
+    /// rooms only.
     ///
     /// Returns the committed event, a record stored `BLOCKED` included,
     /// once its delivery set is over; a replay returns the event its key
@@ -67,47 +69,7 @@ impl<S: ConversationStore> RoomKit<S> {
         room_id: &RoomId,
         event: DirectEvent,
     ) -> Result<RoomEvent, KitError> {
-        self.inject(room_id, None, event).await
-    }
-
-    /// Injects `event` into the room `room_id` as
-    /// [`send_event`](Self::send_event) does, for a caller acting for
-    /// `organization_id` (RFC §17.2, gap G-069): a room of another
-    /// organization, or of none, refuses it before its hooks, nothing
-    /// written.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::Inbound`] with
-    /// [`InboundError::OtherOrganization`](crate::InboundError::OtherOrganization)
-    /// for a room of another organization, and otherwise as
-    /// [`send_event`](Self::send_event) does.
-    pub async fn send_event_for(
-        &self,
-        organization_id: &str,
-        room_id: &RoomId,
-        event: DirectEvent,
-    ) -> Result<RoomEvent, KitError> {
-        self.inject(room_id, Some(organization_id.to_owned()), event)
-            .await
-    }
-
-    /// Runs the injection of `event` into `room_id`, for a caller acting
-    /// for `organization_id`, adopted by the call whose work in the room
-    /// made it, when one did (RFC §13.5).
-    async fn inject(
-        &self,
-        room_id: &RoomId,
-        organization_id: Option<String>,
-        event: DirectEvent,
-    ) -> Result<RoomEvent, KitError> {
-        let entry = Entry::Direct {
-            room_id: room_id.clone(),
-            organization_id,
-            event: Box::new(event),
-        };
-        let result = self.enter(entry, SEND_EVENT).await?;
-        result.event.ok_or(KitError::NoEvent)
+        self.unscoped().send_event(room_id, event).await
     }
 
     /// Commits `event` to the room `room_id` outside the pipeline (RFC
@@ -118,31 +80,24 @@ impl<S: ConversationStore> RoomKit<S> {
     /// hook, no delivery, no framework event. It moves the room's counters,
     /// not its activity, so a paused room stays paused (gap G-071).
     ///
-    /// The room is read for a caller acting for `organization_id` (RFC
-    /// §17.2): another organization's room is not found; `None` reads it
-    /// unscoped. Called from code that holds the room's lock, a
+    /// The room is read unscoped; an organization's
+    /// [`commit_event`](crate::OrganizationKit::commit_event) reaches its
+    /// own rooms only. Called from code that holds the room's lock, a
     /// `BEFORE_BROADCAST` hook among others, it takes the lock again at once
     /// (RFC §13.5).
     ///
     /// # Errors
     ///
     /// Returns [`KitError::Mutation`] when the record names another room,
-    /// before anything is read; when the room does not exist or is another
-    /// organization's; when its status refuses events (RFC §5.1); or when the
-    /// store or the room lock fails.
+    /// before anything is read; when the room does not exist; when its
+    /// status refuses events (RFC §5.1); or when the store or the room lock
+    /// fails.
     pub async fn commit_event(
         &self,
         room_id: &RoomId,
         event: RoomEvent,
-        organization_id: Option<&str>,
     ) -> Result<RoomEvent, KitError> {
-        let operation = CommitRecord::new(
-            self.config(),
-            room_id.clone(),
-            event,
-            organization_id.map(str::to_owned),
-        );
-        Ok(driver::run(&self.inner, "commit_event", operation).await??)
+        self.unscoped().commit_event(room_id, event).await
     }
 
     /// Runs `entry`, a call into the room it names, at least as deep as the
@@ -191,6 +146,39 @@ impl<S: ConversationStore> RoomKit<S> {
             } => Inbound::inject(self.config(), room_id, organization_id, *event),
         };
         Ok(driver::run_inbound(&self.inner, call, operation).await??)
+    }
+}
+
+impl<S: ConversationStore> Scope<'_, S> {
+    /// Injects `event` into a room the scope reaches, adopted by the call
+    /// whose work in the room made it, when one did (RFC §13.5).
+    pub(super) async fn send_event(
+        &self,
+        room_id: &RoomId,
+        event: DirectEvent,
+    ) -> Result<RoomEvent, KitError> {
+        let entry = Entry::Direct {
+            room_id: room_id.clone(),
+            organization_id: self.organization_id(),
+            event: Box::new(event),
+        };
+        let result = self.kit.enter(entry, SEND_EVENT).await?;
+        result.event.ok_or(KitError::NoEvent)
+    }
+
+    /// Commits the record to a room the scope reaches.
+    pub(super) async fn commit_event(
+        &self,
+        room_id: &RoomId,
+        event: RoomEvent,
+    ) -> Result<RoomEvent, KitError> {
+        let operation = CommitRecord::new(
+            self.kit.config(),
+            room_id.clone(),
+            event,
+            self.organization_id(),
+        );
+        Ok(driver::run(&self.kit.inner, "commit_event", operation).await??)
     }
 }
 

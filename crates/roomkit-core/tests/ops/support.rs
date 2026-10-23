@@ -661,6 +661,7 @@ impl Sim {
             room_id(),
             EventId::new(event_id).unwrap(),
             updates,
+            None,
         );
         self.run(operation)
     }
@@ -676,6 +677,7 @@ impl Sim {
             room_id(),
             EventId::new(event_id).unwrap(),
             cascade_replies,
+            None,
         );
         self.run(operation)
     }

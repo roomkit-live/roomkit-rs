@@ -6,6 +6,7 @@ use roomkit_core::model::{EventId, EventUpdates, RoomEvent, RoomId};
 use roomkit_core::ops::{DeleteEvent, UpdateEvent};
 
 use super::RoomKit;
+use super::scope::Scope;
 use crate::driver;
 use crate::error::KitError;
 use crate::store::ConversationStore;
@@ -31,8 +32,9 @@ impl<S: ConversationStore> RoomKit<S> {
         event_id: &EventId,
         updates: EventUpdates,
     ) -> Result<Option<RoomEvent>, KitError> {
-        let operation = UpdateEvent::new(self.config(), room_id.clone(), event_id.clone(), updates);
-        Ok(driver::run(&self.inner, "update_event", operation).await??)
+        self.unscoped()
+            .update_event(room_id, event_id, updates)
+            .await
     }
 
     /// Deletes the room's stored event `event_id` for good, under the room
@@ -57,12 +59,46 @@ impl<S: ConversationStore> RoomKit<S> {
         event_id: &EventId,
         cascade_replies: bool,
     ) -> Result<Vec<EventId>, KitError> {
+        self.unscoped()
+            .delete_event(room_id, event_id, cascade_replies)
+            .await
+    }
+}
+
+impl<S: ConversationStore> Scope<'_, S> {
+    /// Updates the stored event in a room the scope reaches; another room
+    /// holds no event of the scope's.
+    pub(super) async fn update_event(
+        &self,
+        room_id: &RoomId,
+        event_id: &EventId,
+        updates: EventUpdates,
+    ) -> Result<Option<RoomEvent>, KitError> {
+        let operation = UpdateEvent::new(
+            self.kit.config(),
+            room_id.clone(),
+            event_id.clone(),
+            updates,
+            self.organization_id(),
+        );
+        Ok(driver::run(&self.kit.inner, "update_event", operation).await??)
+    }
+
+    /// Deletes the stored event from a room the scope reaches; another room
+    /// holds no event of the scope's.
+    pub(super) async fn delete_event(
+        &self,
+        room_id: &RoomId,
+        event_id: &EventId,
+        cascade_replies: bool,
+    ) -> Result<Vec<EventId>, KitError> {
         let operation = DeleteEvent::new(
-            self.config(),
+            self.kit.config(),
             room_id.clone(),
             event_id.clone(),
             cascade_replies,
+            self.organization_id(),
         );
-        Ok(driver::run(&self.inner, "delete_event", operation).await??)
+        Ok(driver::run(&self.kit.inner, "delete_event", operation).await??)
     }
 }

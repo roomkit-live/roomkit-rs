@@ -12,6 +12,7 @@ use crate::ops::io::Io;
 use crate::ops::lifecycle::gate::{self, Gate, Opened, Pending};
 use crate::ops::protocol::{EffectId, HoldRequest, Outcome, ProtocolError, Step, StoreRequest};
 use crate::ops::{self, Cx, Environment, KitConfig};
+use crate::rules::organizations;
 
 /// The shape the direct calls share: take the lock, read the room, apply
 /// its due timers, change the event or commit the record, release the lock,
@@ -21,6 +22,9 @@ pub(super) struct EventSection {
     config: Arc<KitConfig>,
     io: Io,
     room_id: RoomId,
+    /// The organization the caller acts for, whose rooms only it reaches
+    /// (RFC §17.2); `None` reads the room unscoped.
+    organization_id: Option<String>,
     change: Change,
     state: State,
 }
@@ -53,11 +57,18 @@ pub(super) enum State {
 }
 
 impl EventSection {
-    pub(super) fn new(config: Arc<KitConfig>, room_id: RoomId, change: Change) -> Self {
+    /// The call on `room_id`, for a caller acting for `organization_id`.
+    pub(super) fn new(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        organization_id: Option<String>,
+        change: Change,
+    ) -> Self {
         Self {
             config,
             io: Io::new(),
             room_id,
+            organization_id,
             change,
             state: State::Start,
         }
@@ -73,7 +84,7 @@ impl EventSection {
     ) -> Self {
         Self {
             state: State::Finished(Err(error)),
-            ..Self::new(config, room_id, change)
+            ..Self::new(config, room_id, None, change)
         }
     }
 
@@ -92,6 +103,7 @@ impl EventSection {
             config,
             io,
             room_id,
+            organization_id,
             change,
             state,
         } = self;
@@ -108,6 +120,7 @@ impl EventSection {
             *state = advance(
                 &mut cx,
                 room_id,
+                organization_id.as_deref(),
                 change,
                 mem::replace(state, State::Reported),
                 effect,
@@ -133,10 +146,12 @@ impl EventSection {
     }
 }
 
-/// The section's next state once `effect` is answered with `outcome`.
+/// The section's next state once `effect` is answered with `outcome`, for
+/// a caller acting for `organization_id`.
 fn advance(
     cx: &mut Cx<'_>,
     room_id: &RoomId,
+    organization_id: Option<&str>,
     change: &Change,
     state: State,
     effect: EffectId,
@@ -150,7 +165,9 @@ fn advance(
             })),
             Err(error) => State::Finished(Err(MutationError::Lock(error))),
         },
-        State::Loading(expected) if expected == effect => on_loaded(cx, room_id, change, outcome),
+        State::Loading(expected) if expected == effect => {
+            on_loaded(cx, room_id, organization_id, change, outcome)
+        }
         State::ApplyingTimers {
             effect: expected,
             pending,
@@ -190,14 +207,22 @@ fn advance(
 
 /// The room as the lock found it goes through the timer gate first. A
 /// missing room makes a change of a stored event a no-op, as a target the
-/// room does not hold does, and fails a record's commit (gap G-063).
-fn on_loaded(cx: &mut Cx<'_>, room_id: &RoomId, change: &Change, outcome: Outcome) -> State {
+/// room does not hold does, and fails a record's commit (gap G-063). A room
+/// the caller's organization does not reach is a missing one, nothing
+/// written in it, its due timers included (RFC §17.2).
+fn on_loaded(
+    cx: &mut Cx<'_>,
+    room_id: &RoomId,
+    organization_id: Option<&str>,
+    change: &Change,
+    outcome: Outcome,
+) -> State {
     let context = match outcome.into_context() {
-        Ok(Some(context)) => context,
-        Ok(None) if change.changes_a_stored_event() => {
+        Ok(Some(context)) if organizations::admits(organization_id, &context.room) => context,
+        Ok(_) if change.changes_a_stored_event() => {
             return release(cx, room_id, Ok(Box::new(Done::nothing())));
         }
-        Ok(None) => {
+        Ok(_) => {
             return release(
                 cx,
                 room_id,

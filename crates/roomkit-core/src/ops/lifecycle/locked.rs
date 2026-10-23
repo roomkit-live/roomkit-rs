@@ -17,6 +17,7 @@ use crate::model::{ErrorRecord, RoomContext, RoomId};
 use crate::ops::io::{Bound, Io};
 use crate::ops::protocol::{EffectId, HoldRequest, Outcome, ProtocolError, Step, StoreRequest};
 use crate::ops::{self, Cx, Environment, KitConfig, Progress};
+use crate::rules::organizations;
 use crate::rules::timers::DueTransition;
 
 /// Why a locked section failed: the room, the store or the lock failed it,
@@ -55,11 +56,21 @@ pub(super) struct LockedChange<C: SectionChange<Refusal = LifecycleError>> {
 }
 
 impl<C: SectionChange<Refusal = LifecycleError>> LockedChange<C> {
-    pub(super) fn new(config: Arc<KitConfig>, room_id: RoomId, change: C) -> Self {
+    /// The change of `room_id`, for a caller acting for `organization_id`:
+    /// a room of another organization, or of none, is not found (RFC
+    /// §17.2); `None` reads the room unscoped.
+    pub(super) fn new(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        organization_id: Option<String>,
+        change: C,
+    ) -> Self {
+        let mut section = LockedSection::new(room_id, change);
+        section.organization_id = organization_id;
         Self {
             config,
             io: Io::new(),
-            section: LockedSection::new(room_id, change),
+            section,
             result: None,
         }
     }
@@ -125,6 +136,10 @@ impl<C: SectionChange<Refusal = LifecycleError>> LockedChange<C> {
 #[derive(Debug)]
 pub(crate) struct LockedSection<C: SectionChange> {
     room_id: RoomId,
+    /// The organization the caller acts for, whose rooms only it reaches
+    /// (RFC §17.2); `None` reads the room unscoped. Step 2 checked the
+    /// room's organization on its own read already.
+    organization_id: Option<String>,
     change: C,
     /// The deadline of the wait for the lock, the inbound call's (RFC
     /// §10.4, §13.6); `None` for a lifecycle change.
@@ -173,6 +188,7 @@ impl<C: SectionChange> LockedSection<C> {
     pub(crate) fn new(room_id: RoomId, change: C) -> Self {
         Self {
             room_id,
+            organization_id: None,
             change,
             bound: Bound::Unbounded,
             state: State::Start,
@@ -259,11 +275,14 @@ impl<C: SectionChange> LockedSection<C> {
         }
     }
 
-    /// The room as the lock found it goes through the timer gate first.
+    /// The room as the lock found it goes through the timer gate first. A
+    /// room the caller's organization does not reach is not found, nothing
+    /// written in it, its due timers included (RFC §17.2).
     fn on_loaded(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State<C> {
+        let organization_id = self.organization_id.as_deref();
         let context = match outcome.into_context() {
-            Ok(Some(context)) => context,
-            Ok(None) => {
+            Ok(Some(context)) if organizations::admits(organization_id, &context.room) => context,
+            Ok(_) => {
                 let error = SectionError::RoomNotFound(self.room_id.clone());
                 return self.release(cx, Err(error));
             }

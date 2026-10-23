@@ -305,14 +305,12 @@ async fn a_room_opened_naming_no_one_takes_its_first_sender_only() {
 async fn a_message_is_routed_among_its_caller_s_organization_only() {
     let (kit, _sms) = kit_with_agent();
     let banks = room("bank_room");
-    kit.create_room_with(&banks, |room| {
-        room.organization_id = Some("bank".to_owned());
-    })
-    .await
-    .unwrap();
-    kit.attach(&banks, &channel("sms")).await.unwrap();
+    let bank = kit.for_organization("bank");
+    bank.create_room(&banks).await.unwrap();
+    bank.attach(&banks, &channel("sms")).await.unwrap();
     let result = kit
-        .process_inbound_for("clinic", message(ALICE, "Bonjour"), None)
+        .for_organization("clinic")
+        .process_inbound(message(ALICE, "Bonjour"), None)
         .await
         .unwrap();
     let landed = result.event.unwrap().room_id;

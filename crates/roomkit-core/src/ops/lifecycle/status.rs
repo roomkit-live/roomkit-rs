@@ -29,10 +29,18 @@ macro_rules! status_change {
         }
 
         impl $name {
-            /// The change of `room_id`.
-            pub fn new(config: Arc<KitConfig>, room_id: RoomId) -> Self {
+            /// The change of `room_id`, for a caller acting for
+            /// `organization_id`: a room of another organization, or of
+            /// none, is not found (RFC §17.2); `None` reads the room
+            /// unscoped.
+            pub fn new(
+                config: Arc<KitConfig>,
+                room_id: RoomId,
+                organization_id: Option<String>,
+            ) -> Self {
+                let change = TransitionChange($transition);
                 Self {
-                    change: LockedChange::new(config, room_id, TransitionChange($transition)),
+                    change: LockedChange::new(config, room_id, organization_id, change),
                 }
             }
         }
@@ -118,7 +126,7 @@ impl CheckTimers {
     /// The check of `room_id`'s timers.
     pub fn new(config: Arc<KitConfig>, room_id: RoomId) -> Self {
         Self {
-            change: LockedChange::new(config, room_id, TimersChange),
+            change: LockedChange::new(config, room_id, None, TimersChange),
         }
     }
 }

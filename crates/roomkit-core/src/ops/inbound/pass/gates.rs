@@ -4,6 +4,7 @@
 
 use super::{CommitPass, PassOrigin, PassResult, State};
 use crate::model::RoomContext;
+use crate::ops::inbound::direct::DirectCall;
 use crate::ops::lifecycle::gate::{self, Gate};
 use crate::ops::protocol::{Outcome, StoreRequest};
 use crate::ops::{Abort, Cx};
@@ -27,13 +28,22 @@ impl CommitPass {
     }
 
     /// The room as the lock found it goes through the timer gate first (gap
-    /// G-045).
+    /// G-045), unless it is not the caller's: a direct injection into
+    /// another organization's room is refused before its due timers are
+    /// applied, nothing written in it (RFC §17.2, gap G-069).
     pub(super) fn on_context(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
         let context = match outcome.into_context() {
             Ok(Some(context)) => context,
             Ok(None) => return self.release(cx, Err(Abort::RoomNotFound)),
             Err(error) => return self.release(cx, Err(Abort::Store(error))),
         };
+        let foreign = self
+            .direct
+            .as_ref()
+            .and_then(|direct| direct.foreign(&context.room));
+        if let Some(refusal) = foreign {
+            return self.release(cx, Err(Abort::Refused(refusal)));
+        }
         match gate::open(cx, context) {
             Gate::Clear(context) => self.on_gate(cx, context),
             Gate::Writing { effect, pending } => State::ApplyingTimers { effect, pending },
@@ -46,13 +56,13 @@ impl CommitPass {
     /// the one the hooks see; the pass takes it again once they are over.
     /// An event a hook injected is given the visibility of the targets the
     /// room binds, which its own hooks may narrow (gap G-031). A direct
-    /// injection the room refuses, another organization's or binding no
-    /// channel it names, is refused first, nothing written (gap G-069).
+    /// injection into a room that binds no channel it names is refused
+    /// first, nothing written (gap G-069).
     pub(super) fn on_gate(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
         let refusal = self
             .direct
             .as_ref()
-            .and_then(|direct| direct.refusal(&self.event, &context));
+            .and_then(|_| DirectCall::unbound(&self.event, &context));
         if let Some(refusal) = refusal {
             return self.release(cx, Err(Abort::Refused(refusal)));
         }

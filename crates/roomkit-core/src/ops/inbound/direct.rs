@@ -17,13 +17,15 @@
 //! the call is its error, with nothing to audit. Both are checked under the
 //! room lock, before the pass's hooks or the record of an injection past its
 //! caller's reentry budget, and on the room an off-lock check reads, before
-//! its hooks too.
+//! its hooks too. The organization is checked on the room as the lock finds
+//! it, before its due timers are applied, so nothing is written in a room
+//! the caller does not reach (RFC §17.2).
 
 use super::arrival::Arrived;
 use super::deadline::Stopped;
 use super::instructions::{self, Admission};
 use super::{InboundError, InboundResult, Machine, Stage, stamp};
-use crate::model::{DirectEvent, RoomContext, RoomEvent, RoomId};
+use crate::model::{DirectEvent, Room, RoomContext, RoomEvent, RoomId};
 use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::{Cx, Progress};
@@ -44,9 +46,22 @@ impl DirectCall {
     /// is another organization's than the caller's, or binds no channel the
     /// event names. Nothing is written for either.
     pub(super) fn refusal(&self, event: &RoomEvent, context: &RoomContext) -> Option<InboundError> {
-        if !organizations::admits(self.organization_id.as_deref(), &context.room) {
-            return Some(InboundError::OtherOrganization(context.room.id.clone()));
-        }
+        self.foreign(&context.room)
+            .or_else(|| Self::unbound(event, context))
+    }
+
+    /// Why `room` is not the caller's, if it is not: another organization's,
+    /// or one of none for a caller acting for an organization (RFC §17.2).
+    /// Checked on the room as the lock finds it, before its due timers are
+    /// applied.
+    pub(super) fn foreign(&self, room: &Room) -> Option<InboundError> {
+        let admitted = organizations::admits(self.organization_id.as_deref(), room);
+        (!admitted).then(|| InboundError::OtherOrganization(room.id.clone()))
+    }
+
+    /// Why the room as `context` holds it refuses `event` as the caller's
+    /// room: it binds no channel the event names.
+    pub(super) fn unbound(event: &RoomEvent, context: &RoomContext) -> Option<InboundError> {
         let bound = context.binding(&event.source.channel_id).is_some();
         (!bound).then(|| InboundError::Refused {
             reason: WriteRefusal::Unbound.blocked_by().to_owned(),

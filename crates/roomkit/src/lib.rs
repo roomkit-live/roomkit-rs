@@ -15,6 +15,8 @@
 //!   a call made under the lock or in the room's admission order is adopted
 //!   by the call whose work made it, and a turn's or a delivery's call
 //!   returns at its decision.
+//! - [`OrganizationKit`]: the kit acting for one organization, every call
+//!   reaching its rooms only (RFC §17.2); the kit itself acts for none.
 //! - [`InboundRoomRouter`]: a routing strategy; [`DefaultRouter`] is the
 //!   RFC's.
 //! - [`store`]: where rooms live, in memory by default.
@@ -60,7 +62,7 @@ pub use self::context::keep_context;
 pub use self::environment::SystemEnvironment;
 pub use self::error::KitError;
 pub use self::hooks::{HookError, HookHandler, HookReturn};
-pub use self::kit::{RoomKit, TimerSweeper};
+pub use self::kit::{OrganizationKit, RoomKit, TimerSweeper};
 pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
 pub use self::store::{
     ConversationStore, EventFilter, InMemoryStore, RoomFilter, StoreError, StoreFailure,

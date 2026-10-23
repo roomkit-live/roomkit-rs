@@ -600,3 +600,24 @@ publishes a release.
   the driver speaks with the core, are gone: `roomkit::ops::FrameworkEvent`
   is `roomkit::FrameworkEvent`, `roomkit::rules::edits::is_deleted`
   `roomkit::is_deleted`.
+- The organization a call acts for is named once, through a handle:
+  `RoomKit::for_organization(organization_id)` returns an `OrganizationKit`
+  whose every call is the kit's call of the same name, made for the
+  organization (RFC §17.2, decision 2 of step 2b, gap G-077). Its lifecycle
+  changes (`attach`, `detach`, `update_binding`, `mute`, `unmute` and the
+  transitions) and its record commits do not find a room of another
+  organization, or of none (`RoomNotFound`); its updates and deletes of a
+  stored event find no event there; its messages and injected events are
+  refused `OtherOrganization`; a room it creates belongs to the
+  organization. The kit itself acts for no organization: its calls read
+  rooms unscoped, a room they create belongs to none, and
+  `create_room_with`'s `configure` no longer sets the organization.
+  `RoomKit::process_inbound_for` and `send_event_for` are gone, and
+  `commit_event` takes no organization: an organization's handle makes
+  each of them. The core's lifecycle and event operations take the
+  caller's organization (`PauseRoom::new(config, room_id,
+  organization_id)` and the others), `None` reading the room unscoped.
+- A call acting for an organization writes nothing in another
+  organization's room, its due timers included: an injected event and a
+  record's commit applied the room's due timer transitions before they
+  refused it (gaps G-069, G-071, G-077).

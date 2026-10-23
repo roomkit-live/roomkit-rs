@@ -404,7 +404,7 @@ mod a_locked_hook {
                 let mut record = event.clone();
                 record.id = "trace_1".parse()?;
                 record.content = EventContent::text("trace");
-                kit.commit_event(&room_id(), record, None).await?;
+                kit.commit_event(&room_id(), record).await?;
                 Ok(HookResult::allow())
             }
         })
@@ -1621,7 +1621,8 @@ mod send_event {
     async fn for_another_organization_than_the_room_s_is_refused() {
         let (kit, _) = room().await;
         let refused = kit
-            .send_event_for("clinic", &room_id(), from_console("Hi"))
+            .for_organization("clinic")
+            .send_event(&room_id(), from_console("Hi"))
             .await;
         assert_eq!(
             (refused, timeline(&kit).await),
@@ -1637,18 +1638,12 @@ mod send_event {
     #[tokio::test]
     async fn for_the_room_s_organization_is_committed() {
         let (kit, audit) = room().await;
-        let clinic = RoomId::new("room_2").unwrap();
-        kit.create_room_with(&clinic, |room| {
-            room.organization_id = Some("clinic".to_owned());
-        })
-        .await
-        .unwrap();
-        kit.attach(&clinic, &channel("ws")).await.unwrap();
-        kit.attach(&clinic, audit.id()).await.unwrap();
-        let event = kit
-            .send_event_for("clinic", &clinic, from_console("Hi"))
-            .await
-            .unwrap();
+        let room = RoomId::new("room_2").unwrap();
+        let clinic = kit.for_organization("clinic");
+        clinic.create_room(&room).await.unwrap();
+        clinic.attach(&room, &channel("ws")).await.unwrap();
+        clinic.attach(&room, audit.id()).await.unwrap();
+        let event = clinic.send_event(&room, from_console("Hi")).await.unwrap();
         assert_eq!((event.index, audit.texts()), (0, vec!["Hi".to_owned()]));
     }
 }
@@ -1670,7 +1665,7 @@ async fn commit_event_reaches_no_channel() {
         EventContent::text("Snapshot"),
         Timestamp::UNIX_EPOCH,
     );
-    let committed = kit.commit_event(&room_id(), record, None).await.unwrap();
+    let committed = kit.commit_event(&room_id(), record).await.unwrap();
     assert_eq!(
         (
             committed.index,

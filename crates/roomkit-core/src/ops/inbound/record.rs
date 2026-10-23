@@ -206,13 +206,23 @@ impl RecordPass {
         }))
     }
 
-    /// The room as the lock found it goes through the timer gate first.
+    /// The room as the lock found it goes through the timer gate first,
+    /// unless a direct injection's caller does not reach it: another
+    /// organization's room refuses the record before its due timers are
+    /// applied, nothing written in it (RFC §17.2, gap G-069).
     fn on_room(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
         let context = match outcome.into_context() {
             Ok(Some(context)) => context,
             Ok(None) => return self.release(cx, Err(Abort::RoomNotFound)),
             Err(error) => return self.release(cx, Err(Abort::Store(error))),
         };
+        let foreign = self
+            .direct
+            .as_ref()
+            .and_then(|direct| direct.foreign(&context.room));
+        if let Some(refusal) = foreign {
+            return self.release(cx, Err(Abort::Refused(refusal)));
+        }
         match gate::open(cx, context) {
             Gate::Clear(context) => self.on_gate(cx, &context),
             Gate::Writing { effect, pending } => State::ApplyingTimers { effect, pending },
@@ -221,12 +231,13 @@ impl RecordPass {
 
     /// The status gate, then the commit with the next index and the
     /// visibility step 12 would have given the record (gap G-036); a direct
-    /// injection the room refuses is refused first (gap G-069).
+    /// injection into a room that binds no channel it names is refused
+    /// first (gap G-069).
     fn on_gate(&mut self, cx: &mut Cx<'_>, context: &RoomContext) -> State {
         let refusal = self
             .direct
             .as_ref()
-            .and_then(|direct| direct.refusal(&self.record, context));
+            .and_then(|_| DirectCall::unbound(&self.record, context));
         if let Some(refusal) = refusal {
             return self.release(cx, Err(Abort::Refused(refusal)));
         }

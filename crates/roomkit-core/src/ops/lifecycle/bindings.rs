@@ -23,15 +23,22 @@ pub struct AttachChannel {
 }
 
 impl AttachChannel {
-    /// The attachment of `binding`'s channel to `binding`'s room.
-    pub fn new(config: Arc<KitConfig>, binding: ChannelBinding) -> Self {
+    /// The attachment of `binding`'s channel to `binding`'s room, for a
+    /// caller acting for `organization_id`: a room of another
+    /// organization, or of none, is not found (RFC §17.2); `None` reads the
+    /// room unscoped.
+    pub fn new(
+        config: Arc<KitConfig>,
+        binding: ChannelBinding,
+        organization_id: Option<String>,
+    ) -> Self {
         let room_id = binding.room_id.clone();
         let internal = binding.visibility == Visibility::Internal;
         let change = AttachChange(Box::new(binding));
         let change = if internal {
             LockedChange::refused(config, room_id, change, LifecycleError::InternalVisibility)
         } else {
-            LockedChange::new(config, room_id, change)
+            LockedChange::new(config, room_id, organization_id, change)
         };
         Self { change }
     }
@@ -64,10 +71,18 @@ pub struct DetachChannel {
 }
 
 impl DetachChannel {
-    /// The detachment of `channel_id` from `room_id`.
-    pub fn new(config: Arc<KitConfig>, room_id: RoomId, channel_id: ChannelId) -> Self {
+    /// The detachment of `channel_id` from `room_id`, for a caller acting
+    /// for `organization_id`: a room of another organization, or of none,
+    /// is not found (RFC §17.2); `None` reads the room unscoped.
+    pub fn new(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        channel_id: ChannelId,
+        organization_id: Option<String>,
+    ) -> Self {
+        let change = DetachChange(channel_id);
         Self {
-            change: LockedChange::new(config, room_id, DetachChange(channel_id)),
+            change: LockedChange::new(config, room_id, organization_id, change),
         }
     }
 }
@@ -100,12 +115,15 @@ pub struct UpdateBinding {
 }
 
 impl UpdateBinding {
-    /// The update of `channel_id`'s binding to `room_id`.
+    /// The update of `channel_id`'s binding to `room_id`, for a caller
+    /// acting for `organization_id`: a room of another organization, or of
+    /// none, is not found (RFC §17.2); `None` reads the room unscoped.
     pub fn new(
         config: Arc<KitConfig>,
         room_id: RoomId,
         channel_id: ChannelId,
         update: BindingUpdate,
+        organization_id: Option<String>,
     ) -> Self {
         let internal = update.visibility == Some(Visibility::Internal);
         let change = UpdateChange {
@@ -115,7 +133,7 @@ impl UpdateBinding {
         let change = if internal {
             LockedChange::refused(config, room_id, change, LifecycleError::InternalVisibility)
         } else {
-            LockedChange::new(config, room_id, change)
+            LockedChange::new(config, room_id, organization_id, change)
         };
         Self { change }
     }
