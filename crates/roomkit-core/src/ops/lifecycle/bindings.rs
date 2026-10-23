@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::LifecycleError;
-use super::change::{Change, Changed};
+use super::change::{AttachChange, DetachChange, UpdateChange};
 use super::locked::LockedChange;
 use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomId, Visibility};
 use crate::ops::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
@@ -19,7 +19,7 @@ use crate::ops::{Environment, KitConfig};
 /// refused before anything is read (gap G-041).
 #[derive(Debug)]
 pub struct AttachChannel {
-    change: LockedChange,
+    change: LockedChange<AttachChange>,
 }
 
 impl AttachChannel {
@@ -27,7 +27,7 @@ impl AttachChannel {
     pub fn new(config: Arc<KitConfig>, binding: ChannelBinding) -> Self {
         let room_id = binding.room_id.clone();
         let internal = binding.visibility == Visibility::Internal;
-        let change = Change::Attach(Box::new(binding));
+        let change = AttachChange(Box::new(binding));
         let change = if internal {
             LockedChange::refused(config, room_id, change, LifecycleError::InternalVisibility)
         } else {
@@ -41,14 +41,8 @@ impl Operation for AttachChannel {
     type Output = Result<ChannelBinding, LifecycleError>;
 
     fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
-        self.change.poll(environment, |changed, _| match changed {
-            Changed::Attached { binding, .. } => Some(*binding),
-            Changed::Detached { .. }
-            | Changed::BindingUpdated { .. }
-            | Changed::Transitioned { .. }
-            | Changed::Unchanged(_)
-            | Changed::Rerouted(_) => None,
-        })
+        self.change
+            .poll(environment, |attached, _| *attached.binding)
     }
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
@@ -66,14 +60,14 @@ impl Operation for AttachChannel {
 /// (gap G-047).
 #[derive(Debug)]
 pub struct DetachChannel {
-    change: LockedChange,
+    change: LockedChange<DetachChange>,
 }
 
 impl DetachChannel {
     /// The detachment of `channel_id` from `room_id`.
     pub fn new(config: Arc<KitConfig>, room_id: RoomId, channel_id: ChannelId) -> Self {
         Self {
-            change: LockedChange::new(config, room_id, Change::Detach(channel_id)),
+            change: LockedChange::new(config, room_id, DetachChange(channel_id)),
         }
     }
 }
@@ -82,14 +76,8 @@ impl Operation for DetachChannel {
     type Output = Result<ChannelBinding, LifecycleError>;
 
     fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
-        self.change.poll(environment, |changed, _| match changed {
-            Changed::Detached { binding, .. } => Some(*binding),
-            Changed::Attached { .. }
-            | Changed::BindingUpdated { .. }
-            | Changed::Transitioned { .. }
-            | Changed::Unchanged(_)
-            | Changed::Rerouted(_) => None,
-        })
+        self.change
+            .poll(environment, |detached, _| *detached.binding)
     }
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
@@ -108,8 +96,7 @@ impl Operation for DetachChannel {
 /// bind, once read.
 #[derive(Debug)]
 pub struct UpdateBinding {
-    channel_id: ChannelId,
-    change: LockedChange,
+    change: LockedChange<UpdateChange>,
 }
 
 impl UpdateBinding {
@@ -121,8 +108,8 @@ impl UpdateBinding {
         update: BindingUpdate,
     ) -> Self {
         let internal = update.visibility == Some(Visibility::Internal);
-        let change = Change::UpdateBinding {
-            channel_id: channel_id.clone(),
+        let change = UpdateChange {
+            channel_id,
             update: Box::new(update),
         };
         let change = if internal {
@@ -130,7 +117,7 @@ impl UpdateBinding {
         } else {
             LockedChange::new(config, room_id, change)
         };
-        Self { channel_id, change }
+        Self { change }
     }
 }
 
@@ -138,15 +125,7 @@ impl Operation for UpdateBinding {
     type Output = Result<ChannelBinding, LifecycleError>;
 
     fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
-        let channel_id = &self.channel_id;
-        self.change.poll(environment, |changed, _| match changed {
-            Changed::BindingUpdated { binding, .. } => Some(*binding),
-            Changed::Unchanged(context) => context.binding(channel_id).cloned(),
-            Changed::Attached { .. }
-            | Changed::Detached { .. }
-            | Changed::Transitioned { .. }
-            | Changed::Rerouted(_) => None,
-        })
+        self.change.poll(environment, |updated, _| *updated.binding)
     }
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {

@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use super::LifecycleError;
-use super::change::Change;
+use super::change::{TimersChange, TransitionChange};
 use super::locked::LockedChange;
 use crate::model::{Room, RoomId};
 use crate::ops::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
@@ -25,14 +25,14 @@ macro_rules! status_change {
         $(#[$doc])*
         #[derive(Debug)]
         pub struct $name {
-            change: LockedChange,
+            change: LockedChange<TransitionChange>,
         }
 
         impl $name {
             /// The change of `room_id`.
             pub fn new(config: Arc<KitConfig>, room_id: RoomId) -> Self {
                 Self {
-                    change: LockedChange::new(config, room_id, Change::Transition($transition)),
+                    change: LockedChange::new(config, room_id, TransitionChange($transition)),
                 }
             }
         }
@@ -42,7 +42,7 @@ macro_rules! status_change {
 
             fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
                 self.change
-                    .poll(environment, |changed, _| Some(changed.into_context().room))
+                    .poll(environment, |transitioned, _| transitioned.context.room)
             }
 
             fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
@@ -111,14 +111,14 @@ pub struct TimersChecked {
 /// `room_closed`, each with the reason `timer`, and fires its trigger.
 #[derive(Debug)]
 pub struct CheckTimers {
-    change: LockedChange,
+    change: LockedChange<TimersChange>,
 }
 
 impl CheckTimers {
     /// The check of `room_id`'s timers.
     pub fn new(config: Arc<KitConfig>, room_id: RoomId) -> Self {
         Self {
-            change: LockedChange::new(config, room_id, Change::CheckTimers),
+            change: LockedChange::new(config, room_id, TimersChange),
         }
     }
 }
@@ -127,12 +127,11 @@ impl Operation for CheckTimers {
     type Output = Result<TimersChecked, LifecycleError>;
 
     fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
-        self.change.poll(environment, |changed, transitions| {
-            Some(TimersChecked {
-                room: changed.into_context().room,
+        self.change
+            .poll(environment, |context, transitions| TimersChecked {
+                room: context.room,
                 transitions: transitions.to_vec(),
             })
-        })
     }
 
     fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {

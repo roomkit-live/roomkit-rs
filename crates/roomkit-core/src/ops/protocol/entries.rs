@@ -12,8 +12,8 @@
 //! whose caller receives its decision ([`Decided`]) when it cannot wait for
 //! its delivery.
 
+use super::{InboundError, InboundResult};
 use crate::model::{DirectEvent, InboundMessage, RoomId};
-use crate::ops::inbound::{InboundError, InboundResult};
 
 /// Identifies an adopted entry within its operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

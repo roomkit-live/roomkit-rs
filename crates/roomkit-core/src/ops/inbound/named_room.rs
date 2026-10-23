@@ -43,16 +43,17 @@
 //! the deadline, its creation hooks bounded by their own timeouts: the
 //! creation is a write, and a room created is completed (gap G-068).
 
+use std::convert::Infallible;
 use std::mem;
 
 use super::InboundError;
+use super::arrival_change::{ArrivalChange, Recorded, SenderRecord};
 use crate::model::{ChannelBinding, ChannelType, ErrorRecord, Room, RoomContext, RoomId};
 use crate::ops::io::Bound;
-use crate::ops::lifecycle::change::{Change, Changed, SenderRecord};
-use crate::ops::lifecycle::locked::LockedSection;
+use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
 use crate::ops::lifecycle::report::{self, Reported};
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
-use crate::ops::{ChannelDeclaration, Cx, LifecycleError, Progress};
+use crate::ops::{ChannelDeclaration, Cx, Progress};
 use crate::rules::routing::{self, Recording, Sender};
 use crate::rules::{attachment, organizations};
 
@@ -112,7 +113,7 @@ enum State {
     Observing(EffectId),
     /// The attach or the record, under the room's lock.
     Changing {
-        section: Box<LockedSection>,
+        section: Box<LockedSection<ArrivalChange>>,
         /// Whether step 2 created the room.
         created: bool,
     },
@@ -257,14 +258,18 @@ impl NamedRoom {
                     sender: self.sender.clone(),
                     form: self.channel.form(),
                 };
-                self.change(cx, Change::RecordSender(Box::new(record)), false)
+                self.change(cx, ArrivalChange::RecordSender(Box::new(record)), false)
             }
             Mode::Named | Mode::Fresh => {
                 if !attachment::may_attach_automatically(&context, &self.channel.channel_id) {
                     return Progress::Done(Named::Arrived(context));
                 }
                 let binding = self.channel.binding(self.room_id.clone(), cx.env.now());
-                self.change(cx, Change::AttachAutomatically(Box::new(binding)), false)
+                self.change(
+                    cx,
+                    ArrivalChange::AttachAutomatically(Box::new(binding)),
+                    false,
+                )
             }
         }
     }
@@ -340,7 +345,11 @@ impl NamedRoom {
     /// the sender.
     fn attach_sender(&mut self, cx: &mut Cx<'_>) -> Progress<Named> {
         let binding = self.sender_binding(cx);
-        self.change(cx, Change::AttachAutomatically(Box::new(binding)), true)
+        self.change(
+            cx,
+            ArrivalChange::AttachAutomatically(Box::new(binding)),
+            true,
+        )
     }
 
     /// The channel's binding at its defaults, with the sender recorded as a
@@ -361,7 +370,7 @@ impl NamedRoom {
     /// Makes `change` under the room's lock, waiting for the lock within the
     /// call's deadline unless step 2 created the room, whose attach
     /// completes its creation.
-    fn change(&mut self, cx: &mut Cx<'_>, change: Change, created: bool) -> Progress<Named> {
+    fn change(&mut self, cx: &mut Cx<'_>, change: ArrivalChange, created: bool) -> Progress<Named> {
         let bound = if created {
             Bound::Unbounded
         } else {
@@ -380,12 +389,12 @@ impl NamedRoom {
     fn on_changed(
         &mut self,
         cx: &mut Cx<'_>,
-        changed: Result<Changed, LifecycleError>,
+        changed: SectionResult<ArrivalChange>,
         created: bool,
     ) -> Progress<Named> {
         let context = match changed {
-            Ok(Changed::Rerouted(_)) => return Progress::Done(Named::Rerouted),
-            Ok(changed) => changed.into_context(),
+            Ok(Recorded::Rerouted(_)) => return Progress::Done(Named::Rerouted),
+            Ok(recorded) => recorded.into_context(),
             Err(error) => return Progress::Done(Named::Failed(change_failure(error))),
         };
         if created && starts_session(self.channel.channel_type) {
@@ -409,19 +418,13 @@ fn starts_session(channel_type: ChannelType) -> bool {
     )
 }
 
-/// What a failed attach or record fails the message with.
-fn change_failure(error: LifecycleError) -> InboundError {
+/// What a failed attach or record fails the message with; neither ever
+/// refuses.
+fn change_failure(error: SectionError<Infallible>) -> InboundError {
     match error {
-        LifecycleError::RoomNotFound(room_id) => InboundError::RoomNotFound(room_id),
-        LifecycleError::Store(error) => InboundError::Store(error),
-        LifecycleError::Lock(error) => InboundError::Lock(error),
-        // An automatic attach or a record refuses nothing before the lock,
-        // and decides nothing that fails under it.
-        error @ (LifecycleError::ChannelNotBound { .. }
-        | LifecycleError::InternalVisibility
-        | LifecycleError::ReservedMetadataKey(_)
-        | LifecycleError::TransitionRefused { .. }) => {
-            InboundError::Store(ErrorRecord::new("Internal", error.to_string()))
-        }
+        SectionError::RoomNotFound(room_id) => InboundError::RoomNotFound(room_id),
+        SectionError::Store(error) => InboundError::Store(error),
+        SectionError::Lock(error) => InboundError::Lock(error),
+        SectionError::Refused(never) => match never {},
     }
 }

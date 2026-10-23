@@ -1,358 +1,341 @@
-//! What a lifecycle change writes, decided on the room read under its lock
-//! once its due timers are applied, and what it did.
+//! The changes a locked section makes (RFC §5.1, §5.7, §7.5 rules 6 and
+//! 7): each is decided on the room read under its lock once its due timers
+//! are applied, into the writes it makes, in order, and what it did. What a
+//! change did is a type of its own, so an operation reads only what its
+//! change can do, and a change refuses with its own refusal.
+//!
+//! The lifecycle's changes live here; the inbound pipeline's step 2 makes
+//! changes of its own through the same section (`inbound::arrival_change`).
 
 use std::collections::VecDeque;
+use std::fmt::Debug;
 
 use super::LifecycleError;
 use super::report::Reported;
 use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomUpdates, Timestamp};
 use crate::ops::protocol::StoreRequest;
-use crate::rules::addresses::AddressForm;
 use crate::rules::attachment;
 use crate::rules::lifecycle::{self, Transition};
-use crate::rules::routing::{self, Recording, Sender};
 
-/// A change made under a room's lock.
-#[derive(Clone, Debug)]
-pub(crate) enum Change {
-    /// The integrator's attach, which replaces the room's binding of the
-    /// channel and clears its revocation (RFC §7.5 rule 7).
-    Attach(Box<ChannelBinding>),
-    /// The framework's own attach for a message arriving on the channel
-    /// (RFC §10.1 step 2), made only where rule 7 allows it (gap G-053).
-    AttachAutomatically(Box<ChannelBinding>),
-    /// The record of a routed message's sender on the room's binding of the
-    /// channel (RFC §10.1 step 2, gap G-061).
-    RecordSender(Box<SenderRecord>),
-    Detach(ChannelId),
-    UpdateBinding {
-        channel_id: ChannelId,
-        update: Box<BindingUpdate>,
-    },
-    Transition(Transition),
-    /// Nothing beyond the due timer transitions the gate applies.
-    CheckTimers,
-}
+/// A change a locked section makes (`LockedSection`).
+pub(crate) trait SectionChange: Debug {
+    /// What the change did, the room as it left it among it.
+    type Done: Debug;
+    /// Why the change is refused under the lock, nothing written.
+    type Refusal: Debug;
 
-/// What a change did. A change made carries the room as it left it, which
-/// its hooks receive.
-#[derive(Clone, Debug)]
-pub(crate) enum Changed {
-    Attached {
-        binding: Box<ChannelBinding>,
+    /// Decides the change on `context`, the room as the gate left it, at
+    /// `now`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the change's refusal, nothing to write.
+    fn decide(
+        &self,
         context: Box<RoomContext>,
-    },
-    Detached {
-        binding: Box<ChannelBinding>,
-        context: Box<RoomContext>,
-    },
-    BindingUpdated {
-        binding: Box<ChannelBinding>,
-        /// The binding's `muted` when the update changed it.
-        muted: Option<bool>,
-        context: Box<RoomContext>,
-    },
-    Transitioned {
-        transition: Transition,
-        context: Box<RoomContext>,
-    },
-    /// The change did not apply: it wrote nothing.
-    Unchanged(Box<RoomContext>),
-    /// The room is no longer the routed message's: it is CLOSED or
-    /// ARCHIVED, or PAUSED, neither bound to the channel as a group nor the
-    /// sender's conversation by step 1; its binding names another sender by
-    /// now; or it no longer admits the sender a record would name on a
-    /// binding naming no one. Nothing was written, and the message is routed
-    /// once more (gaps G-045, G-055).
-    Rerouted(Box<RoomContext>),
-}
+        now: Timestamp,
+    ) -> Result<Decision<Self::Done>, Self::Refusal>;
 
-/// What recording a routed sender needs (RFC §10.1 step 2, §5.7).
-#[derive(Clone, Debug)]
-pub(crate) struct SenderRecord {
-    /// The binding attached when the room does not bind the channel: the
-    /// channel's defaults, naming the sender.
-    pub(crate) binding: ChannelBinding,
-    /// The sender, as routing names them.
-    pub(crate) sender: Sender,
-    /// The form the channel's addresses are compared in.
-    pub(crate) form: AddressForm,
+    /// What `done` reports once the lock is released, and the context its
+    /// hooks receive (gap G-027); `None` for a change that reports nothing.
+    fn reported(done: &Self::Done) -> Option<(Reported<'_>, &RoomContext)>;
 }
 
 /// The writes a change makes, in order, and what it did once they are
 /// stored.
 #[derive(Debug)]
-pub(crate) struct Decision {
+pub(crate) struct Decision<D> {
     pub(crate) writes: VecDeque<StoreRequest>,
-    pub(crate) changed: Changed,
+    pub(crate) done: D,
 }
 
-impl Change {
-    /// Decides the change on `context`, the room as the gate left it, at
-    /// `now`.
-    pub(crate) fn decide(
-        &self,
-        context: Box<RoomContext>,
-        now: Timestamp,
-    ) -> Result<Decision, LifecycleError> {
-        match self {
-            Self::Attach(binding) => Ok(attach(binding, context, now)),
-            Self::AttachAutomatically(binding) => Ok(attach_automatically(binding, context)),
-            Self::RecordSender(record) => Ok(record_sender(record, context)),
-            Self::Detach(channel_id) => detach(channel_id, context, now),
-            Self::UpdateBinding { channel_id, update } => {
-                update_binding(channel_id, update, context)
-            }
-            Self::Transition(transition) => transition_room(*transition, context, now),
-            Self::CheckTimers => Ok(Decision {
-                writes: VecDeque::new(),
-                changed: Changed::Unchanged(context),
-            }),
+impl<D> Decision<D> {
+    /// A change that writes nothing.
+    pub(crate) fn unwritten(done: D) -> Self {
+        Self {
+            writes: VecDeque::new(),
+            done,
+        }
+    }
+
+    /// The same writes, with what the change did read as `map` says.
+    pub(crate) fn map<E>(self, map: impl FnOnce(D) -> E) -> Decision<E> {
+        Decision {
+            writes: self.writes,
+            done: map(self.done),
         }
     }
 }
 
-impl Changed {
-    /// What the change reports after the release, and the context its hooks
-    /// receive; `None` for a change that reports nothing.
+/// A channel attached to the room: its binding, and the room as the attach
+/// left it.
+#[derive(Clone, Debug)]
+pub(crate) struct Attached {
+    pub(crate) binding: Box<ChannelBinding>,
+    pub(crate) context: Box<RoomContext>,
+}
+
+impl Attached {
+    /// `ON_CHANNEL_ATTACHED` and `room_channel_attached` (RFC §26.1).
+    pub(crate) fn reported(&self) -> (Reported<'_>, &RoomContext) {
+        (Reported::ChannelAttached(&self.binding), &self.context)
+    }
+}
+
+/// A channel detached from the room: its binding removed, and the room as
+/// the detach left it.
+#[derive(Clone, Debug)]
+pub(crate) struct Detached {
+    pub(crate) binding: Box<ChannelBinding>,
+    pub(crate) context: Box<RoomContext>,
+}
+
+/// A channel's binding as an update left it, changed or not.
+#[derive(Clone, Debug)]
+pub(crate) struct Updated {
+    pub(crate) binding: Box<ChannelBinding>,
+    /// The binding's `muted`, when the update changed it.
+    pub(crate) muted: Option<bool>,
+    pub(crate) context: Box<RoomContext>,
+}
+
+impl Updated {
+    /// `ON_CHANNEL_MUTED` or `ON_CHANNEL_UNMUTED` when `muted` changed,
+    /// nothing otherwise (gap G-047).
     pub(crate) fn reported(&self) -> Option<(Reported<'_>, &RoomContext)> {
-        match self {
-            Self::Attached { binding, context } => {
-                Some((Reported::ChannelAttached(binding), context.as_ref()))
-            }
-            Self::Detached { binding, context } => {
-                Some((Reported::ChannelDetached(binding), context.as_ref()))
-            }
-            Self::BindingUpdated {
-                binding,
-                muted: Some(true),
-                context,
-            } => Some((Reported::ChannelMuted(binding), context.as_ref())),
-            Self::BindingUpdated {
-                binding,
-                muted: Some(false),
-                context,
-            } => Some((Reported::ChannelUnmuted(binding), context.as_ref())),
-            Self::Transitioned {
-                transition,
-                context,
-            } => transition_reported(*transition).map(|reported| (reported, context.as_ref())),
-            Self::BindingUpdated { muted: None, .. } | Self::Unchanged(_) | Self::Rerouted(_) => {
-                None
-            }
-        }
-    }
-
-    /// The room as the change left it.
-    pub(crate) fn into_context(self) -> Box<RoomContext> {
-        match self {
-            Self::Attached { context, .. }
-            | Self::Detached { context, .. }
-            | Self::BindingUpdated { context, .. }
-            | Self::Transitioned { context, .. }
-            | Self::Unchanged(context)
-            | Self::Rerouted(context) => context,
-        }
-    }
-}
-
-/// What the integrator's transition reports (RFC §26.1): a pause fires
-/// `ON_ROOM_PAUSED` without `room_paused`, which only its timer emits; a
-/// resume and a reopen report nothing.
-fn transition_reported(transition: Transition) -> Option<Reported<'static>> {
-    match transition {
-        Transition::Pause => Some(Reported::RoomPaused(None)),
-        Transition::Close => Some(Reported::RoomClosed(None)),
-        Transition::Archive => Some(Reported::RoomArchived),
-        Transition::Resume | Transition::Reopen => None,
-    }
-}
-
-/// Stores the binding in place of any the room has for its channel. An
-/// explicit attach clears the channel's revocation first (RFC §7.5 rule 7).
-fn attach(binding: &ChannelBinding, mut context: Box<RoomContext>, now: Timestamp) -> Decision {
-    let mut writes = VecDeque::new();
-    if let Some(updates) = attachment::clear_revocation(&context.room, &binding.channel_id, now) {
-        writes.push_back(update_room(&mut context, updates));
-    }
-    writes.push_back(StoreRequest::StoreBinding {
-        binding: binding.clone(),
-    });
-    context
-        .bindings
-        .retain(|bound| bound.channel_id != binding.channel_id);
-    context.bindings.push(binding.clone());
-    Decision {
-        writes,
-        changed: Changed::Attached {
-            binding: Box::new(binding.clone()),
-            context,
-        },
-    }
-}
-
-/// Stores the binding, unless the room binds the channel, revoked it or
-/// refuses the message the attach is for (RFC §7.5 rule 7, gap G-053): the
-/// framework never replaces a binding, and never undoes a detach.
-fn attach_automatically(binding: &ChannelBinding, mut context: Box<RoomContext>) -> Decision {
-    if !attachment::may_attach_automatically(&context, &binding.channel_id) {
-        return Decision {
-            writes: VecDeque::new(),
-            changed: Changed::Unchanged(context),
+        let reported = if self.muted? {
+            Reported::ChannelMuted(&self.binding)
+        } else {
+            Reported::ChannelUnmuted(&self.binding)
         };
-    }
-    context.bindings.push(binding.clone());
-    Decision {
-        writes: VecDeque::from([StoreRequest::StoreBinding {
-            binding: binding.clone(),
-        }]),
-        changed: Changed::Attached {
-            binding: Box::new(binding.clone()),
-            context,
-        },
+        Some((reported, &self.context))
     }
 }
 
-/// Records a routed message's sender on the room as the lock finds it (RFC
-/// §10.1 step 2, §10.4, gap G-061). A room whose status no longer keeps it
-/// the message's ([`routing::kept_by_status`]), whose binding names another
-/// sender by now, or which no longer admits the sender a record would name
-/// on a binding naming no one, is no longer the message's: the message is
-/// routed once more (gap G-055). A room that does not bind the channel has
-/// it attached naming the sender, unless rule 7 refuses; one that binds it
-/// has the sender recorded through rule 6, unless the binding is declared
-/// `group` or has them already.
-fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision {
-    let current = context.binding(&record.binding.channel_id).cloned();
-    let kept = routing::kept_by_status(
-        context.room.status,
-        &record.sender,
-        &record.form,
-        &record.binding.channel_id,
-        current.as_ref(),
-        &context.participants,
-    );
-    if !kept {
-        return rerouted(context);
-    }
-    let Some(current) = current else {
-        return attach_automatically(&record.binding, context);
-    };
-    let recording = routing::recording(
-        &current,
-        &record.sender,
-        &record.form,
-        &context.participants,
-    );
-    match recording {
-        Recording::Kept => Decision {
-            writes: VecDeque::new(),
-            changed: Changed::Unchanged(context),
-        },
-        Recording::Write(update) if still_admitted(record, &current, &context) => {
-            let updated = update.apply(&current);
-            store_updated(&current, updated, context)
+/// A room's transition: applied, or left undone in a room in the status it
+/// leads to already.
+#[derive(Clone, Debug)]
+pub(crate) struct Transitioned {
+    pub(crate) transition: Transition,
+    pub(crate) applied: bool,
+    pub(crate) context: Box<RoomContext>,
+}
+
+/// The integrator's attach, which replaces the room's binding of the
+/// channel and clears its revocation (RFC §7.5 rule 7).
+#[derive(Clone, Debug)]
+pub(crate) struct AttachChange(pub(crate) Box<ChannelBinding>);
+
+impl SectionChange for AttachChange {
+    type Done = Attached;
+    type Refusal = LifecycleError;
+
+    /// Stores the binding in place of any the room has for its channel. An
+    /// explicit attach clears the channel's revocation first.
+    fn decide(
+        &self,
+        mut context: Box<RoomContext>,
+        now: Timestamp,
+    ) -> Result<Decision<Attached>, LifecycleError> {
+        let binding = &self.0;
+        let mut writes = VecDeque::new();
+        if let Some(updates) = attachment::clear_revocation(&context.room, &binding.channel_id, now)
+        {
+            writes.push_back(update_room(&mut context, updates));
         }
-        Recording::Taken | Recording::Write(_) => rerouted(context),
+        writes.push_back(StoreRequest::StoreBinding {
+            binding: ChannelBinding::clone(binding),
+        });
+        context
+            .bindings
+            .retain(|bound| bound.channel_id != binding.channel_id);
+        context.bindings.push(ChannelBinding::clone(binding));
+        let done = Attached {
+            binding: binding.clone(),
+            context,
+        };
+        Ok(Decision { writes, done })
+    }
+
+    fn reported(done: &Attached) -> Option<(Reported<'_>, &RoomContext)> {
+        Some(done.reported())
     }
 }
 
-/// Whether the room, as its lock finds it, still admits the sender a record
-/// is about to name on `current` (RFC §10.4 step 3, gap G-055): between the
-/// router's read and the lock, a message from someone else may have been
-/// committed on the channel, through a room its caller named (gap G-053),
-/// or a member may have joined through it.
-///
-/// What the room has heard is read from the events the locked section
-/// reads, the room's latest `context_window` (50 by default), refused ones
-/// set aside. That window holds every event committed since the router's
-/// read unless as many were committed in the room in between; the events
-/// before the read are the router's (the default router reads the whole
-/// timeline). A wider gap goes unseen (gap G-055).
-fn still_admitted(record: &SenderRecord, current: &ChannelBinding, context: &RoomContext) -> bool {
-    let heard = routing::heard(&context.recent_events, &current.channel_id);
-    let admitted = routing::still_admits(
-        current,
-        &record.sender,
-        &record.form,
-        &context.participants,
-        &heard,
-    );
-    if let Err(refusal) = admitted {
-        tracing::debug!(
-            target: "roomkit::core::inbound",
-            room_id = %context.room.id,
-            channel_id = %current.channel_id,
-            refusal = ?refusal,
-            "the routed room no longer admits the sender by its lock"
-        );
-    }
-    admitted.is_ok()
-}
+/// The detach of a channel from the room (RFC §7.5 rule 7).
+#[derive(Clone, Debug)]
+pub(crate) struct DetachChange(pub(crate) ChannelId);
 
-/// A room that is no longer the routed message's: nothing is written (gap
-/// G-055).
-fn rerouted(context: Box<RoomContext>) -> Decision {
-    Decision {
-        writes: VecDeque::new(),
-        changed: Changed::Rerouted(context),
-    }
-}
+impl SectionChange for DetachChange {
+    type Done = Detached;
+    type Refusal = LifecycleError;
 
-/// Records the channel's revocation, then removes its binding (RFC §7.5
-/// rule 7). The revocation is written first: a detach cut short leaves the
-/// channel revoked and still bound, never unbound and free to be attached
-/// again automatically.
-fn detach(
-    channel_id: &ChannelId,
-    mut context: Box<RoomContext>,
-    now: Timestamp,
-) -> Result<Decision, LifecycleError> {
-    let binding = bound(&context, channel_id)?;
-    let revocation = attachment::revoke(&context.room, channel_id, now);
-    let mut writes = VecDeque::from([update_room(&mut context, revocation)]);
-    writes.push_back(StoreRequest::DeleteBinding {
-        room_id: context.room.id.clone(),
-        channel_id: channel_id.clone(),
-    });
-    context
-        .bindings
-        .retain(|bound| &bound.channel_id != channel_id);
-    Ok(Decision {
-        writes,
-        changed: Changed::Detached {
+    /// Records the channel's revocation, then removes its binding. The
+    /// revocation is written first: a detach cut short leaves the channel
+    /// revoked and still bound, never unbound and free to be attached again
+    /// automatically. A channel the room does not bind is refused (gap
+    /// G-047).
+    fn decide(
+        &self,
+        mut context: Box<RoomContext>,
+        now: Timestamp,
+    ) -> Result<Decision<Detached>, LifecycleError> {
+        let channel_id = &self.0;
+        let binding = bound(&context, channel_id)?;
+        let revocation = attachment::revoke(&context.room, channel_id, now);
+        let mut writes = VecDeque::from([update_room(&mut context, revocation)]);
+        writes.push_back(StoreRequest::DeleteBinding {
+            room_id: context.room.id.clone(),
+            channel_id: channel_id.clone(),
+        });
+        context
+            .bindings
+            .retain(|bound| &bound.channel_id != channel_id);
+        let done = Detached {
             binding: Box::new(binding),
             context,
-        },
-    })
+        };
+        Ok(Decision { writes, done })
+    }
+
+    fn reported(done: &Detached) -> Option<(Reported<'_>, &RoomContext)> {
+        Some((Reported::ChannelDetached(&done.binding), &done.context))
+    }
 }
 
-/// Writes the binding as the update leaves it, every field it does not name
-/// carried over (RFC §7.5 rule 6); an update that changes nothing writes
-/// nothing (gap G-047).
-fn update_binding(
-    channel_id: &ChannelId,
-    update: &BindingUpdate,
-    context: Box<RoomContext>,
-) -> Result<Decision, LifecycleError> {
-    let current = bound(&context, channel_id)?;
-    let updated = update.apply(&current);
-    if updated == current {
-        return Ok(Decision {
-            writes: VecDeque::new(),
-            changed: Changed::Unchanged(context),
-        });
+/// The update of a channel's binding (RFC §7.5 rule 6).
+#[derive(Clone, Debug)]
+pub(crate) struct UpdateChange {
+    pub(crate) channel_id: ChannelId,
+    pub(crate) update: Box<BindingUpdate>,
+}
+
+impl SectionChange for UpdateChange {
+    type Done = Updated;
+    type Refusal = LifecycleError;
+
+    /// Writes the binding as the update leaves it, every field it does not
+    /// name carried over; an update that changes nothing writes nothing
+    /// (gap G-047). A channel the room does not bind is refused.
+    fn decide(
+        &self,
+        context: Box<RoomContext>,
+        _now: Timestamp,
+    ) -> Result<Decision<Updated>, LifecycleError> {
+        let current = bound(&context, &self.channel_id)?;
+        let updated = self.update.apply(&current);
+        if updated == current {
+            return Ok(Decision::unwritten(Updated {
+                binding: Box::new(current),
+                muted: None,
+                context,
+            }));
+        }
+        Ok(store_updated(&current, updated, context))
     }
-    Ok(store_updated(&current, updated, context))
+
+    fn reported(done: &Updated) -> Option<(Reported<'_>, &RoomContext)> {
+        done.reported()
+    }
+}
+
+/// A transition of the room's status (RFC §5.1).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TransitionChange(pub(crate) Transition);
+
+impl SectionChange for TransitionChange {
+    type Done = Transitioned;
+    type Refusal = LifecycleError;
+
+    /// Applies the transition when it leaves from the room's status; leaves
+    /// the room as it is when the transition is done in that status
+    /// already, and refuses it otherwise (gap G-074).
+    fn decide(
+        &self,
+        mut context: Box<RoomContext>,
+        now: Timestamp,
+    ) -> Result<Decision<Transitioned>, LifecycleError> {
+        let transition = self.0;
+        let status = context.room.status;
+        if transition.refuses(status) {
+            return Err(LifecycleError::TransitionRefused {
+                room_id: context.room.id.clone(),
+                transition,
+                status,
+            });
+        }
+        let mut room = context.room.clone();
+        if !lifecycle::apply(&mut room, transition, now) {
+            return Ok(Decision::unwritten(Transitioned {
+                transition,
+                applied: false,
+                context,
+            }));
+        }
+        room.updated_at = now;
+        let write = StoreRequest::UpdateRoom {
+            room_id: room.id.clone(),
+            updates: RoomUpdates::lifecycle(&room),
+        };
+        context.room = room;
+        let done = Transitioned {
+            transition,
+            applied: true,
+            context,
+        };
+        Ok(Decision {
+            writes: VecDeque::from([write]),
+            done,
+        })
+    }
+
+    /// What the integrator's transition reports (RFC §26.1): a pause fires
+    /// `ON_ROOM_PAUSED` without `room_paused`, which only its timer emits;
+    /// a resume and a reopen report nothing, and neither does a transition
+    /// done already.
+    fn reported(done: &Transitioned) -> Option<(Reported<'_>, &RoomContext)> {
+        if !done.applied {
+            return None;
+        }
+        let reported = match done.transition {
+            Transition::Pause => Reported::RoomPaused(None),
+            Transition::Close => Reported::RoomClosed(None),
+            Transition::Archive => Reported::RoomArchived,
+            Transition::Resume | Transition::Reopen => return None,
+        };
+        Some((reported, &done.context))
+    }
+}
+
+/// Nothing beyond the due timer transitions the gate applies (gap G-045):
+/// what it did is the room as they left it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TimersChange;
+
+impl SectionChange for TimersChange {
+    type Done = Box<RoomContext>;
+    type Refusal = LifecycleError;
+
+    fn decide(
+        &self,
+        context: Box<RoomContext>,
+        _now: Timestamp,
+    ) -> Result<Decision<Box<RoomContext>>, LifecycleError> {
+        Ok(Decision::unwritten(context))
+    }
+
+    fn reported(_done: &Box<RoomContext>) -> Option<(Reported<'_>, &RoomContext)> {
+        None
+    }
 }
 
 /// Stores `updated` in place of `current`, which `context` then reflects;
 /// the change names `muted` when it changed.
-fn store_updated(
+pub(crate) fn store_updated(
     current: &ChannelBinding,
     updated: ChannelBinding,
     mut context: Box<RoomContext>,
-) -> Decision {
+) -> Decision<Updated> {
     let muted = (updated.muted != current.muted).then_some(updated.muted);
     for binding in &mut context.bindings {
         if binding.channel_id == updated.channel_id {
@@ -363,50 +346,12 @@ fn store_updated(
         writes: VecDeque::from([StoreRequest::StoreBinding {
             binding: updated.clone(),
         }]),
-        changed: Changed::BindingUpdated {
+        done: Updated {
             binding: Box::new(updated),
             muted,
             context,
         },
     }
-}
-
-/// Applies the transition when it leaves from the room's status; leaves the
-/// room as it is when the transition is done in that status already, and
-/// refuses it otherwise (RFC §5.1, gap G-074).
-fn transition_room(
-    transition: Transition,
-    mut context: Box<RoomContext>,
-    now: Timestamp,
-) -> Result<Decision, LifecycleError> {
-    let status = context.room.status;
-    if transition.refuses(status) {
-        return Err(LifecycleError::TransitionRefused {
-            room_id: context.room.id.clone(),
-            transition,
-            status,
-        });
-    }
-    let mut room = context.room.clone();
-    if !lifecycle::apply(&mut room, transition, now) {
-        return Ok(Decision {
-            writes: VecDeque::new(),
-            changed: Changed::Unchanged(context),
-        });
-    }
-    room.updated_at = now;
-    let write = StoreRequest::UpdateRoom {
-        room_id: room.id.clone(),
-        updates: RoomUpdates::lifecycle(&room),
-    };
-    context.room = room;
-    Ok(Decision {
-        writes: VecDeque::from([write]),
-        changed: Changed::Transitioned {
-            transition,
-            context,
-        },
-    })
 }
 
 /// The room's binding of `channel_id`.

@@ -56,6 +56,7 @@
 
 mod adoption;
 mod arrival;
+mod arrival_change;
 mod cascade;
 mod chain;
 mod commit;
@@ -88,7 +89,6 @@ use self::holds::AfterTicket;
 use self::job::Job;
 use self::off_lock::OffLockCheck;
 use self::queues::Delivery;
-pub use self::result::{InboundError, InboundResult};
 pub use self::stamp::default_inbound_event;
 use super::io::Io;
 use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
@@ -98,6 +98,7 @@ use crate::model::{
     Visibility,
 };
 use crate::ops::io::Bound;
+pub use crate::ops::protocol::{InboundError, InboundResult};
 use crate::rules::chain_depth::ReentryBudget;
 
 /// The inbound pipeline for one call (RFC §10.1, §10.5).

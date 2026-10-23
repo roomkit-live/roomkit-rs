@@ -10,6 +10,7 @@
 mod answers;
 mod entries;
 mod requests;
+mod results;
 
 pub(crate) use answers::RequestKind;
 pub use entries::{Decided, Entry, EntryId, Settled};
@@ -17,6 +18,7 @@ pub use requests::{
     ChannelOutcome, ChannelRequest, HoldOutcome, HoldRequest, HookAnswer, HookRequest, Outcome,
     Request, StoreOutcome, StoreRequest,
 };
+pub use results::{InboundError, InboundResult};
 
 use thiserror::Error;
 
