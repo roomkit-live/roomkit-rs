@@ -55,12 +55,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 The examples run the RFC's Appendix B flows and check their own result:
 
 ```sh
-cargo run -p roomkit --example echo_room         # B.1: an agent answers on SMS
-cargo run -p roomkit --example new_conversation  # B.1: two senders on one number, a room each
-cargo run -p roomkit --example block_and_inject  # B.2: a hook blocks and injects
-cargo run -p roomkit --example agent_chain       # B.4: the chain-depth limit
-cargo run -p roomkit --example advisor_joins     # B.5: mute, whisper to an advisor, unmute
-cargo run -p roomkit --example edit_and_delete   # B.6, B.7: an edit and a delete, native or as text
+cargo run --example echo_room             # B.1: an agent answers on SMS
+cargo run --example new_conversation      # B.1: two senders on one number, a room each
+cargo run --example block_and_inject      # B.2: a hook blocks and injects
+cargo run --example agent_chain           # B.4: the chain-depth limit
+cargo run --example advisor_joins         # B.5: mute, whisper to an advisor, unmute
+cargo run --example edit_delete_messages  # B.6, B.7: an edit and a delete, native or as text
 ```
 
 ## Documentation

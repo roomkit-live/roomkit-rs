@@ -6,12 +6,10 @@
 //! their room.
 //!
 //! ```sh
-//! cargo run -p roomkit --example new_conversation
+//! cargo run --example new_conversation
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-
-mod support;
 
 use std::error::Error;
 use std::future::{Future, ready};
@@ -20,13 +18,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, InboundMessage, RoomContext, RoomEvent, RoomId, Timestamp,
+    EventContent, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
-use roomkit::ops::{ChannelDeclaration, FrameworkEvent, SequentialEnvironment};
+use roomkit::ops::{ChannelDeclaration, FrameworkEvent};
 use roomkit::testing::EchoAgent;
 use roomkit::{Channel, ChannelError, ConversationStore, HookTrigger, RoomKit, text_of};
 
-use self::support::Checks;
+use shared::Checks;
 
 const JEAN: &str = "+15551234567";
 const MARIE: &str = "+15557654321";
@@ -135,10 +133,7 @@ async fn bound_to(
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
-    let kit = RoomKit::new();
-    kit.set_environment(SequentialEnvironment::new(Timestamp::from_unix_millis(
-        1_792_677_780_000,
-    )?));
+    let kit = shared::kit();
     let sms = SmsNumber::new(ChannelId::new("sms_main")?);
     let agent = EchoAgent::new(ChannelId::new("ai")?, "Bonjour! You said: ").quoting();
     kit.register_channel(sms.clone())?;
@@ -164,12 +159,12 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     for (who, room) in [("Jean", &jeans), ("Marie", &maries)] {
         println!("{who}'s room {room}:");
-        support::print_timeline(&support::timeline(&kit, room).await?);
+        shared::print_timeline(&shared::timeline(&kit, room).await?);
     }
     let created = std::iter::from_fn(|| events.try_recv().ok())
         .filter(|event| matches!(event, FrameworkEvent::RoomCreated { .. }))
         .count();
-    let jeans_timeline = support::timeline(&kit, &jeans).await?;
+    let jeans_timeline = shared::timeline(&kit, &jeans).await?;
 
     let mut checks = Checks::default();
     checks.expect(

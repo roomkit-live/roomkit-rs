@@ -299,6 +299,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "roomkit-examples"
+version = "0.1.0"
+dependencies = [
+ "roomkit",
+ "tokio",
+]
+
+[[package]]
 name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"

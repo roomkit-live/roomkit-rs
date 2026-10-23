@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "examples"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ repository = "https://github.com/roomkit-live/roomkit-rs"
 publish = false
 
 [workspace.dependencies]
+roomkit = { path = "crates/roomkit" }
 roomkit-core = { path = "crates/roomkit-core" }
 
 jiff = { version = "0.2", default-features = false, features = ["std"] }

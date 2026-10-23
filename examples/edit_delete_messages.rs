@@ -7,12 +7,10 @@
 //! a card number: its target stays as it was, and no trigger fires.
 //!
 //! ```sh
-//! cargo run -p roomkit --example edit_and_delete
+//! cargo run --example edit_delete_messages
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-
-mod support;
 
 use std::error::Error;
 use std::future::{Future, ready};
@@ -23,15 +21,15 @@ use std::time::Duration;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelOutput, ChannelType, DeleteContent, DeleteType, EditContent, EditSource, EventContent,
-    EventId, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, Timestamp,
+    EventId, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
-use roomkit::ops::{ChannelDeclaration, SequentialEnvironment};
+use roomkit::ops::ChannelDeclaration;
 use roomkit::rules::edits;
 use roomkit::testing::RecordingTransport;
 use roomkit::{Channel, ChannelError, ConversationStore, HookTrigger, RoomKit, text_of};
 use tokio::sync::mpsc;
 
-use self::support::Checks;
+use shared::Checks;
 
 /// The customer's number.
 const CUSTOMER: &str = "+15551234567";
@@ -133,10 +131,7 @@ struct Conversation {
 
 impl Conversation {
     async fn open() -> Result<Self, Box<dyn Error>> {
-        let kit = RoomKit::new();
-        kit.set_environment(SequentialEnvironment::new(Timestamp::from_unix_millis(
-            1_792_677_780_000,
-        )?));
+        let kit = shared::kit();
         let customer =
             RecordingTransport::new(ChannelId::new("wa_customer")?, ChannelType::Whatsapp);
         let advisor =
@@ -388,8 +383,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             .any(|text| has_card_number(text)),
     );
 
-    let timeline = support::timeline(&conversation.kit, &conversation.room).await?;
-    support::print_timeline(&timeline);
+    let timeline = shared::timeline(&conversation.kit, &conversation.room).await?;
+    shared::print_timeline(&timeline);
     println!("Delivered on SMS: {:?}", conversation.sms.texts());
     Ok(checks.finish())
 }

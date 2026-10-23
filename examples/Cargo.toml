@@ -1,0 +1,50 @@
+[package]
+name = "roomkit-examples"
+description = "Runnable examples of RoomKit for Rust, each checking what it shows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# What the examples share besides the roomkit calls each one shows. A library
+# target compiles once for all of them, and each example imports what it uses.
+[lib]
+name = "shared"
+path = "shared/lib.rs"
+
+[dependencies]
+roomkit.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
+
+# One file per example, run from the repository root with
+# `cargo run --example <name>`. `make examples` runs every file of this
+# directory, so an example missing here fails the gate.
+
+[[example]]
+name = "advisor_joins"
+path = "advisor_joins.rs"
+
+[[example]]
+name = "agent_chain"
+path = "agent_chain.rs"
+
+[[example]]
+name = "block_and_inject"
+path = "block_and_inject.rs"
+
+[[example]]
+name = "echo_room"
+path = "echo_room.rs"
+
+[[example]]
+name = "edit_delete_messages"
+path = "edit_delete_messages.rs"
+
+[[example]]
+name = "new_conversation"
+path = "new_conversation.rs"

@@ -252,6 +252,11 @@ publishes a release.
 
 ### Changed
 
+- The examples are a package of their own, `roomkit-examples` in
+  `examples/`, one file per example, run from the repository root with
+  `cargo run --example <name>`; what they share is its `shared` library.
+  `edit_and_delete` is renamed `edit_delete_messages`, after the Python
+  example it matches. `make examples` runs every example, and CI runs it.
 - The implementation's room metadata namespace is `roomkit:`, the
   revocations of detached channels `roomkit:detached` (they were
   `roomkit.` and `roomkit.detached`); a key written `roomkit.` is the

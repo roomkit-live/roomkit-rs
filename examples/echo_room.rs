@@ -2,29 +2,22 @@
 //! and the answer reaches the customer.
 //!
 //! ```sh
-//! cargo run -p roomkit --example echo_room
+//! cargo run --example echo_room
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
 
-mod support;
-
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::RoomKit;
-use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId, Timestamp};
-use roomkit::ops::SequentialEnvironment;
+use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId};
 use roomkit::testing::{EchoAgent, RecordingTransport};
 
-use self::support::Checks;
+use shared::Checks;
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
-    let kit = RoomKit::new();
-    kit.set_environment(SequentialEnvironment::new(Timestamp::from_unix_millis(
-        1_792_677_780_000,
-    )?));
+    let kit = shared::kit();
 
     let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::Sms);
     let agent = EchoAgent::new(ChannelId::new("ai")?, "Bonjour Jean! You said: ").quoting();
@@ -44,8 +37,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     let result = kit.process_inbound(message, Some(&room)).await?;
 
-    let timeline = support::timeline(&kit, &room).await?;
-    support::print_timeline(&timeline);
+    let timeline = shared::timeline(&kit, &room).await?;
+    shared::print_timeline(&timeline);
     println!("Delivered on SMS: {:?}", sms.texts());
 
     let mut checks = Checks::default();

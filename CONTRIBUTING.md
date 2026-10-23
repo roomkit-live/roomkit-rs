@@ -24,8 +24,9 @@ make hooks
 `make all` passes before every commit: formatting, clippy with warnings
 denied, tests, documentation with warnings denied, `cargo deny` when it is
 installed, and the check that `roomkit-core` stays free of I/O dependencies.
-Run `make msrv` when a change adds a dependency or uses a recent standard
-library API.
+`make examples` passes too: it runs every example, each of which checks what
+it shows. Run `make msrv` when a change adds a dependency or uses a recent
+standard library API.
 
 ## Code
 

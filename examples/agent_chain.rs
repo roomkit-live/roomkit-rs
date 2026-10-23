@@ -2,31 +2,23 @@
 //! chain-depth limit stops the next turn, which is never asked.
 //!
 //! ```sh
-//! cargo run -p roomkit --example agent_chain
+//! cargo run --example agent_chain
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
 
-mod support;
-
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::RoomKit;
-use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventStatus, InboundMessage, RoomId, Timestamp,
-};
-use roomkit::ops::{FrameworkEvent, SequentialEnvironment};
+use roomkit::model::{ChannelId, ChannelType, EventContent, EventStatus, InboundMessage, RoomId};
+use roomkit::ops::FrameworkEvent;
 use roomkit::testing::{EchoAgent, RecordingTransport};
 
-use self::support::Checks;
+use shared::Checks;
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
-    let kit = RoomKit::new();
-    kit.set_environment(SequentialEnvironment::new(Timestamp::from_unix_millis(
-        1_792_677_780_000,
-    )?));
+    let kit = shared::kit();
     let mut events = kit.subscribe();
 
     let human = RecordingTransport::new(ChannelId::new("ws")?, ChannelType::Websocket);
@@ -54,8 +46,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     message.addressed_to = Some(vec![analyst.id().clone()]);
     kit.process_inbound(message, Some(&room)).await?;
 
-    let timeline = support::timeline(&kit, &room).await?;
-    support::print_timeline(&timeline);
+    let timeline = shared::timeline(&kit, &room).await?;
+    shared::print_timeline(&timeline);
     let mut exceeded = 0;
     while let Ok(event) = events.try_recv() {
         if matches!(event, FrameworkEvent::ChainDepthExceeded { .. }) {

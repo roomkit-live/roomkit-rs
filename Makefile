@@ -2,8 +2,10 @@
 
 CARGO ?= cargo
 MSRV := 1.92.0
+# The examples: every file of examples/, each declared in examples/Cargo.toml.
+EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test doc deny check-core-deps msrv hooks
+.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv hooks
 
 all: fmt-check clippy test doc deny check-core-deps
 
@@ -31,6 +33,14 @@ deny:
 
 check-core-deps:
 	scripts/check-core-deps.sh
+
+# Each example checks what it shows and exits non-zero when a check fails.
+examples:
+	$(CARGO) build --examples --locked --package roomkit-examples
+	@for example in $(EXAMPLES); do \
+		echo "== $$example"; \
+		$(CARGO) run --quiet --locked --example "$$example" || exit 1; \
+	done
 
 msrv:
 	$(CARGO) +$(MSRV) check --workspace --all-targets --all-features --locked

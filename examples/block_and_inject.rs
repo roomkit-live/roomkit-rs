@@ -3,12 +3,10 @@
 //! and records a compliance observation.
 //!
 //! ```sh
-//! cargo run -p roomkit --example block_and_inject
+//! cargo run --example block_and_inject
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-
-mod support;
 
 use std::error::Error;
 use std::process::ExitCode;
@@ -17,11 +15,10 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventStatus, EventType,
     HookResult, InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, Timestamp,
 };
-use roomkit::ops::SequentialEnvironment;
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, RoomKit, text_of};
+use roomkit::{ConversationStore, text_of};
 
-use self::support::Checks;
+use shared::{Checks, Clock};
 
 /// A Canadian social insurance number, as `123-456-789`.
 fn has_sin(text: &str) -> bool {
@@ -53,9 +50,9 @@ fn notice(text: &str, now: Timestamp) -> Result<RoomEvent, Box<dyn Error>> {
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
-    let kit = RoomKit::new();
-    let now = Timestamp::from_unix_millis(1_792_677_780_000)?;
-    kit.set_environment(SequentialEnvironment::new(now));
+    let clock = Clock::new();
+    let kit = clock.kit();
+    let now = clock.now();
 
     let customer = RecordingTransport::new(ChannelId::new("sms_customer")?, ChannelType::Sms);
     let advisor = RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::Websocket);
@@ -100,8 +97,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     let result = kit.process_inbound(message, Some(&room)).await?;
 
-    let timeline = support::timeline(&kit, &room).await?;
-    support::print_timeline(&timeline);
+    let timeline = shared::timeline(&kit, &room).await?;
+    shared::print_timeline(&timeline);
     println!("Delivered to the customer: {:?}", customer.texts());
     println!("Delivered to the advisor: {:?}", advisor.texts());
     let observations = kit.store().list_observations(&room).await?;

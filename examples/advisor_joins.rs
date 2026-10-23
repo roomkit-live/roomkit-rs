@@ -10,12 +10,10 @@
 //! instead (gap G-046), so its timeline holds the messages only.
 //!
 //! ```sh
-//! cargo run -p roomkit --example advisor_joins
+//! cargo run --example advisor_joins
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-
-mod support;
 
 use std::error::Error;
 use std::future::{Future, ready};
@@ -25,14 +23,14 @@ use std::time::Duration;
 use roomkit::model::{
     Access, BindingUpdate, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId,
     ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType,
-    InboundMessage, RoomContext, RoomEvent, RoomId, Timestamp, Visibility,
+    InboundMessage, RoomContext, RoomEvent, RoomId, Visibility,
 };
-use roomkit::ops::{ChannelDeclaration, FrameworkEvent, SequentialEnvironment};
+use roomkit::ops::{ChannelDeclaration, FrameworkEvent};
 use roomkit::testing::RecordingTransport;
 use roomkit::{Channel, ChannelError, HookTrigger, RoomKit, text_of};
 use tokio::sync::{broadcast, mpsc};
 
-use self::support::Checks;
+use shared::Checks;
 
 /// What the agent answers, by what it reads. It stays silent on anything
 /// else, the advisor's own messages among them.
@@ -127,10 +125,7 @@ impl Conversation {
     /// A room with the customer on SMS and the agent; the advisor's
     /// WebSocket is registered, not attached yet.
     async fn open() -> Result<Self, Box<dyn Error>> {
-        let kit = RoomKit::new();
-        kit.set_environment(SequentialEnvironment::new(Timestamp::from_unix_millis(
-            1_792_677_780_000,
-        )?));
+        let kit = shared::kit();
         let customer = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::Sms);
         let advisor =
             RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::Websocket);
@@ -267,8 +262,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let mut conversation = Conversation::open().await?;
     conversation.run().await?;
 
-    let timeline = support::timeline(&conversation.kit, &conversation.room).await?;
-    support::print_timeline(&timeline);
+    let timeline = shared::timeline(&conversation.kit, &conversation.room).await?;
+    shared::print_timeline(&timeline);
     let (customer, advisor) = (conversation.customer.texts(), conversation.advisor.texts());
     println!("Delivered on SMS: {customer:?}");
     println!("Delivered to the advisor: {advisor:?}");
