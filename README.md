@@ -8,7 +8,8 @@ for conversations between humans, AI agents and programs.
 > and broadcast pipelines, with hooks, permissions, transcoding and the
 > chain-depth limit, on a tokio runtime and an in-memory store. Step 2, the
 > rest of Level 0, is in progress: the room lifecycle and its timers, and
-> a message naming its room, are done. No provider yet, and the API will change.
+> a message naming its room, and routing a message that names no room to
+> its conversation are done. No provider yet, and the API will change.
 
 ## Why a Rust implementation
 
@@ -43,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     kit.attach(&room, agent.id()).await?;
 
     let message = InboundMessage::new(sms.id().clone(), "+15551234567", EventContent::text("Bonjour"));
-    kit.process_inbound(&room, message).await?;
+    kit.process_inbound(message, Some(&room)).await?;
     assert_eq!(sms.texts(), ["You said: Bonjour"]);
     Ok(())
 }
@@ -53,6 +54,7 @@ The examples run the RFC's Appendix B flows and check their own result:
 
 ```sh
 cargo run -p roomkit --example echo_room         # B.1: an agent answers on SMS
+cargo run -p roomkit --example new_conversation  # B.1: two senders on one number, a room each
 cargo run -p roomkit --example block_and_inject  # B.2: a hook blocks and injects
 cargo run -p roomkit --example agent_chain       # B.4: the chain-depth limit
 cargo run -p roomkit --example advisor_joins     # B.5: mute, whisper to an advisor, unmute

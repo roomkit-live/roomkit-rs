@@ -52,7 +52,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         EventContent::text("Analyse the quarter"),
     );
     message.addressed_to = Some(vec![analyst.id().clone()]);
-    kit.process_inbound(&room, message).await?;
+    kit.process_inbound(message, Some(&room)).await?;
 
     let timeline = support::timeline(&kit, &room).await?;
     support::print_timeline(&timeline);

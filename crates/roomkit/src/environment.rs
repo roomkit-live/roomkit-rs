@@ -3,7 +3,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use roomkit_core::model::{EventId, ObservationId, Timestamp};
+use roomkit_core::model::{EventId, ObservationId, RoomId, Timestamp};
 use roomkit_core::ops::Environment;
 
 /// The system clock, at millisecond precision, and random version 4 UUIDs as
@@ -33,5 +33,9 @@ impl Environment for SystemEnvironment {
 
     fn new_observation_id(&mut self) -> ObservationId {
         ObservationId::from_u128(uuid::Uuid::new_v4().as_u128())
+    }
+
+    fn new_room_id(&mut self) -> RoomId {
+        RoomId::from_u128(uuid::Uuid::new_v4().as_u128())
     }
 }

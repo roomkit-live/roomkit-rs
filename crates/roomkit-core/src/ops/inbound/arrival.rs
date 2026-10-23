@@ -1,20 +1,35 @@
 //! A message's way to the room's lock (RFC §10.1 steps 1 to 4): its channel
-//! and its sender in the channel's form, its room, the room's context, and
-//! the event its channel parses.
+//! and its sender in the channel's form, its room, the room's lane, the
+//! room's context, and the event its channel parses.
 //!
 //! Step 1 is pure and runs before anything is asked of the driver; steps 2
 //! to 4 are a sub-machine of their own, [`Arrival`], which hands the
-//! cascade the event of its first pass.
+//! cascade the event of its first pass with the room's lane held.
+//!
+//! A message that names no room is routed first (RFC §10.4): the identity
+//! its address resolves to is read once, then the kit's router is asked
+//! (`Route`). The lane of the room it answers is entered, and step 2 records
+//! the sender there under the room lock. A room no longer the message's by
+//! then (its binding names another sender, or it is no longer ACTIVE) has
+//! its lane left, and the router is asked once more; a second such answer,
+//! or none, gives the message a new room (gap G-055). The arrival never
+//! holds two lanes at once.
 
 use std::mem;
 
 use super::InboundError;
-use super::named_room::{Named, NamedRoom};
+use super::named_room::{Mode, Named, NamedRoom};
 use super::stamp;
 use crate::model::{EventId, InboundMessage, RoomContext, RoomEvent, RoomId};
 use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
+use crate::rules::routing::{self, RouteQuery, Sender};
 use crate::rules::{addresses, permissions};
+
+/// How many times a message is routed before it gets a new room: once, then
+/// once more when the room it was routed to is no longer its own by the
+/// lock (gap G-055).
+const ROUTES: u8 = 2;
 
 /// Where an inbound message goes (RFC §10.1 step 2).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,15 +37,9 @@ pub enum InboundTarget {
     /// The room the caller names: used when it exists, created with the id
     /// when it does not.
     Room(RoomId),
-}
-
-impl InboundTarget {
-    /// The room the message goes to.
-    pub(super) fn room_id(&self) -> &RoomId {
-        match self {
-            Self::Room(room_id) => room_id,
-        }
-    }
+    /// The room the kit's router finds for the message, or a new room when
+    /// it finds none (RFC §10.4).
+    Routed,
 }
 
 /// Step 1: the registered channel, and the message with its sender written
@@ -60,16 +69,37 @@ pub(super) fn resolve(
 /// Steps 2 to 4 for one message.
 #[derive(Debug)]
 pub(super) struct Arrival {
-    room_id: RoomId,
+    target: InboundTarget,
+    organization_id: Option<String>,
     message: Box<InboundMessage>,
     channel: Box<ChannelDeclaration>,
+    /// Who the message is from, as routing names them. The identity is read
+    /// once, for a routed message only.
+    sender: Sender,
+    /// How many times the router was asked.
+    routes: u8,
+    /// The room whose lane the arrival holds.
+    lane: Option<RoomId>,
     state: State,
 }
 
 #[derive(Debug)]
 enum State {
-    /// Step 2, and its read for step 3.
+    Start,
+    /// The sender's identity is read (RFC §14.1 `resolve_identity`).
+    Resolving(EffectId),
+    /// The router is asked (RFC §10.4).
+    Routing(EffectId),
+    /// The lane of step 2's room is entered.
+    Entering {
+        effect: EffectId,
+        step: Box<NamedRoom>,
+    },
+    /// Step 2, with the room's lane held.
     Naming(Box<NamedRoom>),
+    /// The lane of a room no longer the message's is left before the
+    /// message is routed again.
+    Leaving(EffectId),
     /// Step 4.
     Parsing {
         effect: EffectId,
@@ -78,35 +108,55 @@ enum State {
     Done,
 }
 
+/// What the arrival ends with: the message's event in its room, or why it
+/// fails.
+type Arrived = Progress<Result<RoomEvent, InboundError>>;
+
 impl Arrival {
     /// The arrival of `message`, resolved on `channel` (step 1), into the
     /// room `target` names, for a caller acting for `organization_id`.
     pub(super) fn new(
-        target: &InboundTarget,
+        target: InboundTarget,
         organization_id: Option<String>,
         channel: ChannelDeclaration,
         message: InboundMessage,
     ) -> Self {
-        let room_id = target.room_id().clone();
-        let channel = Box::new(channel);
-        let named = NamedRoom::new(
-            room_id.clone(),
-            organization_id,
-            channel.clone(),
-            message.sender_id.clone(),
+        let address = routing::routing_address(
+            channel.addressing(),
+            &message.sender_id,
+            &message.metadata,
+            channel.chat_key.as_deref(),
         );
         Self {
-            room_id,
+            target,
+            organization_id,
             message: Box::new(message),
-            channel,
-            state: State::Naming(Box::new(named)),
+            channel: Box::new(channel),
+            sender: Sender {
+                address,
+                identity_id: None,
+            },
+            routes: 0,
+            lane: None,
+            state: State::Start,
         }
     }
 
-    /// Starts step 2.
+    /// The room whose lane the arrival holds, which its caller leaves when
+    /// the arrival fails.
+    pub(super) fn lane(&self) -> Option<&RoomId> {
+        self.lane.as_ref()
+    }
+
+    /// Starts step 2: the named room's lane is entered, or the message is
+    /// routed.
     pub(super) fn start(&mut self, cx: &mut Cx<'_>) {
-        if let State::Naming(named) = &mut self.state {
-            named.start(cx);
+        if !matches!(self.state, State::Start) {
+            return;
+        }
+        match self.target.clone() {
+            InboundTarget::Room(room_id) => self.enter(cx, room_id, Mode::Named),
+            InboundTarget::Routed => self.resolve_identity(cx),
         }
     }
 
@@ -117,20 +167,33 @@ impl Arrival {
         cx: &mut Cx<'_>,
         effect: EffectId,
         outcome: Outcome,
-    ) -> Progress<Result<RoomEvent, InboundError>> {
+    ) -> Arrived {
         match mem::replace(&mut self.state, State::Done) {
-            State::Naming(mut named) => match named.accept(cx, effect, outcome) {
+            State::Resolving(expected) if expected == effect => self.on_resolved(cx, outcome),
+            State::Routing(expected) if expected == effect => self.on_routed(cx, outcome),
+            State::Entering {
+                effect: expected,
+                step,
+            } if expected == effect => self.on_entered(cx, step, outcome),
+            State::Naming(mut step) => match step.accept(cx, effect, outcome) {
                 Progress::Waiting => {
-                    self.state = State::Naming(named);
+                    self.state = State::Naming(step);
                     Progress::Waiting
                 }
-                Progress::Done(context) => self.on_named(cx, context),
+                Progress::Done(named) => self.on_named(cx, named),
             },
+            State::Leaving(expected) if expected == effect => self.on_left(cx, outcome),
             State::Parsing {
                 effect: expected,
                 id,
             } if expected == effect => Progress::Done(self.on_parsed(id, outcome)),
-            state @ (State::Parsing { .. } | State::Done) => {
+            state @ (State::Start
+            | State::Resolving(_)
+            | State::Routing(_)
+            | State::Entering { .. }
+            | State::Leaving(_)
+            | State::Parsing { .. }
+            | State::Done) => {
                 debug_assert!(false, "the arrival received {effect:?} in {state:?}");
                 self.state = state;
                 Progress::Waiting
@@ -138,22 +201,156 @@ impl Arrival {
         }
     }
 
-    /// Hands the room's context to the channel's `handle_inbound()` (RFC
-    /// §10.1 steps 3 and 4).
-    fn on_named(
+    /// Reads the identity the sender's address resolves to in the caller's
+    /// organization (RFC §10.4, §14.1, §17.2), then routes; a message with
+    /// no address is routed at once.
+    fn resolve_identity(&mut self, cx: &mut Cx<'_>) {
+        let Some(address) = self.sender.address.clone() else {
+            return self.route(cx);
+        };
+        self.state = State::Resolving(cx.io.issue(Request::ResolveIdentity {
+            channel_type: self.channel.channel_type,
+            address,
+            organization_id: self.organization_id.clone(),
+        }));
+    }
+
+    /// The identity is read; a store that fails it fails the message, with
+    /// nothing written.
+    fn on_resolved(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arrived {
+        match outcome.into_resolved() {
+            Ok(identity_id) => {
+                self.sender.identity_id = identity_id;
+                self.route(cx);
+                Progress::Waiting
+            }
+            Err(error) => Progress::Done(Err(InboundError::Store(error))),
+        }
+    }
+
+    /// Asks the kit's router which room the message belongs to (RFC §10.4).
+    fn route(&mut self, cx: &mut Cx<'_>) {
+        self.routes = self.routes.saturating_add(1);
+        let query = RouteQuery {
+            channel_id: self.message.channel_id.clone(),
+            channel_type: self.channel.channel_type,
+            sender_id: self.message.sender_id.clone(),
+            metadata: self.message.metadata.clone(),
+            organization_id: self.organization_id.clone(),
+            sender: self.sender.clone(),
+            form: self.channel.form(),
+        };
+        self.state = State::Routing(cx.io.issue(Request::Route {
+            query: Box::new(query),
+        }));
+    }
+
+    /// The router answered: its room, or a new one when it found none (RFC
+    /// §10.1 step 2). A router that fails fails the message, with nothing
+    /// written.
+    fn on_routed(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arrived {
+        match outcome.into_routed() {
+            Ok(Some(room_id)) => self.enter(cx, room_id, Mode::Routed),
+            Ok(None) => self.enter_fresh(cx),
+            Err(error) => return Progress::Done(Err(InboundError::Routing(error))),
+        }
+        Progress::Waiting
+    }
+
+    /// A new room for the message, with a fresh id (RFC §10.1 step 2).
+    fn enter_fresh(&mut self, cx: &mut Cx<'_>) {
+        let room_id = cx.env.new_room_id();
+        self.enter(cx, room_id, Mode::Fresh);
+    }
+
+    /// Enters the lane of the room step 2 works on, before anything is read
+    /// of it.
+    fn enter(&mut self, cx: &mut Cx<'_>, room_id: RoomId, mode: Mode) {
+        let step = Box::new(NamedRoom::new(
+            room_id.clone(),
+            mode,
+            self.organization_id.clone(),
+            self.channel.clone(),
+            self.sender.clone(),
+        ));
+        let effect = cx.io.issue(Request::EnterLane { room_id });
+        self.state = State::Entering { effect, step };
+    }
+
+    /// The room's lane is held: step 2 starts.
+    fn on_entered(
         &mut self,
         cx: &mut Cx<'_>,
-        named: Named,
-    ) -> Progress<Result<RoomEvent, InboundError>> {
-        let context = match named {
-            Ok(context) => context,
-            Err(error) => return Progress::Done(Err(error)),
-        };
+        mut step: Box<NamedRoom>,
+        outcome: Outcome,
+    ) -> Arrived {
+        if let Err(error) = outcome.into_entered() {
+            return Progress::Done(Err(InboundError::Lane(error)));
+        }
+        self.lane = Some(step.room_id().clone());
+        step.start(cx);
+        self.state = State::Naming(step);
+        Progress::Waiting
+    }
+
+    /// Step 2 is over: the room's context goes to the channel, or the room
+    /// is no longer the message's and its lane is left to route it again.
+    fn on_named(&mut self, cx: &mut Cx<'_>, named: Named) -> Arrived {
+        match named {
+            Named::Arrived(context) => self.parse(cx, *context),
+            Named::Failed(error) => Progress::Done(Err(error)),
+            Named::Rerouted => {
+                if let Some(room_id) = self.lane.clone() {
+                    tracing::debug!(
+                        target: "roomkit::core::inbound",
+                        room_id = %room_id,
+                        "the routed room is no longer the message's; it is routed once more"
+                    );
+                    self.state = State::Leaving(cx.io.issue(Request::LeaveLane { room_id }));
+                } else {
+                    self.route_again(cx);
+                }
+                Progress::Waiting
+            }
+        }
+    }
+
+    /// The lane is left. A failed leave changes nothing the call decided:
+    /// it is logged, as at the call's end, and the message is routed all the
+    /// same.
+    fn on_left(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arrived {
+        if let (Err(error), Some(room_id)) = (outcome.into_left(), &self.lane) {
+            tracing::warn!(
+                target: "roomkit::core::inbound",
+                room_id = %room_id,
+                error_type = %error.error_type,
+                message = %error.message,
+                "leaving the room's delivery lane failed; the message is routed all the same"
+            );
+        }
+        self.lane = None;
+        self.route_again(cx);
+        Progress::Waiting
+    }
+
+    /// Routes the message once more, or gives it a new room once it was
+    /// (gap G-055).
+    fn route_again(&mut self, cx: &mut Cx<'_>) {
+        if self.routes < ROUTES {
+            self.route(cx);
+        } else {
+            self.enter_fresh(cx);
+        }
+    }
+
+    /// Hands the room's context to the channel's `handle_inbound()` (RFC
+    /// §10.1 steps 3 and 4).
+    fn parse(&mut self, cx: &mut Cx<'_>, context: RoomContext) -> Arrived {
         let id = cx.env.new_event_id();
         let effect = cx.io.issue(Request::HandleInbound {
             channel_id: self.message.channel_id.clone(),
             message: (*self.message).clone(),
-            context: self.receiver_context(*context),
+            context: self.receiver_context(context),
             id: id.clone(),
         });
         self.state = State::Parsing { effect, id };
@@ -177,7 +374,8 @@ impl Arrival {
         })
     }
 
-    /// Stamps the event the channel parsed (RFC §10.1 step 4).
+    /// Stamps the event the channel parsed (RFC §10.1 step 4), in the room
+    /// whose lane the arrival holds.
     fn on_parsed(&self, id: EventId, outcome: Outcome) -> Result<RoomEvent, InboundError> {
         let parsed = outcome
             .into_parsed()
@@ -186,7 +384,9 @@ impl Arrival {
                 error,
             })?;
         let mut event = stamp::stamp_trigger(*parsed, &self.message, &self.channel, id);
-        event.room_id = self.room_id.clone();
+        if let Some(room_id) = &self.lane {
+            event.room_id = room_id.clone();
+        }
         Ok(event)
     }
 }

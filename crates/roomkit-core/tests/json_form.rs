@@ -18,7 +18,7 @@ use roomkit_core::model::{
     ChannelDirection, ChannelId, ChannelMediaType, ChannelOutput, ChannelType, Confidence,
     Consumption, ConsumptionState, DeliveryError, DeliveryResult, DeliveryStatus, EventContent,
     EventDirection, EventId, EventSource, EventStatus, EventType, HookResult, IdentificationStatus,
-    InboundMessage, InjectedEvent, Metadata, Observation, ObservationId, Participant,
+    Identity, InboundMessage, InjectedEvent, Metadata, Observation, ObservationId, Participant,
     ParticipantId, ParticipantRole, ParticipantStatus, Room, RoomEvent, RoomId, RoomStatus,
     RoomTimers, Task, TaskId, TaskStatus, Timestamp, VerificationStatus, Visibility,
 };
@@ -291,6 +291,31 @@ fn participant() {
             "resolved_at": null,
             "resolved_by": "auto",
             "joined_at": "2026-10-22T14:00:00Z",
+            "metadata": {},
+        }),
+    );
+}
+
+/// RFC §5.6: the addresses an identity uses are keyed by channel type.
+#[test]
+fn identity() {
+    let mut identity = Identity::new("id_jean".parse().unwrap(), Some("bank".to_owned()));
+    identity.display_name = Some("Jean Tremblay".to_owned());
+    identity.link(ChannelType::Sms, "+15551234567");
+    identity.link(ChannelType::Email, "jean@example.com");
+    identity.external_id = Some("crm_42".to_owned());
+
+    assert_json_form(
+        &identity,
+        &json!({
+            "id": "id_jean",
+            "organization_id": "bank",
+            "display_name": "Jean Tremblay",
+            "channel_addresses": {
+                "sms": ["+15551234567"],
+                "email": ["jean@example.com"],
+            },
+            "external_id": "crm_42",
             "metadata": {},
         }),
     );

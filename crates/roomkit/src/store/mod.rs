@@ -9,8 +9,9 @@ mod memory;
 use std::future::Future;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ErrorRecord, Observation, Participant, ParticipantId, Room,
-    RoomContext, RoomEvent, RoomId, RoomStatus, RoomUpdates, Task,
+    ChannelBinding, ChannelId, ChannelType, ErrorRecord, Identity, IdentityId, Observation,
+    Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomStatus, RoomUpdates,
+    Task,
 };
 use roomkit_core::ops::RoomCounters;
 use roomkit_core::rules::timers;
@@ -44,6 +45,23 @@ pub enum StoreError {
         /// The participant.
         participant_id: ParticipantId,
     },
+    /// An identity with the id exists already.
+    #[error("identity {0} exists already")]
+    IdentityExists(IdentityId),
+    /// No identity of the organization has the id.
+    #[error("no identity {0} in the organization")]
+    IdentityNotFound(IdentityId),
+    /// Another identity of the organization uses the address on channels of
+    /// the type already (RFC §14.1, gap G-060).
+    #[error("the {channel_type:?} address {address} belongs to identity {identity_id} already")]
+    AddressLinked {
+        /// The channel type.
+        channel_type: ChannelType,
+        /// The address.
+        address: String,
+        /// The identity that uses it.
+        identity_id: IdentityId,
+    },
     /// The room's timeline holds the index already (RFC §8.1): another
     /// writer committed first.
     #[error("room {room_id} holds index {index} already")]
@@ -66,6 +84,9 @@ impl StoreError {
             Self::RoomNotFound(_) => "RoomNotFound",
             Self::ParticipantExists { .. } => "ParticipantExists",
             Self::ParticipantNotFound { .. } => "ParticipantNotFound",
+            Self::IdentityExists(_) => "IdentityExists",
+            Self::IdentityNotFound(_) => "IdentityNotFound",
+            Self::AddressLinked { .. } => "AddressLinked",
             Self::IndexTaken { .. } => "IndexTaken",
             Self::Unavailable(_) => "StoreUnavailable",
         };
@@ -84,16 +105,35 @@ pub struct RoomFilter {
     /// Only the rooms with a timer that can still fall due: an ACTIVE room
     /// with an inactivity timer, a PAUSED room with a close timer (RFC §5.1).
     pub timers_armed: bool,
+    /// Only the rooms this channel reaches: those binding it, and those
+    /// holding a participant reached through it (RFC §5.5 `connected_via`),
+    /// the rooms the default router reads (RFC §10.4).
+    pub channel_id: Option<ChannelId>,
 }
 
 impl RoomFilter {
-    /// Whether `room` passes the filter.
-    pub fn matches(&self, room: &Room) -> bool {
+    /// Whether the room `room`, with its `bindings` and `participants`,
+    /// passes the filter.
+    pub fn matches(
+        &self,
+        room: &Room,
+        bindings: &[ChannelBinding],
+        participants: &[Participant],
+    ) -> bool {
+        let reached = self.channel_id.as_ref().is_none_or(|channel_id| {
+            bindings
+                .iter()
+                .any(|binding| &binding.channel_id == channel_id)
+                || participants
+                    .iter()
+                    .any(|participant| participant.connected_via.contains(channel_id))
+        });
         self.organization_id
             .as_ref()
             .is_none_or(|organization| room.organization_id.as_ref() == Some(organization))
             && self.status.is_none_or(|status| room.status == status)
             && (!self.timers_armed || timers::armed(room))
+            && reached
     }
 }
 
@@ -131,6 +171,32 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         filter: &RoomFilter,
     ) -> impl Future<Output = Result<Vec<Room>, StoreError>> + Send;
+
+    /// The newest room `filter` admits whose binding of `channel_id` names
+    /// `participant_id` as its correspondent (RFC §14.1
+    /// `find_room_id_by_binding`, the filter carrying its status and the
+    /// caller's organization, gap G-058). Ids compare as stored. Rooms are
+    /// ordered as the default router orders them
+    /// ([`rules::routing::recency`](roomkit_core::rules::routing::recency)):
+    /// by creation, then by id.
+    fn find_room_id_by_binding(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &ParticipantId,
+        filter: &RoomFilter,
+    ) -> impl Future<Output = Result<Option<RoomId>, StoreError>> + Send;
+
+    /// The newest room `filter` admits holding a participant reached through
+    /// `channel_id` whose id is `participant_id`, or whose identity's is
+    /// (RFC §14.1 `find_room_id_by_participant`, given the channel by gap
+    /// G-058). Ids compare as stored; rooms are ordered as in
+    /// [`find_room_id_by_binding`](Self::find_room_id_by_binding).
+    fn find_room_id_by_participant(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &ParticipantId,
+        filter: &RoomFilter,
+    ) -> impl Future<Output = Result<Option<RoomId>, StoreError>> + Send;
 
     /// Stores a binding, replacing the room's binding of the same channel.
     fn store_binding(
@@ -200,6 +266,47 @@ pub trait ConversationStore: Send + Sync + 'static {
         &self,
         room_id: &RoomId,
     ) -> impl Future<Output = Result<Vec<Participant>, StoreError>> + Send;
+
+    /// Stores a new identity (RFC §14.1 `create_identity`). An id taken is
+    /// refused with [`StoreError::IdentityExists`], and an address another
+    /// identity of its organization uses with [`StoreError::AddressLinked`]
+    /// (gap G-060).
+    fn create_identity(
+        &self,
+        identity: Identity,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The identity `identity_id`, if any (RFC §14.1 `get_identity`).
+    fn get_identity(
+        &self,
+        identity_id: &IdentityId,
+    ) -> impl Future<Output = Result<Option<Identity>, StoreError>> + Send;
+
+    /// The identity of `organization_id` that uses `address` on channels of
+    /// `channel_type`, if any (RFC §14.1 `resolve_identity`, §17.2). An
+    /// organization of `None` resolves the identities of no organization
+    /// (gap G-060). Addresses compare as stored: link them in their
+    /// channel's form, a phone number in E.164 (RFC §5.7).
+    fn resolve_identity(
+        &self,
+        channel_type: ChannelType,
+        address: &str,
+        organization_id: Option<&str>,
+    ) -> impl Future<Output = Result<Option<Identity>, StoreError>> + Send;
+
+    /// Links `address` on channels of `channel_type` to the identity
+    /// `identity_id` of `organization_id` (RFC §14.1 `link_address`). An
+    /// identity of another organization is refused with
+    /// [`StoreError::IdentityNotFound`], and an address another identity of
+    /// the organization uses with [`StoreError::AddressLinked`]; linking an
+    /// address the identity uses changes nothing.
+    fn link_address(
+        &self,
+        identity_id: &IdentityId,
+        channel_type: ChannelType,
+        address: &str,
+        organization_id: Option<&str>,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// The event the room committed from `channel_id` with idempotency
     /// `key` (RFC §13.4, gap G-023).

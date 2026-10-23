@@ -1,10 +1,12 @@
 //! The inbound pipeline (RFC §10.1), with the broadcast of every event it
 //! commits (RFC §10.2).
 //!
-//! [`Inbound`] runs one message into a room the caller names, and the whole
-//! cascade it starts. The message's arrival comes first (steps 1 to 4): its
-//! sender in the channel's form, the room it names, created or attached to
-//! when it must be, the room's context and the event the channel parses.
+//! [`Inbound`] runs one message into a room the caller names, or the room
+//! the kit's router finds for it (RFC §10.4), and the whole cascade it
+//! starts. The message's arrival comes first (steps 1 to 4): its sender in
+//! the channel's form, its room, named or routed, created, attached to or
+//! recorded on when it must be, the room's context and the event the
+//! channel parses.
 //! Then the cascade: the trigger's pass, its delivery set, the responses
 //! that re-enter as passes of their own, the events hooks inject, and the
 //! records the room stores in place of responses it refuses.
@@ -14,9 +16,8 @@
 //! work, so one event's delivery set completes before the next one's
 //! begins, and the next call into the room waits for it (RFC §10.2).
 //!
-//! Not covered yet, and refused rather than half done: routing a message to a
-//! room the caller does not name (RFC §10.4), instructions (RFC §10.1.1),
-//! edits and deletes (RFC §10.3), off-lock hooks (RFC §9.5.1).
+//! Not covered yet, and refused rather than half done: instructions (RFC
+//! §10.1.1), edits and deletes (RFC §10.3), off-lock hooks (RFC §9.5.1).
 
 mod arrival;
 mod delivery;
@@ -71,11 +72,12 @@ pub struct Inbound {
 }
 
 impl Inbound {
-    /// The pipeline for `message`, into the room `target` names, for a caller
-    /// acting for `organization_id` (RFC §17.2): a room of another
-    /// organization fails the message, and a room the call creates is that
-    /// organization's. A call that names no organization reads rooms
-    /// unscoped (gap G-051).
+    /// The pipeline for `message`, into the room `target` names or the room
+    /// it is routed to, for a caller acting for `organization_id` (RFC
+    /// §17.2): a room of another organization fails the message, a room the
+    /// call creates is that organization's, and routing reads that
+    /// organization's rooms and identities only. A call that names no
+    /// organization reads rooms unscoped (gap G-051).
     pub fn new(
         config: Arc<KitConfig>,
         target: InboundTarget,
@@ -87,7 +89,7 @@ impl Inbound {
             config,
             io: Io::new(),
             machine: Machine {
-                room_id: target.room_id().clone(),
+                room_id: None,
                 target,
                 organization_id,
                 holds_lane: false,
@@ -133,7 +135,8 @@ impl Operation for Inbound {
 
 #[derive(Debug)]
 struct Machine {
-    room_id: RoomId,
+    /// The message's room, once it arrived there.
+    room_id: Option<RoomId>,
     target: InboundTarget,
     /// The organization the caller acts for (RFC §17.2).
     organization_id: Option<String>,
@@ -161,12 +164,7 @@ struct Machine {
 #[derive(Debug)]
 enum Stage {
     Start(Box<InboundMessage>),
-    /// Step 1 is done; the room's lane is being entered.
-    EnteringLane {
-        effect: EffectId,
-        arrival: Box<Arrival>,
-    },
-    /// Steps 2 to 4.
+    /// Steps 2 to 4, which enter the room's lane.
     Arriving(Box<Arrival>),
     Cascade,
     /// Step 15's writes, each outstanding until answered.
@@ -194,8 +192,8 @@ impl Machine {
     }
 
     /// Resolves the channel and the sender's form, and refuses what this
-    /// step does not provide (RFC §10.1 step 1), then enters the room's
-    /// lane: the room is known.
+    /// step does not provide (RFC §10.1 step 1), then starts the arrival,
+    /// which enters the room's lane once the room is known.
     fn begin(&mut self, cx: &mut Cx<'_>) {
         let Stage::Start(message) = std::mem::replace(&mut self.stage, Stage::Done) else {
             return;
@@ -207,22 +205,18 @@ impl Machine {
         if let Err(error) = check_supported(&message) {
             return self.end(cx, Err(error));
         }
-        let arrival = Arrival::new(&self.target, self.organization_id.clone(), channel, message);
-        let effect = cx.io.issue(Request::EnterLane {
-            room_id: self.room_id.clone(),
-        });
-        self.stage = Stage::EnteringLane {
-            effect,
-            arrival: Box::new(arrival),
-        };
+        let mut arrival = Box::new(Arrival::new(
+            self.target.clone(),
+            self.organization_id.clone(),
+            channel,
+            message,
+        ));
+        arrival.start(cx);
+        self.stage = Stage::Arriving(arrival);
     }
 
     fn dispatch(&mut self, cx: &mut Cx<'_>, effect: EffectId, outcome: Outcome) {
         match std::mem::replace(&mut self.stage, Stage::Done) {
-            Stage::EnteringLane {
-                effect: expected,
-                arrival,
-            } if expected == effect => self.on_lane(cx, arrival, outcome),
             Stage::Arriving(arrival) => self.on_arrival(cx, arrival, effect, outcome),
             Stage::Persisting {
                 side_effects,
@@ -236,29 +230,15 @@ impl Machine {
                 effect: expected,
                 outcome: result,
             } if expected == effect => self.on_left(*result, outcome),
-            stage @ (Stage::Start(_)
-            | Stage::EnteringLane { .. }
-            | Stage::LeavingLane { .. }
-            | Stage::Done) => {
+            stage @ (Stage::Start(_) | Stage::LeavingLane { .. } | Stage::Done) => {
                 debug_assert!(false, "inbound received {effect:?} in {stage:?}");
                 self.stage = stage;
             }
         }
     }
 
-    /// The room's lane is held: the message arrives (RFC §10.1 steps 2 to
-    /// 4).
-    fn on_lane(&mut self, cx: &mut Cx<'_>, mut arrival: Box<Arrival>, outcome: Outcome) {
-        if let Err(error) = outcome.into_entered() {
-            return self.end(cx, Err(InboundError::Lane(error)));
-        }
-        self.holds_lane = true;
-        arrival.start(cx);
-        self.stage = Stage::Arriving(arrival);
-    }
-
     /// Takes an answer of the arrival; once it hands the event, the cascade
-    /// starts with its pass.
+    /// starts with its pass, in the room whose lane the arrival entered.
     fn on_arrival(
         &mut self,
         cx: &mut Cx<'_>,
@@ -269,13 +249,19 @@ impl Machine {
         match arrival.accept(cx, effect, outcome) {
             Progress::Waiting => self.stage = Stage::Arriving(arrival),
             Progress::Done(Ok(event)) => {
+                self.room_id = Some(event.room_id.clone());
+                self.holds_lane = arrival.lane().is_some();
                 self.lane.push_back(Job::Pass(
                     Box::new(CommitPass::new(PassOrigin::Trigger, event)),
                     PassOrigin::Trigger,
                 ));
                 self.stage = Stage::Cascade;
             }
-            Progress::Done(Err(error)) => self.end(cx, Err(error)),
+            Progress::Done(Err(error)) => {
+                self.room_id = arrival.lane().cloned();
+                self.holds_lane = self.room_id.is_some();
+                self.end(cx, Err(error));
+            }
         }
     }
 
@@ -527,9 +513,10 @@ impl Machine {
         if self.tasks.is_empty() && self.observations.is_empty() {
             return None;
         }
+        let room_id = self.room_id.clone()?;
         let tasks = std::mem::take(&mut self.tasks);
         let effect = cx.io.issue(Request::PersistSideEffects {
-            room_id: self.room_id.clone(),
+            room_id,
             tasks: tasks.clone(),
             observations: std::mem::take(&mut self.observations),
         });
@@ -541,8 +528,9 @@ impl Machine {
         if self.metadata_updates.is_empty() {
             return None;
         }
+        let room_id = self.room_id.clone()?;
         Some(cx.io.issue(Request::UpdateRoom {
-            room_id: self.room_id.clone(),
+            room_id,
             updates: RoomUpdates {
                 updated_at: Some(cx.env.now()),
                 metadata: std::mem::take(&mut self.metadata_updates),
@@ -625,10 +613,13 @@ impl Machine {
     fn abort(&mut self, cx: &mut Cx<'_>, abort: Abort) {
         self.lane.clear();
         if !self.committed {
-            let error = match abort {
-                Abort::RoomNotFound => InboundError::RoomNotFound(self.room_id.clone()),
-                Abort::Store(error) => InboundError::Store(error),
-                Abort::Lock(error) => InboundError::Lock(error),
+            let error = match (abort, self.room_id.clone()) {
+                (Abort::RoomNotFound, Some(room_id)) => InboundError::RoomNotFound(room_id),
+                (Abort::RoomNotFound, None) => {
+                    InboundError::Store(ErrorRecord::new("RoomNotFound", "the room disappeared"))
+                }
+                (Abort::Store(error), _) => InboundError::Store(error),
+                (Abort::Lock(error), _) => InboundError::Lock(error),
             };
             return self.end(cx, Err(error));
         }
@@ -643,14 +634,13 @@ impl Machine {
     fn end(&mut self, cx: &mut Cx<'_>, outcome: Result<InboundResult, InboundError>) {
         self.lane.clear();
         self.active = None;
-        if !self.holds_lane {
+        let held = self.room_id.clone().filter(|_| self.holds_lane);
+        let Some(room_id) = held else {
             self.stage = Stage::Done;
             self.outcome = Some(outcome);
             return;
-        }
-        let effect = cx.io.issue(Request::LeaveLane {
-            room_id: self.room_id.clone(),
-        });
+        };
+        let effect = cx.io.issue(Request::LeaveLane { room_id });
         self.stage = Stage::LeavingLane {
             effect,
             outcome: Box::new(outcome),
@@ -668,7 +658,7 @@ impl Machine {
             (Err(error), outcome) => {
                 tracing::warn!(
                     target: "roomkit::core::inbound",
-                    room_id = %self.room_id,
+                    room_id = ?self.room_id,
                     error_type = %error.error_type,
                     message = %error.message,
                     "leaving the room's delivery lane failed; what the call decided stands"

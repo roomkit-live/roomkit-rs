@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use crate::model::{EventId, ObservationId, Timestamp};
+use crate::model::{EventId, ObservationId, RoomId, Timestamp};
 
 /// The clock and the identifiers an operation uses (docs/architecture.md,
 /// "Environment").
@@ -20,15 +20,21 @@ pub trait Environment {
 
     /// A new, unique observation id.
     fn new_observation_id(&mut self) -> ObservationId;
+
+    /// A new, unique room id, for the room the framework creates for a
+    /// message no room was found for (RFC §10.1 step 2, §10.4).
+    fn new_room_id(&mut self) -> RoomId;
 }
 
 /// A deterministic environment, for tests and examples: a clock that moves
-/// only when told to, and ids numbered in order (`evt_1`, `evt_2`, `obs_1`).
+/// only when told to, and ids numbered in order (`evt_1`, `evt_2`, `obs_1`,
+/// `new_room_1`).
 #[derive(Clone, Debug)]
 pub struct SequentialEnvironment {
     now: Timestamp,
     events: u64,
     observations: u64,
+    rooms: u64,
 }
 
 impl SequentialEnvironment {
@@ -38,6 +44,7 @@ impl SequentialEnvironment {
             now,
             events: 0,
             observations: 0,
+            rooms: 0,
         }
     }
 
@@ -70,6 +77,11 @@ impl Environment for SequentialEnvironment {
         self.observations = self.observations.saturating_add(1);
         ObservationId::generated(format!("obs_{}", self.observations))
     }
+
+    fn new_room_id(&mut self) -> RoomId {
+        self.rooms = self.rooms.saturating_add(1);
+        RoomId::generated(format!("new_room_{}", self.rooms))
+    }
 }
 
 #[cfg(test)]
@@ -83,6 +95,13 @@ mod tests {
         let mut environment = SequentialEnvironment::default();
         let ids = [environment.new_event_id(), environment.new_event_id()];
         assert_eq!(ids.map(|id| id.to_string()), ["evt_1", "evt_2"]);
+    }
+
+    #[test]
+    fn room_ids_are_numbered_in_order() {
+        let mut environment = SequentialEnvironment::default();
+        let ids = [environment.new_room_id(), environment.new_room_id()];
+        assert_eq!(ids.map(|id| id.to_string()), ["new_room_1", "new_room_2"]);
     }
 
     #[test]

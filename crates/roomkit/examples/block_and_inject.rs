@@ -98,7 +98,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "+15551234567",
         EventContent::text("Mon NAS est 123-456-789"),
     );
-    let result = kit.process_inbound(&room, message).await?;
+    let result = kit.process_inbound(message, Some(&room)).await?;
 
     let timeline = support::timeline(&kit, &room).await?;
     support::print_timeline(&timeline);

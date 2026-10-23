@@ -7,8 +7,13 @@
 //! inbound operation it checks that the room's lane is held whenever the
 //! room's lock is taken, an event committed or a channel called, and that
 //! the lock is free while awaited observers run, so that they may take it.
+//! An inbound operation never holds two lanes at once, the lane of a room
+//! it was routed to included.
+//!
+//! The router is scripted: each `Route` takes the next answer of `routes`,
+//! a new room once they are spent.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,8 +21,8 @@ use std::time::Duration;
 use roomkit_core::model::{
     Access, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelMediaType, ChannelOutput, ChannelType, ErrorRecord, EventContent, EventDirection,
-    EventId, EventSource, EventStatus, EventType, InboundMessage, Observation, Participant, Room,
-    RoomContext, RoomEvent, RoomId, RoomStatus, Task, Timestamp,
+    EventId, EventSource, EventStatus, EventType, Identity, InboundMessage, Observation,
+    Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomStatus, Task, Timestamp,
 };
 use roomkit_core::ops::{
     ChannelDeclaration, Environment, FrameworkEvent, Inbound, InboundError, InboundResult,
@@ -27,6 +32,7 @@ use roomkit_core::ops::{
 use roomkit_core::rules::attachment;
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
+use roomkit_core::rules::routing::RouteQuery;
 use roomkit_core::rules::transcoding::text_of;
 
 /// What a channel answers to `on_event()`.
@@ -48,6 +54,14 @@ pub(crate) enum HookChange {
 struct Channel {
     on_event: OnEvent,
     deliver: Deliver,
+}
+
+/// What the driver runs: an inbound operation holds a lane for what it
+/// does in a room, another operation holds none.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Running {
+    Inbound,
+    Other,
 }
 
 /// A room of the store other than `room_1`.
@@ -99,8 +113,20 @@ pub(crate) struct Sim {
     others: BTreeMap<RoomId, StoredRoom>,
     locks_held: BTreeSet<RoomId>,
     lanes_held: BTreeSet<RoomId>,
-    /// The room an inbound operation running must hold the lane of.
-    inbound_room: Option<RoomId>,
+    /// What runs: an inbound operation must hold the lane of every room it
+    /// acts in.
+    running: Running,
+    /// The identities the store resolves addresses to (RFC §14.1).
+    pub(crate) identities: Vec<Identity>,
+    /// The router's answers, in order: a room, none, or a failure. Once
+    /// they are spent, the router finds no room.
+    pub(crate) routes: VecDeque<Result<Option<RoomId>, ErrorRecord>>,
+    /// What the router was asked, in order.
+    pub(crate) route_queries: Vec<RouteQuery>,
+    /// A sender another message has recorded on a room's binding of a
+    /// channel by the time the room's lock is first taken: `(room, channel,
+    /// sender)`.
+    pub(crate) recorded_meanwhile: Option<(RoomId, ChannelId, ParticipantId)>,
     /// Whether the store finds `room_1`.
     pub(crate) room_exists: bool,
     /// What the hooks change in the room while they run.
@@ -127,7 +153,9 @@ pub(crate) struct Sim {
     pub(crate) delivery_duration: Duration,
     /// The effect that fails, named by the start of its trace line: a store
     /// write (`update room`, `delete binding sms`, `store room`), a room
-    /// lock (`lock room_1`) or awaited observers (`await on_room_created`).
+    /// lock (`lock room_1`), a room's lane (`enter lane room_1`), the
+    /// router (`route sms`), an identity read (`resolve_identity`) or
+    /// awaited observers (`await on_room_created`).
     /// It is answered `Failed` and changes nothing.
     pub(crate) failing_effect: Option<&'static str>,
 }
@@ -177,7 +205,11 @@ impl Sim {
             others: BTreeMap::new(),
             locks_held: BTreeSet::new(),
             lanes_held: BTreeSet::new(),
-            inbound_room: None,
+            running: Running::Other,
+            identities: Vec::new(),
+            routes: VecDeque::new(),
+            route_queries: Vec::new(),
+            recorded_meanwhile: None,
             room_exists: true,
             hooks_change: None,
             parse_contexts: Vec::new(),
@@ -381,20 +413,45 @@ impl Sim {
         organization: Option<&str>,
         message: InboundMessage,
     ) -> Result<InboundResult, InboundError> {
+        let target = InboundTarget::Room(RoomId::new(room).unwrap());
+        self.inbound(target, organization, message)
+    }
+
+    /// Runs `message`, which names no room, through the inbound operation:
+    /// the scripted router is asked, for a caller acting for `organization`
+    /// (RFC §10.4).
+    pub(crate) fn route(
+        &mut self,
+        organization: Option<&str>,
+        message: InboundMessage,
+    ) -> Result<InboundResult, InboundError> {
+        self.inbound(InboundTarget::Routed, organization, message)
+    }
+
+    fn inbound(
+        &mut self,
+        target: InboundTarget,
+        organization: Option<&str>,
+        message: InboundMessage,
+    ) -> Result<InboundResult, InboundError> {
         let config = Arc::new(self.config.clone());
-        let room_id = RoomId::new(room).unwrap();
-        let target = InboundTarget::Room(room_id.clone());
         let organization = organization.map(str::to_owned);
-        self.inbound_room = Some(room_id);
+        self.running = Running::Inbound;
         let result = self.run(Inbound::new(config, target, organization, message));
-        self.inbound_room = None;
+        self.running = Running::Other;
         result
+    }
+
+    /// Scripts the router's next answer: `room`, or none.
+    pub(crate) fn routes_to(&mut self, room: Option<&str>) {
+        self.routes
+            .push_back(Ok(room.map(|room| RoomId::new(room).unwrap())));
     }
 
     /// Checks that an inbound operation holds the lane of `room_id` before
     /// it does `what` there: the lane comes before the lock (RFC §10.2).
     fn assert_in_lane(&self, room_id: &RoomId, what: &str) {
-        if self.inbound_room.as_ref() == Some(room_id) {
+        if self.running == Running::Inbound {
             assert!(
                 self.lanes_held.contains(room_id),
                 "an inbound operation {what} outside the room's lane"
@@ -470,6 +527,15 @@ impl Sim {
         self.others
             .get(&RoomId::new(id).unwrap())
             .map(|stored| stored.bindings.clone())
+            .unwrap_or_default()
+    }
+
+    /// The timeline of the room `id` the store holds apart from `room_1`, as
+    /// [`timeline_lines`](Self::timeline_lines) writes it.
+    pub(crate) fn other_timeline_lines(&self, id: &str) -> Vec<String> {
+        self.others
+            .get(&RoomId::new(id).unwrap())
+            .map(|stored| stored.timeline.iter().map(describe).collect())
             .unwrap_or_default()
     }
 
@@ -586,6 +652,12 @@ impl Sim {
                 self.awaited_contexts.push(*context);
                 self.execute_observers(trigger, &hooks, &event)
             }
+            Request::ResolveIdentity {
+                channel_type,
+                address,
+                organization_id,
+            } => self.resolve_identity(channel_type, &address, organization_id.as_deref()),
+            Request::Route { query } => self.execute_route(*query),
             Request::LoadContext { .. }
             | Request::LoadBindings { .. }
             | Request::FindByIdempotencyKey { .. }
@@ -598,6 +670,42 @@ impl Sim {
                 let room = store_room(&request).clone();
                 self.on_room(&room, |sim| sim.execute_store(request))
             }
+        }
+    }
+
+    /// The identity of `organization` that uses `address` on channels of
+    /// `channel_type`, if any.
+    fn resolve_identity(
+        &mut self,
+        channel_type: ChannelType,
+        address: &str,
+        organization: Option<&str>,
+    ) -> Outcome {
+        self.trace.push(format!(
+            "resolve_identity {} {address}",
+            type_name(channel_type)
+        ));
+        let identity = self.identities.iter().find(|identity| {
+            identity.organization_id.as_deref() == organization
+                && identity.uses(channel_type, address)
+        });
+        Outcome::Resolved(identity.map(|identity| identity.id.clone()))
+    }
+
+    /// The scripted router's next answer; no room once they are spent. The
+    /// router reads no lock and holds no lane (RFC §10.4).
+    fn execute_route(&mut self, query: RouteQuery) -> Outcome {
+        self.trace
+            .push(format!("route {} {}", query.channel_id, query.sender_id));
+        assert!(
+            self.locks_held.is_empty() && self.lanes_held.is_empty(),
+            "the router was asked holding a lock or a lane"
+        );
+        self.route_queries.push(query);
+        match self.routes.pop_front() {
+            Some(Ok(room)) => Outcome::Routed(room),
+            Some(Err(error)) => Outcome::Failed(error),
+            None => Outcome::Routed(None),
         }
     }
 
@@ -680,8 +788,18 @@ impl Sim {
                 format!("await {}", trigger_name(*trigger)),
                 ErrorRecord::new("HooksUnavailable", "the observers could not be run"),
             ),
+            Request::ResolveIdentity { address, .. } => {
+                (format!("resolve_identity {address}"), store_down())
+            }
+            Request::Route { query } => (
+                format!("route {}", query.channel_id),
+                ErrorRecord::new("RouterError", "the CRM is unreachable"),
+            ),
+            Request::EnterLane { room_id } => (
+                format!("enter lane {room_id}"),
+                ErrorRecord::new("LaneUnavailable", "the lane manager is down"),
+            ),
             Request::ReleaseLock { .. }
-            | Request::EnterLane { .. }
             | Request::LeaveLane { .. }
             | Request::LoadContext { .. }
             | Request::LoadBindings { .. }
@@ -699,15 +817,41 @@ impl Sim {
         Some(Outcome::Failed(error))
     }
 
-    /// Takes a room's lock, which is never taken twice.
+    /// Takes a room's lock, which is never taken twice. A sender recorded
+    /// meanwhile on the room is recorded just before the lock is granted, as
+    /// a concurrent message that held it first would have.
     fn acquire(&mut self, room_id: RoomId) -> Outcome {
         self.trace.push(format!("lock {room_id}"));
         self.assert_in_lane(&room_id, "took the room lock");
+        self.record_meanwhile(&room_id);
         assert!(
             self.locks_held.insert(room_id),
             "the room lock was taken twice"
         );
         Outcome::Locked
+    }
+
+    /// Records the sender `recorded_meanwhile` names on its room's binding,
+    /// once.
+    fn record_meanwhile(&mut self, room_id: &RoomId) {
+        if self
+            .recorded_meanwhile
+            .as_ref()
+            .is_none_or(|(room, _, _)| room != room_id)
+        {
+            return;
+        }
+        let Some((room, channel_id, sender)) = self.recorded_meanwhile.take() else {
+            return;
+        };
+        self.on_room(&room, |sim| {
+            let binding = sim
+                .bindings
+                .iter_mut()
+                .find(|binding| binding.channel_id == channel_id)
+                .unwrap();
+            binding.participant_id = Some(sender);
+        });
     }
 
     /// Releases a room's lock, which must be held.
@@ -723,9 +867,14 @@ impl Sim {
         Outcome::Released
     }
 
-    /// Enters a room's delivery lane, which is never entered twice.
+    /// Enters a room's delivery lane, which is never entered twice; an
+    /// inbound operation holds one lane at a time.
     fn enter_lane(&mut self, room_id: RoomId) -> Outcome {
         self.trace.push(format!("enter lane {room_id}"));
+        assert!(
+            self.running == Running::Other || self.lanes_held.is_empty(),
+            "an inbound operation entered a second lane"
+        );
         assert!(
             self.lanes_held.insert(room_id),
             "the room's lane was entered twice"
@@ -855,7 +1004,9 @@ impl Sim {
             | Request::OnEvent { .. }
             | Request::Deliver { .. }
             | Request::RunHook { .. }
-            | Request::RunObservers { .. } => panic!("not a store request"),
+            | Request::RunObservers { .. }
+            | Request::ResolveIdentity { .. }
+            | Request::Route { .. } => panic!("not a store request"),
         }
     }
 
@@ -976,8 +1127,19 @@ fn store_room(request: &Request) -> &RoomId {
         | Request::OnEvent { .. }
         | Request::Deliver { .. }
         | Request::RunHook { .. }
-        | Request::RunObservers { .. } => panic!("not a store request"),
+        | Request::RunObservers { .. }
+        | Request::ResolveIdentity { .. }
+        | Request::Route { .. } => panic!("not a store request"),
     }
+}
+
+/// A channel type's RFC name, read from its JSON form.
+fn type_name(channel_type: ChannelType) -> String {
+    serde_json::to_value(channel_type)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned()
 }
 
 /// A channel's answer as the driver completes its call with it.

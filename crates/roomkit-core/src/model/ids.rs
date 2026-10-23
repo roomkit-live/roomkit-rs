@@ -151,6 +151,20 @@ impl ChannelId {
     }
 }
 
+impl RoomId {
+    /// The room id written from a random 128-bit value, as the 32 hex digits
+    /// of a UUID's simple form. It cannot fail: the text is never empty.
+    pub fn from_u128(value: u128) -> Self {
+        Self(format!("{value:032x}"))
+    }
+
+    /// A room id the crate generated and knows to be valid.
+    pub(crate) fn generated(value: String) -> Self {
+        debug_assert!(!value.is_empty(), "generated an empty room id");
+        Self(value)
+    }
+}
+
 impl EventId {
     /// The event id written from a random 128-bit value, as the 32 hex digits
     /// of a UUID's simple form. It cannot fail: the text is never empty.

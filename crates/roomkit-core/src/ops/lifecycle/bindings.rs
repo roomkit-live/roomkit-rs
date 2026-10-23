@@ -46,7 +46,8 @@ impl Operation for AttachChannel {
             Changed::Detached { .. }
             | Changed::BindingUpdated { .. }
             | Changed::Transitioned { .. }
-            | Changed::Unchanged(_) => None,
+            | Changed::Unchanged(_)
+            | Changed::Rerouted(_) => None,
         })
     }
 
@@ -86,7 +87,8 @@ impl Operation for DetachChannel {
             Changed::Attached { .. }
             | Changed::BindingUpdated { .. }
             | Changed::Transitioned { .. }
-            | Changed::Unchanged(_) => None,
+            | Changed::Unchanged(_)
+            | Changed::Rerouted(_) => None,
         })
     }
 
@@ -143,9 +145,10 @@ impl Operation for UpdateBinding {
                 .bindings
                 .into_iter()
                 .find(|binding| &binding.channel_id == channel_id),
-            Changed::Attached { .. } | Changed::Detached { .. } | Changed::Transitioned { .. } => {
-                None
-            }
+            Changed::Attached { .. }
+            | Changed::Detached { .. }
+            | Changed::Transitioned { .. }
+            | Changed::Rerouted(_) => None,
         })
     }
 

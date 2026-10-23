@@ -18,6 +18,7 @@ mod delivery;
 mod error;
 mod event;
 mod hook;
+mod identity;
 mod ids;
 mod inbound;
 mod output;
@@ -47,6 +48,7 @@ pub use event::{
     ParticipantConsumption, RoomEvent,
 };
 pub use hook::{HookDecision, HookResult, InjectedEvent};
+pub use identity::Identity;
 pub use ids::{ChannelId, EventId, IdentityId, ObservationId, ParticipantId, RoomId, TaskId};
 pub use inbound::InboundMessage;
 pub use output::{ChannelOutput, ErrorRecord};

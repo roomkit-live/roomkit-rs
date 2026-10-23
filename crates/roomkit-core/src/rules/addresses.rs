@@ -17,11 +17,15 @@
 //! | `5550000001`, `07911 123456`, no country code | as written |
 //! | `12345` (a short code), `alice`, `whatsapp:alice` | as written |
 //! | `Alice <Alice@Example.com>` on an email channel | `alice@example.com` |
+//!
+//! A binding's correspondent and recipient, and a participant's id, are
+//! stored as their writer wrote them; routing compares them in their
+//! channel's form, an [`AddressForm`] (gap G-058).
 
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::model::{ChannelBinding, ChannelType, ParticipantId};
+use crate::model::{ChannelBinding, ChannelType};
 
 /// The binding metadata key of a recipient's phone number (Appendix A.1,
 /// A.3, A.4).
@@ -149,6 +153,44 @@ impl CountryCode {
     }
 }
 
+/// How a channel writes the addresses its bindings and participants name
+/// (RFC §5.7): the form routing compares them in (gap G-058).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddressForm {
+    /// How the channel's senders are addressed.
+    pub addressing: Addressing,
+    /// The country code a phone number written without one takes.
+    pub country_code: Option<CountryCode>,
+    /// The binding metadata key the channel delivers to, if any (RFC §10.2
+    /// step 3d).
+    pub recipient_key: Option<String>,
+}
+
+impl AddressForm {
+    /// `address` in the channel's form.
+    pub fn normalize(&self, address: &str) -> String {
+        normalize(address, self.addressing, self.country_code.as_ref())
+    }
+
+    /// The recipient `binding` delivers to, in the channel's form: its value
+    /// under the channel's recipient key, when it is a non-empty string or a
+    /// number (a Telegram chat id is one).
+    pub fn recipient(&self, binding: &ChannelBinding) -> Option<String> {
+        let key = self.recipient_key.as_deref()?;
+        match binding.metadata.get(key)? {
+            Value::String(recipient) if !recipient.trim().is_empty() => {
+                Some(self.normalize(recipient))
+            }
+            Value::Number(recipient) => Some(recipient.to_string()),
+            Value::String(_)
+            | Value::Null
+            | Value::Bool(_)
+            | Value::Array(_)
+            | Value::Object(_) => None,
+        }
+    }
+}
+
 /// `address` in the form of a channel addressed by `addressing` (RFC §5.7,
 /// §10.1 step 1): a phone number in E.164 when it reads as one, an email
 /// address lower-case without its display name, any other id as written.
@@ -242,6 +284,18 @@ pub fn recipient_key(channel_type: ChannelType) -> Option<&'static str> {
     }
 }
 
+/// The metadata key under which a message on a channel of `channel_type`
+/// carries the chat it was posted in, by default (RFC §5.7, gap G-057): a
+/// chat channel's recipient key, `chat_id` for Telegram and
+/// `teams_conversation_id` for Teams; `None` for every other type, whose
+/// messages are routed by their sender.
+pub fn chat_key(channel_type: ChannelType) -> Option<&'static str> {
+    match Addressing::of(channel_type) {
+        Addressing::Chat => recipient_key(channel_type),
+        Addressing::PhoneNumber | Addressing::EmailAddress | Addressing::AsWritten => None,
+    }
+}
+
 /// Whether `binding` has a recipient under `key`: a value neither null nor
 /// an empty string (RFC §10.2 step 3d).
 pub fn has_recipient(binding: &ChannelBinding, key: &str) -> bool {
@@ -250,16 +304,6 @@ pub fn has_recipient(binding: &ChannelBinding, key: &str) -> bool {
         Some(Value::Null) | None => false,
         Some(Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) => true,
     }
-}
-
-/// The correspondent a binding records for `sender_id`, in its channel's
-/// form already: none for an empty id, nor for the framework's own sender
-/// `system`, which names no correspondent (RFC §5.7, §10.4).
-pub fn correspondent(sender_id: &str) -> Option<ParticipantId> {
-    if sender_id == SYSTEM_SENDER {
-        return None;
-    }
-    ParticipantId::new(sender_id).ok()
 }
 
 /// The text after a URI scheme (`whatsapp:`, `tel:`), or `address` when it
@@ -531,16 +575,49 @@ mod tests {
         assert!(!has_recipient(&empty, PHONE_NUMBER) && !has_recipient(&null, PHONE_NUMBER));
     }
 
-    #[test]
-    fn the_framework_s_own_sender_is_no_correspondent() {
-        assert_eq!(correspondent(SYSTEM_SENDER), None);
+    fn sms_form() -> AddressForm {
+        AddressForm {
+            addressing: Addressing::PhoneNumber,
+            country_code: Some(code("1")),
+            recipient_key: Some(PHONE_NUMBER.to_owned()),
+        }
     }
 
     #[test]
-    fn a_sender_is_its_binding_s_correspondent() {
+    fn a_form_reads_a_recipient_in_its_channel_s_form() {
+        let binding = binding_with(json!({ "phone_number": "+1 (555) 000-0001" }));
         assert_eq!(
-            correspondent("+15550000001").map(String::from),
+            sms_form().recipient(&binding),
             Some("+15550000001".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_form_reads_a_numeric_recipient_as_written() {
+        let form = AddressForm {
+            addressing: Addressing::Chat,
+            country_code: None,
+            recipient_key: Some(TELEGRAM_CHAT_ID.to_owned()),
+        };
+        let binding = binding_with(json!({ "chat_id": -100_777 }));
+        assert_eq!(form.recipient(&binding), Some("-100777".to_owned()));
+    }
+
+    #[test]
+    fn a_form_without_a_recipient_key_reads_no_recipient() {
+        let form = AddressForm {
+            recipient_key: None,
+            ..sms_form()
+        };
+        let binding = binding_with(json!({ "phone_number": "+15550000001" }));
+        assert_eq!(form.recipient(&binding), None);
+    }
+
+    #[test]
+    fn a_chat_channel_carries_its_chat_under_its_recipient_key() {
+        assert_eq!(
+            [ChannelType::Telegram, ChannelType::Teams, ChannelType::Sms].map(chat_key),
+            [Some("chat_id"), Some("teams_conversation_id"), None]
         );
     }
 }

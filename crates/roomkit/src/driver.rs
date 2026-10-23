@@ -95,7 +95,9 @@ async fn execute<'kit, S: ConversationStore>(
             | Request::OnEvent { .. }
             | Request::Deliver { .. }
             | Request::RunHook { .. }
-            | Request::RunObservers { .. }) => {
+            | Request::RunObservers { .. }
+            | Request::ResolveIdentity { .. }
+            | Request::Route { .. }) => {
                 let inner = Arc::clone(inner);
                 let task = calls.spawn(async move { call(&inner, request).await });
                 effect_of_task.insert(task.id(), id);
@@ -193,6 +195,13 @@ async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: Request) -> 
             run_observers(inner, trigger, hooks, *event, *context).await;
             Outcome::Observed
         }
+        Request::Route { query } => {
+            let router = inner.router();
+            match router.route(&inner.store, &query).await {
+                Ok(room_id) => Outcome::Routed(room_id),
+                Err(error) => Outcome::Failed(ErrorRecord::new("RouterError", error.to_string())),
+            }
+        }
         Request::LoadContext { .. }
         | Request::LoadBindings { .. }
         | Request::FindByIdempotencyKey { .. }
@@ -201,7 +210,8 @@ async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: Request) -> 
         | Request::CreateRoom { .. }
         | Request::UpdateRoom { .. }
         | Request::StoreBinding { .. }
-        | Request::DeleteBinding { .. } => store_call(&inner.store, request).await,
+        | Request::DeleteBinding { .. }
+        | Request::ResolveIdentity { .. } => store_call(&inner.store, request).await,
         Request::AcquireLock { .. }
         | Request::ReleaseLock { .. }
         | Request::EnterLane { .. }
@@ -263,6 +273,14 @@ async fn store_call<S: ConversationStore>(store: &S, request: Request) -> Outcom
             .delete_binding(&room_id, &channel_id)
             .await
             .map(|()| Outcome::Stored),
+        Request::ResolveIdentity {
+            channel_type,
+            address,
+            organization_id,
+        } => store
+            .resolve_identity(channel_type, &address, organization_id.as_deref())
+            .await
+            .map(|identity| Outcome::Resolved(identity.map(|identity| identity.id))),
         Request::AcquireLock { .. }
         | Request::ReleaseLock { .. }
         | Request::EnterLane { .. }
@@ -271,7 +289,8 @@ async fn store_call<S: ConversationStore>(store: &S, request: Request) -> Outcom
         | Request::OnEvent { .. }
         | Request::Deliver { .. }
         | Request::RunHook { .. }
-        | Request::RunObservers { .. } => {
+        | Request::RunObservers { .. }
+        | Request::Route { .. } => {
             return Outcome::Failed(ErrorRecord::new(
                 "Internal",
                 "a request reached the store that is not the store's",

@@ -191,11 +191,33 @@ mod a_missing_room {
         );
     }
 
-    /// RFC §5.7: on a chat channel the correspondent and the recipient are
-    /// the chat, which routing reads (gap G-051); the message's author is
-    /// neither.
+    /// RFC §5.7, gap G-057: on a chat channel the correspondent and the
+    /// recipient are the chat the message was posted in; the message's
+    /// author is neither.
     #[test]
-    fn names_neither_correspondent_nor_recipient_on_a_chat_channel() {
+    fn names_the_chat_as_correspondent_and_recipient_on_a_chat_channel() {
+        let mut sim = Sim::without_rooms();
+        sim.unbound_transport("telegram", ChannelType::Telegram);
+        let mut message = message_from("telegram", "4242", "Hi");
+        message
+            .metadata
+            .insert("chat_id".to_owned(), json!(-100_777));
+        sim.send(message).unwrap();
+        let binding = binding_of(&sim, "telegram").unwrap();
+        assert_eq!(
+            (
+                binding.participant_id.as_ref().map(ParticipantId::as_str),
+                serde_json::Value::Object(binding.metadata.clone())
+            ),
+            (Some("-100777"), json!({ "chat_id": "-100777" }))
+        );
+    }
+
+    /// Gap G-057: a chat message that does not carry its chat names
+    /// neither, and its deliveries are refused `no_recipient` until the
+    /// integrator names one.
+    #[test]
+    fn names_neither_correspondent_nor_recipient_for_a_chat_message_without_its_chat() {
         let mut sim = Sim::without_rooms();
         sim.unbound_transport("telegram", ChannelType::Telegram);
         sim.send(message_from("telegram", "4242", "Hi")).unwrap();

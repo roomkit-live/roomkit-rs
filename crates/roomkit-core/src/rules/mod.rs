@@ -9,6 +9,7 @@
 //! | [`attachment`] | §7.5 rule 7, §10.6.5: a detach's revocation, when the framework attaches a channel itself, and the room metadata the implementation reserves |
 //! | [`addresses`] | §5.7, §10.1 step 1, §10.2 step 3d: an address in its channel's form, and a binding's recipient |
 //! | [`organizations`] | §17.2: which rooms a caller reaches, by the organization it acts for |
+//! | [`routing`] | §10.4, §10.1 step 2: the default routing strategy, and what step 2 records of a routed sender |
 //! | [`transcoding`] | §6.6: what a channel receives for a content it cannot carry |
 //! | [`chain_depth`] | §8.3: the chain-depth limit, its records, the reentry budget |
 //! | [`hook_registry`] | §9.1, §9.2: hook registrations and which hooks an event fires |
@@ -30,5 +31,6 @@ pub mod hook_registry;
 pub mod lifecycle;
 pub mod organizations;
 pub mod permissions;
+pub mod routing;
 pub mod timers;
 pub mod transcoding;

@@ -171,7 +171,7 @@ impl Conversation {
     ) -> Result<(), Box<dyn Error>> {
         println!("{sender} writes {text:?}.");
         let message = InboundMessage::new(on.id().clone(), sender, EventContent::text(text));
-        self.kit.process_inbound(&self.room, message).await?;
+        self.kit.process_inbound(message, Some(&self.room)).await?;
         Ok(())
     }
 

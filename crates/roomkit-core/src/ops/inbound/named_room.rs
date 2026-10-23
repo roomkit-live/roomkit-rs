@@ -1,54 +1,86 @@
-//! Step 2 of the inbound pipeline for a room the caller names (RFC §10.1
-//! step 2, §5.7, §7.5 rule 7, §17.2).
+//! Step 2 of the inbound pipeline for a room id in hand (RFC §10.1 step 2,
+//! §5.7, §7.5 rule 7, §17.2): the room the caller names, the room a router
+//! returned, or a new room for a message no room was found for.
 //!
 //! The room is read for the organization the caller acts for: a room of
-//! another organization fails the message with nothing written (gap G-051).
-//! A missing room is created with the id, in the caller's organization:
-//! `room_created` is emitted and the `ON_ROOM_CREATED` hooks run, awaited
-//! (gap G-050); the channel is then attached with a binding naming the
-//! sender and, where replies go to the sender's address, its recipient
-//! (RFC §5.7); on a chat channel, whose correspondent is the chat, it names
-//! neither until routing reads the chat (gap G-051); for a channel other
-//! than `VOICE` and `REALTIME_VOICE`,
-//! `ON_SESSION_STARTED` fires and `session_started` is emitted. A room that
-//! exists has an unbound channel attached at the channel's defaults, unless
-//! it was detached from the room (gap G-053): a detached channel stays
-//! unbound, and step 11 refuses its event `source_unbound`.
+//! another organization fails the message with nothing written (gap G-051),
+//! whoever named it, the caller or a router. A missing room is created with
+//! the id, in the caller's organization: `room_created` is emitted and the
+//! `ON_ROOM_CREATED` hooks run, awaited (gap G-050); the channel is then
+//! attached with a binding naming the message's address, the sender's or on
+//! a chat channel the chat (RFC §5.7, gap G-057), as its correspondent and,
+//! on a transport, as its recipient; for a channel other than `VOICE` and
+//! `REALTIME_VOICE`, `ON_SESSION_STARTED` fires and `session_started` is
+//! emitted.
 //!
-//! Every attach runs under the room's lock, decided on the room as the lock
-//! finds it, so that it never replaces a binding made meanwhile, by an
-//! `ON_ROOM_CREATED` hook among others. What step 2 read last is the room's
-//! context at step 3.
+//! A room that exists is handled by who named it:
+//!
+//! - a room the caller names has an unbound channel attached at the
+//!   channel's defaults, unless it was detached from the room (gap G-053): a
+//!   detached channel stays unbound, and step 11 refuses its event
+//!   `source_unbound`;
+//! - a room a router returned has the sender recorded on its binding of the
+//!   channel, under the room lock, before step 3 (RFC §10.1 step 2, gap
+//!   G-061). A room no longer ACTIVE by then, or whose binding names another
+//!   sender, is no longer the message's, which is routed once more (gap
+//!   G-055). The wait for that lock is what `process_timeout` bounds for
+//!   routing (RFC §10.4, §13.6), with milestone 6.
+//!
+//! A new room for a message no room was found for is created with a fresh
+//! id: a store that holds a room with it fails the message, since that room
+//! is someone else's.
+//!
+//! Every attach and record runs under the room's lock, decided on the room
+//! as the lock finds it, so that it never replaces a binding made
+//! meanwhile, by an `ON_ROOM_CREATED` hook among others. What step 2 read
+//! last is the room's context at step 3.
 
 use std::mem;
 
-use serde_json::Value;
-
 use super::InboundError;
-use crate::model::{
-    ChannelBinding, ChannelCategory, ChannelType, ErrorRecord, Room, RoomContext, RoomId,
-};
-use crate::ops::lifecycle::change::{Change, Changed};
+use crate::model::{ChannelBinding, ChannelType, ErrorRecord, Room, RoomContext, RoomId};
+use crate::ops::lifecycle::change::{Change, Changed, SenderRecord};
 use crate::ops::lifecycle::locked::LockedSection;
 use crate::ops::lifecycle::report::{self, Reported};
 use crate::ops::protocol::{EffectId, Outcome, Request};
 use crate::ops::{ChannelDeclaration, Cx, LifecycleError, Progress};
-use crate::rules::{addresses, attachment, organizations};
+use crate::rules::routing::{self, Recording, Sender};
+use crate::rules::{attachment, organizations};
 
-/// Step 2 for the room a caller names.
+/// Who named the room step 2 works on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Mode {
+    /// The caller.
+    Named,
+    /// A router (RFC §10.4).
+    Routed,
+    /// Nobody: the message was routed to no room, and the room is new.
+    Fresh,
+}
+
+/// Step 2 for a room id in hand.
 #[derive(Debug)]
 pub(super) struct NamedRoom {
     room_id: RoomId,
     organization_id: Option<String>,
     channel: Box<ChannelDeclaration>,
-    /// The sender, in the channel's form (RFC §10.1 step 1).
-    sender: String,
+    /// The message's sender, as routing names them (RFC §10.4).
+    sender: Sender,
+    mode: Mode,
     state: State,
 }
 
-/// What step 2 ends with: the room's context for step 3, or why the message
-/// fails.
-pub(super) type Named = Result<Box<RoomContext>, InboundError>;
+/// What step 2 ends with.
+#[derive(Debug)]
+pub(super) enum Named {
+    /// The room's context for step 3.
+    Arrived(Box<RoomContext>),
+    /// The routed room is no longer the message's: route it once more (gap
+    /// G-055).
+    Rerouted,
+    /// Why the message fails.
+    Failed(InboundError),
+}
 
 #[derive(Debug)]
 enum State {
@@ -65,7 +97,8 @@ enum State {
     },
     /// The `ON_ROOM_CREATED` hooks run.
     Observing(EffectId),
-    Attaching {
+    /// The attach or the record, under the room's lock.
+    Changing {
         section: Box<LockedSection>,
         /// Whether step 2 created the room.
         created: bool,
@@ -74,32 +107,45 @@ enum State {
 }
 
 impl NamedRoom {
-    /// Step 2 into `room_id`, for a caller acting for `organization_id`, of
-    /// a message on `channel` from `sender`.
+    /// Step 2 into `room_id`, named as `mode` says, for a caller acting for
+    /// `organization_id`, of a message on `channel` from `sender`.
     pub(super) fn new(
         room_id: RoomId,
+        mode: Mode,
         organization_id: Option<String>,
         channel: Box<ChannelDeclaration>,
-        sender: String,
+        sender: Sender,
     ) -> Self {
         Self {
             room_id,
             organization_id,
             channel,
             sender,
+            mode,
             state: State::Start,
         }
     }
 
-    /// Reads the room. The read holds the room's recent events, since it is
-    /// the context of step 3 when step 2 writes nothing.
+    /// The room step 2 works on.
+    pub(super) fn room_id(&self) -> &RoomId {
+        &self.room_id
+    }
+
+    /// Reads the room, or creates a new one at once. The read holds the
+    /// room's recent events, since it is the context of step 3 when step 2
+    /// writes nothing.
     pub(super) fn start(&mut self, cx: &mut Cx<'_>) {
-        if matches!(self.state, State::Start) {
-            self.state = State::Reading(cx.io.issue(Request::LoadContext {
-                room_id: self.room_id.clone(),
-                recent_events: cx.config.context_window,
-            }));
+        if !matches!(self.state, State::Start) {
+            return;
         }
+        if self.mode == Mode::Fresh {
+            self.create(cx);
+            return;
+        }
+        self.state = State::Reading(cx.io.issue(Request::LoadContext {
+            room_id: self.room_id.clone(),
+            recent_events: cx.config.context_window,
+        }));
     }
 
     /// Takes the driver's answer to step 2's outstanding effect.
@@ -120,22 +166,22 @@ impl NamedRoom {
                 error,
             } if expected == effect => self.on_reread(cx, error, outcome),
             State::Observing(expected) if expected == effect => self.on_observed(cx, outcome),
-            State::Attaching {
+            State::Changing {
                 mut section,
                 created,
             } if section.awaits(effect) => match section.accept(cx, effect, outcome) {
                 Progress::Waiting => {
-                    self.state = State::Attaching { section, created };
+                    self.state = State::Changing { section, created };
                     Progress::Waiting
                 }
-                Progress::Done(attached) => self.on_attached(cx, attached, created),
+                Progress::Done(changed) => self.on_changed(cx, changed, created),
             },
             state @ (State::Start
             | State::Reading(_)
             | State::Creating { .. }
             | State::Rereading { .. }
             | State::Observing(_)
-            | State::Attaching { .. }
+            | State::Changing { .. }
             | State::Done) => {
                 debug_assert!(false, "step 2 received {effect:?} in {state:?}");
                 self.state = state;
@@ -148,21 +194,35 @@ impl NamedRoom {
         match outcome.into_context() {
             Ok(Some(context)) => self.on_existing(cx, context),
             Ok(None) => self.create(cx),
-            Err(error) => Progress::Done(Err(InboundError::Store(error))),
+            Err(error) => Progress::Done(Named::Failed(InboundError::Store(error))),
         }
     }
 
-    /// A room that exists: the caller's, and its channel attached unless
-    /// rule 7 refuses (gap G-053).
+    /// A room that exists: the caller's, then its channel attached unless
+    /// rule 7 refuses (gap G-053), or the routed sender recorded (gap
+    /// G-061).
     fn on_existing(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> Progress<Named> {
         if !organizations::admits(self.organization_id.as_deref(), &context.room) {
-            return Progress::Done(Err(InboundError::OtherOrganization(self.room_id.clone())));
+            let error = InboundError::OtherOrganization(self.room_id.clone());
+            return Progress::Done(Named::Failed(error));
         }
-        if !attachment::may_attach_automatically(&context, &self.channel.channel_id) {
-            return Progress::Done(Ok(context));
+        match self.mode {
+            Mode::Routed => {
+                let record = SenderRecord {
+                    binding: self.sender_binding(cx),
+                    sender: self.sender.clone(),
+                    form: self.channel.form(),
+                };
+                self.change(cx, Change::RecordSender(Box::new(record)), false)
+            }
+            Mode::Named | Mode::Fresh => {
+                if !attachment::may_attach_automatically(&context, &self.channel.channel_id) {
+                    return Progress::Done(Named::Arrived(context));
+                }
+                let binding = self.channel.binding(self.room_id.clone(), cx.env.now());
+                self.change(cx, Change::AttachAutomatically(Box::new(binding)), false)
+            }
         }
-        let binding = self.channel.binding(self.room_id.clone(), cx.env.now());
-        self.attach(cx, binding, false)
     }
 
     /// Creates the room with the id, in the caller's organization.
@@ -179,9 +239,14 @@ impl NamedRoom {
 
     /// The room is created: `room_created` is emitted and its hooks are
     /// awaited before the channel is attached (gap G-050). A failed creation
-    /// reads the room again, in case another call created it meanwhile.
+    /// reads the room again, in case another call created it meanwhile; a
+    /// fresh room's is never read again, since a room holding its id is
+    /// someone else's.
     fn on_created(&mut self, cx: &mut Cx<'_>, room: Room, outcome: Outcome) -> Progress<Named> {
         if let Err(error) = outcome.into_stored() {
+            if self.mode == Mode::Fresh {
+                return Progress::Done(Named::Failed(InboundError::Store(error)));
+            }
             let effect = cx.io.issue(Request::LoadContext {
                 room_id: self.room_id.clone(),
                 recent_events: cx.config.context_window,
@@ -209,7 +274,7 @@ impl NamedRoom {
     ) -> Progress<Named> {
         match outcome.into_context() {
             Ok(Some(context)) => self.on_existing(cx, context),
-            Ok(None) | Err(_) => Progress::Done(Err(InboundError::Store(creation))),
+            Ok(None) | Err(_) => Progress::Done(Named::Failed(InboundError::Store(creation))),
         }
     }
 
@@ -232,57 +297,45 @@ impl NamedRoom {
     /// the sender.
     fn attach_sender(&mut self, cx: &mut Cx<'_>) -> Progress<Named> {
         let binding = self.sender_binding(cx);
-        self.attach(cx, binding, true)
+        self.change(cx, Change::AttachAutomatically(Box::new(binding)), true)
     }
 
-    /// The binding of a room step 2 created: the channel's defaults, the
-    /// sender as its correspondent (`participant_id`) and, on a transport,
-    /// as its recipient, under the channel's recipient key (RFC §5.7, gap
-    /// G-051). On a chat channel replies go to the chat, which is the
-    /// correspondent as well: the binding names neither, the chat being
-    /// routing's to read.
+    /// The channel's binding at its defaults, with the sender recorded as a
+    /// routed sender is (RFC §5.7, gap G-061): the message's address as its
+    /// correspondent and, on a transport, as its recipient under the
+    /// channel's recipient key. A message with no address (a chat message
+    /// without its chat) and the framework's own sender `system` name
+    /// neither. A binding at its defaults names no one, whoever the room's
+    /// participants are.
     fn sender_binding(&self, cx: &mut Cx<'_>) -> ChannelBinding {
-        let mut binding = self.channel.binding(self.room_id.clone(), cx.env.now());
-        if !self.channel.addressing().replies_to_sender() {
-            return binding;
+        let binding = self.channel.binding(self.room_id.clone(), cx.env.now());
+        match routing::recording(&binding, &self.sender, &self.channel.form(), &[]) {
+            Recording::Write(update) => update.apply(&binding),
+            Recording::Kept | Recording::Taken => binding,
         }
-        binding.participant_id = addresses::correspondent(&self.sender);
-        let addressed =
-            binding.participant_id.is_some() && binding.category == ChannelCategory::Transport;
-        if let (true, Some(key)) = (addressed, &self.channel.recipient_key) {
-            binding
-                .metadata
-                .insert(key.clone(), Value::String(self.sender.clone()));
-        }
-        binding
     }
 
-    /// Attaches `binding` under the room's lock.
-    fn attach(
-        &mut self,
-        cx: &mut Cx<'_>,
-        binding: ChannelBinding,
-        created: bool,
-    ) -> Progress<Named> {
-        let change = Change::AttachAutomatically(Box::new(binding));
+    /// Makes `change` under the room's lock.
+    fn change(&mut self, cx: &mut Cx<'_>, change: Change, created: bool) -> Progress<Named> {
         let mut section = Box::new(LockedSection::new(self.room_id.clone(), change));
         section.start(cx);
-        self.state = State::Attaching { section, created };
+        self.state = State::Changing { section, created };
         Progress::Waiting
     }
 
-    /// The attach is over, and reported: a room step 2 created starts a
-    /// session on a channel other than `VOICE` and `REALTIME_VOICE` (RFC §10.1
-    /// step 2).
-    fn on_attached(
+    /// The attach or the record is over, and reported: a room step 2
+    /// created starts a session on a channel other than `VOICE` and
+    /// `REALTIME_VOICE` (RFC §10.1 step 2).
+    fn on_changed(
         &mut self,
         cx: &mut Cx<'_>,
-        attached: Result<Changed, LifecycleError>,
+        changed: Result<Changed, LifecycleError>,
         created: bool,
     ) -> Progress<Named> {
-        let context = match attached {
+        let context = match changed {
+            Ok(Changed::Rerouted(_)) => return Progress::Done(Named::Rerouted),
             Ok(changed) => changed.into_context(),
-            Err(error) => return Progress::Done(Err(attach_failure(error))),
+            Err(error) => return Progress::Done(Named::Failed(change_failure(error))),
         };
         if created && starts_session(self.channel.channel_type) {
             let started = Reported::SessionStarted {
@@ -291,7 +344,7 @@ impl NamedRoom {
             };
             report::report(cx, started, &context);
         }
-        Progress::Done(Ok(context))
+        Progress::Done(Named::Arrived(context))
     }
 }
 
@@ -305,14 +358,14 @@ fn starts_session(channel_type: ChannelType) -> bool {
     )
 }
 
-/// What a failed attach fails the message with.
-fn attach_failure(error: LifecycleError) -> InboundError {
+/// What a failed attach or record fails the message with.
+fn change_failure(error: LifecycleError) -> InboundError {
     match error {
         LifecycleError::RoomNotFound(room_id) => InboundError::RoomNotFound(room_id),
         LifecycleError::Store(error) => InboundError::Store(error),
         LifecycleError::Lock(error) => InboundError::Lock(error),
-        // An automatic attach refuses nothing before the lock, and decides
-        // nothing that fails under it.
+        // An automatic attach or a record refuses nothing before the lock,
+        // and decides nothing that fails under it.
         error @ (LifecycleError::ChannelNotBound { .. }
         | LifecycleError::InternalVisibility
         | LifecycleError::ReservedMetadataKey(_)) => {

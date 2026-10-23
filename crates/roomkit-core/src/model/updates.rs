@@ -1,7 +1,9 @@
 //! Partial updates of the records a store keeps: a room (RFC §14.1
 //! `update_room(room_id, updates)`) and a binding (RFC §7.5 rule 6).
 
-use super::{Access, ChannelBinding, Metadata, Room, RoomStatus, Timestamp, Visibility};
+use super::{
+    Access, ChannelBinding, Metadata, ParticipantId, Room, RoomStatus, Timestamp, Visibility,
+};
 
 /// A partial update of a room (RFC §14.1 `update_room(room_id, updates)`):
 /// the fields it names are written, every other one is kept as stored.
@@ -82,9 +84,13 @@ impl RoomUpdates {
 /// Every write the framework makes to an existing binding goes through
 /// [`BindingUpdate::apply`], so no write ever widens a binding by letting a
 /// field fall back to its default: `access`, `visibility` and `muted` change
-/// only when the update names them.
+/// only when the update names them. Recording a routed sender is one such
+/// write (RFC §10.1 step 2, gap G-061).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BindingUpdate {
+    /// The binding's correspondent (RFC §10.4), written when `Some`, to the
+    /// value it holds, `None` included.
+    pub participant_id: Option<Option<ParticipantId>>,
     /// The binding's new access.
     pub access: Option<Access>,
     /// Whether the channel is muted (RFC §7.2).
@@ -96,6 +102,11 @@ pub struct BindingUpdate {
 }
 
 impl BindingUpdate {
+    /// Whether the update writes nothing.
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
     /// An update that mutes the channel.
     pub fn mute() -> Self {
         Self {
@@ -124,6 +135,9 @@ impl BindingUpdate {
     /// carried over (RFC §7.5 rule 6).
     pub fn apply(&self, binding: &ChannelBinding) -> ChannelBinding {
         let mut updated = binding.clone();
+        if let Some(participant_id) = &self.participant_id {
+            updated.participant_id.clone_from(participant_id);
+        }
         if let Some(access) = self.access {
             updated.access = access;
         }
@@ -241,6 +255,23 @@ mod tests {
     fn a_binding_update_changes_what_it_names() {
         let updated = BindingUpdate::mute().apply(&binding());
         assert!(updated.muted);
+    }
+
+    #[test]
+    fn a_binding_update_records_a_correspondent_and_keeps_the_permissions() {
+        let update = BindingUpdate {
+            participant_id: Some(Some(ParticipantId::new("+15550000001").unwrap())),
+            ..BindingUpdate::default()
+        };
+        let updated = update.apply(&binding());
+        assert_eq!(
+            (
+                updated.participant_id.as_ref().map(ParticipantId::as_str),
+                updated.access,
+                updated.visibility
+            ),
+            (Some("+15550000001"), Access::ReadOnly, Visibility::None)
+        );
     }
 
     #[test]

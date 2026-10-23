@@ -79,8 +79,52 @@ publishes a release.
 - `RoomKit::process_inbound_for`, for a caller acting for an organization;
   `ChannelDeclaration::new` and `ChannelDeclaration::binding`.
 
+- Inbound routing (RFC §10.4, §10.1 step 2): a message that names no room
+  is routed. `InboundTarget::Routed`; the kit's router is asked through the
+  protocol's `Route` request with a `RouteQuery` (the channel, the sender
+  in the channel's form, the metadata, the caller's organization, the
+  sender's address and identity, the channel's address form), after the core
+  reads the sender's identity once (`ResolveIdentity`). A routed sender is
+  recorded on the room's binding under the room lock before step 3, through
+  `BindingUpdate`; a binding naming someone else by then, or a room no
+  longer ACTIVE, routes the message once more, then into a new room. A
+  router's failure fails the message with nothing written
+  (`InboundError::Routing`).
+- `rules::routing`: the default strategy over the rooms a channel reaches
+  (the sender's newest conversation by binding, then by participant; else
+  the one bound room when it admits the sender; else none), deterministic
+  whatever the order rooms are read in, comparing addresses in the
+  channel's form; the routing address; what step 2 records.
+- `roomkit::InboundRoomRouter`, `DefaultRouter` and `RouterError`;
+  `RoomKit::set_router`.
+- Chat channels: a channel's declaration names the metadata key a message
+  carries its chat under (`ChannelDeclaration::chat_key`, `chat_id` for
+  Telegram and `teams_conversation_id` for Teams by default). A chat
+  message is routed by its chat, and a room created for it binds the chat
+  as correspondent and recipient, so its answers are delivered instead of
+  refused `no_recipient`. `rules::addresses::AddressForm` and
+  `ChannelDeclaration::form`.
+- Identities (RFC §5.6): `model::Identity`, and the store's
+  `create_identity`, `get_identity`, `resolve_identity` and `link_address`,
+  scoped by organization, one identity per address within one. The store's
+  `find_room_id_by_binding` and `find_room_id_by_participant`, and
+  `RoomFilter::channel_id`.
+- `Environment::new_room_id`, `RoomId::from_u128`; `SequentialEnvironment`
+  numbers rooms `new_room_1`, `new_room_2`, ...
+- `BindingUpdate::participant_id` and `BindingUpdate::is_empty`.
+- Example `new_conversation`, after the RFC's Appendix B.1 with two senders.
+
 ### Changed
 
+- `RoomKit::process_inbound(message, room_id)` and
+  `RoomKit::process_inbound_for(organization_id, message, room_id)` take the
+  RFC's order, the room optional: `None` routes the message.
+- `RoomFilter::matches` takes the room's bindings and participants.
+- `Environment` requires `new_room_id`.
+- A room step 2 creates for a chat message names the chat on its binding;
+  a chat message without its chat still names neither.
+- `rules::addresses::correspondent` is gone: the binding of a created room is
+  written by `rules::routing::recording`.
 - `ConversationStore::update_room` is a partial update,
   `update_room(room_id, updates)`, and `Request::UpdateRoom` carries
   `RoomUpdates`; a commit's `RoomCounters` carries the resume of a paused

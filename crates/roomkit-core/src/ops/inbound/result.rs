@@ -46,6 +46,10 @@ pub enum InboundError {
     /// caller acts for (RFC §17.2, gap G-051). Nothing was written.
     #[error("room {0} belongs to another organization")]
     OtherOrganization(RoomId),
+    /// The kit's router failed to route the message (RFC §10.4). Nothing was
+    /// written.
+    #[error("the router failed: {0:?}")]
+    Routing(ErrorRecord),
     /// `standalone` belongs to instructions only (RFC §10.1.1 rule 7).
     #[error("only an instruction may stand alone")]
     StandaloneOutsideInstruction,

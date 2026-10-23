@@ -1,15 +1,19 @@
 //! The in-memory store (RFC §14.2): for tests, prototypes and single-process
 //! deployments.
 
+mod identities;
+
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, EventStatus, Observation, Participant, ParticipantId, Room,
-    RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    ChannelBinding, ChannelId, ChannelType, EventStatus, Identity, IdentityId, Observation,
+    Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
 };
 use roomkit_core::ops::RoomCounters;
+use roomkit_core::rules::routing;
 
+use self::identities::Identities;
 use super::{ConversationStore, RoomFilter, StoreError};
 
 /// A store that keeps everything in memory, for one process.
@@ -19,6 +23,7 @@ use super::{ConversationStore, RoomFilter, StoreError};
 #[derive(Debug, Default)]
 pub struct InMemoryStore {
     rooms: Mutex<HashMap<RoomId, Record>>,
+    identities: Mutex<Identities>,
 }
 
 #[derive(Debug)]
@@ -38,6 +43,30 @@ impl Record {
             .iter()
             .any(|participant| &participant.id == participant_id)
     }
+
+    /// Whether `filter` admits the room.
+    fn admitted_by(&self, filter: &RoomFilter) -> bool {
+        filter.matches(&self.room, &self.bindings, &self.participants)
+    }
+
+    /// Whether the room's binding of `channel_id` names `participant_id`.
+    fn binds_to(&self, channel_id: &ChannelId, participant_id: &ParticipantId) -> bool {
+        self.bindings.iter().any(|binding| {
+            &binding.channel_id == channel_id
+                && binding.participant_id.as_ref() == Some(participant_id)
+        })
+    }
+
+    /// Whether the room holds a participant reached through `channel_id`
+    /// whose id, or whose identity's, is `participant_id`.
+    fn reached(&self, channel_id: &ChannelId, participant_id: &ParticipantId) -> bool {
+        self.participants.iter().any(|participant| {
+            participant.connected_via.contains(channel_id)
+                && (&participant.id == participant_id
+                    || participant.identity_id.as_ref().map(IdentityId::as_str)
+                        == Some(participant_id.as_str()))
+        })
+    }
 }
 
 impl InMemoryStore {
@@ -51,6 +80,24 @@ impl InMemoryStore {
     /// or as one whole write left them, so the store keeps serving.
     fn rooms(&self) -> MutexGuard<'_, HashMap<RoomId, Record>> {
         self.rooms.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The identities, held as the rooms are.
+    fn identities(&self) -> MutexGuard<'_, Identities> {
+        self.identities
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The newest room `filter` admits whose record `found` accepts, as the
+    /// default router orders rooms (RFC §10.4).
+    fn newest(&self, filter: &RoomFilter, found: impl Fn(&Record) -> bool) -> Option<RoomId> {
+        self.rooms()
+            .values()
+            .filter(|record| record.admitted_by(filter) && found(record))
+            .map(|record| &record.room)
+            .max_by(|left, right| routing::recency(left, right))
+            .map(|room| room.id.clone())
     }
 
     /// Runs `read` on the room's record.
@@ -118,12 +165,30 @@ impl ConversationStore for InMemoryStore {
         let mut rooms: Vec<Room> = self
             .rooms()
             .values()
-            .filter(|record| filter.matches(&record.room))
+            .filter(|record| record.admitted_by(filter))
             .map(|record| record.room.clone())
             .collect();
         rooms
             .sort_by(|left, right| (left.created_at, &left.id).cmp(&(right.created_at, &right.id)));
         Ok(rooms)
+    }
+
+    async fn find_room_id_by_binding(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &ParticipantId,
+        filter: &RoomFilter,
+    ) -> Result<Option<RoomId>, StoreError> {
+        Ok(self.newest(filter, |record| record.binds_to(channel_id, participant_id)))
+    }
+
+    async fn find_room_id_by_participant(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &ParticipantId,
+        filter: &RoomFilter,
+    ) -> Result<Option<RoomId>, StoreError> {
+        Ok(self.newest(filter, |record| record.reached(channel_id, participant_id)))
     }
 
     async fn store_binding(&self, binding: ChannelBinding) -> Result<(), StoreError> {
@@ -231,6 +296,36 @@ impl ConversationStore for InMemoryStore {
 
     async fn list_participants(&self, room_id: &RoomId) -> Result<Vec<Participant>, StoreError> {
         self.read(room_id, |record| record.participants.clone())
+    }
+
+    async fn create_identity(&self, identity: Identity) -> Result<(), StoreError> {
+        self.identities().create(identity)
+    }
+
+    async fn get_identity(&self, identity_id: &IdentityId) -> Result<Option<Identity>, StoreError> {
+        Ok(self.identities().get(identity_id))
+    }
+
+    async fn resolve_identity(
+        &self,
+        channel_type: ChannelType,
+        address: &str,
+        organization_id: Option<&str>,
+    ) -> Result<Option<Identity>, StoreError> {
+        Ok(self
+            .identities()
+            .resolve(channel_type, address, organization_id))
+    }
+
+    async fn link_address(
+        &self,
+        identity_id: &IdentityId,
+        channel_type: ChannelType,
+        address: &str,
+        organization_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.identities()
+            .link(identity_id, channel_type, address, organization_id)
     }
 
     async fn find_by_idempotency_key(
@@ -596,6 +691,160 @@ mod tests {
                 .map(|room| room.id.as_str())
                 .collect::<Vec<_>>(),
             ["room_2"]
+        );
+    }
+
+    /// A room `id` created `seconds` after the epoch, its SMS binding
+    /// naming `correspondent`.
+    async fn room_naming(
+        store: &InMemoryStore,
+        id: &str,
+        seconds: i64,
+        correspondent: Option<&str>,
+    ) {
+        let room_id = RoomId::new(id).unwrap();
+        let created = Timestamp::from_unix_millis(seconds * 1000).unwrap();
+        store
+            .create_room(Room::new(room_id.clone(), created))
+            .await
+            .unwrap();
+        let mut binding = ChannelBinding::new(
+            ChannelId::new("sms").unwrap(),
+            room_id,
+            ChannelType::Sms,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+            Timestamp::UNIX_EPOCH,
+        );
+        binding.participant_id = correspondent.map(|id| ParticipantId::new(id).unwrap());
+        store.store_binding(binding).await.unwrap();
+    }
+
+    fn alice() -> ParticipantId {
+        ParticipantId::new("+15550000001").unwrap()
+    }
+
+    fn sms() -> ChannelId {
+        ChannelId::new("sms").unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_newest_room_whose_binding_names_the_participant_is_found() {
+        let store = InMemoryStore::new();
+        room_naming(&store, "older", 10, Some("+15550000001")).await;
+        room_naming(&store, "newer", 20, Some("+15550000001")).await;
+        room_naming(&store, "newest", 30, Some("+15550000002")).await;
+        let found = store
+            .find_room_id_by_binding(&sms(), &alice(), &RoomFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(found, Some(RoomId::new("newer").unwrap()));
+    }
+
+    #[tokio::test]
+    async fn a_binding_of_another_channel_finds_no_room() {
+        let store = InMemoryStore::new();
+        room_naming(&store, "room_1", 10, Some("+15550000001")).await;
+        let found = store
+            .find_room_id_by_binding(
+                &ChannelId::new("whatsapp").unwrap(),
+                &alice(),
+                &RoomFilter::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(found, None);
+    }
+
+    #[tokio::test]
+    async fn a_room_the_filter_refuses_is_not_found_by_its_binding() {
+        let store = InMemoryStore::new();
+        room_naming(&store, "room_1", 10, Some("+15550000001")).await;
+        let filter = RoomFilter {
+            status: Some(RoomStatus::Paused),
+            ..RoomFilter::default()
+        };
+        let found = store
+            .find_room_id_by_binding(&sms(), &alice(), &filter)
+            .await
+            .unwrap();
+        assert_eq!(found, None);
+    }
+
+    #[tokio::test]
+    async fn a_participant_reached_through_the_channel_finds_its_room() {
+        let store = store_with_room().await;
+        let mut participant = jean();
+        participant.identity_id = Some(IdentityId::new("id_jean").unwrap());
+        store.create_participant(participant).await.unwrap();
+        let by_id = store
+            .find_room_id_by_participant(&sms(), &jean().id, &RoomFilter::default())
+            .await
+            .unwrap();
+        let by_identity = store
+            .find_room_id_by_participant(
+                &sms(),
+                &ParticipantId::new("id_jean").unwrap(),
+                &RoomFilter::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!((by_id, by_identity), (Some(room_id()), Some(room_id())));
+    }
+
+    #[tokio::test]
+    async fn a_participant_reached_through_another_channel_finds_no_room() {
+        let store = store_with_room().await;
+        store.create_participant(jean()).await.unwrap();
+        let found = store
+            .find_room_id_by_participant(
+                &ChannelId::new("email").unwrap(),
+                &jean().id,
+                &RoomFilter::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(found, None);
+    }
+
+    #[tokio::test]
+    async fn listing_the_rooms_a_channel_reaches_skips_the_others() {
+        let store = InMemoryStore::new();
+        room_naming(&store, "bound", 10, None).await;
+        store
+            .create_room(Room::new(
+                RoomId::new("joined").unwrap(),
+                Timestamp::UNIX_EPOCH,
+            ))
+            .await
+            .unwrap();
+        store
+            .create_participant(Participant::new(
+                alice(),
+                RoomId::new("joined").unwrap(),
+                sms(),
+                Timestamp::UNIX_EPOCH,
+            ))
+            .await
+            .unwrap();
+        store
+            .create_room(Room::new(
+                RoomId::new("elsewhere").unwrap(),
+                Timestamp::UNIX_EPOCH,
+            ))
+            .await
+            .unwrap();
+        let filter = RoomFilter {
+            channel_id: Some(sms()),
+            ..RoomFilter::default()
+        };
+        let listed = store.list_rooms(&filter).await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|room| room.id.as_str())
+                .collect::<Vec<_>>(),
+            ["joined", "bound"]
         );
     }
 

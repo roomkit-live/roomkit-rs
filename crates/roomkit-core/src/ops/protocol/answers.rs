@@ -3,7 +3,9 @@
 //! through once checked.
 
 use super::{EffectId, Outcome, ProtocolError, Request};
-use crate::model::{ChannelBinding, ChannelOutput, ErrorRecord, RoomContext, RoomEvent};
+use crate::model::{
+    ChannelBinding, ChannelOutput, ErrorRecord, IdentityId, RoomContext, RoomEvent, RoomId,
+};
 use crate::rules::hook_chain::HookOutcome;
 
 /// The families of requests, each answered by its own outcomes.
@@ -23,6 +25,8 @@ pub(crate) enum RequestKind {
     ChannelCall,
     RunHook,
     RunObservers,
+    ResolveIdentity,
+    Route,
 }
 
 impl Request {
@@ -45,6 +49,8 @@ impl Request {
             Self::OnEvent { .. } | Self::Deliver { .. } => RequestKind::ChannelCall,
             Self::RunHook { .. } => RequestKind::RunHook,
             Self::RunObservers { .. } => RequestKind::RunObservers,
+            Self::ResolveIdentity { .. } => RequestKind::ResolveIdentity,
+            Self::Route { .. } => RequestKind::Route,
         }
     }
 }
@@ -67,6 +73,8 @@ impl RequestKind {
             Self::ChannelCall => "Output",
             Self::RunHook => "Hook",
             Self::RunObservers => "Observed",
+            Self::ResolveIdentity => "Resolved",
+            Self::Route => "Routed",
         }
     }
 
@@ -87,7 +95,9 @@ impl RequestKind {
             | (Self::HandleInbound, Outcome::Parsed(_))
             | (Self::ChannelCall, Outcome::Output(_))
             | (Self::RunHook, Outcome::Hook(_))
-            | (Self::RunObservers, Outcome::Observed) => true,
+            | (Self::RunObservers, Outcome::Observed)
+            | (Self::ResolveIdentity, Outcome::Resolved(_))
+            | (Self::Route, Outcome::Routed(_)) => true,
             (
                 Self::AcquireLock
                 | Self::ReleaseLock
@@ -102,7 +112,9 @@ impl RequestKind {
                 | Self::HandleInbound
                 | Self::ChannelCall
                 | Self::RunHook
-                | Self::RunObservers,
+                | Self::RunObservers
+                | Self::ResolveIdentity
+                | Self::Route,
                 _,
             ) => false,
         };
@@ -222,6 +234,22 @@ impl Outcome {
         }
     }
 
+    /// The identity an address resolved to, if any.
+    pub(crate) fn into_resolved(self) -> Result<Option<IdentityId>, ErrorRecord> {
+        match self {
+            Self::Resolved(identity) => Ok(identity),
+            other => Err(other.into_failure()),
+        }
+    }
+
+    /// The room a router chose, `None` for a new room.
+    pub(crate) fn into_routed(self) -> Result<Option<RoomId>, ErrorRecord> {
+        match self {
+            Self::Routed(room_id) => Ok(room_id),
+            other => Err(other.into_failure()),
+        }
+    }
+
     /// What a hook produced; a hook the driver could not run raised.
     pub(crate) fn into_hook(self) -> HookOutcome<RoomEvent> {
         match self {
@@ -265,6 +293,8 @@ impl Outcome {
             Self::Output(_) => "Output",
             Self::Hook(_) => "Hook",
             Self::Observed => "Observed",
+            Self::Resolved(_) => "Resolved",
+            Self::Routed(_) => "Routed",
             Self::Failed(_) => "Failed",
         }
     }
@@ -294,6 +324,19 @@ mod tests {
                 expected: "Committed",
                 got: "Locked",
             })
+        );
+    }
+
+    #[test]
+    fn a_router_s_answer_answers_a_route_request_only() {
+        assert_eq!(
+            (
+                RequestKind::Route.check(EffectId::first(), &Outcome::Routed(None)),
+                RequestKind::ResolveIdentity
+                    .check(EffectId::first(), &Outcome::Routed(None))
+                    .is_err()
+            ),
+            (Ok(()), true)
         );
     }
 

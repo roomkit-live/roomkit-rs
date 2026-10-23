@@ -71,6 +71,10 @@ impl Environment for Clock {
     fn new_observation_id(&mut self) -> ObservationId {
         self.environment().new_observation_id()
     }
+
+    fn new_room_id(&mut self) -> RoomId {
+        self.environment().new_room_id()
+    }
 }
 
 /// A kit on `clock`, with an SMS transport attached to a room whose timers
@@ -185,7 +189,7 @@ mod timers {
         let clock = Clock::new();
         let (kit, sms) = timed_room(&clock).await;
         clock.advance(50);
-        kit.process_inbound(&room_id(), message(&sms, "Still here"))
+        kit.process_inbound(message(&sms, "Still here"), Some(&room_id()))
             .await
             .unwrap();
         clock.advance(50);
@@ -198,7 +202,7 @@ mod timers {
         let (kit, sms) = timed_room(&clock).await;
         clock.advance(200);
         let result = kit
-            .process_inbound(&room_id(), message(&sms, "Hello?"))
+            .process_inbound(message(&sms, "Hello?"), Some(&room_id()))
             .await
             .unwrap();
         let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
@@ -293,7 +297,7 @@ mod unregistering {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         kit.unregister_channel(sms.id()).unwrap();
         let refused = kit
-            .process_inbound(&room_id(), message(&sms, "Hello?"))
+            .process_inbound(message(&sms, "Hello?"), Some(&room_id()))
             .await;
         assert_eq!(
             refused,
@@ -309,7 +313,7 @@ mod unregistering {
         let (kit, sms, ws) = room_with_sms_and_ws().await;
         kit.unregister_channel(ws.id()).unwrap();
         let mut events = kit.subscribe();
-        kit.process_inbound(&room_id(), message(&sms, "Bonjour"))
+        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
             .await
             .unwrap();
         let failed = next_matching(&mut events, |event| {
@@ -338,7 +342,7 @@ mod unregistering {
         kit.unregister_channel(sms.id()).unwrap();
         let replacement = RecordingTransport::new(channel("sms"), ChannelType::Sms);
         kit.register_channel(replacement.clone()).unwrap();
-        kit.process_inbound(&room_id(), message(&replacement, "Back"))
+        kit.process_inbound(message(&replacement, "Back"), Some(&room_id()))
             .await
             .unwrap();
         assert_eq!(timeline_texts(&kit).await, ["Back"]);
@@ -410,7 +414,7 @@ mod metadata_updates {
         kit.create_room(&room_id()).await.unwrap();
         kit.attach(&room_id(), sms.id()).await.unwrap();
         kit.attach(&room_id(), &channel("crm")).await.unwrap();
-        kit.process_inbound(&room_id(), message(&sms, "Bonjour"))
+        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
             .await
             .unwrap();
         kit.store().get_room(&room_id()).await.unwrap().unwrap()
@@ -470,7 +474,7 @@ mod bindings {
     async fn a_detached_agent_is_asked_nothing_more() {
         let (kit, sms, agent) = sms_and_agent().await;
         kit.detach(&room_id(), agent.id()).await.unwrap();
-        kit.process_inbound(&room_id(), message(&sms, "Bonjour"))
+        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
             .await
             .unwrap();
         assert_eq!(sms.texts(), Vec::<String>::new());
@@ -508,7 +512,7 @@ mod bindings {
         let (kit, sms, _agent) = sms_and_agent().await;
         kit.close_room(&room_id()).await.unwrap();
         kit.reopen_room(&room_id()).await.unwrap();
-        kit.process_inbound(&room_id(), message(&sms, "Bonjour"))
+        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
             .await
             .unwrap();
         assert_eq!(sms.texts(), ["Hello back"]);

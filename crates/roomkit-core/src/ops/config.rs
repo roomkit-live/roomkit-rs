@@ -8,7 +8,7 @@ use crate::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId, ChannelType,
     RoomId, Timestamp,
 };
-use crate::rules::addresses::{self, Addressing, CountryCode};
+use crate::rules::addresses::{self, AddressForm, Addressing, CountryCode};
 use crate::rules::chain_depth::DEFAULT_MAX_CHAIN_DEPTH;
 use crate::rules::hook_registry::HookRegistry;
 
@@ -41,12 +41,20 @@ pub struct ChannelDeclaration {
     /// The country code a phone number written without one takes (RFC
     /// §5.7); `None` keeps such a number as written.
     pub country_code: Option<CountryCode>,
+    /// The metadata key under which an inbound message carries the chat it
+    /// was posted in, which routing addresses it by (RFC §5.7, §10.4, gap
+    /// G-057): `chat_id` for Telegram and `teams_conversation_id` for Teams
+    /// by default. A channel carrying private chats and groups (WhatsApp
+    /// Personal) declares the key its group messages carry the group under;
+    /// a message without the key is addressed by its sender.
+    pub chat_key: Option<String>,
 }
 
 impl ChannelDeclaration {
     /// A channel of `channel_type` with the RFC's defaults: the default
-    /// capabilities, no provider name, no country code, and the recipient
-    /// key Appendix A gives its type (gap G-051).
+    /// capabilities, no provider name, no country code, the recipient key
+    /// Appendix A gives its type (gap G-051), and on a chat channel the
+    /// recipient key as its chat key (gap G-057).
     pub fn new(
         channel_id: ChannelId,
         channel_type: ChannelType,
@@ -62,6 +70,7 @@ impl ChannelDeclaration {
             provider_name: None,
             recipient_key: addresses::recipient_key(channel_type).map(str::to_owned),
             country_code: None,
+            chat_key: addresses::chat_key(channel_type).map(str::to_owned),
         }
     }
 
@@ -69,6 +78,16 @@ impl ChannelDeclaration {
     /// gap G-051).
     pub fn addressing(&self) -> Addressing {
         Addressing::of(self.channel_type)
+    }
+
+    /// The form its bindings' and participants' addresses are compared in
+    /// (RFC §5.7).
+    pub fn form(&self) -> AddressForm {
+        AddressForm {
+            addressing: self.addressing(),
+            country_code: self.country_code.clone(),
+            recipient_key: self.recipient_key.clone(),
+        }
     }
 
     /// Its binding to `room_id` at the RFC's defaults: read-write, unmuted,

@@ -10,4 +10,5 @@
 mod inbound;
 mod lifecycle;
 mod named_room;
+mod routing;
 mod support;

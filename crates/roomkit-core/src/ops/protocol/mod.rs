@@ -14,11 +14,13 @@ use thiserror::Error;
 
 use super::{Environment, FrameworkEvent};
 use crate::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventId, InboundMessage, Observation,
-    Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventId, IdentityId,
+    InboundMessage, Observation, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    Timestamp,
 };
 use crate::rules::hook_chain::HookOutcome;
 use crate::rules::hook_registry::{HookId, HookTrigger};
+use crate::rules::routing::RouteQuery;
 
 /// Identifies an effect within its operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -145,6 +147,25 @@ pub enum Request {
         /// The channel.
         channel_id: ChannelId,
     },
+    /// Find the identity an address belongs to on channels of a type, in an
+    /// organization (RFC §14.1 `resolve_identity(channel_type, address,
+    /// organization_id)`, §17.2). Answer [`Outcome::Resolved`].
+    ResolveIdentity {
+        /// The channel type the address is used on.
+        channel_type: ChannelType,
+        /// The address, in its channel's form.
+        address: String,
+        /// The organization the caller acts for; `None` for the identities
+        /// of no organization (gap G-060).
+        organization_id: Option<String>,
+    },
+    /// Ask the kit's routing strategy which room a message that names none
+    /// belongs to (RFC §10.4), as a hook is asked: the default strategy, or
+    /// the integrator's. Answer [`Outcome::Routed`].
+    Route {
+        /// What the router is asked.
+        query: Box<RouteQuery>,
+    },
     /// Call the channel's `handle_inbound()` (RFC §6.1). Answer
     /// [`Outcome::Parsed`].
     HandleInbound {
@@ -256,6 +277,10 @@ pub enum Outcome {
     Hook(Box<HookOutcome<RoomEvent>>),
     /// Every observer has finished.
     Observed,
+    /// The identity the address belongs to, if any.
+    Resolved(Option<IdentityId>),
+    /// The room the router chose, `None` for a new room (RFC §10.4).
+    Routed(Option<RoomId>),
     /// The driver could not carry the request out.
     Failed(ErrorRecord),
 }

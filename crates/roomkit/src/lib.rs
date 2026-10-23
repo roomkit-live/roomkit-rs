@@ -7,7 +7,10 @@
 //!
 //! - [`Channel`]: implement it for a transport or an intelligence channel.
 //! - [`RoomKit`]: register channels and hooks, run rooms through their
-//!   lifecycle and timers, process messages.
+//!   lifecycle and timers, process messages into the room they name or the
+//!   room their router finds.
+//! - [`InboundRoomRouter`]: a routing strategy; [`DefaultRouter`] is the
+//!   RFC's.
 //! - [`store`]: where rooms live, in memory by default.
 //! - [`testing`]: a recording transport and an echo agent, for tests and
 //!   examples.
@@ -22,6 +25,7 @@ mod error;
 mod hooks;
 mod kit;
 mod locks;
+mod router;
 pub mod store;
 pub mod testing;
 
@@ -36,4 +40,5 @@ pub use self::environment::SystemEnvironment;
 pub use self::error::KitError;
 pub use self::hooks::{HookError, HookHandler, HookReturn};
 pub use self::kit::{RoomKit, TimerSweeper};
+pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
 pub use self::store::{ConversationStore, InMemoryStore, RoomFilter, StoreError};
