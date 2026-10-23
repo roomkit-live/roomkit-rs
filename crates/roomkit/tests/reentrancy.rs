@@ -723,6 +723,49 @@ async fn an_awaited_creation_hook_injects_into_the_room_being_created() {
     );
 }
 
+/// Gap G-050: the integrator's creation of a room awaits its hooks too, and
+/// holds no lane meanwhile: a hook that attaches a channel and sends into
+/// the room it observes does not wait for the creation, and its event is
+/// the room's first.
+async fn an_integrator_creation_hook_sends_into_the_room_being_created() {
+    let (kit, _) = room().await;
+    let new_room = RoomId::new("room_2").unwrap();
+    let observer_kit = kit.clone();
+    kit.observe(
+        "welcome",
+        HookTrigger::OnRoomCreated,
+        move |event: RoomEvent, _| {
+            let kit = observer_kit.clone();
+            async move {
+                kit.attach(&event.room_id, &channel("ws")).await.unwrap();
+                kit.send_event(&event.room_id, from_console("Welcome"))
+                    .await
+                    .unwrap();
+            }
+        },
+    )
+    .unwrap();
+    tokio::time::timeout(BOUND, kit.create_room(&new_room))
+        .await
+        .unwrap_or_else(|_| panic!("the creation hook waited for its own creation"))
+        .unwrap();
+    let texts: Vec<String> = kit
+        .store()
+        .list_events(&new_room, true)
+        .await
+        .unwrap()
+        .iter()
+        .map(|event| text_of(&event.content))
+        .collect();
+    assert_eq!(texts, ["Welcome"]);
+}
+
+on_both_runtimes!(
+    an_integrator_creation_hook_sends_into_its_room_on_one_thread,
+    an_integrator_creation_hook_sends_into_its_room_on_many_threads,
+    an_integrator_creation_hook_sends_into_the_room_being_created
+);
+
 /// RFC §13.5: the lock is reentrant all the way down a call chain: a
 /// locked hook sends a message into its room, which is nested in the hook's
 /// section, and the parse of that message injects into the room too, nested

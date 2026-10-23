@@ -39,8 +39,33 @@ pub(super) struct Done {
     pub(super) events: Vec<RoomEvent>,
     /// Whether anything was written, and the trigger is to fire.
     pub(super) changed: bool,
-    /// The room as the change left it, which the trigger's hooks receive.
-    pub(super) context: Box<RoomContext>,
+    /// The room as the change left it, which the trigger's hooks receive;
+    /// `None` when the room does not exist.
+    pub(super) context: Option<Box<RoomContext>>,
+}
+
+impl Done {
+    /// A change of a stored event in a room that does not exist: a no-op
+    /// that fires nothing, as for a target the room does not hold (gap
+    /// G-063).
+    pub(super) fn nothing() -> Self {
+        Self {
+            events: Vec::new(),
+            changed: false,
+            context: None,
+        }
+    }
+}
+
+impl Change {
+    /// Whether the call changes a stored event, which a missing room makes
+    /// a no-op, rather than commit a record, which it refuses (gap G-063).
+    pub(super) fn changes_a_stored_event(&self) -> bool {
+        match self {
+            Self::Update { .. } | Self::Delete { .. } => true,
+            Self::Commit { .. } => false,
+        }
+    }
 }
 
 /// The update reads the event; the delete removes it at once, the store
@@ -74,7 +99,7 @@ pub(super) fn act(
             done: Box::new(Done {
                 events: Vec::new(),
                 changed: true,
-                context,
+                context: Some(context),
             }),
         },
     }
@@ -121,7 +146,7 @@ fn commit(
         done: Box::new(Done {
             events: vec![record],
             changed: true,
-            context,
+            context: Some(context),
         }),
     }
 }
@@ -143,7 +168,7 @@ pub(super) fn on_read(
         let done = Done {
             events: Vec::new(),
             changed: false,
-            context,
+            context: Some(context),
         };
         return section::release(cx, room_id, Ok(Box::new(done)));
     };
@@ -153,7 +178,7 @@ pub(super) fn on_read(
         let done = Done {
             events: vec![updated],
             changed: false,
-            context,
+            context: Some(context),
         };
         return section::release(cx, room_id, Ok(Box::new(done)));
     }
@@ -171,7 +196,7 @@ pub(super) fn on_read(
         done: Box::new(Done {
             events: vec![updated],
             changed: true,
-            context,
+            context: Some(context),
         }),
     }
 }
@@ -190,9 +215,11 @@ pub(super) fn on_written(
         Change::Commit { .. } => outcome.into_committed(),
         Change::Delete { .. } => outcome.into_deleted().map(|removed| {
             done.changed = !removed.is_empty();
-            done.context
-                .recent_events
-                .retain(|recent| !removed.iter().any(|event| event.id == recent.id));
+            if let Some(context) = done.context.as_mut() {
+                context
+                    .recent_events
+                    .retain(|recent| !removed.iter().any(|event| event.id == recent.id));
+            }
             done.events = removed;
         }),
     };
@@ -212,6 +239,9 @@ pub(super) fn report(cx: &mut Cx<'_>, change: &Change, done: &Done) {
         Change::Delete { .. } => HookTrigger::OnEventDeleted,
         Change::Commit { .. } => return,
     };
+    let Some(context) = &done.context else {
+        return;
+    };
     for event in &done.events {
         let hooks = cx.config.hooks.observers(trigger, &event.source);
         if hooks.is_empty() {
@@ -221,7 +251,7 @@ pub(super) fn report(cx: &mut Cx<'_>, change: &Change, done: &Done) {
             trigger,
             hooks,
             event: Box::new(event.clone()),
-            context: done.context.clone(),
+            context: context.clone(),
         });
     }
 }

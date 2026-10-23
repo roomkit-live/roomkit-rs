@@ -1289,6 +1289,16 @@ mod a_committed_record {
         );
     }
 
+    /// Gap G-063: unlike a change of a stored event, a record grows a
+    /// timeline, and a missing room fails it.
+    #[test]
+    fn into_a_missing_room_is_not_found() {
+        let mut sim = room();
+        sim.room_exists = false;
+        let refused = sim.commit_record("room_1", record("snap_1", "room_1"), None);
+        assert_eq!(refused, Err(MutationError::RoomNotFound(room_id())));
+    }
+
     /// RFC §5.1: every point where the timeline grows refuses a closed room.
     #[test]
     fn into_a_closed_room_is_refused() {

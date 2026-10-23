@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use roomkit_core::model::{ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent};
-use roomkit_core::ops::{Notice, Outcome, Request};
+use roomkit_core::ops::{CHANNEL_NOT_REGISTERED, Notice, Outcome, Request};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookTrigger};
 use tokio::task::JoinSet;
@@ -44,7 +44,7 @@ pub(super) async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: R
             context,
         } => {
             let Some(channel) = inner.channel(&binding.channel_id) else {
-                return unknown_channel(&binding.channel_id);
+                return unregistered_channel(&binding.channel_id);
             };
             channel_output(channel.on_event(event, binding, *context).await)
         }
@@ -54,7 +54,7 @@ pub(super) async fn call<S: ConversationStore>(inner: &Arc<Inner<S>>, request: R
             context,
         } => {
             let Some(channel) = inner.channel(&binding.channel_id) else {
-                return unknown_channel(&binding.channel_id);
+                return unregistered_channel(&binding.channel_id);
             };
             channel_output(channel.deliver(event, binding, *context).await)
         }
@@ -290,9 +290,20 @@ fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
     }
 }
 
+/// A channel the kit no longer holds, asked to parse a message.
 fn unknown_channel(channel_id: &ChannelId) -> Outcome {
     Outcome::Failed(ErrorRecord::new(
         "UnknownChannel",
+        format!("no channel {channel_id} is registered"),
+    ))
+}
+
+/// A channel the kit no longer holds, unregistered since the operation
+/// started, asked to take or deliver an event: the delivery set skips a
+/// transport and reports an intelligence channel (gap G-048).
+fn unregistered_channel(channel_id: &ChannelId) -> Outcome {
+    Outcome::Failed(ErrorRecord::new(
+        CHANNEL_NOT_REGISTERED,
         format!("no channel {channel_id} is registered"),
     ))
 }

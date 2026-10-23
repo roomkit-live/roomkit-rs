@@ -432,6 +432,21 @@ mod a_direct_call {
         assert_eq!(returned, None);
     }
 
+    /// Gap G-063: a room that does not exist is a no-op, as a missing
+    /// event is.
+    #[tokio::test]
+    async fn update_and_delete_in_a_missing_room_change_nothing() {
+        let room = room().await;
+        let missing = RoomId::new("room_404").unwrap();
+        let event_id = EventId::new("evt_1").unwrap();
+        let updated = room
+            .kit
+            .update_event(&missing, &event_id, EventUpdates::default())
+            .await;
+        let deleted = room.kit.delete_event(&missing, &event_id, true).await;
+        assert_eq!((updated, deleted), (Ok(None), Ok(vec![])));
+    }
+
     /// Gap G-064: the hard delete takes the thread; the counters stay.
     #[tokio::test]
     async fn delete_removes_the_thread_and_leaves_the_counters() {

@@ -14,8 +14,8 @@ use roomkit::model::{
     RoomStatus, RoomTimers, Timestamp,
 };
 use roomkit::ops::{
-    ChannelDeclaration, Environment, FrameworkEvent, InboundError, LifecycleError,
-    SequentialEnvironment, TransitionReason,
+    CHANNEL_NOT_REGISTERED, ChannelDeclaration, Environment, FrameworkEvent, InboundError,
+    LifecycleError, SequentialEnvironment, TransitionReason,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{Channel, ChannelError, ConversationStore, HookTrigger, KitError, RoomKit};
@@ -307,11 +307,35 @@ mod unregistering {
         );
     }
 
-    /// Gap G-048: the bindings stay, and a delivery to one fails.
+    /// Gap G-048: the bindings stay, and a transport whose channel is
+    /// unregistered is skipped, as one another process serves may be.
     #[tokio::test]
-    async fn fails_the_deliveries_to_the_bindings_it_leaves() {
+    async fn skips_a_transport_binding_it_leaves() {
         let (kit, sms, ws) = room_with_sms_and_ws().await;
         kit.unregister_channel(ws.id()).unwrap();
+        let mut events = kit.subscribe();
+        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+            .await
+            .unwrap();
+        let mut failed = 0;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, FrameworkEvent::DeliveryFailed { .. }) {
+                failed += 1;
+            }
+        }
+        let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
+        assert_eq!((failed, bindings.len()), (0, 2));
+    }
+
+    /// Gap G-048: an intelligence channel whose channel is unregistered is
+    /// reported, the turn it was owed never taken.
+    #[tokio::test]
+    async fn reports_an_agent_binding_it_leaves_as_a_failed_delivery() {
+        let (kit, sms, _ws) = room_with_sms_and_ws().await;
+        kit.register_channel(EchoAgent::new(channel("ai"), "Hello"))
+            .unwrap();
+        kit.attach(&room_id(), &channel("ai")).await.unwrap();
+        kit.unregister_channel(&channel("ai")).unwrap();
         let mut events = kit.subscribe();
         kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
             .await
@@ -320,11 +344,77 @@ mod unregistering {
             matches!(event, FrameworkEvent::DeliveryFailed { .. })
         })
         .await;
-        let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
-        let FrameworkEvent::DeliveryFailed { channel_id, .. } = failed else {
+        let FrameworkEvent::DeliveryFailed {
+            channel_id, error, ..
+        } = failed
+        else {
             panic!("a delivery failure was expected");
         };
-        assert_eq!((channel_id, bindings.len()), (channel("ws"), 2));
+        assert_eq!(
+            (channel_id, error.as_str()),
+            (channel("ai"), CHANNEL_NOT_REGISTERED)
+        );
+    }
+
+    /// A `BEFORE_BROADCAST` hook that unregisters `channel_id` while the
+    /// message it decides on is under the lock: the call goes on with the
+    /// configuration it started with, which still holds the channel.
+    fn unregistering_during_the_call(kit: &RoomKit, channel_id: &str) {
+        let unregistering = kit.clone();
+        let channel_id = channel(channel_id);
+        kit.before_broadcast("unplug", move |_, _| {
+            unregistering.unregister_channel(&channel_id).unwrap();
+            ready(Ok(roomkit::model::HookResult::allow()))
+        })
+        .unwrap();
+    }
+
+    /// Gap G-048: a transport unregistered once the call started is skipped
+    /// when the driver finds it gone.
+    #[tokio::test]
+    async fn skips_a_transport_unregistered_during_the_call() {
+        let (kit, sms, _ws) = room_with_sms_and_ws().await;
+        unregistering_during_the_call(&kit, "ws");
+        let mut events = kit.subscribe();
+        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+            .await
+            .unwrap();
+        let mut failed = 0;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, FrameworkEvent::DeliveryFailed { .. }) {
+                failed += 1;
+            }
+        }
+        assert_eq!(failed, 0);
+    }
+
+    /// Gap G-048: an intelligence channel unregistered once the call
+    /// started is reported when the driver finds it gone.
+    #[tokio::test]
+    async fn reports_an_agent_unregistered_during_the_call() {
+        let (kit, sms, _ws) = room_with_sms_and_ws().await;
+        kit.register_channel(EchoAgent::new(channel("ai"), "Hello"))
+            .unwrap();
+        kit.attach(&room_id(), &channel("ai")).await.unwrap();
+        unregistering_during_the_call(&kit, "ai");
+        let mut events = kit.subscribe();
+        kit.process_inbound(message(&sms, "Bonjour"), Some(&room_id()))
+            .await
+            .unwrap();
+        let failed = next_matching(&mut events, |event| {
+            matches!(event, FrameworkEvent::DeliveryFailed { .. })
+        })
+        .await;
+        let FrameworkEvent::DeliveryFailed {
+            channel_id, error, ..
+        } = failed
+        else {
+            panic!("a delivery failure was expected");
+        };
+        assert_eq!(
+            (channel_id, error.as_str()),
+            (channel("ai"), CHANNEL_NOT_REGISTERED)
+        );
     }
 
     #[tokio::test]
@@ -399,6 +489,38 @@ impl Channel for Tagger {
             .metadata_updates
             .insert("roomkit:detached".to_owned(), revoked.into());
         ready(Ok(output))
+    }
+}
+
+/// Gap G-050: every creation of a room waits for its `ON_ROOM_CREATED`
+/// hooks, the integrator's included.
+mod creating {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// RFC Appendix B.1: the agent a creation hook attaches is bound once
+    /// `create_room` returns, however long the hook takes.
+    #[tokio::test]
+    async fn returns_once_its_on_room_created_hooks_are_over() {
+        let kit = RoomKit::new();
+        kit.register_channel(EchoAgent::new(channel("ai"), "Hello"))
+            .unwrap();
+        let attaching = kit.clone();
+        kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
+            let kit = attaching.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                kit.attach(&event.room_id, &channel("ai")).await.unwrap();
+            }
+        })
+        .unwrap();
+        kit.create_room(&room_id()).await.unwrap();
+        let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
+        let bound: Vec<&str> = bindings
+            .iter()
+            .map(|binding| binding.channel_id.as_str())
+            .collect();
+        assert_eq!(bound, ["ai"]);
     }
 }
 

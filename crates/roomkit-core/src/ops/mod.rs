@@ -57,8 +57,8 @@ pub use lifecycle::{
     PauseRoom, ReopenRoom, ResumeRoom, TimersChecked, UpdateBinding,
 };
 pub use protocol::{
-    Effect, EffectId, Entry, EntryId, Next, Notice, Operation, Outcome, ProtocolError, Request,
-    RoomCounters, Settled, Step, TargetUpdate,
+    CHANNEL_NOT_REGISTERED, Effect, EffectId, Entry, EntryId, Next, Notice, Operation, Outcome,
+    ProtocolError, Request, RoomCounters, Settled, Step, TargetUpdate,
 };
 
 use crate::model::{ErrorRecord, EventId, RoomId};

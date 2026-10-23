@@ -1053,6 +1053,104 @@ mod a_closed_room {
     }
 }
 
+/// RFC §8.2, gap G-048: a binding whose channel is not registered stays in
+/// its room; a transport target is skipped, an intelligence target reported.
+mod an_unregistered_channel {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use roomkit_core::ops::CHANNEL_NOT_REGISTERED;
+
+    /// The delivery failures reported, channel and error.
+    fn failures(sim: &Sim) -> Vec<(String, String)> {
+        sim.framework_events()
+            .into_iter()
+            .filter_map(|event| {
+                let FrameworkEvent::DeliveryFailed {
+                    channel_id, error, ..
+                } = event
+                else {
+                    return None;
+                };
+                Some((channel_id.to_string(), error.clone()))
+            })
+            .collect()
+    }
+
+    fn unregistered(sim: &mut Sim, id: &str) {
+        sim.config.unregister_channel(&channel(id)).unwrap();
+    }
+
+    fn gone() -> ErrorRecord {
+        ErrorRecord::new(CHANNEL_NOT_REGISTERED, "no channel is registered")
+    }
+
+    #[test]
+    fn is_not_called_as_a_transport_target() {
+        let mut sim = room();
+        unregistered(&mut sim, "ws");
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (sim.traced("on_event ws"), failures(&sim)),
+            (vec![], vec![])
+        );
+    }
+
+    #[test]
+    fn is_reported_as_an_intelligence_target_without_its_turn() {
+        let mut sim = room();
+        unregistered(&mut sim, "ai");
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (sim.traced("on_event ai"), failures(&sim)),
+            (
+                vec![],
+                vec![("ai".to_owned(), CHANNEL_NOT_REGISTERED.to_owned())]
+            )
+        );
+    }
+
+    /// Unregistered once the operation started, as the driver answers.
+    #[test]
+    fn the_driver_holds_no_more_is_skipped_as_a_transport_target() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.transport_with("ws", Box::new(|_, _| Err(gone())));
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(failures(&sim), vec![]);
+    }
+
+    /// Unregistered between its `on_event()` and its `deliver()`.
+    #[test]
+    fn the_driver_holds_no_more_at_its_delivery_is_skipped() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.transport("ws");
+        sim.deliver_with("ws", Box::new(|_| Err(gone())));
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(failures(&sim), vec![]);
+    }
+
+    /// Unregistered once the operation started: no turn failed, so
+    /// `ON_ERROR` does not fire.
+    #[test]
+    fn the_driver_holds_no_more_is_reported_as_an_intelligence_target() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.agent("ai", Box::new(|_, _| Err(gone())));
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                failures(&sim),
+                sim.async_triggers().contains(&HookTrigger::OnError)
+            ),
+            (
+                vec![("ai".to_owned(), CHANNEL_NOT_REGISTERED.to_owned())],
+                false
+            )
+        );
+    }
+}
+
 /// RFC §13.4: a redelivered message returns the event it committed first.
 mod a_duplicate_message {
     use super::*;

@@ -188,10 +188,15 @@ fn advance(
     }
 }
 
-/// The room as the lock found it goes through the timer gate first.
+/// The room as the lock found it goes through the timer gate first. A
+/// missing room makes a change of a stored event a no-op, as a target the
+/// room does not hold does, and fails a record's commit (gap G-063).
 fn on_loaded(cx: &mut Cx<'_>, room_id: &RoomId, change: &Change, outcome: Outcome) -> State {
     let context = match outcome.into_context() {
         Ok(Some(context)) => context,
+        Ok(None) if change.changes_a_stored_event() => {
+            return release(cx, room_id, Ok(Box::new(Done::nothing())));
+        }
         Ok(None) => {
             return release(
                 cx,

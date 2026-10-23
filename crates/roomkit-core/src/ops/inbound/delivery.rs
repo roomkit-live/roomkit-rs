@@ -6,6 +6,11 @@
 //! sends; an intelligence target is asked through `on_event()`, which is a
 //! turn. Each target receives the event transcoded for its capabilities and
 //! a context holding only what it may see (RFC §7.5 rule 8).
+//!
+//! A binding stays in its room when its channel is unregistered (gap G-048):
+//! a transport target whose channel the kit does not hold is skipped, as one
+//! served by another process may be, and an intelligence target is reported
+//! `delivery_failed`, since the turn it was owed is never taken.
 
 use std::collections::BTreeMap;
 
@@ -14,7 +19,7 @@ use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, DeliveryResult, DeliveryStatus,
     ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task,
 };
-use crate::ops::protocol::{EffectId, Notice, Outcome, Request};
+use crate::ops::protocol::{CHANNEL_NOT_REGISTERED, EffectId, Notice, Outcome, Request};
 use crate::ops::{Cx, Progress};
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::{self, DeliveryPlan};
@@ -142,9 +147,17 @@ impl DeliverySet {
         self.kind
     }
 
-    /// Calls every target's `on_event()` at once.
+    /// Calls every registered target's `on_event()` at once; a target
+    /// whose channel is not registered is not called (gap G-048).
     pub(super) fn start(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
-        for (index, target) in self.targets.iter().enumerate() {
+        for index in 0..self.targets.len() {
+            let Some(target) = self.targets.get(index) else {
+                continue;
+            };
+            if cx.config.channel(&target.binding.channel_id).is_none() {
+                self.not_registered(index);
+                continue;
+            }
             let effect = cx.io.issue(Request::OnEvent {
                 binding: target.binding.clone(),
                 event: target.event.clone(),
@@ -244,8 +257,11 @@ impl DeliverySet {
     }
 
     /// A target's `on_event()` raised: a turn that failed, or a transport
-    /// that is not delivered to.
+    /// that is not delivered to; or the driver holds the channel no more.
     fn on_event_failed(&mut self, cx: &mut Cx<'_>, index: usize, error: &ErrorRecord) {
+        if error.error_type == CHANNEL_NOT_REGISTERED {
+            return self.not_registered(index);
+        }
         let Some(target) = self.targets.get(index) else {
             return;
         };
@@ -338,8 +354,12 @@ impl DeliverySet {
         self.fail(index, NO_RECIPIENT.to_owned());
     }
 
-    /// A transport's `deliver()` raised.
+    /// A transport's `deliver()` raised; or the driver holds the channel no
+    /// more.
     fn on_delivery_failed(&mut self, index: usize, error: &ErrorRecord) {
+        if error.error_type == CHANNEL_NOT_REGISTERED {
+            return self.not_registered(index);
+        }
         let Some(target) = self.targets.get(index) else {
             return;
         };
@@ -382,6 +402,38 @@ impl DeliverySet {
         }
     }
 
+    /// A target whose channel is not registered, its binding left in the
+    /// room (gap G-048): a transport is skipped, and counts as no target;
+    /// an intelligence channel is reported `delivery_failed`.
+    fn not_registered(&mut self, index: usize) {
+        let Some(target) = self.targets.get(index) else {
+            return;
+        };
+        let channel_id = &target.binding.channel_id;
+        match target.role {
+            Role::Transport { .. } => {
+                tracing::debug!(
+                    target: "roomkit::core::delivery",
+                    room_id = %self.event.room_id,
+                    event_id = %self.event.id,
+                    channel_id = %channel_id,
+                    "the transport is not registered; it is skipped"
+                );
+                self.outcome.targets = self.outcome.targets.saturating_sub(1);
+            }
+            Role::Agent => {
+                tracing::warn!(
+                    target: "roomkit::core::delivery",
+                    room_id = %self.event.room_id,
+                    event_id = %self.event.id,
+                    channel_id = %channel_id,
+                    "the intelligence channel is not registered; its turn is not taken"
+                );
+                self.fail(index, CHANNEL_NOT_REGISTERED.to_owned());
+            }
+        }
+    }
+
     fn fail(&mut self, index: usize, message: String) {
         if let Some(target) = self.targets.get(index) {
             self.outcome
@@ -397,8 +449,8 @@ const NO_RECIPIENT: &str = "no_recipient";
 
 /// The recipient key the channel of `binding` delivers to, when the binding
 /// holds no recipient under it (RFC §10.2 step 3d, gap G-051). A channel that
-/// delivers to a destination of its own declares no key; an unregistered
-/// channel's call fails on its own (gap G-048).
+/// delivers to a destination of its own declares no key; one unregistered
+/// since the set started is answered as not registered (gap G-048).
 fn missing_recipient(cx: &Cx<'_>, binding: &ChannelBinding) -> Option<String> {
     let key = cx
         .config

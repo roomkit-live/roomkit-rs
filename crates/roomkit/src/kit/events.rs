@@ -18,13 +18,13 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `edited` marker: the host authorizes it on its own surface.
     ///
     /// Returns the event as it now stands, or `None` when the room holds no
-    /// such event, which changes and fires nothing. An update that changes
-    /// nothing writes and fires nothing either.
+    /// such event or does not exist, which changes and fires nothing (gap
+    /// G-063). An update that changes nothing writes and fires nothing
+    /// either.
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Mutation`] when the room does not exist, or when
-    /// the store or the room lock fails.
+    /// Returns [`KitError::Mutation`] when the store or the room lock fails.
     pub async fn update_event(
         &self,
         room_id: &RoomId,
@@ -45,12 +45,12 @@ impl<S: ConversationStore> RoomKit<S> {
     /// then holds fewer events than `event_count` counts.
     ///
     /// Returns the ids removed, the target's first; none when the room holds
-    /// no such event, which changes and fires nothing.
+    /// no such event or does not exist, which changes and fires nothing (gap
+    /// G-063).
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Mutation`] when the room does not exist, or when
-    /// the store or the room lock fails.
+    /// Returns [`KitError::Mutation`] when the store or the room lock fails.
     pub async fn delete_event(
         &self,
         room_id: &RoomId,

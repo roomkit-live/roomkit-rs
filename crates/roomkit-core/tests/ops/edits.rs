@@ -16,7 +16,7 @@ use roomkit_core::model::{
     InboundMessage, InjectedEvent, Participant, ParticipantId, ParticipantRole, Room, RoomEvent,
     RoomId, RoomStatus, RoomTimers, Timestamp, Visibility,
 };
-use roomkit_core::ops::{Entry, InboundResult, MutationError};
+use roomkit_core::ops::{Entry, InboundResult};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::HookTrigger;
 use roomkit_core::rules::transcoding;
@@ -1174,13 +1174,19 @@ mod a_direct_update {
         );
     }
 
+    /// Gap G-063: a missing room is a no-op, as a missing target is.
     #[test]
-    fn in_a_missing_room_fails() {
+    fn in_a_missing_room_changes_and_fires_nothing() {
         let mut sim = room();
+        sim.observer("projection", HookTrigger::OnEventUpdated);
         sim.room_exists = false;
         assert_eq!(
-            sim.update_event("evt_1", rewrite("x")),
-            Err(MutationError::RoomNotFound(room_id()))
+            (
+                sim.update_event("evt_1", rewrite("x")),
+                sim.traced("update event"),
+                sim.async_triggers()
+            ),
+            (Ok(None), vec![], vec![])
         );
     }
 
@@ -1242,6 +1248,22 @@ mod a_direct_delete {
         sim.send(Sim::message("wa", "Unrelated")).unwrap();
         forget(&mut sim);
         sim
+    }
+
+    /// Gap G-063: a missing room is a no-op, as a missing target is.
+    #[test]
+    fn in_a_missing_room_removes_and_fires_nothing() {
+        let mut sim = threaded();
+        sim.observer("projection", HookTrigger::OnEventDeleted);
+        sim.room_exists = false;
+        assert_eq!(
+            (
+                sim.delete_event("evt_1", true),
+                sim.traced("delete event"),
+                sim.async_triggers()
+            ),
+            (Ok(vec![]), vec![], vec![])
+        );
     }
 
     #[test]

@@ -64,6 +64,13 @@ pub struct Effect {
     pub locked: Option<RoomId>,
 }
 
+/// The error type of a [`Request::OnEvent`] or [`Request::Deliver`]
+/// answered [`Outcome::Failed`] because the driver holds no channel under
+/// the binding's id, unregistered since the operation started: a transport
+/// target is then skipped, an intelligence target reported
+/// `delivery_failed` with this error (gap G-048).
+pub const CHANNEL_NOT_REGISTERED: &str = "channel_not_registered";
+
 /// What an effect asks of the driver, and the outcome it is answered with.
 ///
 /// Every request may also be answered with [`Outcome::Failed`] when the
@@ -248,7 +255,9 @@ pub enum Request {
         id: EventId,
     },
     /// Call the channel's `on_event()` (RFC §6.1). For an intelligence
-    /// channel this is a turn (RFC §10.6). Answer [`Outcome::Output`].
+    /// channel this is a turn (RFC §10.6). Answer [`Outcome::Output`], or
+    /// [`Outcome::Failed`] with the error type [`CHANNEL_NOT_REGISTERED`]
+    /// for a channel the driver no longer holds.
     OnEvent {
         /// The channel's binding.
         binding: ChannelBinding,
@@ -258,7 +267,8 @@ pub enum Request {
         context: Box<RoomContext>,
     },
     /// Call the channel's `deliver()` (RFC §6.1). Answer
-    /// [`Outcome::Output`].
+    /// [`Outcome::Output`], or [`Outcome::Failed`] with the error type
+    /// [`CHANNEL_NOT_REGISTERED`] for a channel the driver no longer holds.
     Deliver {
         /// The channel's binding.
         binding: ChannelBinding,

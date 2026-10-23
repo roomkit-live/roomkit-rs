@@ -9,7 +9,8 @@
 //! the room read and its due timer transitions applied (gap G-045), the
 //! event changed or the record committed, the lock released; then the
 //! mutation trigger fires, with the event as the change left it. A target
-//! the room does not hold is a no-op that fires nothing. The room's status
+//! the room does not hold, or a room that does not exist, is a no-op that
+//! fires nothing (gap G-063). The room's status
 //! does not refuse a change: a change to what the room stored is no new
 //! event (RFC §5.1, gap G-063). It refuses a record, which grows the
 //! timeline.
@@ -36,8 +37,9 @@ use crate::model::{ErrorRecord, EventId, EventUpdates, RoomEvent, RoomId, RoomSt
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum MutationError {
-    /// The room does not exist, or, for a record's commit, belongs to
-    /// another organization than the caller's (RFC §17.2).
+    /// For a record's commit, the room does not exist or belongs to another
+    /// organization than the caller's (RFC §17.2). An update or a delete in
+    /// a room that does not exist is a no-op instead (gap G-063).
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
     /// The record names another room than the one it is committed to (RFC
@@ -71,7 +73,8 @@ pub enum MutationError {
 /// §10.3 `update_event(room_id, event_id, content|source|metadata)`), then
 /// fires `ON_EVENT_UPDATED` with the event as it now stands. It adds no
 /// `edited` marker. Its output is the event as it now stands, `None` when
-/// the room holds no such event, which is a no-op that fires nothing.
+/// the room holds no such event or does not exist, which is a no-op that
+/// fires nothing (gap G-063).
 ///
 /// An update that changes nothing writes nothing and fires nothing (gap
 /// G-063).
@@ -122,8 +125,8 @@ impl Operation for UpdateEvent {
 /// content (gap G-063). Then fires
 /// `ON_EVENT_DELETED` once for each event removed, the target first, each
 /// as it was stored (gap G-063). Its output is the ids removed, the
-/// target's first; none when the room holds no such event, which fires
-/// nothing.
+/// target's first; none when the room holds no such event or does not
+/// exist, which fires nothing (gap G-063).
 ///
 /// The room's counters are left as they are: an index is never given out
 /// again, and the timeline then holds fewer events than `event_count`

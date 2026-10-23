@@ -67,8 +67,14 @@ pub enum LifecycleError {
     Lock(ErrorRecord),
 }
 
-/// Creates a room, then fires `ON_ROOM_CREATED` and emits `room_created`.
-/// Its output is the stored room.
+/// Creates a room, then emits `room_created` and runs the `ON_ROOM_CREATED`
+/// hooks, waiting for them (`RunObservers`) before it returns, as the
+/// inbound pipeline's creation of a room does: a host that creates a room
+/// and then sends into it finds what the hooks set up, the agent they
+/// attach for instance (RFC Appendix B.1, gap G-050). What a hook raises is
+/// the driver's to log; a driver that cannot run them answers `Failed`,
+/// which is logged, and the room is created all the same. Its output is the
+/// stored room.
 ///
 /// A room whose metadata holds a key of the namespace the implementation
 /// reserves is refused before anything is written (RFC §10.6.5, gap
@@ -79,6 +85,7 @@ pub struct CreateRoom {
     io: Io,
     room: Room,
     creating: Option<EffectId>,
+    observing: Option<EffectId>,
     started: bool,
 }
 
@@ -90,8 +97,47 @@ impl CreateRoom {
             io: Io::new(),
             room,
             creating: None,
+            observing: None,
             started: false,
         }
+    }
+
+    /// The room is stored: its creation is announced and its hooks run,
+    /// awaited (gap G-050); the output once none observes it.
+    fn on_created(
+        &mut self,
+        environment: &mut dyn Environment,
+        outcome: Outcome,
+    ) -> Option<Result<Room, LifecycleError>> {
+        if let Err(error) = outcome.into_stored() {
+            return Some(Err(LifecycleError::Store(error)));
+        }
+        let context = RoomContext::new(self.room.clone());
+        let mut cx = Cx {
+            config: &self.config,
+            env: environment,
+            io: &mut self.io,
+        };
+        self.observing = report::report_awaited(&mut cx, Reported::RoomCreated, &context);
+        match self.observing {
+            Some(_) => None,
+            None => Some(Ok(self.room.clone())),
+        }
+    }
+
+    /// The `ON_ROOM_CREATED` hooks are over; what they raised was the
+    /// driver's to log. The room is created whatever they did.
+    fn on_observed(&self, outcome: Outcome) -> Room {
+        if let Err(error) = outcome.into_observed() {
+            tracing::warn!(
+                target: "roomkit::core::lifecycle",
+                room_id = %self.room.id,
+                error_type = %error.error_type,
+                message = %error.message,
+                "the ON_ROOM_CREATED hooks could not be run; the room is created all the same"
+            );
+        }
+        self.room.clone()
     }
 
     /// Asks for the write, unless the room is refused as it stands.
@@ -112,23 +158,13 @@ impl Operation for CreateRoom {
     fn poll(&mut self, environment: &mut dyn Environment) -> Step<Self::Output> {
         let mut result = if self.started { None } else { self.start() };
         while let Some((effect, outcome)) = self.io.next_outcome() {
-            if self.creating != Some(effect) {
-                continue;
+            if self.creating == Some(effect) {
+                self.creating = None;
+                result = self.on_created(environment, outcome);
+            } else if self.observing == Some(effect) {
+                self.observing = None;
+                result = Some(Ok(self.on_observed(outcome)));
             }
-            self.creating = None;
-            result = Some(match outcome.into_stored() {
-                Ok(()) => {
-                    let context = RoomContext::new(self.room.clone());
-                    let mut cx = Cx {
-                        config: &self.config,
-                        env: environment,
-                        io: &mut self.io,
-                    };
-                    report::report(&mut cx, Reported::RoomCreated, &context);
-                    Ok(self.room.clone())
-                }
-                Err(error) => Err(LifecycleError::Store(error)),
-            });
         }
         self.io.step(result)
     }

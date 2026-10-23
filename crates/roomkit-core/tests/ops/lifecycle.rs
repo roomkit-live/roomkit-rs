@@ -68,13 +68,45 @@ mod create_room {
         );
     }
 
+    /// Gap G-050: the integrator's creation waits for its hooks, as the
+    /// inbound pipeline's does, so the room it returns is ready for what
+    /// the host sends next.
     #[test]
-    fn fires_on_room_created() {
+    fn awaits_its_on_room_created_hooks() {
         let mut sim = Sim::without_rooms();
         sim.observer("welcome", HookTrigger::OnRoomCreated);
         let room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
         sim.run(CreateRoom::new(sim.shared_config(), room)).unwrap();
-        assert_eq!(sim.async_triggers(), [HookTrigger::OnRoomCreated]);
+        assert_eq!(
+            (sim.async_triggers(), sim.trace),
+            (
+                vec![],
+                vec![
+                    "store room room_1 Active".to_owned(),
+                    "await on_room_created welcome".to_owned()
+                ]
+            )
+        );
+    }
+
+    /// Gap G-050: hooks that cannot be run are logged, and the room is
+    /// created all the same.
+    #[test]
+    fn returns_the_room_when_its_hooks_cannot_be_run() {
+        let mut sim = Sim::without_rooms();
+        sim.observer("welcome", HookTrigger::OnRoomCreated);
+        sim.failing_effect = Some("await on_room_created");
+        let room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
+        let created = sim.run(CreateRoom::new(sim.shared_config(), room.clone()));
+        assert_eq!(created, Ok(room));
+    }
+
+    #[test]
+    fn asks_for_no_hook_when_none_observes_the_trigger() {
+        let mut sim = Sim::without_rooms();
+        let room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
+        sim.run(CreateRoom::new(sim.shared_config(), room)).unwrap();
+        assert_eq!(sim.trace, ["store room room_1 Active"]);
     }
 
     /// RFC §10.6.5: the integrator never writes the implementation's keys.

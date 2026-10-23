@@ -267,6 +267,19 @@ publishes a release.
   with it only past ten digits, a shorter number taking the code as a
   national one: `3931234567` on a channel declaring `39` is
   `+393931234567` (gap G-052).
+- A delivery set does not call a target whose channel is not registered,
+  its binding left in the room: a transport is skipped, logged at debug
+  level, and an intelligence channel is reported `delivery_failed` with the
+  error `channel_not_registered`; each was called and its failure reported
+  (gap G-048). A driver answers an `on_event()` or a `deliver()` of a
+  channel it no longer holds `Failed` with the error type
+  `ops::CHANNEL_NOT_REGISTERED`.
+- `RoomKit::create_room` and `create_room_with` wait for the room's
+  `ON_ROOM_CREATED` hooks before they return, as the inbound pipeline's
+  creation does; they fired them without waiting (gap G-050).
+- `RoomKit::update_event` and `delete_event` on a room that does not exist
+  are a no-op, `None` and no id, as for an event the room does not hold;
+  they failed with `MutationError::RoomNotFound` (gap G-063).
 - The `roomkit` driver completes each effect as it finishes and polls the
   operation between completions, a lock, a lane or a ticket's turn waited
   for beside the calls, instead of waiting for a step's every effect.
