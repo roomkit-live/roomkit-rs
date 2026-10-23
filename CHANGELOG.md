@@ -510,3 +510,7 @@ publishes a release.
   over, the integrator's `create_room` and step 2's alike, and before step
   2's attach, as the amended RFC §10.1 step 2 orders it; it was emitted
   before the hooks ran.
+- A binding has a recipient exactly when routing reads one: a string that
+  is not blank, or a number. A boolean, an array or an object under the
+  recipient key is none, and a delivery to it is refused `no_recipient`;
+  it was handed to the transport (gap G-075).

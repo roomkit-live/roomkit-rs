@@ -22,7 +22,7 @@
 //! stored as their writer wrote them; routing compares them in their
 //! channel's form, an [`AddressForm`] (gap G-058).
 
-use serde_json::Value;
+use serde_json::{Number, Value};
 use thiserror::Error;
 
 use crate::model::{ChannelBinding, ChannelType};
@@ -184,21 +184,39 @@ impl AddressForm {
         normalize(address, self.addressing, self.country_code.as_ref())
     }
 
-    /// The recipient `binding` delivers to, in the channel's form: its value
-    /// under the channel's recipient key, when it is a non-empty string or a
-    /// number (a Telegram chat id is one).
+    /// The recipient `binding` delivers to, in the channel's form: its
+    /// value under the channel's recipient key, when it is one
+    /// ([`has_recipient`]). A number, a Telegram chat id, is kept as
+    /// written.
     pub fn recipient(&self, binding: &ChannelBinding) -> Option<String> {
         let key = self.recipient_key.as_deref()?;
-        match binding.metadata.get(key)? {
-            Value::String(recipient) if !recipient.trim().is_empty() => {
-                Some(self.normalize(recipient))
-            }
-            Value::Number(recipient) => Some(recipient.to_string()),
-            Value::String(_)
-            | Value::Null
-            | Value::Bool(_)
-            | Value::Array(_)
-            | Value::Object(_) => None,
+        match written_recipient(binding, key)? {
+            Recipient::Text(recipient) => Some(self.normalize(recipient)),
+            Recipient::Number(recipient) => Some(recipient.to_string()),
+        }
+    }
+}
+
+/// A recipient as a binding's metadata holds it.
+enum Recipient<'binding> {
+    Text(&'binding str),
+    Number(&'binding Number),
+}
+
+/// The recipient `binding` holds under `key`: a string that is not blank,
+/// or a number (RFC §5.7, §10.2 step 3d, gap G-075). Null, a blank string,
+/// a boolean, an array and an object are none.
+fn written_recipient<'binding>(
+    binding: &'binding ChannelBinding,
+    key: &str,
+) -> Option<Recipient<'binding>> {
+    match binding.metadata.get(key)? {
+        Value::String(recipient) if !recipient.trim().is_empty() => {
+            Some(Recipient::Text(recipient))
+        }
+        Value::Number(recipient) => Some(Recipient::Number(recipient)),
+        Value::String(_) | Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
+            None
         }
     }
 }
@@ -334,14 +352,12 @@ pub fn chat_key(channel_type: ChannelType) -> Option<&'static str> {
     }
 }
 
-/// Whether `binding` has a recipient under `key`: a value neither null nor
-/// an empty string (RFC §10.2 step 3d).
+/// Whether `binding` has a recipient under `key`, the one
+/// [`AddressForm::recipient`] reads: a string that is not blank, or a
+/// number (RFC §10.2 step 3d, gap G-075). A delivery to a binding with
+/// none is refused `no_recipient`.
 pub fn has_recipient(binding: &ChannelBinding, key: &str) -> bool {
-    match binding.metadata.get(key) {
-        Some(Value::String(recipient)) => !recipient.trim().is_empty(),
-        Some(Value::Null) | None => false,
-        Some(Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) => true,
-    }
+    written_recipient(binding, key).is_some()
 }
 
 /// The text after a URI scheme (`whatsapp:`, `tel:`), or `address` when it
@@ -638,6 +654,33 @@ mod tests {
         let empty = binding_with(json!({ "phone_number": " " }));
         let null = binding_with(json!({ "phone_number": null }));
         assert!(!has_recipient(&empty, PHONE_NUMBER) && !has_recipient(&null, PHONE_NUMBER));
+    }
+
+    /// Gap G-075: a binding has the recipient a form reads, and only that
+    /// one: a boolean, an array or an object is none, a number is one.
+    #[test]
+    fn a_binding_has_a_recipient_when_a_form_reads_one() {
+        let form = sms_form();
+        let values = [
+            json!(true),
+            json!(["+15550000001"]),
+            json!({ "number": "+15550000001" }),
+            json!(15_550_000_001_u64),
+        ];
+        let read: Vec<(bool, bool)> = values
+            .into_iter()
+            .map(|value| {
+                let binding = binding_with(json!({ "phone_number": value }));
+                (
+                    has_recipient(&binding, PHONE_NUMBER),
+                    form.recipient(&binding).is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [(false, false), (false, false), (false, false), (true, true)]
+        );
     }
 
     fn sms_form() -> AddressForm {
