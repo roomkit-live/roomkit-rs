@@ -1,9 +1,9 @@
 //! A message that names no room, effect by effect (RFC §10.4, §10.1 step 2,
 //! §5.7): the identity its address resolves to, the router asked, the
 //! sender recorded on the binding under the room lock before step 3, a
-//! binding taken meanwhile routing the message once more, a new room when
-//! none is found, and a failing router failing the message before any
-//! write.
+//! binding taken meanwhile routing the message once more, a room paused by
+//! its lock kept as the sender's conversation, a new room when none is
+//! found, and a failing router failing the message before any write.
 //!
 //! The router is scripted (`Sim::routes_to`). The simulated driver checks on
 //! every run that the router is asked holding no lock and no lane, that the
@@ -14,7 +14,7 @@ use roomkit_core::model::{
     Access, ChannelBinding, ChannelType, ErrorRecord, EventContent, Identity, IdentityId,
     InboundMessage, Participant, ParticipantId, Room, RoomId, RoomStatus, RoomTimers, Timestamp,
 };
-use roomkit_core::ops::{FrameworkEvent, InboundError};
+use roomkit_core::ops::{FrameworkEvent, InboundError, InboundResult};
 use roomkit_core::rules::hook_registry::HookTrigger;
 use serde_json::json;
 
@@ -586,9 +586,8 @@ mod a_room_that_heard_another_sender_meanwhile {
     }
 }
 
-/// Gap G-055: a routed room no longer ACTIVE by its lock is no longer the
-/// message's.
-mod a_routed_room_no_longer_active {
+/// Gap G-055: a routed room CLOSED by its lock is no longer the message's.
+mod a_routed_room_closed_by_its_lock {
     use super::*;
     use pretty_assertions::assert_eq;
 
@@ -632,6 +631,146 @@ mod a_routed_room_no_longer_active {
                 named(binding_of(&sim, "sms")).0
             ),
             (false, Some("new_room_1".to_owned()), None)
+        );
+    }
+}
+
+/// Gaps G-045, G-055: a routed room PAUSED by its lock is the message's when
+/// it is the sender's conversation by step 1 (RFC §10.4), which the message
+/// resumes; otherwise the message is routed once more.
+mod a_routed_room_paused_by_its_lock {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// `room_1` with an SMS channel bound naming the sender, which the
+    /// router returns.
+    fn routed_to_the_sender_s_room() -> Sim {
+        let mut sim = Sim::new();
+        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.attach("sms").participant_id = Some(ParticipantId::new(SENDER).unwrap());
+        sim.routes_to(Some("room_1"));
+        sim
+    }
+
+    /// `sim` with `room_1` paused.
+    fn paused(mut sim: Sim) -> Sim {
+        sim.room.status = RoomStatus::Paused;
+        sim.room.paused_at = Some(Timestamp::UNIX_EPOCH);
+        sim
+    }
+
+    /// The room the message landed in, `room_1`'s status and pause, and how
+    /// often the router was asked.
+    fn landing(
+        sim: &Sim,
+        result: &InboundResult,
+    ) -> (Option<String>, RoomStatus, Option<Timestamp>, usize) {
+        (
+            result.event.as_ref().map(|event| event.room_id.to_string()),
+            sim.room.status,
+            sim.room.paused_at,
+            sim.traced("route").len(),
+        )
+    }
+
+    #[test]
+    fn whose_binding_names_the_sender_takes_the_message_and_is_resumed() {
+        let mut sim = paused(routed_to_the_sender_s_room());
+        let result = sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (landing(&sim, &result), sim.timeline_lines()),
+            (
+                (Some("room_1".to_owned()), RoomStatus::Active, None, 1),
+                vec!["#0 sms delivered \"Bonjour\"".to_owned()]
+            )
+        );
+    }
+
+    /// RFC §10.4 step 1: a member reached through the channel makes the room
+    /// the sender's conversation, and the sender is recorded on its binding.
+    #[test]
+    fn whose_member_reached_through_the_channel_is_the_sender_takes_the_message() {
+        let mut sim = paused(routed_to_room_1());
+        sim.participants.push(Participant::new(
+            ParticipantId::new(SENDER).unwrap(),
+            room_id(),
+            channel("sms"),
+            Timestamp::UNIX_EPOCH,
+        ));
+        let result = sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (landing(&sim, &result), named(binding_of(&sim, "sms")).0),
+            (
+                (Some("room_1".to_owned()), RoomStatus::Active, None, 1),
+                Some(SENDER.to_owned())
+            )
+        );
+    }
+
+    /// RFC §5.1, gap G-045: the room was ACTIVE when the router read it, and
+    /// its lock's gate applies the pause that fell due meanwhile.
+    #[test]
+    fn by_its_timer_since_the_router_read_it_takes_the_sender_s_message() {
+        let mut sim = routed_to_the_sender_s_room();
+        sim.room.timers = RoomTimers {
+            inactive_after_seconds: Some(60),
+            closed_after_seconds: None,
+            last_activity_at: None,
+        };
+        let result = sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                landing(&sim, &result),
+                sim.framework_event_names().first().cloned()
+            ),
+            (
+                (Some("room_1".to_owned()), RoomStatus::Active, None, 1),
+                Some("room_paused".to_owned())
+            )
+        );
+    }
+
+    /// Gap G-045: a paused room is step 3's only through a `group` binding.
+    /// Whatever strategy chose this one, a record would name the sender on a
+    /// binding naming no one, or attach the channel: the room is left
+    /// paused, and the message gets a room of its own.
+    #[test]
+    fn that_is_not_the_sender_s_conversation_routes_the_message_once_more() {
+        let mut unbound = paused(routed_to_room_1());
+        unbound.bindings.clear();
+        let landed = [paused(routed_to_room_1()), unbound].map(|mut sim| {
+            let result = sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+            (landing(&sim, &result), named(binding_of(&sim, "sms")).0)
+        });
+        let rerouted = (
+            (
+                Some("new_room_1".to_owned()),
+                RoomStatus::Paused,
+                Some(Timestamp::UNIX_EPOCH),
+                2,
+            ),
+            None,
+        );
+        assert_eq!(landed, [rerouted.clone(), rerouted]);
+    }
+
+    /// Gap G-045: a group binding makes the room one conversation, whoever
+    /// writes; any strategy's paused group room takes the message, which
+    /// resumes it, and records no one.
+    #[test]
+    fn bound_as_a_group_takes_the_message_and_is_resumed() {
+        let mut sim = Sim::new();
+        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.attach("sms").group = true;
+        sim.routes_to(Some("room_1"));
+        let mut sim = paused(sim);
+        let result = sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (landing(&sim, &result), named(binding_of(&sim, "sms")).0),
+            (
+                (Some("room_1".to_owned()), RoomStatus::Active, None, 1),
+                None
+            )
         );
     }
 }

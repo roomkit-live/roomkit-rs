@@ -289,6 +289,21 @@ publishes a release.
   `InboundError::OtherOrganization` (RFC §17.2, gap G-069).
   `Inbound::inject(config, room_id, organization_id, event)` and
   `Entry::Direct` carry the organization.
+- A sender who writes again after a timer paused their room returns to it,
+  and the message resumes it: routing's step 1 reads ACTIVE and PAUSED
+  rooms, the newest winning. Step 3 reads ACTIVE rooms and the PAUSED rooms
+  bound to the channel as a group, so a paused group room takes its group's
+  next message, and any other PAUSED room takes in no one new; one ACTIVE
+  room and one PAUSED group room bound to the channel are two, and give a
+  new room. Under the room lock, a routed room found PAUSED stays the
+  message's when it is the sender's conversation by step 1 or bound to the
+  channel as a group, and the message is routed once more otherwise; it was
+  routed once more whenever the room was not ACTIVE (gaps G-045, G-055).
+  `rules::routing::considered` gives way to `step_one_considers` and
+  `step_three_considers`, which take a `Candidate`; `conversation_through`,
+  answering a `Through`, tells a sender's conversation for step 1, and
+  `paused_room_takes` tells the lock what steps 1 and 3 would take.
+  `DefaultRouter::candidates` reads the PAUSED rooms too.
 - The `roomkit` driver completes each effect as it finishes and polls the
   operation between completions, a lock, a lane or a ticket's turn waited
   for beside the calls, instead of waiting for a step's every effect.

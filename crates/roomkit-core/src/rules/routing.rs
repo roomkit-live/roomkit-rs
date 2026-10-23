@@ -8,13 +8,16 @@
 //! default strategy reads the rooms the channel reaches, each a
 //! [`Candidate`], and returns:
 //!
-//! 1. the newest ACTIVE room whose binding of the channel names the sender,
-//!    else the newest where a participant the sender is was reached through
-//!    the channel ([`conversation`]);
-//! 2. else the one ACTIVE room bound to the channel, when it admits the
-//!    sender ([`admits`]): its binding is declared `group`, or it names no
-//!    one else, delivers to no one else, and the room has neither a member
-//!    nor a message of anyone else on the channel;
+//! 1. the newest ACTIVE or PAUSED room whose binding of the channel names
+//!    the sender, else the newest where a participant the sender is was
+//!    reached through the channel ([`conversation`]): a conversation its
+//!    timer paused is the sender's still, and their message resumes it (gap
+//!    G-045);
+//! 2. else the one room bound to the channel, ACTIVE or PAUSED with its
+//!    binding declared `group` (gap G-045), when it admits the sender
+//!    ([`admits`]): its binding is declared `group`, or it names no one
+//!    else, delivers to no one else, and the room has neither a member nor
+//!    a message of anyone else on the channel;
 //! 3. else none: the framework creates a room.
 //!
 //! The strategy never guesses: two rooms bound to the channel give none at
@@ -25,7 +28,9 @@
 //! Once a room is chosen, step 2 records the sender on its binding of the
 //! channel, under the room lock ([`recording`]). A binding found naming
 //! another sender by then sends the message to be routed once more (gap
-//! G-055).
+//! G-055), and so does a room found PAUSED that neither is the sender's
+//! conversation by step 1 nor binds the channel as a group: the lock tells
+//! it by [`paused_room_takes`], the tests of the strategy's steps 1 and 3.
 
 use std::cmp::Ordering;
 
@@ -141,7 +146,7 @@ pub struct Candidate {
     pub participants: Vec<Participant>,
     /// Who the room has heard on the channel: the participants the room's
     /// received events of the channel name ([`heard`]). Step 3 reads it, for
-    /// the one room bound to the channel only.
+    /// the one room bound to the channel it considers only.
     pub heard: Vec<ParticipantId>,
 }
 
@@ -201,6 +206,17 @@ pub enum Recording {
     Taken,
 }
 
+/// How a room is a sender's conversation on a channel by step 1 (RFC §10.4
+/// step 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Through {
+    /// The room's binding of the channel names the sender as its
+    /// correspondent.
+    Binding,
+    /// A participant the sender is was reached through the channel.
+    Participant,
+}
+
 /// The address a message is routed by (RFC §5.7, §10.4, gap G-057): the
 /// chat it was posted in, read under the channel's chat key; else, on a
 /// channel whose replies go to the sender, the sender's address. `None` for
@@ -236,56 +252,122 @@ fn chat_of(metadata: &Metadata, key: &str) -> Option<String> {
 
 /// The room the default strategy routes `query`'s message to, among the
 /// rooms `candidates` hold; `None` when the framework must create one (RFC
-/// §10.4). Only the ACTIVE rooms the caller reaches count (RFC §17.2).
+/// §10.4). Step 1 reads the rooms [`step_one_considers`], step 3 those
+/// [`step_three_considers`].
 pub fn route(query: &RouteQuery, candidates: &[Candidate]) -> Option<RoomId> {
-    let considered: Vec<&Candidate> = candidates
-        .iter()
-        .filter(|candidate| considered(query, &candidate.room))
-        .collect();
-    conversation(query, &considered)
-        .or_else(|| admitted(query, &considered))
+    let considered = |considers: fn(&RouteQuery, &Candidate) -> bool| -> Vec<&Candidate> {
+        candidates
+            .iter()
+            .filter(|candidate| considers(query, candidate))
+            .collect()
+    };
+    conversation(query, &considered(step_one_considers))
+        .or_else(|| admitted(query, &considered(step_three_considers)))
         .map(|candidate| candidate.room.id.clone())
 }
 
-/// Whether the strategy considers `room` for `query`: an ACTIVE room the
-/// caller reaches (RFC §10.4, §17.2). A room's status is read as stored; a
-/// timer that fell due is applied by the room's next locked section, which
-/// then routes the message once more (gap G-055).
-pub fn considered(query: &RouteQuery, room: &Room) -> bool {
-    room.status == RoomStatus::Active
+/// Whether step 1 considers `candidate`'s room for `query`: an ACTIVE or a
+/// PAUSED room the caller reaches (RFC §10.4 step 1, §17.2, gap G-045). A
+/// conversation its timer paused is the sender's still, and their message
+/// resumes it; a CLOSED or ARCHIVED room is not. A room's status is read as
+/// stored; a timer that fell due is applied by the room's next locked
+/// section, which keeps the room or routes the message once more (gap
+/// G-055).
+pub fn step_one_considers(query: &RouteQuery, candidate: &Candidate) -> bool {
+    let room = &candidate.room;
+    matches!(room.status, RoomStatus::Active | RoomStatus::Paused)
         && organizations::admits(query.organization_id.as_deref(), room)
+}
+
+/// Whether step 3 considers `candidate`'s room for `query`: a room the
+/// caller reaches that is ACTIVE, or PAUSED with its binding of the channel
+/// declared `group` (RFC §10.4 step 3, §17.2, gap G-045). A group binding
+/// says the channel is one conversation, which its next message resumes;
+/// any other PAUSED room is set aside, and does not count among the rooms
+/// bound to the channel. The two kinds count alike: one ACTIVE room and one
+/// PAUSED group room bound to the channel are two, which give none (RFC
+/// §10.4 "A router MUST NOT guess"). A room's status is read as stored, as
+/// at step 1.
+pub fn step_three_considers(query: &RouteQuery, candidate: &Candidate) -> bool {
+    let room = &candidate.room;
+    let open = match room.status {
+        RoomStatus::Active => true,
+        RoomStatus::Paused => declared_group(candidate.binding(&query.channel_id)),
+        RoomStatus::Closed | RoomStatus::Archived => false,
+    };
+    open && organizations::admits(query.organization_id.as_deref(), room)
 }
 
 /// Step 1: the sender's conversation, the newest room whose binding of the
 /// channel names the sender, else the newest where a participant the sender
-/// is was reached through the channel (RFC §10.4 step 1, gap G-058). A
-/// binding speaks for its own channel only, and so does a participant.
+/// is was reached through the channel (RFC §10.4 step 1, gap G-058), each
+/// told by [`conversation_through`].
 pub fn conversation<'room>(
     query: &RouteQuery,
     candidates: &[&'room Candidate],
 ) -> Option<&'room Candidate> {
-    let by_binding = candidates.iter().copied().filter(|candidate| {
-        candidate
-            .binding(&query.channel_id)
-            .and_then(|binding| correspondent(binding, &query.form))
-            .is_some_and(|named| {
-                query.sender.named_by(
-                    &named,
-                    &query.form,
-                    &query.channel_id,
-                    &candidate.participants,
-                )
-            })
-    });
-    newest(by_binding).or_else(|| {
-        let by_participant = candidates.iter().copied().filter(|candidate| {
-            candidate
-                .participants
-                .iter()
-                .any(|participant| joined_through(participant, query))
-        });
-        newest(by_participant)
-    })
+    let through = |candidate: &Candidate| {
+        conversation_through(
+            &query.sender,
+            &query.form,
+            &query.channel_id,
+            candidate.binding(&query.channel_id),
+            &candidate.participants,
+        )
+    };
+    let found = |wanted: Through| {
+        let matching = candidates
+            .iter()
+            .copied()
+            .filter(move |candidate| through(candidate) == Some(wanted));
+        newest(matching)
+    };
+    found(Through::Binding).or_else(|| found(Through::Participant))
+}
+
+/// How a room is `sender`'s conversation on `channel_id` by step 1,
+/// addresses compared in `form` (RFC §10.4 step 1, §5.5, §5.7, gap G-058):
+/// through `binding`, the room's binding of the channel, when its
+/// correspondent names the sender; else through one of the room's
+/// `participants` reached through the channel who is the sender; `None`
+/// when the room is not their conversation. A binding speaks for its own
+/// channel only, and so does a participant.
+///
+/// The strategy's step 1 asks it of every room it reads ([`conversation`]),
+/// and the room lock of a routed room it finds PAUSED
+/// ([`paused_room_takes`]): the two tell a conversation alike.
+pub fn conversation_through(
+    sender: &Sender,
+    form: &AddressForm,
+    channel_id: &ChannelId,
+    binding: Option<&ChannelBinding>,
+    participants: &[Participant],
+) -> Option<Through> {
+    let named = binding
+        .and_then(|binding| correspondent(binding, form))
+        .is_some_and(|named| sender.named_by(&named, form, channel_id, participants));
+    if named {
+        return Some(Through::Binding);
+    }
+    joined(sender, form, channel_id, participants).then_some(Through::Participant)
+}
+
+/// Whether a routed message stays in a room the lock finds PAUSED, whose
+/// binding of `channel_id` is `binding` and which holds `participants` (RFC
+/// §10.4, gaps G-045, G-055): the room is `sender`'s conversation by step 1
+/// ([`conversation_through`]), or its binding is declared `group`, which
+/// step 3 considers paused ([`step_three_considers`]). Any other PAUSED
+/// room would take the sender in by step 3's admission, which it does not
+/// give a PAUSED room, whatever strategy chose it.
+pub fn paused_room_takes(
+    sender: &Sender,
+    form: &AddressForm,
+    channel_id: &ChannelId,
+    binding: Option<&ChannelBinding>,
+    participants: &[Participant],
+) -> bool {
+    declared_group(binding)
+        || conversation_through(sender, form, channel_id, binding, participants).is_some()
 }
 
 /// Steps 3 and 4: the one room bound to the channel, when it admits the
@@ -374,14 +456,10 @@ pub fn still_admits(
     participants: &[Participant],
     heard: &[ParticipantId],
 ) -> Result<(), Refusal> {
-    if binding.group || correspondent(binding, form).is_some() {
-        return Ok(());
-    }
-    let joined = participants.iter().any(|participant| {
-        reached_through(participant, &binding.channel_id)
-            && sender.is_participant(participant, form)
-    });
-    if joined {
+    if binding.group
+        || correspondent(binding, form).is_some()
+        || joined(sender, form, &binding.channel_id, participants)
+    {
         return Ok(());
     }
     admission(sender, form, binding, participants, heard)
@@ -500,12 +578,24 @@ pub fn recording(
     }
 }
 
-/// Whether `participant` is `query`'s sender and was reached through the
-/// query's channel (RFC §10.4 step 1, §5.5): only then is its room the
+/// Whether one of `participants` is `sender` and was reached through
+/// `channel_id` (RFC §10.4 step 1, §5.5): only then is their room the
 /// sender's conversation on this channel.
-fn joined_through(participant: &Participant, query: &RouteQuery) -> bool {
-    reached_through(participant, &query.channel_id)
-        && query.sender.is_participant(participant, &query.form)
+fn joined(
+    sender: &Sender,
+    form: &AddressForm,
+    channel_id: &ChannelId,
+    participants: &[Participant],
+) -> bool {
+    participants.iter().any(|participant| {
+        reached_through(participant, channel_id) && sender.is_participant(participant, form)
+    })
+}
+
+/// Whether `binding` is declared `group`: the channel is one conversation,
+/// whoever writes on it (RFC §5.7).
+fn declared_group(binding: Option<&ChannelBinding>) -> bool {
+    binding.is_some_and(|binding| binding.group)
 }
 
 /// Whether the room reached `participant` through `channel_id` (RFC §5.5
@@ -646,6 +736,16 @@ mod tests {
         candidate
     }
 
+    /// `candidate` in `status`.
+    fn in_status(mut candidate: Candidate, status: RoomStatus) -> Candidate {
+        candidate.room.status = status;
+        candidate
+    }
+
+    fn paused(candidate: Candidate) -> Candidate {
+        in_status(candidate, RoomStatus::Paused)
+    }
+
     /// `candidate` with the member `p_jean`, resolved to `id_jean`, reached
     /// through `channel_id`.
     fn with_jean(mut candidate: Candidate, channel_id: &str) -> Candidate {
@@ -777,15 +877,50 @@ mod tests {
             assert_eq!(routed(&query(ALICE), &rooms), Some("room_1".to_owned()));
         }
 
+        /// Gap G-045: a conversation its timer paused is the sender's still.
         #[test]
-        fn a_room_that_is_not_active_is_not_found() {
-            let statuses = [RoomStatus::Paused, RoomStatus::Closed, RoomStatus::Archived];
-            let found = statuses.map(|status| {
-                let mut alice = naming(room("room_1", 0), ALICE);
-                alice.room.status = status;
-                routed(&query(ALICE), &[alice])
+        fn a_paused_room_whose_binding_names_the_sender_is_found() {
+            let rooms = [paused(naming(room("room_1", 0), ALICE))];
+            assert_eq!(routed(&query(ALICE), &rooms), Some("room_1".to_owned()));
+        }
+
+        #[test]
+        fn a_paused_room_the_sender_joined_through_the_channel_is_found() {
+            let rooms = [paused(with_member(bound(room("room_1", 0)), ALICE, "sms"))];
+            assert_eq!(routed(&query(ALICE), &rooms), Some("room_1".to_owned()));
+        }
+
+        /// The newest wins, whichever of the two is paused.
+        #[test]
+        fn the_newest_of_an_active_and_a_paused_room_naming_the_sender_is_found() {
+            let newer_paused = [
+                naming(room("room_1", 10), ALICE),
+                paused(naming(room("room_2", 20), ALICE)),
+            ];
+            let newer_active = [
+                paused(naming(room("room_1", 10), ALICE)),
+                naming(room("room_2", 20), ALICE),
+            ];
+            assert_eq!(
+                [
+                    routed(&query(ALICE), &newer_paused),
+                    routed(&query(ALICE), &newer_active)
+                ],
+                [Some("room_2".to_owned()), Some("room_2".to_owned())]
+            );
+        }
+
+        #[test]
+        fn a_closed_or_archived_room_is_not_found() {
+            let found = [RoomStatus::Closed, RoomStatus::Archived].map(|status| {
+                let named = in_status(naming(room("room_1", 0), ALICE), status);
+                let joined = in_status(with_member(room("room_2", 0), ALICE, "sms"), status);
+                [
+                    routed(&query(ALICE), &[named]),
+                    routed(&query(ALICE), &[joined]),
+                ]
             });
-            assert_eq!(found, [None, None, None]);
+            assert_eq!(found, [[None, None], [None, None]]);
         }
 
         /// RFC §17.2.
@@ -830,6 +965,50 @@ mod tests {
         #[test]
         fn a_room_the_channel_does_not_bind_is_not_step_three_s() {
             let rooms = [bound_on(room("room_1", 0), "whatsapp", |_| {})];
+            assert_eq!(routed(&query(ALICE), &rooms), None);
+        }
+
+        /// Gap G-045: step 3 admits a sender into a paused room only through
+        /// a `group` binding.
+        #[test]
+        fn a_paused_room_whose_binding_is_not_group_is_not_step_three_s() {
+            let rooms = [paused(bound(room("room_1", 0)))];
+            assert_eq!(routed(&query(ALICE), &rooms), None);
+        }
+
+        #[test]
+        fn a_closed_or_archived_room_is_not_step_three_s_even_bound_as_a_group() {
+            let found = [RoomStatus::Closed, RoomStatus::Archived].map(|status| {
+                let rooms = [in_status(grouped(room("room_1", 0)), status)];
+                routed(&query(ALICE), &rooms)
+            });
+            assert_eq!(found, [None, None]);
+        }
+
+        /// Gap G-045: a paused room bound to the channel leaves the one
+        /// ACTIVE room bound to it to step 3.
+        #[test]
+        fn a_paused_room_beside_the_active_one_bound_to_the_channel_leaves_it_to_step_three() {
+            let rooms = [bound(room("room_1", 10)), paused(bound(room("room_2", 20)))];
+            assert_eq!(routed(&query(ALICE), &rooms), Some("room_1".to_owned()));
+        }
+
+        /// Gap G-045: a group binding says the channel is one conversation,
+        /// which its next message resumes.
+        #[test]
+        fn a_paused_room_bound_as_a_group_is_step_three_s() {
+            let rooms = [having_heard(paused(grouped(room("room_1", 0))), BOB)];
+            assert_eq!(routed(&query(ALICE), &rooms), Some("room_1".to_owned()));
+        }
+
+        /// RFC §10.4 "A router MUST NOT guess": a paused group room counts
+        /// among the rooms bound to the channel.
+        #[test]
+        fn an_active_room_and_a_paused_group_room_bound_to_the_channel_give_none() {
+            let rooms = [
+                bound(room("room_1", 10)),
+                paused(grouped(room("room_2", 20))),
+            ];
             assert_eq!(routed(&query(ALICE), &rooms), None);
         }
 

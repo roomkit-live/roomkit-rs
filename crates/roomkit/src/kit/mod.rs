@@ -185,11 +185,12 @@ impl<S: ConversationStore> RoomKit<S> {
     /// The sender is written in the channel's form first: a phone number in
     /// E.164, an email address lower-case (RFC §5.7). A message that names
     /// no room is routed (RFC §10.4): the sender's conversation on the
-    /// channel, or the one room bound to the channel when it admits them; the
-    /// sender is then recorded on the room's binding, and a message no room
-    /// was found for gets a new one, bound to its sender. On a chat channel
-    /// the conversation is the chat the message was posted in, read under
-    /// the channel's chat key (RFC §5.7).
+    /// channel, a paused one included, which the message resumes, or the
+    /// one room bound to the channel when it admits them, active, or paused
+    /// with a `group` binding; the sender is then recorded on the room's
+    /// binding, and a message no room was found for gets a new one, bound to
+    /// its sender. On a chat channel the conversation is the chat the
+    /// message was posted in, read under the channel's chat key (RFC §5.7).
     ///
     /// A room that does not exist is created with its id: `ON_ROOM_CREATED`'s
     /// hooks run, and finish, before the channel is attached with a binding

@@ -21,10 +21,12 @@
 //!   `source_unbound`;
 //! - a room a router returned has the sender recorded on its binding of the
 //!   channel, under the room lock, before step 3 (RFC §10.1 step 2, gap
-//!   G-061). A room no longer ACTIVE by then, whose binding names another
-//!   sender, or that step 3 no longer admits the sender to (someone else
-//!   heard on the channel meanwhile), is no longer the message's, which is
-//!   routed once more (gap G-055).
+//!   G-061). A room CLOSED or ARCHIVED by then, PAUSED but neither the
+//!   sender's conversation by step 1 nor bound to the channel as a group
+//!   (gap G-045), whose binding names another sender, or that step 3 no
+//!   longer admits the sender to (someone else heard on the channel
+//!   meanwhile), is no longer the message's, which is routed once more
+//!   (gap G-055).
 //!
 //! A new room for a message no room was found for is created with a fresh
 //! id: a store that holds a room with it fails the message, since that room

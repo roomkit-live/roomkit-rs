@@ -1,6 +1,7 @@
 //! The room lifecycle on the tokio runtime (RFC §5.1, §7.2, §7.5 rule 7,
-//! §8.2): room timers on an advancing clock, the background sweeper,
-//! unregistering a channel, and the room metadata updates channels return.
+//! §8.2): room timers on an advancing clock, the background sweeper, a
+//! sender routed back to the conversation its timer paused, unregistering a
+//! channel, and the room metadata updates channels return.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -259,6 +260,133 @@ mod timers {
             kit.run_timers(Duration::from_secs(1)),
             Err(KitError::NoRuntime)
         ));
+    }
+}
+
+/// RFC §10.4 step 1, gap G-045: a sender who writes again after the timer
+/// paused their conversation returns to it, and their message resumes it.
+mod a_paused_conversation {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// The timed room, with a websocket attached beside its SMS transport.
+    async fn with_websocket(clock: &Clock) -> (RoomKit, RecordingTransport, RecordingTransport) {
+        let (kit, sms) = timed_room(clock).await;
+        let ws = RecordingTransport::new(channel("ws"), ChannelType::Websocket);
+        kit.register_channel(ws.clone()).unwrap();
+        kit.attach(&room_id(), ws.id()).await.unwrap();
+        (kit, sms, ws)
+    }
+
+    /// Moves the clock past the room's inactivity timer and checks the
+    /// timers: the statuses of the rooms the check changed, and the pause
+    /// it reported.
+    async fn paused_by_its_timer(
+        kit: &RoomKit,
+        clock: &Clock,
+    ) -> (Vec<RoomStatus>, FrameworkEvent) {
+        let mut events = kit.subscribe();
+        clock.advance(90);
+        let paused = kit.check_timers().await.unwrap();
+        let reported = next_matching(&mut events, |event| {
+            matches!(event, FrameworkEvent::RoomPaused { .. })
+        })
+        .await;
+        (statuses(&paused), reported)
+    }
+
+    #[tokio::test]
+    async fn its_sender_writing_again_lands_in_it_and_resumes_it() {
+        let clock = Clock::new();
+        let (kit, sms, ws) = with_websocket(&clock).await;
+        kit.process_inbound(message(&sms, "Bonjour"), None)
+            .await
+            .unwrap();
+        let (paused, reported) = paused_by_its_timer(&kit, &clock).await;
+        let result = kit
+            .process_inbound(message(&sms, "Still there?"), None)
+            .await
+            .unwrap();
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        assert_eq!(
+            (
+                paused,
+                reported,
+                result.event.map(|event| event.room_id),
+                (room.status, room.paused_at),
+                ws.texts()
+            ),
+            (
+                vec![RoomStatus::Paused],
+                FrameworkEvent::RoomPaused {
+                    room_id: room_id(),
+                    reason: TransitionReason::Timer,
+                },
+                Some(room_id()),
+                (RoomStatus::Active, None),
+                ["Bonjour", "Still there?"].map(str::to_owned).to_vec()
+            )
+        );
+    }
+
+    /// Gap G-045: step 3 admits no one into a paused room whose binding is
+    /// not `group`, so a sender the room never recorded gets a room of their
+    /// own, and the paused one is left as it is.
+    #[tokio::test]
+    async fn a_sender_it_never_recorded_gets_a_room_of_their_own() {
+        let clock = Clock::new();
+        let (kit, sms, ws) = with_websocket(&clock).await;
+        paused_by_its_timer(&kit, &clock).await;
+        let result = kit
+            .process_inbound(message(&sms, "Bonjour"), None)
+            .await
+            .unwrap();
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        assert_eq!(
+            (
+                result.event.is_some_and(|event| event.room_id != room_id()),
+                room.status,
+                ws.texts()
+            ),
+            (true, RoomStatus::Paused, Vec::<String>::new())
+        );
+    }
+
+    /// Gap G-045: a group binding says the channel is one conversation, so a
+    /// second member's message after the pause lands in the room and
+    /// resumes it.
+    #[tokio::test]
+    async fn bound_as_a_group_takes_another_member_s_message_and_is_resumed() {
+        let clock = Clock::new();
+        let (kit, sms, ws) = with_websocket(&clock).await;
+        kit.attach_with(&room_id(), sms.id(), |binding| binding.group = true)
+            .await
+            .unwrap();
+        kit.process_inbound(message(&sms, "Bonjour"), None)
+            .await
+            .unwrap();
+        let (paused, _) = paused_by_its_timer(&kit, &clock).await;
+        let other = InboundMessage::new(
+            sms.id().clone(),
+            "+15550000002",
+            EventContent::text("Me too"),
+        );
+        let result = kit.process_inbound(other, None).await.unwrap();
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        assert_eq!(
+            (
+                paused,
+                result.event.map(|event| event.room_id),
+                (room.status, room.paused_at),
+                ws.texts()
+            ),
+            (
+                vec![RoomStatus::Paused],
+                Some(room_id()),
+                (RoomStatus::Active, None),
+                ["Bonjour", "Me too"].map(str::to_owned).to_vec()
+            )
+        );
     }
 }
 

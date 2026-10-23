@@ -60,10 +60,12 @@ pub(crate) enum Changed {
     },
     /// The change did not apply: it wrote nothing.
     Unchanged(Box<RoomContext>),
-    /// The room is no longer the routed message's: it is not ACTIVE, its
-    /// binding names another sender by now, or it no longer admits the
-    /// sender a record would name on a binding naming no one. Nothing was
-    /// written, and the message is routed once more (gap G-055).
+    /// The room is no longer the routed message's: it is CLOSED or
+    /// ARCHIVED, or PAUSED, neither bound to the channel as a group nor the
+    /// sender's conversation by step 1; its binding names another sender by
+    /// now; or it no longer admits the sender a record would name on a
+    /// binding naming no one. Nothing was written, and the message is routed
+    /// once more (gaps G-045, G-055).
     Rerouted(Box<RoomContext>),
 }
 
@@ -214,18 +216,20 @@ fn attach_automatically(binding: &ChannelBinding, mut context: Box<RoomContext>)
 }
 
 /// Records a routed message's sender on the room as the lock finds it (RFC
-/// §10.1 step 2, §10.4, gap G-061). A room no longer ACTIVE, whose binding
-/// names another sender by now, or which no longer admits the sender a
-/// record would name on a binding naming no one, is no longer the
-/// message's: the message is routed once more (gap G-055). A room that does
-/// not bind the channel has it attached naming the sender, unless rule 7
-/// refuses; one that binds it has the sender recorded through rule 6,
-/// unless the binding is declared `group` or has them already.
+/// §10.1 step 2, §10.4, gap G-061). A room whose status no longer keeps it
+/// the message's ([`kept_by_status`]), whose binding names another sender
+/// by now, or which no longer admits the sender a record would name on a
+/// binding naming no one, is no longer the message's: the message is routed
+/// once more (gap G-055). A room that does not bind the channel has it
+/// attached naming the sender, unless rule 7 refuses; one that binds it has
+/// the sender recorded through rule 6, unless the binding is declared
+/// `group` or has them already.
 fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision {
-    if context.room.status != RoomStatus::Active {
+    let current = bound(&context, &record.binding.channel_id).ok();
+    if !kept_by_status(record, current.as_ref(), &context) {
         return rerouted(context);
     }
-    let Ok(current) = bound(&context, &record.binding.channel_id) else {
+    let Some(current) = current else {
         return attach_automatically(&record.binding, context);
     };
     let recording = routing::recording(
@@ -244,6 +248,37 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision {
             store_updated(&current, updated, context)
         }
         Recording::Taken | Recording::Write(_) => rerouted(context),
+    }
+}
+
+/// Whether the room's status, as its lock finds it, keeps the room the
+/// routed message's, `current` being its binding of the channel (RFC §5.1,
+/// §10.4, gaps G-045, G-055). An ACTIVE room does. A PAUSED room does when
+/// it is the sender's conversation by step 1 (its binding names the sender,
+/// or the sender is a participant reached through the channel), or when its
+/// binding is declared `group`, told as the default strategy's steps 1 and
+/// 3 tell them ([`routing::paused_room_takes`]); the message's commit then
+/// resumes it. Any other PAUSED room is no longer the message's, whatever
+/// strategy chose it. A CLOSED or ARCHIVED room never is.
+///
+/// A room the default strategy read ACTIVE is found PAUSED here when the
+/// lock's gate applied a pause that fell due meanwhile, and is kept by the
+/// same test.
+fn kept_by_status(
+    record: &SenderRecord,
+    current: Option<&ChannelBinding>,
+    context: &RoomContext,
+) -> bool {
+    match context.room.status {
+        RoomStatus::Active => true,
+        RoomStatus::Paused => routing::paused_room_takes(
+            &record.sender,
+            &record.form,
+            &record.binding.channel_id,
+            current,
+            &context.participants,
+        ),
+        RoomStatus::Closed | RoomStatus::Archived => false,
     }
 }
 

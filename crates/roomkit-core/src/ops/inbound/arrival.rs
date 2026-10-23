@@ -10,11 +10,12 @@
 //! its address resolves to is read once, then the kit's router is asked
 //! (`Route`). The lane of the room it answers is entered, and step 2 records
 //! the sender there under the room lock. A room no longer the message's by
-//! then (its binding names another sender, it is no longer ACTIVE, or step 3
-//! no longer admits the sender, someone else being heard there meanwhile) has
-//! its lane left, and the router is asked once more; a second such answer,
-//! or none, gives the message a new room (gap G-055). The arrival never
-//! holds two lanes at once.
+//! then (its binding names another sender, it is CLOSED or ARCHIVED, or
+//! PAUSED, neither the sender's conversation by step 1 nor bound to the
+//! channel as a group, or step 3 no longer admits the sender, someone else
+//! being heard there meanwhile) has its lane left, and the router is asked
+//! once more; a second such answer, or none, gives the message a new room
+//! (gaps G-045, G-055). The arrival never holds two lanes at once.
 //!
 //! Every request of the arrival carries the call's deadline (RFC §13.6),
 //! but a write, a release, what completes a room step 2 creates, and the

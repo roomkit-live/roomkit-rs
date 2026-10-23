@@ -201,7 +201,9 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// caller's organization, gap G-058). Ids compare as stored. Rooms are
     /// ordered as the default router orders them
     /// ([`rules::routing::recency`](roomkit_core::rules::routing::recency)):
-    /// by creation, then by id.
+    /// by creation, then by id. Step 1 reads ACTIVE and PAUSED rooms (gap
+    /// G-045): a router built on this query asks it for each status, and
+    /// keeps the newer of the rooms it answers.
     fn find_room_id_by_binding(
         &self,
         channel_id: &ChannelId,
@@ -212,7 +214,8 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// The newest room `filter` admits holding a participant reached through
     /// `channel_id` whose id is `participant_id`, or whose identity's is
     /// (RFC §14.1 `find_room_id_by_participant`, given the channel by gap
-    /// G-058). Ids compare as stored; rooms are ordered as in
+    /// G-058). Ids compare as stored; rooms are ordered, and step 1 asks
+    /// for each status, as in
     /// [`find_room_id_by_binding`](Self::find_room_id_by_binding).
     fn find_room_id_by_participant(
         &self,
