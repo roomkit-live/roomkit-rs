@@ -164,7 +164,8 @@ impl CallStage {
     /// Puts back the stage a handler took out, as it was: an answer it does
     /// not wait for changes nothing.
     pub(super) fn put_back(&mut self, stage: Stage) {
-        debug_assert_eq!(self.taken.take(), Some(stage.name()));
+        let taken = self.taken.take();
+        debug_assert_eq!(taken, Some(stage.name()));
         self.stage = stage;
     }
 }
