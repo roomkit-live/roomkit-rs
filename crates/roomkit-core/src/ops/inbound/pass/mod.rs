@@ -37,6 +37,7 @@ use super::direct::DirectCall;
 use super::edits::Accepted;
 use crate::model::{
     ChannelId, ErrorRecord, InjectedEvent, Observation, RoomContext, RoomEvent, RoomStatus, Task,
+    Visibility,
 };
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::gate::{Pending, TimerHooks};
@@ -59,7 +60,12 @@ pub(super) enum PassOrigin {
     /// of the operation (RFC §13.5, gap G-070).
     Adopted(EntryId),
     /// A channel's response, re-entering (RFC §10.1 step 14).
-    Response,
+    Response {
+        /// Where the answers of the message its cascade derives from may
+        /// go, which binds what answers the response too, at any depth
+        /// (RFC §5.12, gap G-073); `None` for anywhere.
+        answers_within: Option<Visibility>,
+    },
     /// An event a hook injected, delivered to its targets only (gap G-021).
     Injected {
         /// The channels it is delivered to; `None` stores it only.

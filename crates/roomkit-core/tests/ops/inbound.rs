@@ -1524,10 +1524,11 @@ mod a_response_visibility {
         );
     }
 
-    /// An answer to an answer answers no message: it keeps the visibility
-    /// its channel gave it.
+    /// The scope binds every pass of the message's cascade: an answer to
+    /// an answer stays within it too, so nothing derived from the message
+    /// leaves the perimeter it asked for.
     #[test]
-    fn leaves_a_response_to_a_response_as_its_channel_gave_it() {
+    fn narrows_a_response_to_a_response_within_the_message_s() {
         let mut sim = room_with(answering_as("all"));
         sim.agent(
             "writer",
@@ -1541,7 +1542,10 @@ mod a_response_visibility {
         sim.send(answered_within("Hello", "intelligence")).unwrap();
         assert_eq!(
             (stored(&sim, "Re: Hello"), stored(&sim, "Noted")),
-            (Some("intelligence".to_owned()), Some("all".to_owned()))
+            (
+                Some("intelligence".to_owned()),
+                Some("intelligence".to_owned())
+            )
         );
     }
 

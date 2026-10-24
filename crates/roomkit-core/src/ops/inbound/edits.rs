@@ -45,7 +45,9 @@ pub(super) fn check(
 ) -> Result<Accepted, EditRefusal> {
     let mutation = edits::mutation(event)?.ok_or(EditRefusal::TargetNotFound)?;
     let origin = match origin {
-        PassOrigin::Trigger | PassOrigin::Adopted(_) | PassOrigin::Response => Origin::Channel,
+        PassOrigin::Trigger | PassOrigin::Adopted(_) | PassOrigin::Response { .. } => {
+            Origin::Channel
+        }
         PassOrigin::Injected { .. } => Origin::Hook,
     };
     edits::validate(event, &mutation, target.as_ref(), origin, participants)?;

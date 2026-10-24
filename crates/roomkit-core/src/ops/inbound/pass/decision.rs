@@ -224,7 +224,7 @@ impl CommitPass {
             PassOrigin::Injected { targets } => {
                 self.injected_visibility(event, targets.as_deref(), &context.bindings)
             }
-            PassOrigin::Trigger | PassOrigin::Adopted(_) | PassOrigin::Response => {
+            PassOrigin::Trigger | PassOrigin::Adopted(_) | PassOrigin::Response { .. } => {
                 commit::stored_visibility(event, context)
             }
         }

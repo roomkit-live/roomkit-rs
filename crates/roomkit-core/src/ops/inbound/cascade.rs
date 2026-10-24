@@ -108,10 +108,12 @@ impl Machine {
             );
             self.trigger.settle(entry_result(&report.result), decided);
         }
-        let answers_within = if trigger {
-            self.call.answers_within.clone()
-        } else {
-            None
+        // The scope a message gives its answers binds every pass of its
+        // cascade, the responses to its responses included (gap G-073).
+        let answers_within = match origin {
+            PassOrigin::Trigger => self.call.answers_within.clone(),
+            PassOrigin::Response { answers_within } => answers_within.clone(),
+            PassOrigin::Adopted(_) | PassOrigin::Injected { .. } => None,
         };
         self.add_to_cascade(cx, report, origin, answers_within);
         if trigger {
@@ -170,7 +172,7 @@ impl Machine {
         let kind = match origin {
             PassOrigin::Trigger => SetKind::Root,
             PassOrigin::Adopted(_) => SetKind::Adopted,
-            PassOrigin::Response => SetKind::Response,
+            PassOrigin::Response { .. } => SetKind::Response,
             PassOrigin::Injected { .. } => SetKind::Injected,
         };
         let budget = self.cascade.budget.clone();
@@ -305,9 +307,10 @@ impl Machine {
     }
 
     /// Queues one channel's responses to the event `set` delivered: each
-    /// re-enters as a pass, within where the answers to its trigger may go
-    /// (gap G-073), unless the room refuses it first (RFC §8.3). An
-    /// instruction does not re-enter (gap G-066).
+    /// re-enters as a pass, within where the answers of the message the
+    /// cascade derives from may go, which binds what answers it too (gap
+    /// G-073), unless the room refuses it first (RFC §8.3). An instruction
+    /// does not re-enter (gap G-066).
     fn queue_response(&mut self, cx: &mut Cx<'_>, response: Response, set: &DeliverySet) {
         let Response { responder, events } = response;
         let trigger = set.event();
@@ -323,9 +326,12 @@ impl Machine {
                 // stored refused (RFC §8.3).
                 self.queue_refused(event, chain_depth::CHAIN_DEPTH_LIMIT);
             } else if self.cascade.budget.take() {
+                let origin = PassOrigin::Response {
+                    answers_within: set.answers_within().cloned(),
+                };
                 self.cascade.queue(Job::Pass(
-                    Box::new(CommitPass::new(PassOrigin::Response, event)),
-                    PassOrigin::Response,
+                    Box::new(CommitPass::new(origin.clone(), event)),
+                    origin,
                 ));
             } else {
                 self.queue_refused(event, chain_depth::REENTRY_LOOP_CAP);
