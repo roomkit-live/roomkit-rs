@@ -69,10 +69,11 @@ impl ConversationStore for GatedStore {
         &self,
         channel_id: &ChannelId,
         participant_id: &ParticipantId,
+        identity_id: Option<&IdentityId>,
         filter: &RoomFilter,
     ) -> Result<Option<RoomId>, StoreError> {
         self.store
-            .find_room_id_by_binding(channel_id, participant_id, filter)
+            .find_room_id_by_binding(channel_id, participant_id, identity_id, filter)
             .await
     }
 
@@ -80,10 +81,11 @@ impl ConversationStore for GatedStore {
         &self,
         channel_id: &ChannelId,
         participant_id: &ParticipantId,
+        identity_id: Option<&IdentityId>,
         filter: &RoomFilter,
     ) -> Result<Option<RoomId>, StoreError> {
         self.store
-            .find_room_id_by_participant(channel_id, participant_id, filter)
+            .find_room_id_by_participant(channel_id, participant_id, identity_id, filter)
             .await
     }
 

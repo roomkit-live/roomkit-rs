@@ -291,31 +291,34 @@ pub trait ConversationStore: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Vec<Room>, StoreError>> + Send;
 
     /// The newest room `filter` admits whose binding of `channel_id` names
-    /// `participant_id` as its correspondent (RFC §14.1
-    /// `find_room_id_by_binding`, the filter carrying its status and the
-    /// caller's organization, gap G-058). Ids compare as stored. Rooms are
-    /// ordered as the default router orders them
-    /// ([`rules::routing::recency`](roomkit_core::rules::routing::recency)):
-    /// by creation, then by id. Step 1 reads ACTIVE and PAUSED rooms (gap
-    /// G-045): a router built on this query asks it for each status, and
-    /// keeps the newer of the rooms it answers.
+    /// the sender as its correspondent: `participant_id`, their address, or
+    /// `identity_id`, the identity the caller resolved for them, `None` when
+    /// none (RFC §14.1 `find_room_id_by_binding`, §10.4 step 1, gap G-058).
+    /// The filter carries the statuses and the caller's organization. Ids
+    /// compare as stored. Rooms are ordered as the default router orders
+    /// them ([`rules::routing::recency`](roomkit_core::rules::routing::recency)):
+    /// by creation, then by id, whichever name found them. Step 1 reads
+    /// ACTIVE and PAUSED rooms (gap G-045): a router built on this query asks
+    /// it for each status, and keeps the newer of the rooms it answers.
     fn find_room_id_by_binding(
         &self,
         channel_id: &ChannelId,
         participant_id: &ParticipantId,
+        identity_id: Option<&IdentityId>,
         filter: &RoomFilter,
     ) -> impl Future<Output = Result<Option<RoomId>, StoreError>> + Send;
 
     /// The newest room `filter` admits holding a participant reached through
-    /// `channel_id` whose id is `participant_id`, or whose identity's is
-    /// (RFC §14.1 `find_room_id_by_participant`, given the channel by gap
-    /// G-058). Ids compare as stored; rooms are ordered, and step 1 asks
-    /// for each status, as in
+    /// `channel_id` named by the sender's `participant_id` or `identity_id`:
+    /// its id is either, or its identity is `identity_id` (RFC §14.1
+    /// `find_room_id_by_participant`, gap G-058). Ids compare as stored;
+    /// rooms are ordered, and step 1 asks for each status, as in
     /// [`find_room_id_by_binding`](Self::find_room_id_by_binding).
     fn find_room_id_by_participant(
         &self,
         channel_id: &ChannelId,
         participant_id: &ParticipantId,
+        identity_id: Option<&IdentityId>,
         filter: &RoomFilter,
     ) -> impl Future<Output = Result<Option<RoomId>, StoreError>> + Send;
 

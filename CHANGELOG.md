@@ -174,7 +174,8 @@ as it stands.
   model whole and, of its operations and rules, only what a caller names.
 - **The store** (§14.1): rooms with partial updates and filters, bindings,
   participants by room, identities linked to and unlinked from addresses
-  per organization, the routing lookups by binding and by participant, and
+  per organization, the routing lookups by binding and by participant,
+  each finding the sender by address or by identity, and
   events, a commit writing the event, the room's counters and an edit's or
   a delete's target in one transaction, an index below `event_count`
   refused, the idempotency lookup from a channel or within the room

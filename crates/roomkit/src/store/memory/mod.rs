@@ -51,24 +51,51 @@ impl Record {
         filter.matches(&self.room, &self.bindings, &self.participants)
     }
 
-    /// Whether the room's binding of `channel_id` names `participant_id`.
-    fn binds_to(&self, channel_id: &ChannelId, participant_id: &ParticipantId) -> bool {
+    /// Whether the room's binding of `channel_id` names `participant_id` or
+    /// `identity_id`.
+    fn binds_to(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &ParticipantId,
+        identity_id: Option<&IdentityId>,
+    ) -> bool {
         self.bindings.iter().any(|binding| {
             &binding.channel_id == channel_id
-                && binding.participant_id.as_ref() == Some(participant_id)
+                && binding
+                    .participant_id
+                    .as_ref()
+                    .is_some_and(|named| names(named, participant_id, identity_id))
         })
     }
 
     /// Whether the room holds a participant reached through `channel_id`
-    /// whose id, or whose identity's, is `participant_id`.
-    fn reached(&self, channel_id: &ChannelId, participant_id: &ParticipantId) -> bool {
+    /// whose id is `participant_id` or `identity_id`, or whose identity is
+    /// `identity_id`.
+    fn reached(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &ParticipantId,
+        identity_id: Option<&IdentityId>,
+    ) -> bool {
         self.participants.iter().any(|participant| {
             participant.connected_via.contains(channel_id)
-                && (&participant.id == participant_id
-                    || participant.identity_id.as_ref().map(IdentityId::as_str)
-                        == Some(participant_id.as_str()))
+                && (names(&participant.id, participant_id, identity_id)
+                    || identity_id
+                        .is_some_and(|identity| participant.identity_id.as_ref() == Some(identity)))
         })
     }
+}
+
+/// Whether `named`, a stored id, names the sender: their address
+/// `participant_id`, or the identity `identity_id` the caller resolved for
+/// them. Ids compare as stored.
+fn names(
+    named: &ParticipantId,
+    participant_id: &ParticipantId,
+    identity_id: Option<&IdentityId>,
+) -> bool {
+    named == participant_id
+        || identity_id.is_some_and(|identity| named.as_str() == identity.as_str())
 }
 
 impl InMemoryStore {
@@ -179,18 +206,24 @@ impl ConversationStore for InMemoryStore {
         &self,
         channel_id: &ChannelId,
         participant_id: &ParticipantId,
+        identity_id: Option<&IdentityId>,
         filter: &RoomFilter,
     ) -> Result<Option<RoomId>, StoreError> {
-        Ok(self.newest(filter, |record| record.binds_to(channel_id, participant_id)))
+        Ok(self.newest(filter, |record| {
+            record.binds_to(channel_id, participant_id, identity_id)
+        }))
     }
 
     async fn find_room_id_by_participant(
         &self,
         channel_id: &ChannelId,
         participant_id: &ParticipantId,
+        identity_id: Option<&IdentityId>,
         filter: &RoomFilter,
     ) -> Result<Option<RoomId>, StoreError> {
-        Ok(self.newest(filter, |record| record.reached(channel_id, participant_id)))
+        Ok(self.newest(filter, |record| {
+            record.reached(channel_id, participant_id, identity_id)
+        }))
     }
 
     async fn store_binding(&self, binding: ChannelBinding) -> Result<(), StoreError> {
@@ -817,7 +850,7 @@ mod tests {
         room_naming(&store, "newer", 20, Some("+15550000001")).await;
         room_naming(&store, "newest", 30, Some("+15550000002")).await;
         let found = store
-            .find_room_id_by_binding(&sms(), &alice(), &RoomFilter::default())
+            .find_room_id_by_binding(&sms(), &alice(), None, &RoomFilter::default())
             .await
             .unwrap();
         assert_eq!(found, Some(RoomId::new("newer").unwrap()));
@@ -831,6 +864,7 @@ mod tests {
             .find_room_id_by_binding(
                 &ChannelId::new("whatsapp").unwrap(),
                 &alice(),
+                None,
                 &RoomFilter::default(),
             )
             .await
@@ -847,7 +881,7 @@ mod tests {
             ..RoomFilter::default()
         };
         let found = store
-            .find_room_id_by_binding(&sms(), &alice(), &filter)
+            .find_room_id_by_binding(&sms(), &alice(), None, &filter)
             .await
             .unwrap();
         assert_eq!(found, None);
@@ -860,13 +894,15 @@ mod tests {
         participant.identity_id = Some(IdentityId::new("id_jean").unwrap());
         store.create_participant(participant).await.unwrap();
         let by_id = store
-            .find_room_id_by_participant(&sms(), &jean().id, &RoomFilter::default())
+            .find_room_id_by_participant(&sms(), &jean().id, None, &RoomFilter::default())
             .await
             .unwrap();
+        // Another address, the identity the caller resolved for it.
         let by_identity = store
             .find_room_id_by_participant(
                 &sms(),
-                &ParticipantId::new("id_jean").unwrap(),
+                &ParticipantId::new("+15559999999").unwrap(),
+                Some(&IdentityId::new("id_jean").unwrap()),
                 &RoomFilter::default(),
             )
             .await
@@ -882,6 +918,7 @@ mod tests {
             .find_room_id_by_participant(
                 &ChannelId::new("email").unwrap(),
                 &jean().id,
+                None,
                 &RoomFilter::default(),
             )
             .await
@@ -948,5 +985,91 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["early", "late"]
         );
+    }
+
+    /// RFC §14.1, §10.4 step 1 (44dada1), gap G-058: the routing lookups
+    /// find the sender by their address or by the identity the caller
+    /// resolved for them, the newest room either name finds winning.
+    mod routing_lookups {
+        use pretty_assertions::assert_eq;
+        use roomkit_core::model::{IdentityId, ParticipantId};
+
+        use super::*;
+
+        const ALICE: &str = "+15550000001";
+
+        fn sms() -> ChannelId {
+            ChannelId::new("sms").unwrap()
+        }
+
+        fn marie() -> IdentityId {
+            IdentityId::new("id_marie").unwrap()
+        }
+
+        /// A store holding `named`, rooms created a second apart in that
+        /// order, each with an SMS binding naming the id it gives.
+        async fn bound(named: &[(&str, &str)]) -> InMemoryStore {
+            let store = InMemoryStore::new();
+            for (offset, (room, correspondent)) in named.iter().enumerate() {
+                let room_id = RoomId::new(*room).unwrap();
+                let created =
+                    Timestamp::from_unix_millis(i64::try_from(offset).unwrap() * 1000).unwrap();
+                store
+                    .create_room(Room::new(room_id.clone(), created))
+                    .await
+                    .unwrap();
+                let mut binding = ChannelBinding::new(
+                    sms(),
+                    room_id,
+                    ChannelType::Sms,
+                    ChannelCategory::Transport,
+                    ChannelDirection::Bidirectional,
+                    created,
+                );
+                binding.participant_id = Some(ParticipantId::new(*correspondent).unwrap());
+                store.store_binding(binding).await.unwrap();
+            }
+            store
+        }
+
+        async fn by_binding(
+            store: &InMemoryStore,
+            identity: Option<&IdentityId>,
+        ) -> Option<String> {
+            let alice = ParticipantId::new(ALICE).unwrap();
+            store
+                .find_room_id_by_binding(&sms(), &alice, identity, &RoomFilter::default())
+                .await
+                .unwrap()
+                .map(|room| room.to_string())
+        }
+
+        #[tokio::test]
+        async fn a_binding_naming_the_sender_s_identity_is_found() {
+            let store = bound(&[("by_identity", "id_marie")]).await;
+            assert_eq!(
+                (
+                    by_binding(&store, None).await,
+                    by_binding(&store, Some(&marie())).await
+                ),
+                (None, Some("by_identity".to_owned()))
+            );
+        }
+
+        #[tokio::test]
+        async fn the_newest_room_either_name_finds_wins() {
+            let identity_newer = bound(&[("by_address", ALICE), ("by_identity", "id_marie")]).await;
+            let address_newer = bound(&[("by_identity", "id_marie"), ("by_address", ALICE)]).await;
+            assert_eq!(
+                (
+                    by_binding(&identity_newer, Some(&marie())).await,
+                    by_binding(&address_newer, Some(&marie())).await
+                ),
+                (
+                    Some("by_identity".to_owned()),
+                    Some("by_address".to_owned())
+                )
+            );
+        }
     }
 }
