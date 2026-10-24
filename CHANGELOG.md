@@ -198,11 +198,13 @@ as it stands.
   with. The `Channel`, `InboundRoomRouter` and `ConversationStore` traits,
   `DefaultRouter`, whose `candidates` a router wrapping it reuses with the
   crate's `default_route`, the default strategy's decision,
-  `InMemoryStore`, `StoreError` (an unavailable store's cause, a
-  `StoreFailure` equal only to itself, kept as its source), `KitError`, and
-  the testing helpers `RecordingTransport` and `EchoAgent`. The crate
-  re-exports the core's model whole and, of its operations and rules, only
-  what a caller names.
+  `InMemoryStore`, `StoreError` (an unavailable store's cause kept as its
+  source: a `StoreFailure`, a type that equals only itself and reads as the
+  error it holds, through `Deref`, `AsRef`, `Display` and `into_inner`,
+  built with `new` or `From` whatever a boxed error is made from),
+  `KitError`, and the testing helpers `RecordingTransport` and `EchoAgent`.
+  The crate re-exports the core's model whole and, of its operations and
+  rules, only what a caller names.
 - **The store** (§14.1): rooms with partial updates and filters, bindings,
   participants by room, identities linked to and unlinked from addresses
   per organization, the routing lookups by binding and by participant,

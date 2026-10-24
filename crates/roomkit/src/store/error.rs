@@ -13,9 +13,11 @@ use crate::error;
 /// a database driver's error, an I/O error, or a message (`"connection
 /// refused".into()`).
 ///
-/// It dereferences to the error it holds, which is
-/// [`StoreError::Unavailable`]'s source, and equals only itself: a cause
-/// cannot be compared.
+/// It reads as the error it holds: it dereferences to it, which is
+/// [`StoreError::Unavailable`]'s source, shows it, and gives it back
+/// ([`into_inner`](Self::into_inner)). It equals only itself: a cause
+/// cannot be compared. It is not an error of its own, so the source chain
+/// goes from the store's error to the cause, with nothing between.
 pub struct StoreFailure(Box<dyn Error + Send + Sync>);
 
 impl StoreFailure {
@@ -24,6 +26,18 @@ impl StoreFailure {
     pub fn new(cause: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
         Self(cause.into())
     }
+
+    /// The error it holds.
+    pub fn into_inner(self) -> Box<dyn Error + Send + Sync> {
+        self.0
+    }
+}
+
+/// Anything a boxed error is made from: an error, or a message.
+impl<E: Into<Box<dyn Error + Send + Sync>>> From<E> for StoreFailure {
+    fn from(cause: E) -> Self {
+        Self::new(cause)
+    }
 }
 
 impl Deref for StoreFailure {
@@ -31,6 +45,19 @@ impl Deref for StoreFailure {
 
     fn deref(&self) -> &Self::Target {
         &*self.0
+    }
+}
+
+impl AsRef<dyn Error + Send + Sync + 'static> for StoreFailure {
+    fn as_ref(&self) -> &(dyn Error + Send + Sync + 'static) {
+        &*self.0
+    }
+}
+
+/// Shows the error it holds, as that error shows itself.
+impl std::fmt::Display for StoreFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, formatter)
     }
 }
 
@@ -169,6 +196,35 @@ mod tests {
                 Some(io::ErrorKind::ConnectionRefused),
                 "the store failed".to_owned(),
                 "the store failed: connection refused".to_owned()
+            )
+        );
+    }
+
+    /// A failure reads as the error it holds, as the boxed cause it was
+    /// read: built from a message, shown, borrowed and given back.
+    #[test]
+    fn a_failure_reads_as_the_error_it_holds() {
+        let met = io::Error::new(io::ErrorKind::ConnectionRefused, "connection refused");
+        let failure = StoreFailure::from(met);
+        let borrowed = failure
+            .as_ref()
+            .downcast_ref::<io::Error>()
+            .map(io::Error::kind);
+        let shown = failure.to_string();
+        let given_back = failure.into_inner().downcast::<io::Error>().ok();
+        let message: StoreFailure = "the pool is closed".into();
+        assert_eq!(
+            (
+                borrowed,
+                shown,
+                given_back.map(|error| error.kind()),
+                message.to_string()
+            ),
+            (
+                Some(io::ErrorKind::ConnectionRefused),
+                "connection refused".to_owned(),
+                Some(io::ErrorKind::ConnectionRefused),
+                "the pool is closed".to_owned()
             )
         );
     }
