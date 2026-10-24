@@ -1,8 +1,4 @@
 #!/bin/sh
-# The repository is public: commit messages name RoomKit's own tickets
-# (RMK-...), never a downstream application or its board. CI re-checks pushed
-# messages for commits made without this hook (`make hooks` installs it).
-if grep -v '^#' "$1" | grep -iqE '\bluge\b|\bLUG-[0-9]+'; then
-    echo "commit-msg: the message names a downstream application (CONTRIBUTING.md)" >&2
-    exit 1
-fi
+# The rules of CONTRIBUTING.md "Commits", checked before the commit is made.
+# CI runs the same script on pushed commits (`make hooks` installs this hook).
+exec scripts/check-commit-message.sh "$1"

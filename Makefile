@@ -9,7 +9,7 @@ EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
 .PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks
 
-all: fmt-check clippy test doc deny check-core-deps
+all: fmt-check clippy test doc deny check-core-deps examples
 
 fmt:
 	$(CARGO) fmt --all
@@ -26,12 +26,14 @@ test:
 doc:
 	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps --all-features --locked
 
+# A gate, never skipped: without cargo-deny the check fails and says how to
+# install it.
 deny:
-	@if command -v cargo-deny >/dev/null 2>&1; then \
-		$(CARGO) deny check; \
-	else \
-		echo "deny: skipped, cargo-deny is not installed (cargo install cargo-deny --locked)"; \
-	fi
+	@command -v cargo-deny >/dev/null 2>&1 || { \
+		echo "deny: cargo-deny is not installed (cargo install cargo-deny --locked)" >&2; \
+		exit 1; \
+	}
+	$(CARGO) deny check
 
 check-core-deps:
 	scripts/check-core-deps.sh

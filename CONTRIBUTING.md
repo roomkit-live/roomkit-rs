@@ -22,10 +22,11 @@ make hooks
 ## Gates
 
 `make all` passes before every commit: formatting, clippy with warnings
-denied, tests, documentation with warnings denied, `cargo deny` when it is
-installed, and the check that `roomkit-core` depends, on every target, only
-on the crates its allow list names (`scripts/check-core-deps.sh`). `make examples` passes too:
-it runs every example, each of which checks what it shows. Run `make msrv`
+denied, tests, documentation with warnings denied, `cargo deny` (it fails
+when cargo-deny is not installed: `cargo install cargo-deny --locked`), the
+check that `roomkit-core` depends, on every target, only on the crates its
+allow list names (`scripts/check-core-deps.sh`), and every example, each of
+which checks what it shows (`make examples`). Run `make msrv`
 when a change adds a dependency or uses a recent standard library API: the
 minimum supported Rust version is the workspace's `rust-version`, written
 once in `Cargo.toml` (`make msrv-toolchain` installs it). CI checks the
@@ -76,10 +77,12 @@ what [docs/architecture.md](docs/architecture.md#crates) lists for it.
 
 ## Commits
 
-- Conventional prefixes with a scope: `feat(core): ...`, `fix(runtime): ...`,
-  `docs: ...`, `chore: ...`.
+- A subject of at most 72 characters, `type(scope): summary`, the scope
+  always given: `feat(core): ...`, `fix(runtime): ...`, `docs(rfc-gaps): ...`,
+  `chore(ci): ...`. The body says what changed and why, and names the ticket.
 - Reference RoomKit's own tickets (`RMK-...`). The repository is public: never
   name a downstream application or its tickets. The commit-msg hook and CI
-  refuse it.
+  check both rules (`scripts/check-commit-message.sh`; `make hooks` installs
+  the hook).
 - Add a line to `CHANGELOG.md` under `Unreleased` for every change a user of
   the crates would notice.
