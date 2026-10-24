@@ -11,22 +11,23 @@ use std::time::Duration;
 
 use roomkit_core::model::{
     Access, BindingUpdate, ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput,
-    ChannelType, ErrorRecord, EventType, HookResult, InjectedEvent, Room, RoomStatus, RoomTimers,
-    Timestamp, Visibility,
+    ChannelType, DirectEvent, ErrorRecord, EventContent, EventType, HookResult, InjectedEvent,
+    Room, RoomStatus, RoomTimers, Timestamp, Visibility,
 };
 use roomkit_core::ops::{
-    ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, FrameworkEvent,
-    InboundError, LifecycleChange, LifecycleError, LifecyclePayload, Next, Operation, PauseRoom,
-    RefusedOperation, ReopenRoom, ResumeRoom, SequentialEnvironment, TimersChecked,
-    TransitionReason, UpdateBinding,
+    ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, Entry,
+    FrameworkEvent, InboundError, LifecycleChange, LifecycleError, LifecyclePayload, Next,
+    Operation, PauseRoom, RefusedOperation, ReopenRoom, ResumeRoom, SequentialEnvironment,
+    TimersChecked, TransitionReason, UpdateBinding,
 };
 use roomkit_core::rules::attachment;
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::HookTrigger;
 use roomkit_core::rules::lifecycle::Transition;
 use roomkit_core::rules::timers::DueTransition;
+use roomkit_core::rules::transcoding::text_of;
 
-use crate::support::{Sim, after_start, channel, notice_event, room_id};
+use crate::support::{Answer, Reentry, Sim, after_start, calling, channel, notice_event, room_id};
 
 fn sms_binding() -> ChannelBinding {
     ChannelBinding::new(
@@ -1245,6 +1246,65 @@ mod a_timer_transition_s_report {
             (
                 Some("room_closed"),
                 vec!["room_closed".to_owned(), "room_refused_event".to_owned()],
+                vec![(HookTrigger::OnRoomClosed, false)]
+            )
+        );
+    }
+
+    /// A locked hook that injects a note into the room, the entry's read of
+    /// the room made `hook_time` into the hook: the entry, nested in the
+    /// trigger's section, applies what fell due meanwhile at its own gate.
+    fn note_from_a_slow_hook(sim: &mut Sim, hook_time: Duration) {
+        sim.reentrant_hook(
+            "slow",
+            true,
+            Reentry {
+                entries: calling(|event| {
+                    (text_of(&event.content) == "Hello?").then(|| Entry::Direct {
+                        room_id: room_id(),
+                        organization_id: None,
+                        event: Box::new(DirectEvent::new(
+                            channel("sms"),
+                            EventContent::text("Note"),
+                        )),
+                    })
+                }),
+                answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        // The third read is the entry's, after the trigger's step 2 and gate.
+        sim.nth_durations.push(("load_context", 3, hook_time));
+    }
+
+    /// An entry nested under a locked hook releases no lock of its own: the
+    /// pause its gate applies fires its hooks once the trigger's section,
+    /// which holds the lock, released it.
+    #[test]
+    fn fires_a_nested_entry_s_hooks_once_the_outer_lock_is_released() {
+        let mut sim = timed_room();
+        sim.observer("on_paused", HookTrigger::OnRoomPaused);
+        note_from_a_slow_hook(&mut sim, Duration::from_secs(90));
+        sim.send(Sim::message("sms", "Hello?")).unwrap();
+        assert_eq!(
+            (sim.room.status, sim.fired.clone()),
+            (RoomStatus::Active, vec![(HookTrigger::OnRoomPaused, false)])
+        );
+    }
+
+    /// The same with a close falling due under the hook: the entry is
+    /// refused, the trigger too on its re-read, and the close's hooks fire
+    /// after the trigger's release.
+    #[test]
+    fn fires_a_nested_entry_s_close_hooks_once_the_outer_lock_is_released() {
+        let mut sim = paused_room();
+        sim.observer("on_closed", HookTrigger::OnRoomClosed);
+        note_from_a_slow_hook(&mut sim, Duration::from_secs(150));
+        let result = sim.send(Sim::message("sms", "Hello?")).unwrap();
+        assert_eq!(
+            (sim.room.status, result.reason.as_deref(), sim.fired.clone()),
+            (
+                RoomStatus::Closed,
+                Some("room_closed"),
                 vec![(HookTrigger::OnRoomClosed, false)]
             )
         );

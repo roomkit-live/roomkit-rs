@@ -59,10 +59,12 @@ pub(crate) struct Opened {
 pub(crate) struct TimerHooks(Vec<Notice>);
 
 impl TimerHooks {
-    /// Fires the hooks, the room's lock released.
+    /// Fires the hooks, the section's lock released: at once, or, for a
+    /// section nested under another's lock, once that one released it
+    /// ([`Io::notify_after_release`](crate::ops::io::Io::notify_after_release)).
     pub(crate) fn fire(self, cx: &mut Cx<'_>) {
         for notice in self.0 {
-            cx.io.notify(notice);
+            cx.io.notify_after_release(notice);
         }
     }
 }

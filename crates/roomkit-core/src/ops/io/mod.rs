@@ -89,6 +89,9 @@ pub(crate) struct Io {
     /// The room whose lock the section being advanced runs under, nested
     /// in the section that holds it.
     nested: Option<RoomId>,
+    /// The notices a nested section emitted for after its release, held
+    /// until the section that holds the room's lock released it.
+    held_for_release: Vec<(RoomId, Notice)>,
     /// The room in whose admission order the section being advanced runs
     /// (RFC §9.5.1).
     admitted: Option<RoomId>,
@@ -110,6 +113,7 @@ impl Io {
             inbox: VecDeque::new(),
             locks: RoomLocks::default(),
             nested: None,
+            held_for_release: Vec::new(),
             admitted: None,
             expired: false,
         }
@@ -246,6 +250,28 @@ impl Io {
         self.notices.push(notice);
     }
 
+    /// Emits `notice`, which a section owes once it released the room's
+    /// lock (RFC §5.1 When): on the next step when the section held a
+    /// tenure of its own, released by now; once the section that holds the
+    /// lock released it when the section ran nested under it, whose release
+    /// `Io` answered without the driver.
+    pub(crate) fn notify_after_release(&mut self, notice: Notice) {
+        match &self.nested {
+            Some(room_id) => self.held_for_release.push((room_id.clone(), notice)),
+            None => self.notices.push(notice),
+        }
+    }
+
+    /// Emits the notices held for `room_id`'s release, now answered.
+    fn release_held(&mut self, room_id: &RoomId) {
+        let (released, held): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held_for_release)
+            .into_iter()
+            .partition(|(room, _)| room == room_id);
+        self.held_for_release = held;
+        self.notices
+            .extend(released.into_iter().map(|(_, notice)| notice));
+    }
+
     /// Reports the result of the adopted entry `entry` on the next step.
     pub(crate) fn settle(&mut self, entry: EntryId, result: Result<InboundResult, InboundError>) {
         self.settled.push(Settled { entry, result });
@@ -331,8 +357,12 @@ impl Io {
             .ok_or(ProtocolError::UnknownEffect(id))?;
         outstanding.kind.check(id, &outcome, outstanding.bounded)?;
         self.outstanding.remove(&id);
+        let released = self.locks.release_of(id);
         let next = self.locks.answered(id, &outcome);
         self.issued.extend(next);
+        if let Some(room_id) = released {
+            self.release_held(&room_id);
+        }
         self.inbox.push_back((id, outcome));
         Ok(())
     }

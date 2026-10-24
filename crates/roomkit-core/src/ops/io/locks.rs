@@ -89,6 +89,14 @@ impl RoomLocks {
         true
     }
 
+    /// The room `effect` releases the lock of, when it is a release.
+    pub(super) fn release_of(&self, effect: EffectId) -> Option<RoomId> {
+        match self.requests.get(&effect) {
+            Some((room_id, Step::Release)) => Some(room_id.clone()),
+            Some((_, Step::Acquire)) | None => None,
+        }
+    }
+
     /// The driver answered `effect` with `outcome`; what goes out now. When
     /// it let the room's lock go (a release, answered whatever way, or an
     /// acquire that did not take it), the acquire held back first goes out;
