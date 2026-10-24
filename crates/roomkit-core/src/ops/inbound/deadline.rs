@@ -35,6 +35,10 @@ pub(super) enum Stopped {
     Failed(InboundError),
     /// The call's deadline passed (RFC §13.6).
     Expired,
+    /// A message routed into the room whose delivery made the call, past
+    /// the reentry budget of the cascade that delivers: refused with no
+    /// event (gap G-070).
+    PastBudget,
 }
 
 /// The deadline of a call starting at `now`: `now` plus the kit's

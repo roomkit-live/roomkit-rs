@@ -145,6 +145,12 @@ pub(super) struct Arrival {
     /// The room step 2 works on or arrived in; `None` while the message is
     /// routed.
     room: Option<RoomId>,
+    /// For a routed message a delivery's code sent, the room it delivers in
+    /// and its cascade's budget, charged once routing names that room.
+    charge: Option<(RoomId, ReentryBudget)>,
+    /// The budget the message was charged on, once routed into the
+    /// delivering room: its cascade draws on it.
+    charged: Option<ReentryBudget>,
     state: State,
 }
 
@@ -200,8 +206,23 @@ impl Arrival {
             },
             routes: 0,
             room: None,
+            charge: None,
+            charged: None,
             state: State::Start,
         }
+    }
+
+    /// The same arrival, charging `charge`'s budget once routing places the
+    /// message in its room, before step 2 and the parse (gap G-070).
+    pub(super) fn charging(mut self, charge: Option<(RoomId, ReentryBudget)>) -> Self {
+        self.charge = charge;
+        self
+    }
+
+    /// The delivering cascade's budget the message was charged on, once
+    /// routed into the room that cascade delivers in.
+    pub(super) fn charged(&self) -> Option<&ReentryBudget> {
+        self.charged.as_ref()
     }
 
     /// The arrival of `message`, resolved on `channel`, into `room_id`,
@@ -344,11 +365,38 @@ impl Arrival {
     /// written.
     fn on_routed(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arriving {
         match outcome.into_routed() {
-            Ok(Some(room_id)) => self.enter(cx, room_id, Mode::Routed),
-            Ok(None) => self.enter_fresh(cx),
+            Ok(Some(room_id)) => {
+                if !self.charge_in(&room_id) {
+                    return Progress::Done(Err(Stopped::PastBudget));
+                }
+                self.enter(cx, room_id, Mode::Routed);
+            }
+            Ok(None) => {
+                // A new room is no room a delivery delivers in.
+                self.charge = None;
+                self.enter_fresh(cx);
+            }
             Err(error) => return failed(InboundError::Routing(error)),
         }
         Progress::Waiting
+    }
+
+    /// Charges the message on the delivering cascade's budget when routing
+    /// first names the room that cascade delivers in (gap G-070); `false`
+    /// once that budget is spent. A room it is routed into later, or any
+    /// other room, charges nothing: the call's budget is its own.
+    fn charge_in(&mut self, room_id: &RoomId) -> bool {
+        let Some((delivering, budget)) = self.charge.take() else {
+            return true;
+        };
+        if &delivering != room_id {
+            return true;
+        }
+        if !budget.take() {
+            return false;
+        }
+        self.charged = Some(budget);
+        true
     }
 
     /// A new room for the message, with a fresh id (RFC §10.1 step 2).

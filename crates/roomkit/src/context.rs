@@ -417,17 +417,24 @@ impl ExecutionContext {
     /// The reentry budget a call into `room_id` made in this context draws
     /// on: the budget of the cascade whose delivery set runs the innermost
     /// running frame of a delivery in that room, `None` otherwise (gap
-    /// G-070). `None` for `room_id` is a message the router places: its
-    /// room known only once routed, it draws on the innermost running
-    /// delivery's, so a channel routing back into its room on every
-    /// delivery stays bounded.
-    pub(crate) fn budget(&self, room_id: Option<&RoomId>) -> Option<ReentryBudget> {
+    /// G-070).
+    pub(crate) fn budget(&self, room_id: &RoomId) -> Option<ReentryBudget> {
+        self.frames
+            .iter()
+            .rev()
+            .filter(|frame| frame.runs() && frame.work.delivering.as_ref() == Some(room_id))
+            .find_map(|frame| frame.work.budget.clone())
+    }
+
+    /// The room the innermost running frame of a delivery delivers in, and
+    /// the budget of its cascade: what a message the router places draws
+    /// on once routed into that room (gap G-070).
+    pub(crate) fn delivery(&self) -> Option<(RoomId, ReentryBudget)> {
         self.frames
             .iter()
             .rev()
             .filter(|frame| frame.runs())
-            .filter(|frame| room_id.is_none_or(|room| frame.work.delivering.as_ref() == Some(room)))
-            .find_map(|frame| frame.work.budget.clone())
+            .find_map(|frame| Some((frame.work.delivering.clone()?, frame.work.budget.clone()?)))
     }
 
     /// The innermost frame that runs under `room_id`'s lock or in its

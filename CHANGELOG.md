@@ -126,8 +126,9 @@ as it stands.
   adopted by the call whose work made it and returns at its commit; a
   turn's or a delivery's call is a new arrival with its own ticket and
   `process_timeout`, drawing on the delivering cascade's budget when it
-  comes into the room delivered in (a call into another room has a budget
-  of its own) and answered at its decision when it comes into its caller's
+  comes into the room delivered in, a routed message once routing places
+  it there (a call into another room has a budget of its own), and
+  answered at its decision when it comes into its caller's
   room; a call made while a turn runs, into whatever room, is at least as
   deep as the turn's response (§10.6); work a turn or a delivery began
   starts fresh once that work is over, at depth 0 and on a budget of its

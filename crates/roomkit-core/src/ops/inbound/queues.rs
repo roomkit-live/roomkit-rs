@@ -29,7 +29,7 @@ use super::job::{Job, RecordNote, Run};
 use super::pass::{CommitPass, PassOrigin};
 use super::record::RecordPass;
 use super::{Machine, Stage};
-use crate::model::RoomEvent;
+use crate::model::{RoomEvent, RoomId};
 use crate::ops::protocol::{EffectId, Outcome};
 use crate::ops::{Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::{self, ReentryBudget};
@@ -64,6 +64,10 @@ pub(super) struct Cascade {
     /// Whether the call draws on the budget of the cascade whose delivery
     /// made it, which charges its trigger as it starts (gap G-070).
     drawn: bool,
+    /// For a message the router places, the room a delivery made it in and
+    /// that delivery's budget, which the message draws on only once routed
+    /// into that room (gap G-070).
+    routed_into: Option<(RoomId, ReentryBudget)>,
 }
 
 impl Cascade {
@@ -77,7 +81,20 @@ impl Cascade {
             stopping: false,
             budget,
             drawn: false,
+            routed_into: None,
         }
+    }
+
+    /// Draws on `budget` only once routing places the call's message in
+    /// `room_id`, the room whose delivery made the call (gap G-070).
+    pub(super) fn draw_on_if_routed_into(&mut self, room_id: RoomId, budget: ReentryBudget) {
+        self.routed_into = Some((room_id, budget));
+    }
+
+    /// The room and budget a routed message draws on once routed into that
+    /// room, taken by its arrival.
+    pub(super) fn take_routed_into(&mut self) -> Option<(RoomId, ReentryBudget)> {
+        self.routed_into.take()
     }
 
     /// Draws on `budget`, the budget of the cascade whose delivery made the

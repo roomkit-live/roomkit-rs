@@ -108,7 +108,8 @@ enum RunState {
 enum Advanced {
     Waiting,
     Arrived(Box<RoomEvent>),
-    Stopped(InboundError),
+    /// The entry stopped before its pass, with what its caller receives.
+    Stopped(Box<Result<InboundResult, InboundError>>),
     Passed(Result<PassReport, Abort>),
     Recorded(Result<RecordReport, Abort>),
 }
@@ -182,12 +183,18 @@ impl AdoptedRun {
             RunState::Arriving(arrival) => match arrival.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,
                 Progress::Done(Ok(arrived)) => Advanced::Arrived(Box::new(arrived.event)),
-                Progress::Done(Err(Stopped::Failed(error))) => Advanced::Stopped(error),
+                Progress::Done(Err(Stopped::Failed(error))) => {
+                    Advanced::Stopped(Box::new(Err(error)))
+                }
                 Progress::Done(Err(Stopped::Expired)) => {
                     // An adopted message carries no deadline (gap G-070).
-                    Advanced::Stopped(InboundError::Store(
+                    Advanced::Stopped(Box::new(Err(InboundError::Store(
                         Abort::DeadlinePassed(None).into_record(),
-                    ))
+                    ))))
+                }
+                // An adopted message is charged as its arrival starts.
+                Progress::Done(Err(Stopped::PastBudget)) => {
+                    Advanced::Stopped(Box::new(Ok(result::past_the_budget())))
                 }
             },
             RunState::Passing(pass) => match pass.accept(cx, effect, outcome) {
@@ -374,7 +381,7 @@ impl Machine {
         match advanced {
             Advanced::Waiting => self.adopted.running.insert(index, run),
             Advanced::Arrived(event) => self.enter_pass(cx, adopted, *event, None),
-            Advanced::Stopped(error) => self.settle_entry(cx, &adopted, Err(error)),
+            Advanced::Stopped(stopped) => self.settle_entry(cx, &adopted, *stopped),
             Advanced::Passed(Ok(report)) => self.on_adopted_pass(cx, &adopted, report),
             Advanced::Passed(Err(abort)) | Advanced::Recorded(Err(abort)) => {
                 let error = cascade::failure(abort, self.call.room_id.clone());

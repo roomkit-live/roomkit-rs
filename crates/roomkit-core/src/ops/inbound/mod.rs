@@ -186,6 +186,18 @@ impl Inbound {
         self
     }
 
+    /// The same message, routed by the kit's router and sent by the code a
+    /// delivery set of `room_id` runs: it draws on `budget`, that cascade's,
+    /// as [`drawing_on`](Self::drawing_on) does, only once routing places
+    /// it in `room_id`, charged then, before step 2 and its parse; routed
+    /// into another room, or into a new one, its budget is its own (RFC
+    /// §9.5.1, gap G-070).
+    #[must_use]
+    pub fn drawing_on_if_routed_into(mut self, room_id: RoomId, budget: ReentryBudget) -> Self {
+        self.machine.cascade.draw_on_if_routed_into(room_id, budget);
+        self
+    }
+
     fn calling(config: Arc<KitConfig>, call: Call) -> Self {
         let budget = ReentryBudget::new(config.max_chain_depth);
         let entry = match call {

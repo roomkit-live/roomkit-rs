@@ -1086,6 +1086,64 @@ impl<S: ConversationStore> InboundRoomRouter<S> for ToRoom1 {
     }
 }
 
+/// Routes every message to the room it names.
+struct ToRoom(RoomId);
+
+impl<S: ConversationStore> InboundRoomRouter<S> for ToRoom {
+    fn route(
+        &self,
+        _store: &S,
+        _query: &RouteQuery,
+    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
+        ready(Ok(Some(self.0.clone())))
+    }
+}
+
+/// RFC §9.5.1, gap G-070: a message a delivery's code routes draws on the
+/// delivering cascade's budget once routing places it in the room the set
+/// delivers in, charged before its parse; one routed into another room has
+/// a budget of its own.
+#[tokio::test]
+async fn a_routed_message_draws_on_the_delivering_budget_in_the_delivering_room_only() {
+    const LIMIT: u32 = 2;
+    let mut refused_in = Vec::new();
+    for into in ["room_1", "room_2"] {
+        let (kit, _) = room().await;
+        kit.set_max_chain_depth(LIMIT);
+        kit.create_room(&RoomId::new("room_2").unwrap())
+            .await
+            .unwrap();
+        kit.set_router(ToRoom(RoomId::new(into).unwrap()));
+        let refusals = Arc::new(Mutex::new(Vec::new()));
+        let (bot_kit, bot_refusals) = (kit.clone(), Arc::clone(&refusals));
+        let bot = Scripted::transport(
+            "bot",
+            Arc::new(move |event: RoomEvent| {
+                let (kit, refusals) = (bot_kit.clone(), Arc::clone(&bot_refusals));
+                Box::pin(async move {
+                    if text_of(&event.content) != "hello" {
+                        return Ok(ChannelOutput::default());
+                    }
+                    for _ in 0..=LIMIT * 10 {
+                        let result = kit.process_inbound(message("routed")).await?;
+                        if result.event.is_none() {
+                            refusals.lock().unwrap().push(result.reason);
+                        }
+                    }
+                    Ok(ChannelOutput::default())
+                })
+            }),
+        );
+        kit.register_channel(bot).unwrap();
+        kit.attach(&room_id(), &channel("bot")).await.unwrap();
+        send(&kit, "hello").await.unwrap();
+        let refused = refusals.lock().unwrap().clone();
+        refused_in.push((into, refused.first().cloned().flatten()));
+    }
+    let cap = Some("reentry_loop_cap".to_owned());
+    assert_eq!(refused_in, [("room_1", cap), ("room_2", None)]);
+}
+
 /// RFC §13.5, §9.5.1 Reentrance: a message routed back into the room from
 /// under its lock cannot be adopted, the room being known only once it is
 /// routed: it fails at the lock its own caller's section holds, instead of

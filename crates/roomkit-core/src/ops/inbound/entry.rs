@@ -4,7 +4,7 @@
 
 use super::arrival::{self, Admitted, Arrival};
 use super::deadline::{self, Stopped};
-use super::{Call, InboundTarget, Machine, Stage};
+use super::{Call, InboundTarget, Machine, Stage, result};
 use crate::model::InboundMessage;
 use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome};
@@ -53,13 +53,11 @@ impl Machine {
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),
             Err(error) => return self.end(cx, Err(error)),
         };
-        let mut arrival = Box::new(Arrival::new(
-            target,
-            organization_id,
-            channel,
-            message,
-            self.call.bound,
-        ));
+        let charge = self.cascade.take_routed_into();
+        let mut arrival = Box::new(
+            Arrival::new(target, organization_id, channel, message, self.call.bound)
+                .charging(charge),
+        );
         arrival.start(cx);
         self.stage = Stage::Arriving(arrival);
     }
@@ -81,6 +79,11 @@ impl Machine {
         match arrived {
             Ok(arrived) => {
                 self.call.room_id = Some(arrived.event.room_id.clone());
+                if let Some(budget) = arrival.charged() {
+                    // Routed into the delivering room: its cascade draws on
+                    // that delivery's budget too (gap G-070).
+                    self.cascade.draw_on(budget.clone());
+                }
                 self.after_arrival(cx, arrived);
             }
             Err(stopped) => {
@@ -96,6 +99,7 @@ impl Machine {
         match stopped {
             Stopped::Failed(error) => self.end(cx, Err(error)),
             Stopped::Expired => self.expire(cx, None),
+            Stopped::PastBudget => self.end(cx, Ok(result::past_the_budget())),
         }
     }
 }

@@ -172,8 +172,9 @@ impl Caller {
 /// driver would commit within that section's tenure. A call made within a
 /// delivery set's code, a turn or a transport's delivery, into the room the
 /// set delivers in draws on the reentry budget of the cascade that
-/// delivers while that code runs; one into another room has a budget of
-/// its own (gap G-070). A caller that
+/// delivers while that code runs, a routed message once routing places it
+/// there; one into another room has a budget of its own (gap G-070). A
+/// caller that
 /// stops waiting detaches the run, which expires its call when it is not
 /// decided yet (gap G-076).
 ///
@@ -192,9 +193,17 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
 ) -> InboundOutput {
     inner.open()?;
     let context = ExecutionContext::current();
-    let inbound = match context.budget(room_id) {
-        Some(budget) => inbound.drawing_on(budget),
-        None => inbound,
+    let inbound = match room_id {
+        Some(room_id) => match context.budget(room_id) {
+            Some(budget) => inbound.drawing_on(budget),
+            None => inbound,
+        },
+        // Routed: the room is known once the router answers, and the
+        // message is charged then (gap G-070).
+        None => match context.delivery() {
+            Some((delivering, budget)) => inbound.drawing_on_if_routed_into(delivering, budget),
+            None => inbound,
+        },
     };
     let (answer, decided) = oneshot::channel();
     let kit = Arc::clone(inner);

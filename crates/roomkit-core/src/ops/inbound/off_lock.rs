@@ -227,6 +227,7 @@ impl Machine {
             Ok(Checked { event, chain }) => self.start_trigger(event, Some(chain)),
             Err(Stopped::Failed(error)) => self.end(cx, Err(error)),
             Err(Stopped::Expired) => self.expire(cx, None),
+            Err(Stopped::PastBudget) => self.end(cx, Ok(super::result::past_the_budget())),
         }
     }
 }
