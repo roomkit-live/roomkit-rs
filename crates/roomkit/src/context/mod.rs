@@ -49,86 +49,32 @@
 //! running, stands in none and lends nothing: that work starts fresh, at
 //! depth 0 and on a budget of its own.
 //!
+//! What a run holds, its lock tenures and the leases on them, is `run`'s;
+//! the hand-off of a call into a room to the run that adopts it is
+//! `adoption`'s.
+//!
 //! tokio hands no task-local to a spawned task. A call that spawns a task
 //! and awaits it as its own (RFC §13.5: "the tasks it awaits as its own")
 //! wraps the task's future in [`keep_context`], so that it runs within the
 //! call's context; a task spawned without it, awaited or not, has none, and
 //! waits for the room as any task does.
 
-use std::collections::{HashMap, HashSet};
+mod adoption;
+mod run;
+
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 use roomkit_core::model::{ChannelCategory, RoomId};
-use roomkit_core::ops::{
-    ChannelRequest, Effect, EffectId, Entry, InboundError, InboundResult, Request,
-};
+use roomkit_core::ops::{ChannelRequest, Effect, EffectId, Request};
 use roomkit_core::rules::chain_depth::{self, ReentryBudget};
-use tokio::sync::{mpsc, oneshot};
+
+pub(crate) use self::adoption::{Adopting, Adoption, Reply, adopt};
+use self::run::Lease;
+pub(crate) use self::run::RunShared;
 
 tokio::task_local! {
     static CONTEXT: ExecutionContext;
-}
-
-/// What an adopted entry's caller receives (RFC §10.1 step 18).
-pub(crate) type EntryResult = Result<InboundResult, InboundError>;
-
-/// A call into a room, handed to the run whose work made it.
-#[derive(Debug)]
-pub(crate) struct Adoption {
-    /// The call.
-    pub(crate) entry: Entry,
-    /// The effect whose call made it, in that run.
-    pub(crate) origin: EffectId,
-    /// Where its answer goes.
-    pub(crate) reply: oneshot::Sender<Reply>,
-}
-
-/// The answer of the run a call into its room was handed to.
-#[derive(Debug)]
-pub(crate) enum Reply {
-    /// The run's operation adopted the call and decided it.
-    Settled(Box<EntryResult>),
-    /// The run did not adopt the call: its origin was answered already, or
-    /// the run is over. The call runs apart.
-    Declined(Box<Entry>),
-}
-
-/// What a run holds now, as the calls it makes read it.
-#[derive(Debug, Default)]
-struct Holdings {
-    locks: HashMap<RoomId, Tenure>,
-    /// The effects whose calls run now: the operation has not been answered
-    /// them yet.
-    calls: HashSet<EffectId>,
-}
-
-/// How a run holds a room's lock.
-#[derive(Clone, Debug)]
-enum Tenure {
-    /// The lock itself, its tenure numbered.
-    Own(u64),
-    /// Granted on a lease its context holds.
-    Granted(Lease),
-}
-
-/// A run's side shared with the calls it makes: what it holds, and the
-/// queue that hands it calls into its room.
-#[derive(Debug)]
-pub(crate) struct RunShared {
-    holdings: Mutex<Holdings>,
-    adoptions: mpsc::UnboundedSender<Adoption>,
-    tenures: AtomicU64,
-}
-
-/// A claim on one tenure of a room's lock, which code run under that lock
-/// holds.
-#[derive(Clone, Debug)]
-pub(crate) struct Lease {
-    holder: Arc<RunShared>,
-    room_id: RoomId,
-    tenure: u64,
 }
 
 /// One frame of a context: a run, and the effect whose call this is.
@@ -165,103 +111,6 @@ pub(crate) struct Work {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExecutionContext {
     frames: Arc<[Frame]>,
-}
-
-/// What became of a call handed to the run whose work made it.
-#[derive(Debug)]
-pub(crate) enum Adopting {
-    /// No frame of the caller's context works in the call's room, or its
-    /// run declined the call: the call runs apart, as any call does.
-    Apart(Entry),
-    /// The run's operation adopted the call and decided it.
-    Settled(Box<EntryResult>),
-    /// The run adopted the call, then was dropped before deciding it.
-    Abandoned,
-}
-
-impl RunShared {
-    /// A run's shared side, with the queue its driver receives calls on.
-    pub(crate) fn new() -> (Arc<Self>, mpsc::UnboundedReceiver<Adoption>) {
-        let (adoptions, received) = mpsc::unbounded_channel();
-        let shared = Arc::new(Self {
-            holdings: Mutex::new(Holdings::default()),
-            adoptions,
-            tenures: AtomicU64::new(0),
-        });
-        (shared, received)
-    }
-
-    fn holdings(&self) -> MutexGuard<'_, Holdings> {
-        self.holdings.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Records that the run took `room_id`'s lock itself.
-    pub(crate) fn locked(&self, room_id: RoomId) {
-        let tenure = self.tenures.fetch_add(1, Ordering::Relaxed);
-        self.holdings().locks.insert(room_id, Tenure::Own(tenure));
-    }
-
-    /// Records that the run was granted `room_id`'s lock on `lease`.
-    pub(crate) fn granted(&self, lease: Lease) {
-        self.holdings()
-            .locks
-            .insert(lease.room_id.clone(), Tenure::Granted(lease));
-    }
-
-    /// Records that the run let `room_id`'s lock go: every lease on its
-    /// tenure dies with it.
-    pub(crate) fn released(&self, room_id: &RoomId) {
-        self.holdings().locks.remove(room_id);
-    }
-
-    /// Records that the call for `effect` runs.
-    pub(crate) fn calling(&self, effect: EffectId) {
-        self.holdings().calls.insert(effect);
-    }
-
-    /// Records that the call for `effect` is over, its effect answered:
-    /// its frame stands in no admission order any more.
-    pub(crate) fn answered(&self, effect: EffectId) {
-        self.holdings().calls.remove(&effect);
-    }
-
-    /// Whether the call for `effect` still runs.
-    fn is_calling(&self, effect: EffectId) -> bool {
-        self.holdings().calls.contains(&effect)
-    }
-
-    /// Forgets everything the run held: it is over.
-    pub(crate) fn clear(&self) {
-        *self.holdings() = Holdings::default();
-    }
-
-    /// The lease on the lock of `room_id` the run holds, by its own tenure
-    /// or by the lease it was granted on.
-    fn lease_of(self: &Arc<Self>, room_id: &RoomId) -> Option<Lease> {
-        match self.holdings().locks.get(room_id)? {
-            Tenure::Own(tenure) => Some(Lease {
-                holder: Arc::clone(self),
-                room_id: room_id.clone(),
-                tenure: *tenure,
-            }),
-            Tenure::Granted(lease) => Some(lease.clone()),
-        }
-    }
-}
-
-impl Lease {
-    /// The room whose lock the lease is on.
-    pub(crate) fn room_id(&self) -> &RoomId {
-        &self.room_id
-    }
-
-    /// Whether the holder still holds the lock under the lease's tenure.
-    fn is_live(&self) -> bool {
-        matches!(
-            self.holder.holdings().locks.get(&self.room_id),
-            Some(Tenure::Own(tenure)) if *tenure == self.tenure
-        )
-    }
 }
 
 impl Work {
@@ -328,25 +177,6 @@ impl Frame {
     /// it yet: a frame kept past its call's end stands for no work.
     fn runs(&self) -> bool {
         self.run.is_calling(self.effect)
-    }
-
-    /// Hands `entry` to the frame's run, and waits for its decision.
-    async fn adopt(&self, entry: Entry) -> Adopting {
-        let (reply, answer) = oneshot::channel();
-        let adoption = Adoption {
-            entry,
-            origin: self.effect,
-            reply,
-        };
-        if let Err(unsent) = self.run.adoptions.send(adoption) {
-            // The run is over: it holds nothing of the room any more.
-            return Adopting::Apart(unsent.0.entry);
-        }
-        match answer.await {
-            Ok(Reply::Settled(result)) => Adopting::Settled(result),
-            Ok(Reply::Declined(entry)) => Adopting::Apart(*entry),
-            Err(_dropped) => Adopting::Abandoned,
-        }
     }
 }
 
@@ -445,18 +275,6 @@ impl ExecutionContext {
             .rev()
             .find(|frame| frame.adopts_into(room_id))
     }
-}
-
-/// Hands `entry` to the run of the current task's context whose work under
-/// its room's lock or in its admission order made it, if any: the call is
-/// adopted by that run's operation, or declined (RFC §13.5, §9.5.1
-/// Reentrance).
-pub(crate) async fn adopt(entry: Entry) -> Adopting {
-    let context = ExecutionContext::current();
-    let Some(frame) = context.taker(entry.room_id()).cloned() else {
-        return Adopting::Apart(entry);
-    };
-    frame.adopt(entry).await
 }
 
 /// Raises `chain_depth`, the depth of a call the current task makes into a
