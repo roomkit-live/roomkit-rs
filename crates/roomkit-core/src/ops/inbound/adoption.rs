@@ -32,8 +32,8 @@
 //! the lock: the operation it joins stands in the room's order already (RFC
 //! §9.5.1). It draws on the operation's reentry budget, past which it is
 //! stored `BLOCKED` with `reentry_loop_cap` (RFC §8.3); a message is charged
-//! as its arrival starts, before its channel's parse, and refused with no
-//! event past the budget. Its caller receives its result at its commit
+//! first thing, before its channel is looked up, and refused with no event
+//! past the budget (RFC §10.1 step 1). Its caller receives its result at its commit
 //! (detached completion: no delivery results, no completion handle), and
 //! its event takes its place in the room's lane at that commit. A message's
 //! arrival runs its step 2, then its channel's parse. A direct injection is

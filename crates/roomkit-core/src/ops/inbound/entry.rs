@@ -33,9 +33,10 @@ impl Machine {
     }
 
     /// Admits the message before anything is read (`arrival::admit`), then
-    /// starts its arrival. A message a delivery's code sends is charged on
-    /// the cascade that delivers before its parse, as an adopted one is
-    /// (gap G-070).
+    /// starts its arrival. A message a delivery's code sends into the room
+    /// it delivers in, by name, is charged on the cascade that delivers
+    /// first thing, as an adopted one is; a routed one, or one into another
+    /// room, once step 2 knows its final room (gap G-070).
     pub(super) fn begin_message(
         &mut self,
         cx: &mut Cx<'_>,
@@ -79,9 +80,10 @@ impl Machine {
         match arrived {
             Ok(arrived) => {
                 self.call.room_id = Some(arrived.event.room_id.clone());
-                if let Some(budget) = arrival.charged() {
-                    // Routed into the delivering room: its cascade draws on
-                    // that delivery's budget too (gap G-070).
+                if let Some(budget) = arrival.drawn_on() {
+                    // Into the delivering room, or a room it opened: its
+                    // cascade draws on that delivery's budget too (gap
+                    // G-070).
                     self.cascade.draw_on(budget.clone());
                 }
                 self.after_arrival(cx, arrived);

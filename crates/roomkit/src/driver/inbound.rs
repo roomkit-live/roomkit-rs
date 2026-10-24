@@ -172,7 +172,7 @@ impl Caller {
 /// driver would commit within that section's tenure. A call made within a
 /// delivery set's code, a turn or a transport's delivery, into the room the
 /// set delivers in draws on the reentry budget of the cascade that
-/// delivers while that code runs, a routed message once routing places it
+/// delivers while that code runs, a routed message once step 2 kept it
 /// there, and a message that creates a room; one into another existing room
 /// has a budget of its own (gap G-070). A caller that
 /// stops waiting detaches the run, which expires its call when it is not
@@ -196,8 +196,8 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     let inbound = match room_id.and_then(|room_id| context.budget(room_id)) {
         // Into the room a running delivery delivers in.
         Some(budget) => inbound.drawing_on(budget),
-        // Routed, or into another room: charged once routing places it in
-        // the delivering room, or once it creates a room (gap G-070).
+        // Routed, or into another room: charged once step 2 knows its final
+        // room, the delivering room or one it creates (gap G-070).
         None => match context.delivery() {
             Some((delivering, budget)) => inbound.drawing_on_from_delivery(delivering, budget),
             None => inbound,

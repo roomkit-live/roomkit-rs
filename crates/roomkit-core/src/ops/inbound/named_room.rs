@@ -83,8 +83,11 @@ pub(super) struct NamedRoom {
     /// For a message the room's delivery work sent, the budget a room
     /// step 2 creates is charged on (gap G-070).
     opening: Option<ReentryBudget>,
-    /// Whether step 2 charged `opening` for the room it creates.
-    opened: bool,
+    /// Whether step 2 charged `opening`, having read the room absent: the
+    /// charge stays when another call created the room first (gap G-070).
+    charged: bool,
+    /// Whether step 2 created the room.
+    created: bool,
     state: State,
 }
 
@@ -149,7 +152,8 @@ impl NamedRoom {
             mode,
             bound,
             opening: None,
-            opened: false,
+            charged: false,
+            created: false,
             state: State::Start,
         }
     }
@@ -161,9 +165,15 @@ impl NamedRoom {
         self
     }
 
-    /// Whether step 2 charged its opening budget for the room it created.
-    pub(super) fn opened(&self) -> bool {
-        self.opened
+    /// Whether step 2 charged its opening budget, for a room it read absent.
+    pub(super) fn charged(&self) -> bool {
+        self.charged
+    }
+
+    /// Whether step 2 created the room: the message's cascade is then the
+    /// work of the delivery whose budget opened it (gap G-070).
+    pub(super) fn created(&self) -> bool {
+        self.created
     }
 
     /// The room step 2 works on.
@@ -267,7 +277,7 @@ impl NamedRoom {
             Ok(None) => match self.opening.take() {
                 Some(budget) if !budget.take() => Progress::Done(Named::PastBudget),
                 Some(_) => {
-                    self.opened = true;
+                    self.charged = true;
                     self.create(cx)
                 }
                 None => self.create(cx),
@@ -334,6 +344,7 @@ impl NamedRoom {
             self.state = State::Rereading { effect, error };
             return Progress::Waiting;
         }
+        self.created = true;
         let context = Box::new(RoomContext::new(room));
         match report::report_awaited(cx, Reported::RoomCreated, &context) {
             Some(effect) => {

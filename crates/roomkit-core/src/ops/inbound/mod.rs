@@ -174,8 +174,9 @@ impl Inbound {
     /// transport's delivery, drawing on `budget`, the reentry budget of the
     /// cascade that delivers, rather than on one of its own (RFC §8.3, gap
     /// G-070). The call is charged as it starts, as an entry adopted from
-    /// that cascade would be: a message as its arrival starts, before its
-    /// parse, refused with no event past the budget; an injected event at
+    /// that cascade would be: a message first thing, before its channel is
+    /// looked up, refused with no event past the budget (RFC §10.1 step
+    /// 1); an injected event at
     /// its pass, stored `BLOCKED` with `reentry_loop_cap` past it, its hooks
     /// never run. Its own cascade draws on the same budget, so that a
     /// channel that calls into a room on every delivery stops at the cap.
@@ -188,13 +189,18 @@ impl Inbound {
 
     /// The same message, sent by the code a delivery set of `room_id`
     /// runs into a room it does not name as `room_id`, or that the router
-    /// places: it draws on `budget`, that cascade's, as
-    /// [`drawing_on`](Self::drawing_on) does, once it comes into `room_id`
-    /// (routed there) or creates a room (routed to none, or to a room the
-    /// store lacks, or naming one the store lacks), the delivery's own work,
-    /// charged once before step 2 creates or enters the room; into another
-    /// existing room its budget is its own (RFC §9.5.1, gap G-070). A
-    /// direct injection, which never creates a room, ignores it.
+    /// places: it is charged one pass on `budget`, that cascade's, once its
+    /// final room is known (RFC §9.5.1, §10.1 step 2, gap G-070). A room
+    /// step 2 creates (routed to none, or to a room the store lacks, or
+    /// naming one the store lacks) is the delivery's own work: charged
+    /// before it is created, its cascade then draws on `budget` as
+    /// [`drawing_on`](Self::drawing_on)'s does; when another call created
+    /// it first, the charge stays and the cascade has a budget of its own.
+    /// A routed room that exists is charged once step 2's locked check kept
+    /// it for the message, after any re-route: `room_id` on `budget`, past
+    /// which the message is refused, the sender's record kept, and another
+    /// room not at all. A message is charged once, wherever routing places
+    /// it. A direct injection, which never creates a room, ignores it.
     #[must_use]
     pub fn drawing_on_from_delivery(mut self, room_id: RoomId, budget: ReentryBudget) -> Self {
         self.machine.cascade.draw_on_from_delivery(room_id, budget);

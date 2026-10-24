@@ -65,12 +65,13 @@ pub(super) enum Admitted {
 }
 
 /// Admits `message`, the call's own or an entry's, before anything is
-/// read: step 1, then the refusals of an instruction that cannot be one
+/// read: first the charge on `budget`, the reentry budget of the room's
+/// work a message naming its room draws on, when it draws on one (RFC
+/// §8.3, §10.1 step 1, gap G-070): past it, the message is refused
+/// `reentry_loop_cap` first thing, with no event, its channel not looked
+/// up. Then step 1, and the refusals of an instruction that cannot be one
 /// (RFC §10.1.1) and of a visibility only the framework writes (gap
-/// G-041), then the charge on `budget`, the reentry budget the message
-/// draws on as its arrival starts, before its parse, when it draws on one
-/// (RFC §8.3, gap G-070): a message past it is refused `reentry_loop_cap`,
-/// with no event.
+/// G-041).
 ///
 /// # Errors
 ///
@@ -82,12 +83,12 @@ pub(super) fn admit(
     message: InboundMessage,
     budget: Option<&ReentryBudget>,
 ) -> Result<Admitted, InboundError> {
+    if budget.is_some_and(|budget| !budget.take()) {
+        return Ok(Admitted::Refused(Box::new(result::past_the_budget())));
+    }
     let (channel, message) = resolve(config, message)?;
     if let Admission::Refused(refusal) = instructions::admit(config, (&message).into())? {
         return Ok(Admitted::Refused(Box::new(instructions::refused(refusal))));
-    }
-    if budget.is_some_and(|budget| !budget.take()) {
-        return Ok(Admitted::Refused(Box::new(result::past_the_budget())));
     }
     Ok(Admitted::Message {
         channel: Box::new(channel),
@@ -145,12 +146,18 @@ pub(super) struct Arrival {
     /// The room step 2 works on or arrived in; `None` while the message is
     /// routed.
     room: Option<RoomId>,
-    /// For a routed message a delivery's code sent, the room it delivers in
-    /// and its cascade's budget, charged once routing names that room.
-    charge: Option<(RoomId, ReentryBudget)>,
-    /// The budget the message was charged on, once routed into the
-    /// delivering room: its cascade draws on it.
-    charged: Option<ReentryBudget>,
+    /// For a message a delivery's code sent into a room it does not name
+    /// as the delivering one, or that routing places: the room that
+    /// delivery delivers in and its cascade's budget, which the message is
+    /// charged on once its final room is known (gap G-070).
+    delivery: Option<(RoomId, ReentryBudget)>,
+    /// Whether the message drew its one pass on that budget: it is never
+    /// charged twice, wherever routing places it once more.
+    charged: bool,
+    /// Whether its cascade draws on that budget too: step 2 created its
+    /// room, or it came into the delivering room. A room another call
+    /// created first leaves it a budget of its own.
+    draws: bool,
     state: State,
 }
 
@@ -206,23 +213,30 @@ impl Arrival {
             },
             routes: 0,
             room: None,
-            charge: None,
-            charged: None,
+            delivery: None,
+            charged: false,
+            draws: false,
             state: State::Start,
         }
     }
 
-    /// The same arrival, charging `charge`'s budget once routing places the
-    /// message in its room, before step 2 and the parse (gap G-070).
-    pub(super) fn charging(mut self, charge: Option<(RoomId, ReentryBudget)>) -> Self {
-        self.charge = charge;
+    /// The same arrival, for a message the code of a delivery set in
+    /// `delivery`'s room sent: charged on `delivery`'s budget once its final
+    /// room is known, when step 2 creates that room or it is the delivering
+    /// one (gap G-070).
+    pub(super) fn charging(mut self, delivery: Option<(RoomId, ReentryBudget)>) -> Self {
+        self.delivery = delivery;
         self
     }
 
-    /// The delivering cascade's budget the message was charged on, once
-    /// routed into the room that cascade delivers in.
-    pub(super) fn charged(&self) -> Option<&ReentryBudget> {
-        self.charged.as_ref()
+    /// The delivering cascade's budget the message's cascade draws on: the
+    /// one it was charged on, when step 2 created its room or it came into
+    /// the room that cascade delivers in.
+    pub(super) fn drawn_on(&self) -> Option<&ReentryBudget> {
+        self.delivery
+            .as_ref()
+            .filter(|_| self.draws)
+            .map(|(_, budget)| budget)
     }
 
     /// The arrival of `message`, resolved on `channel`, into `room_id`,
@@ -295,8 +309,9 @@ impl Arrival {
                     Progress::Waiting
                 }
                 Progress::Done(named) => {
-                    let opened = step.opened();
-                    self.on_named(cx, step.room_id(), named, opened)
+                    self.charged |= step.charged();
+                    self.draws |= step.created();
+                    self.on_named(cx, step.room_id(), named)
                 }
             },
             State::Parsing {
@@ -365,14 +380,11 @@ impl Arrival {
 
     /// The router answered: its room, or a new one when it found none (RFC
     /// §10.1 step 2). A router that fails fails the message, with nothing
-    /// written.
+    /// written. A routed room is charged once step 2 kept it for the
+    /// message (gap G-070).
     fn on_routed(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arriving {
         match outcome.into_routed() {
             Ok(Some(room_id)) => {
-                let delivering = self.charge.as_ref().map(|(room, _)| room);
-                if delivering == Some(&room_id) && !self.charge_now() {
-                    return Progress::Done(Err(Stopped::PastBudget));
-                }
                 self.enter(cx, room_id, Mode::Routed);
                 Progress::Waiting
             }
@@ -381,26 +393,29 @@ impl Arrival {
         }
     }
 
-    /// Charges the message one pass on the budget of the delivery whose
-    /// code routed it, once (gap G-070): it came into the room that
-    /// delivery delivers in, or opens a new room, that work's own. `false`
-    /// once that budget is spent. Its cascade then draws on it. A message
-    /// charged already, or no delivery's, charges nothing.
-    fn charge_now(&mut self) -> bool {
-        let Some((_, budget)) = self.charge.take() else {
+    /// Charges the message its one pass on the budget of the delivery whose
+    /// code sent it, unless it was charged already (gap G-070). `false`
+    /// once that budget is spent. A message no delivery's code sent charges
+    /// nothing.
+    fn charge_once(&mut self) -> bool {
+        let Some((_, budget)) = &self.delivery else {
             return true;
         };
+        if self.charged {
+            return true;
+        }
         if !budget.take() {
             return false;
         }
-        self.charged = Some(budget);
+        self.charged = true;
         true
     }
 
-    /// A new room for the message, with a fresh id (RFC §10.1 step 2),
-    /// charged on the budget of the delivery whose code routed it.
+    /// A new room for the message, with a fresh id (RFC §10.1 step 2): the
+    /// work of the delivery whose code routed it, charged on its budget
+    /// before the room is created.
     fn enter_fresh(&mut self, cx: &mut Cx<'_>) -> Arriving {
-        if !self.charge_now() {
+        if !self.charge_once() {
             return Progress::Done(Err(Stopped::PastBudget));
         }
         let room_id = cx.env.new_room_id();
@@ -411,12 +426,15 @@ impl Arrival {
     /// Starts step 2 in `room_id`, named as `mode` says. A room the store
     /// lacks, routed or named, is created on the budget of the delivery
     /// whose code sent the message, charged by step 2 before it creates it
-    /// (a fresh room was charged before step 2).
+    /// unless the message was charged already (a fresh room was charged
+    /// before step 2).
     fn enter(&mut self, cx: &mut Cx<'_>, room_id: RoomId, mode: Mode) {
         self.room = Some(room_id.clone());
         let opening = match mode {
-            Mode::Routed | Mode::Named => self.charge.as_ref().map(|(_, budget)| budget.clone()),
-            Mode::Fresh => None,
+            Mode::Routed | Mode::Named if !self.charged => {
+                self.delivery.as_ref().map(|(_, budget)| budget.clone())
+            }
+            Mode::Routed | Mode::Named | Mode::Fresh => None,
         };
         let mut step = Box::new(
             NamedRoom::new(
@@ -434,20 +452,15 @@ impl Arrival {
     }
 
     /// Step 2 is over: the room's context goes to the channel, or the room
-    /// is no longer the message's and the message is routed again. A room
-    /// step 2 created on the opening budget charged the message.
-    fn on_named(
-        &mut self,
-        cx: &mut Cx<'_>,
-        room_id: &RoomId,
-        named: Named,
-        opened: bool,
-    ) -> Arriving {
-        if opened && let Some((_, budget)) = self.charge.take() {
-            self.charged = Some(budget);
-        }
+    /// is no longer the message's and the message is routed again.
+    fn on_named(&mut self, cx: &mut Cx<'_>, room_id: &RoomId, named: Named) -> Arriving {
         match named {
-            Named::Arrived(context) => self.parse(cx, context),
+            Named::Arrived(context) => {
+                if !self.arrived_within_budget(room_id) {
+                    return Progress::Done(Err(Stopped::PastBudget));
+                }
+                self.parse(cx, context)
+            }
             Named::Failed(error) => failed(error),
             Named::Expired => Progress::Done(Err(Stopped::Expired)),
             Named::PastBudget => Progress::Done(Err(Stopped::PastBudget)),
@@ -460,6 +473,23 @@ impl Arrival {
                 self.route_again(cx)
             }
         }
+    }
+
+    /// Charges a message that came into the room its delivery delivers in,
+    /// its final room, once step 2 kept that room for it, after any
+    /// re-route (RFC §10.1 step 2, gap G-070): its cascade then draws on
+    /// that delivery's budget. `false` past that budget: the message is
+    /// refused, what step 2 wrote to route it kept.
+    fn arrived_within_budget(&mut self, room_id: &RoomId) -> bool {
+        let delivering = self.delivery.as_ref().map(|(room, _)| room);
+        if delivering != Some(room_id) {
+            return true;
+        }
+        if !self.charge_once() {
+            return false;
+        }
+        self.draws = true;
+        true
     }
 
     /// Routes the message once more, or gives it a new room once it was
