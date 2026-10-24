@@ -204,8 +204,8 @@ impl EventChange for Update {
     }
 }
 
-/// The host's hard delete of a stored event, with its thread when it
-/// cascades to its replies (RFC §10.3, gap G-063).
+/// The host's hard delete of a stored event, with its replies one level
+/// deep when it cascades to them (RFC §10.3, gap G-063).
 #[derive(Debug)]
 pub(super) struct Delete {
     event_id: EventId,
@@ -226,7 +226,7 @@ enum DeleteState {
 }
 
 impl Delete {
-    /// The delete of `event_id`, with its thread's replies when
+    /// The delete of `event_id`, with its replies one level deep when
     /// `cascade_replies` is set.
     pub(super) fn new(event_id: EventId, cascade_replies: bool) -> Self {
         Self {

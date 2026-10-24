@@ -138,8 +138,8 @@ pub struct DeleteEvent {
 }
 
 impl DeleteEvent {
-    /// The delete of `event_id` from `room_id`, with its thread's replies
-    /// when `cascade_replies` is set (the RFC's default), for a caller
+    /// The delete of `event_id` from `room_id`, with its replies one level
+    /// deep when `cascade_replies` is set (the RFC's default), for a caller
     /// acting for `organization_id`; `None` reads the room unscoped.
     pub fn new(
         config: Arc<KitConfig>,

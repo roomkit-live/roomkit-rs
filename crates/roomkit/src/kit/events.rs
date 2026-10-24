@@ -13,8 +13,9 @@ use crate::store::ConversationStore;
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Replaces the fields `updates` names on the room's stored event
-    /// `event_id`, each whole, under the room lock, then fires
-    /// `ON_EVENT_UPDATED` with the event as it now stands (RFC §10.3). Unlike
+    /// `event_id`, each whole, under the room lock; once the lock is
+    /// released, reads the room and fires `ON_EVENT_UPDATED` with the event
+    /// as it now stands and the room read then (RFC §10.3). Unlike
     /// an edit sent through the pipeline, it checks no authorship and adds no
     /// `edited` marker: the host authorizes it on its own surface.
     ///
@@ -38,17 +39,20 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Deletes the room's stored event `event_id` for good, under the room
-    /// lock, with the replies of its thread when `cascade_replies` is set,
-    /// the RFC's default, since nothing else protects them, and the edits
-    /// and deletes of what it removes, an edit holding its target's content;
-    /// then fires
-    /// `ON_EVENT_DELETED` once for each event removed (RFC §10.3). The
-    /// room's counters stay: an index is never given again, and the timeline
-    /// then holds fewer events than `event_count` counts.
+    /// lock, with its replies one level deep (the events whose
+    /// `parent_event_id` names it) when `cascade_replies` is set, the RFC's
+    /// default, since nothing else protects them, and the edits and deletes
+    /// of the target and its replies, an edit holding its target's content.
+    /// Once the lock is released, it reads the room and fires
+    /// `ON_EVENT_DELETED` once for each event removed, in the order of the
+    /// ids it returns, with the room read then (RFC §10.3). The room's
+    /// counters stay: an index is never given again, and the timeline then
+    /// holds fewer events than `event_count` counts.
     ///
-    /// Returns the ids removed, the target's first; none when the room holds
-    /// no such event or does not exist, which changes and fires nothing (gap
-    /// G-063).
+    /// Returns the ids removed: the target's, then its replies' by index,
+    /// then the changes' by index, an event both a reply and a change among
+    /// the replies; none when the room holds no such event or does not
+    /// exist, which changes and fires nothing (gap G-063).
     ///
     /// # Errors
     ///
