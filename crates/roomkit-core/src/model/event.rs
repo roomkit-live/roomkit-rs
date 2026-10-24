@@ -216,8 +216,9 @@ pub struct RoomEvent {
     /// What refused it, when it is blocked.
     #[serde(default)]
     pub blocked_by: Option<String>,
-    /// Who may see it.
-    #[serde(default)]
+    /// Who may see it; an empty value read from a store or the wire reads
+    /// `none` (RFC §7.3).
+    #[serde(default, deserialize_with = "super::visibility::on_event")]
     pub visibility: Visibility,
     /// The intelligence channels asked to act; `None` leaves it to the room
     /// (RFC §19.3).
@@ -227,8 +228,9 @@ pub struct RoomEvent {
     /// §5.2, §5.12, §8.5); `None` restricts nothing. A response carries the
     /// scope it was answered within, intersected with any its channel gave
     /// it, and a hook's modify may narrow it, never widen or clear it (RFC
-    /// §9.4, gap G-073).
-    #[serde(default)]
+    /// §9.4, gap G-073). An empty value read from a store or the wire reads
+    /// `none` (RFC §7.3).
+    #[serde(default, deserialize_with = "super::visibility::scope_on_event")]
     pub response_visibility: Option<Visibility>,
     /// Its position in the room's timeline, assigned at commit; an
     /// instruction's is provisional, the index the room's next event takes

@@ -164,6 +164,37 @@ impl<'de> Deserialize<'de> for Visibility {
     }
 }
 
+/// An event's visibility as a reader of a stored or exchanged event takes
+/// it (RFC §7.3): an empty or blank value, which the doors refuse, reads
+/// `none` when it reaches an event another way, a custom store's among
+/// others, so that it restricts rather than opens. Any other value parses
+/// as [`Visibility`] does.
+pub(super) fn on_event<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Visibility, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    read_on_event(&value).map_err(serde::de::Error::custom)
+}
+
+/// An event's `response_visibility` as [`on_event`] reads a visibility:
+/// null restricts nothing, an empty or blank value reads `none` (RFC §7.3,
+/// §8.5).
+pub(super) fn scope_on_event<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Visibility>, D::Error> {
+    let value = Option::<String>::deserialize(deserializer)?;
+    value
+        .as_deref()
+        .map(read_on_event)
+        .transpose()
+        .map_err(serde::de::Error::custom)
+}
+
+fn read_on_event(value: &str) -> Result<Visibility, ModelError> {
+    if value.trim().is_empty() {
+        return Ok(Visibility::None);
+    }
+    value.parse()
+}
+
 /// The channels a list visibility names: never empty, each id once, in id
 /// order.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

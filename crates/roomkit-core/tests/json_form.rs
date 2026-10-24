@@ -152,6 +152,31 @@ fn room_event() {
     assert_json_form(&full_event(), &full_event_form());
 }
 
+/// RFC §7.3: an empty visibility that reaches an event other than through
+/// a door, a store's among others, reads as `none`, so that it restricts
+/// rather than opens; the doors refuse it.
+#[test]
+fn a_room_event_s_empty_visibilities_read_none() {
+    let mut form = full_event_form();
+    form["visibility"] = json!("");
+    form["response_visibility"] = json!(" ");
+    let event: RoomEvent = serde_json::from_value(form).unwrap();
+    let message = serde_json::from_value::<InboundMessage>(json!({
+        "channel_id": "sms",
+        "sender_id": "+15551234567",
+        "content": { "type": "text", "body": "Hi" },
+        "visibility": "",
+    }));
+    assert_eq!(
+        (
+            event.visibility,
+            event.response_visibility,
+            message.is_err()
+        ),
+        (Visibility::None, Some(Visibility::None), true)
+    );
+}
+
 #[test]
 fn room() {
     let mut room = Room::new(room_id(), at("2026-10-22T14:00:00Z"));
