@@ -21,7 +21,6 @@ use crate::rules::organizations;
 pub(super) struct EventSection<C: EventChange> {
     config: Arc<KitConfig>,
     io: Io,
-    room_id: RoomId,
     section: Section<EventWork<C>>,
     /// The read of the room once the lock is released, outstanding, and
     /// what the change gave, handed out once its trigger fired.
@@ -45,7 +44,6 @@ impl<C: EventChange> EventSection<C> {
         Self {
             config,
             io: Io::new(),
-            room_id: room_id.clone(),
             section: Section::new(room_id, work),
             reading: None,
             result: None,
@@ -67,7 +65,6 @@ impl<C: EventChange> EventSection<C> {
         Self {
             config,
             io: Io::new(),
-            room_id: room_id.clone(),
             section: Section::ended(room_id, work),
             reading: None,
             result: Some(Err(error)),
@@ -88,7 +85,6 @@ impl<C: EventChange> EventSection<C> {
         let Self {
             config,
             io,
-            room_id,
             section,
             reading,
             result,
@@ -101,14 +97,19 @@ impl<C: EventChange> EventSection<C> {
         section.start(&mut cx);
         while let Some((effect, outcome)) = cx.io.next_outcome() {
             if let Some((_, given)) = reading.take_if(|(read, _)| *read == effect) {
-                report_on(&mut cx, &section.work().change, room_id, outcome);
+                report_on(&mut cx, &section.work().change, section.room_id(), outcome);
                 *result = Some(Ok(given));
                 continue;
             }
             if let Progress::Done(ended) = section.accept(&mut cx, effect, outcome) {
                 // A failed release is logged, and changes nothing the call
                 // did (gap G-025).
-                match after_release(&mut cx, &section.work().change, room_id, ended.result) {
+                match after_release(
+                    &mut cx,
+                    &section.work().change,
+                    section.room_id(),
+                    ended.result,
+                ) {
                     Released::Done(ended) => *result = Some(ended),
                     Released::Reading(effect, given) => *reading = Some((effect, given)),
                 }

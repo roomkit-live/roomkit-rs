@@ -22,7 +22,9 @@
 //! | [`timers`] | §5.1: which timer transition falls due, and when |
 //! | [`edits`] | §10.1 step 8a, §10.3: whether an edit or a delete may change its target, and what the commit writes on it |
 //! | [`instructions`] | §10.1.1: what an instruction must be before anything is read, what a modify keeps of it, what its turn reads, and its responses' fingerprint |
-//! | [`threads`] | §5.2, §10.1 step 8: the thread root an event's parent is rooted to |
+//!
+//! The crate's own `threads` (§5.2, §10.1 step 8) gives the thread root an
+//! event's parent is rooted to; the pipeline alone applies it.
 //!
 //! Visibility itself (§7.3) is a model type: see
 //! [`Visibility::admits`](crate::model::Visibility::admits) and
@@ -41,6 +43,6 @@ pub mod lifecycle;
 pub mod organizations;
 pub mod permissions;
 pub mod routing;
-pub mod threads;
+pub(crate) mod threads;
 pub mod timers;
 pub mod transcoding;

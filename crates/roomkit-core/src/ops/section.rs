@@ -177,6 +177,11 @@ impl<W: SectionWork> Section<W> {
         &self.work
     }
 
+    /// The room the section works in.
+    pub(crate) fn room_id(&self) -> &RoomId {
+        &self.room_id
+    }
+
     /// The timer transitions the gate applied.
     pub(crate) fn transitions(&self) -> &[DueTransition] {
         &self.timers

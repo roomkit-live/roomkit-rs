@@ -177,8 +177,9 @@ impl Inbound {
     /// that cascade would be: a message first thing, before its channel is
     /// looked up, refused with no event past the budget (RFC §10.1 step 1);
     /// an injected event at its pass, stored `BLOCKED` with
-    /// `reentry_loop_cap` past it, its hooks never run. Its own cascade draws on the same budget, so that a
-    /// channel that calls into a room on every delivery stops at the cap.
+    /// `reentry_loop_cap` past it, its hooks never run. Its own cascade draws
+    /// on the same budget, so that a channel that calls into a room on every
+    /// delivery stops at the cap.
     /// The call keeps its own admission ticket and `process_timeout`.
     #[must_use]
     pub fn drawing_on(mut self, budget: ReentryBudget) -> Self {

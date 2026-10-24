@@ -38,9 +38,10 @@ as it stands.
   where its answers may go, which each response carries as its own
   `response_visibility` within its channel's, a response's hooks never
   widening it past that and any hook narrowing an event's scope, never
-  widening or clearing it (§5.2, §5.12, §9.4, gap G-073); a channel's history withholding a soft-deleted event's
-  content (gap G-062); transcoding and the text a reader takes, a tool
-  call's and a system notice's included, a composite's empty parts skipped,
+  widening or clearing it (§5.2, §5.12, §9.4, gap G-073); a channel's history
+  withholding a soft-deleted event's content (gap G-062); transcoding and the
+  text a reader takes, a tool call's and a system notice's included, a
+  composite's empty parts skipped,
   a location's coordinates in decimal with a point (`45.0`), an edit a
   channel cannot apply one `Correction: ` text (§6.6, gap G-072); the
   chain-depth limit and a cascade's reentry budget, shared by the calls that
@@ -56,8 +57,7 @@ as it stands.
   the default routing strategy, its steps 1 and 3 over ACTIVE and PAUSED
   rooms, what keeps a routed room under its lock and what step 2 records of
   a routed sender (§10.4, gaps G-045, G-055, G-058, G-061); the validation
-  of an edit or a delete against its target (§10.3, gap G-062); the thread
-  root a parent is rooted to (§10.1 step 8); and what an
+  of an edit or a delete against its target (§10.3, gap G-062); and what an
   instruction must be and what its responses carry (§10.1.1, gap G-065).
 - **The effect protocol** (`roomkit_core::ops`): an `Operation` is polled
   for a `Step`, the notices to perform, the adopted entries settled, an
@@ -146,9 +146,10 @@ as it stands.
   charged before the room is created (a call into another existing room,
   and the cascade of a message whose room another call created first, have
   a budget of its own; no message is charged twice), and answered at its
-  decision when it comes into its caller's room; a call made while a turn runs, into whatever room, is at least as
-  deep as the turn's response (§10.6); work a turn or a delivery began
-  starts fresh once that work is over, at depth 0 and on a budget of its
+  decision when it comes into its caller's room; a call made while a turn
+  runs, into whatever room, is at least as deep as the turn's response
+  (§10.6); work a turn or a delivery began starts fresh once that work is
+  over, at depth 0 and on a budget of its
   own (gap G-070); a
   call that would wait for what its own context holds fails
   `KitError::Reentrant`. A call's ticket is released once no section of the
@@ -175,9 +176,9 @@ as it stands.
   another organization, or of none, is not found by its changes and its
   injections (`RoomNotFound`), holds no event for its updates and deletes,
   and refuses its messages `OtherOrganization`, nothing written in it, its
-  due timers included; a room it creates belongs to it, and its messages are routed
-  among its rooms and identities only (gaps G-051, G-060). The kit itself
-  acts for no organization.
+  due timers included; a room it creates belongs to it, and its messages are
+  routed among its rooms and identities only (gaps G-051, G-060). The kit
+  itself acts for no organization.
 - **The runtime** (`roomkit`), on tokio. `RoomKit` registers and
   unregisters channels, registers hooks (`hook`, `hook_handler`,
   `before_broadcast`, `observe`), sets the

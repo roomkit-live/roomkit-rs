@@ -440,28 +440,25 @@ mod tests {
     /// tests too.
     #[test]
     fn a_location_s_coordinates_read_in_decimal_with_a_point() {
-        let cases = [
-            (45.0, -73.0, "[Location: (45.0, -73.0)]"),
-            (5e-05, -1.5e-07, "[Location: (0.00005, -0.00000015)]"),
-            (45.5, -73.6, "[Location: (45.5, -73.6)]"),
-        ];
-        let read: Vec<(String, &str)> = cases
+        let read: Vec<String> = [(45.0, -73.0), (5e-05, -1.5e-07), (45.5, -73.6)]
             .into_iter()
-            .map(|(latitude, longitude, text)| {
-                let content = EventContent::Location(LocationContent {
+            .map(|(latitude, longitude)| {
+                text_of(&EventContent::Location(LocationContent {
                     latitude: Latitude::new(latitude).unwrap(),
                     longitude: Longitude::new(longitude).unwrap(),
                     label: None,
                     address: None,
-                });
-                (text_of(&content), text)
+                }))
             })
             .collect();
-        let expected: Vec<(String, &str)> = read
-            .iter()
-            .map(|(_, text)| ((*text).to_owned(), *text))
-            .collect();
-        assert_eq!(read, expected);
+        assert_eq!(
+            read,
+            [
+                "[Location: (45.0, -73.0)]",
+                "[Location: (0.00005, -0.00000015)]",
+                "[Location: (45.5, -73.6)]",
+            ]
+        );
     }
 
     #[test]

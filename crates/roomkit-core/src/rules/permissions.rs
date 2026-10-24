@@ -180,7 +180,7 @@ pub fn answer_visibility(
 /// side, so that a scope never carries it: so a response carries its
 /// cascade's scope within its channel's, and a hook's modify narrows an
 /// event's, never widening or clearing it.
-pub fn narrower_scope(
+pub(crate) fn narrower_scope(
     first: Option<&Visibility>,
     second: Option<&Visibility>,
     bindings: &[ChannelBinding],

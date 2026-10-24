@@ -9,7 +9,7 @@ use crate::model::{EventId, RoomEvent, RoomId};
 /// reply joins the thread's root; that event itself otherwise; none when
 /// the store holds no such event, or it is another room's, so the event is
 /// posted at the top level.
-pub fn root(parent: Option<&RoomEvent>, room_id: &RoomId) -> Option<EventId> {
+pub(crate) fn root(parent: Option<&RoomEvent>, room_id: &RoomId) -> Option<EventId> {
     let parent = parent.filter(|parent| &parent.room_id == room_id)?;
     Some(
         parent
