@@ -56,7 +56,8 @@ as it stands.
   the default routing strategy, its steps 1 and 3 over ACTIVE and PAUSED
   rooms, what keeps a routed room under its lock and what step 2 records of
   a routed sender (§10.4, gaps G-045, G-055, G-058, G-061); the validation
-  of an edit or a delete against its target (§10.3, gap G-062); and what an
+  of an edit or a delete against its target (§10.3, gap G-062); the thread
+  root a parent is rooted to (§10.1 step 8); and what an
   instruction must be and what its responses carry (§10.1.1, gap G-065).
 - **The effect protocol** (`roomkit_core::ops`): an `Operation` is polled
   for a `Step`, the notices to perform, the adopted entries settled, an
@@ -82,7 +83,9 @@ as it stands.
   them (gaps G-055, G-061). Then the channel's parse, the off-lock checks
   ordered by the room's admission ticket (§9.5.1, gap G-067), and the pass
   under the room lock: the due timers applied, the status gate, the
-  idempotency key, an edit's or a delete's target, the hooks, the room
+  idempotency key, an entry's thread parent rooted to its thread's root
+  (§10.1 step 8), an edit's or a delete's target, the hooks, a thread
+  parent a hook set rooted alike, the room
   read again after a hook that ran under the lock, the source's
   permissions, the commit with the room's counters and the event's place in
   the room's delivery lane. An accepted edit or delete fires

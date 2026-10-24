@@ -207,6 +207,11 @@ enum State {
         effect: EffectId,
         context: Box<RoomContext>,
     },
+    /// Step 8 reads the event an entry's thread parent names, to root it.
+    RootingParent {
+        effect: EffectId,
+        context: Box<RoomContext>,
+    },
     /// Step 8a reads the target of an edit or a delete.
     ReadingTarget {
         effect: EffectId,
@@ -221,6 +226,14 @@ enum State {
     Rereading {
         effect: EffectId,
         verdict: Box<Verdict>,
+    },
+    /// The event a thread parent a hook set names is read, to root it
+    /// (RFC §10.1 step 9).
+    RootingHookParent {
+        effect: EffectId,
+        verdict: Box<Verdict>,
+        context: Box<RoomContext>,
+        reread: bool,
     },
     /// An accepted edit's or delete's target is read again, as the hooks
     /// left it.
@@ -255,9 +268,11 @@ impl State {
             | Self::LoadingContext(effect)
             | Self::ApplyingTimers { effect, .. }
             | Self::CheckingKey { effect, .. }
+            | Self::RootingParent { effect, .. }
             | Self::ReadingTarget { effect, .. }
             | Self::RunningHook { effect, .. }
             | Self::Rereading { effect, .. }
+            | Self::RootingHookParent { effect, .. }
             | Self::RereadingTarget { effect, .. }
             | Self::Committing { effect, .. }
             | Self::Placing { effect, .. }
@@ -355,9 +370,16 @@ impl CommitPass {
                 Err(error) => self.release(cx, Err(Abort::Store(error))),
             },
             State::CheckingKey { context, .. } => self.on_key(cx, context, outcome),
+            State::RootingParent { context, .. } => self.on_parent(cx, context, outcome),
             State::ReadingTarget { context, .. } => self.on_target(cx, context, outcome),
             State::RunningHook { run, context, .. } => self.on_hook(cx, run, context, outcome),
             State::Rereading { verdict, .. } => self.on_reread(cx, *verdict, outcome),
+            State::RootingHookParent {
+                verdict,
+                context,
+                reread,
+                ..
+            } => self.on_hook_parent(cx, *verdict, context, reread, outcome),
             State::RereadingTarget {
                 payload, context, ..
             } => self.on_target_reread(cx, *payload, context, outcome),
@@ -401,9 +423,11 @@ impl CommitPass {
             State::LoadingContext(_)
             | State::ApplyingTimers { .. }
             | State::CheckingKey { .. }
+            | State::RootingParent { .. }
             | State::ReadingTarget { .. }
             | State::RunningHook { .. }
             | State::Rereading { .. }
+            | State::RootingHookParent { .. }
             | State::RereadingTarget { .. } => {
                 let expired = Abort::DeadlinePassed(Some(self.event.id.clone()));
                 self.release(cx, Err(expired))

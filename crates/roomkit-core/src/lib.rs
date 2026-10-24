@@ -12,7 +12,7 @@
 //!   planning, addresses, organizations and routing, attachments, the
 //!   lifecycle and its timers, transcoding, the chain depth and the reentry
 //!   budget, hook registrations and chains, edits and deletes,
-//!   instructions.
+//!   instructions, thread roots.
 //! - [`ops`]: the operations, run by a driver through the effect protocol:
 //!   the inbound pipeline and direct injection, the room lifecycle, the
 //!   host's direct changes of stored events and records committed outside

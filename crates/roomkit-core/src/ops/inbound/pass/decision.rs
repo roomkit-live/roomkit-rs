@@ -145,10 +145,8 @@ impl CommitPass {
 
     /// The hooks' decision on the room as they left it, `reread` when the
     /// pass read it again: its status refuses the event when it no longer
-    /// accepts any; otherwise the event takes the room's next index and is
-    /// committed, blocked or delivered (RFC §10.1 steps 10 to 12). An
-    /// accepted edit or delete reads its target again first when the room
-    /// was read again.
+    /// accepts any; otherwise a thread parent a hook set is rooted first
+    /// (RFC §10.1 step 9), then the verdict applies.
     fn apply(
         &mut self,
         cx: &mut Cx<'_>,
@@ -161,6 +159,53 @@ impl CommitPass {
             super::super::report::room_refused(cx, &self.event, &self.origin, status);
             return self.release(cx, Ok(PassResult::Refused { status }));
         }
+        let set_by_a_hook = verdict
+            .payload
+            .parent_event_id
+            .clone()
+            .filter(|parent| self.event.parent_event_id.as_ref() != Some(parent));
+        match set_by_a_hook {
+            Some(event_id) => State::RootingHookParent {
+                effect: self.issue(cx, StoreRequest::GetEvent { event_id }),
+                verdict: Box::new(verdict),
+                context,
+                reread,
+            },
+            None => self.apply_verdict(cx, verdict, context, reread),
+        }
+    }
+
+    /// The event a hook set as the thread parent is read: the event keeps
+    /// its thread's root, or none, as at step 8 (RFC §10.1 step 9).
+    pub(super) fn on_hook_parent(
+        &mut self,
+        cx: &mut Cx<'_>,
+        mut verdict: Verdict,
+        context: Box<RoomContext>,
+        reread: bool,
+        outcome: Outcome,
+    ) -> State {
+        match outcome.into_event() {
+            Ok(parent) => {
+                verdict.payload.parent_event_id =
+                    super::gates::rooted(&verdict.payload, parent.as_deref());
+                self.apply_verdict(cx, verdict, context, reread)
+            }
+            Err(error) => self.release(cx, Err(Abort::Store(error))),
+        }
+    }
+
+    /// The verdict on a room that accepts events: the event takes the
+    /// room's next index and is committed, blocked or delivered (RFC §10.1
+    /// steps 10 to 12). An accepted edit or delete reads its target again
+    /// first when the room was read again.
+    fn apply_verdict(
+        &mut self,
+        cx: &mut Cx<'_>,
+        verdict: Verdict,
+        context: Box<RoomContext>,
+        reread: bool,
+    ) -> State {
         self.event.index = context.room.event_count;
         let Verdict {
             mut payload,

@@ -1,14 +1,15 @@
 //! A pass's gates before its hooks (RFC §10.1 steps 6 to 8a): the room as
 //! the lock finds it, its due timers applied, its status, the idempotency
-//! key, the provisional index, and an edit's or a delete's target.
+//! key, the provisional index and an entry's thread root, and an edit's or
+//! a delete's target.
 
 use super::{CommitPass, PassOrigin, PassResult, State};
-use crate::model::RoomContext;
+use crate::model::{EventId, RoomContext, RoomEvent};
 use crate::ops::inbound::direct::DirectCall;
 use crate::ops::lifecycle::gate::{self, Gate};
 use crate::ops::protocol::{Outcome, StoreRequest};
 use crate::ops::{Abort, Cx};
-use crate::rules::permissions;
+use crate::rules::{permissions, threads};
 
 impl CommitPass {
     pub(super) fn on_locked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
@@ -88,7 +89,7 @@ impl CommitPass {
                 ),
                 context,
             },
-            _ => self.check_edit(cx, context),
+            _ => self.root_parent(cx, context),
         }
     }
 
@@ -100,7 +101,38 @@ impl CommitPass {
     ) -> State {
         match outcome.into_idempotent() {
             Ok(Some(event)) => self.release(cx, Ok(PassResult::Duplicate { event })),
-            Ok(None) => self.check_edit(cx, context),
+            Ok(None) => self.root_parent(cx, context),
+            Err(error) => self.release(cx, Err(Abort::Store(error))),
+        }
+    }
+
+    /// Step 8: an entry's thread, an inbound message's or a direct
+    /// injection's, is rooted: the event its parent names is read under the
+    /// lock (RFC §10.1 step 8). A response and an event a hook injected
+    /// keep the parent they came with.
+    fn root_parent(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
+        match self.event.parent_event_id.clone() {
+            Some(event_id) if self.origin.is_entry() => State::RootingParent {
+                effect: self.issue(cx, StoreRequest::GetEvent { event_id }),
+                context,
+            },
+            Some(_) | None => self.check_edit(cx, context),
+        }
+    }
+
+    /// The parent is read: the event keeps its thread's root, or no parent
+    /// at all when the room holds no such event, then goes to step 8a.
+    pub(super) fn on_parent(
+        &mut self,
+        cx: &mut Cx<'_>,
+        context: Box<RoomContext>,
+        outcome: Outcome,
+    ) -> State {
+        match outcome.into_event() {
+            Ok(parent) => {
+                self.event.parent_event_id = rooted(&self.event, parent.as_deref());
+                self.check_edit(cx, context)
+            }
             Err(error) => self.release(cx, Err(Abort::Store(error))),
         }
     }
@@ -140,4 +172,22 @@ impl CommitPass {
             Err(refusal) => self.refuse_edit(cx, refusal),
         }
     }
+}
+
+/// The parent `event` keeps once its thread is rooted on `parent`, the
+/// event its parent names as the store holds it (`rules::threads::root`).
+/// A parent the room does not hold is dropped with a warning: a stale
+/// reference does not lose the message, posted at the top level.
+pub(super) fn rooted(event: &RoomEvent, parent: Option<&RoomEvent>) -> Option<EventId> {
+    let root = threads::root(parent, &event.room_id);
+    if root.is_none() {
+        tracing::warn!(
+            target: "roomkit::core::inbound",
+            room_id = %event.room_id,
+            event_id = %event.id,
+            parent = ?event.parent_event_id,
+            "the thread parent names no event of the room; the event is posted at the top level"
+        );
+    }
+    root
 }
