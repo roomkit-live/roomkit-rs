@@ -36,7 +36,9 @@ as it stands.
   and a refused record keep, never wider than their event's (gaps G-031,
   G-036); answers kept within where their message's answers may go (§5.12,
   gap G-073); a channel's history withholding a soft-deleted event's
-  content (gap G-062); transcoding and the text a reader takes (§6.6); the
+  content (gap G-062); transcoding and the text a reader takes, a tool
+  call's and a system notice's included, a composite's empty parts skipped
+  (§6.6, gap G-072); the
   chain-depth limit and a cascade's reentry budget, shared by the calls that
   draw on it (§8.3); hook registrations, the off-lock and locked chains and
   how a chain of SYNC outcomes decides (§9.1–9.4); the lifecycle's

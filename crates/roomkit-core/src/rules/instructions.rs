@@ -261,7 +261,8 @@ mod tests {
 
     use super::*;
     use crate::model::{
-        ChannelType, EventContent, EventDirection, EventId, EventSource, Room, RoomId, Timestamp,
+        ChannelType, CompositeContent, EventContent, EventDirection, EventId, EventSource, Room,
+        RoomId, SystemContent, Timestamp, ToolCallContent, ToolCallStatus,
     };
 
     fn channel(id: &str) -> ChannelId {
@@ -691,6 +692,55 @@ mod tests {
                 Fingerprint::of_instruction(&instruction("abc")),
                 Fingerprint::of("abc")
             );
+        }
+
+        /// Gap G-072: a tool call reads as its name, a system notice as its
+        /// body, a composite as its parts' texts one per line, an empty one
+        /// skipped. The Python implementation pins the same cases and the
+        /// same texts, so the two fingerprint an instruction alike.
+        #[test]
+        fn of_an_instruction_is_of_the_text_its_content_reads_as() {
+            let tool_call = || {
+                EventContent::ToolCall(ToolCallContent {
+                    tool_name: "lookup".to_owned(),
+                    tool_id: "call_1".to_owned(),
+                    arguments: Metadata::new(),
+                    result: Value::Null,
+                    status: ToolCallStatus::Pending,
+                    duration_ms: None,
+                    error: None,
+                    structured_content: None,
+                    outcome: None,
+                    refused_but_ran: false,
+                })
+            };
+            let notice = || EventContent::System(SystemContent::new("Call transferred."));
+            let composite = |parts| EventContent::Composite(CompositeContent::new(parts).unwrap());
+            let cases = [
+                (tool_call(), "[Tool call: lookup]"),
+                (notice(), "Call transferred."),
+                (
+                    composite(vec![
+                        EventContent::text("First."),
+                        EventContent::text(""),
+                        EventContent::text("Then."),
+                    ]),
+                    "First.\nThen.",
+                ),
+                (
+                    composite(vec![notice(), tool_call()]),
+                    "Call transferred.\n[Tool call: lookup]",
+                ),
+            ];
+            for (content, text) in cases {
+                let mut event = instruction("");
+                event.content = content;
+                assert_eq!(
+                    Fingerprint::of_instruction(&event),
+                    Fingerprint::of(text),
+                    "{text:?}"
+                );
+            }
         }
     }
 

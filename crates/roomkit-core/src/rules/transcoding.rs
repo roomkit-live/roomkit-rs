@@ -15,7 +15,8 @@ use crate::model::{
 /// - An edit or a delete is delivered unchanged to a channel that supports
 ///   the operation natively, as its text form otherwise.
 /// - A composite is transcoded part by part; when every part ends up as
-///   text, it becomes one text, the parts joined by a newline (gap G-007).
+///   text, it becomes one text, its text form: the parts joined by a
+///   newline, an empty one skipped (gaps G-007, G-072).
 /// - System and tool-call contents have no row in the RFC's table and are
 ///   delivered unchanged (gap G-019).
 /// - Text is then cut to the channel's `max_length`, counted in Unicode code
@@ -30,7 +31,9 @@ pub fn transcode(content: &EventContent, capabilities: &ChannelCapabilities) -> 
 }
 
 /// The text a reader takes from a content (RFC §6.6): its text, each media
-/// as its label, a composite's parts in order.
+/// as its label, a system notice as its body, a tool call as
+/// `[Tool call: <name>]`, a composite's parts in order, one per line, an
+/// empty one skipped (gap G-072). An instruction's fingerprint is of it.
 ///
 /// A media's label names its URL only when the URL is an `http` or `https`
 /// link, its MIME type otherwise: never a `data:` URI or an application
@@ -57,12 +60,7 @@ pub fn text_of(content: &EventContent) -> String {
             format!("[Video: {}]", link_or_type(&video.url, &video.mime_type))
         }
         EventContent::Location(location) => location_text(location),
-        EventContent::Composite(composite) => composite
-            .parts()
-            .iter()
-            .map(text_of)
-            .collect::<Vec<_>>()
-            .join("\n"),
+        EventContent::Composite(composite) => lines(composite.parts()),
         EventContent::System(system) => system.body.clone(),
         EventContent::Template(template) => template
             .body
@@ -72,6 +70,17 @@ pub fn text_of(content: &EventContent) -> String {
         EventContent::Delete(_) => "[Message deleted]".to_owned(),
         EventContent::ToolCall(tool_call) => format!("[Tool call: {}]", tool_call.tool_name),
     }
+}
+
+/// The texts of `parts`, one per line, an empty one taking none (gap
+/// G-072).
+fn lines(parts: &[EventContent]) -> String {
+    parts
+        .iter()
+        .map(text_of)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn transcode_content(content: &EventContent, capabilities: &ChannelCapabilities) -> EventContent {
@@ -124,7 +133,7 @@ fn transcode_composite(
         .iter()
         .all(|part| matches!(part, EventContent::Text(_)))
     {
-        return EventContent::text(parts.iter().map(text_of).collect::<Vec<_>>().join("\n"));
+        return EventContent::text(lines(&parts));
     }
     // Each part is replaced by its own transcoding, which never nests deeper.
     EventContent::Composite(CompositeContent::from_derived_parts(parts))
@@ -452,10 +461,12 @@ mod tests {
         assert_eq!(transcode(&delete(), &capabilities), delete());
     }
 
+    /// An empty part takes no line of its own (gap G-072).
     #[test]
     fn a_composite_of_text_fallbacks_becomes_one_text() {
         let content = composite(vec![
             EventContent::text("Here is the receipt"),
+            EventContent::text(""),
             media("https://example.com/a.jpg", None, Some("a.jpg")),
         ]);
         assert_eq!(
