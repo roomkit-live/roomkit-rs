@@ -1641,11 +1641,11 @@ mod a_response_visibility {
         );
     }
 
-    /// A hook that writes `scope` as the `response_visibility` of the
-    /// customer's message.
-    fn rescoping(sim: &mut Sim, scope: Option<Visibility>) {
+    /// A hook named `name` that writes `scope` as the
+    /// `response_visibility` of the customer's message.
+    fn rescoping(sim: &mut Sim, name: &str, scope: Option<Visibility>) {
         sim.before_broadcast(
-            "rescope",
+            name,
             Box::new(move |event| {
                 if event.source.channel_id.as_str() != "sms" {
                     return HookOutcome::Returned(HookResult::allow());
@@ -1706,7 +1706,7 @@ mod a_response_visibility {
     #[test]
     fn narrowed_by_a_hook_binds_the_answers() {
         let mut sim = room_with(answering_as("all"));
-        rescoping(&mut sim, Some("ws_advisor".parse().unwrap()));
+        rescoping(&mut sim, "rescope", Some("ws_advisor".parse().unwrap()));
         sim.send(Sim::message("sms", "Hello")).unwrap();
         assert_eq!(
             (scope_of(&sim, "Hello"), stored(&sim, "Re: Hello")),
@@ -1725,7 +1725,7 @@ mod a_response_visibility {
         ];
         for (written, kept, answered) in cases {
             let mut sim = room_with(answering_as("all"));
-            rescoping(&mut sim, written.clone());
+            rescoping(&mut sim, "rescope", written.clone());
             sim.send(answered_within("Hello", "ws_advisor")).unwrap();
             assert_eq!(
                 (scope_of(&sim, "Hello"), stored(&sim, "Re: Hello")),
@@ -1733,6 +1733,31 @@ mod a_response_visibility {
                 "a hook writing {written:?}"
             );
         }
+    }
+
+    /// RFC §9.4: what an earlier hook narrowed, a later one can neither
+    /// widen nor clear: each hook's modify is kept against the event that
+    /// hook was handed.
+    #[test]
+    fn narrowed_by_one_hook_is_never_widened_by_the_next() {
+        let mut kept = Vec::new();
+        for written in [Some(Visibility::All), None] {
+            let mut sim = room_with(answering_as("all"));
+            rescoping(&mut sim, "rescope", Some("ws_advisor".parse().unwrap()));
+            rescoping(&mut sim, "widen", written);
+            sim.send(Sim::message("sms", "Hello")).unwrap();
+            kept.push((
+                scope_of(&sim, "Hello"),
+                stored(&sim, "Re: Hello"),
+                delivered(&sim, "Re: Hello").join(","),
+            ));
+        }
+        let narrowed = (
+            Some("ws_advisor".to_owned()),
+            Some("ws_advisor".to_owned()),
+            "ws_advisor".to_owned(),
+        );
+        assert_eq!(kept, [narrowed.clone(), narrowed]);
     }
 
     /// RFC §9.2: the payload of `ON_ERROR` is visible where the trigger's

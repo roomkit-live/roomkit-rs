@@ -149,11 +149,23 @@ impl<P> HookChain<P> {
     /// Applies what `hook` produced. Once the chain is blocked, nothing more
     /// is applied: a blocked chain runs no further hook.
     pub fn apply(&mut self, hook: &HookSpec, outcome: HookOutcome<P>) {
+        self.apply_kept(hook, outcome, |payload| payload);
+    }
+
+    /// Applies what `hook` produced, a replacement payload as `keep` keeps
+    /// it: what the hook may change of the payload it was handed, the rest
+    /// put back from it before the next hook reads it (RFC §9.4).
+    pub fn apply_kept(
+        &mut self,
+        hook: &HookSpec,
+        outcome: HookOutcome<P>,
+        keep: impl FnOnce(P) -> P,
+    ) {
         if self.is_blocked() {
             return;
         }
         match outcome {
-            HookOutcome::Returned(result) => self.apply_result(hook, result),
+            HookOutcome::Returned(result) => self.apply_result(hook, result, keep),
             HookOutcome::Raised(error) => self.apply_problem(hook, HookProblem::Raised(error)),
             HookOutcome::TimedOut => self.apply_problem(hook, HookProblem::TimedOut),
             HookOutcome::Invalid {
@@ -193,13 +205,13 @@ impl<P> HookChain<P> {
         }
     }
 
-    fn apply_result(&mut self, hook: &HookSpec, result: HookResult<P>) {
+    fn apply_result(&mut self, hook: &HookSpec, result: HookResult<P>, keep: impl FnOnce(P) -> P) {
         self.injected_events.extend(result.injected_events);
         self.tasks.extend(result.tasks);
         self.observations.extend(result.observations);
         match result.decision {
             HookDecision::Allow => {}
-            HookDecision::Modify(payload) => self.payload = payload,
+            HookDecision::Modify(payload) => self.payload = keep(payload),
             HookDecision::Block => self.block = Some((hook.name.clone(), result.reason)),
         }
     }

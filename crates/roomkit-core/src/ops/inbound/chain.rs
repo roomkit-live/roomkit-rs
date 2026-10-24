@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use super::stamp;
-use crate::model::{RoomContext, RoomEvent, RoomId};
+use crate::model::{ChannelBinding, RoomContext, RoomEvent, RoomId};
 use crate::ops::Cx;
 use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, HookRequest, Outcome};
@@ -20,6 +20,9 @@ pub(super) struct HookRun {
     rest: VecDeque<HookId>,
     chain: HookChain<RoomEvent>,
     running: Option<HookId>,
+    /// The event the running hook was handed, which its modify is kept
+    /// against (RFC §9.4).
+    handed: Option<RoomEvent>,
     /// Whether the run asked for a hook.
     asked: bool,
 }
@@ -31,6 +34,7 @@ impl HookRun {
             rest: hooks.into(),
             chain,
             running: None,
+            handed: None,
             asked: false,
         }
     }
@@ -71,22 +75,26 @@ impl HookRun {
             .and_then(|hook| cx.config.hooks.get(hook).map(|spec| (hook, spec.timeout)))?;
         self.running = Some(hook);
         self.asked = true;
+        let handed =
+            stamp::keep_identity(original, self.chain.payload().clone(), &context.bindings);
+        self.handed = Some(handed.clone());
         let request = HookRequest::RunHook {
             hook,
             trigger: HookTrigger::BeforeBroadcast,
-            event: Box::new(stamp::keep_identity(
-                original,
-                self.chain.payload().clone(),
-                &context.bindings,
-            )),
+            event: Box::new(handed),
             context: Box::new(context.clone()),
             timeout,
         };
         Some(cx.io.issue_under(request, bound, locked.cloned()))
     }
 
-    /// Applies what the running hook produced (RFC §9.3).
-    pub(super) fn apply(&mut self, cx: &Cx<'_>, outcome: Outcome) {
+    /// Applies what the running hook produced (RFC §9.3): a modify is kept
+    /// against the event the hook was handed, a listed channel's category
+    /// read from `bindings`, so that a later hook never undoes what an
+    /// earlier one may only narrow, where the event's answers go among
+    /// others (RFC §9.4, gap G-073).
+    pub(super) fn apply(&mut self, cx: &Cx<'_>, outcome: Outcome, bindings: &[ChannelBinding]) {
+        let handed = self.handed.take();
         let Some(spec) = self
             .running
             .take()
@@ -94,7 +102,11 @@ impl HookRun {
         else {
             return;
         };
-        self.chain.apply(spec, outcome.into_hook());
+        self.chain
+            .apply_kept(spec, outcome.into_hook(), |payload| match &handed {
+                Some(handed) => stamp::keep_identity(handed, payload, bindings),
+                None => payload,
+            });
     }
 
     /// The chain so far.

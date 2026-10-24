@@ -153,7 +153,7 @@ impl OffLockCheck {
         if outcome == Outcome::DeadlinePassed {
             return Progress::Done(Err(Stopped::Expired));
         }
-        run.apply(cx, outcome);
+        run.apply(cx, outcome, &self.context.bindings);
         let incidents = run.chain_mut().take_incidents();
         report::hook_incidents(cx, &self.event, &incidents);
         self.next_hook(cx, run)

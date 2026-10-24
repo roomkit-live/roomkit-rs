@@ -68,7 +68,7 @@ impl CommitPass {
         context: Box<RoomContext>,
         outcome: Outcome,
     ) -> State {
-        run.apply(cx, outcome);
+        run.apply(cx, outcome, &context.bindings);
         self.next_hook(cx, run, context)
     }
 
