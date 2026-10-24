@@ -1544,6 +1544,103 @@ async fn an_agent_injecting_on_every_turn_stops_at_the_chain_depth_limit() {
     );
 }
 
+/// The calls, as `(chain depth, status)`, of work a turn began, which sends
+/// `count` events into `room` through the console.
+type Sent = Arc<Mutex<Vec<(u32, EventStatus)>>>;
+
+async fn send_through_console(kit: &RoomKit, room: &RoomId, count: u32, sent: &Sent) {
+    for _ in 0..count {
+        let event = kit.send_event(room, from_console("Later")).await.unwrap();
+        sent.lock().unwrap().push((event.chain_depth, event.status));
+    }
+}
+
+/// Decided 2026-10-23 (RMK-930, gap G-070): work a turn began starts
+/// fresh once the turn is over. A task the turn spawned within its context
+/// and left running, which sends after the turn, is at depth 0 and on a
+/// budget of its own for each call: the frame of a call that is over lends
+/// neither its depth nor its budget.
+#[tokio::test]
+async fn work_a_turn_began_starts_fresh_once_the_turn_is_over() {
+    const LIMIT: u32 = 2;
+    let (kit, _) = room().await;
+    kit.set_max_chain_depth(LIMIT);
+    let (turn_over, sent): (Arc<Notify>, Sent) = (Arc::new(Notify::new()), Sent::default());
+    let (turn_kit, turn_notify, turn_sent) =
+        (kit.clone(), Arc::clone(&turn_over), Arc::clone(&sent));
+    let agent = Scripted::agent(
+        "ai",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, over, sent) = (
+                turn_kit.clone(),
+                Arc::clone(&turn_notify),
+                Arc::clone(&turn_sent),
+            );
+            Box::pin(async move {
+                if text_of(&event.content) == "hello" {
+                    // Left running past the turn, within the turn's context.
+                    drop(tokio::spawn(roomkit::keep_context(async move {
+                        over.notified().await;
+                        send_through_console(&kit, &room_id(), LIMIT * 10 + 1, &sent).await;
+                    })));
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(agent).unwrap();
+    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    send(&kit, "hello").await.unwrap();
+    turn_over.notify_one();
+    let deadline = tokio::time::Instant::now() + BOUND;
+    while sent.lock().unwrap().len() < (LIMIT * 10 + 1) as usize {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the task never sent"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        sent.lock().unwrap().clone(),
+        vec![(0, EventStatus::Delivered); (LIMIT * 10 + 1) as usize]
+    );
+}
+
+/// Decided 2026-10-23 (RMK-930, gap G-070): a turn's call into another
+/// room is none of this room's work, and has a budget of its own; it is
+/// still at least as deep as the turn's response, as any call made while
+/// the turn runs.
+#[tokio::test]
+async fn a_turn_s_call_into_another_room_has_a_budget_of_its_own() {
+    const LIMIT: u32 = 2;
+    let (kit, _) = room().await;
+    kit.set_max_chain_depth(LIMIT);
+    let other = RoomId::new("room_2").unwrap();
+    kit.create_room(&other).await.unwrap();
+    kit.attach(&other, &channel("ws")).await.unwrap();
+    let (turn_kit, sent, turn_other) = (kit.clone(), Sent::default(), other.clone());
+    let turn_sent = Arc::clone(&sent);
+    let agent = Scripted::agent(
+        "ai",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, sent, other) = (turn_kit.clone(), Arc::clone(&turn_sent), turn_other.clone());
+            Box::pin(async move {
+                if text_of(&event.content) == "hello" {
+                    send_through_console(&kit, &other, LIMIT * 10 + 1, &sent).await;
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(agent).unwrap();
+    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    send(&kit, "hello").await.unwrap();
+    assert_eq!(
+        sent.lock().unwrap().clone(),
+        vec![(1, EventStatus::Delivered); (LIMIT * 10 + 1) as usize]
+    );
+}
+
 /// RFC §10.1 step 18: a message a turn routes back into its own room is a
 /// new arrival, and returns at its decision, its delivery following the
 /// turn's own set in the lane: it waits for nothing its caller holds.

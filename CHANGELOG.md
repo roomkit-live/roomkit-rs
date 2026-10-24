@@ -125,9 +125,13 @@ as it stands.
   `process_inbound_in` made under the lock or in the admission order is
   adopted by the call whose work made it and returns at its commit; a
   turn's or a delivery's call is a new arrival with its own ticket and
-  `process_timeout`, drawing on the delivering cascade's budget and
-  answered at its decision when it comes into its caller's room; a call
-  made within a turn is at least as deep as the turn's response (§10.6); a
+  `process_timeout`, drawing on the delivering cascade's budget when it
+  comes into the room delivered in (a call into another room has a budget
+  of its own) and answered at its decision when it comes into its caller's
+  room; a call made while a turn runs, into whatever room, is at least as
+  deep as the turn's response (§10.6); work a turn or a delivery began
+  starts fresh once that work is over, at depth 0 and on a budget of its
+  own (gap G-070); a
   call that would wait for what its own context holds fails
   `KitError::Reentrant`. A call's ticket is released once no section of the
   call holds the room's lock, its decision and its delivery set not waiting

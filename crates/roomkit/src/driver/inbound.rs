@@ -163,14 +163,17 @@ impl Caller {
     }
 }
 
-/// Runs `inbound`, made by the kit's call `call`, on a task of its own,
+/// Runs `inbound`, made by the kit's call `call` into `room_id` (`None` for
+/// a message the router places), on a task of its own,
 /// within the caller's execution context, and waits for its end or, for a
 /// caller whose context detaches from the call's room, its decision. A lock
 /// its context holds a lease on is refused to it: a call nested under the
 /// lock is adopted by the section that holds it, and one that reaches the
 /// driver would commit within that section's tenure. A call made within a
-/// delivery set's code, a turn or a transport's delivery, draws on the
-/// reentry budget of the cascade that delivers (gap G-070). A caller that
+/// delivery set's code, a turn or a transport's delivery, into the room the
+/// set delivers in draws on the reentry budget of the cascade that
+/// delivers while that code runs; one into another room has a budget of
+/// its own (gap G-070). A caller that
 /// stops waiting detaches the run, which expires its call when it is not
 /// decided yet (gap G-076).
 ///
@@ -184,11 +187,12 @@ impl Caller {
 pub(crate) async fn run_inbound<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
+    room_id: Option<&RoomId>,
     inbound: Inbound,
 ) -> InboundOutput {
     inner.open()?;
     let context = ExecutionContext::current();
-    let inbound = match context.budget() {
+    let inbound = match context.budget(room_id) {
         Some(budget) => inbound.drawing_on(budget),
         None => inbound,
     };

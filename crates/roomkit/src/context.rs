@@ -31,18 +31,23 @@
 //!   lock, in its admission order or delivering in it, returns at its
 //!   decision rather than wait for its delivery, which may wait in the
 //!   room's lane behind its own caller's set (RFC §10.1 step 18);
-//! - a call made within a turn is at least as deep as the turn's response
-//!   (RFC §10.6), so that an agent that calls into its room on every turn
-//!   stops at the chain-depth limit (RFC §8.3).
+//! - a call made while a turn runs, into whatever room, is at least as deep
+//!   as the turn's response (RFC §10.6), so that an agent that calls into
+//!   its room on every turn stops at the chain-depth limit (RFC §8.3);
+//! - a call into the room a delivery set delivers in, made while the set's
+//!   call runs, draws on the budget of the cascade that delivers; a call
+//!   into another room has a budget of its own (gap G-070).
 //!
 //! A refusal fails the call ([`KitError::Reentrant`](crate::KitError::Reentrant))
 //! rather than let it wait for itself.
 //!
 //! A lease is live while the run that holds the lock keeps the tenure it
 //! was given under, so a context kept past the release grants nothing. A
-//! frame stands in an admission order while its call runs, so a context
-//! kept past the call's end, by a run the call started that goes on
-//! detached, stands in none.
+//! frame stands in an admission order, lends its turn's depth and lends its
+//! cascade's budget while its call runs, so a context kept past the call's
+//! end, by a run the call started that goes on detached or a task it left
+//! running, stands in none and lends nothing: that work starts fresh, at
+//! depth 0 and on a budget of its own.
 //!
 //! tokio hands no task-local to a spawned task. A call that spawns a task
 //! and awaits it as its own (RFC §13.5: "the tasks it awaits as its own")
@@ -316,7 +321,13 @@ impl Frame {
     /// that goes on detached, stands in no order: the ticket its run held,
     /// or was about to take, waits for nothing that run does any more.
     fn is_admitted_to(&self, room_id: &RoomId) -> bool {
-        self.work.admitted.as_ref() == Some(room_id) && self.run.is_calling(self.effect)
+        self.work.admitted.as_ref() == Some(room_id) && self.runs()
+    }
+
+    /// Whether the frame's call still runs, its run's operation not answered
+    /// it yet: a frame kept past its call's end stands for no work.
+    fn runs(&self) -> bool {
+        self.run.is_calling(self.effect)
     }
 
     /// Hands `entry` to the frame's run, and waits for its decision.
@@ -391,24 +402,31 @@ impl ExecutionContext {
             })
     }
 
-    /// The least chain depth of a call made in this context: the response
-    /// depth of the deepest turn it runs within, `None` outside every turn
-    /// (RFC §10.6: a call a turn makes is at least as deep as the turn's
-    /// response).
+    /// The least chain depth of a call made in this context, into whatever
+    /// room: the response depth of the deepest turn it runs within that
+    /// still runs, `None` outside every running turn (RFC §10.6: a call a
+    /// turn makes is at least as deep as the turn's response; gap G-070).
     pub(crate) fn turn_depth(&self) -> Option<u32> {
         self.frames
             .iter()
+            .filter(|frame| frame.runs())
             .filter_map(|frame| frame.work.response_depth)
             .max()
     }
 
-    /// The reentry budget a call made in this context draws on: the
-    /// budget of the cascade whose delivery set runs the innermost frame
-    /// of a delivery, `None` outside every delivery (gap G-070).
-    pub(crate) fn budget(&self) -> Option<ReentryBudget> {
+    /// The reentry budget a call into `room_id` made in this context draws
+    /// on: the budget of the cascade whose delivery set runs the innermost
+    /// running frame of a delivery in that room, `None` otherwise (gap
+    /// G-070). `None` for `room_id` is a message the router places: its
+    /// room known only once routed, it draws on the innermost running
+    /// delivery's, so a channel routing back into its room on every
+    /// delivery stays bounded.
+    pub(crate) fn budget(&self, room_id: Option<&RoomId>) -> Option<ReentryBudget> {
         self.frames
             .iter()
             .rev()
+            .filter(|frame| frame.runs())
+            .filter(|frame| room_id.is_none_or(|room| frame.work.delivering.as_ref() == Some(room)))
             .find_map(|frame| frame.work.budget.clone())
     }
 
@@ -686,23 +704,26 @@ mod tests {
     }
 
     /// RFC §10.6, §8.3: a turn's frame gives the calls made within it the
-    /// depth of the turn's response; a transport told of the event gives
-    /// none.
+    /// depth of the turn's response while the turn runs, and none once it
+    /// is over (gap G-070); a transport told of the event gives none.
     #[test]
     fn a_turn_gives_the_calls_made_within_it_its_response_depth() {
         let (run, _queue) = RunShared::new();
+        run.calling(effect());
         let depth_within = |category| {
             let work = Work::of(&on_event(category, 2));
             ExecutionContext::default()
                 .within(Frame::new(&run, effect(), work))
                 .turn_depth()
         };
+        let running = (
+            depth_within(ChannelCategory::Intelligence),
+            depth_within(ChannelCategory::Transport),
+        );
+        run.answered(effect());
         assert_eq!(
-            (
-                depth_within(ChannelCategory::Intelligence),
-                depth_within(ChannelCategory::Transport)
-            ),
-            (Some(3), None)
+            (running, depth_within(ChannelCategory::Intelligence)),
+            ((Some(3), None), None)
         );
     }
 

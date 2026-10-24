@@ -322,7 +322,7 @@ impl<S: ConversationStore> Scope<'_, S> {
             self.organization_id(),
             message,
         );
-        Ok(driver::run_inbound(&self.kit.inner, PROCESS_INBOUND, inbound).await??)
+        Ok(driver::run_inbound(&self.kit.inner, PROCESS_INBOUND, None, inbound).await??)
     }
 
     /// Runs `message` into the room `room_id` of the scope, adopted by the

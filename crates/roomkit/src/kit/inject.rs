@@ -128,6 +128,7 @@ impl<S: ConversationStore> RoomKit<S> {
             }
             Adopting::Apart(entry) => entry,
         };
+        let room_id = entry.room_id().clone();
         let operation = match entry {
             Entry::Message {
                 room_id,
@@ -145,7 +146,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 event,
             } => Inbound::inject(self.config(), room_id, organization_id, *event),
         };
-        Ok(driver::run_inbound(&self.inner, call, operation).await??)
+        Ok(driver::run_inbound(&self.inner, call, Some(&room_id), operation).await??)
     }
 }
 
