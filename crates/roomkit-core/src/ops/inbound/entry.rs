@@ -53,7 +53,7 @@ impl Machine {
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),
             Err(error) => return self.end(cx, Err(error)),
         };
-        let charge = self.cascade.take_routed_into();
+        let charge = self.cascade.take_from_delivery();
         let mut arrival = Box::new(
             Arrival::new(target, organization_id, channel, message, self.call.bound)
                 .charging(charge),

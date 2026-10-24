@@ -408,14 +408,15 @@ impl Arrival {
         Progress::Waiting
     }
 
-    /// Starts step 2 in `room_id`, named as `mode` says. A routed room the
-    /// store lacks is created on the budget of the delivery whose code
-    /// routed the message, charged by step 2 before it creates it.
+    /// Starts step 2 in `room_id`, named as `mode` says. A room the store
+    /// lacks, routed or named, is created on the budget of the delivery
+    /// whose code sent the message, charged by step 2 before it creates it
+    /// (a fresh room was charged before step 2).
     fn enter(&mut self, cx: &mut Cx<'_>, room_id: RoomId, mode: Mode) {
         self.room = Some(room_id.clone());
         let opening = match mode {
-            Mode::Routed => self.charge.as_ref().map(|(_, budget)| budget.clone()),
-            Mode::Named | Mode::Fresh => None,
+            Mode::Routed | Mode::Named => self.charge.as_ref().map(|(_, budget)| budget.clone()),
+            Mode::Fresh => None,
         };
         let mut step = Box::new(
             NamedRoom::new(

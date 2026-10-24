@@ -186,15 +186,18 @@ impl Inbound {
         self
     }
 
-    /// The same message, routed by the kit's router and sent by the code a
-    /// delivery set of `room_id` runs: it draws on `budget`, that cascade's,
-    /// as [`drawing_on`](Self::drawing_on) does, only once routing places
-    /// it in `room_id`, charged then, before step 2 and its parse; routed
-    /// into another room, or into a new one, its budget is its own (RFC
-    /// §9.5.1, gap G-070).
+    /// The same message, sent by the code a delivery set of `room_id`
+    /// runs into a room it does not name as `room_id`, or that the router
+    /// places: it draws on `budget`, that cascade's, as
+    /// [`drawing_on`](Self::drawing_on) does, once it comes into `room_id`
+    /// (routed there) or creates a room (routed to none, or to a room the
+    /// store lacks, or naming one the store lacks), the delivery's own work,
+    /// charged once before step 2 creates or enters the room; into another
+    /// existing room its budget is its own (RFC §9.5.1, gap G-070). A
+    /// direct injection, which never creates a room, ignores it.
     #[must_use]
-    pub fn drawing_on_if_routed_into(mut self, room_id: RoomId, budget: ReentryBudget) -> Self {
-        self.machine.cascade.draw_on_if_routed_into(room_id, budget);
+    pub fn drawing_on_from_delivery(mut self, room_id: RoomId, budget: ReentryBudget) -> Self {
+        self.machine.cascade.draw_on_from_delivery(room_id, budget);
         self
     }
 

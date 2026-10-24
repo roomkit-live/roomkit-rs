@@ -1173,20 +1173,31 @@ impl<S: ConversationStore> InboundRoomRouter<S> for FreshRoom {
     }
 }
 
+/// How a delivery's message opens a room.
+#[derive(Clone, Copy, Debug)]
+enum Opens {
+    /// The router answers none.
+    NoRoom,
+    /// The router names a room the store lacks.
+    FreshIds,
+    /// The call names a room the store lacks.
+    Named,
+}
+
 /// The maintainer's rule (RMK-930, gap G-070): a message a delivery's code
-/// routes that opens a new room is that delivery's own work, and draws on
-/// the delivering cascade's budget, whichever way routing opens the room
-/// (no answer, or an id the store lacks): a transport whose every delivery
-/// opens a room it is then bound in stops at the cap, rather than create
-/// rooms without end.
-async fn opening_a_room_on_every_delivery_stops_at_the_reentry_cap(fresh_ids: bool) {
+/// sends that creates a room is that delivery's own work, and draws on the
+/// delivering cascade's budget, whichever way the room is opened (no
+/// answer from the router, an id the store lacks, a named room the store
+/// lacks): a transport whose every delivery opens a room it is then bound
+/// in stops at the cap, rather than create rooms without end.
+async fn opening_a_room_on_every_delivery_stops_at_the_reentry_cap(opens: Opens) {
     let (kit, _) = room().await;
     kit.set_max_chain_depth(1);
-    if fresh_ids {
-        kit.set_router(FreshRoom::default());
-    } else {
-        kit.set_router(NoRoom);
+    match opens {
+        Opens::FreshIds => kit.set_router(FreshRoom::default()),
+        Opens::NoRoom | Opens::Named => kit.set_router(NoRoom),
     }
+    let named = Arc::new(AtomicU32::new(0));
     let binder = kit.clone();
     kit.observe("bind_bot", HookTrigger::OnRoomCreated, move |event, _| {
         let kit = binder.clone();
@@ -1201,8 +1212,17 @@ async fn opening_a_room_on_every_delivery_stops_at_the_reentry_cap(fresh_ids: bo
         "bot",
         Arc::new(move |_| {
             let (kit, refused) = (bot_kit.clone(), Arc::clone(&bot_refused));
+            let fresh = named.fetch_add(1, AtomicOrdering::Relaxed);
             Box::pin(async move {
-                let result = kit.process_inbound(message("again")).await?;
+                let result = match opens {
+                    Opens::Named => {
+                        let room = RoomId::new(format!("named_{fresh}")).unwrap();
+                        kit.process_inbound_in(&room, message("again")).await?
+                    }
+                    Opens::NoRoom | Opens::FreshIds => {
+                        kit.process_inbound(message("again")).await?
+                    }
+                };
                 if result.event.is_none() {
                     refused.lock().unwrap().push(result.reason);
                 }
@@ -1229,18 +1249,60 @@ async fn opening_a_room_on_every_delivery_stops_at_the_reentry_cap(fresh_ids: bo
     assert_eq!(
         (refused.lock().unwrap().clone(), rooms.len()),
         (vec![Some("reentry_loop_cap".to_owned())], 11),
-        "fresh ids: {fresh_ids}"
+        "{opens:?}"
     );
 }
 
 #[tokio::test]
 async fn a_transport_opening_a_room_on_every_delivery_stops_at_the_reentry_cap() {
-    opening_a_room_on_every_delivery_stops_at_the_reentry_cap(false).await;
+    opening_a_room_on_every_delivery_stops_at_the_reentry_cap(Opens::NoRoom).await;
 }
 
 #[tokio::test]
 async fn a_transport_routing_to_a_missing_room_on_every_delivery_stops_at_the_reentry_cap() {
-    opening_a_room_on_every_delivery_stops_at_the_reentry_cap(true).await;
+    opening_a_room_on_every_delivery_stops_at_the_reentry_cap(Opens::FreshIds).await;
+}
+
+#[tokio::test]
+async fn a_transport_naming_a_missing_room_on_every_delivery_stops_at_the_reentry_cap() {
+    opening_a_room_on_every_delivery_stops_at_the_reentry_cap(Opens::Named).await;
+}
+
+/// The maintainer's rule (RMK-930, gap G-070): a delivery's call into an
+/// existing room it does not deliver in has a budget of its own.
+#[tokio::test]
+async fn a_delivery_s_call_into_another_existing_room_has_a_budget_of_its_own() {
+    const LIMIT: u32 = 1;
+    let (kit, _) = room().await;
+    kit.set_max_chain_depth(LIMIT);
+    let other = RoomId::new("room_2").unwrap();
+    kit.create_room(&other).await.unwrap();
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let (bot_kit, bot_results, bot_other) = (kit.clone(), Arc::clone(&results), other.clone());
+    let bot = Scripted::transport(
+        "bot",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, results, other) =
+                (bot_kit.clone(), Arc::clone(&bot_results), bot_other.clone());
+            Box::pin(async move {
+                if text_of(&event.content) != "hello" {
+                    return Ok(ChannelOutput::default());
+                }
+                for _ in 0..=LIMIT * 10 {
+                    let result = kit.process_inbound_in(&other, message("there")).await?;
+                    results.lock().unwrap().push(result.event.is_some());
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(bot).unwrap();
+    kit.attach(&room_id(), &channel("bot")).await.unwrap();
+    send(&kit, "hello").await.unwrap();
+    assert_eq!(
+        results.lock().unwrap().clone(),
+        vec![true; (LIMIT * 10 + 1) as usize]
+    );
 }
 
 /// RFC §13.5, §9.5.1 Reentrance: a message routed back into the room from

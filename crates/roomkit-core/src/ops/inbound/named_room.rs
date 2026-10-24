@@ -80,8 +80,8 @@ pub(super) struct NamedRoom {
     mode: Mode,
     /// The call's deadline (RFC §13.6).
     bound: Bound,
-    /// For a routed message the room's delivery work sent, the budget a
-    /// room step 2 creates is charged on (gap G-070).
+    /// For a message the room's delivery work sent, the budget a room
+    /// step 2 creates is charged on (gap G-070).
     opening: Option<ReentryBudget>,
     /// Whether step 2 charged `opening` for the room it creates.
     opened: bool,
@@ -261,8 +261,9 @@ impl NamedRoom {
     fn on_read(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<Named> {
         match outcome.into_context() {
             Ok(Some(context)) => self.on_existing(cx, context),
-            // A router may name a room the store lacks: the room's work
-            // that routed the message opens it, on its budget (gap G-070).
+            // A room the store lacks, named by the call or by its router:
+            // the room's work that sent the message opens it, on its budget
+            // (gap G-070).
             Ok(None) => match self.opening.take() {
                 Some(budget) if !budget.take() => Progress::Done(Named::PastBudget),
                 Some(_) => {

@@ -64,10 +64,10 @@ pub(super) struct Cascade {
     /// Whether the call draws on the budget of the cascade whose delivery
     /// made it, which charges its trigger as it starts (gap G-070).
     drawn: bool,
-    /// For a message the router places, the room a delivery made it in and
-    /// that delivery's budget, which the message draws on only once routed
-    /// into that room (gap G-070).
-    routed_into: Option<(RoomId, ReentryBudget)>,
+    /// For a message a delivery's code sent, the room that delivery
+    /// delivers in and its budget, which the message draws on once routed
+    /// into that room or once it creates a room (gap G-070).
+    from_delivery: Option<(RoomId, ReentryBudget)>,
 }
 
 impl Cascade {
@@ -81,20 +81,21 @@ impl Cascade {
             stopping: false,
             budget,
             drawn: false,
-            routed_into: None,
+            from_delivery: None,
         }
     }
 
-    /// Draws on `budget` only once routing places the call's message in
-    /// `room_id`, the room whose delivery made the call (gap G-070).
-    pub(super) fn draw_on_if_routed_into(&mut self, room_id: RoomId, budget: ReentryBudget) {
-        self.routed_into = Some((room_id, budget));
+    /// Draws on `budget` only once the call's message is routed into
+    /// `room_id`, the room whose delivery made the call, or creates a room
+    /// (gap G-070).
+    pub(super) fn draw_on_from_delivery(&mut self, room_id: RoomId, budget: ReentryBudget) {
+        self.from_delivery = Some((room_id, budget));
     }
 
-    /// The room and budget a routed message draws on once routed into that
-    /// room, taken by its arrival.
-    pub(super) fn take_routed_into(&mut self) -> Option<(RoomId, ReentryBudget)> {
-        self.routed_into.take()
+    /// The room and budget a delivery's message draws on once routed into
+    /// that room or once it creates one, taken by its arrival.
+    pub(super) fn take_from_delivery(&mut self) -> Option<(RoomId, ReentryBudget)> {
+        self.from_delivery.take()
     }
 
     /// Draws on `budget`, the budget of the cascade whose delivery made the

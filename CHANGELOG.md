@@ -127,8 +127,9 @@ as it stands.
   turn's or a delivery's call is a new arrival with its own ticket and
   `process_timeout`, drawing on the delivering cascade's budget when it
   comes into the room delivered in, a routed message once routing places
-  it there or opens a new room for it (a call into another existing room
-  has a budget of its own), and answered at its decision when it comes into its caller's
+  it there, and a call that creates a room, routed or named, charged
+  before the room is created (a call into another existing room has a
+  budget of its own), and answered at its decision when it comes into its caller's
   room; a call made while a turn runs, into whatever room, is at least as
   deep as the turn's response (§10.6); work a turn or a delivery began
   starts fresh once that work is over, at depth 0 and on a budget of its
