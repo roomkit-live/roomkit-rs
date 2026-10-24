@@ -280,6 +280,10 @@ pub(crate) struct Sim {
     /// (`release ticket room_1`) fails too, and lets the ticket go all the
     /// same, as a lease that expires would.
     pub(crate) failing_effect: Option<&'static str>,
+    /// An event another call commits to `room_1` just before the next read
+    /// of it made holding no lock on it, as a direct call's once its lock
+    /// is released.
+    pub(crate) committed_before_unlocked_read: Option<RoomEvent>,
 }
 
 /// The instant the simulated clock starts at, 2026-10-22T14:03:00Z.
@@ -358,6 +362,7 @@ impl Sim {
             settled: Vec::new(),
             decisions: Vec::new(),
             failing_effect: None,
+            committed_before_unlocked_read: None,
         }
     }
 
@@ -1481,6 +1486,12 @@ impl Sim {
                 self.trace.push(format!("load_context {room_id}"));
                 if !self.room_exists {
                     return Outcome::Store(StoreOutcome::RoomNotFound);
+                }
+                if room_id == self::room_id()
+                    && !self.state(self.current).locks.contains(&room_id)
+                    && let Some(event) = self.committed_before_unlocked_read.take()
+                {
+                    self.seed(event);
                 }
                 Outcome::Store(StoreOutcome::Context(Box::new(self.context(recent_events))))
             }

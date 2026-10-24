@@ -1255,6 +1255,24 @@ mod a_direct_update {
         );
     }
 
+    /// RFC §10.3: the trigger's context is the room read once the lock is
+    /// released: an event another call committed meanwhile is in it.
+    #[test]
+    fn fires_with_the_room_read_after_the_release() {
+        let mut sim = room();
+        sim.observer("projection", HookTrigger::OnEventUpdated);
+        sim.committed_before_unlocked_read = Some(notice_event("evt_9", "Meanwhile"));
+        sim.update_event("evt_1", rewrite("I need 6000$")).unwrap();
+        let history = sim
+            .async_contexts()
+            .first()
+            .map(|context| texts(&context.recent_events));
+        assert_eq!(
+            history,
+            Some(vec!["I need 6000$".to_owned(), "Meanwhile".to_owned()])
+        );
+    }
+
     /// Gap G-063: a read of the room that fails once the lock is released
     /// changes nothing the update did; its trigger fires with the room as
     /// the update left it.
@@ -1397,6 +1415,24 @@ mod a_direct_delete {
                 vec!["evt_1", "evt_2"]
             )
         );
+    }
+
+    /// RFC §10.3: each trigger's context is the room read once the lock is
+    /// released, without the events removed: an event another call
+    /// committed meanwhile is in it.
+    #[test]
+    fn fires_with_the_room_read_after_the_release() {
+        let mut sim = threaded();
+        sim.observer("projection", HookTrigger::OnEventDeleted);
+        sim.committed_before_unlocked_read = Some(notice_event("evt_9", "Meanwhile"));
+        sim.delete_event("evt_1", true).unwrap();
+        let histories: Vec<Vec<String>> = sim
+            .async_contexts()
+            .iter()
+            .map(|context| texts(&context.recent_events))
+            .collect();
+        let read = vec!["Unrelated".to_owned(), "Meanwhile".to_owned()];
+        assert_eq!(histories, [read.clone(), read]);
     }
 
     #[test]
