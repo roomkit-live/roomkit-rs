@@ -885,6 +885,54 @@ mod metadata_updates {
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!((sim.room.event_count, sim.room.latest_index), (1, Some(0)));
     }
+
+    /// RFC §10.1 step 15: a cascade that collected a task and a metadata
+    /// update writes both once it is over, the task first, each answered
+    /// on its own; the call ends once both are, the task stored and the
+    /// room tagged.
+    #[test]
+    fn are_written_after_the_tasks_each_write_answered_on_its_own() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.agent(
+            "crm",
+            Box::new(|_, _| {
+                let task = Task::new(
+                    TaskId::new("task_1").unwrap(),
+                    room_id(),
+                    "Call back",
+                    Timestamp::UNIX_EPOCH,
+                );
+                let mut output = ChannelOutput {
+                    tasks: vec![task],
+                    ..ChannelOutput::default()
+                };
+                output
+                    .metadata_updates
+                    .insert("tier".to_owned(), json!("gold"));
+                Ok(output)
+            }),
+        );
+        let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (
+                sim.trace[sim.trace.len() - 3..].to_vec(),
+                sim.tasks.len(),
+                sim.room.metadata.get("tier"),
+                result.error
+            ),
+            (
+                vec![
+                    "leave lane room_1 evt_1".to_owned(),
+                    "persist 1 tasks, 0 observations".to_owned(),
+                    "update room room_1 Active".to_owned()
+                ],
+                1,
+                Some(&json!("gold")),
+                None
+            )
+        );
+    }
 }
 
 /// RFC §7.5 rule 2: a source that cannot write commits its event blocked.
