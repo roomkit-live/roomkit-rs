@@ -180,10 +180,10 @@ as it stands.
   routed among its rooms and identities only (gaps G-051, G-060). The kit
   itself acts for no organization.
 - **The runtime** (`roomkit`), on tokio. `RoomKit` registers and
-  unregisters channels, registers hooks (`hook`, `hook_handler`,
-  `before_broadcast`, `observe`), sets the
-  router, the environment, the chain-depth limit and the
-  `process_timeout`, creates rooms (`create_room`, `create_room_with`
+  unregisters channels, registers hooks (`hook`, `hook_handler` for a
+  `HookHandler`, whose `call` returns a `HookFuture`, `before_broadcast`,
+  `observe`), sets the router, the environment, the chain-depth limit and
+  the `process_timeout`, creates rooms (`create_room`, `create_room_with`
   `RoomOptions`), attaches channels (`attach`, `attach_with`
   `BindingOptions`), detaches, updates, mutes and unmutes them, moves rooms
   through their lifecycle, routes a message (`process_inbound`) or runs one

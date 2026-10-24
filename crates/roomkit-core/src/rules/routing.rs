@@ -210,7 +210,7 @@ pub enum Recording {
 /// How a room is a sender's conversation on a channel by step 1 (RFC §10.4
 /// step 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Through {
+pub(crate) enum Through {
     /// The room's binding of the channel names the sender as its
     /// correspondent.
     Binding,
@@ -253,8 +253,8 @@ fn chat_of(metadata: &Metadata, key: &str) -> Option<String> {
 
 /// The room the default strategy routes `query`'s message to, among the
 /// rooms `candidates` hold; `None` when the framework must create one (RFC
-/// §10.4). Step 1 reads the rooms [`step_one_considers`], step 3 those
-/// [`step_three_considers`].
+/// §10.4). Step 1 reads the ACTIVE and PAUSED rooms the caller reaches,
+/// step 3 those [`step_three_considers`].
 pub fn route(query: &RouteQuery, candidates: &[Candidate]) -> Option<RoomId> {
     let considered = |considers: fn(&RouteQuery, &Candidate) -> bool| -> Vec<&Candidate> {
         candidates
@@ -274,7 +274,7 @@ pub fn route(query: &RouteQuery, candidates: &[Candidate]) -> Option<RoomId> {
 /// stored; a timer that fell due is applied by the room's next locked
 /// section, which keeps the room or routes the message once more (gap
 /// G-055).
-pub fn step_one_considers(query: &RouteQuery, candidate: &Candidate) -> bool {
+pub(crate) fn step_one_considers(query: &RouteQuery, candidate: &Candidate) -> bool {
     let room = &candidate.room;
     matches!(room.status, RoomStatus::Active | RoomStatus::Paused)
         && organizations::admits(query.organization_id.as_deref(), room)
@@ -302,7 +302,7 @@ pub fn step_three_considers(query: &RouteQuery, candidate: &Candidate) -> bool {
 /// Step 1: the sender's conversation, the newest room whose binding of the
 /// channel names the sender, else the newest where a participant the sender
 /// is was reached through the channel (RFC §10.4 step 1, gap G-058), each
-/// told by [`conversation_through`].
+/// speaking for its own channel only.
 pub fn conversation<'room>(
     query: &RouteQuery,
     candidates: &[&'room Candidate],
@@ -337,7 +337,7 @@ pub fn conversation<'room>(
 /// The strategy's step 1 asks it of every room it reads ([`conversation`]),
 /// and the room lock of a routed room it finds PAUSED
 /// ([`paused_room_takes`]): the two tell a conversation alike.
-pub fn conversation_through(
+pub(crate) fn conversation_through(
     sender: &Sender,
     form: &AddressForm,
     channel_id: &ChannelId,
@@ -355,11 +355,11 @@ pub fn conversation_through(
 
 /// Whether a routed message stays in a room the lock finds PAUSED, whose
 /// binding of `channel_id` is `binding` and which holds `participants` (RFC
-/// §10.4, gaps G-045, G-055): the room is `sender`'s conversation by step 1
-/// ([`conversation_through`]), or its binding is declared `group`, which
-/// step 3 considers paused ([`step_three_considers`]). Any other PAUSED
-/// room would take the sender in by step 3's admission, which it does not
-/// give a PAUSED room, whatever strategy chose it.
+/// §10.4, gaps G-045, G-055): the room is `sender`'s conversation by step 1,
+/// told as [`conversation`] tells it, or its binding is declared `group`,
+/// which step 3 considers paused ([`step_three_considers`]). Any other
+/// PAUSED room would take the sender in by step 3's admission, which it
+/// does not give a PAUSED room, whatever strategy chose it.
 pub fn paused_room_takes(
     sender: &Sender,
     form: &AddressForm,

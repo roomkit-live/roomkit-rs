@@ -24,18 +24,22 @@ pub type HookError = Box<dyn Error + Send + Sync>;
 /// result is discarded.
 pub trait HookHandler: Send + Sync + 'static {
     /// Runs the hook on `event`.
-    fn call(&self, event: RoomEvent, context: RoomContext) -> BoxFuture<'static, HookReturn>;
+    fn call(&self, event: RoomEvent, context: RoomContext) -> HookFuture;
 }
 
 /// What a hook handler returns.
 pub type HookReturn = Result<HookResult, HookError>;
+
+/// The future [`HookHandler::call`] returns: boxed and sendable, it gives
+/// what the hook decided (`Box::pin(async move { ... })`).
+pub type HookFuture = BoxFuture<'static, HookReturn>;
 
 impl<F, Fut> HookHandler for F
 where
     F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = HookReturn> + Send + 'static,
 {
-    fn call(&self, event: RoomEvent, context: RoomContext) -> BoxFuture<'static, HookReturn> {
+    fn call(&self, event: RoomEvent, context: RoomContext) -> HookFuture {
         Box::pin(self(event, context))
     }
 }
@@ -49,7 +53,7 @@ where
     F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    fn call(&self, event: RoomEvent, context: RoomContext) -> BoxFuture<'static, HookReturn> {
+    fn call(&self, event: RoomEvent, context: RoomContext) -> HookFuture {
         let observing = (self.0)(event, context);
         Box::pin(async move {
             observing.await;
