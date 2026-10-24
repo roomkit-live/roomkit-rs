@@ -150,9 +150,9 @@ impl Inbound {
     ///
     /// Its output is the committed event's result, a record stored
     /// `BLOCKED` included, once its delivery set is over. A refusal before
-    /// the commit is an error with nothing written: a room of another
-    /// organization, or of none for a caller that names one,
-    /// [`InboundError::OtherOrganization`]; otherwise
+    /// the commit is an error with nothing written: a room that does not
+    /// exist, or of another organization, or of none for a caller that
+    /// names one, [`InboundError::RoomNotFound`] (gap G-077); otherwise
     /// [`InboundError::Refused`]: a channel the room does not bind
     /// (`source_unbound`), a room whose status refuses events, the call's
     /// `process_timeout`, a refused edit or delete, a refused instruction.

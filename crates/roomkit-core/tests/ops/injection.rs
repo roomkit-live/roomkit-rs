@@ -286,16 +286,16 @@ mod an_injected_event {
         );
     }
 
-    /// RFC §17.2, gap G-069: a room of another organization than the one
-    /// the caller acts for refuses the event, nothing written.
+    /// RFC §17.2, gap G-077: a room of another organization than the one
+    /// the caller acts for fails the event as not found, nothing written.
     #[test]
-    fn into_another_organization_s_room_is_refused_with_nothing_written() {
+    fn into_another_organization_s_room_fails_as_not_found_with_nothing_written() {
         let mut sim = room();
         sim.room.organization_id = Some("bank".to_owned());
         let refused = sim.inject_for(Some("clinic"), "room_1", from_console("Hi"));
         assert_eq!(
             (refused, sim.timeline.len(), sim.traced("hook")),
-            (Err(InboundError::OtherOrganization(room_id())), 0, vec![])
+            (Err(InboundError::RoomNotFound(room_id())), 0, vec![])
         );
     }
 
@@ -304,7 +304,7 @@ mod an_injected_event {
     fn into_a_room_of_no_organization_is_refused_for_a_caller_naming_one() {
         let mut sim = room();
         let refused = sim.inject_for(Some("clinic"), "room_1", from_console("Hi"));
-        assert_eq!(refused, Err(InboundError::OtherOrganization(room_id())));
+        assert_eq!(refused, Err(InboundError::RoomNotFound(room_id())));
     }
 
     #[test]
@@ -330,7 +330,7 @@ mod an_injected_event {
         let refused = sim.inject_for(Some("clinic"), "room_1", from_console("Hi"));
         assert_eq!(
             (refused, sim.traced("hook")),
-            (Err(InboundError::OtherOrganization(room_id())), vec![])
+            (Err(InboundError::RoomNotFound(room_id())), vec![])
         );
     }
 
@@ -991,7 +991,7 @@ mod an_entry_adopted_under_the_lock {
         assert_eq!(
             (answers.borrow().clone(), sim.timeline_lines()),
             (
-                vec![Err(InboundError::OtherOrganization(room_id()))],
+                vec![Err(InboundError::RoomNotFound(room_id()))],
                 vec!["#0 sms delivered \"hello\"".to_owned()]
             )
         );
@@ -1033,7 +1033,7 @@ mod an_entry_adopted_under_the_lock {
         assert_eq!(
             (answers.borrow().clone(), sim.timeline_lines()),
             (
-                vec![Err(InboundError::OtherOrganization(room_id()))],
+                vec![Err(InboundError::RoomNotFound(room_id()))],
                 vec!["#0 sms delivered \"hello\"".to_owned()]
             )
         );

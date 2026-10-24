@@ -1931,10 +1931,10 @@ mod send_event {
         );
     }
 
-    /// RFC §17.2, gap G-069: a caller acting for an organization reaches its
-    /// rooms only.
+    /// RFC §17.2, gaps G-069 and G-077: a caller acting for an organization
+    /// reaches its rooms only, another's failing as not found.
     #[tokio::test]
-    async fn for_another_organization_than_the_room_s_is_refused() {
+    async fn for_another_organization_than_the_room_s_fails_as_not_found() {
         let (kit, _) = room().await;
         let refused = kit
             .for_organization("clinic")
@@ -1943,9 +1943,7 @@ mod send_event {
         assert_eq!(
             (refused, timeline(&kit).await),
             (
-                Err(KitError::Inbound(
-                    InboundError::OtherOrganization(room_id())
-                )),
+                Err(KitError::Inbound(InboundError::RoomNotFound(room_id()))),
                 vec![]
             )
         );

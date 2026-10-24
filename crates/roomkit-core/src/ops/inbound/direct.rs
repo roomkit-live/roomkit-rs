@@ -11,10 +11,11 @@
 //! at once. Every request up to its decision carries the call's deadline
 //! (RFC §13.6).
 //!
-//! A room of another organization than the one the caller acts for, and a
-//! room that binds no channel the event names, refuse it with nothing
-//! written (gap G-069): the host named the room and the channel itself, so
-//! the call is its error, with nothing to audit. Both are checked under the
+//! A room of another organization than the one the caller acts for, which
+//! the call does not find, as a room that does not exist (RFC §17.2, gap
+//! G-077), and a room that binds no channel the event names refuse it with
+//! nothing written (gap G-069): the host named the room and the channel
+//! itself, so the call is its error, with nothing to audit. Both are checked under the
 //! room lock, before the pass's hooks or the record of an injection past its
 //! caller's reentry budget, and on the room an off-lock check reads, before
 //! its hooks too. The organization is checked on the room as the lock finds
@@ -51,12 +52,13 @@ impl DirectCall {
     }
 
     /// Why `room` is not the caller's, if it is not: another organization's,
-    /// or one of none for a caller acting for an organization (RFC §17.2).
-    /// Checked on the room as the lock finds it, before its due timers are
-    /// applied.
+    /// or one of none for a caller acting for an organization, which the
+    /// injection does not find, as a room that does not exist (RFC §17.2,
+    /// gap G-077). Checked on the room as the lock finds it, before its due
+    /// timers are applied.
     pub(super) fn foreign(&self, room: &Room) -> Option<InboundError> {
         let admitted = organizations::admits(self.organization_id.as_deref(), room);
-        (!admitted).then(|| InboundError::OtherOrganization(room.id.clone()))
+        (!admitted).then(|| InboundError::RoomNotFound(room.id.clone()))
     }
 
     /// Why the room as `context` holds it refuses `event` as the caller's

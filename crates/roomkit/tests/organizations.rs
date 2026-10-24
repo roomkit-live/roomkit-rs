@@ -156,9 +156,9 @@ async fn a_record_is_never_committed_to_another_organization_s_room() {
     );
 }
 
-/// RFC §17.2, gap G-069: a message or an injected event is refused by
-/// another organization's room with nothing written in it, its due timers
-/// included.
+/// RFC §17.2, gaps G-069 and G-077: another organization's room refuses a
+/// message as not its own, and an injected event fails as not found, with
+/// nothing written in it, its due timers included.
 #[tokio::test]
 async fn an_event_is_never_brought_into_another_organization_s_room() {
     let (kit, clock) = room_of(Some("bank")).await;
@@ -175,15 +175,14 @@ async fn an_event_is_never_brought_into_another_organization_s_room() {
             .await
             .err(),
     );
-    let other = || {
-        Some(KitError::Inbound(
-            InboundError::OtherOrganization(room_id()),
-        ))
-    };
+    let inbound = |error| Some(KitError::Inbound(error));
     assert_eq!(
         (refused, as_stored(&kit).await),
         (
-            (other(), other()),
+            (
+                inbound(InboundError::OtherOrganization(room_id())),
+                inbound(InboundError::RoomNotFound(room_id()))
+            ),
             (RoomStatus::Active, 0, vec![("sms".to_owned(), false)])
         )
     );

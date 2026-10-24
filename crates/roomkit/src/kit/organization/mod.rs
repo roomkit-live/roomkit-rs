@@ -333,13 +333,14 @@ impl<S: ConversationStore> OrganizationKit<S> {
 
     /// Injects `event` into a room of the organization, as
     /// [`RoomKit::send_event`] does: a room of another organization, or of
-    /// none, refuses it before its hooks, nothing written (gap G-069).
+    /// none, is not found, as a room that does not exist, before its hooks,
+    /// nothing written (RFC §17.2, gap G-077).
     ///
     /// # Errors
     ///
     /// As [`RoomKit::send_event`], with
-    /// [`InboundError::OtherOrganization`](crate::InboundError::OtherOrganization)
-    /// for a room of another organization.
+    /// [`InboundError::RoomNotFound`](crate::InboundError::RoomNotFound) for
+    /// a room of another organization.
     pub async fn send_event(
         &self,
         room_id: &RoomId,
