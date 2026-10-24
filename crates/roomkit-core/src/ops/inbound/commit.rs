@@ -7,7 +7,7 @@
 //! and moves no counter, and a paused room stays paused until an event is
 //! committed (gap G-065).
 
-use super::pass::PassResult;
+use super::pass::{Changed, PassResult};
 use crate::model::{
     EventStatus, EventType, RoomContext, RoomEvent, RoomUpdates, Timestamp, Visibility,
 };
@@ -30,7 +30,8 @@ pub(super) struct Committing {
 /// An accepted edit or delete updates its target in the same commit, never
 /// before (RFC §10.1 step 12, §10.3): `written` is the write on the target
 /// and the target as it leaves it. The delivery set reads the target so,
-/// and the result carries it for the mutation trigger.
+/// and the result carries it, with the room as the commit leaves it, for
+/// the mutation trigger.
 pub(super) fn delivered(
     cx: &mut Cx<'_>,
     mut event: RoomEvent,
@@ -48,7 +49,7 @@ pub(super) fn delivered(
                 event: Box::new(event),
                 plan,
                 context,
-                target: None,
+                changed: None,
             },
         };
     }
@@ -62,6 +63,10 @@ pub(super) fn delivered(
                     recent.clone_from(&changed);
                 }
             }
+            let changed = Changed {
+                target: changed,
+                context: committed(&context, &event, &counters, cx.config.context_window),
+            };
             (Some(update), Some(Box::new(changed)))
         }
         None => (None, None),
@@ -79,9 +84,32 @@ pub(super) fn delivered(
             event: Box::new(event),
             plan,
             context,
-            target: changed,
+            changed,
         },
     }
+}
+
+/// The room of `context` as the commit of `event` with `counters` leaves it
+/// (RFC §10.3 "Mutation triggers", gap G-062): its counters written, and
+/// `event` the newest event of its history, at its committed index, the
+/// oldest dropped past `window`, as a read of the room would hold it.
+fn committed(
+    context: &RoomContext,
+    event: &RoomEvent,
+    counters: &RoomCounters,
+    window: usize,
+) -> RoomContext {
+    let mut committed = context.clone();
+    let room = &mut committed.room;
+    room.event_count = counters.event_count;
+    room.latest_index = Some(counters.latest_index);
+    room.timers.last_activity_at = counters.last_activity_at;
+    let history = &mut committed.recent_events;
+    history.retain(|recent| recent.id != event.id);
+    history.push(event.clone());
+    let excess = history.len().saturating_sub(window);
+    history.drain(..excess);
+    committed
 }
 
 /// Commits `event` blocked by `blocked_by` (RFC §10.1 steps 10 and 11): the

@@ -85,7 +85,11 @@ as it stands.
   idempotency key, an edit's or a delete's target, the hooks, the room
   read again after a hook that ran under the lock, the source's
   permissions, the commit with the room's counters and the event's place in
-  the room's delivery lane. Delivery sets run in index order, one at a
+  the room's delivery lane. An accepted edit or delete fires
+  `ON_EVENT_UPDATED` or `ON_EVENT_DELETED` once the lock is released, its
+  payload the target, which the observers' filters read, and its context
+  the room as the commit left it, the change the newest event of its
+  history (§10.3, gap G-062). Delivery sets run in index order, one at a
   time per room; a transport delivery with no recipient is refused
   `no_recipient`, a target whose channel is no longer registered skipped
   or reported (gap G-048); responses re-enter with their own source, their

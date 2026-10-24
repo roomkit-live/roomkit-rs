@@ -1484,3 +1484,194 @@ mod a_target_changed_by_a_hook {
         );
     }
 }
+
+/// RFC §10.3 "Mutation triggers", §9.2, gap G-062: what `ON_EVENT_UPDATED`
+/// and `ON_EVENT_DELETED` carry when the pipeline commits a change: the
+/// target as the payload, which the hooks' filters read, and the room as
+/// the change's commit left it.
+mod a_mutation_trigger {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use roomkit_core::model::{ChannelId, RoomContext};
+    use roomkit_core::ops::Notice;
+    use roomkit_core::rules::hook_registry::{HookExecution, HookFilter, HookSpec};
+
+    /// The context `trigger`'s observers were handed.
+    fn context_of(sim: &Sim, trigger: HookTrigger) -> RoomContext {
+        sim.notices
+            .iter()
+            .find_map(|notice| match notice {
+                Notice::AsyncHooks {
+                    trigger: fired,
+                    context,
+                    ..
+                } if *fired == trigger => Some((**context).clone()),
+                Notice::AsyncHooks { .. } | Notice::FrameworkEvent(_) => None,
+            })
+            .unwrap()
+    }
+
+    /// The history of `context`, each event's index, id and text, and the
+    /// room's counters.
+    fn history(context: &RoomContext) -> (Vec<(u64, String, String)>, u64, Option<u64>) {
+        let events = context
+            .recent_events
+            .iter()
+            .map(|event| {
+                (
+                    event.index,
+                    event.id.to_string(),
+                    transcoding::text_of(&event.content),
+                )
+            })
+            .collect();
+        (events, context.room.event_count, context.room.latest_index)
+    }
+
+    fn line(index: u64, id: &str, text: &str) -> (u64, String, String) {
+        (index, id.to_owned(), text.to_owned())
+    }
+
+    /// The target rewritten, and the change itself in the history, the
+    /// newest event at its committed index, the counters past it.
+    #[test]
+    fn of_an_edit_holds_the_room_as_its_commit_left_it() {
+        let mut sim = room();
+        sim.observer("projection", HookTrigger::OnEventUpdated);
+        sim.send(edit()).unwrap();
+        assert_eq!(
+            history(&context_of(&sim, HookTrigger::OnEventUpdated)),
+            (
+                vec![
+                    line(0, "evt_1", "I need 50000$"),
+                    line(1, "evt_2", "Correction: I need 50000$"),
+                ],
+                2,
+                Some(1)
+            )
+        );
+    }
+
+    #[test]
+    fn of_a_delete_holds_the_room_as_its_commit_left_it() {
+        let mut sim = room();
+        sim.observer("projection", HookTrigger::OnEventDeleted);
+        sim.send(delete()).unwrap();
+        let context = context_of(&sim, HookTrigger::OnEventDeleted);
+        assert_eq!(
+            (
+                history(&context),
+                context.recent_events[0].metadata.get("deleted").cloned()
+            ),
+            (
+                (
+                    vec![
+                        line(0, "evt_1", "I need 5000$"),
+                        line(1, "evt_2", "[Message deleted]"),
+                    ],
+                    2,
+                    Some(1)
+                ),
+                Some(json!(true))
+            )
+        );
+    }
+
+    /// An event a hook's code committed ahead of the change, during its
+    /// hooks, is in the history before it.
+    #[test]
+    fn holds_what_was_committed_ahead_of_the_change_during_its_hooks() {
+        let mut sim = room();
+        sim.observer("projection", HookTrigger::OnEventUpdated);
+        sim.reentrant_hook(
+            "notes",
+            true,
+            Reentry {
+                entries: calling(|event| {
+                    (event.event_type == EventType::Edit).then(|| Entry::Direct {
+                        room_id: room_id(),
+                        organization_id: None,
+                        event: Box::new(DirectEvent::new(
+                            channel("ws"),
+                            EventContent::text("Heads up"),
+                        )),
+                    })
+                }),
+                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        sim.send(edit()).unwrap();
+        let (events, event_count, latest_index) =
+            history(&context_of(&sim, HookTrigger::OnEventUpdated));
+        let texts: Vec<(u64, String)> = events
+            .into_iter()
+            .map(|(index, _, text)| (index, text))
+            .collect();
+        assert_eq!(
+            (texts, event_count, latest_index),
+            (
+                vec![
+                    (0, "I need 50000$".to_owned()),
+                    (1, "Heads up".to_owned()),
+                    (2, "Correction: I need 50000$".to_owned()),
+                ],
+                3,
+                Some(2)
+            )
+        );
+    }
+
+    /// The filters read the target's source: an observer of the target's
+    /// channel sees a correction the framework's hook made, one of the
+    /// change's channel does not.
+    #[test]
+    fn reaches_the_observers_filtered_on_its_target_s_channel() {
+        let mut sim = room();
+        let filtered = |sim: &mut Sim, name: &str, channel_id: &str| {
+            let spec = HookSpec {
+                filter: HookFilter {
+                    channel_ids: Some([ChannelId::new(channel_id).unwrap()].into()),
+                    ..HookFilter::default()
+                },
+                ..HookSpec::new(name, HookTrigger::OnEventUpdated, HookExecution::Async)
+            };
+            sim.config.hooks.register(spec).unwrap()
+        };
+        let of_the_target = filtered(&mut sim, "of_wa", "wa");
+        filtered(&mut sim, "of_system", "system");
+        let mut correction = notice_event("placeholder", "");
+        correction.event_type = EventType::Edit;
+        correction.content = EventContent::Edit(EditContent {
+            target_event_id: id("evt_1"),
+            new_content: Box::new(EventContent::text("I need [redacted]")),
+            edit_source: Some(EditSource::System),
+        });
+        sim.before_broadcast(
+            "redactor",
+            Box::new(move |event| {
+                let reported =
+                    matches!(&event.content, EventContent::Text(text) if text.body == "report it");
+                if !reported {
+                    return HookOutcome::Returned(HookResult::allow());
+                }
+                HookOutcome::Returned(
+                    HookResult::allow().inject(InjectedEvent::stored_only(correction.clone())),
+                )
+            }),
+        );
+        sim.send(Sim::message("wa", "report it")).unwrap();
+        let fired: Vec<_> = sim
+            .notices
+            .iter()
+            .filter_map(|notice| match notice {
+                Notice::AsyncHooks { trigger, hooks, .. }
+                    if *trigger == HookTrigger::OnEventUpdated =>
+                {
+                    Some(hooks.clone())
+                }
+                Notice::AsyncHooks { .. } | Notice::FrameworkEvent(_) => None,
+            })
+            .collect();
+        assert_eq!(fired, [vec![of_the_target]]);
+    }
+}

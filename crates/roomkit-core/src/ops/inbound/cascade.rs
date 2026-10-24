@@ -149,7 +149,7 @@ impl Machine {
             event,
             plan,
             context,
-            target,
+            changed,
         } = report.result
         else {
             for job in injected {
@@ -157,8 +157,8 @@ impl Machine {
             }
             return;
         };
-        if let Some(target) = &target {
-            report::target_changed(cx, &event, target, &context);
+        if let Some(changed) = &changed {
+            report::target_changed(cx, &event, &changed.target, &changed.context);
         }
         let kind = match origin {
             PassOrigin::Trigger => SetKind::Root,

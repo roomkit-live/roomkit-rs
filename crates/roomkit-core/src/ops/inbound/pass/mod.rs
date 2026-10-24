@@ -97,9 +97,9 @@ pub(super) enum PassResult {
         /// The room's context at the commit, as the hooks left it, an edit's
         /// or a delete's target as the commit left it.
         context: Box<RoomContext>,
-        /// The target of an edit or a delete, as the commit left it (RFC
-        /// §10.3), for its mutation trigger.
-        target: Option<Box<RoomEvent>>,
+        /// What an accepted edit or delete changed, for its mutation
+        /// trigger (RFC §10.3).
+        changed: Option<Box<Changed>>,
     },
     /// Committed blocked, by a hook or by a source that cannot write; an
     /// instruction is blocked without being stored (RFC §10.1.1 rule 4).
@@ -129,6 +129,18 @@ pub(super) enum PassResult {
         /// Why.
         refusal: EditRefusal,
     },
+}
+
+/// What an accepted edit or delete changed, as its mutation trigger fires
+/// with it (RFC §10.3 "Mutation triggers", §9.2, gap G-062).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Changed {
+    /// The target, as the commit left it: the trigger's payload.
+    pub(super) target: RoomEvent,
+    /// The room as the commit left it: its counters past the change, the
+    /// target rewritten, the events committed ahead of the change during
+    /// its hooks, and the change itself, the newest event of its history.
+    pub(super) context: RoomContext,
 }
 
 /// Everything a pass produced.

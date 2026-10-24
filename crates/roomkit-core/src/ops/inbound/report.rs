@@ -65,9 +65,11 @@ pub(super) fn after_broadcast(cx: &mut Cx<'_>, event: &RoomEvent, context: &Room
 }
 
 /// Fires the mutation trigger of an edit or a delete committed as `change`,
-/// once the room lock is released (RFC §10.3): `ON_EVENT_UPDATED` for an
-/// edit, `ON_EVENT_DELETED` for a delete, with `target` as the commit left
-/// it. A blocked change never reaches here.
+/// once the room lock is released (RFC §10.3 "Mutation triggers"):
+/// `ON_EVENT_UPDATED` for an edit, `ON_EVENT_DELETED` for a delete, its
+/// payload `target` as the commit left it, which its observers' filters
+/// read, and `context` the room as the commit left it, the change in its
+/// history (gap G-062). A blocked change never reaches here.
 pub(super) fn target_changed(
     cx: &mut Cx<'_>,
     change: &RoomEvent,
