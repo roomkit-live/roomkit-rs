@@ -38,8 +38,9 @@ as it stands.
   where its answers may go, a response's hooks never widening it past that
   (§5.12, gap G-073); a channel's history withholding a soft-deleted event's
   content (gap G-062); transcoding and the text a reader takes, a tool
-  call's and a system notice's included, a composite's empty parts skipped
-  (§6.6, gap G-072); the
+  call's and a system notice's included, a composite's empty parts skipped,
+  a location's coordinates in decimal with a point (`45.0`), an edit a
+  channel cannot apply one `Correction: ` text (§6.6, gap G-072); the
   chain-depth limit and a cascade's reentry budget, shared by the calls that
   draw on it (§8.3); hook registrations, the off-lock and locked chains and
   how a chain of SYNC outcomes decides (§9.1–9.4); the lifecycle's

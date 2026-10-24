@@ -31,7 +31,8 @@ pub fn transcode(content: &EventContent, capabilities: &ChannelCapabilities) -> 
 }
 
 /// The text a reader takes from a content (RFC §6.6): its text, each media
-/// as its label, a system notice as its body, a tool call as
+/// as its label, a location's coordinates in decimal with a point
+/// (`45.0`), a system notice as its body, a tool call as
 /// `[Tool call: <name>]`, a composite's parts in order, one per line, an
 /// empty one skipped (gap G-072). An instruction's fingerprint is of it.
 ///
@@ -196,12 +197,25 @@ fn is_link(url: &str) -> bool {
 fn location_text(location: &LocationContent) -> String {
     let coordinates = format!(
         "({}, {})",
-        location.latitude.degrees(),
-        location.longitude.degrees()
+        coordinate_text(location.latitude.degrees()),
+        coordinate_text(location.longitude.degrees())
     );
     match location.label.as_deref().or(location.address.as_deref()) {
         Some(name) => format!("[Location: {name} {coordinates}]"),
         None => format!("[Location: {coordinates}]"),
+    }
+}
+
+/// A coordinate as a text form writes it (RFC §6.6, gap G-072): the
+/// shortest decimal that reads back as the same binary64, which `f64`'s
+/// `Display` writes with no exponent, and a digit after the point at least,
+/// so that `45` reads `45.0` as every implementation writes it.
+fn coordinate_text(degrees: f64) -> String {
+    let text = degrees.to_string();
+    if text.contains('.') {
+        text
+    } else {
+        text + ".0"
     }
 }
 
@@ -420,6 +434,36 @@ mod tests {
         );
     }
 
+    /// RFC §6.6, gap G-072: a coordinate reads as the shortest decimal that
+    /// reads back as the same binary64, with a digit after the point at
+    /// least and never an exponent, the cases the Python implementation
+    /// tests too.
+    #[test]
+    fn a_location_s_coordinates_read_in_decimal_with_a_point() {
+        let cases = [
+            (45.0, -73.0, "[Location: (45.0, -73.0)]"),
+            (5e-05, -1.5e-07, "[Location: (0.00005, -0.00000015)]"),
+            (45.5, -73.6, "[Location: (45.5, -73.6)]"),
+        ];
+        let read: Vec<(String, &str)> = cases
+            .into_iter()
+            .map(|(latitude, longitude, text)| {
+                let content = EventContent::Location(LocationContent {
+                    latitude: Latitude::new(latitude).unwrap(),
+                    longitude: Longitude::new(longitude).unwrap(),
+                    label: None,
+                    address: None,
+                });
+                (text_of(&content), text)
+            })
+            .collect();
+        let expected: Vec<(String, &str)> = read
+            .iter()
+            .map(|(_, text)| ((*text).to_owned(), *text))
+            .collect();
+        assert_eq!(read, expected);
+    }
+
     #[test]
     fn template_falls_back_to_its_body() {
         assert_eq!(transcoded_text(&template(Some("Welcome!"))), "Welcome!");
@@ -433,6 +477,28 @@ mod tests {
     #[test]
     fn an_edit_falls_back_to_a_correction() {
         assert_eq!(transcoded_text(&edit("meet at 3")), "Correction: meet at 3");
+    }
+
+    /// RFC §6.6: a channel that does not edit natively receives one text,
+    /// `Correction: ` and the text form of the new content, even when that
+    /// content is a composite holding a part the channel carries (gap
+    /// G-072).
+    #[test]
+    fn an_edit_of_a_composite_falls_back_to_one_correction() {
+        let new_content = composite(vec![
+            EventContent::text("Here is the receipt"),
+            media("https://example.com/a.jpg", None, Some("a.jpg")),
+        ]);
+        let edit = EventContent::Edit(EditContent {
+            target_event_id: EventId::new("evt_1").unwrap(),
+            new_content: Box::new(new_content),
+            edit_source: None,
+        });
+        let capabilities = carrying(&[ChannelMediaType::Text, ChannelMediaType::Media]);
+        assert_eq!(
+            transcode(&edit, &capabilities),
+            EventContent::text("Correction: Here is the receipt\n[Media: a.jpg]")
+        );
     }
 
     #[test]

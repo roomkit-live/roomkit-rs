@@ -751,6 +751,15 @@ mod tests {
                     ]),
                     "[Location: Office (45.5, -73.6)]\n[Template: welcome]",
                 ),
+                (
+                    EventContent::Location(LocationContent {
+                        latitude: Latitude::new(45.0).unwrap(),
+                        longitude: Longitude::new(-73.0).unwrap(),
+                        label: None,
+                        address: None,
+                    }),
+                    "[Location: (45.0, -73.0)]",
+                ),
             ];
             for (content, text) in cases {
                 let mut event = instruction("");
