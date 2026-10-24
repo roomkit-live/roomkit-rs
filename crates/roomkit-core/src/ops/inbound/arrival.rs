@@ -294,7 +294,10 @@ impl Arrival {
                     self.state = State::Naming(step);
                     Progress::Waiting
                 }
-                Progress::Done(named) => self.on_named(cx, step.room_id(), named),
+                Progress::Done(named) => {
+                    let opened = step.opened();
+                    self.on_named(cx, step.room_id(), named, opened)
+                }
             },
             State::Parsing {
                 effect: expected,
@@ -366,32 +369,27 @@ impl Arrival {
     fn on_routed(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arriving {
         match outcome.into_routed() {
             Ok(Some(room_id)) => {
-                if !self.charge_in(&room_id) {
+                let delivering = self.charge.as_ref().map(|(room, _)| room);
+                if delivering == Some(&room_id) && !self.charge_now() {
                     return Progress::Done(Err(Stopped::PastBudget));
                 }
                 self.enter(cx, room_id, Mode::Routed);
+                Progress::Waiting
             }
-            Ok(None) => {
-                // A new room is no room a delivery delivers in.
-                self.charge = None;
-                self.enter_fresh(cx);
-            }
-            Err(error) => return failed(InboundError::Routing(error)),
+            Ok(None) => self.enter_fresh(cx),
+            Err(error) => failed(InboundError::Routing(error)),
         }
-        Progress::Waiting
     }
 
-    /// Charges the message on the delivering cascade's budget when routing
-    /// first names the room that cascade delivers in (gap G-070); `false`
-    /// once that budget is spent. A room it is routed into later, or any
-    /// other room, charges nothing: the call's budget is its own.
-    fn charge_in(&mut self, room_id: &RoomId) -> bool {
-        let Some((delivering, budget)) = self.charge.take() else {
+    /// Charges the message one pass on the budget of the delivery whose
+    /// code routed it, once (gap G-070): it came into the room that
+    /// delivery delivers in, or opens a new room, that work's own. `false`
+    /// once that budget is spent. Its cascade then draws on it. A message
+    /// charged already, or no delivery's, charges nothing.
+    fn charge_now(&mut self) -> bool {
+        let Some((_, budget)) = self.charge.take() else {
             return true;
         };
-        if &delivering != room_id {
-            return true;
-        }
         if !budget.take() {
             return false;
         }
@@ -399,53 +397,78 @@ impl Arrival {
         true
     }
 
-    /// A new room for the message, with a fresh id (RFC §10.1 step 2).
-    fn enter_fresh(&mut self, cx: &mut Cx<'_>) {
+    /// A new room for the message, with a fresh id (RFC §10.1 step 2),
+    /// charged on the budget of the delivery whose code routed it.
+    fn enter_fresh(&mut self, cx: &mut Cx<'_>) -> Arriving {
+        if !self.charge_now() {
+            return Progress::Done(Err(Stopped::PastBudget));
+        }
         let room_id = cx.env.new_room_id();
         self.enter(cx, room_id, Mode::Fresh);
+        Progress::Waiting
     }
 
-    /// Starts step 2 in `room_id`, named as `mode` says.
+    /// Starts step 2 in `room_id`, named as `mode` says. A routed room the
+    /// store lacks is created on the budget of the delivery whose code
+    /// routed the message, charged by step 2 before it creates it.
     fn enter(&mut self, cx: &mut Cx<'_>, room_id: RoomId, mode: Mode) {
         self.room = Some(room_id.clone());
-        let mut step = Box::new(NamedRoom::new(
-            room_id,
-            mode,
-            self.organization_id.clone(),
-            self.channel.clone(),
-            self.sender.clone(),
-            self.bound,
-        ));
+        let opening = match mode {
+            Mode::Routed => self.charge.as_ref().map(|(_, budget)| budget.clone()),
+            Mode::Named | Mode::Fresh => None,
+        };
+        let mut step = Box::new(
+            NamedRoom::new(
+                room_id,
+                mode,
+                self.organization_id.clone(),
+                self.channel.clone(),
+                self.sender.clone(),
+                self.bound,
+            )
+            .opening_on(opening),
+        );
         step.start(cx);
         self.state = State::Naming(step);
     }
 
     /// Step 2 is over: the room's context goes to the channel, or the room
-    /// is no longer the message's and the message is routed again.
-    fn on_named(&mut self, cx: &mut Cx<'_>, room_id: &RoomId, named: Named) -> Arriving {
+    /// is no longer the message's and the message is routed again. A room
+    /// step 2 created on the opening budget charged the message.
+    fn on_named(
+        &mut self,
+        cx: &mut Cx<'_>,
+        room_id: &RoomId,
+        named: Named,
+        opened: bool,
+    ) -> Arriving {
+        if opened && let Some((_, budget)) = self.charge.take() {
+            self.charged = Some(budget);
+        }
         match named {
             Named::Arrived(context) => self.parse(cx, context),
             Named::Failed(error) => failed(error),
             Named::Expired => Progress::Done(Err(Stopped::Expired)),
+            Named::PastBudget => Progress::Done(Err(Stopped::PastBudget)),
             Named::Rerouted => {
                 tracing::debug!(
                     target: "roomkit::core::inbound",
                     room_id = %room_id,
                     "the routed room is no longer the message's; it is routed once more"
                 );
-                self.route_again(cx);
-                Progress::Waiting
+                self.route_again(cx)
             }
         }
     }
 
     /// Routes the message once more, or gives it a new room once it was
     /// (gap G-055).
-    fn route_again(&mut self, cx: &mut Cx<'_>) {
+    fn route_again(&mut self, cx: &mut Cx<'_>) -> Arriving {
         if self.routes < ROUTES {
             self.route(cx);
+            Progress::Waiting
         } else {
-            self.enter_fresh(cx);
+            self.enter_fresh(cx)
         }
     }
 

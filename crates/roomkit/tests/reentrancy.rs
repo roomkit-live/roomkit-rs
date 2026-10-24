@@ -14,6 +14,7 @@
 
 use std::future::{Future, ready};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -26,8 +27,8 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConversationStore, EventDraft, FrameworkEvent,
-    HookExecution, HookSpec, HookTrigger, InboundError, InboundRoomRouter, KitError, RoomKit,
-    RouteQuery, RouterError, default_inbound_event, text_of,
+    HookExecution, HookSpec, HookTrigger, InboundError, InboundRoomRouter, KitError, RoomFilter,
+    RoomKit, RouteQuery, RouterError, default_inbound_event, text_of,
 };
 use tokio::sync::Notify;
 
@@ -1142,6 +1143,104 @@ async fn a_routed_message_draws_on_the_delivering_budget_in_the_delivering_room_
     }
     let cap = Some("reentry_loop_cap".to_owned());
     assert_eq!(refused_in, [("room_1", cap), ("room_2", None)]);
+}
+
+/// Finds no room for any message: each one opens a new room.
+struct NoRoom;
+
+impl<S: ConversationStore> InboundRoomRouter<S> for NoRoom {
+    fn route(
+        &self,
+        _store: &S,
+        _query: &RouteQuery,
+    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
+        ready(Ok(None))
+    }
+}
+
+/// Names, for each message, a room the store does not hold.
+#[derive(Default)]
+struct FreshRoom(AtomicU32);
+
+impl<S: ConversationStore> InboundRoomRouter<S> for FreshRoom {
+    fn route(
+        &self,
+        _store: &S,
+        _query: &RouteQuery,
+    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
+        let room = self.0.fetch_add(1, AtomicOrdering::Relaxed);
+        ready(Ok(Some(RoomId::new(format!("fresh_{room}")).unwrap())))
+    }
+}
+
+/// The maintainer's rule (RMK-930, gap G-070): a message a delivery's code
+/// routes that opens a new room is that delivery's own work, and draws on
+/// the delivering cascade's budget, whichever way routing opens the room
+/// (no answer, or an id the store lacks): a transport whose every delivery
+/// opens a room it is then bound in stops at the cap, rather than create
+/// rooms without end.
+async fn opening_a_room_on_every_delivery_stops_at_the_reentry_cap(fresh_ids: bool) {
+    let (kit, _) = room().await;
+    kit.set_max_chain_depth(1);
+    if fresh_ids {
+        kit.set_router(FreshRoom::default());
+    } else {
+        kit.set_router(NoRoom);
+    }
+    let binder = kit.clone();
+    kit.observe("bind_bot", HookTrigger::OnRoomCreated, move |event, _| {
+        let kit = binder.clone();
+        async move {
+            kit.attach(&event.room_id, &channel("bot")).await.unwrap();
+        }
+    })
+    .unwrap();
+    let refused = Arc::new(Mutex::new(Vec::new()));
+    let (bot_kit, bot_refused) = (kit.clone(), Arc::clone(&refused));
+    let bot = Scripted::transport(
+        "bot",
+        Arc::new(move |_| {
+            let (kit, refused) = (bot_kit.clone(), Arc::clone(&bot_refused));
+            Box::pin(async move {
+                let result = kit.process_inbound(message("again")).await?;
+                if result.event.is_none() {
+                    refused.lock().unwrap().push(result.reason);
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(bot).unwrap();
+    kit.attach(&room_id(), &channel("bot")).await.unwrap();
+    send(&kit, "hello").await.unwrap();
+    let deadline = tokio::time::Instant::now() + BOUND;
+    while refused.lock().unwrap().is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the transport opened rooms without end"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let rooms = kit
+        .store()
+        .list_rooms(&RoomFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        (refused.lock().unwrap().clone(), rooms.len()),
+        (vec![Some("reentry_loop_cap".to_owned())], 11),
+        "fresh ids: {fresh_ids}"
+    );
+}
+
+#[tokio::test]
+async fn a_transport_opening_a_room_on_every_delivery_stops_at_the_reentry_cap() {
+    opening_a_room_on_every_delivery_stops_at_the_reentry_cap(false).await;
+}
+
+#[tokio::test]
+async fn a_transport_routing_to_a_missing_room_on_every_delivery_stops_at_the_reentry_cap() {
+    opening_a_room_on_every_delivery_stops_at_the_reentry_cap(true).await;
 }
 
 /// RFC §13.5, §9.5.1 Reentrance: a message routed back into the room from

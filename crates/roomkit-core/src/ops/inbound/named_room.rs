@@ -54,6 +54,7 @@ use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
 use crate::ops::lifecycle::report::{self, Reported};
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::{ChannelDeclaration, Cx, Progress};
+use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::routing::{self, Recording, Sender};
 use crate::rules::{attachment, organizations};
 
@@ -79,6 +80,11 @@ pub(super) struct NamedRoom {
     mode: Mode,
     /// The call's deadline (RFC §13.6).
     bound: Bound,
+    /// For a routed message the room's delivery work sent, the budget a
+    /// room step 2 creates is charged on (gap G-070).
+    opening: Option<ReentryBudget>,
+    /// Whether step 2 charged `opening` for the room it creates.
+    opened: bool,
     state: State,
 }
 
@@ -94,6 +100,9 @@ pub(super) enum Named {
     Failed(InboundError),
     /// The call's deadline passed: nothing was written (RFC §13.6).
     Expired,
+    /// The room would be created past the reentry budget the room's work
+    /// that routed the message draws on: nothing was written (gap G-070).
+    PastBudget,
 }
 
 #[derive(Debug)]
@@ -139,8 +148,22 @@ impl NamedRoom {
             sender,
             mode,
             bound,
+            opening: None,
+            opened: false,
             state: State::Start,
         }
+    }
+
+    /// The same step, charging `opening` one pass before it creates the
+    /// room, refused past it (gap G-070).
+    pub(super) fn opening_on(mut self, opening: Option<ReentryBudget>) -> Self {
+        self.opening = opening;
+        self
+    }
+
+    /// Whether step 2 charged its opening budget for the room it created.
+    pub(super) fn opened(&self) -> bool {
+        self.opened
     }
 
     /// The room step 2 works on.
@@ -238,7 +261,16 @@ impl NamedRoom {
     fn on_read(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<Named> {
         match outcome.into_context() {
             Ok(Some(context)) => self.on_existing(cx, context),
-            Ok(None) => self.create(cx),
+            // A router may name a room the store lacks: the room's work
+            // that routed the message opens it, on its budget (gap G-070).
+            Ok(None) => match self.opening.take() {
+                Some(budget) if !budget.take() => Progress::Done(Named::PastBudget),
+                Some(_) => {
+                    self.opened = true;
+                    self.create(cx)
+                }
+                None => self.create(cx),
+            },
             Err(error) => Progress::Done(Named::Failed(InboundError::Store(error))),
         }
     }
