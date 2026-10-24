@@ -12,7 +12,8 @@
 //! channel's parse and step 2 (`direct`). Then the cascade: the call's
 //! pass, its delivery set, the responses that re-enter as passes of their
 //! own, the events hooks inject, and the records the room stores in place of
-//! responses it refuses (`cascade`).
+//! responses it refuses (`cascade`). The stages a call goes through, and
+//! the order they follow, are written once (`stage`).
 //!
 //! The room's delivery lane is entered at each commit (RFC §10.1 step 12,
 //! §10.2): an event delivered takes its place under the room lock, and its
@@ -76,24 +77,22 @@ mod queues;
 mod record;
 mod report;
 mod result;
+mod stage;
 mod stamp;
 
 use std::sync::Arc;
 
 use self::adoption::Adoptions;
-use self::arrival::Arrival;
 pub use self::arrival::InboundTarget;
 use self::cascade::Trigger;
-use self::direct::DirectRead;
-use self::holds::AfterTicket;
-use self::off_lock::OffLockCheck;
 use self::persist::SideEffects;
 use self::queues::Cascade;
+use self::stage::{CallStage, Stage};
 pub use self::stamp::default_inbound_event;
 use super::io::Io;
 use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
 use super::{Cx, Environment, KitConfig};
-use crate::model::{ChannelId, DirectEvent, InboundMessage, RoomId, Task};
+use crate::model::{ChannelId, DirectEvent, InboundMessage, RoomId};
 use crate::ops::io::Bound;
 pub use crate::ops::protocol::{InboundError, InboundResult};
 use crate::rules::chain_depth::ReentryBudget;
@@ -218,7 +217,7 @@ impl Inbound {
             io: Io::new(),
             machine: Machine {
                 call: CallFacts::new(entry),
-                stage: Stage::Start(Box::new(call)),
+                stage: CallStage::new(call),
                 trigger: Trigger::default(),
                 cascade: Cascade::new(budget),
                 adopted: Adoptions::default(),
@@ -297,7 +296,7 @@ enum EntryKind {
 #[derive(Debug)]
 struct Machine {
     call: CallFacts,
-    stage: Stage,
+    stage: CallStage,
     trigger: Trigger,
     cascade: Cascade,
     /// The entries adopted from the operation's own work (gap G-070).
@@ -339,38 +338,12 @@ impl CallFacts {
     }
 }
 
-#[derive(Debug)]
-enum Stage {
-    Start(Box<Call>),
-    /// A message's steps 2 to 4.
-    Arriving(Box<Arrival>),
-    /// A direct injection's read of its room for its off-lock check.
-    Reading(Box<DirectRead>),
-    /// Step 5a: the trigger's off-lock check, holding the room's ticket.
-    Checking(Box<OffLockCheck>),
-    Cascade,
-    /// The ticket's release, before the call goes on.
-    ReleasingTicket {
-        effect: EffectId,
-        then: Box<AfterTicket>,
-    },
-    /// Step 15's writes, each outstanding until answered.
-    Persisting {
-        side_effects: Option<(EffectId, Vec<Task>)>,
-        metadata: Option<EffectId>,
-    },
-    /// The call's outcome waits for every entry it adopted to be settled,
-    /// and every event committed to be delivered.
-    Ending(Box<Result<InboundResult, InboundError>>),
-    Done,
-}
-
 impl Machine {
     /// Takes every answer in, starts the entries adopted since, and runs
     /// the queues, until nothing is left to take in: a section nested under
     /// a lock is answered at once, without the driver.
     fn advance(&mut self, cx: &mut Cx<'_>) {
-        if matches!(self.stage, Stage::Start(_)) {
+        if matches!(self.stage.current(), Stage::Start(_)) {
             self.begin(cx);
         }
         loop {
@@ -435,7 +408,7 @@ impl Machine {
         if self.cascade.set_awaits(effect) {
             return self.on_set_outcome(cx, effect, outcome);
         }
-        match std::mem::replace(&mut self.stage, Stage::Done) {
+        match self.stage.take() {
             Stage::Arriving(arrival) => self.on_arrival(cx, arrival, effect, outcome),
             Stage::Reading(read) => self.on_read(cx, read, effect, outcome),
             Stage::Checking(check) => self.on_check(cx, check, effect, outcome),
@@ -453,7 +426,7 @@ impl Machine {
             | Stage::Ending(_)
             | Stage::Done) => {
                 debug_assert!(false, "inbound received {effect:?} in {stage:?}");
-                self.stage = stage;
+                self.stage.put_back(stage);
             }
         }
     }

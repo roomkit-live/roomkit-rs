@@ -181,7 +181,7 @@ impl Machine {
             CommitPass::trigger(event, self.call.bound, checked).checking(self.call.direct.clone());
         self.cascade
             .lead(Job::Pass(Box::new(pass), PassOrigin::Trigger));
-        self.stage = Stage::Cascade;
+        self.stage.enter(Stage::Cascade);
     }
 
     /// Queues the trigger, past the reentry budget it draws on, as its
@@ -193,7 +193,7 @@ impl Machine {
         let record = RecordPass::refusing(event, RefusedOperation::Inbound).checking(Some(direct));
         self.cascade
             .lead(Job::Record(Box::new(record), RecordNote::Trigger));
-        self.stage = Stage::Cascade;
+        self.stage.enter(Stage::Cascade);
     }
 
     /// Hands the running pass the answer to one of its effects.
@@ -236,7 +236,7 @@ impl Machine {
     /// ends.
     pub(super) fn run_queues(&mut self, cx: &mut Cx<'_>) {
         loop {
-            let passing = matches!(self.stage, Stage::Cascade | Stage::Ending(_));
+            let passing = matches!(self.stage.current(), Stage::Cascade | Stage::Ending(_));
             if passing
                 && self.cascade.pass.is_none()
                 && let Some(mut job) = self.cascade.passes.pop_front()
@@ -256,7 +256,9 @@ impl Machine {
             }
             break;
         }
-        if matches!(self.stage, Stage::Cascade) && self.cascade.is_idle() && self.adopted.is_idle()
+        if matches!(self.stage.current(), Stage::Cascade)
+            && self.cascade.is_idle()
+            && self.adopted.is_idle()
         {
             self.persist_side_effects(cx);
         }

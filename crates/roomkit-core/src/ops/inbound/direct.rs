@@ -199,7 +199,7 @@ impl Machine {
         }
         let mut read = Box::new(DirectRead::new(event, call));
         read.start(cx, self.call.bound);
-        self.stage = Stage::Reading(read);
+        self.stage.enter(Stage::Reading(read));
     }
 
     /// Takes the answer of the room's read; its off-lock check starts.
@@ -211,7 +211,7 @@ impl Machine {
         outcome: Outcome,
     ) {
         match read.accept(effect, outcome) {
-            Progress::Waiting => self.stage = Stage::Reading(read),
+            Progress::Waiting => self.stage.enter(Stage::Reading(read)),
             Progress::Done(Ok(arrived)) => self.after_arrival(cx, arrived),
             Progress::Done(Err(stopped)) => self.stop(cx, stopped),
         }

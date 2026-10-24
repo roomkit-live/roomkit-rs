@@ -14,7 +14,7 @@ impl Machine {
     /// Sets the call's deadline (RFC §13.6), then starts the way of its
     /// message or its directly injected event to the room.
     pub(super) fn begin(&mut self, cx: &mut Cx<'_>) {
-        let Stage::Start(call) = std::mem::replace(&mut self.stage, Stage::Done) else {
+        let Stage::Start(call) = self.stage.take() else {
             return;
         };
         self.call.bound = Bound::Call(deadline::of_call(cx.config, cx.env.now()));
@@ -57,7 +57,7 @@ impl Machine {
                 .charging(charge),
         );
         arrival.start(cx);
-        self.stage = Stage::Arriving(arrival);
+        self.stage.enter(Stage::Arriving(arrival));
     }
 
     /// Takes an answer of the arrival; once it hands the event, the
@@ -71,7 +71,7 @@ impl Machine {
         outcome: Outcome,
     ) {
         let Progress::Done(arrived) = arrival.accept(cx, effect, outcome) else {
-            self.stage = Stage::Arriving(arrival);
+            self.stage.enter(Stage::Arriving(arrival));
             return;
         };
         match arrived {

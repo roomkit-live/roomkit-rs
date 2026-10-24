@@ -11,6 +11,7 @@
 //! the next one's begins (RFC §10.2).
 
 use super::delivery::{DeliverySet, Response, SetKind, SetOutcome};
+use super::holds::AfterTicket;
 use super::job::{Finished, Job, RecordNote};
 use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
 use super::queues::Delivery;
@@ -67,10 +68,10 @@ impl Machine {
             match finished {
                 Finished::Pass(Ok(report), PassOrigin::Trigger) => {
                     self.on_pass(cx, report, &PassOrigin::Trigger);
-                    return self.release_ticket(cx, super::AfterTicket::Resume);
+                    return self.release_ticket(cx, AfterTicket::Resume);
                 }
                 finished @ Finished::Pass(Err(_), PassOrigin::Trigger) => {
-                    return self.release_ticket(cx, super::AfterTicket::Settle(Box::new(finished)));
+                    return self.release_ticket(cx, AfterTicket::Settle(Box::new(finished)));
                 }
                 Finished::Pass(..) | Finished::Record(..) => {
                     return self.settle_released(cx, finished);

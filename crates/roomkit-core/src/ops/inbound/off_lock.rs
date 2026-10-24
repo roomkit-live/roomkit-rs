@@ -205,7 +205,7 @@ impl Machine {
         }
         let mut check = Box::new(OffLockCheck::new(hooks, arrived, self.call.bound));
         check.start(cx);
-        self.stage = Stage::Checking(check);
+        self.stage.enter(Stage::Checking(check));
     }
 
     /// Takes an answer of the off-lock check; once it is over, the call
@@ -219,7 +219,7 @@ impl Machine {
         outcome: Outcome,
     ) {
         let Progress::Done(done) = check.accept(cx, effect, outcome) else {
-            self.stage = Stage::Checking(check);
+            self.stage.enter(Stage::Checking(check));
             return;
         };
         self.trigger.ticket = check.ticket().cloned();

@@ -60,7 +60,7 @@ impl Machine {
     /// last committed event delivered.
     fn end_after_the_cascade(&mut self, outcome: Result<InboundResult, InboundError>) {
         if !self.adopted.is_idle() || !self.cascade.is_idle() {
-            self.stage = Stage::Ending(Box::new(outcome));
+            self.stage.enter(Stage::Ending(Box::new(outcome)));
             return;
         }
         self.finish(outcome);
@@ -70,10 +70,10 @@ impl Machine {
     /// committed event delivered.
     pub(super) fn end_once_settled(&mut self) {
         let over = self.adopted.is_idle() && self.cascade.is_idle();
-        if !matches!(self.stage, Stage::Ending(_)) || !over {
+        if !matches!(self.stage.current(), Stage::Ending(_)) || !over {
             return;
         }
-        if let Stage::Ending(outcome) = std::mem::replace(&mut self.stage, Stage::Done) {
+        if let Stage::Ending(outcome) = self.stage.take() {
             self.finish(*outcome);
         }
     }
@@ -84,10 +84,10 @@ impl Machine {
             return self.after_ticket(cx, then, None);
         };
         let effect = cx.io.issue(HoldRequest::ReleaseTicket { room_id });
-        self.stage = Stage::ReleasingTicket {
+        self.stage.enter(Stage::ReleasingTicket {
             effect,
             then: Box::new(then),
-        };
+        });
     }
 
     /// The ticket is released, or its release failed.
@@ -113,11 +113,11 @@ impl Machine {
     fn after_ticket(&mut self, cx: &mut Cx<'_>, then: AfterTicket, failure: Option<ErrorRecord>) {
         match then {
             AfterTicket::Resume => {
-                self.stage = Stage::Cascade;
+                self.stage.enter(Stage::Cascade);
                 self.trigger.note_error(failure);
             }
             AfterTicket::Settle(finished) => {
-                self.stage = Stage::Cascade;
+                self.stage.enter(Stage::Cascade);
                 self.trigger.note_error(failure);
                 self.settle(cx, *finished);
             }
@@ -135,7 +135,7 @@ impl Machine {
 
     /// The operation is over with `outcome`.
     fn finish(&mut self, outcome: Result<InboundResult, InboundError>) {
-        self.stage = Stage::Done;
+        self.stage.enter(Stage::Done);
         self.outcome = Some(outcome);
     }
 }

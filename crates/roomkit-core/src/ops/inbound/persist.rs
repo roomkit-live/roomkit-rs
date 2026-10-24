@@ -133,10 +133,10 @@ impl Machine {
             }
             (side_effects, metadata) => {
                 debug_assert!(false, "inbound received {effect:?} while persisting");
-                self.stage = Stage::Persisting {
+                self.stage.put_back(Stage::Persisting {
                     side_effects,
                     metadata,
-                };
+                });
             }
         }
     }
@@ -152,10 +152,10 @@ impl Machine {
             let result = std::mem::take(&mut self.trigger.result);
             return self.end(cx, Ok(result));
         }
-        self.stage = Stage::Persisting {
+        self.stage.enter(Stage::Persisting {
             side_effects,
             metadata,
-        };
+        });
     }
 
     /// The side effects are stored: each task's `ON_TASK_CREATED` observers
