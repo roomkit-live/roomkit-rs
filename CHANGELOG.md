@@ -93,7 +93,8 @@ as it stands.
   G-049). An `INSTRUCTION` is decided without being stored, delivered to
   the agents it names and fingerprinted on every response (gaps G-042,
   G-065, G-066). Only the framework writes the visibility `internal`: a
-  message carrying it is refused, a response carrying it is committed with
+  message carrying it, for itself or for its answers, is refused (gaps
+  G-041, G-073), a response carrying it is committed with
   `none`, and a hook's modify of an event marked `internal` keeps it (gap
   G-041).
 - **Deadlines and callers that leave.** The kit's `process_timeout` bounds
