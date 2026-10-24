@@ -33,11 +33,11 @@
 //! §9.5.1). It draws on the operation's reentry budget, past which it is
 //! stored `BLOCKED` with `reentry_loop_cap` (RFC §8.3); a message is charged
 //! first thing, before its channel is looked up, and refused with no event
-//! past the budget (RFC §10.1 step 1). Its caller receives its result at its commit
-//! (detached completion: no delivery results, no completion handle), and
-//! its event takes its place in the room's lane at that commit. A message's
-//! arrival runs its step 2, then its channel's parse. A direct injection is
-//! admitted and stamped at once.
+//! past the budget (RFC §10.1 step 1). Its caller receives its result at
+//! its commit (detached completion: no delivery results, no completion
+//! handle), and its event takes its place in the room's lane at that
+//! commit. A message's arrival runs its step 2, then its channel's parse. A
+//! direct injection is admitted and stamped at once.
 
 use std::mem;
 

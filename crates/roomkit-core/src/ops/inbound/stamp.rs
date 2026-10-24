@@ -54,11 +54,10 @@ pub fn default_inbound_event(
 /// `message`: the id the pipeline gives it (RFC §8.1), the type, depth,
 /// visibility, address, response scope (gap G-073), thread and idempotency
 /// key the message asked for, and the receiving channel as its inbound
-/// source. An instruction is
-/// visible to intelligence channels only, and carries the caller's
-/// metadata and its `standalone` word (RFC §10.1.1 rules 3 and 4). No
-/// trigger carries the key a response to an instruction records, whoever
-/// wrote it (gap G-065).
+/// source. An instruction is visible to intelligence channels only, and
+/// carries the caller's metadata and its `standalone` word (RFC §10.1.1
+/// rules 3 and 4). No trigger carries the key a response to an instruction
+/// records, whoever wrote it (gap G-065).
 pub(crate) fn stamp_trigger(
     mut event: RoomEvent,
     message: &InboundMessage,

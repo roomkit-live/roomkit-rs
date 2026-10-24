@@ -15,10 +15,10 @@
 //! the call does not find, as a room that does not exist (RFC §17.2, gap
 //! G-077), and a room that binds no channel the event names refuse it with
 //! nothing written (gap G-069): the host named the room and the channel
-//! itself, so the call is its error, with nothing to audit. Both are checked under the
-//! room lock, before the pass's hooks or the record of an injection past its
-//! caller's reentry budget, and on the room an off-lock check reads, before
-//! its hooks too. The organization is checked on the room as the lock finds
+//! itself, so the call is its error, with nothing to audit. Both are
+//! checked under the room lock, before the pass's hooks or the record of an
+//! injection past its caller's reentry budget, and on the room an off-lock
+//! check reads, before its hooks too. The organization is checked on the room as the lock finds
 //! it, before its due timers are applied, so nothing is written in a room
 //! the caller does not reach (RFC §17.2).
 
