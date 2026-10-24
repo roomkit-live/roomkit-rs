@@ -493,13 +493,16 @@ pub trait ConversationStore: Send + Sync + 'static {
     ) -> impl Future<Output = Result<RoomEvent, StoreError>> + Send;
 
     /// Removes the room's event `event_id` for good, with, when
-    /// `cascade_replies` is set, the events whose thread it roots
-    /// (`parent_event_id`, a reply's replies included), and always the edits
-    /// and deletes of every event removed (gap G-063). Returns the events
-    /// removed, the target first (RFC §14.1 `delete_event(room_id, event_id,
+    /// `cascade_replies` is set, its replies one level deep (the events
+    /// whose `parent_event_id` names it), and always the edits and deletes
+    /// of the target and its replies (RFC §10.3, gap G-063). Returns the
+    /// events removed in §10.3's order: the target, its replies by index,
+    /// then the changes by index, an event both a reply and a change among
+    /// the replies (RFC §14.1 `delete_event(room_id, event_id,
     /// cascade_replies)`, which names their ids; the records let the kit fire
-    /// `ON_EVENT_DELETED` for each, gap G-064). An event the room does not
-    /// hold removes nothing. The room's counters are left as they are.
+    /// `ON_EVENT_DELETED` for each, in that order, gap G-064). An event the
+    /// room does not hold removes nothing. The room's counters are left as
+    /// they are.
     fn delete_event(
         &self,
         room_id: &RoomId,

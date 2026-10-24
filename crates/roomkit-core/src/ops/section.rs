@@ -172,6 +172,11 @@ impl<W: SectionWork> Section<W> {
         &mut self.work
     }
 
+    /// The work, as it stands.
+    pub(crate) fn work(&self) -> &W {
+        &self.work
+    }
+
     /// The timer transitions the gate applied.
     pub(crate) fn transitions(&self) -> &[DueTransition] {
         &self.timers

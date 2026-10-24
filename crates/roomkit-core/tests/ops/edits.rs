@@ -1103,6 +1103,8 @@ mod a_direct_update {
         }
     }
 
+    /// RFC §10.3: the trigger fires once the lock is released, with the
+    /// room's context read then.
     #[test]
     fn replaces_the_fields_it_names_under_the_lock_and_fires_after_the_release() {
         let mut sim = room();
@@ -1116,6 +1118,7 @@ mod a_direct_update {
                 "get_event evt_1",
                 "update event evt_1",
                 "release room_1",
+                "load_context room_1",
                 "fire on_event_updated",
             ]
         );
@@ -1252,6 +1255,33 @@ mod a_direct_update {
         );
     }
 
+    /// Gap G-063: a read of the room that fails once the lock is released
+    /// changes nothing the update did; its trigger fires with the room as
+    /// the update left it.
+    #[test]
+    fn whose_room_cannot_be_read_after_the_release_still_fires() {
+        let mut sim = room();
+        sim.observer("projection", HookTrigger::OnEventUpdated);
+        sim.failing_effect = Some("unlocked load_context room_1");
+        let updated = sim.update_event("evt_1", rewrite("I need 6000$"));
+        let history = sim
+            .async_contexts()
+            .first()
+            .map(|context| texts(&context.recent_events));
+        assert_eq!(
+            (
+                updated.map(|event| event.map(|event| event.content)),
+                sim.async_triggers(),
+                history
+            ),
+            (
+                Ok(Some(EventContent::text("I need 6000$"))),
+                vec![HookTrigger::OnEventUpdated],
+                Some(vec!["I need 6000$".to_owned()])
+            )
+        );
+    }
+
     /// The lock is released when the write fails (the simulated driver
     /// checks it), and nothing fires.
     #[test]
@@ -1343,6 +1373,8 @@ mod a_direct_delete {
         assert_eq!((removed, sim.timeline.len()), (vec![id("evt_1")], 2));
     }
 
+    /// RFC §10.3: once the lock is released, with the room's context read
+    /// then, in the order of the ids returned.
     #[test]
     fn fires_on_event_deleted_for_each_removed_event_after_the_release() {
         let mut sim = threaded();
@@ -1358,6 +1390,7 @@ mod a_direct_delete {
             (
                 vec![
                     "release room_1".to_owned(),
+                    "load_context room_1".to_owned(),
                     "fire on_event_deleted".to_owned(),
                     "fire on_event_deleted".to_owned()
                 ],

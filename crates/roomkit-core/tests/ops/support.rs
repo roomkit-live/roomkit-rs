@@ -1285,6 +1285,13 @@ impl Sim {
             Request::Store(StoreRequest::DeleteEvent { event_id, .. }) => {
                 (format!("delete event {event_id}"), store_down())
             }
+            // A read of the room made holding no lock on it, as a direct
+            // call's once its lock is released.
+            Request::Store(StoreRequest::LoadContext { room_id, .. })
+                if !self.state(self.current).locks.contains(room_id) =>
+            {
+                (format!("unlocked load_context {room_id}"), store_down())
+            }
             Request::Hold(HoldRequest::AcquireLock { room_id }) => (
                 format!("lock {room_id}"),
                 ErrorRecord::new("LockUnavailable", "the lock manager is down"),
@@ -1548,10 +1555,11 @@ impl Sim {
         }
     }
 
-    /// Removes `event_id` from the timeline under the room's lock, with the
-    /// replies of its thread when `cascade_replies` is set and the edits and
-    /// deletes of what it removes (RFC §14.1 `delete_event`, gap G-063). The
-    /// counters stay as they are.
+    /// Removes `event_id` from the timeline under the room's lock, with its
+    /// replies one level deep when `cascade_replies` is set and the edits and
+    /// deletes of the target and its replies, answered in §10.3's order: the
+    /// target, the replies by index, the changes by index (RFC §14.1
+    /// `delete_event`, gap G-063). The counters stay as they are.
     fn delete_stored_event(&mut self, event_id: &EventId, cascade_replies: bool) -> Outcome {
         self.trace.push(format!("delete event {event_id}"));
         assert!(
@@ -1561,25 +1569,33 @@ impl Sim {
         let Some(at) = self.timeline.iter().position(|event| &event.id == event_id) else {
             return Outcome::Store(StoreOutcome::Deleted(Vec::new()));
         };
-        let mut removed = vec![self.timeline.remove(at)];
-        let mut gone = vec![event_id.clone()];
-        while let Some(next) = self.timeline.iter().position(|event| {
-            let reply = cascade_replies
-                && event
-                    .parent_event_id
-                    .as_ref()
-                    .is_some_and(|parent| gone.contains(parent));
-            let change = edits::mutation(event)
+        let target = self.timeline.remove(at);
+        let replies = if cascade_replies {
+            self.take_from_timeline(|event| event.parent_event_id.as_ref() == Some(event_id))
+        } else {
+            Vec::new()
+        };
+        let mut gone: Vec<EventId> = replies.iter().map(|reply| reply.id.clone()).collect();
+        gone.push(event_id.clone());
+        let changes = self.take_from_timeline(|event| {
+            edits::mutation(event)
                 .ok()
                 .flatten()
-                .is_some_and(|mutation| gone.contains(mutation.target_event_id()));
-            reply || change
-        }) {
-            let next = self.timeline.remove(next);
-            gone.push(next.id.clone());
-            removed.push(next);
-        }
+                .is_some_and(|mutation| gone.contains(mutation.target_event_id()))
+        });
+        let removed = [target].into_iter().chain(replies).chain(changes).collect();
         Outcome::Store(StoreOutcome::Deleted(removed))
+    }
+
+    /// Takes the events of the timeline `belongs` holds for out of it, in
+    /// index order.
+    fn take_from_timeline(&mut self, belongs: impl Fn(&RoomEvent) -> bool) -> Vec<RoomEvent> {
+        let (mut taken, left): (Vec<RoomEvent>, Vec<RoomEvent>) = mem::take(&mut self.timeline)
+            .into_iter()
+            .partition(|event| belongs(event));
+        self.timeline = left;
+        taken.sort_by_key(|event| event.index);
+        taken
     }
 
     /// Commits `event` with the room's counters, under the room's lock, with

@@ -7,8 +7,9 @@
 //! none checks who asks. Each runs under the room's lock, so that it
 //! serialises against the inbound pipeline (RFC §13.5): the lock is taken,
 //! the room read and its due timer transitions applied (gap G-045), the
-//! event changed or the record committed, the lock released; then the
-//! mutation trigger fires, with the event as the change left it. A target
+//! event changed or the record committed, the lock released; then the room
+//! is read again and the mutation trigger fires with it, with the event as
+//! the change left it (RFC §10.3). A target
 //! the room does not hold, or a room that does not exist, is a no-op that
 //! fires nothing (gap G-063). The room's status
 //! does not refuse a change: a change to what the room stored is no new
@@ -70,8 +71,9 @@ pub enum MutationError {
 }
 
 /// Replaces fields of a stored event whole, under the room's lock (RFC
-/// §10.3 `update_event(room_id, event_id, content|source|metadata)`), then
-/// fires `ON_EVENT_UPDATED` with the event as it now stands. It adds no
+/// §10.3 `update_event(room_id, event_id, content|source|metadata)`), then,
+/// once the lock is released, reads the room and fires `ON_EVENT_UPDATED`
+/// with the event as it now stands and the room read then. It adds no
 /// `edited` marker. Its output is the event as it now stands, `None` when
 /// the room holds no such event or does not exist, which is a no-op that
 /// fires nothing (gap G-063); a room the caller's organization does not
@@ -115,15 +117,17 @@ impl Operation for UpdateEvent {
 
 /// Removes a stored event from its room for good, under the room's lock
 /// (RFC §10.3 `delete_event(room_id, event_id, cascade_replies)`): a hard
-/// delete, which takes the replies of the event's thread with it unless
+/// delete, which takes the event's replies with it, one level deep, unless
 /// `cascade_replies` is unset, since nothing else protects them, and always
 /// the edits and deletes of what it removes, an edit holding its target's
-/// content (gap G-063). Then fires
-/// `ON_EVENT_DELETED` once for each event removed, the target first, each
-/// as it was stored (gap G-063). Its output is the ids removed, the
-/// target's first; none when the room holds no such event or does not
-/// exist, which fires nothing (gap G-063), a room the caller's organization
-/// does not reach being one that does not exist (RFC §17.2).
+/// content (gap G-063). Once the lock is released it reads the room, then
+/// fires `ON_EVENT_DELETED` once for each event removed, in the order of
+/// the ids, each as it was stored, with the room read then (gap G-063). Its
+/// output is the ids removed, the target's, then its replies' by index,
+/// then the changes' by index, as the store answers them; none when the
+/// room holds no such event or does not exist, which fires nothing (gap
+/// G-063), a room the caller's organization does not reach being one that
+/// does not exist (RFC §17.2).
 ///
 /// The room's counters are left as they are: an index is never given out
 /// again, and the timeline then holds fewer events than `event_count`

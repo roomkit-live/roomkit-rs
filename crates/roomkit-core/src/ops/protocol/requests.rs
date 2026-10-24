@@ -231,17 +231,19 @@ pub enum StoreRequest {
         /// What to write.
         updates: EventUpdates,
     },
-    /// Remove the room's event `event_id` and, with `cascade_replies`, the
-    /// replies of its thread (RFC §14.1 `delete_event(room_id, event_id,
-    /// cascade_replies)`): a hard delete, which leaves the room's counters
-    /// as they are. Answer [`StoreOutcome::Deleted`] with the events removed,
+    /// Remove the room's event `event_id`, with `cascade_replies` its
+    /// replies one level deep, and the edits and deletes of what it removes
+    /// (RFC §14.1 `delete_event(room_id, event_id, cascade_replies)`,
+    /// §10.3): a hard delete, which leaves the room's counters as they are.
+    /// Answer [`StoreOutcome::Deleted`] with the events removed, in §10.3's
+    /// order: the target, its replies by index, then the changes by index;
     /// none when the room holds no such event.
     DeleteEvent {
         /// The room.
         room_id: RoomId,
         /// The event.
         event_id: EventId,
-        /// Whether the events whose thread it roots go with it.
+        /// Whether the events whose `parent_event_id` names it go with it.
         cascade_replies: bool,
     },
     /// Find the identity an address belongs to on channels of a type, in an

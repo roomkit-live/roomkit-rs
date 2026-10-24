@@ -122,9 +122,11 @@ as it stands.
   a record under the room lock with the next index and nothing else: no
   hook, no delivery, no activity (gap G-071). `update_event` and
   `delete_event`, the host's changes of stored events, run under the lock,
-  fire their trigger after it, and are a no-op on a missing target or
-  room; a hard delete takes its thread and the changes of what it removes,
-  leaving the counters as they are (§10.3, gaps G-063, G-064).
+  fire their trigger after it with the room read then, and are a no-op on
+  a missing target or room; a hard delete takes its replies one level deep
+  and the changes of what it removes, returns the target's id, then the
+  replies' and the changes' by index, and leaves the counters as they are
+  (§10.3, gaps G-063, G-064).
 - **Reentrancy** (§13.5, §9.5.1 Reentrance, §10.1 step 18, gap G-070): code
   that runs inside a room's own work calls into the room without waiting
   for itself. A lifecycle change, a direct change or a record made under the

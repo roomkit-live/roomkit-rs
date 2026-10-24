@@ -1,22 +1,26 @@
 //! The in-memory store's hard delete (RFC §14.1 `delete_event`, §10.3):
-//! the event, the replies of its thread, and the edits and deletes of what
-//! it removes.
+//! the event, its replies, and the edits and deletes of what it removes.
 
 use std::collections::BTreeSet;
+use std::mem;
 
 use roomkit_core::model::{EventId, RoomEvent};
 use roomkit_core::rules::edits;
 
-/// Removes `event_id` from `events`, with what goes with it (gap G-063):
+/// Removes `event_id` from `events`, with what goes with it (RFC §10.3,
+/// gap G-063):
 ///
-/// - with `cascade_replies`, every event whose thread it roots, a reply's
-///   replies included, since nothing else protects them (RFC §10.3);
-/// - whatever `cascade_replies` says, every edit and delete of an event
-///   removed: an edit holds its target's content, and a change of an event
-///   that no longer exists changes nothing.
+/// - with `cascade_replies`, its replies, the events whose
+///   `parent_event_id` names it, one level deep: the pipeline roots every
+///   thread parent (RFC §10.1 step 8), so a reply names its thread's root,
+///   and an event naming one of the replies goes nowhere with them;
+/// - whatever `cascade_replies` says, the edits and deletes of the target
+///   and of its replies: an edit holds its target's content, and a change
+///   of an event that no longer exists changes nothing.
 ///
-/// Returns the events removed, the target first, then the others in
-/// timeline order; none when `events` does not hold the target.
+/// Returns the events removed, the target first, then its replies in index
+/// order, then the changes in index order, an event both a reply and a
+/// change among the replies; none when `events` does not hold the target.
 pub(super) fn remove(
     events: &mut Vec<RoomEvent>,
     event_id: &EventId,
@@ -25,33 +29,40 @@ pub(super) fn remove(
     let Some(at) = events.iter().position(|event| &event.id == event_id) else {
         return Vec::new();
     };
-    let mut removed = vec![events.remove(at)];
-    let mut gone = BTreeSet::from([event_id.clone()]);
-    while let Some(next) = events
+    let target = events.remove(at);
+    let replies = if cascade_replies {
+        take(events, |event| {
+            event.parent_event_id.as_ref() == Some(event_id)
+        })
+    } else {
+        Vec::new()
+    };
+    let gone: BTreeSet<&EventId> = replies
         .iter()
-        .position(|event| goes_with(event, &gone, cascade_replies))
-    {
-        let next = events.remove(next);
-        gone.insert(next.id.clone());
-        removed.push(next);
-    }
-    removed.sort_by_key(|event| (event.id != *event_id, event.index));
-    removed
+        .map(|reply| &reply.id)
+        .chain([event_id])
+        .collect();
+    let changes = take(events, |event| changes_one_of(event, &gone));
+    [target].into_iter().chain(replies).chain(changes).collect()
 }
 
-/// Whether `event` goes with the events `gone`: a reply in their thread when
-/// replies cascade, an edit or a delete of one of them always.
-fn goes_with(event: &RoomEvent, gone: &BTreeSet<EventId>, cascade_replies: bool) -> bool {
-    let reply = cascade_replies
-        && event
-            .parent_event_id
-            .as_ref()
-            .is_some_and(|parent| gone.contains(parent));
-    let change = edits::mutation(event)
+/// Takes the events of `events` that `belongs` holds for out of it, in index
+/// order.
+fn take(events: &mut Vec<RoomEvent>, belongs: impl Fn(&RoomEvent) -> bool) -> Vec<RoomEvent> {
+    let (mut taken, left): (Vec<RoomEvent>, Vec<RoomEvent>) = mem::take(events)
+        .into_iter()
+        .partition(|event| belongs(event));
+    *events = left;
+    taken.sort_by_key(|event| event.index);
+    taken
+}
+
+/// Whether `event` is an edit or a delete of one of the events `gone`.
+fn changes_one_of(event: &RoomEvent, gone: &BTreeSet<&EventId>) -> bool {
+    edits::mutation(event)
         .ok()
         .flatten()
-        .is_some_and(|mutation| gone.contains(mutation.target_event_id()));
-    reply || change
+        .is_some_and(|mutation| gone.contains(mutation.target_event_id()))
 }
 
 #[cfg(test)]
@@ -98,17 +109,55 @@ mod tests {
         ]
     }
 
+    /// RFC §10.3: the replies one level deep, the pipeline rooting every
+    /// thread parent (§10.1 step 8): a reply to a reply stays.
     #[test]
-    fn a_delete_takes_the_thread_with_it_the_target_first() {
+    fn a_delete_takes_its_replies_one_level_deep() {
         let mut events = timeline();
         let removed = remove(&mut events, &EventId::new("evt_0").unwrap(), true);
         assert_eq!(
             (ids(&removed), ids(&events)),
             (
-                ["evt_0", "evt_1", "evt_3", "evt_4"]
-                    .map(str::to_owned)
-                    .to_vec(),
-                vec!["evt_2".to_owned()]
+                ["evt_0", "evt_1", "evt_3"].map(str::to_owned).to_vec(),
+                ["evt_2", "evt_4"].map(str::to_owned).to_vec()
+            )
+        );
+    }
+
+    /// RFC §10.3, §14.1: the target, then its replies by index, then the
+    /// changes by index, whatever their places in the timeline.
+    #[test]
+    fn a_delete_returns_the_target_then_the_replies_then_the_changes() {
+        let mut events = vec![event(0, None), edit_of(1, 0), event(2, Some(0))];
+        let removed = remove(&mut events, &EventId::new("evt_0").unwrap(), true);
+        assert_eq!(
+            ids(&removed),
+            ["evt_0", "evt_2", "evt_1"].map(str::to_owned).to_vec()
+        );
+    }
+
+    /// RFC §10.3: an event both a reply and a change is removed once, among
+    /// the replies, or among the changes when replies are not taken.
+    #[test]
+    fn a_reply_that_is_a_change_is_counted_once() {
+        let edit_in_thread = || {
+            let mut edit = edit_of(1, 0);
+            edit.parent_event_id = Some(EventId::new("evt_0").unwrap());
+            edit
+        };
+        let removed = |cascade_replies| {
+            let mut events = vec![event(0, None), edit_in_thread(), event(2, Some(0))];
+            ids(&remove(
+                &mut events,
+                &EventId::new("evt_0").unwrap(),
+                cascade_replies,
+            ))
+        };
+        assert_eq!(
+            (removed(true), removed(false)),
+            (
+                ["evt_0", "evt_1", "evt_2"].map(str::to_owned).to_vec(),
+                ["evt_0", "evt_1"].map(str::to_owned).to_vec()
             )
         );
     }
@@ -381,10 +430,10 @@ mod tests {
         assert_eq!(
             (ids(&removed), ids(&events)),
             (
-                ["evt_0", "evt_1", "evt_3", "evt_4", "evt_5", "evt_7"]
+                ["evt_0", "evt_1", "evt_3", "evt_5", "evt_7"]
                     .map(str::to_owned)
                     .to_vec(),
-                ["evt_2", "evt_6"].map(str::to_owned).to_vec()
+                ["evt_2", "evt_4", "evt_6"].map(str::to_owned).to_vec()
             )
         );
     }

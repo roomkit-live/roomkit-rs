@@ -44,9 +44,13 @@ pub(super) trait EventChange: Debug {
     /// Whether the change waits for `effect`.
     fn awaits(&self, effect: EffectId) -> bool;
 
-    /// Fires the call's trigger for what it changed, once the lock is
-    /// released (RFC §10.3).
-    fn report(&self, cx: &mut Cx<'_>);
+    /// The room as the change left it, once it wrote what its trigger fires
+    /// for; `None` when it fires nothing.
+    fn reported(&self) -> Option<&RoomContext>;
+
+    /// Fires the call's trigger for what it changed, with `context`, the
+    /// room read once the lock is released (RFC §10.3).
+    fn report(&self, cx: &mut Cx<'_>, context: &RoomContext);
 }
 
 /// The host's update of a stored event: the fields it names, each whole
@@ -70,8 +74,8 @@ enum UpdateState {
         updated: Box<RoomEvent>,
         context: Box<RoomContext>,
     },
-    /// The event as the update left it, and the room it fires
-    /// `ON_EVENT_UPDATED` with; `None` when nothing was written.
+    /// The event as the update left it, and the room as the update left
+    /// it; `None` when nothing was written.
     Over(Option<(Box<RoomEvent>, Box<RoomContext>)>),
 }
 
@@ -181,10 +185,20 @@ impl EventChange for Update {
         }
     }
 
+    fn reported(&self) -> Option<&RoomContext> {
+        match &self.state {
+            UpdateState::Over(Some((_, context))) => Some(context),
+            UpdateState::Start
+            | UpdateState::Reading { .. }
+            | UpdateState::Writing { .. }
+            | UpdateState::Over(None) => None,
+        }
+    }
+
     /// `ON_EVENT_UPDATED`, once, with the event as it now stands, when the
     /// update wrote it (gap G-063).
-    fn report(&self, cx: &mut Cx<'_>) {
-        if let UpdateState::Over(Some((event, context))) = &self.state {
+    fn report(&self, cx: &mut Cx<'_>, context: &RoomContext) {
+        if let UpdateState::Over(Some((event, _))) = &self.state {
             cx.fire_observers(HookTrigger::OnEventUpdated, event, context);
         }
     }
@@ -206,8 +220,8 @@ enum DeleteState {
         effect: EffectId,
         context: Box<RoomContext>,
     },
-    /// The events removed, and the room as the delete left it, which their
-    /// `ON_EVENT_DELETED` observers receive; `None` when nothing was.
+    /// The events removed, and the room as the delete left it; `None` when
+    /// nothing was.
     Over(Option<(Vec<RoomEvent>, Box<RoomContext>)>),
 }
 
@@ -276,10 +290,17 @@ impl EventChange for Delete {
         )
     }
 
-    /// `ON_EVENT_DELETED` once for each event removed, each as it was
-    /// stored (gap G-063).
-    fn report(&self, cx: &mut Cx<'_>) {
-        if let DeleteState::Over(Some((removed, context))) = &self.state {
+    fn reported(&self) -> Option<&RoomContext> {
+        match &self.state {
+            DeleteState::Over(Some((_, context))) => Some(context),
+            DeleteState::Start | DeleteState::Deleting { .. } | DeleteState::Over(None) => None,
+        }
+    }
+
+    /// `ON_EVENT_DELETED` once for each event removed, in the order the
+    /// store removed them, each as it was stored (RFC §10.3, gap G-063).
+    fn report(&self, cx: &mut Cx<'_>, context: &RoomContext) {
+        if let DeleteState::Over(Some((removed, _))) = &self.state {
             for event in removed {
                 cx.fire_observers(HookTrigger::OnEventDeleted, event, context);
             }
@@ -357,5 +378,9 @@ impl EventChange for Commit {
     }
 
     /// A record fires no hook (RFC §10.5).
-    fn report(&self, _cx: &mut Cx<'_>) {}
+    fn reported(&self) -> Option<&RoomContext> {
+        None
+    }
+
+    fn report(&self, _cx: &mut Cx<'_>, _context: &RoomContext) {}
 }
