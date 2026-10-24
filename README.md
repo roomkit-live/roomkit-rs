@@ -109,6 +109,8 @@ Routing and identities:
 - [Step 2](docs/steps/step-02.md): the rest of Level 0, done.
 - [Step 2b](docs/steps/step-02b.md): the protocol and the public API in the
   shape a Python driver will call, done.
+- [RMK-941](docs/steps/rmk-941.md): the code aligned with RMK-930's last RFC
+  batch, done.
 - [RFC gaps](docs/rfc-gaps.md): what the specification leaves open, and the
   decisions taken here.
 
