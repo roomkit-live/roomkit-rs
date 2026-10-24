@@ -6,7 +6,9 @@
 
 mod memory;
 
+use std::error::Error;
 use std::future::Future;
+use std::ops::Deref;
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, ErrorRecord, EventId, EventStatus, EventUpdates,
@@ -25,14 +27,50 @@ pub use self::memory::InMemoryStore;
 /// What a store that could not be reached or failed reports as its cause:
 /// a database driver's error, an I/O error, or a message (`"connection
 /// refused".into()`).
-pub type StoreFailure = Box<dyn std::error::Error + Send + Sync>;
+///
+/// It dereferences to the error it holds, which is
+/// [`StoreError::Unavailable`]'s source, and equals only itself: a cause
+/// cannot be compared.
+pub struct StoreFailure(Box<dyn Error + Send + Sync>);
+
+impl StoreFailure {
+    /// The failure `cause` stands for: the error the store met, or a
+    /// message.
+    pub fn new(cause: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
+        Self(cause.into())
+    }
+}
+
+impl Deref for StoreFailure {
+    type Target = dyn Error + Send + Sync + 'static;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+/// Shows the error it holds, as that error shows itself.
+impl std::fmt::Debug for StoreFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, formatter)
+    }
+}
+
+/// One failure equals itself only.
+impl PartialEq for StoreFailure {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+
+impl Eq for StoreFailure {}
 
 /// Why a store refused or failed a request.
 ///
 /// Two errors are equal when they are the same refusal, field for field; an
 /// [`Unavailable`](Self::Unavailable) error only to itself, since its cause
 /// cannot be compared.
-#[derive(Debug, Error)]
+#[derive(Debug, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum StoreError {
     /// A room with the id exists already.
@@ -95,85 +133,11 @@ pub enum StoreError {
     Unavailable(#[source] StoreFailure),
 }
 
-impl PartialEq for StoreError {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::RoomExists(room), Self::RoomExists(other))
-            | (Self::RoomNotFound(room), Self::RoomNotFound(other)) => room == other,
-            (
-                Self::ParticipantExists {
-                    room_id,
-                    participant_id,
-                },
-                Self::ParticipantExists {
-                    room_id: other_room,
-                    participant_id: other_participant,
-                },
-            )
-            | (
-                Self::ParticipantNotFound {
-                    room_id,
-                    participant_id,
-                },
-                Self::ParticipantNotFound {
-                    room_id: other_room,
-                    participant_id: other_participant,
-                },
-            ) => room_id == other_room && participant_id == other_participant,
-            (Self::IdentityExists(identity), Self::IdentityExists(other))
-            | (Self::IdentityNotFound(identity), Self::IdentityNotFound(other)) => {
-                identity == other
-            }
-            (
-                Self::AddressLinked {
-                    channel_type,
-                    address,
-                    identity_id,
-                },
-                Self::AddressLinked {
-                    channel_type: other_type,
-                    address: other_address,
-                    identity_id: other_identity,
-                },
-            ) => {
-                channel_type == other_type
-                    && address == other_address
-                    && identity_id == other_identity
-            }
-            (Self::EventNotFound(event), Self::EventNotFound(other)) => event == other,
-            (
-                Self::IndexTaken { room_id, index },
-                Self::IndexTaken {
-                    room_id: other_room,
-                    index: other_index,
-                },
-            ) => room_id == other_room && index == other_index,
-            // The cause has no equality: one error is equal to itself.
-            (Self::Unavailable(_), Self::Unavailable(_)) => std::ptr::eq(self, other),
-            (
-                Self::RoomExists(_)
-                | Self::RoomNotFound(_)
-                | Self::ParticipantExists { .. }
-                | Self::ParticipantNotFound { .. }
-                | Self::IdentityExists(_)
-                | Self::IdentityNotFound(_)
-                | Self::AddressLinked { .. }
-                | Self::EventNotFound(_)
-                | Self::IndexTaken { .. }
-                | Self::Unavailable(_),
-                _,
-            ) => false,
-        }
-    }
-}
-
-impl Eq for StoreError {}
-
 impl StoreError {
     /// A store that could not be reached or failed, with `cause`, the error
     /// it met, or a message.
-    pub fn unavailable(cause: impl Into<StoreFailure>) -> Self {
-        Self::Unavailable(cause.into())
+    pub fn unavailable(cause: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
+        Self::Unavailable(StoreFailure::new(cause))
     }
 
     /// The error as the core records it, its message followed by each of
