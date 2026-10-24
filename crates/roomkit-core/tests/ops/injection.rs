@@ -9,9 +9,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use roomkit_core::model::{
-    ChannelOutput, DirectEvent, EditContent, EditSource, EventContent, EventDirection, EventStatus,
-    EventType, HookResult, InboundMessage, InjectedEvent, RoomEvent, RoomId, RoomStatus,
-    Visibility,
+    ChannelOutput, DirectEvent, EditContent, EditSource, ErrorRecord, EventContent, EventDirection,
+    EventStatus, EventType, HookResult, InboundMessage, InjectedEvent, RoomEvent, RoomId,
+    RoomStatus, Visibility,
 };
 use roomkit_core::ops::{
     EffectId, Entry, FrameworkEvent, Inbound, InboundError, InboundTarget, MutationError, Next,
@@ -1533,6 +1533,52 @@ mod an_entry_whose_caller_did_not_wait {
                     ..ChannelOutput::default()
                 })
             }),
+        );
+    }
+}
+
+/// RFC §13.6, gap G-070: a parse that calls into its room, then fails,
+/// fails its message with nothing of it written; the call ends only once
+/// the event its call committed is delivered.
+mod a_parse_that_fails_after_its_call {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn fails_the_message_once_its_call_s_event_is_delivered() {
+        let mut sim = room();
+        sim.failing_parse(
+            "sms",
+            Reentry {
+                entries: calling(|_| Some(send_event("Heads up"))),
+                answer: Answer::Awaits(Box::new(|_| {
+                    ErrorRecord::new("ParseError", "the payload is garbled")
+                })),
+            },
+        );
+        let failed = sim.send(hello()).err();
+        let after_the_parse: Vec<&str> = sim
+            .trace
+            .iter()
+            .map(String::as_str)
+            .skip_while(|line| *line != "handle_inbound sms returns")
+            .collect();
+        assert_eq!(
+            (failed, sim.timeline_lines(), after_the_parse),
+            (
+                Some(InboundError::ChannelFailed {
+                    channel_id: channel("sms"),
+                    error: ErrorRecord::new("ParseError", "the payload is garbled"),
+                }),
+                vec!["#0 ws delivered \"Heads up\"".to_owned()],
+                vec![
+                    "handle_inbound sms returns",
+                    "await lane room_1 evt_2",
+                    "on_event sms <- evt_2",
+                    "deliver sms <- evt_2",
+                    "leave lane room_1 evt_2",
+                ]
+            )
         );
     }
 }

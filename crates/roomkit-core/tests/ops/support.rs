@@ -22,9 +22,9 @@
 //! The router is scripted: each `Route` takes the next answer of `routes`,
 //! a new room once they are spent.
 //!
-//! A hook or a channel may call into a room (RFC §13.5): it is scripted as
-//! a [`Reentry`], the entries it makes from the event it runs on and what it
-//! answers. The driver hands a call to the run of its context that holds
+//! A hook, a channel's turn or a parse that then fails may call into a room
+//! (RFC §13.5): it is scripted as a [`Reentry`], the entries it makes from
+//! the event it runs on, or parses, and what it answers. The driver hands a call to the run of its context that holds
 //! the room's lane (`Operation::adopt`); a call no run takes, or one its
 //! run declines, runs as an operation of its own, an arrival, within the
 //! caller's context (`runs`). Either way it keeps the hook's or the
@@ -108,6 +108,8 @@ pub(crate) enum Answer<T> {
 enum Caller {
     Hook(HookId),
     Channel(ChannelId),
+    /// A channel's parse, which fails once it made its call.
+    Parse(ChannelId),
 }
 
 /// How a caller goes on once it made its calls.
@@ -265,6 +267,8 @@ pub(crate) struct Sim {
     reentrant_hooks: BTreeMap<HookId, Reentry<HookOutcome<RoomEvent>>>,
     /// The channels whose `on_event()` calls into their own room.
     reentrant_channels: BTreeMap<ChannelId, Reentry<Result<ChannelOutput, ErrorRecord>>>,
+    /// The channels whose parse calls into its room, then fails.
+    failing_parses: BTreeMap<ChannelId, Reentry<ErrorRecord>>,
     /// The entries the operations settled, in order.
     pub(crate) settled: Vec<Settled>,
     /// The decisions the inbound operations published (`Step::decided`),
@@ -359,6 +363,7 @@ impl Sim {
             delivery_duration: Duration::ZERO,
             reentrant_hooks: BTreeMap::new(),
             reentrant_channels: BTreeMap::new(),
+            failing_parses: BTreeMap::new(),
             settled: Vec::new(),
             decisions: Vec::new(),
             failing_effect: None,
@@ -580,6 +585,13 @@ impl Sim {
         self.reentrant_channels.insert(channel(id), reentry);
     }
 
+    /// Makes the channel `id`'s parse call into its room from the event it
+    /// parses, then fail with what `reentry` answers, as a parse that
+    /// injects before it fails does.
+    pub(crate) fn failing_parse(&mut self, id: &str, reentry: Reentry<ErrorRecord>) {
+        self.failing_parses.insert(channel(id), reentry);
+    }
+
     /// Runs `event`, injected directly into `room` (RFC §10.5).
     pub(crate) fn inject(
         &mut self,
@@ -735,6 +747,28 @@ impl Sim {
             }
             return Some((Caller::Channel(binding.channel_id.clone()), entries));
         }
+        if let Request::Channel(ChannelRequest::HandleInbound {
+            channel_id,
+            message,
+            context,
+            id,
+        }) = &effect.request
+        {
+            let reentry = self.failing_parses.get_mut(channel_id)?;
+            let declaration = self.config.channel(channel_id).unwrap();
+            let event = default_inbound_event(
+                message,
+                declaration,
+                context.room.id.clone(),
+                id.clone(),
+                self.env.now(),
+            );
+            let entries = (reentry.entries)(&event);
+            if entries.is_empty() {
+                return None;
+            }
+            return Some((Caller::Parse(channel_id.clone()), entries));
+        }
         None
     }
 
@@ -764,6 +798,13 @@ impl Sim {
                     Answer::Apart(answer) => at_once(output(answer()), true),
                 }
             }
+            Caller::Parse(channel_id) => {
+                match &mut self.failing_parses.get_mut(channel_id).unwrap().answer {
+                    Answer::Awaits(_) => Then::Waits,
+                    Answer::AtOnce(answer) => at_once(Outcome::Failed(answer()), false),
+                    Answer::Apart(answer) => at_once(Outcome::Failed(answer()), true),
+                }
+            }
         }
     }
 
@@ -783,6 +824,13 @@ impl Sim {
                     unreachable!("a caller that waits answers from the result");
                 };
                 output(then(result))
+            }
+            Caller::Parse(channel_id) => {
+                let reentry = self.failing_parses.get_mut(channel_id).unwrap();
+                let Answer::Awaits(then) = &mut reentry.answer else {
+                    unreachable!("a caller that waits answers from the result");
+                };
+                Outcome::Failed(then(result))
             }
         }
     }
