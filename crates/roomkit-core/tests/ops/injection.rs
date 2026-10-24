@@ -466,16 +466,27 @@ mod a_refusal_before_the_commit {
         );
     }
 
-    /// Gap G-041: only the framework writes `internal`.
+    /// Gap G-041: only the framework writes `internal`, where the event's
+    /// answers may go included (gap G-073).
     #[test]
     fn of_the_visibility_internal_is_raised_before_anything_is_read() {
-        let mut sim = room();
-        let mut event = from_console("Hi");
-        event.visibility = Visibility::Internal;
-        assert_eq!(
-            (outcome(&mut sim, event), sim.trace.len()),
-            ((Err(InboundError::InternalVisibility), 0), 0)
-        );
+        let internal = [
+            DirectEvent {
+                visibility: Visibility::Internal,
+                ..from_console("Hi")
+            },
+            DirectEvent {
+                response_visibility: Some(Visibility::Internal),
+                ..from_console("Hi")
+            },
+        ];
+        for event in internal {
+            let mut sim = room();
+            assert_eq!(
+                (outcome(&mut sim, event), sim.trace.len()),
+                ((Err(InboundError::InternalVisibility), 0), 0)
+            );
+        }
     }
 
     #[test]

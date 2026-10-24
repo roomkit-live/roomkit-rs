@@ -243,7 +243,7 @@ impl Machine {
         let id = self.adopted.next_id();
         let answers_within = match &entry {
             Entry::Message { message, .. } => message.response_visibility.clone(),
-            Entry::Direct { .. } => None,
+            Entry::Direct { event, .. } => event.response_visibility.clone(),
         };
         let adopted = Adopted {
             id,

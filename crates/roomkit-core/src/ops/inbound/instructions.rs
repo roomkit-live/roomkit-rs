@@ -44,8 +44,7 @@ pub(super) struct Asked<'entry> {
     event_type: EventType,
     standalone: bool,
     visibility: &'entry Visibility,
-    /// Where the answers may go; `None` for anywhere, and for a direct
-    /// injection, which names no such place.
+    /// Where the answers may go; `None` for anywhere.
     response_visibility: Option<&'entry Visibility>,
     addressed_to: Option<&'entry [ChannelId]>,
     idempotency_key: Option<&'entry str>,
@@ -70,7 +69,7 @@ impl<'entry> From<&'entry DirectEvent> for Asked<'entry> {
             event_type: event.event_type,
             standalone: event.standalone,
             visibility: &event.visibility,
-            response_visibility: None,
+            response_visibility: event.response_visibility.as_ref(),
             addressed_to: event.addressed_to.as_deref(),
             idempotency_key: event.idempotency_key.as_deref(),
         }

@@ -26,6 +26,11 @@ pub struct DirectEvent {
     /// Who may see it (RFC §7.3). `internal` is the framework's alone (gap
     /// G-041).
     pub visibility: Visibility,
+    /// Where its answers may go, as a message's `response_visibility` (RFC
+    /// §5.12, gap G-073): every response its cascade derives from it is
+    /// kept within it; `None` restricts nothing. Never `internal` (gap
+    /// G-041).
+    pub response_visibility: Option<Visibility>,
     /// The intelligence channels asked to act; `None` for any eligible one
     /// (RFC §19.3).
     pub addressed_to: Option<Vec<ChannelId>>,
@@ -52,6 +57,7 @@ impl DirectEvent {
             event_type: EventType::Message,
             participant_id: None,
             visibility: Visibility::All,
+            response_visibility: None,
             addressed_to: None,
             parent_event_id: None,
             idempotency_key: None,

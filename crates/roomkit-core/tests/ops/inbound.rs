@@ -1411,7 +1411,7 @@ mod a_response_visibility {
     use super::*;
     use crate::support::{Answer, OnEvent, Reentry, calling};
     use pretty_assertions::assert_eq;
-    use roomkit_core::model::InboundMessage;
+    use roomkit_core::model::{DirectEvent, EventContent, InboundMessage};
     use roomkit_core::ops::Entry;
     use roomkit_core::rules::transcoding::text_of;
 
@@ -1545,6 +1545,39 @@ mod a_response_visibility {
             (
                 Some("intelligence".to_owned()),
                 Some("intelligence".to_owned())
+            )
+        );
+    }
+
+    /// A direct injection names where its answers may go as a message does
+    /// (RFC §10.5): its responses, and theirs, are narrowed by it.
+    #[test]
+    fn narrows_the_responses_of_a_direct_injection_by_its_own() {
+        let mut sim = room_with(answering_as("all"));
+        sim.agent(
+            "writer",
+            Box::new(|event, _| {
+                if event.source.channel_id.as_str() != "ai" {
+                    return Ok(ChannelOutput::default());
+                }
+                Ok(respond("writer", event, "Noted"))
+            }),
+        );
+        let event = DirectEvent {
+            response_visibility: Some("ws_advisor,writer".parse().unwrap()),
+            ..DirectEvent::new(channel("sms"), EventContent::text("Hello"))
+        };
+        sim.inject("room_1", event).unwrap();
+        assert_eq!(
+            (
+                stored(&sim, "Hello"),
+                stored(&sim, "Re: Hello"),
+                stored(&sim, "Noted")
+            ),
+            (
+                Some("all".to_owned()),
+                Some("writer,ws_advisor".to_owned()),
+                Some("writer,ws_advisor".to_owned())
             )
         );
     }

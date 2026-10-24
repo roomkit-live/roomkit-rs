@@ -300,9 +300,8 @@ struct CallFacts {
     /// What a direct injection's trigger is checked for before its hooks
     /// (gap G-069); `None` for a message.
     direct: Option<direct::DirectCall>,
-    /// Where the answers to the call's message may go, its response
-    /// visibility (RFC §5.12, gap G-073); `None` for anywhere, and for a
-    /// direct injection.
+    /// Where the answers to the call's message or direct injection may go,
+    /// its response visibility (RFC §5.12, gap G-073); `None` for anywhere.
     answers_within: Option<Visibility>,
     /// The call's bound, its deadline set at its start from
     /// `process_timeout` (RFC §13.6).

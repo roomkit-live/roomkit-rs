@@ -108,7 +108,9 @@ as it stands.
   it committed.
 - **Direct calls.** `send_event` injects an event through the pipeline
   from its lock on, without a parse or step 2: a refusal before its commit
-  is raised with nothing written (§10.5, gap G-069). `commit_event` commits
+  is raised with nothing written (§10.5, gap G-069); its `DirectEvent` may
+  say where its answers go (`response_visibility`), as a message does (gap
+  G-073). `commit_event` commits
   a record under the room lock with the next index and nothing else: no
   hook, no delivery, no activity (gap G-071). `update_event` and
   `delete_event`, the host's changes of stored events, run under the lock,
