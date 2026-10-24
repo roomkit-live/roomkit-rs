@@ -256,13 +256,16 @@ pub fn clear_fingerprint(event: &mut RoomEvent) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
     use super::*;
     use crate::model::{
-        ChannelType, CompositeContent, EventContent, EventDirection, EventId, EventSource, Room,
-        RoomId, SystemContent, Timestamp, ToolCallContent, ToolCallStatus,
+        ChannelType, CompositeContent, EventContent, EventDirection, EventId, EventSource,
+        Latitude, LocationContent, Longitude, Room, RoomId, SystemContent, TemplateContent,
+        Timestamp, ToolCallContent, ToolCallStatus,
     };
 
     fn channel(id: &str) -> ChannelId {
@@ -730,6 +733,23 @@ mod tests {
                 (
                     composite(vec![notice(), tool_call()]),
                     "Call transferred.\n[Tool call: lookup]",
+                ),
+                (
+                    composite(vec![
+                        EventContent::Location(LocationContent {
+                            latitude: Latitude::new(45.5).unwrap(),
+                            longitude: Longitude::new(-73.6).unwrap(),
+                            label: Some("Office".to_owned()),
+                            address: None,
+                        }),
+                        EventContent::Template(TemplateContent {
+                            template_id: "welcome".to_owned(),
+                            language: "en".to_owned(),
+                            parameters: BTreeMap::new(),
+                            body: None,
+                        }),
+                    ]),
+                    "[Location: Office (45.5, -73.6)]\n[Template: welcome]",
                 ),
             ];
             for (content, text) in cases {
