@@ -111,6 +111,8 @@ Routing and identities:
   shape a Python driver will call, done.
 - [RMK-941](docs/steps/rmk-941.md): the code aligned with RMK-930's last RFC
   batch, done.
+- [RMK-944](docs/steps/rmk-944.md): the code-hygiene findings of a review,
+  with no behaviour change, done.
 - [RFC gaps](docs/rfc-gaps.md): what the specification leaves open, and the
   decisions taken here.
 
