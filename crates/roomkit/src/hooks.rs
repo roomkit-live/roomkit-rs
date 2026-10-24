@@ -2,13 +2,12 @@
 
 use std::error::Error;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit_core::model::{ErrorRecord, HookResult, RoomContext, RoomEvent};
 use roomkit_core::rules::hook_chain::HookOutcome;
-
-use crate::channel::BoxFuture;
 
 /// What a hook's handler failed with. A SYNC hook that fails lets the event
 /// through, unless the hook or its trigger fails closed (RFC §9.3).
@@ -32,7 +31,7 @@ pub type HookReturn = Result<HookResult, HookError>;
 
 /// The future [`HookHandler::call`] returns: boxed and sendable, it gives
 /// what the hook decided (`Box::pin(async move { ... })`).
-pub type HookFuture = BoxFuture<'static, HookReturn>;
+pub type HookFuture = Pin<Box<dyn Future<Output = HookReturn> + Send + 'static>>;
 
 impl<F, Fut> HookHandler for F
 where
