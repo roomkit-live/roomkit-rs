@@ -164,6 +164,7 @@ impl CommitPass {
             blocked,
         } = verdict;
         payload.index = self.event.index;
+        let mut payload = self.within_its_scope(payload, &context);
         match blocked {
             Some((by, reason)) => {
                 // A blocked record is stored as step 12 would have stored it
@@ -211,6 +212,19 @@ impl CommitPass {
                     commit::blocked(cx, event, blocked_by.clone(), Some(blocked_by), &context);
                 self.committing(cx, blocked)
             }
+        }
+    }
+
+    /// `event`, a response as its hooks left it, back within where the
+    /// answers of the message its cascade derives from may go (RFC §5.12,
+    /// gap G-073): a hook may change its visibility as on any event, never
+    /// past that scope. Any other pass's event is left as it is.
+    fn within_its_scope(&self, event: RoomEvent, context: &RoomContext) -> RoomEvent {
+        match &self.origin {
+            PassOrigin::Response { answers_within } => {
+                stamp::answer_within(event, answers_within.as_ref(), &context.bindings)
+            }
+            PassOrigin::Trigger | PassOrigin::Adopted(_) | PassOrigin::Injected { .. } => event,
         }
     }
 

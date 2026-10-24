@@ -35,7 +35,8 @@ as it stands.
   addressing (§7.5, §10.2, §19.3); the visibility a hook's injected event
   and a refused record keep, never wider than their event's (gaps G-031,
   G-036); answers, at any depth of their message's cascade, kept within
-  where its answers may go (§5.12, gap G-073); a channel's history withholding a soft-deleted event's
+  where its answers may go, a response's hooks never widening it past that
+  (§5.12, gap G-073); a channel's history withholding a soft-deleted event's
   content (gap G-062); transcoding and the text a reader takes, a tool
   call's and a system notice's included, a composite's empty parts skipped
   (§6.6, gap G-072); the

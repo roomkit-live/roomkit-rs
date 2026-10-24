@@ -1491,6 +1491,30 @@ mod a_response_visibility {
         }
     }
 
+    /// A response's hook may change its visibility as on any event, never
+    /// past where its message's answers may go: the pass narrows it back
+    /// once its hooks ran.
+    #[test]
+    fn narrows_a_response_its_hook_widened_back_within_the_message_s() {
+        let mut sim = room_with(answering_as("all"));
+        sim.before_broadcast(
+            "widen",
+            Box::new(|event| {
+                if event.source.channel_id.as_str() != "ai" {
+                    return HookOutcome::Returned(HookResult::allow());
+                }
+                let mut widened = event.clone();
+                widened.visibility = Visibility::All;
+                HookOutcome::Returned(HookResult::modify(widened))
+            }),
+        );
+        sim.send(answered_within("Hello", "ws_advisor")).unwrap();
+        assert_eq!(
+            (stored(&sim, "Re: Hello"), delivered(&sim, "Re: Hello")),
+            (Some("ws_advisor".to_owned()), vec!["ws_advisor"])
+        );
+    }
+
     #[test]
     fn leaves_the_message_itself_as_it_asked() {
         let mut sim = room_with(answering_as("all"));
