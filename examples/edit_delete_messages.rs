@@ -3,8 +3,10 @@
 //! and the SMS copy as text, and the agent reads it with the target
 //! corrected in its history. The target is updated in the change's commit,
 //! and `ON_EVENT_UPDATED` and `ON_EVENT_DELETED` fire with it once the room
-//! lock is released. Then a moderation hook blocks an edit that would write
-//! a card number: its target stays as it was, and no trigger fires.
+//! lock is released, with the room as the commit left it: the change the
+//! newest event of its history (RFC §10.3). Then a moderation hook blocks an
+//! edit that would write a card number: its target stays as it was, and no
+//! trigger fires.
 //!
 //! ```sh
 //! cargo run --example edit_delete_messages
@@ -47,6 +49,10 @@ fn edits_natively() -> ChannelCapabilities {
     }
 }
 
+/// A mutation trigger that fired: the trigger, its payload, and the id of
+/// the newest event of the room's history it was handed.
+type Change = (HookTrigger, RoomEvent, Option<EventId>);
+
 /// The room of the flow, with its channels and what the example observes.
 struct Conversation {
     kit: RoomKit,
@@ -58,8 +64,9 @@ struct Conversation {
     agent: ScriptedAgent,
     /// The ids of [`MESSAGES`], in order.
     sent: Vec<EventId>,
-    /// The mutation triggers that fired, with their targets, as they fire.
-    changed: Log<(HookTrigger, RoomEvent)>,
+    /// The mutation triggers that fired, with their targets and the newest
+    /// event of the room they were handed, as they fire.
+    changed: Log<Change>,
 }
 
 impl Conversation {
@@ -100,7 +107,7 @@ impl Conversation {
 
     /// The mutation triggers that fired so far. They run as observers, in
     /// the background: the kit's background work is waited for first.
-    async fn changes(&self) -> Vec<(HookTrigger, RoomEvent)> {
+    async fn changes(&self) -> Vec<Change> {
         self.kit.idle().await;
         self.changed.entries()
     }
@@ -170,19 +177,18 @@ impl Conversation {
 }
 
 /// Registers observers of `ON_EVENT_UPDATED` and `ON_EVENT_DELETED`, which
-/// note each one's trigger and payload in `changed`.
-fn observe_changes(
-    kit: &RoomKit,
-    changed: &Log<(HookTrigger, RoomEvent)>,
-) -> Result<(), Box<dyn Error>> {
+/// note each one's trigger, payload and the newest event of its room's
+/// history in `changed`.
+fn observe_changes(kit: &RoomKit, changed: &Log<Change>) -> Result<(), Box<dyn Error>> {
     for (name, trigger) in [
         ("projection_updated", HookTrigger::OnEventUpdated),
         ("projection_deleted", HookTrigger::OnEventDeleted),
     ] {
         let changed = changed.clone();
-        kit.observe(name, trigger, move |event, _| {
+        kit.observe(name, trigger, move |event, context| {
             let changed = changed.clone();
-            async move { changed.push((trigger, event)) }
+            let newest = context.recent_events.last().map(|newest| newest.id.clone());
+            async move { changed.push((trigger, event, newest)) }
         })?;
     }
     Ok(())
@@ -238,7 +244,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let updated = conversation.changes().await.last().cloned();
     checks.expect(
         "the edit is stored after its target, which now reads \"I need 50000$\" and is marked edited",
-        edited.event.is_some_and(|event| event.index == 6)
+        edited.event.as_ref().is_some_and(|event| event.index == 6)
             && target.as_ref().is_some_and(|target| target.content == EventContent::text("I need 50000$"))
             && target.as_ref().is_some_and(is_edited),
     );
@@ -257,10 +263,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
                 && turn.history.contains(&"I need 50000$".to_owned())
         }),
     );
+    let edit_id = edited.event.as_ref().map(|event| event.id.clone());
     checks.expect(
-        "ON_EVENT_UPDATED fires with the edited target",
-        updated.is_some_and(|(trigger, event)| {
-            trigger == HookTrigger::OnEventUpdated && Some(event) == target
+        "ON_EVENT_UPDATED fires with the edited target, the edit the newest event of its room",
+        updated.is_some_and(|(trigger, event, newest)| {
+            trigger == HookTrigger::OnEventUpdated && Some(event) == target && newest == edit_id
         }),
     );
 
@@ -272,7 +279,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let removed = conversation.changes().await.last().cloned();
     checks.expect(
         "the delete is stored after its target, which is marked deleted",
-        deleted.event.is_some_and(|event| event.index == 7)
+        deleted.event.as_ref().is_some_and(|event| event.index == 7)
             && target.as_ref().is_some_and(is_deleted),
     );
     checks.expect(
@@ -280,10 +287,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         to_advisor.is_some_and(|event| matches!(event.content, EventContent::Delete(_)))
             && conversation.sms.texts().last().map(String::as_str) == Some("[Message deleted]"),
     );
+    let delete_id = deleted.event.as_ref().map(|event| event.id.clone());
     checks.expect(
-        "ON_EVENT_DELETED fires with the deleted target",
-        removed.is_some_and(|(trigger, event)| {
-            trigger == HookTrigger::OnEventDeleted && Some(event) == target
+        "ON_EVENT_DELETED fires with the deleted target, the delete the newest event of its room",
+        removed.is_some_and(|(trigger, event, newest)| {
+            trigger == HookTrigger::OnEventDeleted && Some(event) == target && newest == delete_id
         }),
     );
 

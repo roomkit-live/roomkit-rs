@@ -81,14 +81,15 @@ pub enum EventStatus {
     /// Created, not yet processed.
     #[default]
     Pending,
-    /// Stored and broadcast.
+    /// Stored and broadcast; an allowed instruction, never stored, reads
+    /// so too (RFC §10.1.1).
     Delivered,
     /// Read by its recipient.
     Read,
     /// Delivery failed after every retry.
     Failed,
-    /// Refused: by a SYNC hook, by a source that cannot write, or by the
-    /// chain-depth limit.
+    /// Refused: by a SYNC hook, by a source that cannot write, by the
+    /// chain-depth limit or by the reentry budget (RFC §8.3).
     Blocked,
 }
 
@@ -229,14 +230,16 @@ pub struct RoomEvent {
     /// §9.4, gap G-073).
     #[serde(default)]
     pub response_visibility: Option<Visibility>,
-    /// Its position in the room's timeline, assigned at commit.
+    /// Its position in the room's timeline, assigned at commit; an
+    /// instruction's is provisional, the index the room's next event takes
+    /// (RFC §10.1.1 rule 5).
     #[serde(default)]
     pub index: u64,
     /// How many response hops separate it from the external event that
     /// started its chain (RFC §8.3).
     #[serde(default)]
     pub chain_depth: u32,
-    /// The root of its in-app thread.
+    /// The root of its in-app thread, as RFC §10.1 step 8 stores it.
     #[serde(default)]
     pub parent_event_id: Option<EventId>,
     /// The event this response answers (RFC §8.5).

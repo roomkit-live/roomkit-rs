@@ -34,7 +34,8 @@ pub struct DirectEvent {
     /// The intelligence channels asked to act; `None` for any eligible one
     /// (RFC §19.3).
     pub addressed_to: Option<Vec<ChannelId>>,
-    /// The event it replies to, in its thread.
+    /// The event it replies to, in its thread; the pipeline stores its
+    /// thread's root (RFC §10.1 step 8).
     pub parent_event_id: Option<EventId>,
     /// The key that prevents a duplicate, per room and channel (RFC §13.4,
     /// gap G-023).

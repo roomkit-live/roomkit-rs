@@ -29,7 +29,8 @@ pub struct InboundMessage {
     /// The provider's native thread reference, passed through to it.
     #[serde(default)]
     pub thread_id: Option<String>,
-    /// The in-app thread: the event this message replies to.
+    /// The in-app thread: the event this message replies to; the pipeline
+    /// stores its thread's root (RFC §10.1 step 8).
     #[serde(default)]
     pub parent_event_id: Option<EventId>,
     /// The key that prevents a duplicate (RFC §13.4).
