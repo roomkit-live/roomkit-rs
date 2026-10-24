@@ -60,6 +60,7 @@ mod arrival;
 mod arrival_change;
 mod cascade;
 mod chain;
+mod charge;
 mod commit;
 mod deadline;
 mod delivery;

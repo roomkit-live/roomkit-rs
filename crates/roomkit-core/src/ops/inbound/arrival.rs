@@ -14,7 +14,9 @@
 //! conversation by step 1 nor bound to the channel as a group, or step 3 no
 //! longer admits the sender, someone else being heard there meanwhile) is
 //! left, and the router is asked once more; a second such answer, or none,
-//! gives the message a new room (gaps G-045, G-055).
+//! gives the message a new room (gaps G-045, G-055). A message the code of a
+//! delivery set sent is charged on that delivery's reentry budget once its
+//! final room is known (`charge`, gap G-070).
 //!
 //! Every request of the arrival carries the call's deadline (RFC §13.6),
 //! but a write, a release, what completes a room step 2 creates, and the
@@ -23,6 +25,7 @@
 
 use std::mem;
 
+use super::charge::DeliveryCharge;
 use super::deadline::Stopped;
 use super::instructions::{self, Admission};
 use super::named_room::{Mode, Named, NamedRoom};
@@ -147,17 +150,9 @@ pub(super) struct Arrival {
     /// routed.
     room: Option<RoomId>,
     /// For a message a delivery's code sent into a room it does not name
-    /// as the delivering one, or that routing places: the room that
-    /// delivery delivers in and its cascade's budget, which the message is
-    /// charged on once its final room is known (gap G-070).
-    delivery: Option<(RoomId, ReentryBudget)>,
-    /// Whether the message drew its one pass on that budget: it is never
-    /// charged twice, wherever routing places it once more.
-    charged: bool,
-    /// Whether its cascade draws on that budget too: step 2 created its
-    /// room, or it came into the delivering room. A room another call
-    /// created first leaves it a budget of its own.
-    draws: bool,
+    /// as the delivering one, or that routing places, its charge on that
+    /// delivery's budget once its final room is known (gap G-070).
+    delivery: DeliveryCharge,
     state: State,
 }
 
@@ -213,9 +208,7 @@ impl Arrival {
             },
             routes: 0,
             room: None,
-            delivery: None,
-            charged: false,
-            draws: false,
+            delivery: DeliveryCharge::new(None),
             state: State::Start,
         }
     }
@@ -225,7 +218,7 @@ impl Arrival {
     /// room is known, when step 2 creates that room or it is the delivering
     /// one (gap G-070).
     pub(super) fn charging(mut self, delivery: Option<(RoomId, ReentryBudget)>) -> Self {
-        self.delivery = delivery;
+        self.delivery = DeliveryCharge::new(delivery);
         self
     }
 
@@ -233,10 +226,7 @@ impl Arrival {
     /// one it was charged on, when step 2 created its room or it came into
     /// the room that cascade delivers in.
     pub(super) fn drawn_on(&self) -> Option<&ReentryBudget> {
-        self.delivery
-            .as_ref()
-            .filter(|_| self.draws)
-            .map(|(_, budget)| budget)
+        self.delivery.drawn_on()
     }
 
     /// The arrival of `message`, resolved on `channel`, into `room_id`,
@@ -309,8 +299,7 @@ impl Arrival {
                     Progress::Waiting
                 }
                 Progress::Done(named) => {
-                    self.charged |= step.charged();
-                    self.draws |= step.created();
+                    self.delivery.after_step_two(step.charged(), step.created());
                     self.on_named(cx, step.room_id(), named)
                 }
             },
@@ -393,29 +382,11 @@ impl Arrival {
         }
     }
 
-    /// Charges the message its one pass on the budget of the delivery whose
-    /// code sent it, unless it was charged already (gap G-070). `false`
-    /// once that budget is spent. A message no delivery's code sent charges
-    /// nothing.
-    fn charge_once(&mut self) -> bool {
-        let Some((_, budget)) = &self.delivery else {
-            return true;
-        };
-        if self.charged {
-            return true;
-        }
-        if !budget.take() {
-            return false;
-        }
-        self.charged = true;
-        true
-    }
-
     /// A new room for the message, with a fresh id (RFC §10.1 step 2): the
     /// work of the delivery whose code routed it, charged on its budget
     /// before the room is created.
     fn enter_fresh(&mut self, cx: &mut Cx<'_>) -> Arriving {
-        if !self.charge_once() {
+        if !self.delivery.charge_once() {
             return Progress::Done(Err(Stopped::PastBudget));
         }
         let room_id = cx.env.new_room_id();
@@ -430,12 +401,7 @@ impl Arrival {
     /// before step 2).
     fn enter(&mut self, cx: &mut Cx<'_>, room_id: RoomId, mode: Mode) {
         self.room = Some(room_id.clone());
-        let opening = match mode {
-            Mode::Routed | Mode::Named if !self.charged => {
-                self.delivery.as_ref().map(|(_, budget)| budget.clone())
-            }
-            Mode::Routed | Mode::Named | Mode::Fresh => None,
-        };
+        let opening = self.delivery.opening(mode);
         let mut step = Box::new(
             NamedRoom::new(
                 room_id,
@@ -456,7 +422,7 @@ impl Arrival {
     fn on_named(&mut self, cx: &mut Cx<'_>, room_id: &RoomId, named: Named) -> Arriving {
         match named {
             Named::Arrived(context) => {
-                if !self.arrived_within_budget(room_id) {
+                if !self.delivery.arrived_within_budget(room_id) {
                     return Progress::Done(Err(Stopped::PastBudget));
                 }
                 self.parse(cx, context)
@@ -473,23 +439,6 @@ impl Arrival {
                 self.route_again(cx)
             }
         }
-    }
-
-    /// Charges a message that came into the room its delivery delivers in,
-    /// its final room, once step 2 kept that room for it, after any
-    /// re-route (RFC §10.1 step 2, gap G-070): its cascade then draws on
-    /// that delivery's budget. `false` past that budget: the message is
-    /// refused, what step 2 wrote to route it kept.
-    fn arrived_within_budget(&mut self, room_id: &RoomId) -> bool {
-        let delivering = self.delivery.as_ref().map(|(room, _)| room);
-        if delivering != Some(room_id) {
-            return true;
-        }
-        if !self.charge_once() {
-            return false;
-        }
-        self.draws = true;
-        true
     }
 
     /// Routes the message once more, or gives it a new room once it was
