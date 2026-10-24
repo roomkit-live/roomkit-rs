@@ -130,7 +130,8 @@ pub trait Channel: Send + Sync + 'static {
     }
 }
 
-/// A boxed, sendable future, as a dynamic channel or hook returns it.
+/// A boxed, sendable future, as a channel or a router behind a trait object
+/// returns it.
 pub(crate) type BoxFuture<'call, T> = Pin<Box<dyn Future<Output = T> + Send + 'call>>;
 
 /// A [`Channel`] behind a trait object, so the kit holds channels of any

@@ -152,7 +152,7 @@ pub(super) struct Arrival {
     /// For a message a delivery's code sent into a room it does not name
     /// as the delivering one, or that routing places, its charge on that
     /// delivery's budget once its final room is known (gap G-070).
-    delivery: DeliveryCharge,
+    charge: DeliveryCharge,
     state: State,
 }
 
@@ -208,7 +208,7 @@ impl Arrival {
             },
             routes: 0,
             room: None,
-            delivery: DeliveryCharge::new(None),
+            charge: DeliveryCharge::new(None),
             state: State::Start,
         }
     }
@@ -218,7 +218,7 @@ impl Arrival {
     /// room is known, when step 2 creates that room or it is the delivering
     /// one (gap G-070).
     pub(super) fn charging(mut self, delivery: Option<(RoomId, ReentryBudget)>) -> Self {
-        self.delivery = DeliveryCharge::new(delivery);
+        self.charge = DeliveryCharge::new(delivery);
         self
     }
 
@@ -226,7 +226,7 @@ impl Arrival {
     /// one it was charged on, when step 2 created its room or it came into
     /// the room that cascade delivers in.
     pub(super) fn drawn_on(&self) -> Option<&ReentryBudget> {
-        self.delivery.drawn_on()
+        self.charge.drawn_on()
     }
 
     /// The arrival of `message`, resolved on `channel`, into `room_id`,
@@ -299,7 +299,7 @@ impl Arrival {
                     Progress::Waiting
                 }
                 Progress::Done(named) => {
-                    self.delivery.after_step_two(step.charged(), step.created());
+                    self.charge.after_step_two(step.charged(), step.created());
                     self.on_named(cx, step.room_id(), named)
                 }
             },
@@ -386,7 +386,7 @@ impl Arrival {
     /// work of the delivery whose code routed it, charged on its budget
     /// before the room is created.
     fn enter_fresh(&mut self, cx: &mut Cx<'_>) -> Arriving {
-        if !self.delivery.charge_once() {
+        if !self.charge.charge_once() {
             return Progress::Done(Err(Stopped::PastBudget));
         }
         let room_id = cx.env.new_room_id();
@@ -401,7 +401,7 @@ impl Arrival {
     /// before step 2).
     fn enter(&mut self, cx: &mut Cx<'_>, room_id: RoomId, mode: Mode) {
         self.room = Some(room_id.clone());
-        let opening = self.delivery.opening(mode);
+        let opening = self.charge.opening(mode);
         let mut step = Box::new(
             NamedRoom::new(
                 room_id,
@@ -422,7 +422,7 @@ impl Arrival {
     fn on_named(&mut self, cx: &mut Cx<'_>, room_id: &RoomId, named: Named) -> Arriving {
         match named {
             Named::Arrived(context) => {
-                if !self.delivery.arrived_within_budget(room_id) {
+                if !self.charge.arrived_within_budget(room_id) {
                     return Progress::Done(Err(Stopped::PastBudget));
                 }
                 self.parse(cx, context)
