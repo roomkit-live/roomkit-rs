@@ -93,7 +93,7 @@ pub use self::stamp::default_inbound_event;
 use super::io::Io;
 use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
 use super::{Cx, Environment, KitConfig};
-use crate::model::{ChannelId, DirectEvent, InboundMessage, RoomId, Task, Visibility};
+use crate::model::{ChannelId, DirectEvent, InboundMessage, RoomId, Task};
 use crate::ops::io::Bound;
 pub use crate::ops::protocol::{InboundError, InboundResult};
 use crate::rules::chain_depth::ReentryBudget;
@@ -321,9 +321,6 @@ struct CallFacts {
     /// What a direct injection's trigger is checked for before its hooks
     /// (gap G-069); `None` for a message.
     direct: Option<direct::DirectCall>,
-    /// Where the answers to the call's message or direct injection may go,
-    /// its response visibility (RFC §5.12, gap G-073); `None` for anywhere.
-    answers_within: Option<Visibility>,
     /// The call's bound, its deadline set at its start from
     /// `process_timeout` (RFC §13.6).
     bound: Bound,
@@ -337,7 +334,6 @@ impl CallFacts {
             entry,
             channel_id: None,
             direct: None,
-            answers_within: None,
             bound: Bound::Unbounded,
         }
     }

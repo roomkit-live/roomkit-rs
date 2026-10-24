@@ -61,9 +61,11 @@ pub(super) enum PassOrigin {
     Adopted(EntryId),
     /// A channel's response, re-entering (RFC §10.1 step 14).
     Response {
-        /// Where the answers of the message its cascade derives from may
-        /// go, which binds what answers the response too, at any depth
-        /// (RFC §5.12, gap G-073); `None` for anywhere.
+        /// Where the answers to the event it answers may go, the scope it
+        /// was stamped within, which its visibility is narrowed back to
+        /// once its hooks are over (RFC §8.5, gap G-073); `None` for
+        /// anywhere. What answers the response goes where its own
+        /// `response_visibility` says.
         answers_within: Option<Visibility>,
     },
     /// An event a hook injected, delivered to its targets only (gap G-021).

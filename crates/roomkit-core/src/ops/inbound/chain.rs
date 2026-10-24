@@ -74,7 +74,11 @@ impl HookRun {
         let request = HookRequest::RunHook {
             hook,
             trigger: HookTrigger::BeforeBroadcast,
-            event: Box::new(stamp::keep_identity(original, self.chain.payload().clone())),
+            event: Box::new(stamp::keep_identity(
+                original,
+                self.chain.payload().clone(),
+                &context.bindings,
+            )),
             context: Box::new(context.clone()),
             timeout,
         };

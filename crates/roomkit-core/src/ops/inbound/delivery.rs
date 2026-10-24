@@ -136,9 +136,6 @@ pub(super) struct DeliverySet {
     /// The reentry budget of the cascade that delivers, which the calls its
     /// targets make into a room draw on (gap G-070).
     budget: ReentryBudget,
-    /// Where the answers to its event may go: the response visibility of
-    /// the message it came from (RFC §5.12, gap G-073); `None` for anywhere.
-    answers_within: Option<Visibility>,
     calls: BTreeMap<EffectId, (usize, Call)>,
     outcome: SetOutcome,
 }
@@ -168,19 +165,8 @@ impl DeliverySet {
             targets,
             place: if placed { Place::Taken } else { Place::Missing },
             budget,
-            answers_within: None,
             calls: BTreeMap::new(),
             outcome,
-        }
-    }
-
-    /// The same set, whose event's answers may go to `within`, the
-    /// response visibility of the message it came from (RFC §5.12, gap
-    /// G-073); `None` for anywhere.
-    pub(super) fn answering_within(self, within: Option<Visibility>) -> Self {
-        Self {
-            answers_within: within,
-            ..self
         }
     }
 
@@ -212,9 +198,11 @@ impl DeliverySet {
         self.kind
     }
 
-    /// Where the answers to its event may go; `None` for anywhere.
+    /// Where the answers to its event may go: the event's
+    /// `response_visibility` as committed (RFC §5.2, §8.5, gap G-073);
+    /// `None` for anywhere.
     pub(super) fn answers_within(&self) -> Option<&Visibility> {
-        self.answers_within.as_ref()
+        self.event.response_visibility.as_ref()
     }
 
     /// Waits for the set's turn in the room's lane, with no deadline: what
@@ -425,7 +413,7 @@ impl DeliverySet {
         };
         let id = cx.env.new_event_id();
         let now = cx.env.now();
-        let within = self.answers_within.as_ref();
+        let within = self.event.response_visibility.as_ref();
         let payload = stamp::error_event(id, &target.binding, &self.event, within, error, now);
         cx.fire_observers(HookTrigger::OnError, &payload, &target.context);
         if self.outcome.error.is_none() {

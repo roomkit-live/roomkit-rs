@@ -1606,6 +1606,135 @@ mod a_response_visibility {
         );
     }
 
+    /// The stored `response_visibility` of the event that says `text`;
+    /// `None` when it restricts nothing.
+    fn scope_of(sim: &Sim, text: &str) -> Option<String> {
+        saying(sim, text)
+            .and_then(|event| event.response_visibility.as_ref())
+            .map(ToString::to_string)
+    }
+
+    /// An agent that answers the customer's `text` with `Re: text`, visible
+    /// to all, its own answers' scope `scope`.
+    fn answering_within(scope: Option<&'static str>) -> OnEvent {
+        Box::new(move |event, _| {
+            if event.source.channel_id.as_str() != "sms" {
+                return Ok(ChannelOutput::default());
+            }
+            let text = format!("Re: {}", text_of(&event.content));
+            let mut answer = response("ai", event, &text);
+            answer.response_visibility = scope.map(|scope| scope.parse().unwrap());
+            Ok(ChannelOutput::respond(vec![answer]))
+        })
+    }
+
+    /// A `writer` agent that answers `ai`'s answers with `Noted`.
+    fn noting(sim: &mut Sim) {
+        sim.agent(
+            "writer",
+            Box::new(|event, _| {
+                if event.source.channel_id.as_str() != "ai" {
+                    return Ok(ChannelOutput::default());
+                }
+                Ok(respond("writer", event, "Noted"))
+            }),
+        );
+    }
+
+    /// A hook that writes `scope` as the `response_visibility` of the
+    /// customer's message.
+    fn rescoping(sim: &mut Sim, scope: Option<Visibility>) {
+        sim.before_broadcast(
+            "rescope",
+            Box::new(move |event| {
+                if event.source.channel_id.as_str() != "sms" {
+                    return HookOutcome::Returned(HookResult::allow());
+                }
+                let mut rescoped = event.clone();
+                rescoped.response_visibility.clone_from(&scope);
+                HookOutcome::Returned(HookResult::modify(rescoped))
+            }),
+        );
+    }
+
+    /// RFC §5.2: the scope is a field of the event, stored with it.
+    #[test]
+    fn is_stored_on_the_message_s_event() {
+        let mut sim = room_with(answering_as("all"));
+        sim.send(answered_within("Hello", "ws_advisor")).unwrap();
+        assert_eq!(scope_of(&sim, "Hello"), Some("ws_advisor".to_owned()));
+    }
+
+    /// RFC §8.5: each response carries the scope it answers within,
+    /// intersected with any its channel gave it.
+    #[test]
+    fn is_carried_by_each_response_within_its_channel_s() {
+        let cases = [
+            (None, "writer,ws_advisor"),
+            (Some("writer"), "writer"),
+            (Some("sms"), "none"),
+        ];
+        for (given, carried) in cases {
+            let mut sim = room_with(answering_within(given));
+            noting(&mut sim);
+            sim.send(answered_within("Hello", "ws_advisor,writer"))
+                .unwrap();
+            assert_eq!(
+                scope_of(&sim, "Re: Hello"),
+                Some(carried.to_owned()),
+                "a response its channel scoped {given:?}"
+            );
+        }
+    }
+
+    /// RFC §8.5: what answers a response stays within the scope the
+    /// response carries, its channel's included, though its message
+    /// restricted nothing.
+    #[test]
+    fn binds_the_answers_to_a_response_its_channel_scoped() {
+        let mut sim = room_with(answering_within(Some("ws_advisor")));
+        noting(&mut sim);
+        sim.send(Sim::message("sms", "Hello")).unwrap();
+        assert_eq!(
+            (stored(&sim, "Re: Hello"), stored(&sim, "Noted")),
+            (Some("all".to_owned()), Some("ws_advisor".to_owned()))
+        );
+    }
+
+    /// RFC §9.4: a hook may narrow where the answers go, and the answers
+    /// follow.
+    #[test]
+    fn narrowed_by_a_hook_binds_the_answers() {
+        let mut sim = room_with(answering_as("all"));
+        rescoping(&mut sim, Some("ws_advisor".parse().unwrap()));
+        sim.send(Sim::message("sms", "Hello")).unwrap();
+        assert_eq!(
+            (scope_of(&sim, "Hello"), stored(&sim, "Re: Hello")),
+            (Some("ws_advisor".to_owned()), Some("ws_advisor".to_owned()))
+        );
+    }
+
+    /// RFC §9.4: a hook can neither widen nor clear it, and `internal`
+    /// from a hook reads `none`.
+    #[test]
+    fn written_by_a_hook_never_widens_nor_clears() {
+        let cases = [
+            (Some(Visibility::All), "ws_advisor", "ws_advisor"),
+            (None, "ws_advisor", "ws_advisor"),
+            (Some(Visibility::Internal), "none", "none"),
+        ];
+        for (written, kept, answered) in cases {
+            let mut sim = room_with(answering_as("all"));
+            rescoping(&mut sim, written.clone());
+            sim.send(answered_within("Hello", "ws_advisor")).unwrap();
+            assert_eq!(
+                (scope_of(&sim, "Hello"), stored(&sim, "Re: Hello")),
+                (Some(kept.to_owned()), Some(answered.to_owned())),
+                "a hook writing {written:?}"
+            );
+        }
+    }
+
     /// RFC §9.2: the payload of `ON_ERROR` is visible where the trigger's
     /// answers may go.
     #[test]

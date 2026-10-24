@@ -45,9 +45,6 @@ impl Machine {
         message: InboundMessage,
     ) {
         self.call.channel_id = Some(message.channel_id.clone());
-        self.call
-            .answers_within
-            .clone_from(&message.response_visibility);
         let budget = self.cascade.drawn_on();
         let (channel, message) = match arrival::admit(cx.config, message, budget) {
             Ok(Admitted::Message { channel, message }) => (*channel, *message),

@@ -82,6 +82,7 @@ fn full_event() -> RoomEvent {
     event.blocked_by = None;
     event.visibility = Visibility::channels([channel("ws_advisor")]).unwrap();
     event.addressed_to = Some(vec![channel("ai")]);
+    event.response_visibility = Some(Visibility::Transport);
     event.index = 4;
     event.chain_depth = 1;
     event.parent_event_id = Some(EventId::new("evt_0").unwrap());
@@ -124,6 +125,7 @@ fn full_event_form() -> Value {
         "blocked_by": null,
         "visibility": "ws_advisor",
         "addressed_to": ["ai"],
+        "response_visibility": "transport",
         "index": 4,
         "chain_depth": 1,
         "parent_event_id": "evt_0",

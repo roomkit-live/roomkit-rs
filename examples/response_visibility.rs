@@ -5,12 +5,15 @@
 //! when both include it, and the framework stores that intersection on the
 //! event when it commits it. A message also says where its answers may go,
 //! its `response_visibility`: each answer keeps the visibility its channel
-//! gave it within that one, and is never shown wider.
+//! gave it within that one, and is never shown wider. The answer carries
+//! that scope as its own `response_visibility`, stored with it (RFC §5.2,
+//! §8.5), so what answers the answer stays within it too.
 //!
 //! - A question typed on the screen carries `intelligence`: the assistant
 //!   reads it, the call never speaks it. It asks for its answers on the
 //!   screen: the assistant's answer, which it writes for everyone, is
-//!   stored visible to the screen alone, shown and never spoken.
+//!   stored visible to the screen alone, shown and never spoken, and
+//!   carries the screen as where its own answers may go.
 //! - A spoken question restricts neither who sees it nor where its answers
 //!   go: its answer reaches the call and the screen.
 //! - The supervisor's binding is visible to `transport`: what they write
@@ -167,15 +170,24 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let (heard, shown) = (call.texts(), screen.texts());
     println!("Spoken on the call: {heard:?}");
     println!("Shown on the screen: {shown:?}");
-    let stored = |text: &str| {
+    let stored_event = |text: &str| {
         timeline
             .iter()
             .find(|event| text_of(&event.content) == text)
-            .map(|event| event.visibility.to_string())
+    };
+    let stored = |text: &str| stored_event(text).map(|event| event.visibility.to_string());
+    let carried = |text: &str| {
+        stored_event(text)
+            .and_then(|event| event.response_visibility.as_ref())
+            .map(ToString::to_string)
     };
     let (spoken_answer, typed_answer) = (
         format!("Answer to {spoken:?}"),
         format!("Answer to {typed:?}"),
+    );
+    println!(
+        "The typed question's answer is stored with its answers to {}.",
+        carried(&typed_answer).as_deref().unwrap_or("anywhere")
     );
 
     let mut checks = Checks::default();
@@ -192,6 +204,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         stored(&typed_answer).as_deref() == Some("screen")
             && shown.contains(&typed_answer)
             && !heard.contains(&typed_answer),
+    );
+    checks.expect(
+        "that answer carries the question's response visibility, so what answers it stays on the screen",
+        carried(&typed_answer).as_deref() == Some("screen") && carried(&spoken_answer).is_none(),
     );
     checks.expect(
         "the supervisor's question reaches the call and the screen, and the assistant never reads it",

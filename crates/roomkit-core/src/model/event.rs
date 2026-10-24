@@ -222,6 +222,13 @@ pub struct RoomEvent {
     /// (RFC §19.3).
     #[serde(default)]
     pub addressed_to: Option<Vec<ChannelId>>,
+    /// Where the answers to it may go, at any depth of its cascade (RFC
+    /// §5.2, §5.12, §8.5); `None` restricts nothing. A response carries the
+    /// scope it was answered within, intersected with any its channel gave
+    /// it, and a hook's modify may narrow it, never widen or clear it (RFC
+    /// §9.4, gap G-073).
+    #[serde(default)]
+    pub response_visibility: Option<Visibility>,
     /// Its position in the room's timeline, assigned at commit.
     #[serde(default)]
     pub index: u64,
@@ -279,6 +286,7 @@ impl RoomEvent {
             blocked_by: None,
             visibility: Visibility::All,
             addressed_to: None,
+            response_visibility: None,
             index: 0,
             chain_depth: 0,
             parent_event_id: None,

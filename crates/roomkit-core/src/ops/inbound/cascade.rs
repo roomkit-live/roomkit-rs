@@ -16,9 +16,7 @@ use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
 use super::queues::Delivery;
 use super::record::{RecordPass, RecordReport, RecordResult};
 use super::{InboundError, InboundResult, Machine, instructions, report, stamp};
-use crate::model::{
-    ChannelCategory, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId, Visibility,
-};
+use crate::model::{ChannelCategory, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId};
 use crate::ops::{Abort, Cx};
 use crate::rules::chain_depth;
 
@@ -108,14 +106,7 @@ impl Machine {
             );
             self.trigger.settle(entry_result(&report.result), decided);
         }
-        // The scope a message gives its answers binds every pass of its
-        // cascade, the responses to its responses included (gap G-073).
-        let answers_within = match origin {
-            PassOrigin::Trigger => self.call.answers_within.clone(),
-            PassOrigin::Response { answers_within } => answers_within.clone(),
-            PassOrigin::Adopted(_) | PassOrigin::Injected { .. } => None,
-        };
-        self.add_to_cascade(cx, report, origin, answers_within);
+        self.add_to_cascade(cx, report, origin);
         if trigger {
             let decided = Ok(self.trigger.result.clone());
             self.publish(cx, &decided);
@@ -125,15 +116,15 @@ impl Machine {
     /// What every pass adds to the cascade, whichever cascade it belongs
     /// to: its tasks and observations, its delivery set, and the events its
     /// hooks injected, which follow the set or, for a record stored blocked,
-    /// which has none, are queued at once. The answers to an entry's event
-    /// may go to `answers_within`, its message's response visibility (RFC
-    /// §5.12, gap G-073).
+    /// which has none, are queued at once. The answers to the event may go
+    /// where its `response_visibility` says, which binds every pass of its
+    /// cascade, the responses to its responses included (RFC §8.5, gap
+    /// G-073).
     pub(super) fn add_to_cascade(
         &mut self,
         cx: &mut Cx<'_>,
         report: PassReport,
         origin: &PassOrigin,
-        answers_within: Option<Visibility>,
     ) {
         let context = match &report.result {
             PassResult::Delivered { context, .. } | PassResult::Blocked { context, .. } => {
@@ -176,8 +167,7 @@ impl Machine {
             PassOrigin::Injected { .. } => SetKind::Injected,
         };
         let budget = self.cascade.budget.clone();
-        let set = DeliverySet::new(kind, *event, plan, context, report.placed, budget)
-            .answering_within(answers_within);
+        let set = DeliverySet::new(kind, *event, plan, context, report.placed, budget);
         self.cascade.queue_set(Delivery {
             set: Box::new(set),
             then: injected,
@@ -307,10 +297,11 @@ impl Machine {
     }
 
     /// Queues one channel's responses to the event `set` delivered: each
-    /// re-enters as a pass, within where the answers of the message the
-    /// cascade derives from may go, which binds what answers it too (gap
-    /// G-073), unless the room refuses it first (RFC §8.3). An instruction
-    /// does not re-enter (gap G-066).
+    /// re-enters as a pass, within where the answers to that event may go,
+    /// which the response carries as its own `response_visibility`, so that
+    /// it binds what answers it too (RFC §8.5, gap G-073), unless the room
+    /// refuses it first (RFC §8.3). An instruction does not re-enter (gap
+    /// G-066).
     fn queue_response(&mut self, cx: &mut Cx<'_>, response: Response, set: &DeliverySet) {
         let Response { responder, events } = response;
         let trigger = set.event();

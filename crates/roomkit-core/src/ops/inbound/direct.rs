@@ -181,9 +181,6 @@ impl Machine {
     ) {
         self.call.channel_id = Some(event.channel_id.clone());
         self.call.room_id = Some(room_id.clone());
-        self.call
-            .answers_within
-            .clone_from(&event.response_visibility);
         let call = DirectCall { organization_id };
         self.call.direct = Some(call.clone());
         let event = match admit(cx, room_id, event) {

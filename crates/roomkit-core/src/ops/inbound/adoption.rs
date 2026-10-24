@@ -48,7 +48,7 @@ use super::direct::{self, DirectCall};
 use super::pass::{CommitPass, PassOrigin, PassReport};
 use super::record::{RecordPass, RecordReport};
 use super::{InboundError, InboundResult, Machine, result};
-use crate::model::{InboundMessage, RoomEvent, RoomId, Visibility};
+use crate::model::{InboundMessage, RoomEvent, RoomId};
 use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
@@ -81,10 +81,6 @@ struct Adopted {
     /// Whether the entry is a direct injection, whose refusal before its
     /// commit is an error (RFC §10.5).
     direct: bool,
-    /// Where the answers to the entry's message may go, its response
-    /// visibility (RFC §5.12, gap G-073); `None` for anywhere, and for a
-    /// direct injection.
-    answers_within: Option<Visibility>,
 }
 
 /// One adopted entry at work.
@@ -248,17 +244,12 @@ impl Machine {
         }
         let nested = nested.then(|| room_id.clone());
         let id = self.adopted.next_id();
-        let answers_within = match &entry {
-            Entry::Message { message, .. } => message.response_visibility.clone(),
-            Entry::Direct { event, .. } => event.response_visibility.clone(),
-        };
         let adopted = Adopted {
             id,
             room_id: entry.room_id().clone(),
             origin,
             nested,
             direct: matches!(entry, Entry::Direct { .. }),
-            answers_within,
         };
         self.adopted.adopted.push((adopted, Box::new(entry)));
         Ok(id)
@@ -398,8 +389,7 @@ impl Machine {
         let mut result = entry_result(&report.result);
         result.error = report.release_error.take();
         self.settle_entry(cx, adopted, Ok(result));
-        let answers_within = adopted.answers_within.clone();
-        self.add_to_cascade(cx, report, &PassOrigin::Adopted(adopted.id), answers_within);
+        self.add_to_cascade(cx, report, &PassOrigin::Adopted(adopted.id));
     }
 
     /// The entry was stored blocked past its caller's reentry budget, or

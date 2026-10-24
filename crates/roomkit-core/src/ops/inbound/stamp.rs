@@ -52,8 +52,9 @@ pub fn default_inbound_event(
 
 /// Writes the pipeline's fields on the event a channel parsed from
 /// `message`: the id the pipeline gives it (RFC §8.1), the type, depth,
-/// visibility, address, thread and idempotency key the message asked for,
-/// and the receiving channel as its inbound source. An instruction is
+/// visibility, address, response scope (gap G-073), thread and idempotency
+/// key the message asked for, and the receiving channel as its inbound
+/// source. An instruction is
 /// visible to intelligence channels only, and carries the caller's
 /// metadata and its `standalone` word (RFC §10.1.1 rules 3 and 4). No
 /// trigger carries the key a response to an instruction records, whoever
@@ -69,6 +70,9 @@ pub(crate) fn stamp_trigger(
     event.chain_depth = message.chain_depth;
     event.visibility = message.visibility.clone();
     event.addressed_to.clone_from(&message.addressed_to);
+    event
+        .response_visibility
+        .clone_from(&message.response_visibility);
     event.parent_event_id.clone_from(&message.parent_event_id);
     event.idempotency_key.clone_from(&message.idempotency_key);
     event.responds_to = None;
@@ -110,6 +114,7 @@ pub(crate) fn stamp_direct(
     event.chain_depth = direct.chain_depth;
     event.visibility = direct.visibility;
     event.addressed_to = direct.addressed_to;
+    event.response_visibility = direct.response_visibility;
     event.parent_event_id = direct.parent_event_id;
     event.idempotency_key = direct.idempotency_key;
     event.metadata.clone_from(&direct.metadata);
@@ -176,13 +181,15 @@ pub(crate) fn stamp_response(
     reset_commit_fields(response)
 }
 
-/// Narrows `response`, an answer to a message whose answers may go to
-/// `within`, its `response_visibility` (RFC §5.12, gap G-073): the response
-/// keeps what its channel gave it within `within`, a listed channel's
-/// category read from the room's `bindings`, and is never wider than
-/// either. A message that restricted nothing, and any other trigger, leave
-/// it as its channel gave it. Its commit narrows it once more, to its
-/// source binding's (RFC §7.3).
+/// Narrows `response`, an answer to an event whose answers may go to
+/// `within`, that event's `response_visibility` (RFC §5.12, §8.5, gap
+/// G-073): the response keeps what its channel gave it within `within`, a
+/// listed channel's category read from the room's `bindings`, and is never
+/// wider than either; and it carries `within` as its own
+/// `response_visibility`, intersected with any its channel gave it, so that
+/// what answers it stays within both. An event that restricted nothing
+/// leaves it as its channel gave it. Its commit narrows its visibility once
+/// more, to its source binding's (RFC §7.3).
 pub(crate) fn answer_within(
     mut response: RoomEvent,
     within: Option<&Visibility>,
@@ -192,6 +199,8 @@ pub(crate) fn answer_within(
         response.visibility =
             permissions::answer_visibility(&response.visibility, within, bindings);
     }
+    response.response_visibility =
+        permissions::narrower_scope(response.response_visibility.as_ref(), within, bindings);
     response
 }
 
@@ -218,7 +227,8 @@ fn without_internal(response: &mut RoomEvent, responder: &ChannelBinding) {
 /// on `trigger` (gap G-021): a fresh id (gap G-024), the trigger's room and
 /// depth, and a visibility naming its targets only, `none` when it is stored
 /// only, which its commit narrows to the targets the room binds (gap
-/// G-031). It records no instruction (gap G-065).
+/// G-031). It records no instruction (gap G-065). It keeps the response
+/// scope the hook gave it, `internal` read as `none` (gap G-073).
 pub(crate) fn stamp_injected(
     injected: InjectedEvent,
     trigger: &RoomEvent,
@@ -232,6 +242,8 @@ pub(crate) fn stamp_injected(
         .target_channel_ids
         .and_then(|targets| Visibility::channels(targets).ok())
         .unwrap_or(Visibility::None);
+    event.response_visibility =
+        permissions::narrower_scope(event.response_visibility.as_ref(), None, &[]);
     event.idempotency_key = None;
     instructions::clear_fingerprint(&mut event);
     reset_commit_fields(event)
@@ -246,9 +258,22 @@ pub(crate) fn stamp_injected(
 /// the fingerprint a response to one records and no other event holds (RFC
 /// §10.1.1, gaps G-020 and G-065). Nor may it write the visibility
 /// `internal`, which only the framework writes, nor change it on an event
-/// the framework marked so (gap G-041).
-pub(crate) fn keep_identity(original: &RoomEvent, mut modified: RoomEvent) -> RoomEvent {
+/// the framework marked so (gap G-041). It may narrow where the event's
+/// answers go, never widen or clear it: the event keeps the intersection of
+/// the original's `response_visibility` and the hook's, a listed channel's
+/// category read from `bindings`, the room's as the hooks' context holds
+/// them (RFC §9.4, gap G-073).
+pub(crate) fn keep_identity(
+    original: &RoomEvent,
+    mut modified: RoomEvent,
+    bindings: &[ChannelBinding],
+) -> RoomEvent {
     modified.content = kept_change(&original.content, modified.content);
+    modified.response_visibility = permissions::narrower_scope(
+        original.response_visibility.as_ref(),
+        modified.response_visibility.as_ref(),
+        bindings,
+    );
     instructions::keep_checked(original, &mut modified);
     if modified.visibility == Visibility::Internal || original.visibility == Visibility::Internal {
         // Only the framework writes `internal`, on its own records, and only
@@ -640,7 +665,7 @@ mod tests {
         let mut modified = trigger();
         modified.source.channel_id = ChannelId::new("ws_admin").unwrap();
         modified.content = EventContent::text("[redacted]");
-        let kept = keep_identity(&trigger(), modified);
+        let kept = keep_identity(&trigger(), modified, &[]);
         assert_eq!(
             (kept.source.channel_id.as_str(), kept.content),
             ("sms", EventContent::text("[redacted]"))
@@ -664,7 +689,7 @@ mod tests {
                 visibility,
                 ..internal.clone()
             };
-            keep_identity(&internal, modified).visibility
+            keep_identity(&internal, modified, &[]).visibility
         });
         assert_eq!(
             widened,
@@ -682,7 +707,7 @@ mod tests {
         modified
             .delivery_results
             .insert("sms".to_owned(), "delivered".into());
-        let kept = keep_identity(&trigger(), modified);
+        let kept = keep_identity(&trigger(), modified, &[]);
         assert!(kept.delivery_results.is_empty());
     }
 
@@ -704,6 +729,7 @@ mod tests {
         let kept = keep_identity(
             &edit_of("evt_3", "I need 50000$"),
             edit_of("evt_1", "I need [redacted]"),
+            &[],
         );
         assert_eq!(kept.content, edit_of("evt_3", "I need [redacted]").content);
     }
@@ -714,7 +740,7 @@ mod tests {
         if let EventContent::Edit(edit) = &mut system.content {
             edit.edit_source = Some(crate::model::EditSource::System);
         }
-        let kept = keep_identity(&edit_of("evt_3", "x"), system);
+        let kept = keep_identity(&edit_of("evt_3", "x"), system, &[]);
         assert_eq!(kept.content, edit_of("evt_3", "x").content);
     }
 
@@ -733,6 +759,7 @@ mod tests {
         let kept = keep_identity(
             &delete("evt_3", crate::model::DeleteType::Sender, None),
             delete("evt_1", crate::model::DeleteType::Admin, Some("spam")),
+            &[],
         );
         assert_eq!(
             kept.content,
@@ -746,7 +773,7 @@ mod tests {
     fn a_text_in_place_of_an_edit_is_the_edit_s_new_content() {
         let mut text = edit_of("evt_1", "x");
         text.content = EventContent::text("[redacted]");
-        let kept = keep_identity(&edit_of("evt_3", "x"), text);
+        let kept = keep_identity(&edit_of("evt_3", "x"), text, &[]);
         assert_eq!(kept.content, edit_of("evt_3", "[redacted]").content);
     }
 
@@ -776,7 +803,7 @@ mod tests {
             event.content = original.clone();
             let mut modified = trigger();
             modified.content = replacement;
-            let kept = keep_identity(&event, modified);
+            let kept = keep_identity(&event, modified, &[]);
             assert_eq!(kept.content, original);
         }
     }
@@ -791,7 +818,7 @@ mod tests {
                 reason: None,
             });
         }
-        let kept = keep_identity(&edit_of("evt_3", "x"), nested);
+        let kept = keep_identity(&edit_of("evt_3", "x"), nested, &[]);
         assert_eq!(kept.content, edit_of("evt_3", "x").content);
     }
 
@@ -805,7 +832,7 @@ mod tests {
             ])
             .unwrap(),
         );
-        let kept = keep_identity(&trigger(), smuggled);
+        let kept = keep_identity(&trigger(), smuggled, &[]);
         assert_eq!(kept.content, trigger().content);
     }
 
@@ -813,7 +840,7 @@ mod tests {
     fn a_replacement_never_turns_a_message_into_an_edit() {
         let mut smuggled = trigger();
         smuggled.content = edit_of("evt_3", "x").content;
-        let kept = keep_identity(&trigger(), smuggled);
+        let kept = keep_identity(&trigger(), smuggled, &[]);
         assert_eq!(kept.content, trigger().content);
     }
 
@@ -821,7 +848,7 @@ mod tests {
     fn a_modified_payload_keeps_its_new_address() {
         let mut modified = trigger();
         modified.addressed_to = Some(vec![ChannelId::new("billing").unwrap()]);
-        let kept = keep_identity(&trigger(), modified.clone());
+        let kept = keep_identity(&trigger(), modified.clone(), &[]);
         assert_eq!(kept.addressed_to, modified.addressed_to);
     }
 }

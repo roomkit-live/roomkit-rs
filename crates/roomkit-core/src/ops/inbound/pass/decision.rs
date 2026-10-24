@@ -57,8 +57,8 @@ impl CommitPass {
                 context,
             };
         }
-        let unchanged = if run.asked() { None } else { Some(context) };
-        self.conclude_chain(cx, run.into_chain().finish(), unchanged)
+        let asked = run.asked();
+        self.conclude_chain(cx, run.into_chain().finish(), context, asked)
     }
 
     pub(super) fn on_hook(
@@ -73,19 +73,22 @@ impl CommitPass {
     }
 
     /// The chain is over: its side effects are kept, and the room is read
-    /// again before its decision applies when a hook ran under the lock
-    /// (gap G-070); `unchanged` is the room as the gate read it otherwise.
+    /// again before its decision applies when a hook ran under the lock,
+    /// `asked` (gap G-070); `context`, the room the hooks were handed, is as
+    /// the gate read it otherwise.
     fn conclude_chain(
         &mut self,
         cx: &mut Cx<'_>,
         verdict: ChainVerdict<RoomEvent>,
-        unchanged: Option<Box<RoomContext>>,
+        context: Box<RoomContext>,
+        asked: bool,
     ) -> State {
         super::super::report::hook_incidents(cx, &self.event, &verdict.incidents);
         self.injected_events.extend(verdict.injected_events);
         self.tasks.extend(verdict.tasks);
         self.observations.extend(verdict.observations);
-        let payload = stamp::keep_identity(&self.event, verdict.payload);
+        let payload = stamp::keep_identity(&self.event, verdict.payload, &context.bindings);
+        let unchanged = (!asked).then_some(context);
         let blocked = match verdict.decision {
             ChainDecision::Blocked { by, reason } => Some((by, reason)),
             ChainDecision::Allowed => None,

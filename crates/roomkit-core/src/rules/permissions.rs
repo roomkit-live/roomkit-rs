@@ -172,6 +172,35 @@ pub fn answer_visibility(
     given.intersect(within, category_in(bindings))
 }
 
+/// Where the answers to an event may go within both `first` and `second`,
+/// two of its scopes (RFC §5.12, §7.3, §9.4, gap G-073): their
+/// intersection, a listed channel's category read from the room's
+/// `bindings`; `None`, no restriction, on either side giving the other's.
+/// `internal`, which only the framework writes, reads `none` on either
+/// side, so that a scope never carries it: so a response carries its
+/// cascade's scope within its channel's, and a hook's modify narrows an
+/// event's, never widening or clearing it.
+pub fn narrower_scope(
+    first: Option<&Visibility>,
+    second: Option<&Visibility>,
+    bindings: &[ChannelBinding],
+) -> Option<Visibility> {
+    match (first.map(as_scope), second.map(as_scope)) {
+        (None, None) => None,
+        (Some(scope), None) | (None, Some(scope)) => Some(scope),
+        (Some(first), Some(second)) => Some(first.intersect(&second, category_in(bindings))),
+    }
+}
+
+/// `scope` as a response scope holds it: `internal` reads `none`.
+fn as_scope(scope: &Visibility) -> Visibility {
+    if *scope == Visibility::Internal {
+        Visibility::None
+    } else {
+        scope.clone()
+    }
+}
+
 /// The category of a channel the room binds among `bindings`, which a
 /// category intersected with a list reads (RFC §7.3).
 fn category_in(
