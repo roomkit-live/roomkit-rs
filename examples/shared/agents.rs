@@ -8,7 +8,7 @@ use roomkit::model::{
     ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType, RoomContext,
     RoomEvent,
 };
-use roomkit::{Channel, ChannelDeclaration, ChannelError, text_of};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, text_of, turn_context};
 
 use crate::Log;
 
@@ -17,7 +17,10 @@ pub type Script = &'static [(&'static str, &'static str)];
 
 /// An intelligence channel standing in for a model: at each turn it answers
 /// the text it reads with the script's line for it, and stays silent on any
-/// other text. It keeps what each turn read. Cloning it shares what it kept.
+/// other text. It keeps what each turn read: the history it is handed, none
+/// of it for a standalone instruction, which the turn reads nothing of the
+/// room for (RFC §10.1.1 rule 7, `turn_context`). Cloning it shares what it
+/// kept.
 #[derive(Clone, Debug)]
 pub struct ScriptedAgent {
     declaration: ChannelDeclaration,
@@ -116,7 +119,7 @@ impl Channel for ScriptedAgent {
             Some(answer) => ChannelOutput::respond(vec![answer]),
             None => ChannelOutput::default(),
         };
-        let history = context
+        let history = turn_context(&event, context)
             .recent_events
             .iter()
             .map(|event| text_of(&event.content))

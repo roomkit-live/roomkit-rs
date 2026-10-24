@@ -59,6 +59,7 @@ pub use roomkit_core::rules::edits::{is_deleted, is_edited};
 pub use roomkit_core::rules::hook_registry::{
     HookExecution, HookFilter, HookId, HookSpec, HookTrigger, RegistrationError,
 };
+pub use roomkit_core::rules::instructions::turn_context;
 pub use roomkit_core::rules::lifecycle::Transition;
 pub use roomkit_core::rules::routing::{Candidate, RouteQuery, Sender, route as default_route};
 pub use roomkit_core::rules::transcoding::text_of;

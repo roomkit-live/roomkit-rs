@@ -17,7 +17,9 @@
 //! - its commit writes nothing: blocked, it emits `event_blocked`; allowed,
 //!   it is planned and the lock released, no index consumed and no counter
 //!   moved (`commit`);
-//! - a standalone instruction's turn is handed no history (`delivery`);
+//! - a standalone instruction's targets are handed the room's context as
+//!   for any event, the turn reading none of it (`delivery`,
+//!   `rules::instructions::turn_context`);
 //! - every response it produces records its fingerprint (`stamp`).
 
 use super::{InboundError, InboundResult};

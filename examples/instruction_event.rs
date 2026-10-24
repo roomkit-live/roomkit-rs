@@ -6,7 +6,8 @@
 //! the room's other agent, and is never stored: the room keeps the answer,
 //! with the instruction's fingerprint, never its text. A `standalone`
 //! instruction opens a turn that reads nothing of the room, for a pass that
-//! must start from a blank page.
+//! must start from a blank page: the pipeline hands the agent the room as
+//! for any event, and the turn leaves it unread (`turn_context`).
 //!
 //! ```sh
 //! cargo run --example instruction_event

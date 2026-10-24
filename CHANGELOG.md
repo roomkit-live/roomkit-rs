@@ -102,7 +102,9 @@ as it stands.
   `room_refused_event` (gap G-043), and step 15 stores the cascade's side
   effects and applies the room metadata updates channels return (gap
   G-049). An `INSTRUCTION` is decided without being stored, delivered to
-  the agents it names and fingerprinted on every response (gaps G-042,
+  the agents it names, each handed the room's context, which a standalone
+  instruction's turn reads none of (`turn_context`, re-exported by
+  `roomkit`), and fingerprinted on every response (gaps G-042,
   G-065, G-066). Only the framework writes the visibility `internal`: a
   message carrying it, for itself or for its answers, is refused (gaps
   G-041, G-073), a response carrying it is committed with

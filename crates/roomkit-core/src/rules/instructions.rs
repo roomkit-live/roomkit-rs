@@ -158,7 +158,9 @@ fn keep_fingerprint(original: &RoomEvent, modified: &mut RoomEvent) {
 /// The context of the turn `event` opens: `context` as the reader may see
 /// it, without any history when `event` is an instruction that stands
 /// alone (RFC §10.1.1 rule 7). The room, its bindings and its participants
-/// stay: they are not the room's past.
+/// stay: they are not the room's past. The pipeline hands every target the
+/// context whole; reading none of it is the turn's duty, which a channel
+/// applies with this rule to what it is handed.
 pub fn turn_context(event: &RoomEvent, context: RoomContext) -> RoomContext {
     if !is_standalone(event) {
         return context;

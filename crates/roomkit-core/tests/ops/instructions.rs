@@ -930,15 +930,20 @@ mod a_standalone_instruction {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// RFC §10.1.1 rule 7: the pipeline empties nothing it hands the
+    /// targets; reading none of the room is the turn's duty.
     #[test]
-    fn s_turn_is_handed_no_history() {
+    fn s_targets_are_handed_the_room_s_context() {
         let mut sim = with_agent();
         let mut message = instruction_to(&["ai"], "Summarize the call.");
         message.standalone = true;
         sim.send(message).unwrap();
         assert_eq!(
             (asked_about(&sim, "evt_2"), sim.history_seen_by("ai")),
-            (vec!["ai".to_owned()], Vec::<String>::new())
+            (
+                vec!["ai".to_owned()],
+                vec!["My card was declined".to_owned()]
+            )
         );
     }
 
@@ -1172,6 +1177,70 @@ mod an_instruction_from_inside_the_cascade {
         assert_eq!(
             sim.timeline_lines().last().map(String::as_str),
             Some("#1 ai delivered \"Hello, I am the assistant.\"")
+        );
+    }
+}
+
+/// RFC §10.1.1 rule 5, §10.1 step 9a, gap G-065: an instruction after its
+/// hooks, when a hook ran under the lock.
+mod after_a_locked_hook {
+    use super::*;
+    use crate::support::{Answer, HookChange, Reentry, calling};
+    use pretty_assertions::assert_eq;
+    use roomkit_core::model::DirectEvent;
+    use roomkit_core::ops::Entry;
+
+    /// A locked hook whose code commits an event ahead of the instruction,
+    /// then answers `answer`.
+    fn committing_ahead(sim: &mut Sim, answer: fn() -> HookResult) {
+        sim.reentrant_hook(
+            "notes",
+            true,
+            Reentry {
+                entries: calling(|event| {
+                    (event.event_type == EventType::Instruction).then(|| Entry::Direct {
+                        room_id: room_id(),
+                        organization_id: None,
+                        event: Box::new(DirectEvent::new(
+                            channel("app"),
+                            EventContent::text("Noted"),
+                        )),
+                    })
+                }),
+                answer: Answer::Awaits(Box::new(move |_| HookOutcome::Returned(answer()))),
+            },
+        );
+    }
+
+    /// Allowed or blocked, it carries the index the room's next event
+    /// takes once its hooks are over, step 9a's.
+    #[test]
+    fn carries_the_room_s_next_index_once_its_hooks_are_over() {
+        let blocking: fn() -> HookResult = || HookResult::block("not now");
+        let mut indexes = Vec::new();
+        for answer in [HookResult::allow, blocking] {
+            let mut sim = with_silent_agent();
+            committing_ahead(&mut sim, answer);
+            let result = sim.send(instruction()).unwrap();
+            indexes.push((
+                result.blocked,
+                result.event.map(|event| event.index),
+                sim.room.event_count,
+            ));
+        }
+        assert_eq!(indexes, [(false, Some(2), 2), (true, Some(2), 2)]);
+    }
+
+    /// A room a locked hook closed refuses it as step 6 does: no event.
+    #[test]
+    fn closed_by_the_hook_is_refused_room_closed_with_no_event() {
+        let mut sim = with_silent_agent();
+        hook_seeing(&mut sim, "audit", |_| HookResult::allow());
+        sim.hooks_change = Some(HookChange::CloseRoom);
+        let result = sim.send(instruction()).unwrap();
+        assert_eq!(
+            (result.blocked, result.reason, result.event.is_none()),
+            (true, Some("room_closed".to_owned()), true)
         );
     }
 }
