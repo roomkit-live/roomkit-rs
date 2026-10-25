@@ -525,6 +525,21 @@ fn truthy(value: &Value) -> bool {
     }
 }
 
+/// `metadata`, a direct update's of `stored`, with the record of the
+/// author `stored` was committed with, and none when it was committed with
+/// none: the record is the room's alone, fixed at the commit (RFC §10.1
+/// step 12), so a direct update never writes one (gap G-089).
+pub(crate) fn keep_record(metadata: &mut Metadata, stored: &RoomEvent) {
+    match stored.metadata.get(AUTHOR) {
+        Some(record) => {
+            metadata.insert(AUTHOR.to_owned(), record.clone());
+        }
+        None => {
+            metadata.remove(AUTHOR);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;

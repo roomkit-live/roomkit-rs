@@ -248,7 +248,8 @@ as it stands.
   commit (`RoomUpdates::private_state`), rebuilt from the timeline for a
   room that holds none (`StoreRequest::ListEvents`), merged with one the
   room's metadata still holds. A record stored `BLOCKED` takes none and
-  loses one it came with. The store gains `get_private_state` and
+  loses one it came with, and a direct update that writes an event's
+  metadata keeps the record it was committed with. The store gains `get_private_state` and
   `set_private_state`, whose defaults keep the value in the room's
   metadata; `InMemoryStore` keeps it apart. What reads alike is read over
   Unicode tables generated from roomkit (`scripts/build-unicode-tables.py`).

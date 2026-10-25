@@ -4,9 +4,10 @@
 //! `core/_authors.py`), computed for the same room, sources and names.
 
 use roomkit_core::model::{
-    ChannelType, EventContent, EventDirection, EventSource, EventType, HookResult, Metadata,
-    Participant, ParticipantId, RoomEvent, Timestamp,
+    ChannelType, EventContent, EventDirection, EventSource, EventType, EventUpdates, HookResult,
+    Metadata, Participant, ParticipantId, RoomEvent, Timestamp,
 };
+use roomkit_core::ops::UpdateEvent;
 use roomkit_core::rules::hook_chain::HookOutcome;
 use serde_json::{Value, json};
 
@@ -221,5 +222,41 @@ fn a_record_committed_outside_the_pipeline_carries_its_author() {
             Some(author("Alice", 1, SENDER)),
             Some(register(&json!({ ALICE: format!("{SENDER}:1") })))
         )
+    );
+}
+
+/// RFC §10.1 step 12, gap G-089: the record of an author is fixed at the
+/// commit; a direct update that writes metadata keeps the record the event
+/// was committed with, and never writes one of its own.
+#[test]
+fn a_direct_update_keeps_the_record_the_event_was_committed_with() {
+    let mut sim = Sim::new();
+    sim.transport("sms");
+    let sent = sim.send(named("Alice")).unwrap().event.unwrap();
+    let mut forged = sent.metadata.clone();
+    forged.insert(
+        "author".to_owned(),
+        json!({ "name": "Admin", "rank": 1, "source": OTHER }),
+    );
+    forged.insert("tag".to_owned(), json!("vip"));
+    let updates = EventUpdates {
+        metadata: Some(forged),
+        ..EventUpdates::default()
+    };
+    let update = UpdateEvent::new(
+        sim.shared_config(),
+        room_id(),
+        sent.id.clone(),
+        updates,
+        None,
+    );
+    sim.run(update).unwrap();
+    let stored = sim.timeline.last().unwrap();
+    assert_eq!(
+        (
+            stored.metadata.get("author").cloned(),
+            stored.metadata.get("tag").cloned()
+        ),
+        (Some(author("Alice", 1, SENDER)), Some(json!("vip")))
     );
 }

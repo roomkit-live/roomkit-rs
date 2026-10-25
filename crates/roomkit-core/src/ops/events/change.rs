@@ -163,6 +163,9 @@ impl Update {
         let Some(stored) = stored else {
             return Progress::Done(Ok(None));
         };
+        if let Some(metadata) = &mut self.updates.metadata {
+            authors::keep_record(metadata, &stored);
+        }
         let mut updated = (*stored).clone();
         self.updates.apply(&mut updated);
         if updated == *stored {
