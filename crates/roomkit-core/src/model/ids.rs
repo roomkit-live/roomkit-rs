@@ -149,6 +149,12 @@ impl ChannelId {
     pub fn system() -> Self {
         Self("system".to_owned())
     }
+
+    /// The id of the kit's own host channel, `host`, which a post that
+    /// names no channel speaks from (RFC §10.5).
+    pub fn host() -> Self {
+        Self("host".to_owned())
+    }
 }
 
 impl RoomId {

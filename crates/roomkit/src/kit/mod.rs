@@ -17,6 +17,7 @@ mod background;
 mod events;
 mod inject;
 mod organization;
+mod post;
 mod registry;
 mod rooms;
 mod scope;

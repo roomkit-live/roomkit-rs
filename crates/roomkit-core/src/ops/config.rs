@@ -6,8 +6,8 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::model::{
-    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId, ChannelType,
-    RoomId, Timestamp,
+    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
+    ChannelMediaType, ChannelType, RoomId, Timestamp,
 };
 use crate::rules::addresses::{self, AddressForm, Addressing, CountryCode};
 use crate::rules::chain_depth::DEFAULT_MAX_CHAIN_DEPTH;
@@ -72,6 +72,36 @@ impl ChannelDeclaration {
             recipient_key: addresses::recipient_key(channel_type).map(str::to_owned),
             country_code: None,
             chat_key: addresses::chat_key(channel_type).map(str::to_owned),
+        }
+    }
+
+    /// A host channel named `channel_id` (RFC §10.5, Appendix A.14.1): a
+    /// transport of type `HOST`, `INBOUND`, never delivered to, declaring
+    /// every media type, since a post may carry any content, and no
+    /// recipient.
+    pub fn host(channel_id: ChannelId) -> Self {
+        let declaration = Self::new(
+            channel_id,
+            ChannelType::Host,
+            ChannelCategory::Transport,
+            ChannelDirection::Inbound,
+        );
+        Self {
+            capabilities: ChannelCapabilities {
+                media_types: [
+                    ChannelMediaType::Text,
+                    ChannelMediaType::Rich,
+                    ChannelMediaType::Media,
+                    ChannelMediaType::Audio,
+                    ChannelMediaType::Video,
+                    ChannelMediaType::Location,
+                    ChannelMediaType::Template,
+                ]
+                .into(),
+                ..ChannelCapabilities::default()
+            },
+            provider_name: Some("HostChannel".to_owned()),
+            ..declaration
         }
     }
 

@@ -13,7 +13,7 @@
 //! its delivery.
 
 use super::{InboundError, InboundResult};
-use crate::model::{DirectEvent, InboundMessage, RoomId};
+use crate::model::{DirectEvent, InboundMessage, Post, RoomId};
 
 /// Identifies an adopted entry within its operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -53,13 +53,25 @@ pub enum Entry {
         /// The event.
         event: Box<DirectEvent>,
     },
+    /// `post(room_id, ...)`, the host's own words (RFC §10.5), for a caller
+    /// acting for `organization_id` (RFC §17.2).
+    Post {
+        /// The room the call names.
+        room_id: RoomId,
+        /// The organization the caller acts for.
+        organization_id: Option<String>,
+        /// The post.
+        post: Box<Post>,
+    },
 }
 
 impl Entry {
     /// The room the call names.
     pub fn room_id(&self) -> &RoomId {
         match self {
-            Self::Message { room_id, .. } | Self::Direct { room_id, .. } => room_id,
+            Self::Message { room_id, .. }
+            | Self::Direct { room_id, .. }
+            | Self::Post { room_id, .. } => room_id,
         }
     }
 }

@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
-use crate::model::{ChannelId, DeliveryResult, ErrorRecord, Metadata, RoomEvent, RoomId};
+use crate::model::{
+    ChannelId, DeliveryResult, ErrorRecord, Metadata, ParticipantId, RoomEvent, RoomId,
+};
 
 /// What became of an inbound message (RFC §10.1 `InboundResult`).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -59,6 +61,41 @@ pub enum InboundError {
     /// either (RFC §17.2, gap G-077). Nothing was written.
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
+    /// The message arrived on a host channel, which receives no external
+    /// payload: the host speaks through `post` and `send_event` only (RFC
+    /// §10.1 step 1, §10.5). Nothing was read or written.
+    #[error("channel {0} is a host channel, which receives no external payload")]
+    InboundOnHostChannel(ChannelId),
+    /// `post` speaks from a channel of type `HOST` only: the channel it
+    /// names is of another type, or the id `host` it speaks from by default
+    /// is held by one (RFC §10.5). Nothing was written.
+    #[error("channel {0} is not a host channel: post() speaks from a channel of type HOST")]
+    NotAHostChannel(ChannelId),
+    /// The speaker a post names is no participant of the room its host
+    /// channel reaches, by their id or their identity's (RFC §10.5, §5.5):
+    /// `reached_elsewhere` says whether the id names a participant of the
+    /// room reached through other channels only, or nobody of the room.
+    /// Nothing was written.
+    #[error(
+        "post() speaks as a participant of room {room_id} the host channel {channel_id} reaches, \
+         and {participant_id} {}",
+        if *reached_elsewhere {
+            "names a participant reached through other channels only"
+        } else {
+            "names nobody of the room"
+        }
+    )]
+    ParticipantNotFound {
+        /// The room.
+        room_id: RoomId,
+        /// The speaker the post names.
+        participant_id: ParticipantId,
+        /// The host channel the post speaks from.
+        channel_id: ChannelId,
+        /// Whether the id names a participant reached through other
+        /// channels only.
+        reached_elsewhere: bool,
+    },
     /// The room a message names, or routing finds, belongs to another
     /// organization than the one the caller acts for, or to none: it is not
     /// the caller's (RFC §10.1 step 2, §17.2, gap G-051). Nothing was

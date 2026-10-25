@@ -93,6 +93,10 @@ path = "response_visibility.rs"
 name = "send_event"
 path = "send_event.rs"
 
+[[example]]
+name = "host_post"
+path = "host_post.rs"
+
 # Routing and identities.
 
 [[example]]

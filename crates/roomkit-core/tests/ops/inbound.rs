@@ -2056,6 +2056,19 @@ mod a_refused_operation {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// RFC §10.1 step 1, §10.5: a host channel receives no external
+    /// payload: a message on one is refused before anything is read,
+    /// whether it names its room or is routed.
+    #[test]
+    fn a_message_on_a_host_channel_is_refused_before_any_effect() {
+        let mut sim = room();
+        sim.unbound_transport("host", roomkit_core::model::ChannelType::Host);
+        let named = sim.send(Sim::message("host", "Bonjour"));
+        let routed = sim.route(None, Sim::message("host", "Bonjour"));
+        let refused = || Err(InboundError::InboundOnHostChannel(channel("host")));
+        assert_eq!((named, routed, sim.trace.len()), (refused(), refused(), 0));
+    }
+
     #[test]
     fn an_unregistered_channel_fails_before_any_effect() {
         let mut sim = room();

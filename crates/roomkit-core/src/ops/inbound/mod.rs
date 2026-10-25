@@ -68,6 +68,7 @@ mod direct;
 mod edits;
 mod entry;
 mod holds;
+mod host_post;
 mod instructions;
 mod job;
 mod named_room;
@@ -94,7 +95,7 @@ pub use self::stamp::default_inbound_event;
 use super::io::Io;
 use super::protocol::{Decided, EffectId, Entry, EntryId, Operation, Outcome, ProtocolError, Step};
 use super::{Cx, Environment, KitConfig};
-use crate::model::{ChannelId, DirectEvent, InboundMessage, RoomId};
+use crate::model::{ChannelId, DirectEvent, InboundMessage, Post, RoomId};
 use crate::ops::io::Bound;
 pub use crate::ops::protocol::{InboundError, InboundResult};
 use crate::rules::chain_depth::ReentryBudget;
@@ -171,6 +172,38 @@ impl Inbound {
         Self::calling(config, call)
     }
 
+    /// The pipeline for `post`, the host's own words in `room_id` (RFC
+    /// §10.5 `post()`), for a caller acting for `organization_id` (RFC
+    /// §17.2): injected as [`inject`](Self::inject) injects, from the host
+    /// channel `post` names, or the kit's own (`host`), which must be a
+    /// registered channel of type `HOST`. The room is read scoped first,
+    /// then the speaker checked; a room that never bound the host channel
+    /// gets it attached in one section under the room lock, a binding made
+    /// by then kept. One `process_timeout` bounds the call from its start
+    /// to its commit, the first post's wait for the lock included.
+    ///
+    /// Its output is a direct injection's. A refusal before its commit is
+    /// an error with nothing written: [`InboundError::UnknownChannel`],
+    /// [`InboundError::NotAHostChannel`],
+    /// [`InboundError::RoomNotFound`] for a room missing or of another
+    /// organization, [`InboundError::ParticipantNotFound`] for a speaker
+    /// the host channel does not reach, and [`InboundError::Refused`] as an
+    /// injection's: `room_closed`, `source_unbound` for a room the host
+    /// channel was detached from, `process_timeout`.
+    pub fn post(
+        config: Arc<KitConfig>,
+        room_id: RoomId,
+        organization_id: Option<String>,
+        post: Post,
+    ) -> Self {
+        let call = Call::Post {
+            room_id,
+            organization_id,
+            post: Box::new(post),
+        };
+        Self::calling(config, call)
+    }
+
     /// The same call, made by the code a delivery set runs, a turn or a
     /// transport's delivery, drawing on `budget`, the reentry budget of the
     /// cascade that delivers, rather than on one of its own (RFC §8.3, gap
@@ -212,7 +245,7 @@ impl Inbound {
         let budget = ReentryBudget::new(config.max_chain_depth);
         let entry = match call {
             Call::Message { .. } => EntryKind::Message,
-            Call::Direct { .. } => EntryKind::Direct,
+            Call::Direct { .. } | Call::Post { .. } => EntryKind::Direct,
         };
         Self {
             config,
@@ -280,6 +313,11 @@ enum Call {
         room_id: RoomId,
         organization_id: Option<String>,
         event: Box<DirectEvent>,
+    },
+    Post {
+        room_id: RoomId,
+        organization_id: Option<String>,
+        post: Box<Post>,
     },
 }
 
@@ -413,6 +451,7 @@ impl Machine {
         match self.stage.take() {
             Stage::Arriving(arrival) => self.on_arrival(cx, arrival, effect, outcome),
             Stage::Replaying(read) => self.on_key_read(cx, read, effect, outcome),
+            Stage::Posting(post) => self.on_post(cx, post, effect, outcome),
             Stage::Reading(read) => self.on_read(cx, read, effect, outcome),
             Stage::Checking(check) => self.on_check(cx, check, effect, outcome),
             Stage::ReleasingTicket {

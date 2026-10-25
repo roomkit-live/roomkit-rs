@@ -30,7 +30,7 @@ use super::deadline::Stopped;
 use super::instructions::{self, Admission};
 use super::named_room::{Mode, Named, NamedRoom};
 use super::{InboundError, InboundResult, result, stamp};
-use crate::model::{EventId, InboundMessage, RoomContext, RoomEvent, RoomId};
+use crate::model::{ChannelType, EventId, InboundMessage, RoomContext, RoomEvent, RoomId};
 use crate::ops::io::Bound;
 use crate::ops::protocol::{ChannelRequest, EffectId, Outcome, Request, StoreRequest};
 use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
@@ -107,7 +107,8 @@ pub(super) fn admit(
 /// # Errors
 ///
 /// Returns [`InboundError::UnknownChannel`] when no channel has the
-/// message's channel id.
+/// message's channel id, and [`InboundError::InboundOnHostChannel`] for a
+/// host channel, which receives no external payload (RFC §10.5).
 fn resolve(
     config: &KitConfig,
     mut message: InboundMessage,
@@ -116,6 +117,9 @@ fn resolve(
         .channel(&message.channel_id)
         .cloned()
         .ok_or_else(|| InboundError::UnknownChannel(message.channel_id.clone()))?;
+    if channel.channel_type == ChannelType::Host {
+        return Err(InboundError::InboundOnHostChannel(channel.channel_id));
+    }
     message.sender_id = addresses::normalize(
         &message.sender_id,
         channel.addressing(),

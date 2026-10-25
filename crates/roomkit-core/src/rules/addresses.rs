@@ -113,6 +113,7 @@ impl Addressing {
             | ChannelType::Conference
             | ChannelType::Cli
             | ChannelType::Push
+            | ChannelType::Host
             | ChannelType::Ai
             | ChannelType::System => Self::AsWritten,
         }
@@ -320,6 +321,7 @@ pub fn recipient_key(channel_type: ChannelType) -> Option<&'static str> {
         | ChannelType::Conference
         | ChannelType::Cli
         | ChannelType::Push
+        | ChannelType::Host
         | ChannelType::Ai
         | ChannelType::System => None,
     }
@@ -352,6 +354,7 @@ pub fn chat_key(channel_type: ChannelType) -> Option<&'static str> {
         | ChannelType::Conference
         | ChannelType::Cli
         | ChannelType::Push
+        | ChannelType::Host
         | ChannelType::Ai
         | ChannelType::System => None,
     }
@@ -622,6 +625,20 @@ mod tests {
                 Some("teams_conversation_id"),
                 Some("phone_number"),
             ]
+        );
+    }
+
+    /// RFC §10.5, Appendix A.14.1: the host channel is never delivered to
+    /// and carries no chat: its ids are kept as written.
+    #[test]
+    fn a_host_channel_is_addressed_as_written_with_no_recipient_nor_chat() {
+        assert_eq!(
+            (
+                Addressing::of(ChannelType::Host),
+                recipient_key(ChannelType::Host),
+                chat_key(ChannelType::Host)
+            ),
+            (Addressing::AsWritten, None, None)
         );
     }
 

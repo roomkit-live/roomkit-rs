@@ -25,6 +25,7 @@ mod inbound;
 mod options;
 mod output;
 mod participant;
+mod post;
 mod room;
 mod side_effects;
 mod time;
@@ -59,6 +60,7 @@ pub use output::{ChannelOutput, ErrorRecord};
 pub use participant::{
     IdentificationStatus, Participant, ParticipantRole, ParticipantStatus, VerificationStatus,
 };
+pub use post::Post;
 pub use room::{AgentResponsePolicy, Room, RoomStatus, RoomTimers};
 pub use side_effects::{Confidence, Observation, Task, TaskStatus};
 pub use time::Timestamp;

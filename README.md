@@ -93,6 +93,7 @@ The pipeline:
 - `instruction_event`: an instruction directs one agent and is never stored.
 - `response_visibility`: who sees what, by the event's visibility and its binding's, and where a message's answers go.
 - `send_event`: direct injection, from the host and from an agent's turn.
+- `host_post`: the host writes to a room's people in its own name, from its host channel, attached on first use.
 
 Routing and identities:
 

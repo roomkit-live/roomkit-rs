@@ -268,6 +268,27 @@ mod attach_channel {
         );
     }
 
+    /// RFC §6.2, §10.5: a host channel is bound as a transport only: a
+    /// binding of one as an intelligence channel is refused before anything
+    /// is read.
+    #[test]
+    fn of_a_host_channel_as_an_intelligence_channel_is_refused_before_any_effect() {
+        let mut sim = Sim::new();
+        let binding = ChannelBinding::new(
+            channel("host"),
+            room_id(),
+            ChannelType::Host,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Inbound,
+            Timestamp::UNIX_EPOCH,
+        );
+        let attached = sim.run(AttachChannel::new(sim.shared_config(), binding, None));
+        assert_eq!(
+            (attached, sim.trace.len()),
+            (Err(LifecycleError::HostAsIntelligence(channel("host"))), 0)
+        );
+    }
+
     /// Gap G-041: only the framework writes `internal`.
     #[test]
     fn of_visibility_internal_is_refused_before_any_effect() {

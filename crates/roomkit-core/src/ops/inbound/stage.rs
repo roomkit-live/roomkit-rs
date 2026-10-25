@@ -4,7 +4,8 @@
 //!
 //! - from its start, a message arrives (`Arriving`, steps 2 to 4); a direct
 //!   injection from the room's work has its key read before its budget
-//!   (`Replaying`), then, as any direct injection, has its room read for its
+//!   (`Replaying`), after a post's room read and first attach (`Posting`),
+//!   then, as any direct injection, has its room read for its
 //!   off-lock check (`Reading`), or its pass queued at once (`Cascade`);
 //! - arrived, the trigger's off-lock check runs (`Checking`, step 5a) when an
 //!   off-lock hook fires for it, then its pass is queued (`Cascade`);
@@ -24,6 +25,7 @@ use std::mem;
 use super::arrival::Arrival;
 use super::direct::DirectRead;
 use super::holds::AfterTicket;
+use super::host_post::HostPost;
 use super::off_lock::OffLockCheck;
 use super::replay::KeyRead;
 use super::{Call, InboundError, InboundResult};
@@ -36,6 +38,9 @@ pub(super) enum Stage {
     Start(Box<Call>),
     /// A message's steps 2 to 4.
     Arriving(Box<Arrival>),
+    /// A post's read of its room, its speaker's check and its host
+    /// channel's first attach (RFC §10.5).
+    Posting(Box<HostPost>),
     /// The read of a direct injection's key, from the room's work, before
     /// its budget (RFC §9.5.1 Past the cap).
     Replaying(Box<KeyRead>),
@@ -65,6 +70,7 @@ pub(super) enum Stage {
 enum StageName {
     Start,
     Arriving,
+    Posting,
     Replaying,
     Reading,
     Checking,
@@ -80,6 +86,7 @@ impl Stage {
         match self {
             Self::Start(_) => StageName::Start,
             Self::Arriving(_) => StageName::Arriving,
+            Self::Posting(_) => StageName::Posting,
             Self::Replaying(_) => StageName::Replaying,
             Self::Reading(_) => StageName::Reading,
             Self::Checking(_) => StageName::Checking,
@@ -97,14 +104,19 @@ impl Stage {
 /// work it started still runs, else into `Done`.
 fn follows(from: StageName, to: StageName) -> bool {
     use StageName::{
-        Arriving, Cascade, Checking, Done, Ending, Persisting, Reading, ReleasingTicket, Replaying,
-        Start,
+        Arriving, Cascade, Checking, Done, Ending, Persisting, Posting, Reading, ReleasingTicket,
+        Replaying, Start,
     };
     match from {
         // A message arrives; a direct injection from the room's work has
         // its key read, then any has its room read, or its pass queued at
         // once.
-        Start => matches!(to, Arriving | Replaying | Reading | Cascade | Ending | Done),
+        Start => matches!(
+            to,
+            Arriving | Posting | Replaying | Reading | Cascade | Ending | Done
+        ),
+        // A post's room read and its first attach, then its injection.
+        Posting => matches!(to, Posting | Replaying | Reading | Cascade | Ending | Done),
         Replaying => matches!(to, Replaying | Reading | Cascade | Ending | Done),
         // Arrived: the off-lock check when an off-lock hook fires for the
         // trigger, else its pass. Each stays while it waits for more

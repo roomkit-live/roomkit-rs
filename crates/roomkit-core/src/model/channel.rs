@@ -51,6 +51,9 @@ pub enum ChannelType {
     Cli,
     /// Push notification channel.
     Push,
+    /// The host application's own voice in a room: a transport, `INBOUND`,
+    /// never delivered to (RFC §6.2, §10.5, Appendix A.14.1).
+    Host,
     /// AI or LLM agent.
     Ai,
     /// Framework-generated events.
@@ -82,7 +85,8 @@ impl ChannelType {
             | Self::Conference
             | Self::Telegram
             | Self::Cli
-            | Self::Push => Some(ChannelCategory::Transport),
+            | Self::Push
+            | Self::Host => Some(ChannelCategory::Transport),
             Self::Ai => Some(ChannelCategory::Intelligence),
             Self::System => None,
         }
@@ -272,6 +276,19 @@ mod tests {
         assert_eq!(
             ChannelType::Ai.category(),
             Some(ChannelCategory::Intelligence)
+        );
+    }
+
+    /// RFC §6.2: HOST, the host's own voice, is a transport, written
+    /// `host`.
+    #[test]
+    fn the_host_type_is_a_transport_written_host() {
+        assert_eq!(
+            (
+                ChannelType::Host.category(),
+                serde_json::to_value(ChannelType::Host).unwrap()
+            ),
+            (Some(ChannelCategory::Transport), json!("host"))
         );
     }
 

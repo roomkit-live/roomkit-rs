@@ -6,7 +6,9 @@ use std::sync::Arc;
 use super::LifecycleError;
 use super::change::{AttachChange, DetachChange, UpdateChange};
 use super::locked::LockedChange;
-use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomId, Visibility};
+use crate::model::{
+    BindingUpdate, ChannelBinding, ChannelCategory, ChannelId, ChannelType, RoomId, Visibility,
+};
 use crate::ops::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use crate::ops::{Environment, KitConfig};
 
@@ -16,7 +18,8 @@ use crate::ops::{Environment, KitConfig};
 ///
 /// An explicit attach clears the channel's revocation, if it was detached
 /// from the room (RFC §7.5 rule 7). A binding of visibility `internal` is
-/// refused before anything is read (gap G-041).
+/// refused before anything is read (gap G-041), and so is a host channel's
+/// bound as an intelligence channel (RFC §10.5).
 #[derive(Debug)]
 pub struct AttachChannel {
     change: LockedChange<AttachChange>,
@@ -33,15 +36,26 @@ impl AttachChannel {
         organization_id: Option<String>,
     ) -> Self {
         let room_id = binding.room_id.clone();
-        let internal = binding.visibility == Visibility::Internal;
+        let refusal = refusal(&binding);
         let change = AttachChange(Box::new(binding));
-        let change = if internal {
-            LockedChange::refused(config, room_id, change, LifecycleError::InternalVisibility)
-        } else {
-            LockedChange::new(config, room_id, organization_id, change)
+        let change = match refusal {
+            Some(refusal) => LockedChange::refused(config, room_id, change, refusal),
+            None => LockedChange::new(config, room_id, organization_id, change),
         };
         Self { change }
     }
+}
+
+/// Why `binding` cannot be attached, before anything is read: the
+/// visibility `internal`, the framework's alone (gap G-041), or a host
+/// channel bound as an intelligence channel (RFC §6.2, §10.5).
+fn refusal(binding: &ChannelBinding) -> Option<LifecycleError> {
+    if binding.visibility == Visibility::Internal {
+        return Some(LifecycleError::InternalVisibility);
+    }
+    let host_as_intelligence = binding.channel_type == ChannelType::Host
+        && binding.category == ChannelCategory::Intelligence;
+    host_as_intelligence.then(|| LifecycleError::HostAsIntelligence(binding.channel_id.clone()))
 }
 
 impl Operation for AttachChannel {

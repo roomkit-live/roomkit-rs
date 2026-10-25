@@ -1829,6 +1829,9 @@ fn entry_name(entry: &Entry) -> String {
         Entry::Message {
             room_id, message, ..
         } => format!("process_inbound {room_id} {:?}", text_of(&message.content)),
+        Entry::Post { room_id, post, .. } => {
+            format!("post {room_id} {:?}", text_of(&post.content))
+        }
     }
 }
 

@@ -465,6 +465,11 @@ impl Sim {
                 organization_id,
                 event,
             } => Inbound::inject(config, room_id, organization_id, *event),
+            Entry::Post {
+                room_id,
+                organization_id,
+                post,
+            } => Inbound::post(config, room_id, organization_id, *post),
         };
         let operation = match call
             .context

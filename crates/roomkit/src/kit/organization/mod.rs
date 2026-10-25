@@ -9,7 +9,7 @@ mod reads;
 
 use roomkit_core::model::{
     BindingOptions, BindingUpdate, ChannelBinding, ChannelId, DirectEvent, EventId, EventUpdates,
-    InboundMessage, Room, RoomEvent, RoomId, RoomOptions,
+    InboundMessage, Post, Room, RoomEvent, RoomId, RoomOptions,
 };
 use roomkit_core::ops::InboundResult;
 
@@ -347,6 +347,18 @@ impl<S: ConversationStore> OrganizationKit<S> {
         event: DirectEvent,
     ) -> Result<RoomEvent, KitError> {
         self.scope().send_event(room_id, event).await
+    }
+
+    /// Posts in a room of the organization in the host's own name, as
+    /// [`RoomKit::post`] does (RFC §10.5): a room of another organization,
+    /// or of none, is not found, whoever its speaker names, nothing written
+    /// (RFC §17.2).
+    ///
+    /// # Errors
+    ///
+    /// As [`RoomKit::post`].
+    pub async fn post(&self, room_id: &RoomId, post: Post) -> Result<RoomEvent, KitError> {
+        self.scope().post(room_id, post).await
     }
 
     /// Commits `event` to a room of the organization outside the pipeline,

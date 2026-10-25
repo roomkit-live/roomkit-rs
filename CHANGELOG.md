@@ -141,6 +141,23 @@ as it stands.
   and the changes of what it removes, returns the target's id, then the
   replies' and the changes' by index, and leaves the counters as they are
   (§10.3, gaps G-063, G-064).
+- **The host's own voice** (§10.5, Appendix A.14.1, gap G-085):
+  `RoomKit::post` and `OrganizationKit::post` write a `Post` to a room's
+  people in the host's name, from a host channel (`ChannelType::Host`,
+  `HostChannel`, a transport, `INBOUND`, every media type), the one the post
+  names or the kit's own, registered on first use under `HOST_CHANNEL_ID`
+  (`host`). A post is a direct injection that addresses no agent unless it
+  names one, speaks as a participant the host channel reaches
+  (`InboundError::ParticipantNotFound` otherwise), attaches the host
+  channel on a room's first post in one section under the room lock, a
+  binding made meanwhile kept, and is refused with nothing written in a
+  closed room or one the channel was detached from, from a channel that is
+  not a host channel (`InboundError::NotAHostChannel`), and past its one
+  `process_timeout`; its key makes a retry a replay. A message on a host
+  channel is refused before anything is read
+  (`InboundError::InboundOnHostChannel`), and so is an attach of one as an
+  intelligence channel (`LifecycleError::HostAsIntelligence`). The
+  `host_post` example shows it.
 - **Reentrancy** (§13.5, §9.5.1 Reentrance, §10.1 step 18, gap G-070): code
   that runs inside a room's own work calls into the room without waiting
   for itself. A lifecycle change, a direct change or a record made under the
@@ -238,6 +255,7 @@ as it stands.
   `edit_delete_messages`), rooms and channels (`room_lifecycle`,
   `channel_mute_unmute`, `room_membership`), hooks (`hook_moderation`,
   `hook_inject_welcome`, `hook_off_lock_check`), the pipeline
-  (`instruction_event`, `response_visibility`, `send_event`), and routing and
+  (`instruction_event`, `response_visibility`, `send_event`, `host_post`),
+  and routing and
   identities (`shared_sms_number`, `paused_conversation`,
   `identity_addresses`).

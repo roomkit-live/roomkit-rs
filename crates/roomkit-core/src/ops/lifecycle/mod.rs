@@ -59,6 +59,11 @@ pub enum LifecycleError {
     /// it writes itself (gap G-041).
     #[error("only the framework writes the visibility internal")]
     InternalVisibility,
+    /// A host channel is bound as a transport only: the attach binds it as
+    /// an intelligence channel, by the category it names or the one the
+    /// channel declares (RFC §6.2, §10.5). Nothing was read or written.
+    #[error("channel {0} is a host channel, never bound as an intelligence channel")]
+    HostAsIntelligence(ChannelId),
     /// The room's status is neither one the transition leaves from nor the
     /// one it names: a pause or a resume of a CLOSED or ARCHIVED room, a
     /// reopen of a room that is not CLOSED, a close of an ARCHIVED room

@@ -118,6 +118,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let chain_depth = match &mut entry {
             Entry::Message { message, .. } => &mut message.chain_depth,
             Entry::Direct { event, .. } => &mut event.chain_depth,
+            Entry::Post { post, .. } => &mut post.chain_depth,
         };
         context::as_deep_as_its_turn(chain_depth);
         self.inner.open()?;
@@ -149,6 +150,11 @@ impl<S: ConversationStore> RoomKit<S> {
                 organization_id,
                 event,
             } => Inbound::inject(self.config(), room_id, organization_id, *event),
+            Entry::Post {
+                room_id,
+                organization_id,
+                post,
+            } => Inbound::post(self.config(), room_id, organization_id, *post),
         };
         Ok(driver::run_inbound(&self.inner, call, Some(&room_id), operation).await??)
     }

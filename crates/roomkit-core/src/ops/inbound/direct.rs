@@ -25,13 +25,16 @@
 use super::arrival::Arrived;
 use super::cascade::replay_result;
 use super::deadline::Stopped;
+use super::host_post::HostPost;
 use super::instructions::{self, Admission};
 use super::replay::KeyRead;
 use super::{InboundError, InboundResult, Machine, Stage, stamp};
-use crate::model::{DirectEvent, Room, RoomContext, RoomEvent, RoomId};
+use crate::model::{
+    ChannelBinding, ChannelId, ChannelType, DirectEvent, Post, Room, RoomContext, RoomEvent, RoomId,
+};
 use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
-use crate::ops::{Cx, Progress};
+use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
 use crate::rules::permissions::WriteRefusal;
 use crate::rules::{idempotency, organizations};
 
@@ -154,24 +157,130 @@ pub(super) enum Admitted {
 pub(super) fn admit(
     cx: &mut Cx<'_>,
     room_id: RoomId,
-    mut event: DirectEvent,
+    event: DirectEvent,
 ) -> Result<Admitted, InboundError> {
-    event.idempotency_key = idempotency::key(event.idempotency_key);
     let channel = cx
         .config
         .channel(&event.channel_id)
         .cloned()
         .ok_or_else(|| InboundError::UnknownChannel(event.channel_id.clone()))?;
+    admit_from(cx, room_id, event, &channel)
+}
+
+/// Admits `event` from `channel`, its source, as [`admit`] does once the
+/// channel is found.
+///
+/// # Errors
+///
+/// Returns why the event is refused before anything is read.
+fn admit_from(
+    cx: &mut Cx<'_>,
+    room_id: RoomId,
+    mut event: DirectEvent,
+    channel: &ChannelDeclaration,
+) -> Result<Admitted, InboundError> {
+    event.idempotency_key = idempotency::key(event.idempotency_key);
     if let Admission::Refused(refusal) = instructions::admit(cx.config, (&event).into())? {
         return Ok(Admitted::Refused(Box::new(instructions::refused(refusal))));
     }
     let id = cx.env.new_event_id();
     let now = cx.env.now();
-    let event = stamp::stamp_direct(event, &channel, room_id, id, now);
+    let event = stamp::stamp_direct(event, channel, room_id, id, now);
     Ok(Admitted::Event(Box::new(event)))
 }
 
+/// Refuses `post` before anything is read when it cannot be one, or stamps
+/// it for `room_id` as the direct event of its host channel (RFC §10.5): the
+/// channel it names, or the kit's own `host`, must be a registered channel
+/// of type `HOST`, and its event is admitted as `send_event`'s is. Returns
+/// the admitted event with the host channel's binding at its defaults,
+/// which a first post attaches.
+///
+/// # Errors
+///
+/// Returns [`InboundError::UnknownChannel`] for a channel no one
+/// registered, [`InboundError::NotAHostChannel`] for one of another type,
+/// and what [`admit`] refuses.
+pub(super) fn admit_post(
+    cx: &mut Cx<'_>,
+    room_id: RoomId,
+    post: Post,
+) -> Result<(Admitted, ChannelBinding), InboundError> {
+    let channel = match &post.channel_id {
+        Some(channel_id) => cx
+            .config
+            .channel(channel_id)
+            .cloned()
+            .ok_or_else(|| InboundError::UnknownChannel(channel_id.clone()))?,
+        None => own_host_channel(cx.config),
+    };
+    let channel_id = channel.channel_id.clone();
+    if channel.channel_type != ChannelType::Host {
+        return Err(InboundError::NotAHostChannel(channel_id));
+    }
+    let binding = channel.binding(room_id.clone(), cx.env.now());
+    let admitted = admit_from(cx, room_id, post.into_event(channel_id), &channel)?;
+    Ok((admitted, binding))
+}
+
+/// The kit's own host channel, `host`, as `config` registers it, or, when
+/// no channel holds the id, as it is registered on first use (RFC §10.5): a
+/// call that started before the first post registered it adopts one all
+/// the same.
+fn own_host_channel(config: &KitConfig) -> ChannelDeclaration {
+    let host = ChannelId::host();
+    config
+        .channel(&host)
+        .cloned()
+        .unwrap_or_else(|| ChannelDeclaration::host(host))
+}
+
 impl Machine {
+    /// Starts a post's way (RFC §10.5), for a caller acting for
+    /// `organization_id` (RFC §17.2): refused before anything is read when
+    /// it cannot be one, its room read and its speaker checked, its host
+    /// channel attached on its first post, then injected as `send_event`
+    /// injects.
+    pub(super) fn begin_post(
+        &mut self,
+        cx: &mut Cx<'_>,
+        room_id: RoomId,
+        organization_id: Option<String>,
+        post: Post,
+    ) {
+        self.call.channel_id.clone_from(&post.channel_id);
+        self.call.room_id = Some(room_id.clone());
+        let call = DirectCall { organization_id };
+        self.call.direct = Some(call.clone());
+        let (event, binding) = match admit_post(cx, room_id, post) {
+            Ok((Admitted::Event(event), binding)) => (*event, binding),
+            Ok((Admitted::Refused(refused), _)) => return self.end(cx, Ok(*refused)),
+            Err(error) => return self.end(cx, Err(error)),
+        };
+        self.call.channel_id = Some(event.source.channel_id.clone());
+        let post = HostPost::start(cx, event, call, binding, self.call.bound);
+        self.stage.enter(Stage::Posting(Box::new(post)));
+    }
+
+    /// Takes an answer of the post's way: once its room took it, it is
+    /// injected.
+    pub(super) fn on_post(
+        &mut self,
+        cx: &mut Cx<'_>,
+        mut post: Box<HostPost>,
+        effect: EffectId,
+        outcome: Outcome,
+    ) {
+        match post.accept(cx, effect, outcome) {
+            Progress::Waiting => self.stage.enter(Stage::Posting(post)),
+            Progress::Done(Ok(())) => {
+                let (event, call) = post.into_parts();
+                self.inject_admitted(cx, event, call);
+            }
+            Progress::Done(Err(stopped)) => self.stop(cx, stopped),
+        }
+    }
+
     /// Starts a direct injection's way (RFC §10.5), for a caller acting for
     /// `organization_id` (RFC §17.2): refused before anything is read when
     /// it cannot be one, its room is read for its off-lock check when an
@@ -192,6 +301,12 @@ impl Machine {
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),
             Err(error) => return self.end(cx, Err(error)),
         };
+        self.inject_admitted(cx, event, call);
+    }
+
+    /// An admitted injection goes in: drawing on the budget of the room's
+    /// work that made it, if any, once its key is read.
+    fn inject_admitted(&mut self, cx: &mut Cx<'_>, event: RoomEvent, call: DirectCall) {
         if self.cascade.drawn_on().is_none() {
             return self.go_in(cx, event, call);
         }

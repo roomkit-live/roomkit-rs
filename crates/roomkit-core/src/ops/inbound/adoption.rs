@@ -47,11 +47,12 @@ use super::arrival::{self, Arrival};
 use super::cascade::{self, entry_result, replay_result};
 use super::deadline::Stopped;
 use super::direct::{self, DirectCall};
+use super::host_post::HostPost;
 use super::pass::{CommitPass, PassOrigin, PassReport};
 use super::record::{RecordPass, RecordReport};
 use super::replay::KeyRead;
 use super::{InboundError, InboundResult, Machine, result};
-use crate::model::{InboundMessage, RoomEvent, RoomId};
+use crate::model::{InboundMessage, Post, RoomEvent, RoomId};
 use crate::ops::io::{Bound, Io};
 use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
@@ -97,6 +98,8 @@ struct AdoptedRun {
 enum RunState {
     /// A message's steps 2 to 4.
     Arriving(Box<Arrival>),
+    /// A post's read of its room and its host channel's first attach.
+    Posting(Box<HostPost>),
     /// A direct injection's key, read before it draws on the budget.
     Replaying(Box<KeyRead>),
     /// The entry's pass.
@@ -109,6 +112,8 @@ enum RunState {
 enum Advanced {
     Waiting,
     Arrived(Box<RoomEvent>),
+    /// A post's room took it: it is injected.
+    Posted,
     /// A direct injection's key was read: the event it names, a replay, or
     /// none.
     KeyRead(Option<Box<RoomEvent>>),
@@ -176,6 +181,7 @@ impl AdoptedRun {
     fn awaits(&self, effect: EffectId) -> bool {
         match &self.state {
             RunState::Arriving(arrival) => arrival.awaits(effect),
+            RunState::Posting(post) => post.awaits(effect),
             RunState::Replaying(read) => read.awaits(effect),
             RunState::Passing(pass) => pass.awaits(effect),
             RunState::Recording(record) => record.awaits(effect),
@@ -200,6 +206,19 @@ impl AdoptedRun {
                 // An adopted message is charged as its arrival starts.
                 Progress::Done(Err(Stopped::PastBudget)) => {
                     Advanced::Stopped(Box::new(Ok(result::past_the_budget())))
+                }
+            },
+            RunState::Posting(post) => match post.accept(cx, effect, outcome) {
+                Progress::Waiting => Advanced::Waiting,
+                Progress::Done(Ok(())) => Advanced::Posted,
+                Progress::Done(Err(Stopped::Failed(error))) => {
+                    Advanced::Stopped(Box::new(Err(error)))
+                }
+                // An adopted entry carries no deadline (gap G-070).
+                Progress::Done(Err(Stopped::Expired | Stopped::PastBudget)) => {
+                    Advanced::Stopped(Box::new(Err(InboundError::Store(
+                        Abort::DeadlinePassed(None).into_record(),
+                    ))))
                 }
             },
             RunState::Replaying(read) => match read.accept(cx, effect, outcome) {
@@ -272,7 +291,7 @@ impl Machine {
             room_id: entry.room_id().clone(),
             origin,
             nested,
-            direct: matches!(entry, Entry::Direct { .. }),
+            direct: matches!(entry, Entry::Direct { .. } | Entry::Post { .. }),
         };
         self.adopted.adopted.push((adopted, Box::new(entry)));
         Ok(id)
@@ -313,7 +332,50 @@ impl Machine {
                 organization_id,
                 message,
             } => self.arrive(cx, adopted, room_id, organization_id, *message),
+            Entry::Post {
+                room_id,
+                organization_id,
+                post,
+            } => self.post(cx, adopted, room_id, organization_id, *post),
         }
+    }
+
+    /// A post's way to its injection (RFC §10.5): its room read, its speaker
+    /// checked and its host channel attached on its first post, within the
+    /// adoption, then its key read as any injection's.
+    fn post(
+        &mut self,
+        cx: &mut Cx<'_>,
+        adopted: Adopted,
+        room_id: RoomId,
+        organization_id: Option<String>,
+        post: Post,
+    ) {
+        let (event, binding) = match direct::admit_post(cx, room_id, post) {
+            Ok((direct::Admitted::Event(event), binding)) => (*event, binding),
+            Ok((direct::Admitted::Refused(refused), _)) => {
+                return self.settle_entry(cx, &adopted, Ok(*refused));
+            }
+            Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
+        };
+        let call = DirectCall { organization_id };
+        let post = within(cx, &adopted, |cx| {
+            HostPost::start(cx, event, call, binding, Bound::Unbounded)
+        });
+        self.adopted.running.push(AdoptedRun {
+            entry: adopted,
+            state: RunState::Posting(Box::new(post)),
+        });
+    }
+
+    /// The post's room took it: its key is read, then it goes to its pass.
+    fn on_entry_posted(&mut self, cx: &mut Cx<'_>, adopted: Adopted, run: AdoptedRun) {
+        let RunState::Posting(post) = run.state else {
+            debug_assert!(false, "a post answered an entry that posts nothing");
+            return;
+        };
+        let (event, call) = post.into_parts();
+        self.read_key(cx, adopted, event, call);
     }
 
     /// A message's steps 1 to 4, in the operation's room, once admitted
@@ -431,6 +493,7 @@ impl Machine {
         match advanced {
             Advanced::Waiting => self.adopted.running.insert(index, run),
             Advanced::Arrived(event) => self.enter_pass(cx, adopted, *event, None),
+            Advanced::Posted => self.on_entry_posted(cx, adopted, run),
             Advanced::KeyRead(found) => self.on_entry_key(cx, adopted, run, found),
             Advanced::Stopped(stopped) => self.settle_entry(cx, &adopted, *stopped),
             Advanced::Passed(Ok(report)) => self.on_adopted_pass(cx, &adopted, report),
