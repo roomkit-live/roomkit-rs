@@ -1,0 +1,231 @@
+//! Runs one conformance scenario on the tokio runtime and compares what it
+//! did (roomkit-specs `conformance/README.md`): the setup is made before
+//! anything is recorded, the steps run in order, the kit is left to go idle,
+//! and what the run produced is normalized and matched against the
+//! scenario's expectations.
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use roomkit::model::RoomId;
+use roomkit::{ConversationStore, RoomFilter, RoomKit};
+use serde_json::{Value, json};
+use tokio::task::JoinHandle;
+
+use crate::calls;
+use crate::compare::compare;
+use crate::normalize::Observed;
+use crate::run::{Check, Run, Scope, lock};
+
+/// Runs `scenario`; returns every mismatch with its expectations.
+pub(crate) async fn run(scenario: &Value) -> Vec<String> {
+    let kit = RoomKit::new();
+    let setup = scenario.get("setup").cloned().unwrap_or_default();
+    if let Some(depth) = setup["kit"]["max_chain_depth"].as_u64() {
+        kit.set_max_chain_depth(u32::try_from(depth).unwrap_or(u32::MAX));
+    }
+    if let Some(timeout) = setup["kit"]["process_timeout_ms"].as_u64() {
+        kit.set_process_timeout(Some(Duration::from_millis(timeout)));
+    }
+    let run = Arc::new(Run::new(kit, scenario));
+    if let Err(problem) = set_up(&run, &setup).await {
+        return vec![format!("setup: {problem}")];
+    }
+    run.recording.store(true, Ordering::SeqCst);
+    let mut step_outcomes = Vec::new();
+    for (position, step) in scenario["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        step_outcomes.extend(run_step(&run, step, &format!("steps[{position}]")).await);
+    }
+    run.idle().await;
+    let observed = observe(&run, step_outcomes).await;
+    run.kit().shutdown().await;
+    let mut found = lock(&run.problems).clone();
+    found.extend(compare(&run, scenario, &observed));
+    found
+}
+
+async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
+    for channel in setup["channels"].as_array().into_iter().flatten() {
+        calls::register_channel(run, channel)?
+            .map_err(|error| format!("register {channel}: {error}"))?;
+    }
+    for room in setup["rooms"].as_array().into_iter().flatten() {
+        if let Err(error) = calls::create_room(run, room).await? {
+            return Err(format!("create {room}: {error}"));
+        }
+        for binding in room["bindings"].as_array().into_iter().flatten() {
+            calls::attach_binding(run, room, binding).await?;
+        }
+        let status = room["status"].as_str();
+        let id = RoomId::new(room["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
+        if matches!(status, Some("closed" | "archived")) {
+            run.kit().close_room(&id).await.map_err(|e| e.to_string())?;
+        }
+        if status == Some("archived") {
+            run.kit()
+                .archive_room(&id)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    for hook in setup["hooks"].as_array().into_iter().flatten() {
+        calls::register_hook(run, hook)?.map_err(|error| format!("register {hook}: {error}"))?;
+    }
+    run.idle().await;
+    Ok(())
+}
+
+/// Runs one step; returns the outcomes of the calls it made, in order.
+async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
+    let mut outcomes = Vec::new();
+    let mut check = |path: String, expect: Option<&Value>, outcome: Value| {
+        outcomes.push(outcome.clone());
+        lock(&run.checks).push(Check {
+            path,
+            expect: expect.cloned(),
+            outcome,
+        });
+    };
+    if step.get("call").is_some() {
+        if step.get("background") == Some(&Value::Bool(true)) {
+            let label = step["as"].as_str().unwrap_or_default().to_owned();
+            let handle = tokio::spawn(run.invoke(step.clone(), Scope::default()));
+            lock(&run.background).insert(label, handle);
+            return outcomes;
+        }
+        let outcome = run.invoke(step.clone(), Scope::default()).await;
+        check(path.to_owned(), step.get("expect"), outcome);
+    } else if let Some(label) = step["await"].as_str() {
+        let handle = lock(&run.background).remove(label);
+        let outcome = match handle {
+            Some(handle) => handle
+                .await
+                .unwrap_or_else(|_| json!({ "result": null, "error": { "name": "<panicked>" } })),
+            None => json!({ "result": null, "error": { "name": "<no such call>" } }),
+        };
+        check(path.to_owned(), step.get("expect"), outcome);
+    } else if let Some(calls) = step["concurrent"].as_array() {
+        let handles: Vec<JoinHandle<Value>> = calls
+            .iter()
+            .map(|call| tokio::spawn(run.invoke(call.clone(), Scope::default())))
+            .collect();
+        for (position, (call, handle)) in calls.iter().zip(handles).enumerate() {
+            let outcome = handle
+                .await
+                .unwrap_or_else(|_| json!({ "result": null, "error": { "name": "<panicked>" } }));
+            check(
+                format!("{path}.concurrent[{position}]"),
+                call.get("expect"),
+                outcome,
+            );
+        }
+    } else if let Some(gate) = step["wait_for"].as_str() {
+        if !run.gates.wait_for(gate).await {
+            run.problem(format!("{path}: no call reached the gate {gate}"));
+        }
+    } else if let Some(gate) = step["open"].as_str() {
+        run.gates.open(gate);
+    } else if step.get("idle").is_some() {
+        run.idle().await;
+    }
+    outcomes
+}
+
+async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
+    let store = run.kit().store();
+    let rooms = store
+        .list_rooms(&RoomFilter::default())
+        .await
+        .unwrap_or_default();
+    let mut timelines = Vec::new();
+    for room in &rooms {
+        timelines.push((room.id.to_string(), run.timeline(room.id.as_str()).await));
+    }
+    let mut observed = std::mem::take(&mut *lock(&run.observed));
+    observed.steps = step_outcomes;
+    for ((room_key, timeline), room) in timelines.into_iter().zip(&rooms) {
+        observed.timelines.insert(room_key.clone(), timeline);
+        observed.rooms.insert(
+            room_key.clone(),
+            serde_json::to_value(room).unwrap_or_default(),
+        );
+        let bindings = store.list_bindings(&room.id).await.unwrap_or_default();
+        observed.bindings.insert(
+            room_key.clone(),
+            bindings
+                .iter()
+                .map(|binding| {
+                    (
+                        binding.channel_id.to_string(),
+                        serde_json::to_value(binding).unwrap_or_default(),
+                    )
+                })
+                .collect(),
+        );
+        let observations = store.list_observations(&room.id).await.unwrap_or_default();
+        observed.observations.insert(
+            room_key.clone(),
+            observations
+                .iter()
+                .map(|o| serde_json::to_value(o).unwrap_or_default())
+                .collect(),
+        );
+        let tasks = store.list_tasks(&room.id).await.unwrap_or_default();
+        observed.tasks.insert(
+            room_key,
+            tasks
+                .iter()
+                .map(|t| serde_json::to_value(t).unwrap_or_default())
+                .collect(),
+        );
+    }
+    observed
+}
+
+/// The room ids a scenario writes itself; any other room a run creates is
+/// aliased.
+pub(crate) fn literal_rooms(scenario: &Value) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    for room in scenario["setup"]["rooms"].as_array().into_iter().flatten() {
+        if let Some(id) = room["id"].as_str() {
+            found.insert(id.to_owned());
+        }
+    }
+    for part in [
+        &scenario["steps"],
+        &scenario["setup"]["hooks"],
+        &scenario["setup"]["channels"],
+    ] {
+        walk_rooms(part, &mut found);
+    }
+    found
+}
+
+fn walk_rooms(value: &Value, found: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(object) => {
+            for (key, item) in object {
+                if key == "room_id"
+                    && let Some(room) = item.as_str()
+                    && !room.starts_with('$')
+                {
+                    found.insert(room.to_owned());
+                }
+                if let (true, Some(room)) = (key == "room", item.get("id").and_then(Value::as_str))
+                {
+                    found.insert(room.to_owned());
+                }
+                walk_rooms(item, found);
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| walk_rooms(item, found)),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}

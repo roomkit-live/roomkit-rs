@@ -7,7 +7,7 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks
+.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync
 
 all: fmt-check clippy test doc deny check-core-deps examples
 
@@ -54,3 +54,19 @@ msrv-toolchain:
 
 hooks:
 	git config core.hooksPath .githooks
+
+# The shared conformance suite (roomkit-specs conformance/): its scenarios at
+# one roomkit-specs commit, copied into conformance/scenarios with that commit
+# recorded in conformance/SPECS_COMMIT, so CI needs no sibling checkout; `make
+# test` runs them (crates/roomkit/tests/conformance). The copy is never edited
+# here: change the scenarios in roomkit-specs, commit them there, and sync
+# again. SPECS_REF names the commit.
+SPECS_DIR ?= ../roomkit-specs
+SPECS_REF ?= HEAD
+
+conformance-sync:
+	@commit=$$(git -C $(SPECS_DIR) rev-parse --verify "$(SPECS_REF)^{commit}") && \
+	rm -rf conformance/scenarios && mkdir -p conformance && \
+	git -C $(SPECS_DIR) archive --format=tar "$$commit" conformance/scenarios | tar -x -C . && \
+	echo "$$commit" > conformance/SPECS_COMMIT && \
+	echo "conformance/ synced from roomkit-specs $$commit"
