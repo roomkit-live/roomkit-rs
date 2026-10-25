@@ -14,7 +14,7 @@ use std::error::Error;
 use std::future::Future;
 
 use roomkit_core::model::{RoomId, RoomStatus};
-use roomkit_core::rules::routing::{self, Candidate, RouteQuery};
+use roomkit_core::rules::routing::{self, Candidate, Refusal, RouteQuery};
 
 use crate::channel::BoxFuture;
 use crate::store::{ConversationStore, RoomFilter, StoreError};
@@ -105,15 +105,38 @@ impl<S: ConversationStore, R: InboundRoomRouter<S>> DynRouter<S> for R {
 /// decides on what it read, comparing addresses in the channel's form, so a
 /// strategy wrapping the default reads the same rooms and decides as it
 /// does. A message is routed in a number of store reads that grows with the
-/// rooms its channel reaches.
+/// rooms its channel reaches. A room step 3 refuses because its binding
+/// holds a value under the recipient key that is not a recipient is logged
+/// as a warning naming the binding and the value's type (RFC §5.7).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DefaultRouter;
 
 impl<S: ConversationStore> InboundRoomRouter<S> for DefaultRouter {
     async fn route(&self, store: &S, query: &RouteQuery) -> Result<Option<RoomId>, RouterError> {
         let candidates = Self::candidates(store, query).await?;
-        Ok(routing::route(query, &candidates))
+        let routed = routing::routed(query, &candidates);
+        if let Some((room_id, Refusal::NotARecipient(kind))) = &routed.refused {
+            not_a_recipient(room_id, query, kind);
+        }
+        Ok(routed.room_id)
     }
+}
+
+/// Logs that step 3 refused `room_id` for `query`'s message because its
+/// binding holds a value under the channel's recipient key that is not a
+/// recipient, of JSON type `kind` (RFC §5.7 SHOULD): the binding and the
+/// type, never the value, which may be a person's address.
+fn not_a_recipient(room_id: &RoomId, query: &RouteQuery, kind: &str) {
+    tracing::warn!(
+        target: "roomkit::router",
+        room_id = %room_id,
+        channel_id = %query.channel_id,
+        recipient_key = %query.form.recipient_key.as_deref().unwrap_or_default(),
+        held = %kind,
+        "the binding holds a value under its recipient key that is not a recipient: \
+         routing reads it as someone else's address, so no sender the binding does not \
+         name is admitted through it, and deliveries to it are refused no_recipient"
+    );
 }
 
 impl DefaultRouter {

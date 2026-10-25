@@ -184,6 +184,12 @@ pub enum Refusal {
     NamesAnother,
     /// The binding delivers to someone else: it is their conversation.
     AddressedToAnother,
+    /// The binding holds a value under its recipient key that is not a
+    /// recipient, of this JSON type (`boolean`, `float`, `array`,
+    /// `object`): someone else's address, whoever writes (RFC §5.7). A
+    /// caller logs it as a warning naming the binding and the type, never
+    /// the value, which may be a person's address.
+    NotARecipient(&'static str),
     /// A participant other than the sender joined the room through the
     /// channel.
     MemberJoined,
@@ -206,6 +212,24 @@ pub enum Recording {
     /// The binding names another sender: the message is routed once more
     /// (gap G-055).
     Taken,
+    /// The binding names no participant and holds a value under its
+    /// recipient key that is not a recipient, of this JSON type: someone
+    /// else's address (RFC §5.7). The message is routed once more, as for
+    /// [`Taken`](Self::Taken); a caller logs it as [`Refusal::NotARecipient`]
+    /// says.
+    NotARecipient(&'static str),
+}
+
+/// What the default strategy answers for a message (RFC §10.4), and why
+/// step 3 refused the one room bound to the channel when it refused it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Routed {
+    /// The room, `None` when the framework must create one.
+    pub room_id: Option<RoomId>,
+    /// The one room step 3 read and refused, with its refusal: `None` when
+    /// step 1 found the sender's conversation, when no room or several are
+    /// bound to the channel, or when step 3 admitted the sender.
+    pub refused: Option<(RoomId, Refusal)>,
 }
 
 /// The correspondent a binding names (RFC §5.7, gap G-078).
@@ -284,15 +308,38 @@ fn chat_of(metadata: &Metadata, key: &str) -> Option<String> {
 /// §10.4). Step 1 reads the ACTIVE and PAUSED rooms the caller reaches,
 /// step 3 those [`step_three_considers`].
 pub fn route(query: &RouteQuery, candidates: &[Candidate]) -> Option<RoomId> {
+    routed(query, candidates).room_id
+}
+
+/// What [`route`] answers, with why step 3 refused the one room bound to
+/// the channel when it refused it, which a router may log.
+pub fn routed(query: &RouteQuery, candidates: &[Candidate]) -> Routed {
     let considered = |considers: fn(&RouteQuery, &Candidate) -> bool| -> Vec<&Candidate> {
         candidates
             .iter()
             .filter(|candidate| considers(query, candidate))
             .collect()
     };
-    conversation(query, &considered(step_one_considers))
-        .or_else(|| admitted(query, &considered(step_three_considers)))
-        .map(|candidate| candidate.room.id.clone())
+    let found = |room_id: &RoomId| Routed {
+        room_id: Some(room_id.clone()),
+        refused: None,
+    };
+    if let Some(conversation) = conversation(query, &considered(step_one_considers)) {
+        return found(&conversation.room.id);
+    }
+    let Some(room) = sole_bound(query, &considered(step_three_considers)) else {
+        return Routed {
+            room_id: None,
+            refused: None,
+        };
+    };
+    match admits(query, room) {
+        Ok(()) => found(&room.room.id),
+        Err(refusal) => Routed {
+            room_id: None,
+            refused: Some((room.room.id.clone(), refusal)),
+        },
+    }
 }
 
 /// Whether step 1 considers `candidate`'s room for `query`: an ACTIVE or a
@@ -457,9 +504,7 @@ pub fn sole_bound<'room>(
 /// - the binding names no participant, or names the sender;
 /// - the binding holds no value under its recipient key, or delivers to
 ///   the sender: a value there that is not a recipient is someone else's
-///   address (RFC §5.7), and refuses the sender as a recipient naming
-///   another does, logged as a warning naming the binding and the value's
-///   type;
+///   address (RFC §5.7, [`Refusal::NotARecipient`]);
 /// - no participant other than the sender was reached through the channel;
 /// - the room has heard no one else on the channel.
 ///
@@ -543,11 +588,8 @@ fn admission(
         Held::Recipient(recipient) if !sender.is(&recipient, form) => {
             return Err(Refusal::AddressedToAnother);
         }
-        Held::NotARecipient(kind) => {
-            // Someone else's address, whoever writes (RFC §5.7).
-            not_a_recipient(binding, form, kind);
-            return Err(Refusal::AddressedToAnother);
-        }
+        // Someone else's address, whoever writes (RFC §5.7).
+        Held::NotARecipient(kind) => return Err(Refusal::NotARecipient(kind)),
         Held::Recipient(_) | Held::Nothing => {}
     }
     let member = participants.iter().any(|participant| {
@@ -597,10 +639,14 @@ pub fn heard(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<ParticipantId>
 /// that recipient's conversation (RFC §5.7). A binding naming no
 /// participant that holds a value under its recipient key that is not a
 /// recipient names someone other than the sender, whoever writes; one with
-/// no value there names no one.
+/// no value there names no one. Routing does not read a `group` binding's
+/// recipient (RFC §5.7): one naming no participant names no one.
 pub fn correspondent(binding: &ChannelBinding, form: &AddressForm) -> Option<Correspondent> {
     if let Some(participant) = &binding.participant_id {
         return Some(Correspondent::Address(form.normalize(participant.as_str())));
+    }
+    if binding.group {
+        return None;
     }
     match form.held(binding) {
         Held::Recipient(recipient) => Some(Correspondent::Address(recipient)),
@@ -609,28 +655,12 @@ pub fn correspondent(binding: &ChannelBinding, form: &AddressForm) -> Option<Cor
     }
 }
 
-/// Logs that routing read a value under `binding`'s recipient key that is
-/// not a recipient (RFC §5.7 SHOULD): the binding and the value's type
-/// `kind`, never the value, which may be a person's address.
-fn not_a_recipient(binding: &ChannelBinding, form: &AddressForm, kind: &str) {
-    tracing::warn!(
-        target: "roomkit::core::routing",
-        room_id = %binding.room_id,
-        channel_id = %binding.channel_id,
-        recipient_key = %form.recipient_key.as_deref().unwrap_or_default(),
-        held = %kind,
-        "the binding holds a value under its recipient key that is not a recipient: \
-         routing reads it as someone else's address, so no sender the binding does not \
-         name is admitted through it, and deliveries to it are refused no_recipient"
-    );
-}
-
 /// What step 2 writes on `binding` for a routed message from `sender`, in a
 /// room holding `participants` (RFC §10.1 step 2, §5.7, gap G-061): nothing
 /// on a binding declared `group`; [`Recording::Taken`] when the binding
-/// names someone else, a binding naming no participant that holds a value
-/// under its recipient key that is not a recipient included, logged as a
-/// warning; otherwise the sender's address as its correspondent where it
+/// names someone else, [`Recording::NotARecipient`] when it names no
+/// participant and holds a value under its recipient key that is not a
+/// recipient; otherwise the sender's address as its correspondent where it
 /// names none, and on a transport as its recipient where it holds no value
 /// under the key, a value that is not a recipient kept, on a binding
 /// naming the sender too. The framework's own sender, and a message with
@@ -648,10 +678,10 @@ pub fn recording(
     if let Some(named) = correspondent(binding, form)
         && !named.names(sender, form, &binding.channel_id, participants)
     {
-        if let Correspondent::NotARecipient(kind) = named {
-            not_a_recipient(binding, form, kind);
-        }
-        return Recording::Taken;
+        return match named {
+            Correspondent::NotARecipient(kind) => Recording::NotARecipient(kind),
+            Correspondent::Address(_) => Recording::Taken,
+        };
     }
     let Some(address) = &sender.address else {
         return Recording::Kept;
@@ -1196,16 +1226,22 @@ mod tests {
 
         /// RFC §5.7: no value under the recipient key names no one; a value
         /// that is not a recipient is someone else's address, the sender's
-        /// own number written as a float included.
+        /// own number written as a float included, named by its JSON type.
         #[test]
         fn a_binding_holding_what_is_not_a_recipient_admits_no_one() {
             let held = [
                 (Value::Null, Ok(())),
                 (json!(" "), Ok(())),
-                (json!(true), Err(Refusal::AddressedToAnother)),
-                (json!([BOB]), Err(Refusal::AddressedToAnother)),
-                (json!({ "number": BOB }), Err(Refusal::AddressedToAnother)),
-                (json!(15_550_000_002.0), Err(Refusal::AddressedToAnother)),
+                (json!(true), Err(Refusal::NotARecipient("boolean"))),
+                (json!([BOB]), Err(Refusal::NotARecipient("array"))),
+                (
+                    json!({ "number": BOB }),
+                    Err(Refusal::NotARecipient("object")),
+                ),
+                (
+                    json!(15_550_000_002.0),
+                    Err(Refusal::NotARecipient("float")),
+                ),
             ];
             let admitted: Vec<_> = held
                 .iter()
@@ -1659,7 +1695,11 @@ mod tests {
                 .collect();
             assert_eq!(
                 taken,
-                [Recording::Taken, Recording::Taken, Recording::Taken]
+                [
+                    Recording::NotARecipient("boolean"),
+                    Recording::NotARecipient("object"),
+                    Recording::NotARecipient("float")
+                ]
             );
         }
 

@@ -407,7 +407,7 @@ impl NamedRoom {
         let binding = self.channel.binding(self.room_id.clone(), cx.env.now());
         match routing::recording(&binding, &self.sender, &self.channel.form(), &[]) {
             Recording::Write(update) => update.apply(&binding),
-            Recording::Kept | Recording::Taken => binding,
+            Recording::Kept | Recording::Taken | Recording::NotARecipient(_) => binding,
         }
     }
 

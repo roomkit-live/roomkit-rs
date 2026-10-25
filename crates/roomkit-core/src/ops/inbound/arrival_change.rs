@@ -155,8 +155,29 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<R
             let updated = update.apply(&current);
             change::store_updated(&current, updated, context).map(Recorded::Updated)
         }
+        Recording::NotARecipient(kind) => {
+            not_a_recipient(&current, &record.form, kind);
+            Decision::unwritten(Recorded::Rerouted(context))
+        }
         Recording::Taken | Recording::Write(_) => Decision::unwritten(Recorded::Rerouted(context)),
     }
+}
+
+/// Logs that the record found a value under `binding`'s recipient key, in
+/// `form`, that is not a recipient, of JSON type `kind` (RFC §5.7 SHOULD):
+/// the binding and the type, never the value, which may be a person's
+/// address. The room is no longer the routed message's.
+fn not_a_recipient(binding: &ChannelBinding, form: &AddressForm, kind: &str) {
+    tracing::warn!(
+        target: "roomkit::core::inbound",
+        room_id = %binding.room_id,
+        channel_id = %binding.channel_id,
+        recipient_key = %form.recipient_key.as_deref().unwrap_or_default(),
+        held = %kind,
+        "the binding holds a value under its recipient key that is not a recipient: \
+         routing reads it as someone else's address, so no sender the binding does not \
+         name is admitted through it, and deliveries to it are refused no_recipient"
+    );
 }
 
 /// Whether the room, as its lock finds it, still admits the sender a record

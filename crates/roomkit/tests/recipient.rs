@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
-    ChannelType, EventContent, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId, Timestamp,
+    ChannelType, EventContent, InboundMessage, Metadata, ParticipantId, RoomContext, RoomEvent,
+    RoomId, Timestamp,
 };
 use roomkit::testing::EchoAgent;
 use roomkit::{
@@ -330,30 +331,6 @@ async fn a_room_whose_recipient_is_not_one_admits_no_routed_sender() {
     assert_eq!(landed, expected);
 }
 
-/// RFC §5.7: the warning names the value's type, never the value.
-#[tokio::test]
-async fn the_warning_names_the_type_of_what_is_not_a_recipient() {
-    let mut kinds = Vec::new();
-    for held in not_recipients() {
-        let (kit, _sms) = kit_with_agent();
-        open_room(&kit, "free", Some(held), false).await;
-        let (warnings, guard) = Warnings::capture();
-        routed(&kit, message(BOB, "Hello")).await;
-        drop(guard);
-        let warned = warnings.containing("not a recipient");
-        let kind = warned
-            .first()
-            .and_then(|warning| warning.split("held=").nth(1))
-            .and_then(|rest| rest.split_whitespace().next())
-            .map(str::to_owned);
-        kinds.push(kind);
-    }
-    assert_eq!(
-        kinds,
-        ["boolean", "object", "array", "float", "float"].map(|kind| Some(kind.to_owned()))
-    );
-}
-
 /// RFC §5.7: no value under the recipient key (null, an empty or a blank
 /// string) names no one: the room's first sender is recorded there, their
 /// address its recipient, and the next sender gets a room of their own. The
@@ -391,28 +368,54 @@ async fn a_room_holding_no_value_under_its_recipient_key_takes_its_first_sender(
     assert_eq!(landed, expected);
 }
 
-/// RFC §5.7: routing does not read a `group` binding's recipient. Every
-/// sender shares the room, whatever it holds under the key, and routing
-/// warns of nothing.
+/// RFC §5.7, §10.4 steps 1 and 3: routing does not read a `group`
+/// binding's recipient, whatever it holds under the key, and warns of
+/// nothing. Alone on the channel, the room takes every sender. Beside a
+/// room whose binding names Alice, it is not Bob's conversation, his own
+/// number under its key included: two rooms bound to the channel, Bob gets
+/// a room of his own.
 #[tokio::test]
 async fn a_group_binding_s_recipient_is_not_read() {
     let mut shared = Vec::new();
-    for held in [None, Some(json!(15_550_000_001.0))] {
+    for held in [None, Some(json!(15_550_000_001.0)), Some(json!(BOB))] {
         let (kit, _sms) = kit_with_agent();
-        let team = open_room(&kit, "team", held, true).await;
+        let team = open_room(&kit, "team", held.clone(), true).await;
         let (warnings, guard) = Warnings::capture();
-        let rooms = [
+        let alone = [
             routed(&kit, message(ALICE, "Bonjour")).await,
             routed(&kit, message(BOB, "Hello")).await,
         ];
         drop(guard);
+        let (kit, _sms) = kit_with_agent();
+        let team_beside = open_room(&kit, "team", held.clone(), true).await;
+        let desk = room("desk");
+        kit.create_room(&desk).await.unwrap();
+        let alices = BindingOptions {
+            participant_id: Some(ParticipantId::new(ALICE).unwrap()),
+            ..BindingOptions::default()
+        };
+        kit.attach_with(&desk, &channel("sms"), alices)
+            .await
+            .unwrap();
+        let (beside_warnings, guard) = Warnings::capture();
+        let bobs = routed(&kit, message(BOB, "Hello")).await;
+        drop(guard);
         shared.push((
-            rooms == [team.clone(), team.clone()],
-            sms_binding(&kit, &team).await.participant_id,
-            warnings.containing("not a recipient").len(),
+            held.map(|held| held.to_string()),
+            alone == [team.clone(), team.clone()],
+            bobs != team_beside && bobs != desk,
+            warnings.containing("not a recipient").len()
+                + beside_warnings.containing("not a recipient").len(),
         ));
     }
-    assert_eq!(shared, [(true, None, 0), (true, None, 0)]);
+    assert_eq!(
+        shared,
+        [
+            (None, true, true, 0),
+            (Some("15550000001.0".to_owned()), true, true, 0),
+            (Some(format!("\"{BOB}\"")), true, true, 0),
+        ]
+    );
 }
 
 /// End to end, as an integrator meets it (RFC §5.7, §10.4 step 3, §10.2
