@@ -279,6 +279,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// included (RFC §14.1 `get_event_by_idempotency_key`, §13.4): the one
     /// `channel_id` committed, or, for `None`, the one any channel of the
     /// room committed, as a proactive delivery's key is looked up (§22.1).
+    /// A blank key, empty or whitespace only, is no key and names none.
     fn get_event_by_idempotency_key(
         &self,
         room_id: &RoomId,
@@ -296,7 +297,8 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// channel and idempotency key an event of the room carries, a blank key
     /// being no key (RFC §13.4, §14.3). Refuses with
     /// [`StoreError::EventNotFound`] a target the room no longer holds.
-    /// A refused commit writes nothing.
+    /// A refused commit writes nothing. An event carrying a blank key is
+    /// stored with none.
     ///
     /// The target's update keeps the `delivery_results` the store holds:
     /// once stored, an event's `delivery_results` is written by the record

@@ -309,6 +309,27 @@ mod tests {
             );
         }
 
+        /// RFC §13.4: a blank key is no key: an event committed with one is
+        /// stored with none, and a lookup of one finds nothing.
+        #[tokio::test]
+        async fn a_blank_key_is_stored_as_no_key_and_finds_nothing() {
+            let store = store().await;
+            store
+                .commit(keyed(2, "sms", "   "), counters(2), None)
+                .await
+                .unwrap();
+            let stored = store
+                .get_event(&EventId::new("evt_k2").unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            let found = store
+                .get_event_by_idempotency_key(&room_id(), None, "   ")
+                .await
+                .unwrap();
+            assert_eq!((stored.idempotency_key, found), (None, None));
+        }
+
         /// RFC §14.3: once stored, an event's `delivery_results` is written
         /// by the record of its deliveries alone: an update and the commit
         /// of an edit's target keep what the store holds.

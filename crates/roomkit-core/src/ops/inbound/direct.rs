@@ -27,7 +27,7 @@ use super::cascade::replay_result;
 use super::deadline::Stopped;
 use super::host_post::HostPost;
 use super::instructions::{self, Admission};
-use super::replay::KeyRead;
+use super::work_read::{Read, WorkRead};
 use super::{InboundError, InboundResult, Machine, Stage, stamp};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelType, DirectEvent, Post, Room, RoomContext, RoomEvent, RoomId,
@@ -304,53 +304,59 @@ impl Machine {
         self.inject_admitted(cx, event, call);
     }
 
-    /// An admitted injection goes in: drawing on the budget of the room's
-    /// work that made it, if any, once its key is read.
+    /// An admitted injection goes in: one from the room's work reads its
+    /// room and its key first, then draws on the budget of that work (RFC
+    /// §9.5.1 Past the cap, §13.4, §17.2).
     fn inject_admitted(&mut self, cx: &mut Cx<'_>, event: RoomEvent, call: DirectCall) {
         if self.cascade.drawn_on().is_none() {
             return self.go_in(cx, event, call);
         }
-        // An event a delivery's code injects has its key read before it
-        // draws on the cascade that delivers: a replay draws nothing (RFC
-        // §9.5.1 Past the cap, §13.4).
-        match event.idempotency_key.clone() {
-            Some(key) => {
-                let read = KeyRead::start(cx, event, key, call, self.call.bound);
-                self.stage.enter(Stage::Replaying(Box::new(read)));
-            }
-            None => self.draw_and_go_in(cx, event, call),
-        }
+        let read = WorkRead::start(cx, event, call, self.call.bound);
+        self.stage.enter(Stage::ReadingWork(Box::new(read)));
     }
 
-    /// Takes the answer of the key's read: a replay ends the call with the
-    /// event the key committed, drawing nothing; any other event draws on
-    /// the budget and goes in.
-    pub(super) fn on_key_read(
+    /// Takes an answer of the reads before the budget: a refusal ends the
+    /// call, drawing nothing; a replay ends it with the event the key
+    /// committed, drawing nothing; any other event draws on the budget and
+    /// goes in.
+    pub(super) fn on_work_read(
         &mut self,
         cx: &mut Cx<'_>,
-        mut read: Box<KeyRead>,
+        mut read: Box<WorkRead>,
         effect: EffectId,
         outcome: Outcome,
     ) {
         match read.accept(cx, effect, outcome) {
-            Progress::Waiting => self.stage.enter(Stage::Replaying(read)),
-            Progress::Done(Ok(Some(original))) => self.end(cx, Ok(replay_result(&original))),
-            Progress::Done(Ok(None)) => {
+            Progress::Waiting => self.stage.enter(Stage::ReadingWork(read)),
+            Progress::Done(Ok(Read::Replay(original))) => {
+                self.end(cx, Ok(replay_result(&original)));
+            }
+            Progress::Done(Ok(Read::Fresh(context))) => {
                 let (event, call) = read.into_parts();
-                self.draw_and_go_in(cx, event, call);
+                self.draw_and_go_in(cx, event, call, context);
             }
             Progress::Done(Err(stopped)) => self.stop(cx, stopped),
         }
     }
 
-    /// An event a delivery's code injects is charged on the cascade that
-    /// delivers, as an adopted one is: past it, it is stored capped, and no
-    /// hook runs for it (gap G-070).
-    fn draw_and_go_in(&mut self, cx: &mut Cx<'_>, event: RoomEvent, call: DirectCall) {
+    /// An event a delivery's code injects, its room read, is charged on the
+    /// cascade that delivers, as an adopted one is: past it, it is stored
+    /// capped, and no hook runs for it (gap G-070); within it, its
+    /// off-lock check runs on the room as read, or its pass starts.
+    fn draw_and_go_in(
+        &mut self,
+        cx: &mut Cx<'_>,
+        event: RoomEvent,
+        call: DirectCall,
+        context: Box<RoomContext>,
+    ) {
         if self.cascade.drawn_on().is_some_and(|budget| !budget.take()) {
             return self.start_capped_trigger(event, call);
         }
-        self.go_in(cx, event, call);
+        if cx.config.hooks.off_lock_checks(&event.source).is_empty() {
+            return self.start_trigger(event, None);
+        }
+        self.after_arrival(cx, Arrived { event, context });
     }
 
     /// The event's room is read for its off-lock check when an off-lock

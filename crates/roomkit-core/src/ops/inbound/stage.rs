@@ -2,11 +2,12 @@
 //!
 //! A call goes through its stages in this order (RFC §10.1, §10.5):
 //!
-//! - from its start, a message arrives (`Arriving`, steps 2 to 4); a direct
-//!   injection from the room's work has its key read before its budget
-//!   (`Replaying`), after a post's room read and first attach (`Posting`),
-//!   then, as any direct injection, has its room read for its
-//!   off-lock check (`Reading`), or its pass queued at once (`Cascade`);
+//! - from its start, a message arrives (`Arriving`, steps 2 to 4); a post
+//!   has its room read and its host channel attached first (`Posting`); a
+//!   direct injection from the room's work has its room and its key read
+//!   before it draws on the budget (`ReadingWork`), its off-lock check run
+//!   on the room as read; any other has its room read for its off-lock
+//!   check (`Reading`), or its pass queued at once (`Cascade`);
 //! - arrived, the trigger's off-lock check runs (`Checking`, step 5a) when an
 //!   off-lock hook fires for it, then its pass is queued (`Cascade`);
 //! - the trigger's pass over, the call releases the admission ticket it
@@ -27,7 +28,7 @@ use super::direct::DirectRead;
 use super::holds::AfterTicket;
 use super::host_post::HostPost;
 use super::off_lock::OffLockCheck;
-use super::replay::KeyRead;
+use super::work_read::WorkRead;
 use super::{Call, InboundError, InboundResult};
 use crate::model::Task;
 use crate::ops::protocol::EffectId;
@@ -41,9 +42,9 @@ pub(super) enum Stage {
     /// A post's read of its room, its speaker's check and its host
     /// channel's first attach (RFC §10.5).
     Posting(Box<HostPost>),
-    /// The read of a direct injection's key, from the room's work, before
-    /// its budget (RFC §9.5.1 Past the cap).
-    Replaying(Box<KeyRead>),
+    /// A direct injection from the room's work reads its room, then its
+    /// key, before it draws on the budget (RFC §9.5.1 Past the cap).
+    ReadingWork(Box<WorkRead>),
     /// A direct injection's read of its room for its off-lock check.
     Reading(Box<DirectRead>),
     /// Step 5a: the trigger's off-lock check, holding the room's ticket.
@@ -71,7 +72,7 @@ enum StageName {
     Start,
     Arriving,
     Posting,
-    Replaying,
+    ReadingWork,
     Reading,
     Checking,
     Cascade,
@@ -87,7 +88,7 @@ impl Stage {
             Self::Start(_) => StageName::Start,
             Self::Arriving(_) => StageName::Arriving,
             Self::Posting(_) => StageName::Posting,
-            Self::Replaying(_) => StageName::Replaying,
+            Self::ReadingWork(_) => StageName::ReadingWork,
             Self::Reading(_) => StageName::Reading,
             Self::Checking(_) => StageName::Checking,
             Self::Cascade => StageName::Cascade,
@@ -104,8 +105,8 @@ impl Stage {
 /// work it started still runs, else into `Done`.
 fn follows(from: StageName, to: StageName) -> bool {
     use StageName::{
-        Arriving, Cascade, Checking, Done, Ending, Persisting, Posting, Reading, ReleasingTicket,
-        Replaying, Start,
+        Arriving, Cascade, Checking, Done, Ending, Persisting, Posting, Reading, ReadingWork,
+        ReleasingTicket, Start,
     };
     match from {
         // A message arrives; a direct injection from the room's work has
@@ -113,11 +114,16 @@ fn follows(from: StageName, to: StageName) -> bool {
         // once.
         Start => matches!(
             to,
-            Arriving | Posting | Replaying | Reading | Cascade | Ending | Done
+            Arriving | Posting | ReadingWork | Reading | Cascade | Ending | Done
         ),
         // A post's room read and its first attach, then its injection.
-        Posting => matches!(to, Posting | Replaying | Reading | Cascade | Ending | Done),
-        Replaying => matches!(to, Replaying | Reading | Cascade | Ending | Done),
+        Posting => matches!(
+            to,
+            Posting | ReadingWork | Reading | Cascade | Ending | Done
+        ),
+        // Read before the budget: the off-lock check on the room as read,
+        // or the pass.
+        ReadingWork => matches!(to, ReadingWork | Checking | Cascade | Ending | Done),
         // Arrived: the off-lock check when an off-lock hook fires for the
         // trigger, else its pass. Each stays while it waits for more
         // answers.

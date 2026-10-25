@@ -176,11 +176,11 @@ as it stands.
   runs, into whatever room, is at least as deep as the turn's response
   (§10.6); work a turn or a delivery began starts fresh once that work is
   over, at depth 0 and on a budget of its
-  own (gap G-070); a direct injection from the room's work whose key its
-  channel holds is a replay, its key read before the budget it draws on,
-  once its room is read and admits it, so a caller its pass would refuse
-  never receives the original (§17.2), and the replay returns the event the
-  key committed and draws nothing, past the
+  own (gap G-070); a direct injection from the room's work reads its room
+  before it draws on the budget, so a call its room refuses draws nothing
+  and a caller its pass would refuse never receives an original (§17.2),
+  then its key: one its channel holds makes it a replay, which returns the
+  event the key committed and draws nothing, past the
   budget too, its record looking the key up again under the lock (gap
   G-081); a
   call that would wait for what its own context holds fails

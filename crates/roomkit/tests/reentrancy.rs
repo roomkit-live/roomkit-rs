@@ -2087,6 +2087,34 @@ async fn commit_event_under_a_key_its_channel_holds_is_refused() {
     );
 }
 
+/// RFC §13.4: a blank key, empty or whitespace only, is no key: two
+/// messages, two injections and two records carrying one are each
+/// processed and stored as carrying none.
+#[tokio::test]
+async fn a_blank_key_is_no_key() {
+    for blank in ["", "   "] {
+        let (kit, _) = room().await;
+        for text in ["one", "two"] {
+            let mut keyed = message(text);
+            keyed.idempotency_key = Some(blank.to_owned());
+            kit.process_inbound_in(&room_id(), keyed).await.unwrap();
+        }
+        for text in ["three", "four"] {
+            let mut injected = from_console(text);
+            injected.idempotency_key = Some(blank.to_owned());
+            kit.send_event(&room_id(), injected).await.unwrap();
+        }
+        for id in ["snap_1", "snap_2"] {
+            let mut record = console_record(id, "Snapshot");
+            record.idempotency_key = Some(blank.to_owned());
+            kit.commit_event(&room_id(), record).await.unwrap();
+        }
+        let stored = kit.store().list_events(&room_id(), true).await.unwrap();
+        let keys: Vec<Option<String>> = stored.iter().map(|e| e.idempotency_key.clone()).collect();
+        assert_eq!((stored.len(), keys), (6, vec![None; 6]), "blank {blank:?}");
+    }
+}
+
 /// RFC §10.5, §14.3: a record is stored with the `delivery_results` it
 /// brings, which a later update keeps.
 #[tokio::test]

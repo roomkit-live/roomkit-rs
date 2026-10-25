@@ -77,11 +77,11 @@ mod pass;
 mod persist;
 mod queues;
 mod record;
-mod replay;
 mod report;
 mod result;
 mod stage;
 mod stamp;
+mod work_read;
 
 use std::sync::Arc;
 
@@ -450,7 +450,7 @@ impl Machine {
         }
         match self.stage.take() {
             Stage::Arriving(arrival) => self.on_arrival(cx, arrival, effect, outcome),
-            Stage::Replaying(read) => self.on_key_read(cx, read, effect, outcome),
+            Stage::ReadingWork(read) => self.on_work_read(cx, read, effect, outcome),
             Stage::Posting(post) => self.on_post(cx, post, effect, outcome),
             Stage::Reading(read) => self.on_read(cx, read, effect, outcome),
             Stage::Checking(check) => self.on_check(cx, check, effect, outcome),

@@ -613,6 +613,7 @@ mod an_entry_adopted_under_the_lock {
                 "load_context room_1",
                 "hook notifier calls send_event room_1 \"Heads up\"",
                 "load_context room_1",
+                "load_context room_1",
                 "hook notifier",
                 "load_context room_1",
                 "commit #0 ws delivered \"Heads up\"",
@@ -775,6 +776,50 @@ mod an_entry_adopted_under_the_lock {
         );
     }
 
+    /// RFC §17.2, gap G-069, as Python reads the scoped binding first: a
+    /// call its room refuses draws nothing on its caller's budget, key or
+    /// no key: after three injections from a channel the room does not
+    /// bind, ten passes are left to the ten that follow.
+    #[test]
+    fn refused_by_its_room_draws_nothing_on_its_caller_s_budget() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 1;
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.reentrant_hook(
+            "notifier",
+            true,
+            Reentry {
+                entries: Box::new(|event| {
+                    if event.source.channel_id.as_str() != "sms" {
+                        return Vec::new();
+                    }
+                    let refused = || Entry::Direct {
+                        room_id: room_id(),
+                        organization_id: None,
+                        event: Box::new(DirectEvent::new(channel("api"), EventContent::text("x"))),
+                    };
+                    let mut entries: Vec<Entry> = (0..3).map(|_| refused()).collect();
+                    entries.extend((0..10).map(|_| send_event("Heads up")));
+                    entries
+                }),
+                answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        sim.send(hello()).unwrap();
+        let lines = sim.timeline_lines();
+        assert_eq!(
+            (
+                lines
+                    .iter()
+                    .filter(|line| line.contains("delivered \"Heads up\""))
+                    .count(),
+                lines.iter().filter(|line| line.contains("blocked")).count()
+            ),
+            (10, 0),
+            "{lines:?}"
+        );
+    }
+
     /// RFC §9.5.1 Past the cap, §13.4: a replay draws nothing on its
     /// caller's budget: ten replays leave its ten passes to the entry that
     /// follows them, committed delivered.
@@ -890,6 +935,7 @@ mod an_entry_adopted_under_the_lock {
                 "hook notifier calls send_event room_1 \"Heads up\"",
                 "hook notifier returns",
                 "load_context room_1",
+                "load_context room_1",
                 "hook notifier",
                 "load_context room_1",
                 "commit #0 ws delivered \"Heads up\"",
@@ -910,10 +956,11 @@ mod an_entry_adopted_under_the_lock {
     fn is_delivered_when_the_outer_event_passes_its_deadline() {
         let (mut sim, _, _) = notified();
         sim.config.process_timeout = Some(std::time::Duration::from_secs(10));
-        // The step 2 read, the gate's, the entry's gate and its read after
-        // its hook, then the outer pass's read after its hooks.
+        // The step 2 read, the gate's, the entry's read before its budget,
+        // its gate and its read after its hook, then the outer pass's read
+        // after its hooks.
         sim.nth_durations
-            .push(("load_context", 5, std::time::Duration::from_secs(11)));
+            .push(("load_context", 6, std::time::Duration::from_secs(11)));
         let result = sim.send(hello()).unwrap();
         assert_eq!(
             (
@@ -960,11 +1007,13 @@ mod an_entry_adopted_under_the_lock {
                 "hook notifier calls send_event room_1 \"Second\"",
                 "hook notifier returns",
                 "load_context room_1",
+                "load_context room_1",
                 "hook notifier",
                 "load_context room_1",
                 "commit #0 ws delivered \"First\"",
                 "enter lane room_1 evt_2",
                 "hook notifier settled",
+                "load_context room_1",
                 "load_context room_1",
                 "hook notifier",
                 "load_context room_1",
@@ -1476,6 +1525,50 @@ mod an_arrival_from_a_delivery {
         );
     }
 
+    /// RFC §17.2, gap G-069, as Python reads the scoped binding first: a
+    /// turn's call its room refuses draws nothing on the delivering
+    /// cascade's budget: after three from a channel the room does not
+    /// bind, the twenty that follow have their twenty passes.
+    #[test]
+    fn refused_by_its_room_draws_nothing_on_the_delivering_budget() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 2;
+        sim.echo_agent("ai", "unused");
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.reentrant_channel(
+            "ai",
+            Reentry {
+                entries: Box::new(|event| {
+                    if event.source.channel_id.as_str() != "sms" {
+                        return Vec::new();
+                    }
+                    let refused = || Entry::Direct {
+                        room_id: room_id(),
+                        organization_id: None,
+                        event: Box::new(DirectEvent::new(channel("api"), EventContent::text("x"))),
+                    };
+                    let mut entries: Vec<Entry> = (0..20).map(|_| thought("Checking.")).collect();
+                    entries.extend((0..3).map(|_| refused()));
+                    entries
+                }),
+                answer: Answer::AtOnce(Box::new(|| Ok(ChannelOutput::default()))),
+            },
+        );
+        sim.send(hello()).unwrap();
+        let lines = sim.timeline_lines();
+        assert_eq!(
+            (
+                lines
+                    .iter()
+                    .filter(|line| line.contains("delivered \"Checking.\""))
+                    .count(),
+                lines.iter().filter(|line| line.contains("blocked")).count()
+            ),
+            (20, 0),
+            "{lines:?}"
+        );
+    }
+
     /// RFC §10.1 step 18: the call's result reports its own event's
     /// deliveries, none of the arrival's.
     #[test]
@@ -1901,6 +1994,7 @@ mod an_entry_adopted_from_an_off_lock_hook {
             [
                 "handle_inbound sms in room_1",
                 "hook scanner in room_1",
+                "load_context room_1 in room_1",
                 "lock room_1 in room_1",
                 "load_context room_1 in room_1",
                 "hook scanner in room_1",
@@ -1938,6 +2032,7 @@ mod an_entry_adopted_from_an_off_lock_hook {
                 vec![
                     "take ticket room_1",
                     "hook scanner calls send_event room_1 \"Scanned\"",
+                    "load_context room_1",
                     "lock room_1",
                     "load_context room_1",
                     "hook scanner",

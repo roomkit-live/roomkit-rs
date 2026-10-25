@@ -37,9 +37,10 @@
 //! its commit (detached completion: no delivery results, no completion
 //! handle), and its event takes its place in the room's lane at that
 //! commit. A message's arrival runs its step 2, then its channel's parse. A
-//! direct injection is admitted and stamped at once, and its key, when it
-//! carries one, read before it draws on the budget: a replay draws nothing
-//! (RFC §9.5.1 Past the cap, §13.4).
+//! direct injection is admitted and stamped at once, and its room, then its
+//! key, when it carries one, read before it draws on the budget: a call its
+//! room refuses and a replay draw nothing (RFC §9.5.1 Past the cap, §13.4,
+//! §17.2).
 
 use std::mem;
 
@@ -50,7 +51,7 @@ use super::direct::{self, DirectCall};
 use super::host_post::HostPost;
 use super::pass::{CommitPass, PassOrigin, PassReport};
 use super::record::{RecordPass, RecordReport};
-use super::replay::KeyRead;
+use super::work_read::{Read, WorkRead};
 use super::{InboundError, InboundResult, Machine, result};
 use crate::model::{InboundMessage, Post, RoomEvent, RoomId};
 use crate::ops::io::{Bound, Io};
@@ -100,8 +101,9 @@ enum RunState {
     Arriving(Box<Arrival>),
     /// A post's read of its room and its host channel's first attach.
     Posting(Box<HostPost>),
-    /// A direct injection's key, read before it draws on the budget.
-    Replaying(Box<KeyRead>),
+    /// A direct injection's room, then its key, read before it draws on
+    /// the budget.
+    ReadingWork(Box<WorkRead>),
     /// The entry's pass.
     Passing(Box<CommitPass>),
     /// The entry stored blocked, past its caller's reentry budget.
@@ -114,9 +116,9 @@ enum Advanced {
     Arrived(Box<RoomEvent>),
     /// A post's room took it: it is injected.
     Posted,
-    /// A direct injection's key was read: the event it names, a replay, or
-    /// none.
-    KeyRead(Option<Box<RoomEvent>>),
+    /// A direct injection's room and key were read: the room took it, as
+    /// a replay or not.
+    WorkRead(Read),
     /// The entry stopped before its pass, with what its caller receives.
     Stopped(Box<Result<InboundResult, InboundError>>),
     Passed(Result<PassReport, Abort>),
@@ -182,7 +184,7 @@ impl AdoptedRun {
         match &self.state {
             RunState::Arriving(arrival) => arrival.awaits(effect),
             RunState::Posting(post) => post.awaits(effect),
-            RunState::Replaying(read) => read.awaits(effect),
+            RunState::ReadingWork(read) => read.awaits(effect),
             RunState::Passing(pass) => pass.awaits(effect),
             RunState::Recording(record) => record.awaits(effect),
         }
@@ -221,14 +223,14 @@ impl AdoptedRun {
                     ))))
                 }
             },
-            RunState::Replaying(read) => match read.accept(cx, effect, outcome) {
+            RunState::ReadingWork(read) => match read.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,
-                Progress::Done(Ok(found)) => Advanced::KeyRead(found),
+                Progress::Done(Ok(read)) => Advanced::WorkRead(read),
                 Progress::Done(Err(Stopped::Failed(error))) => {
                     Advanced::Stopped(Box::new(Err(error)))
                 }
                 // An adopted entry carries no deadline (gap G-070), and is
-                // never refused past the budget before its key is read.
+                // never refused past the budget before its room is read.
                 Progress::Done(Err(Stopped::Expired | Stopped::PastBudget)) => {
                     Advanced::Stopped(Box::new(Err(InboundError::Store(
                         Abort::DeadlinePassed(None).into_record(),
@@ -406,35 +408,27 @@ impl Machine {
         });
     }
 
-    /// A direct injection's key, when it carries one, is read before it
-    /// draws on its caller's budget (RFC §9.5.1 Past the cap, §13.4); an
-    /// event that carries none goes to its pass at once.
+    /// A direct injection's room, then its key, when it carries one, are
+    /// read before it draws on its caller's budget (RFC §9.5.1 Past the
+    /// cap, §13.4, §17.2).
     fn read_key(&mut self, cx: &mut Cx<'_>, adopted: Adopted, event: RoomEvent, call: DirectCall) {
-        let Some(key) = event.idempotency_key.clone() else {
-            return self.enter_pass(cx, adopted, event, Some(call));
-        };
         let read = within(cx, &adopted, |cx| {
-            KeyRead::start(cx, event, key, call, Bound::Unbounded)
+            WorkRead::start(cx, event, call, Bound::Unbounded)
         });
         self.adopted.running.push(AdoptedRun {
             entry: adopted,
-            state: RunState::Replaying(Box::new(read)),
+            state: RunState::ReadingWork(Box::new(read)),
         });
     }
 
-    /// The entry's key is read: a replay answers its caller with the event
-    /// the key committed, drawing nothing; any other event goes to its pass.
-    fn on_entry_key(
-        &mut self,
-        cx: &mut Cx<'_>,
-        adopted: Adopted,
-        run: AdoptedRun,
-        found: Option<Box<RoomEvent>>,
-    ) {
-        if let Some(original) = found {
+    /// The entry's room and key are read: a replay answers its caller with
+    /// the event the key committed, drawing nothing; any other event goes to
+    /// its pass.
+    fn on_entry_key(&mut self, cx: &mut Cx<'_>, adopted: Adopted, run: AdoptedRun, read: Read) {
+        if let Read::Replay(original) = read {
             return self.settle_entry(cx, &adopted, Ok(replay_result(&original)));
         }
-        let RunState::Replaying(read) = run.state else {
+        let RunState::ReadingWork(read) = run.state else {
             debug_assert!(false, "a key read answered an entry that read none");
             return;
         };
@@ -494,7 +488,7 @@ impl Machine {
             Advanced::Waiting => self.adopted.running.insert(index, run),
             Advanced::Arrived(event) => self.enter_pass(cx, adopted, *event, None),
             Advanced::Posted => self.on_entry_posted(cx, adopted, run),
-            Advanced::KeyRead(found) => self.on_entry_key(cx, adopted, run, found),
+            Advanced::WorkRead(read) => self.on_entry_key(cx, adopted, run, read),
             Advanced::Stopped(stopped) => self.settle_entry(cx, &adopted, *stopped),
             Advanced::Passed(Ok(report)) => self.on_adopted_pass(cx, &adopted, report),
             Advanced::Passed(Err(abort)) | Advanced::Recorded(Err(abort)) => {

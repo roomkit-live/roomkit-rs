@@ -100,13 +100,10 @@ fn names(
 
 /// The refusal of `event`'s commit when `events`, its room's timeline,
 /// holds an event of the same source channel with the same idempotency key
-/// (RFC §14.3); `None` for an event that carries no key, a blank one
-/// included (RFC §13.4).
+/// (RFC §14.3); `None` for an event that carries no key, a blank one read
+/// as none already (RFC §13.4).
 fn taken_key(events: &[RoomEvent], event: &RoomEvent) -> Option<StoreError> {
-    let key = event
-        .idempotency_key
-        .as_deref()
-        .filter(|key| idempotency::is_key(key))?;
+    let key = event.idempotency_key.as_deref()?;
     let channel_id = &event.source.channel_id;
     let taken = events.iter().any(|stored| {
         stored.idempotency_key.as_deref() == Some(key) && &stored.source.channel_id == channel_id
@@ -400,6 +397,10 @@ impl ConversationStore for InMemoryStore {
         channel_id: Option<&ChannelId>,
         key: &str,
     ) -> Result<Option<RoomEvent>, StoreError> {
+        // A blank key is no key: it names no event (RFC §13.4).
+        if !idempotency::is_key(key) {
+            return self.read(room_id, |_| None);
+        }
         self.read(room_id, |record| {
             record
                 .events
@@ -415,10 +416,12 @@ impl ConversationStore for InMemoryStore {
 
     async fn commit(
         &self,
-        event: RoomEvent,
+        mut event: RoomEvent,
         counters: RoomCounters,
         target: Option<TargetUpdate>,
     ) -> Result<(), StoreError> {
+        // A blank key is no key: the event is stored with none (RFC §13.4).
+        event.idempotency_key = idempotency::key(event.idempotency_key);
         let room_id = event.room_id.clone();
         self.write(&room_id, |record| {
             // The room's count is the next index: a hard-deleted index is

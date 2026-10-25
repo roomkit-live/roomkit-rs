@@ -188,8 +188,6 @@ async fn an_event_is_never_brought_into_another_organization_s_room() {
     );
 }
 
-/// RFC §17.2, gap G-063: another organization's room holds no stored event
-/// of the caller's, so an update or a delete changes nothing.
 /// RFC §17.2, §13.4: from the room's own work, a hook under its lock, an
 /// injection for another organization under a key the room's console holds
 /// fails as not found, as it would without the key: the original is never
@@ -229,6 +227,8 @@ async fn a_replay_is_never_handed_to_another_organization() {
     );
 }
 
+/// RFC §17.2, gap G-063: another organization's room holds no stored event
+/// of the caller's, so an update or a delete changes nothing.
 #[tokio::test]
 async fn a_stored_event_of_another_organization_s_room_is_never_changed() {
     let (kit, _clock) = room_of(Some("bank")).await;
