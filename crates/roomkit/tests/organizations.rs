@@ -190,6 +190,45 @@ async fn an_event_is_never_brought_into_another_organization_s_room() {
 
 /// RFC §17.2, gap G-063: another organization's room holds no stored event
 /// of the caller's, so an update or a delete changes nothing.
+/// RFC §17.2, §13.4: from the room's own work, a hook under its lock, an
+/// injection for another organization under a key the room's console holds
+/// fails as not found, as it would without the key: the original is never
+/// handed to it.
+#[tokio::test]
+async fn a_replay_is_never_handed_to_another_organization() {
+    let (kit, _) = room_of(Some("bank")).await;
+    let bank = kit.for_organization("bank");
+    bank.attach(&room_id(), &channel("ws")).await.unwrap();
+    let mut held = DirectEvent::new(channel("ws"), EventContent::text("Your balance is 5000$"));
+    held.idempotency_key = Some("WS1".to_owned());
+    bank.send_event(&room_id(), held.clone()).await.unwrap();
+    let answers = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (hook_kit, hook_answers) = (kit.clone(), Arc::clone(&answers));
+    kit.before_broadcast("relay", move |event, _| {
+        let (kit, answers, held) = (hook_kit.clone(), Arc::clone(&hook_answers), held.clone());
+        async move {
+            if event.source.channel_id == channel("sms") {
+                let replayed = kit
+                    .for_organization("clinic")
+                    .send_event(&room_id(), held)
+                    .await
+                    .map(|event| event.id);
+                answers.lock().unwrap().push(replayed);
+            }
+            Ok(roomkit::model::HookResult::allow())
+        }
+    })
+    .unwrap();
+    let message = InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("Hi"));
+    bank.process_inbound_in(&room_id(), message).await.unwrap();
+    assert_eq!(
+        std::mem::take(&mut *answers.lock().unwrap()),
+        [Err(KitError::Inbound(
+            InboundError::RoomNotFound(room_id())
+        ))]
+    );
+}
+
 #[tokio::test]
 async fn a_stored_event_of_another_organization_s_room_is_never_changed() {
     let (kit, _clock) = room_of(Some("bank")).await;

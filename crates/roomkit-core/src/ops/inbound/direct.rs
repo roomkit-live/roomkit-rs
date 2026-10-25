@@ -213,11 +213,11 @@ impl Machine {
     pub(super) fn on_key_read(
         &mut self,
         cx: &mut Cx<'_>,
-        read: Box<KeyRead>,
+        mut read: Box<KeyRead>,
         effect: EffectId,
         outcome: Outcome,
     ) {
-        match read.accept(effect, outcome) {
+        match read.accept(cx, effect, outcome) {
             Progress::Waiting => self.stage.enter(Stage::Replaying(read)),
             Progress::Done(Ok(Some(original))) => self.end(cx, Ok(replay_result(&original))),
             Progress::Done(Ok(None)) => {

@@ -202,7 +202,7 @@ impl AdoptedRun {
                     Advanced::Stopped(Box::new(Ok(result::past_the_budget())))
                 }
             },
-            RunState::Replaying(read) => match read.accept(effect, outcome) {
+            RunState::Replaying(read) => match read.accept(cx, effect, outcome) {
                 Progress::Waiting => Advanced::Waiting,
                 Progress::Done(Ok(found)) => Advanced::KeyRead(found),
                 Progress::Done(Err(Stopped::Failed(error))) => {

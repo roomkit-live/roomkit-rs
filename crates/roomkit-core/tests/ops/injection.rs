@@ -1161,6 +1161,46 @@ mod an_entry_adopted_under_the_lock {
             )
         );
     }
+
+    /// RFC §17.2, gap G-069: a replay is never handed to a caller its pass
+    /// would refuse. Under a key its channel holds, an injection for
+    /// another organization fails as not found, and one from a channel the
+    /// room does not bind is refused `source_unbound`, as each would
+    /// without the key: the original is not returned.
+    #[test]
+    fn with_a_key_its_channel_holds_is_refused_as_without_it() {
+        let mut answered_by = Vec::new();
+        for (organization, channel_id) in [(Some("clinic"), "ws"), (None, "api")] {
+            let mut sim = room();
+            sim.room.organization_id = Some("bank".to_owned());
+            sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+            let mut held = console_keyed("evt_0", "alert_1");
+            held.source.channel_id = channel(channel_id);
+            sim.seed(held);
+            let mut event = DirectEvent::new(channel(channel_id), EventContent::text("Heads up"));
+            event.idempotency_key = Some("alert_1".to_owned());
+            let entry = Entry::Direct {
+                room_id: room_id(),
+                organization_id: organization.map(str::to_owned),
+                event: Box::new(event),
+            };
+            let answers = answered(&mut sim, entry);
+            sim.send(hello()).unwrap();
+            answered_by.push((answers.borrow().clone(), sim.traced("find_key").len()));
+        }
+        assert_eq!(
+            answered_by,
+            [
+                (vec![Err(InboundError::RoomNotFound(room_id()))], 0),
+                (
+                    vec![Err(InboundError::Refused {
+                        reason: "source_unbound".to_owned()
+                    })],
+                    0
+                )
+            ]
+        );
+    }
 }
 
 /// RFC §9.5.1 Reentrance, §10.1 step 18, gap G-070: a call an agent's turn

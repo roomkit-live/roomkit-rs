@@ -158,7 +158,9 @@ as it stands.
   over, at depth 0 and on a budget of its
   own (gap G-070); a direct injection from the room's work whose key its
   channel holds is a replay, its key read before the budget it draws on,
-  which returns the event the key committed and draws nothing, past the
+  once its room is read and admits it, so a caller its pass would refuse
+  never receives the original (§17.2), and the replay returns the event the
+  key committed and draws nothing, past the
   budget too, its record looking the key up again under the lock (gap
   G-081); a
   call that would wait for what its own context holds fails
