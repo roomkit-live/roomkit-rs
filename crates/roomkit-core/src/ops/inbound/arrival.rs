@@ -34,7 +34,7 @@ use crate::model::{ChannelType, EventId, InboundMessage, RoomContext, RoomEvent,
 use crate::ops::io::Bound;
 use crate::ops::protocol::{ChannelRequest, EffectId, Outcome, Request, StoreRequest};
 use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
-use crate::rules::chain_depth::ReentryBudget;
+use crate::rules::chain_depth::Draw;
 use crate::rules::routing::{self, RouteQuery, Sender};
 use crate::rules::{addresses, idempotency, permissions};
 
@@ -68,9 +68,9 @@ pub(super) enum Admitted {
 }
 
 /// Admits `message`, the call's own or an entry's, before anything is
-/// read: first the charge on `budget`, the reentry budget of the room's
-/// work a message naming its room draws on, when it draws on one (RFC
-/// §8.3, §10.1 step 1, gap G-070): past it, the message is refused
+/// read: first `draw`, what a message naming its room draws on the reentry
+/// budget of the room's work, when it draws on one (RFC §8.3, §10.1 step
+/// 1, gaps G-070, G-087): past it, the message is refused
 /// `reentry_loop_cap` first thing, with no event, its channel not looked
 /// up. Then step 1, its blank idempotency key read as none (RFC §13.4),
 /// and the refusals of an instruction that cannot be one (RFC §10.1.1) and
@@ -84,9 +84,9 @@ pub(super) enum Admitted {
 pub(super) fn admit(
     config: &KitConfig,
     message: InboundMessage,
-    budget: Option<&ReentryBudget>,
+    draw: Option<&Draw>,
 ) -> Result<Admitted, InboundError> {
-    if budget.is_some_and(|budget| !budget.take()) {
+    if draw.is_some_and(|draw| !draw.take()) {
         return Ok(Admitted::Refused(Box::new(result::past_the_budget())));
     }
     let (channel, mut message) = resolve(config, message)?;
@@ -222,7 +222,7 @@ impl Arrival {
     /// `delivery`'s room sent: charged on `delivery`'s budget once its final
     /// room is known, when step 2 creates that room or it is the delivering
     /// one (gap G-070).
-    pub(super) fn charging(mut self, delivery: Option<(RoomId, ReentryBudget)>) -> Self {
+    pub(super) fn charging(mut self, delivery: Option<(RoomId, Draw)>) -> Self {
         self.charge = DeliveryCharge::new(delivery);
         self
     }
@@ -230,7 +230,7 @@ impl Arrival {
     /// The delivering cascade's budget the message's cascade draws on: the
     /// one it was charged on, when step 2 created its room or it came into
     /// the room that cascade delivers in.
-    pub(super) fn drawn_on(&self) -> Option<&ReentryBudget> {
+    pub(super) fn drawn_on(&self) -> Option<&Draw> {
         self.charge.drawn_on()
     }
 

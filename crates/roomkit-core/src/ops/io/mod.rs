@@ -10,6 +10,10 @@
 //! section that stands in a room's admission order (RFC §9.5.1) say so, as
 //! those of a section under a lock do.
 //!
+//! A hook, a parse or a route asked for under a lock or in an admission
+//! order carries the reentry budget of the cascade its section works for
+//! (`Effect::budget`, gap G-087), which the operation lends.
+//!
 //! A request within the call's bound, from its start to its decision (RFC
 //! §13.6), is given up on past its deadline, by the driver, and when the
 //! call expires before it, its caller gone (`expire`), here: it is
@@ -95,6 +99,9 @@ pub(crate) struct Io {
     /// The room in whose admission order the section being advanced runs
     /// (RFC §9.5.1).
     admitted: Option<RoomId>,
+    /// The reentry budget of the cascade the sections being advanced work
+    /// for, which the operation lends ([`Io::work_for`]).
+    work: Option<ReentryBudget>,
     /// Whether the call expired before its decision, its caller gone: a
     /// request within its bound is answered `DeadlinePassed` at once.
     expired: bool,
@@ -115,7 +122,34 @@ impl Io {
             nested: None,
             held_for_release: Vec::new(),
             admitted: None,
+            work: None,
             expired: false,
+        }
+    }
+
+    /// Makes the sections advanced from now on work for the cascade whose
+    /// budget is `budget`: a hook, a parse or a route they ask for under a
+    /// lock or in an admission order carries it (`Effect::budget`, RFC
+    /// §10.3, gap G-087), so that a direct change its code makes is that
+    /// cascade's work.
+    pub(crate) fn work_for(&mut self, budget: &ReentryBudget) {
+        self.work = Some(budget.clone());
+    }
+
+    /// The budget `request`, made under a lock when `locked`, carries
+    /// unless it names its own: the cascade's its section works for, for
+    /// a request that runs the integrator's code under a lock or in an
+    /// admission order.
+    fn lent(&self, request: &Request, locked: bool) -> Option<ReentryBudget> {
+        let runs_code = matches!(
+            request,
+            Request::Hook(_) | Request::Channel(_) | Request::Route { .. }
+        );
+        let in_section = locked || self.admitted.is_some();
+        if runs_code && in_section {
+            self.work.clone()
+        } else {
+            None
         }
     }
 
@@ -187,6 +221,7 @@ impl Io {
         }
         let deadline = bound.deadline();
         let locked = locked.or_else(|| self.nested.clone());
+        let budget = budget.or_else(|| self.lent(&request, locked.is_some()));
         let outstanding = Outstanding {
             kind: request.kind(),
             bounded: deadline.is_some(),

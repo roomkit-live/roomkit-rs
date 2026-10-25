@@ -32,7 +32,7 @@ use super::{Machine, Stage};
 use crate::model::{RoomEvent, RoomId};
 use crate::ops::protocol::{EffectId, Outcome};
 use crate::ops::{Cx, Progress, RefusedOperation};
-use crate::rules::chain_depth::{self, ReentryBudget};
+use crate::rules::chain_depth::{self, Draw, ReentryBudget};
 use crate::rules::hook_chain::HookChain;
 
 /// A committed event's delivery set, and the passes that follow it.
@@ -65,11 +65,11 @@ pub(super) struct Cascade {
     /// body, made the call, as its trigger is charged on it as it starts: a
     /// pass for a delivery's call, a hook call for a hook body's (RFC §8.3,
     /// gaps G-070, G-087).
-    drawn: Option<ReentryBudget>,
+    drawn: Option<Draw>,
     /// For a message a delivery's code sent, the room that delivery
     /// delivers in and its budget, which the message draws on once routed
     /// into that room or once it creates a room (gap G-070).
-    from_delivery: Option<(RoomId, ReentryBudget)>,
+    from_delivery: Option<(RoomId, Draw)>,
 }
 
 impl Cascade {
@@ -90,13 +90,13 @@ impl Cascade {
     /// Draws on `budget` only once the call's message is routed into
     /// `room_id`, the room whose delivery made the call, or creates a room
     /// (gap G-070).
-    pub(super) fn draw_on_from_delivery(&mut self, room_id: RoomId, budget: ReentryBudget) {
-        self.from_delivery = Some((room_id, budget));
+    pub(super) fn draw_on_from_delivery(&mut self, room_id: RoomId, draw: Draw) {
+        self.from_delivery = Some((room_id, draw));
     }
 
     /// The room and budget a delivery's message draws on once routed into
     /// that room or once it creates one, taken by its arrival.
-    pub(super) fn take_from_delivery(&mut self) -> Option<(RoomId, ReentryBudget)> {
+    pub(super) fn take_from_delivery(&mut self) -> Option<(RoomId, Draw)> {
         self.from_delivery.take()
     }
 
@@ -104,15 +104,15 @@ impl Cascade {
     /// hook's body made the call (gaps G-070, G-087): the trigger is charged
     /// on it as it is seen, a pass or a hook call, and the cascade's own
     /// passes draw on its passes.
-    pub(super) fn draw_on(&mut self, budget: ReentryBudget) {
-        self.budget = budget.for_passes();
-        self.drawn = Some(budget);
+    pub(super) fn draw_on(&mut self, draw: Draw) {
+        self.budget = draw.budget().clone();
+        self.drawn = Some(draw);
     }
 
     /// The budget of the cascade whose delivery or hook's body made the
     /// call, when it draws on one, as the call's trigger is charged on it
     /// as it starts.
-    pub(super) fn drawn_on(&self) -> Option<&ReentryBudget> {
+    pub(super) fn drawn_on(&self) -> Option<&Draw> {
         self.drawn.as_ref()
     }
 

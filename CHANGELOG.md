@@ -188,10 +188,14 @@ as it stands.
   delivery set has run (`AFTER_BROADCAST`, a change's mutation trigger) is
   that cascade's work while it runs: its calls into the room draw on the
   cascade's hook calls, a counter of `ReentryBudget` kept apart from its
-  passes, at least one deeper than its event, and a direct update or delete
-  it makes draws one too, `MutationError::ReentryLoopCap` past them,
-  nothing written (`AfterDelivery`, `UpdateEvent::made_in`,
-  `DeleteEvent::made_in`, gap G-087); a
+  passes (`Draw::HookCall`, beside `Draw::Pass`), at least one deeper than
+  its event, and a direct update or delete it makes draws one too,
+  `MutationError::ReentryLoopCap` past them, nothing written
+  (`AfterDelivery`, `UpdateEvent::made_in`, `DeleteEvent::made_in`, gap
+  G-087); a hook, a parse or a route under the room's lock or in its
+  admission order carries its cascade's budget, so that a direct change
+  it makes is that cascade's work, drawing nothing, its triggers' bodies on
+  that budget however soon the body that started the cascade is over; a
   call that would wait for what its own context holds fails
   `KitError::Reentrant`. A call's ticket is released once no section of the
   call holds the room's lock, its decision and its delivery set not waiting

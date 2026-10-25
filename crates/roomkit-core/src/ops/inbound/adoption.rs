@@ -57,7 +57,7 @@ use crate::model::{InboundMessage, Post, RoomEvent, RoomId};
 use crate::ops::io::{Bound, Io};
 use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
-use crate::rules::chain_depth;
+use crate::rules::chain_depth::{self, Draw};
 
 /// The entries adopted from the operation's own work.
 #[derive(Debug, Default)]
@@ -392,14 +392,14 @@ impl Machine {
         organization_id: Option<String>,
         message: InboundMessage,
     ) {
-        let (channel, message) =
-            match arrival::admit(cx.config, message, Some(&self.cascade.budget)) {
-                Ok(arrival::Admitted::Message { channel, message }) => (*channel, *message),
-                Ok(arrival::Admitted::Refused(refused)) => {
-                    return self.settle_entry(cx, &adopted, Ok(*refused));
-                }
-                Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
-            };
+        let pass = Draw::Pass(self.cascade.budget.clone());
+        let (channel, message) = match arrival::admit(cx.config, message, Some(&pass)) {
+            Ok(arrival::Admitted::Message { channel, message }) => (*channel, *message),
+            Ok(arrival::Admitted::Refused(refused)) => {
+                return self.settle_entry(cx, &adopted, Ok(*refused));
+            }
+            Err(error) => return self.settle_entry(cx, &adopted, Err(error)),
+        };
         let mut arrival = Box::new(Arrival::adopted(room_id, organization_id, channel, message));
         within(cx, &adopted, |cx| arrival.start(cx));
         self.adopted.running.push(AdoptedRun {
@@ -448,7 +448,7 @@ impl Machine {
         direct: Option<DirectCall>,
     ) {
         let charged = direct.is_none();
-        let state = if charged || self.cascade.budget.take() {
+        let state = if charged || self.cascade.budget.take_pass() {
             let pass = CommitPass::new(PassOrigin::Adopted(adopted.id), event).checking(direct);
             let mut pass = Box::new(pass);
             within(cx, &adopted, |cx| pass.start(cx));

@@ -10,8 +10,8 @@ use super::MutationError;
 use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId};
 use crate::ops::protocol::{EffectId, Outcome, RoomCounters, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
-use crate::ops::{Cx, Progress};
-use crate::rules::chain_depth::ReentryBudget;
+use crate::ops::{Cx, KitConfig, Progress};
+use crate::rules::chain_depth::{Draw, ReentryBudget};
 use crate::rules::hook_registry::HookTrigger;
 
 /// What a direct call changes under the room's lock, and what it gives.
@@ -66,23 +66,44 @@ pub(super) struct Update {
 }
 
 /// The room's work a direct change is made in (RFC §10.3 "A direct change
-/// from the room's work", gap G-087): the budget its triggers' hook bodies
-/// draw their calls on, and the least depth of their calls. Made from an
-/// ASYNC hook's body, its budget is seen for hook calls
-/// ([`ReentryBudget::draws_hook_calls`]), and the change draws one before
-/// it writes; made from other work of the room, or from outside it, it
-/// draws nothing.
+/// from the room's work", gap G-087): what it draws on the budget its
+/// triggers' hook bodies draw their calls on, and the least depth of their
+/// calls. Made from an ASYNC hook's body ([`Draw::HookCall`]), the change
+/// draws one hook call before it writes; made from a delivery or a section
+/// of the room's work ([`Draw::Pass`]), or from outside it, it draws
+/// nothing.
 #[derive(Clone, Debug)]
 pub(crate) struct DirectWork {
-    pub(crate) budget: ReentryBudget,
+    pub(crate) draw: Draw,
     pub(crate) floor: u32,
 }
 
 impl DirectWork {
-    /// Whether the change may write: one made from a hook's body draws one
-    /// of its budget's hook calls first; past them it writes nothing.
-    fn draws(&self) -> bool {
-        !self.budget.draws_hook_calls() || self.budget.take()
+    /// The work of a change made from outside the room's work: a budget of
+    /// its own under `config`'s limit, which it draws nothing on, its calls
+    /// at depth 0 or deeper.
+    pub(crate) fn outside(config: &KitConfig) -> Self {
+        Self {
+            draw: Draw::Pass(ReentryBudget::new(config.max_chain_depth)),
+            floor: 0,
+        }
+    }
+
+    /// Whether a change made from a hook's body draws a hook call: it
+    /// reads its target first, so that a change that finds nothing draws
+    /// nothing.
+    fn draws_a_hook_call(&self) -> bool {
+        matches!(self.draw, Draw::HookCall(_))
+    }
+
+    /// Draws what the change costs, and answers whether it may write: one
+    /// made from a hook's body draws one of its budget's hook calls first,
+    /// and past them writes nothing; any other draws nothing.
+    fn try_draw(&self) -> bool {
+        match &self.draw {
+            Draw::HookCall(budget) => budget.take_hook_call(),
+            Draw::Pass(_) => true,
+        }
     }
 
     /// Fires `trigger` for `payload` with `context`, the triggers' bodies
@@ -94,7 +115,7 @@ impl DirectWork {
         payload: &RoomEvent,
         context: &RoomContext,
     ) {
-        cx.fire_after_delivery(trigger, payload, context, &self.budget, self.floor);
+        cx.fire_after_delivery(trigger, payload, context, self.draw.budget(), self.floor);
     }
 }
 
@@ -146,7 +167,7 @@ impl Update {
         if updated == *stored {
             return Progress::Done(Ok(Some(updated)));
         }
-        if !self.work.draws() {
+        if !self.work.try_draw() {
             return Progress::Done(Err(MutationError::ReentryLoopCap(context.room.id.clone())));
         }
         for recent in &mut context.recent_events {
@@ -316,7 +337,7 @@ impl Delete {
         if !held {
             return Progress::Done(Ok(Vec::new()));
         }
-        if !self.work.draws() {
+        if !self.work.try_draw() {
             return Progress::Done(Err(MutationError::ReentryLoopCap(context.room.id.clone())));
         }
         self.delete(cx, context)
@@ -339,7 +360,7 @@ impl EventChange for Delete {
         _room_id: &RoomId,
         context: Box<RoomContext>,
     ) -> Progress<Result<Vec<RoomEvent>, MutationError>> {
-        if !self.work.budget.draws_hook_calls() {
+        if !self.work.draws_a_hook_call() {
             return self.delete(cx, context);
         }
         let effect = cx.io.issue(StoreRequest::GetEvent {

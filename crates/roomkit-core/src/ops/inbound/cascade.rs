@@ -193,7 +193,7 @@ impl Machine {
         for injected in instructions::without_instructions(injected, trigger) {
             let targets = injected.target_channel_ids.clone();
             let event = stamp::stamp_injected(injected, trigger, cx.env.new_event_id());
-            let job = if self.cascade.budget.take() {
+            let job = if self.cascade.budget.take_pass() {
                 Job::Pass(
                     Box::new(CommitPass::new(
                         PassOrigin::Injected {
@@ -323,7 +323,7 @@ impl Machine {
                 // Only a transport is asked at the limit; what it answers is
                 // stored refused (RFC §8.3).
                 self.queue_refused(event, chain_depth::CHAIN_DEPTH_LIMIT);
-            } else if self.cascade.budget.take() {
+            } else if self.cascade.budget.take_pass() {
                 let origin = PassOrigin::Response {
                     answers_within: set.answers_within().cloned(),
                 };

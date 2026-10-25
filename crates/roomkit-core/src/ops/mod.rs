@@ -129,7 +129,7 @@ impl Cx<'_> {
             event: Box::new(payload.clone()),
             context: Box::new(context.clone()),
             after_delivery: Some(AfterDelivery {
-                budget: budget.for_hook_calls(),
+                budget: budget.clone(),
                 floor,
             }),
         });

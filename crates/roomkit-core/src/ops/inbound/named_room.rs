@@ -54,7 +54,7 @@ use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
 use crate::ops::lifecycle::report::{self, Reported};
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::{ChannelDeclaration, Cx, Progress};
-use crate::rules::chain_depth::ReentryBudget;
+use crate::rules::chain_depth::Draw;
 use crate::rules::routing::{self, Recording, Sender};
 use crate::rules::{attachment, organizations};
 
@@ -82,7 +82,7 @@ pub(super) struct NamedRoom {
     bound: Bound,
     /// For a message the room's delivery work sent, the budget a room
     /// step 2 creates is charged on (gap G-070).
-    opening: Option<ReentryBudget>,
+    opening: Option<Draw>,
     /// Whether step 2 charged `opening`, having read the room absent: the
     /// charge stays when another call created the room first (gap G-070).
     charged: bool,
@@ -160,7 +160,7 @@ impl NamedRoom {
 
     /// The same step, charging `opening` one pass before it creates the
     /// room, refused past it (gap G-070).
-    pub(super) fn opening_on(mut self, opening: Option<ReentryBudget>) -> Self {
+    pub(super) fn opening_on(mut self, opening: Option<Draw>) -> Self {
         self.opening = opening;
         self
     }
@@ -275,7 +275,7 @@ impl NamedRoom {
             // the room's work that sent the message opens it, on its budget
             // (gap G-070).
             Ok(None) => match self.opening.take() {
-                Some(budget) if !budget.take() => Progress::Done(Named::PastBudget),
+                Some(draw) if !draw.take() => Progress::Done(Named::PastBudget),
                 Some(_) => {
                     self.charged = true;
                     self.create(cx)

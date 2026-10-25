@@ -98,7 +98,7 @@ use super::{Cx, Environment, KitConfig};
 use crate::model::{ChannelId, DirectEvent, InboundMessage, Post, RoomId};
 use crate::ops::io::Bound;
 pub use crate::ops::protocol::{InboundError, InboundResult};
-use crate::rules::chain_depth::ReentryBudget;
+use crate::rules::chain_depth::{Draw, ReentryBudget};
 
 /// The inbound pipeline for one call (RFC §10.1, §10.5).
 ///
@@ -216,8 +216,8 @@ impl Inbound {
     /// delivery stops at the cap.
     /// The call keeps its own admission ticket and `process_timeout`.
     #[must_use]
-    pub fn drawing_on(mut self, budget: ReentryBudget) -> Self {
-        self.machine.cascade.draw_on(budget);
+    pub fn drawing_on(mut self, draw: Draw) -> Self {
+        self.machine.cascade.draw_on(draw);
         self
     }
 
@@ -236,8 +236,8 @@ impl Inbound {
     /// room not at all. A message is charged once, wherever routing places
     /// it. A direct injection, which never creates a room, ignores it.
     #[must_use]
-    pub fn drawing_on_from_delivery(mut self, room_id: RoomId, budget: ReentryBudget) -> Self {
-        self.machine.cascade.draw_on_from_delivery(room_id, budget);
+    pub fn drawing_on_from_delivery(mut self, room_id: RoomId, draw: Draw) -> Self {
+        self.machine.cascade.draw_on_from_delivery(room_id, draw);
         self
     }
 
@@ -383,13 +383,19 @@ impl Machine {
     /// the queues, until nothing is left to take in: a section nested under
     /// a lock is answered at once, without the driver.
     fn advance(&mut self, cx: &mut Cx<'_>) {
+        // Every section of the operation works for its cascade (gap G-087);
+        // the cascade's budget is lent again after each answer, which may
+        // have set it on its caller's.
+        cx.io.work_for(&self.cascade.budget);
         if matches!(self.stage.current(), Stage::Start(_)) {
             self.begin(cx);
         }
         loop {
             while let Some((effect, outcome)) = cx.io.next_outcome() {
+                cx.io.work_for(&self.cascade.budget);
                 self.dispatch(cx, effect, outcome);
             }
+            cx.io.work_for(&self.cascade.budget);
             self.start_adopted(cx);
             self.run_queues(cx);
             self.end_once_settled();

@@ -80,12 +80,16 @@ pub struct Effect {
     /// never waits for the ticket its own caller holds (RFC §9.5.1
     /// Reentrance). `None` for any other request.
     pub admitted: Option<RoomId>,
-    /// The reentry budget a call into a room that the request's code makes
-    /// draws on (RFC §8.3, gap G-070): an `OnEvent` or a `Deliver` carries
-    /// the budget of the cascade whose delivery set made it, so that the
-    /// operation a turn's or a delivery's call starts is charged on it, and
-    /// a channel that calls into a room on every delivery stops at the cap.
-    /// `None` for any other request.
+    /// The reentry budget of the cascade whose work the request's code is
+    /// (RFC §8.3, §10.3, gaps G-070, G-087): an `OnEvent` or a `Deliver`
+    /// carries the budget of the cascade whose delivery set made it, so that
+    /// the operation a turn's or a delivery's call starts draws one of its
+    /// passes, and a channel that calls into a room on every delivery stops
+    /// at the cap; a hook, a parse or a route made under a room's lock or
+    /// in its admission order (`locked`, `admitted`) carries the budget of
+    /// the cascade its section works for, so that a direct change its code
+    /// makes is that cascade's work, its triggers' bodies drawing on its hook
+    /// calls. `None` for any other request.
     pub budget: Option<ReentryBudget>,
 }
 
@@ -186,8 +190,10 @@ pub enum Notice {
 /// has returned is work of its own.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AfterDelivery {
-    /// The budget of the cascade, or of the direct change's work, seen for
-    /// the hooks' bodies ([`ReentryBudget::for_hook_calls`]).
+    /// The budget of the cascade, or of the direct change's work, whose
+    /// hook calls the hooks' bodies draw on ([`Draw::HookCall`]).
+    ///
+    /// [`Draw::HookCall`]: crate::rules::chain_depth::Draw::HookCall
     pub budget: ReentryBudget,
     /// The least chain depth of a call the body makes: one deeper than the
     /// event the hook runs for.

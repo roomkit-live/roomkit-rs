@@ -16,7 +16,7 @@ use roomkit_core::model::{
     RoomId, Timestamp,
 };
 use roomkit_core::ops::{Inbound, InboundError, InboundResult, InboundTarget};
-use roomkit_core::rules::chain_depth::ReentryBudget;
+use roomkit_core::rules::chain_depth::{Draw, ReentryBudget};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::transcoding::text_of;
 
@@ -29,7 +29,7 @@ const OTHER: &str = "+15550000009";
 fn budget_of(passes: u32) -> ReentryBudget {
     let budget = ReentryBudget::new(1);
     while budget.remaining() > passes {
-        budget.take();
+        budget.take_pass();
     }
     budget
 }
@@ -47,7 +47,7 @@ fn route_from_delivery(
     message: InboundMessage,
 ) -> Result<InboundResult, InboundError> {
     let operation = Inbound::new(sim.shared_config(), InboundTarget::Routed, None, message)
-        .drawing_on_from_delivery(delivering, budget.clone());
+        .drawing_on_from_delivery(delivering, Draw::Pass(budget.clone()));
     sim.run(operation)
 }
 
@@ -216,7 +216,7 @@ mod a_room_created_meanwhile {
             None,
             Sim::message("sms", "Bonjour"),
         )
-        .drawing_on_from_delivery(room_2(), one.clone());
+        .drawing_on_from_delivery(room_2(), Draw::Pass(one.clone()));
         sim.run(operation).unwrap();
         assert_eq!(
             (one.remaining(), sim.timeline_lines()),
@@ -249,7 +249,7 @@ mod a_named_message {
             None,
             message,
         )
-        .drawing_on(budget_of(0));
+        .drawing_on(Draw::Pass(budget_of(0)));
         let result = sim.run(operation);
         assert_eq!(
             (
@@ -284,7 +284,7 @@ mod a_hook_s_body {
     }
 
     /// The `AFTER_BROADCAST` hooks of an event run as its cascade's work:
-    /// on that cascade's budget, seen for hook calls, one deeper than the
+    /// on the hook calls of that cascade's budget, one deeper than the
     /// event; a lifecycle observer runs as no work.
     #[test]
     fn runs_on_its_cascade_s_hook_calls_one_deeper_than_its_event() {
@@ -294,7 +294,7 @@ mod a_hook_s_body {
         let mut deep = console("Deep");
         deep.chain_depth = 2;
         sim.inject("room_1", deep).unwrap();
-        let works: Vec<(HookTrigger, Option<(bool, u32)>)> = sim
+        let works: Vec<(HookTrigger, Option<u32>)> = sim
             .notices
             .iter()
             .filter_map(|notice| match notice {
@@ -306,12 +306,12 @@ mod a_hook_s_body {
                     *trigger,
                     after_delivery
                         .as_ref()
-                        .map(|AfterDelivery { budget, floor }| (budget.draws_hook_calls(), *floor)),
+                        .map(|AfterDelivery { floor, .. }| *floor),
                 )),
                 Notice::FrameworkEvent(_) => None,
             })
             .collect();
-        assert_eq!(works, [(HookTrigger::AfterBroadcast, Some((true, 3)))]);
+        assert_eq!(works, [(HookTrigger::AfterBroadcast, Some(3))]);
     }
 
     /// A call a hook's body makes into the room draws one of the cascade's
@@ -321,7 +321,7 @@ mod a_hook_s_body {
     fn draws_a_hook_call_past_which_its_call_is_capped() {
         let mut sim = room();
         let budget = ReentryBudget::new(1);
-        let hooks = budget.for_hook_calls();
+        let hooks = Draw::HookCall(budget.clone());
         let mut drawn = Vec::new();
         for n in 0..=10 {
             let operation = Inbound::inject(

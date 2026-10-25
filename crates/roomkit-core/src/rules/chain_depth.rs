@@ -116,15 +116,12 @@ pub fn not_asked_observation(
 /// starts draws on the budget of the cascade that delivers, so that a
 /// channel that calls into a room on every delivery stops at the cap. The
 /// counts are shared across threads, as the operations that draw on them
-/// may run on several. A budget is seen as one counter or the other:
-/// [`take`](Self::take) spends a pass, or, seen for a hook's body
-/// ([`for_hook_calls`](Self::for_hook_calls)), a hook call.
+/// may run on several. What a call draws, a pass or a hook call, is its
+/// [`Draw`].
 #[derive(Clone, Debug)]
 pub struct ReentryBudget {
-    remaining: Arc<AtomicU32>,
+    passes: Arc<AtomicU32>,
     hook_calls: Arc<AtomicU32>,
-    /// Whether [`take`](Self::take) spends a hook call.
-    for_hooks: bool,
 }
 
 impl ReentryBudget {
@@ -133,70 +130,28 @@ impl ReentryBudget {
     pub fn new(max_chain_depth: u32) -> Self {
         let size = max_chain_depth.saturating_mul(10);
         Self {
-            remaining: Arc::new(AtomicU32::new(size)),
+            passes: Arc::new(AtomicU32::new(size)),
             hook_calls: Arc::new(AtomicU32::new(size)),
-            for_hooks: false,
         }
     }
 
-    /// The same budget, seen for the body of an ASYNC hook of its cascade:
-    /// [`take`](Self::take) spends one of its hook calls (RFC §8.3, §9.5.1).
-    #[must_use]
-    pub fn for_hook_calls(&self) -> Self {
-        Self {
-            for_hooks: true,
-            ..self.clone()
-        }
-    }
-
-    /// The same budget, seen for its cascade's passes: [`take`](Self::take)
-    /// spends one of its passes.
-    #[must_use]
-    pub fn for_passes(&self) -> Self {
-        Self {
-            for_hooks: false,
-            ..self.clone()
-        }
-    }
-
-    /// Whether the budget is seen for a hook's body: what a call draws on it
-    /// is a hook call.
-    pub fn draws_hook_calls(&self) -> bool {
-        self.for_hooks
-    }
-
-    /// Spends one pass, or one hook call when the budget is seen for a
-    /// hook's body, or answers `false` when none is left: the response or
-    /// the injection is then stored blocked with [`REENTRY_LOOP_CAP`]
+    /// Spends one pass, or answers `false` when none is left: the response
+    /// or the injection is then stored blocked with [`REENTRY_LOOP_CAP`]
     /// instead.
-    pub fn take(&self) -> bool {
-        let counter = if self.for_hooks {
-            &self.hook_calls
-        } else {
-            &self.remaining
-        };
-        // The count guards nothing else: no ordering with other memory is
-        // needed.
-        let mut remaining = counter.load(Ordering::Relaxed);
-        loop {
-            let Some(left) = remaining.checked_sub(1) else {
-                return false;
-            };
-            match counter.compare_exchange_weak(
-                remaining,
-                left,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return true,
-                Err(now) => remaining = now,
-            }
-        }
+    pub fn take_pass(&self) -> bool {
+        take_one(&self.passes)
+    }
+
+    /// Spends one hook call, a call an ASYNC hook's body makes into the
+    /// room (RFC §8.3 "The hook calls of a cascade"), or answers `false`
+    /// when none is left.
+    pub fn take_hook_call(&self) -> bool {
+        take_one(&self.hook_calls)
     }
 
     /// The passes left.
     pub fn remaining(&self) -> u32 {
-        self.remaining.load(Ordering::Relaxed)
+        self.passes.load(Ordering::Relaxed)
     }
 
     /// The hook calls left.
@@ -205,15 +160,61 @@ impl ReentryBudget {
     }
 }
 
-/// Two budgets are equal when they are one budget, shared, whichever
-/// counter each is seen for.
+/// Spends one of `counter`, or answers `false` when none is left.
+fn take_one(counter: &AtomicU32) -> bool {
+    // The count guards nothing else: no ordering with other memory is
+    // needed.
+    let mut remaining = counter.load(Ordering::Relaxed);
+    loop {
+        let Some(left) = remaining.checked_sub(1) else {
+            return false;
+        };
+        match counter.compare_exchange_weak(remaining, left, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return true,
+            Err(now) => remaining = now,
+        }
+    }
+}
+
+/// Two budgets are equal when they are one budget, shared.
 impl PartialEq for ReentryBudget {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.remaining, &other.remaining)
+        Arc::ptr_eq(&self.passes, &other.passes)
     }
 }
 
 impl Eq for ReentryBudget {}
+
+/// What a call made in a cascade's work draws on the cascade's budget
+/// (RFC §8.3, gaps G-070, G-087).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Draw {
+    /// One of its passes: a call a delivery's code makes into the room, a
+    /// turn's or a transport's. A direct change made from the cascade's
+    /// delivery, or from one of its sections (a hook under the room's lock
+    /// or in its admission order), draws none (RFC §10.3).
+    Pass(ReentryBudget),
+    /// One of its hook calls: a call the body of an ASYNC hook it fired
+    /// makes.
+    HookCall(ReentryBudget),
+}
+
+impl Draw {
+    /// Spends what the call draws, or answers `false` when none is left.
+    pub fn take(&self) -> bool {
+        match self {
+            Self::Pass(budget) => budget.take_pass(),
+            Self::HookCall(budget) => budget.take_hook_call(),
+        }
+    }
+
+    /// The budget it draws on.
+    pub fn budget(&self) -> &ReentryBudget {
+        match self {
+            Self::Pass(budget) | Self::HookCall(budget) => budget,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -342,13 +343,13 @@ mod tests {
     #[test]
     fn an_exhausted_reentry_budget_refuses_a_pass() {
         let budget = ReentryBudget::new(0);
-        assert!(!budget.take());
+        assert!(!budget.take_pass());
     }
 
     #[test]
     fn taking_a_pass_spends_the_budget() {
         let budget = ReentryBudget::new(1);
-        budget.take();
+        budget.take_pass();
         assert_eq!(budget.remaining(), 9);
     }
 
@@ -357,10 +358,10 @@ mod tests {
     #[test]
     fn a_hook_call_spends_no_pass() {
         let budget = ReentryBudget::new(1);
-        let hooks = budget.for_hook_calls();
+        let hooks = Draw::HookCall(budget.clone());
         let spent = (0..10).all(|_| hooks.take());
         assert_eq!(
-            (spent, hooks.take(), budget.remaining(), budget.take()),
+            (spent, hooks.take(), budget.remaining(), budget.take_pass()),
             (true, false, 10, true)
         );
     }
@@ -370,8 +371,7 @@ mod tests {
     #[test]
     fn a_clone_spends_the_same_passes() {
         let budget = ReentryBudget::new(1);
-        let drawn = budget.clone();
-        drawn.take();
+        Draw::Pass(budget.clone()).take();
         assert_eq!(budget.remaining(), 9);
     }
 }

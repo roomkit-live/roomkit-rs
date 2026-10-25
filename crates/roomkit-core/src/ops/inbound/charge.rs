@@ -20,14 +20,16 @@
 
 use super::named_room::Mode;
 use crate::model::RoomId;
-use crate::rules::chain_depth::ReentryBudget;
+use crate::rules::chain_depth::Draw;
 
 /// The charge of one message on the budget of the delivery whose code sent
 /// it, if any.
 #[derive(Debug)]
 pub(super) struct DeliveryCharge {
-    /// The room the delivery delivers in, and its cascade's budget.
-    delivery: Option<(RoomId, ReentryBudget)>,
+    /// The room the delivery delivers in, and what the message draws on
+    /// its cascade's budget: a pass for a delivery's call, a hook call for
+    /// a hook's body's (gap G-087).
+    delivery: Option<(RoomId, Draw)>,
     /// Whether the message drew its one pass on that budget: it is never
     /// charged twice, wherever routing places it once more.
     charged: bool,
@@ -40,7 +42,7 @@ pub(super) struct DeliveryCharge {
 impl DeliveryCharge {
     /// The charge of a message the code of a delivery set in `delivery`'s
     /// room sent, `None` for any other message.
-    pub(super) fn new(delivery: Option<(RoomId, ReentryBudget)>) -> Self {
+    pub(super) fn new(delivery: Option<(RoomId, Draw)>) -> Self {
         Self {
             delivery,
             charged: false,
@@ -51,7 +53,7 @@ impl DeliveryCharge {
     /// The delivering cascade's budget the message's cascade draws on: the
     /// one it was charged on, when step 2 created its room or it came into
     /// the room that cascade delivers in.
-    pub(super) fn drawn_on(&self) -> Option<&ReentryBudget> {
+    pub(super) fn drawn_on(&self) -> Option<&Draw> {
         self.delivery
             .as_ref()
             .filter(|_| self.draws)
@@ -61,7 +63,7 @@ impl DeliveryCharge {
     /// The budget step 2, in `mode`, charges before it creates a room it
     /// reads absent: the delivery's, unless the message was charged
     /// already; a fresh room was charged before step 2.
-    pub(super) fn opening(&self, mode: Mode) -> Option<ReentryBudget> {
+    pub(super) fn opening(&self, mode: Mode) -> Option<Draw> {
         match mode {
             Mode::Routed | Mode::Named if !self.charged => {
                 self.delivery.as_ref().map(|(_, budget)| budget.clone())
@@ -81,13 +83,13 @@ impl DeliveryCharge {
     /// code sent it, unless it was charged already. `false` once that
     /// budget is spent. A message no delivery's code sent charges nothing.
     pub(super) fn charge_once(&mut self) -> bool {
-        let Some((_, budget)) = &self.delivery else {
+        let Some((_, draw)) = &self.delivery else {
             return true;
         };
         if self.charged {
             return true;
         }
-        if !budget.take() {
+        if !draw.take() {
             return false;
         }
         self.charged = true;

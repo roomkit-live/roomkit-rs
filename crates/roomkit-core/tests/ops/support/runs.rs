@@ -24,7 +24,7 @@ use roomkit_core::ops::{
     ChannelRequest, Decided, Effect, EffectId, Entry, EntryId, Environment, HoldOutcome, Inbound,
     InboundTarget, Next, Notice, Operation, Outcome, Request, Settled,
 };
-use roomkit_core::rules::chain_depth::ReentryBudget;
+use roomkit_core::rules::chain_depth::{Draw, ReentryBudget};
 
 use super::{Called, Caller, Sim, Then, journal_line};
 
@@ -51,7 +51,9 @@ pub(super) struct Frame {
     admitted: Option<RoomId>,
     /// The room a delivery set delivers in, for its calls.
     delivering: Option<RoomId>,
-    /// The reentry budget of the cascade that delivers, for its calls.
+    /// The reentry budget of the cascade whose work the effect is: the
+    /// one that delivers, for a delivery's calls; the one its section works
+    /// for, for a hook under a lock or in an admission order.
     budget: Option<ReentryBudget>,
 }
 
@@ -475,9 +477,9 @@ impl Sim {
             .context
             .iter()
             .rev()
-            .find_map(|frame| frame.budget.clone())
+            .find_map(|frame| frame.delivering.as_ref().and(frame.budget.clone()))
         {
-            Some(budget) => operation.drawing_on(budget),
+            Some(budget) => operation.drawing_on(Draw::Pass(budget)),
             None => operation,
         };
         let context = call.context.clone();

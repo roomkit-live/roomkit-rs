@@ -5,7 +5,7 @@
 use roomkit_core::model::{EventId, EventUpdates, RoomEvent, RoomId};
 use roomkit_core::ops::{DeleteEvent, UpdateEvent};
 
-use roomkit_core::rules::chain_depth::ReentryBudget;
+use roomkit_core::rules::chain_depth::Draw;
 
 use super::RoomKit;
 use super::scope::Scope;
@@ -104,7 +104,7 @@ impl<S: ConversationStore> Scope<'_, S> {
             self.organization_id(),
         );
         let operation = match room_work(room_id) {
-            Some((budget, floor)) => operation.made_in(budget, floor),
+            Some((draw, floor)) => operation.made_in(draw, floor),
             None => operation,
         };
         Ok(driver::run(&self.kit.inner, "update_event", operation).await??)
@@ -126,7 +126,7 @@ impl<S: ConversationStore> Scope<'_, S> {
             self.organization_id(),
         );
         let operation = match room_work(room_id) {
-            Some((budget, floor)) => operation.made_in(budget, floor),
+            Some((draw, floor)) => operation.made_in(draw, floor),
             None => operation,
         };
         Ok(driver::run(&self.kit.inner, "delete_event", operation).await??)
@@ -134,11 +134,9 @@ impl<S: ConversationStore> Scope<'_, S> {
 }
 
 /// The work of `room_id` a direct change made by the current task is made
-/// in, a delivery's or a hook body's, while it runs: its cascade's budget,
-/// seen for hook calls for a hook body, and the least depth of the calls
-/// it makes (gap G-087); `None` outside the room's work.
-fn room_work(room_id: &RoomId) -> Option<(ReentryBudget, u32)> {
-    let context = ExecutionContext::current();
-    let budget = context.budget(room_id)?;
-    Some((budget, context.turn_depth().unwrap_or(0)))
+/// in, while it runs ([`ExecutionContext::room_work`]): what it draws on
+/// its cascade's budget, a hook call from a hook's body only, and the least
+/// depth of its triggers' calls (gap G-087); `None` outside the room's work.
+fn room_work(room_id: &RoomId) -> Option<(Draw, u32)> {
+    ExecutionContext::current().room_work(room_id)
 }

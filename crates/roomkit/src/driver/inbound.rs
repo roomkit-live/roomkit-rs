@@ -195,11 +195,11 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     let context = ExecutionContext::current();
     let inbound = match room_id.and_then(|room_id| context.budget(room_id)) {
         // Into the room a running delivery delivers in.
-        Some(budget) => inbound.drawing_on(budget),
+        Some(draw) => inbound.drawing_on(draw),
         // Routed, or into another room: charged once step 2 knows its final
         // room, the delivering room or one it creates (gap G-070).
         None => match context.delivery() {
-            Some((delivering, budget)) => inbound.drawing_on_from_delivery(delivering, budget),
+            Some((delivering, draw)) => inbound.drawing_on_from_delivery(delivering, draw),
             None => inbound,
         },
     };

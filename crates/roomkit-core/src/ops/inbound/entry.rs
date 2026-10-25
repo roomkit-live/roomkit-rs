@@ -50,8 +50,8 @@ impl Machine {
         message: InboundMessage,
     ) {
         self.call.channel_id = Some(message.channel_id.clone());
-        let budget = self.cascade.drawn_on();
-        let (channel, message) = match arrival::admit(cx.config, message, budget) {
+        let draw = self.cascade.drawn_on();
+        let (channel, message) = match arrival::admit(cx.config, message, draw) {
             Ok(Admitted::Message { channel, message }) => (*channel, *message),
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),
             Err(error) => return self.end(cx, Err(error)),
@@ -82,11 +82,11 @@ impl Machine {
         match arrived {
             Ok(arrived) => {
                 self.call.room_id = Some(arrived.event.room_id.clone());
-                if let Some(budget) = arrival.drawn_on() {
+                if let Some(draw) = arrival.drawn_on() {
                     // Into the delivering room, or a room it opened: its
                     // cascade draws on that delivery's budget too (gap
                     // G-070).
-                    self.cascade.draw_on(budget.clone());
+                    self.cascade.draw_on(draw.clone());
                 }
                 self.after_arrival(cx, arrived);
             }
