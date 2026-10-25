@@ -37,7 +37,7 @@ use std::cmp::Ordering;
 
 use serde_json::Value;
 
-use super::addresses::{AddressForm, Addressing, SYSTEM_SENDER};
+use super::addresses::{self, AddressForm, Addressing, SYSTEM_SENDER, Written};
 use super::organizations;
 use crate::model::{
     BindingUpdate, ChannelBinding, ChannelCategory, ChannelId, ChannelType, EventStatus,
@@ -239,15 +239,13 @@ pub fn routing_address(
     addressed.then(|| sender_id.to_owned())
 }
 
-/// The chat `metadata` names under `key`, as written: a non-empty string, or
-/// a number (a Telegram chat id is one).
+/// The chat `metadata` names under `key`, as written: a string that is not
+/// blank, or an integer (a Telegram chat id is one), in its digits; a float
+/// is none (RFC §5.7, `addresses::written`).
 fn chat_of(metadata: &Metadata, key: &str) -> Option<String> {
-    match metadata.get(key)? {
-        Value::String(chat) if !chat.trim().is_empty() => Some(chat.clone()),
-        Value::Number(chat) => Some(chat.to_string()),
-        Value::String(_) | Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
-            None
-        }
+    match addresses::written(metadata.get(key)?)? {
+        Written::Text(chat) => Some(chat.to_owned()),
+        Written::Integer(chat) => Some(chat.to_string()),
     }
 }
 
@@ -1746,6 +1744,17 @@ mod tests {
                 routing_address(Addressing::Chat, "4242", &chat, Some("chat_id")),
                 Some("-100777".to_owned())
             );
+        }
+
+        /// RFC §5.7: a float is no chat, a whole one included; the chat
+        /// message names no address then.
+        #[test]
+        fn of_a_chat_message_whose_chat_is_a_float_is_none() {
+            let routed = [json!(-100_777.0), json!(4.5)].map(|chat| {
+                let chat = metadata(json!({ "chat_id": chat }));
+                routing_address(Addressing::Chat, "4242", &chat, Some("chat_id"))
+            });
+            assert_eq!(routed, [None, None]);
         }
 
         #[test]

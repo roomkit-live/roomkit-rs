@@ -52,8 +52,10 @@ as it stands.
   detach's revocation and the `roomkit:` metadata namespace (gaps G-049,
   G-053); an address in its channel's form, a phone number in E.164 by the
   rules of gap G-052 and an email address lower-case, how each channel
-  type is addressed, its recipient and chat keys, and what a recipient is
-  (gaps G-051, G-057, G-075); the rooms an organization reaches (§17.2);
+  type is addressed, its recipient and chat keys, and what a recipient or
+  a chat is, a string that is not blank or an integer, never a float, an
+  integer naming the address its digits write (gaps G-051, G-057, G-075,
+  G-078); the rooms an organization reaches (§17.2);
   the default routing strategy, its steps 1 and 3 over ACTIVE and PAUSED
   rooms, what keeps a routed room under its lock and what step 2 records of
   a routed sender (§10.4, gaps G-045, G-055, G-058, G-061); the validation

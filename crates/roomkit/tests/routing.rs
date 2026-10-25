@@ -540,6 +540,49 @@ async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
     );
 }
 
+/// RFC §5.7: an integer names the address its digits write. A room the
+/// host opened with the chat id `7`, written as an integer or as a string,
+/// is the chat `"7"`'s: its message lands there, the binding records the
+/// chat as a string, and the answer goes to the chat.
+#[tokio::test]
+async fn a_room_the_host_opened_for_a_chat_id_is_the_chat_s() {
+    let mut landed = Vec::new();
+    for held in [7.into(), "7".into()] {
+        let kit = RoomKit::new();
+        let telegram = Provider::new("tg", ChannelType::Telegram);
+        kit.register_channel(telegram.clone()).unwrap();
+        kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
+            .unwrap();
+        kit.create_room(&room("chat-room")).await.unwrap();
+        kit.attach(&room("chat-room"), &channel("ai"))
+            .await
+            .unwrap();
+        let mut options = BindingOptions::default();
+        options.metadata.insert("telegram_chat_id".to_owned(), held);
+        kit.attach_with(&room("chat-room"), &channel("tg"), options)
+            .await
+            .unwrap();
+        let mut message = InboundMessage::new(channel("tg"), "7", EventContent::text("Hi"));
+        message.metadata.insert("chat_id".to_owned(), "7".into());
+        let landed_in = routed(&kit, message).await;
+        let recorded = kit
+            .store()
+            .list_bindings(&landed_in)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|binding| binding.channel_id == channel("tg"))
+            .and_then(|binding| binding.participant_id.map(String::from));
+        landed.push((landed_in.to_string(), recorded, telegram.sent()));
+    }
+    let expected = (
+        "chat-room".to_owned(),
+        Some("7".to_owned()),
+        vec![("7".to_owned(), "You said: Hi".to_owned())],
+    );
+    assert_eq!(landed, [expected.clone(), expected]);
+}
+
 /// Two tasks on a multi-threaded runtime send the first messages of two
 /// senders on one number at the same instant, with no room yet: each opens
 /// a room of its own, bound to its sender.

@@ -186,38 +186,43 @@ impl AddressForm {
 
     /// The recipient `binding` delivers to, in the channel's form: its
     /// value under the channel's recipient key, when it is one
-    /// ([`has_recipient`]). A number, a Telegram chat id, is kept as
-    /// written.
+    /// ([`has_recipient`]). An integer, a Telegram chat id, is written in
+    /// its digits.
     pub fn recipient(&self, binding: &ChannelBinding) -> Option<String> {
         let key = self.recipient_key.as_deref()?;
-        match written_recipient(binding, key)? {
-            Recipient::Text(recipient) => Some(self.normalize(recipient)),
-            Recipient::Number(recipient) => Some(recipient.to_string()),
+        match written(binding.metadata.get(key)?)? {
+            Written::Text(recipient) => Some(self.normalize(recipient)),
+            Written::Integer(recipient) => Some(recipient.to_string()),
         }
     }
 }
 
-/// A recipient as a binding's metadata holds it.
-enum Recipient<'binding> {
-    Text(&'binding str),
-    Number(&'binding Number),
+/// An address as a JSON value holds it (RFC §5.7, gap G-075).
+pub(crate) enum Written<'value> {
+    /// A string that is not blank, as written.
+    Text(&'value str),
+    /// An integer, which names the address its digits write: `12345` and
+    /// `"12345"` are one address.
+    Integer(&'value Number),
 }
 
-/// The recipient `binding` holds under `key`: a string that is not blank,
-/// or a number (RFC §5.7, §10.2 step 3d, gap G-075). Null, a blank string,
-/// a boolean, an array and an object are none.
-fn written_recipient<'binding>(
-    binding: &'binding ChannelBinding,
-    key: &str,
-) -> Option<Recipient<'binding>> {
-    match binding.metadata.get(key)? {
-        Value::String(recipient) if !recipient.trim().is_empty() => {
-            Some(Recipient::Text(recipient))
+/// The address `value` holds (RFC §5.7, gap G-075): a string that is not
+/// blank, or an integer, a chat id written as one. Null, a blank string, a
+/// boolean, a float, a whole one included (`42.0`), an array and an object
+/// are none: a float has no single written form, so it cannot be compared
+/// as an address. A binding's recipient and a message's chat are read so.
+pub(crate) fn written(value: &Value) -> Option<Written<'_>> {
+    match value {
+        Value::String(address) if !address.trim().is_empty() => Some(Written::Text(address)),
+        Value::Number(address) if address.is_i64() || address.is_u64() => {
+            Some(Written::Integer(address))
         }
-        Value::Number(recipient) => Some(Recipient::Number(recipient)),
-        Value::String(_) | Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => {
-            None
-        }
+        Value::String(_)
+        | Value::Number(_)
+        | Value::Null
+        | Value::Bool(_)
+        | Value::Array(_)
+        | Value::Object(_) => None,
     }
 }
 
@@ -353,11 +358,11 @@ pub fn chat_key(channel_type: ChannelType) -> Option<&'static str> {
 }
 
 /// Whether `binding` has a recipient under `key`, the one
-/// [`AddressForm::recipient`] reads: a string that is not blank, or a
-/// number (RFC §10.2 step 3d, gap G-075). A delivery to a binding with
-/// none is refused `no_recipient`.
+/// [`AddressForm::recipient`] reads: a string that is not blank, or an
+/// integer (RFC §5.7, §10.2 step 3d, gap G-075). A delivery to a binding
+/// with none is refused `no_recipient`.
 pub fn has_recipient(binding: &ChannelBinding, key: &str) -> bool {
-    written_recipient(binding, key).is_some()
+    binding.metadata.get(key).and_then(written).is_some()
 }
 
 /// The text after a URI scheme (`whatsapp:`, `tel:`), or `address` when it
@@ -697,6 +702,37 @@ mod tests {
         assert_eq!(
             sms_form().recipient(&binding),
             Some("+15550000001".to_owned())
+        );
+    }
+
+    /// RFC §5.7: a float has no single written form, so it is no
+    /// address: a whole one, one a store reads back with an exponent and
+    /// one with a fraction are none, an integer its digits.
+    #[test]
+    fn a_float_is_no_recipient_a_whole_one_included() {
+        let form = AddressForm {
+            addressing: Addressing::Chat,
+            country_code: None,
+            recipient_key: Some(TELEGRAM_CHAT_ID.to_owned()),
+        };
+        let read: Vec<(bool, Option<String>)> = [json!(42.0), json!(1e16), json!(4.5), json!(42)]
+            .into_iter()
+            .map(|value| {
+                let binding = binding_with(json!({ "telegram_chat_id": value }));
+                (
+                    has_recipient(&binding, TELEGRAM_CHAT_ID),
+                    form.recipient(&binding),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (false, None),
+                (false, None),
+                (false, None),
+                (true, Some("42".to_owned()))
+            ]
         );
     }
 
