@@ -4,10 +4,10 @@
 
 use std::sync::Arc;
 
-use roomkit_core::model::{ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent};
+use roomkit_core::model::{ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId};
 use roomkit_core::ops::{
-    CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Environment, HookAnswer, HookRequest,
-    Notice, Outcome, StoreOutcome, StoreRequest,
+    AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Environment, HookAnswer,
+    HookRequest, Notice, Outcome, StoreOutcome, StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookTrigger};
@@ -15,7 +15,7 @@ use roomkit_core::rules::routing::RouteQuery;
 use tokio::task::JoinSet;
 
 use crate::channel::{ChannelError, EventDraft};
-use crate::context::ExecutionContext;
+use crate::context::{ExecutionContext, HookBody};
 use crate::hooks;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
@@ -202,9 +202,13 @@ pub(super) async fn route<S: ConversationStore>(
 
 /// Performs a notice: publishes a framework event, or runs observer hooks in
 /// the background, as tasks the kit tracks, logging what they raise (RFC
-/// §9.3). A background observer runs outside every execution context: it
-/// runs after the fact, and nothing awaits it as its own. Once the kit is
-/// shut down, none runs.
+/// §9.3). A background observer runs outside every call's execution
+/// context: it runs after the fact, and nothing awaits it as its own. The
+/// body of one a cascade fires once an event's delivery set has run, or a
+/// direct change fires, is that work while it runs (a [`HookBody`]): its
+/// calls into the room draw on the work's hook calls, at least one deeper
+/// than its event (RFC §8.3, §9.5.1, §10.1 step 16, gap G-087). Once the
+/// kit is shut down, none runs.
 pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notice) {
     match notice {
         Notice::FrameworkEvent(event) => inner.publish(event),
@@ -213,11 +217,13 @@ pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notic
             hooks,
             event,
             context,
+            after_delivery,
         } => {
             for hook in hooks {
                 let Some(observing) = observe(inner, trigger, hook, &event, &context) else {
                     continue;
                 };
+                let observing = in_its_work(&event.room_id, after_delivery.as_ref(), observing);
                 if inner.tasks.spawn(observing).is_none() {
                     tracing::debug!(
                         target: "roomkit::hooks",
@@ -227,6 +233,24 @@ pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notic
                 }
             }
         }
+    }
+}
+
+/// `observing`, a hook's body, run as the work `after_delivery` names, in
+/// `room_id`, until it is over; as it is outside every work otherwise.
+fn in_its_work(
+    room_id: &RoomId,
+    after_delivery: Option<&AfterDelivery>,
+    observing: impl Future<Output = ()> + Send + 'static,
+) -> impl Future<Output = ()> + Send + 'static {
+    let body =
+        after_delivery.map(|work| HookBody::new(room_id.clone(), work.budget.clone(), work.floor));
+    async move {
+        let Some(body) = body else {
+            return observing.await;
+        };
+        let _running = body.running();
+        ExecutionContext::of_hook_body(body).scope(observing).await;
     }
 }
 

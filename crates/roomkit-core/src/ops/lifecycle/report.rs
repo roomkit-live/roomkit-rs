@@ -181,6 +181,7 @@ pub(crate) fn report_after_release(
         hooks,
         event: Box::new(payload),
         context: Box::new(context.clone()),
+        after_delivery: None,
     })
 }
 

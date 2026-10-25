@@ -8,6 +8,7 @@ use crate::model::{
     Metadata, RoomContext, RoomEvent, RoomStatus, SystemContent, Task,
 };
 use crate::ops::{ChainDepthData, Cx, FrameworkEvent, Notice, RefusedOperation};
+use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_chain::{HookIncident, HookProblem};
 use crate::rules::hook_registry::HookTrigger;
 
@@ -59,9 +60,15 @@ pub(super) fn root_deliveries(cx: &mut Cx<'_>, event: &RoomEvent, outcome: &SetO
 }
 
 /// Fires the `AFTER_BROADCAST` observers of an event whose delivery set
-/// completed (RFC §10.1 step 16).
-pub(super) fn after_broadcast(cx: &mut Cx<'_>, event: &RoomEvent, context: &RoomContext) {
-    cx.fire_observers(HookTrigger::AfterBroadcast, event, context);
+/// completed (RFC §10.1 step 16), their bodies the work of the cascade
+/// drawing on `budget` while they run (gap G-087).
+pub(super) fn after_broadcast(
+    cx: &mut Cx<'_>,
+    event: &RoomEvent,
+    context: &RoomContext,
+    budget: &ReentryBudget,
+) {
+    cx.fire_after_delivery(HookTrigger::AfterBroadcast, event, context, budget, 0);
 }
 
 /// Fires the mutation trigger of an edit or a delete committed as `change`,
@@ -69,19 +76,21 @@ pub(super) fn after_broadcast(cx: &mut Cx<'_>, event: &RoomEvent, context: &Room
 /// `ON_EVENT_UPDATED` for an edit, `ON_EVENT_DELETED` for a delete, its
 /// payload `target` as the commit left it, which its observers' filters
 /// read, and `context` the room as the commit left it, the change in its
-/// history (gap G-062). A blocked change never reaches here.
+/// history (gap G-062), their bodies the work of the cascade drawing on
+/// `budget` (gap G-087). A blocked change never reaches here.
 pub(super) fn target_changed(
     cx: &mut Cx<'_>,
     change: &RoomEvent,
     target: &RoomEvent,
     context: &RoomContext,
+    budget: &ReentryBudget,
 ) {
     let trigger = if change.event_type == EventType::Delete {
         HookTrigger::OnEventDeleted
     } else {
         HookTrigger::OnEventUpdated
     };
-    cx.fire_observers(trigger, target, context);
+    cx.fire_after_delivery(trigger, target, context, budget, 0);
 }
 
 /// Fires the `ON_TASK_CREATED` observers of each stored task (RFC §9.2),

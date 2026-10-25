@@ -159,7 +159,13 @@ impl Machine {
             return;
         };
         if let Some(changed) = &changed {
-            report::target_changed(cx, &event, &changed.target, &changed.context);
+            report::target_changed(
+                cx,
+                &event,
+                &changed.target,
+                &changed.context,
+                &self.cascade.budget,
+            );
         }
         let kind = match origin {
             PassOrigin::Trigger => SetKind::Root,
@@ -257,7 +263,7 @@ impl Machine {
     /// call's own written into its result too.
     pub(super) fn on_set(&mut self, cx: &mut Cx<'_>, outcome: SetOutcome, set: &DeliverySet) {
         let event = set.event();
-        report::after_broadcast(cx, event, set.context());
+        report::after_broadcast(cx, event, set.context(), &self.cascade.budget);
         match set.kind() {
             SetKind::Root => self.settle_root(cx, event, &outcome),
             SetKind::Adopted => report::root_deliveries(cx, event, &outcome),

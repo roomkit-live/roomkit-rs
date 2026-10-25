@@ -5,8 +5,11 @@
 use roomkit_core::model::{EventId, EventUpdates, RoomEvent, RoomId};
 use roomkit_core::ops::{DeleteEvent, UpdateEvent};
 
+use roomkit_core::rules::chain_depth::ReentryBudget;
+
 use super::RoomKit;
 use super::scope::Scope;
+use crate::context::ExecutionContext;
 use crate::driver;
 use crate::error::KitError;
 use crate::store::ConversationStore;
@@ -24,9 +27,18 @@ impl<S: ConversationStore> RoomKit<S> {
     /// G-063). An update that changes nothing writes and fires nothing
     /// either.
     ///
+    /// Made from the body of an ASYNC hook a cascade fires once an event's
+    /// delivery set has run, an update that changes something draws one of
+    /// that cascade's hook calls before it writes; made from other work of
+    /// the room, it draws nothing. Its trigger's hook bodies run on the
+    /// budget of that work, or of its own from outside (RFC §10.3 "A direct
+    /// change from the room's work", gap G-087).
+    ///
     /// # Errors
     ///
-    /// Returns [`KitError::Mutation`] when the store or the room lock fails.
+    /// Returns [`KitError::Mutation`] when the store or the room lock fails,
+    /// and with [`MutationError::ReentryLoopCap`](crate::MutationError::ReentryLoopCap)
+    /// when a hook's body is past its cascade's hook calls, nothing written.
     pub async fn update_event(
         &self,
         room_id: &RoomId,
@@ -54,9 +66,15 @@ impl<S: ConversationStore> RoomKit<S> {
     /// the replies; none when the room holds no such event or does not
     /// exist, which changes and fires nothing (gap G-063).
     ///
+    /// Made from an ASYNC hook's body, a delete of an event the room holds
+    /// draws one hook call before it removes anything, as an update does
+    /// (gap G-087).
+    ///
     /// # Errors
     ///
-    /// Returns [`KitError::Mutation`] when the store or the room lock fails.
+    /// Returns [`KitError::Mutation`] when the store or the room lock fails,
+    /// and with [`MutationError::ReentryLoopCap`](crate::MutationError::ReentryLoopCap)
+    /// when a hook's body is past its cascade's hook calls, nothing removed.
     pub async fn delete_event(
         &self,
         room_id: &RoomId,
@@ -85,6 +103,10 @@ impl<S: ConversationStore> Scope<'_, S> {
             updates,
             self.organization_id(),
         );
+        let operation = match room_work(room_id) {
+            Some((budget, floor)) => operation.made_in(budget, floor),
+            None => operation,
+        };
         Ok(driver::run(&self.kit.inner, "update_event", operation).await??)
     }
 
@@ -103,6 +125,20 @@ impl<S: ConversationStore> Scope<'_, S> {
             cascade_replies,
             self.organization_id(),
         );
+        let operation = match room_work(room_id) {
+            Some((budget, floor)) => operation.made_in(budget, floor),
+            None => operation,
+        };
         Ok(driver::run(&self.kit.inner, "delete_event", operation).await??)
     }
+}
+
+/// The work of `room_id` a direct change made by the current task is made
+/// in, a delivery's or a hook body's, while it runs: its cascade's budget,
+/// seen for hook calls for a hook body, and the least depth of the calls
+/// it makes (gap G-087); `None` outside the room's work.
+fn room_work(room_id: &RoomId) -> Option<(ReentryBudget, u32)> {
+    let context = ExecutionContext::current();
+    let budget = context.budget(room_id)?;
+    Some((budget, context.turn_depth().unwrap_or(0)))
 }

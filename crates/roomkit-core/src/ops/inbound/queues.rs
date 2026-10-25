@@ -61,9 +61,11 @@ pub(super) struct Cascade {
     /// adopted entry's on its caller's (RFC §8.3), and the calls its
     /// delivery sets' targets make into a room too (gap G-070).
     pub(super) budget: ReentryBudget,
-    /// Whether the call draws on the budget of the cascade whose delivery
-    /// made it, which charges its trigger as it starts (gap G-070).
-    drawn: bool,
+    /// The budget of the cascade whose delivery, or whose ASYNC hook's
+    /// body, made the call, as its trigger is charged on it as it starts: a
+    /// pass for a delivery's call, a hook call for a hook body's (RFC §8.3,
+    /// gaps G-070, G-087).
+    drawn: Option<ReentryBudget>,
     /// For a message a delivery's code sent, the room that delivery
     /// delivers in and its budget, which the message draws on once routed
     /// into that room or once it creates a room (gap G-070).
@@ -80,7 +82,7 @@ impl Cascade {
             delivery: None,
             stopping: false,
             budget,
-            drawn: false,
+            drawn: None,
             from_delivery: None,
         }
     }
@@ -98,17 +100,20 @@ impl Cascade {
         self.from_delivery.take()
     }
 
-    /// Draws on `budget`, the budget of the cascade whose delivery made the
-    /// call (gap G-070).
+    /// Draws on `budget`, the budget of the cascade whose delivery or whose
+    /// hook's body made the call (gaps G-070, G-087): the trigger is charged
+    /// on it as it is seen, a pass or a hook call, and the cascade's own
+    /// passes draw on its passes.
     pub(super) fn draw_on(&mut self, budget: ReentryBudget) {
-        self.budget = budget;
-        self.drawn = true;
+        self.budget = budget.for_passes();
+        self.drawn = Some(budget);
     }
 
-    /// The budget of the cascade whose delivery made the call, when it
-    /// draws on one, which charges the call's trigger as it starts.
+    /// The budget of the cascade whose delivery or hook's body made the
+    /// call, when it draws on one, as the call's trigger is charged on it
+    /// as it starts.
     pub(super) fn drawn_on(&self) -> Option<&ReentryBudget> {
-        self.drawn.then_some(&self.budget)
+        self.drawn.as_ref()
     }
 
     /// Queues `job` at the head of the passes, ahead of what the sets of

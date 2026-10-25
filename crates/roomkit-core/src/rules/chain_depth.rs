@@ -105,36 +105,84 @@ pub fn not_asked_observation(
 /// chain-depth limit, shared by every response the cascade re-enters, the
 /// events its hooks inject, the entries its operation adopts, and the calls
 /// its delivery sets make into a room, a turn's or a transport's delivery's
-/// (gap G-070).
+/// (gap G-070); and, on a counter of the same size kept apart, the calls
+/// the bodies of the ASYNC hooks it fires once an event's delivery set has
+/// run may still make into the room, every hook of the cascade together
+/// (RFC §8.3 "The hook calls of a cascade", gap G-087): a hook's notices
+/// cost the agents no answer, and their answers block no notice below the
+/// cap.
 ///
-/// A clone draws on the same passes: the operation a delivery's call starts
-/// draws on the budget of the cascade that delivers, so that a channel that
-/// calls into a room on every delivery stops at the cap. The count is shared
-/// across threads, as the operations that draw on it may run on several.
+/// A clone draws on the same counters: the operation a delivery's call
+/// starts draws on the budget of the cascade that delivers, so that a
+/// channel that calls into a room on every delivery stops at the cap. The
+/// counts are shared across threads, as the operations that draw on them
+/// may run on several. A budget is seen as one counter or the other:
+/// [`take`](Self::take) spends a pass, or, seen for a hook's body
+/// ([`for_hook_calls`](Self::for_hook_calls)), a hook call.
 #[derive(Clone, Debug)]
 pub struct ReentryBudget {
     remaining: Arc<AtomicU32>,
+    hook_calls: Arc<AtomicU32>,
+    /// Whether [`take`](Self::take) spends a hook call.
+    for_hooks: bool,
 }
 
 impl ReentryBudget {
-    /// The budget of a cascade under `max_chain_depth`.
+    /// The budget of a cascade under `max_chain_depth`: as many passes as
+    /// hook calls.
     pub fn new(max_chain_depth: u32) -> Self {
+        let size = max_chain_depth.saturating_mul(10);
         Self {
-            remaining: Arc::new(AtomicU32::new(max_chain_depth.saturating_mul(10))),
+            remaining: Arc::new(AtomicU32::new(size)),
+            hook_calls: Arc::new(AtomicU32::new(size)),
+            for_hooks: false,
         }
     }
 
-    /// Spends one pass, or answers `false` when none is left: the response
-    /// is then stored blocked with [`REENTRY_LOOP_CAP`] instead.
+    /// The same budget, seen for the body of an ASYNC hook of its cascade:
+    /// [`take`](Self::take) spends one of its hook calls (RFC §8.3, §9.5.1).
+    #[must_use]
+    pub fn for_hook_calls(&self) -> Self {
+        Self {
+            for_hooks: true,
+            ..self.clone()
+        }
+    }
+
+    /// The same budget, seen for its cascade's passes: [`take`](Self::take)
+    /// spends one of its passes.
+    #[must_use]
+    pub fn for_passes(&self) -> Self {
+        Self {
+            for_hooks: false,
+            ..self.clone()
+        }
+    }
+
+    /// Whether the budget is seen for a hook's body: what a call draws on it
+    /// is a hook call.
+    pub fn draws_hook_calls(&self) -> bool {
+        self.for_hooks
+    }
+
+    /// Spends one pass, or one hook call when the budget is seen for a
+    /// hook's body, or answers `false` when none is left: the response or
+    /// the injection is then stored blocked with [`REENTRY_LOOP_CAP`]
+    /// instead.
     pub fn take(&self) -> bool {
+        let counter = if self.for_hooks {
+            &self.hook_calls
+        } else {
+            &self.remaining
+        };
         // The count guards nothing else: no ordering with other memory is
         // needed.
-        let mut remaining = self.remaining.load(Ordering::Relaxed);
+        let mut remaining = counter.load(Ordering::Relaxed);
         loop {
             let Some(left) = remaining.checked_sub(1) else {
                 return false;
             };
-            match self.remaining.compare_exchange_weak(
+            match counter.compare_exchange_weak(
                 remaining,
                 left,
                 Ordering::Relaxed,
@@ -150,9 +198,15 @@ impl ReentryBudget {
     pub fn remaining(&self) -> u32 {
         self.remaining.load(Ordering::Relaxed)
     }
+
+    /// The hook calls left.
+    pub fn hook_calls_left(&self) -> u32 {
+        self.hook_calls.load(Ordering::Relaxed)
+    }
 }
 
-/// Two budgets are equal when they are one budget, shared.
+/// Two budgets are equal when they are one budget, shared, whichever
+/// counter each is seen for.
 impl PartialEq for ReentryBudget {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.remaining, &other.remaining)
@@ -296,6 +350,19 @@ mod tests {
         let budget = ReentryBudget::new(1);
         budget.take();
         assert_eq!(budget.remaining(), 9);
+    }
+
+    /// RFC §8.3: a hook's body draws on the hook calls, kept apart from the
+    /// passes: neither spends the other.
+    #[test]
+    fn a_hook_call_spends_no_pass() {
+        let budget = ReentryBudget::new(1);
+        let hooks = budget.for_hook_calls();
+        let spent = (0..10).all(|_| hooks.take());
+        assert_eq!(
+            (spent, hooks.take(), budget.remaining(), budget.take()),
+            (true, false, 10, true)
+        );
     }
 
     /// Gap G-070: the operation a delivery's call starts draws on the

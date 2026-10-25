@@ -165,7 +165,33 @@ pub enum Notice {
         event: Box<RoomEvent>,
         /// The room's context, whole.
         context: Box<RoomContext>,
+        /// For the hooks a cascade fires once an event's delivery set has
+        /// run, and a direct change's: the work each body is while it runs
+        /// (RFC §8.3, §9.5.1, §10.1 step 16, §10.3); `None` for any other.
+        after_delivery: Option<AfterDelivery>,
     },
+}
+
+/// The work the body of an ASYNC hook is while it runs, when a cascade
+/// fires it once an event's delivery set has run (RFC §10.1 step 16's
+/// `AFTER_BROADCAST` hooks, a change's `ON_EVENT_UPDATED` and
+/// `ON_EVENT_DELETED` hooks, §10.3), or a direct change does (gap G-087).
+///
+/// While the body runs, a call it makes into the room is a new arrival
+/// that draws one of `budget`'s hook calls as it starts, its cascade on
+/// that budget's passes; a direct change it makes there draws one too; and
+/// a call it makes into any room is at least `floor` deep (RFC §8.3), so
+/// that a hook that asks an agent again after each of its answers ends at
+/// the chain-depth limit. Work the body starts that calls once the body
+/// has returned is work of its own.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AfterDelivery {
+    /// The budget of the cascade, or of the direct change's work, seen for
+    /// the hooks' bodies ([`ReentryBudget::for_hook_calls`]).
+    pub budget: ReentryBudget,
+    /// The least chain depth of a call the body makes: one deeper than the
+    /// event the hook runs for.
+    pub floor: u32,
 }
 
 /// What an operation produced on one poll.

@@ -11,6 +11,7 @@ use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId};
 use crate::ops::protocol::{EffectId, Outcome, RoomCounters, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Cx, Progress};
+use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::HookTrigger;
 
 /// What a direct call changes under the room's lock, and what it gives.
@@ -60,7 +61,41 @@ pub(super) trait EventChange: Debug {
 pub(super) struct Update {
     event_id: EventId,
     updates: Box<EventUpdates>,
+    pub(super) work: DirectWork,
     state: UpdateState,
+}
+
+/// The room's work a direct change is made in (RFC §10.3 "A direct change
+/// from the room's work", gap G-087): the budget its triggers' hook bodies
+/// draw their calls on, and the least depth of their calls. Made from an
+/// ASYNC hook's body, its budget is seen for hook calls
+/// ([`ReentryBudget::draws_hook_calls`]), and the change draws one before
+/// it writes; made from other work of the room, or from outside it, it
+/// draws nothing.
+#[derive(Clone, Debug)]
+pub(crate) struct DirectWork {
+    pub(crate) budget: ReentryBudget,
+    pub(crate) floor: u32,
+}
+
+impl DirectWork {
+    /// Whether the change may write: one made from a hook's body draws one
+    /// of its budget's hook calls first; past them it writes nothing.
+    fn draws(&self) -> bool {
+        !self.budget.draws_hook_calls() || self.budget.take()
+    }
+
+    /// Fires `trigger` for `payload` with `context`, the triggers' bodies
+    /// the work of the change's (RFC §10.3).
+    fn fire(
+        &self,
+        cx: &mut Cx<'_>,
+        trigger: HookTrigger,
+        payload: &RoomEvent,
+        context: &RoomContext,
+    ) {
+        cx.fire_after_delivery(trigger, payload, context, &self.budget, self.floor);
+    }
 }
 
 #[derive(Debug)]
@@ -82,10 +117,11 @@ enum UpdateState {
 
 impl Update {
     /// The update of `event_id` with `updates`.
-    pub(super) fn new(event_id: EventId, updates: EventUpdates) -> Self {
+    pub(super) fn new(event_id: EventId, updates: EventUpdates, work: DirectWork) -> Self {
         Self {
             event_id,
             updates: Box::new(updates),
+            work,
             state: UpdateState::Start,
         }
     }
@@ -109,6 +145,9 @@ impl Update {
         self.updates.apply(&mut updated);
         if updated == *stored {
             return Progress::Done(Ok(Some(updated)));
+        }
+        if !self.work.draws() {
+            return Progress::Done(Err(MutationError::ReentryLoopCap(context.room.id.clone())));
         }
         for recent in &mut context.recent_events {
             if recent.id == self.event_id {
@@ -200,7 +239,8 @@ impl EventChange for Update {
     /// update wrote it (gap G-063).
     fn report(&self, cx: &mut Cx<'_>, context: &RoomContext) {
         if let UpdateState::Over(Some((event, _))) = &self.state {
-            cx.fire_observers(HookTrigger::OnEventUpdated, event, context);
+            self.work
+                .fire(cx, HookTrigger::OnEventUpdated, event, context);
         }
     }
 }
@@ -211,12 +251,19 @@ impl EventChange for Update {
 pub(super) struct Delete {
     event_id: EventId,
     cascade_replies: bool,
+    pub(super) work: DirectWork,
     state: DeleteState,
 }
 
 #[derive(Debug)]
 enum DeleteState {
     Start,
+    /// A delete made from a hook's body reads its event first: it draws a
+    /// hook call only for an event the room holds.
+    Reading {
+        effect: EffectId,
+        context: Box<RoomContext>,
+    },
     Deleting {
         effect: EffectId,
         context: Box<RoomContext>,
@@ -229,12 +276,50 @@ enum DeleteState {
 impl Delete {
     /// The delete of `event_id`, with its replies one level deep when
     /// `cascade_replies` is set.
-    pub(super) fn new(event_id: EventId, cascade_replies: bool) -> Self {
+    pub(super) fn new(event_id: EventId, cascade_replies: bool, work: DirectWork) -> Self {
         Self {
             event_id,
             cascade_replies,
+            work,
             state: DeleteState::Start,
         }
+    }
+
+    /// Removes the event, the store answering what it removed.
+    fn delete(
+        &mut self,
+        cx: &mut Cx<'_>,
+        context: Box<RoomContext>,
+    ) -> Progress<Result<Vec<RoomEvent>, MutationError>> {
+        let effect = cx.io.issue(StoreRequest::DeleteEvent {
+            room_id: context.room.id.clone(),
+            event_id: self.event_id.clone(),
+            cascade_replies: self.cascade_replies,
+        });
+        self.state = DeleteState::Deleting { effect, context };
+        Progress::Waiting
+    }
+
+    /// The event a hook body's delete names is read: another room's, or
+    /// none, is a no-op that draws nothing; the room's draws one hook call
+    /// before it is removed, past which nothing is (RFC §10.3).
+    fn on_read(
+        &mut self,
+        cx: &mut Cx<'_>,
+        context: Box<RoomContext>,
+        outcome: Outcome,
+    ) -> Progress<Result<Vec<RoomEvent>, MutationError>> {
+        let held = match outcome.into_event() {
+            Ok(stored) => stored.is_some_and(|event| event.room_id == context.room.id),
+            Err(error) => return Progress::Done(Err(MutationError::Store(error))),
+        };
+        if !held {
+            return Progress::Done(Ok(Vec::new()));
+        }
+        if !self.work.draws() {
+            return Progress::Done(Err(MutationError::ReentryLoopCap(context.room.id.clone())));
+        }
+        self.delete(cx, context)
     }
 }
 
@@ -246,31 +331,36 @@ impl EventChange for Delete {
         Ok(Vec::new())
     }
 
-    /// Removes the event at once, the store answering what it removed.
+    /// Removes the event at once, the store answering what it removed; a
+    /// delete made from a hook's body reads it first.
     fn begin(
         &mut self,
         cx: &mut Cx<'_>,
-        room_id: &RoomId,
+        _room_id: &RoomId,
         context: Box<RoomContext>,
     ) -> Progress<Result<Vec<RoomEvent>, MutationError>> {
-        let effect = cx.io.issue(StoreRequest::DeleteEvent {
-            room_id: room_id.clone(),
+        if !self.work.budget.draws_hook_calls() {
+            return self.delete(cx, context);
+        }
+        let effect = cx.io.issue(StoreRequest::GetEvent {
             event_id: self.event_id.clone(),
-            cascade_replies: self.cascade_replies,
         });
-        self.state = DeleteState::Deleting { effect, context };
+        self.state = DeleteState::Reading { effect, context };
         Progress::Waiting
     }
 
     fn accept(
         &mut self,
-        _cx: &mut Cx<'_>,
+        cx: &mut Cx<'_>,
         outcome: Outcome,
     ) -> Progress<Result<Vec<RoomEvent>, MutationError>> {
-        let DeleteState::Deleting { mut context, .. } =
-            std::mem::replace(&mut self.state, DeleteState::Over(None))
-        else {
-            return Progress::Waiting;
+        let mut context = match std::mem::replace(&mut self.state, DeleteState::Over(None)) {
+            DeleteState::Reading { context, .. } => return self.on_read(cx, context, outcome),
+            DeleteState::Deleting { context, .. } => context,
+            state @ (DeleteState::Start | DeleteState::Over(_)) => {
+                self.state = state;
+                return Progress::Waiting;
+            }
         };
         match outcome.into_deleted() {
             Ok(removed) => {
@@ -285,16 +375,20 @@ impl EventChange for Delete {
     }
 
     fn awaits(&self, effect: EffectId) -> bool {
-        matches!(
-            &self.state,
-            DeleteState::Deleting { effect: deleting, .. } if *deleting == effect
-        )
+        match &self.state {
+            DeleteState::Reading { effect: waited, .. }
+            | DeleteState::Deleting { effect: waited, .. } => *waited == effect,
+            DeleteState::Start | DeleteState::Over(_) => false,
+        }
     }
 
     fn reported(&self) -> Option<&RoomContext> {
         match &self.state {
             DeleteState::Over(Some((_, context))) => Some(context),
-            DeleteState::Start | DeleteState::Deleting { .. } | DeleteState::Over(None) => None,
+            DeleteState::Start
+            | DeleteState::Reading { .. }
+            | DeleteState::Deleting { .. }
+            | DeleteState::Over(None) => None,
         }
     }
 
@@ -303,7 +397,8 @@ impl EventChange for Delete {
     fn report(&self, cx: &mut Cx<'_>, context: &RoomContext) {
         if let DeleteState::Over(Some((removed, _))) = &self.state {
             for event in removed {
-                cx.fire_observers(HookTrigger::OnEventDeleted, event, context);
+                self.work
+                    .fire(cx, HookTrigger::OnEventDeleted, event, context);
             }
         }
     }

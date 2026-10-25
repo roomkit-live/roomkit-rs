@@ -61,12 +61,14 @@ pub use lifecycle::{
     UpdateBinding,
 };
 pub use protocol::{
-    CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided, Effect, EffectId, Entry,
-    EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest, Next, Notice, Operation, Outcome,
-    ProtocolError, Request, RoomCounters, Settled, Step, StoreOutcome, StoreRequest, TargetUpdate,
+    AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided, Effect,
+    EffectId, Entry, EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest, Next, Notice,
+    Operation, Outcome, ProtocolError, Request, RoomCounters, Settled, Step, StoreOutcome,
+    StoreRequest, TargetUpdate,
 };
 
 use crate::model::{ErrorRecord, EventId, RoomContext, RoomEvent, RoomId};
+use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::HookTrigger;
 
 /// What a sub-machine reads and writes while it advances.
@@ -96,6 +98,40 @@ impl Cx<'_> {
             hooks,
             event: Box::new(payload.clone()),
             context: Box::new(context.clone()),
+            after_delivery: None,
+        });
+    }
+
+    /// Fires `trigger`'s observers of `payload` as [`fire_observers`]
+    /// does, their bodies the work of the cascade or the direct change
+    /// whose budget is `budget` while they run (RFC §8.3, §9.5.1, §10.1
+    /// step 16, §10.3, gap G-087): what they call into the room draws on
+    /// its hook calls, at least `floor` deep, one deeper than `payload`
+    /// when the caller names no deeper floor.
+    ///
+    /// [`fire_observers`]: Self::fire_observers
+    pub(crate) fn fire_after_delivery(
+        &mut self,
+        trigger: HookTrigger,
+        payload: &RoomEvent,
+        context: &RoomContext,
+        budget: &ReentryBudget,
+        floor: u32,
+    ) {
+        let hooks = self.config.hooks.observers(trigger, &payload.source);
+        if hooks.is_empty() {
+            return;
+        }
+        let floor = floor.max(payload.chain_depth.saturating_add(1));
+        self.io.notify(Notice::AsyncHooks {
+            trigger,
+            hooks,
+            event: Box::new(payload.clone()),
+            context: Box::new(context.clone()),
+            after_delivery: Some(AfterDelivery {
+                budget: budget.for_hook_calls(),
+                floor,
+            }),
         });
     }
 

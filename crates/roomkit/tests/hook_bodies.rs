@@ -1,0 +1,719 @@
+//! The body of an ASYNC hook a cascade fires once an event's delivery set
+//! has run (`AFTER_BROADCAST`, a change's `ON_EVENT_UPDATED` and
+//! `ON_EVENT_DELETED`) is that cascade's work while it runs (RFC §8.3, §9.5.1,
+//! §10.1 step 16, §10.3, RMK-954): a call it makes into the room draws one
+//! of the cascade's hook calls, a counter kept apart from its passes; a
+//! direct change it makes draws one too, refused past them; a call it makes
+//! is at least one deeper than its event; a task it starts calls as work of
+//! its own once the body has returned.
+//!
+//! Each looping hook stops itself well past the cap, so that a loop the cap
+//! does not stop fails at once rather than run forever.
+
+#![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
+
+use std::future::{Future, ready};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use pretty_assertions::assert_eq;
+use roomkit::model::{
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    DeleteContent, DeleteType, DirectEvent, EditContent, EventContent, EventDirection, EventId,
+    EventSource, EventType, EventUpdates, HookResult, InboundMessage, ParticipantId, Post,
+    RoomContext, RoomEvent, RoomId,
+};
+use roomkit::testing::RecordingTransport;
+use roomkit::{
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, HookTrigger, InboundResult,
+    InboundRoomRouter, KitError, MutationError, RoomKit, RouteQuery, RouterError, keep_context,
+    text_of,
+};
+
+/// `max_chain_depth` 1: ten passes and ten hook calls per cascade.
+const BUDGET: usize = 10;
+
+fn channel(id: &str) -> ChannelId {
+    ChannelId::new(id).unwrap()
+}
+
+fn room_id() -> RoomId {
+    RoomId::new("r1").unwrap()
+}
+
+/// What a test collects from the hooks it runs.
+type Kept<T> = Arc<Mutex<Vec<T>>>;
+
+fn kept<T>() -> Kept<T> {
+    Arc::default()
+}
+
+fn push<T>(kept: &Kept<T>, item: T) {
+    kept.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(item);
+}
+
+fn len<T>(kept: &Kept<T>) -> usize {
+    kept.lock().unwrap_or_else(PoisonError::into_inner).len()
+}
+
+fn taken<T>(kept: &Kept<T>) -> Vec<T> {
+    std::mem::take(&mut *kept.lock().unwrap_or_else(PoisonError::into_inner))
+}
+
+/// Room `r1` with an SMS, its kit's chain-depth limit `max_chain_depth`.
+async fn room(max_chain_depth: u32) -> RoomKit {
+    let kit = RoomKit::new();
+    kit.set_max_chain_depth(max_chain_depth);
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+        .unwrap();
+    kit.create_room(&room_id()).await.unwrap();
+    kit.attach(&room_id(), &channel("sms")).await.unwrap();
+    kit
+}
+
+fn message(text: &str) -> InboundMessage {
+    InboundMessage::new(channel("sms"), "+15551234567", EventContent::text(text))
+}
+
+/// The customer's `text` from the SMS, sent as `u`.
+fn from_u(content: EventContent, event_type: EventType) -> DirectEvent {
+    DirectEvent {
+        event_type,
+        participant_id: Some(ParticipantId::new("u").unwrap()),
+        ..DirectEvent::new(channel("sms"), content)
+    }
+}
+
+/// An agent that answers "Answer." to every event but its own, and counts
+/// what it is asked.
+#[derive(Clone)]
+struct Answering {
+    id: ChannelId,
+    asked: Kept<RoomEvent>,
+}
+
+impl Answering {
+    fn new(id: &str) -> Self {
+        Self {
+            id: channel(id),
+            asked: kept(),
+        }
+    }
+}
+
+impl Channel for Answering {
+    fn declaration(&self) -> ChannelDeclaration {
+        ChannelDeclaration::new(
+            self.id.clone(),
+            ChannelType::Ai,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+        )
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        if event.source.channel_id == self.id {
+            return ready(Ok(ChannelOutput::default()));
+        }
+        push(&self.asked, event.clone());
+        let answer = RoomEvent::new(
+            event.id.clone(),
+            event.room_id.clone(),
+            EventType::Message,
+            EventSource::new(self.id.clone(), ChannelType::Ai, EventDirection::Outbound),
+            EventContent::text("Answer."),
+            event.created_at,
+        );
+        ready(Ok(ChannelOutput::respond(vec![answer])))
+    }
+}
+
+/// RFC §9.5.1, §10.1 step 16: no agent in the room, the hook's own post
+/// fires it again: it stops at the cap of its cascade's hook calls.
+#[tokio::test]
+async fn a_hook_posting_after_every_event_stops_at_the_cap() {
+    let kit = room(1).await;
+    let posted: Kept<Option<String>> = kept();
+    let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
+    kit.observe("notice", HookTrigger::AfterBroadcast, move |event, _| {
+        let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
+        async move {
+            if event.event_type == EventType::Message && len(&posted) <= 2 * BUDGET {
+                let notice = Post::new(EventContent::text(format!("Noted {}.", len(&posted))));
+                let event = kit.post(&room_id(), notice).await.unwrap();
+                push(&posted, event.blocked_by);
+            }
+        }
+    })
+    .unwrap();
+    kit.process_inbound_in(&room_id(), message("hi"))
+        .await
+        .unwrap();
+    kit.idle().await;
+    let mut expected = vec![None; BUDGET];
+    expected.push(Some("reentry_loop_cap".to_owned()));
+    assert_eq!(taken(&posted), expected);
+}
+
+/// A router that opens a room for every message.
+struct NoRoom;
+
+impl<S: ConversationStore> InboundRoomRouter<S> for NoRoom {
+    fn route(
+        &self,
+        _store: &S,
+        _query: &RouteQuery,
+    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
+        ready(Ok(None))
+    }
+}
+
+/// RFC §9.5.1: a message the hook sends that opens a room is the
+/// cascade's work too, charged before the room is created: a hook that
+/// opens a room after every event, each room's message firing it again,
+/// stops at the cap.
+#[tokio::test]
+async fn a_hook_opening_a_room_after_every_event_stops_at_the_cap() {
+    let kit = room(1).await;
+    kit.set_router(NoRoom);
+    let answers: Kept<Option<String>> = kept();
+    let calls: Kept<()> = kept();
+    let (hook_kit, hook_answers, hook_calls) =
+        (kit.clone(), Arc::clone(&answers), Arc::clone(&calls));
+    kit.observe("open", HookTrigger::AfterBroadcast, move |event, _| {
+        let (kit, answers, calls) = (
+            hook_kit.clone(),
+            Arc::clone(&hook_answers),
+            Arc::clone(&hook_calls),
+        );
+        async move {
+            if event.event_type == EventType::Message && len(&calls) <= 2 * BUDGET {
+                push(&calls, ());
+                let result: InboundResult = kit.process_inbound(message("again")).await.unwrap();
+                push(&answers, result.reason);
+            }
+        }
+    })
+    .unwrap();
+    kit.process_inbound_in(&room_id(), message("hi"))
+        .await
+        .unwrap();
+    kit.idle().await;
+    let rooms = kit
+        .store()
+        .list_rooms(&roomkit::RoomFilter::default())
+        .await
+        .unwrap();
+    let refused = taken(&answers)
+        .iter()
+        .filter(|reason| reason.as_deref() == Some("reentry_loop_cap"))
+        .count();
+    assert_eq!((refused, rooms.len()), (1, 1 + BUDGET));
+}
+
+/// RFC §8.3: a hook that awaits each answer and posts back to the agent:
+/// each post is one deeper than the answer that fired the hook, so the
+/// round trips end at the depth limit, three answers at the limit of 6.
+#[tokio::test]
+async fn a_judge_posting_back_after_each_answer_stops_at_the_depth_limit() {
+    let kit = room(6).await;
+    let agent = Answering::new("a");
+    kit.register_channel(agent.clone()).unwrap();
+    kit.attach(&room_id(), &channel("a")).await.unwrap();
+    let depths: Kept<u32> = kept();
+    let (hook_kit, hook_depths) = (kit.clone(), Arc::clone(&depths));
+    kit.observe("judge", HookTrigger::AfterBroadcast, move |event, _| {
+        let (kit, depths) = (hook_kit.clone(), Arc::clone(&hook_depths));
+        async move {
+            if event.source.channel_id != channel("a")
+                || event.blocked_by.is_some()
+                || len(&depths) >= 4 * BUDGET
+            {
+                return;
+            }
+            let mut again = Post::new(EventContent::text("@a again"));
+            again.addressed_to = vec![channel("a")];
+            let posted = kit.post(&room_id(), again).await.unwrap();
+            push(&depths, posted.chain_depth);
+        }
+    })
+    .unwrap();
+    let mut hello = message("@a hello");
+    hello.addressed_to = Some(vec![channel("a")]);
+    kit.process_inbound_in(&room_id(), hello).await.unwrap();
+    kit.idle().await;
+    assert_eq!((len(&agent.asked), taken(&depths)), (3, vec![2, 4, 6]));
+}
+
+/// RFC §10.3, §9.5.1: a change's mutation trigger is its cascade's work
+/// too: a hook that edits the event again each time it is edited, or that
+/// sends a message and deletes it each time one is deleted, stops at the
+/// cap of its hook calls.
+#[tokio::test]
+async fn a_mutation_hook_changing_again_stops_at_the_cap() {
+    for deleting in [false, true] {
+        let kit = room(1).await;
+        let sent: Kept<Option<String>> = kept();
+        let (hook_kit, hook_sent) = (kit.clone(), Arc::clone(&sent));
+        let trigger = if deleting {
+            HookTrigger::OnEventDeleted
+        } else {
+            HookTrigger::OnEventUpdated
+        };
+        kit.observe("again", trigger, move |event, _| {
+            let (kit, sent) = (hook_kit.clone(), Arc::clone(&hook_sent));
+            async move {
+                if len(&sent) > 2 * BUDGET {
+                    return;
+                }
+                let n = len(&sent);
+                if deleting {
+                    let mut another =
+                        from_u(EventContent::text(format!("m{n}")), EventType::Message);
+                    another.addressed_to = Some(Vec::new());
+                    let another = kit.send_event(&room_id(), another).await.unwrap();
+                    push(&sent, another.blocked_by.clone());
+                    if another.blocked_by.is_none() {
+                        let delete = delete_of(&another.id);
+                        let deleted = kit.send_event(&room_id(), delete).await.unwrap();
+                        push(&sent, deleted.blocked_by);
+                    }
+                } else {
+                    let edit = edit_of(&event.id, &format!("v{n}"));
+                    let edited = kit.send_event(&room_id(), edit).await.unwrap();
+                    push(&sent, edited.blocked_by);
+                }
+            }
+        })
+        .unwrap();
+        let first = kit
+            .send_event(
+                &room_id(),
+                from_u(EventContent::text("v"), EventType::Message),
+            )
+            .await
+            .unwrap();
+        let change = if deleting {
+            delete_of(&first.id)
+        } else {
+            edit_of(&first.id, "v")
+        };
+        kit.send_event(&room_id(), change).await.unwrap();
+        kit.idle().await;
+        let mut expected = vec![None; BUDGET];
+        expected.push(Some("reentry_loop_cap".to_owned()));
+        assert_eq!(taken(&sent), expected, "deleting {deleting}");
+    }
+}
+
+/// The customer's edit of `target` to `text`.
+fn edit_of(target: &EventId, text: &str) -> DirectEvent {
+    let edit = EditContent {
+        target_event_id: target.clone(),
+        new_content: Box::new(EventContent::text(text)),
+        edit_source: None,
+    };
+    from_u(EventContent::Edit(edit), EventType::Edit)
+}
+
+/// The customer's delete of `target`.
+fn delete_of(target: &EventId) -> DirectEvent {
+    let delete = DeleteContent {
+        target_event_id: target.clone(),
+        delete_type: DeleteType::Sender,
+        reason: None,
+    };
+    from_u(EventContent::Delete(delete), EventType::Delete)
+}
+
+/// RFC §9.5.1: a notice, one post for each message, draws one hook call of
+/// that message's cascade: more messages than a cascade holds hook calls
+/// each get theirs.
+#[tokio::test]
+async fn a_hook_posting_once_per_message_posts_for_every_message() {
+    let kit = room(1).await;
+    let posted: Kept<Option<String>> = kept();
+    let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
+    kit.observe("receipt", HookTrigger::AfterBroadcast, move |event, _| {
+        let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
+        async move {
+            if event.source.channel_id == channel("sms") {
+                let receipt = kit
+                    .post(&room_id(), Post::new(EventContent::text("Received.")))
+                    .await
+                    .unwrap();
+                push(&posted, receipt.blocked_by);
+            }
+        }
+    })
+    .unwrap();
+    for n in 0..=BUDGET {
+        kit.process_inbound_in(&room_id(), message(&format!("message {n}")))
+            .await
+            .unwrap();
+    }
+    kit.idle().await;
+    assert_eq!(taken(&posted), vec![None; BUDGET + 1]);
+}
+
+/// RFC §9.5.1: once the hook's body is over, whether it returned or ran
+/// past its timeout, a task it started that kept its context sends at
+/// depth 0 with a budget of its own for each call, as a call from outside
+/// the room's work.
+#[tokio::test]
+async fn a_task_the_hook_starts_calls_as_work_of_its_own() {
+    for times_out in [false, true] {
+        let kit = room(1).await;
+        let sent: Kept<(u32, Option<String>)> = kept();
+        let over = Arc::new(tokio::sync::Notify::new());
+        let (hook_kit, hook_sent, hook_over) = (kit.clone(), Arc::clone(&sent), Arc::clone(&over));
+        let mut spec = roomkit::HookSpec::new(
+            "start",
+            HookTrigger::AfterBroadcast,
+            roomkit::HookExecution::Async,
+        );
+        spec.timeout = Duration::from_millis(10);
+        kit.hook(spec, move |event, _| {
+            let (kit, sent, over) = (
+                hook_kit.clone(),
+                Arc::clone(&hook_sent),
+                Arc::clone(&hook_over),
+            );
+            async move {
+                if text_of(&event.content) != "hi" {
+                    return Ok(HookResult::allow());
+                }
+                tokio::spawn(keep_context(async move {
+                    over.notified().await;
+                    for n in 0..=2 * BUDGET {
+                        let later = DirectEvent::new(
+                            channel("sms"),
+                            EventContent::text(format!("later {n}")),
+                        );
+                        let event = kit.send_event(&room_id(), later).await.unwrap();
+                        push(&sent, (event.chain_depth, event.blocked_by));
+                    }
+                }));
+                if times_out {
+                    std::future::pending::<()>().await;
+                }
+                Ok(HookResult::allow())
+            }
+        })
+        .unwrap();
+        kit.process_inbound_in(&room_id(), message("hi"))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        over.notify_one();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while len(&sent) <= 2 * BUDGET && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            taken(&sent),
+            vec![(0, None); 2 * BUDGET + 1],
+            "times out {times_out}"
+        );
+    }
+}
+
+/// RFC §8.3: three agents answer one another to the depth limit of 5, 45
+/// answers, and a hook posts a notice after each: 45 passes and 45 hook
+/// calls, each under its cap of 50, so every answer and every notice
+/// lands. On one counter, notices would have been blocked.
+#[tokio::test]
+async fn a_notice_per_answer_costs_the_agents_no_answer() {
+    let kit = room(5).await;
+    for n in 0..3 {
+        let id = format!("agent-{n}");
+        kit.register_channel(Answering::new(&id)).unwrap();
+        kit.attach(&room_id(), &channel(&id)).await.unwrap();
+    }
+    let notices: Kept<Option<String>> = kept();
+    let (hook_kit, hook_notices) = (kit.clone(), Arc::clone(&notices));
+    kit.observe("notice", HookTrigger::AfterBroadcast, move |event, _| {
+        let (kit, notices) = (hook_kit.clone(), Arc::clone(&hook_notices));
+        async move {
+            if event.source.channel_id.as_str().starts_with("agent-") && event.blocked_by.is_none()
+            {
+                let mut noted = DirectEvent::new(channel("sms"), EventContent::text("Noted."));
+                noted.addressed_to = Some(Vec::new());
+                let noted = kit.send_event(&room_id(), noted).await.unwrap();
+                push(&notices, noted.blocked_by);
+            }
+        }
+    })
+    .unwrap();
+    kit.process_inbound_in(&room_id(), message("hi"))
+        .await
+        .unwrap();
+    kit.idle().await;
+    let answers: Vec<Option<String>> = kit
+        .store()
+        .list_events(&room_id(), true)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.source.channel_id.as_str().starts_with("agent-"))
+        .map(|event| event.blocked_by)
+        .filter(|blocked| blocked.as_deref() != Some("event_chain_depth_limit"))
+        .collect();
+    assert_eq!((answers, taken(&notices)), (vec![None; 45], vec![None; 45]));
+}
+
+/// RFC §10.3: an `ON_EVENT_UPDATED` hook that updates its event again on
+/// every update, started from outside the room's work, runs on the budget
+/// of the first update, ten hook calls: its eleventh run's update is
+/// refused, nothing written.
+#[tokio::test]
+async fn a_hook_updating_its_event_on_every_update_stops_at_the_cap() {
+    let kit = room(1).await;
+    let refused: Kept<KitError> = kept();
+    let ran: Kept<()> = kept();
+    let (hook_kit, hook_refused, hook_ran) = (kit.clone(), Arc::clone(&refused), Arc::clone(&ran));
+    kit.observe("again", HookTrigger::OnEventUpdated, move |event, _| {
+        let (kit, refused, ran) = (
+            hook_kit.clone(),
+            Arc::clone(&hook_refused),
+            Arc::clone(&hook_ran),
+        );
+        async move {
+            push(&ran, ());
+            if len(&ran) > 4 * BUDGET {
+                return;
+            }
+            let mut updates = EventUpdates::default();
+            let mut metadata = event.metadata.clone();
+            metadata.insert("n".to_owned(), len(&ran).into());
+            updates.metadata = Some(metadata);
+            if let Err(error) = kit.update_event(&room_id(), &event.id, updates).await {
+                push(&refused, error);
+            }
+        }
+    })
+    .unwrap();
+    let first = kit
+        .send_event(
+            &room_id(),
+            DirectEvent::new(channel("sms"), EventContent::text("v")),
+        )
+        .await
+        .unwrap();
+    let mut updates = EventUpdates::default();
+    let mut metadata = first.metadata.clone();
+    metadata.insert("n".to_owned(), 0.into());
+    updates.metadata = Some(metadata);
+    kit.update_event(&room_id(), &first.id, updates)
+        .await
+        .unwrap();
+    kit.idle().await;
+    assert_eq!(
+        (len(&ran), taken(&refused)),
+        (
+            BUDGET + 1,
+            vec![KitError::Mutation(MutationError::ReentryLoopCap(room_id()))]
+        )
+    );
+}
+
+/// RFC §10.3: a hook's body spends its cascade's thirty hook calls
+/// (depth limit 3) updating another event, then deletes the message the
+/// agent answered: refused once, the message kept, the agent asked once.
+#[tokio::test]
+async fn a_direct_change_past_the_cap_writes_nothing() {
+    for deleting in [false, true] {
+        let kit = room(3).await;
+        let agent = Answering::new("ai");
+        kit.register_channel(agent.clone()).unwrap();
+        kit.attach(&room_id(), &channel("ai")).await.unwrap();
+        let mut spare = DirectEvent::new(channel("sms"), EventContent::text("spare"));
+        spare.addressed_to = Some(Vec::new());
+        let spare = kit.send_event(&room_id(), spare).await.unwrap();
+        let refused: Kept<KitError> = kept();
+        let (hook_kit, hook_refused) = (kit.clone(), Arc::clone(&refused));
+        kit.observe("bulk", HookTrigger::AfterBroadcast, move |event, _| {
+            let (kit, refused, spare) = (
+                hook_kit.clone(),
+                Arc::clone(&hook_refused),
+                spare.id.clone(),
+            );
+            async move {
+                if text_of(&event.content) != "hi" {
+                    return;
+                }
+                for n in 0..30 {
+                    let mut metadata = roomkit::model::Metadata::new();
+                    metadata.insert("n".to_owned(), n.into());
+                    let updates = EventUpdates {
+                        metadata: Some(metadata),
+                        ..EventUpdates::default()
+                    };
+                    kit.update_event(&room_id(), &spare, updates).await.unwrap();
+                }
+                let one_more = if deleting {
+                    kit.delete_event(&room_id(), &event.id, true)
+                        .await
+                        .map(|_| ())
+                } else {
+                    let updates = EventUpdates {
+                        content: Some(EventContent::text("changed")),
+                        ..EventUpdates::default()
+                    };
+                    kit.update_event(&room_id(), &event.id, updates)
+                        .await
+                        .map(|_| ())
+                };
+                if let Err(error) = one_more {
+                    push(&refused, error);
+                }
+            }
+        })
+        .unwrap();
+        let hi = kit
+            .send_event(
+                &room_id(),
+                DirectEvent::new(channel("sms"), EventContent::text("hi")),
+            )
+            .await
+            .unwrap();
+        kit.idle().await;
+        let stored = kit.store().get_event(&hi.id).await.unwrap();
+        assert_eq!(
+            (
+                taken(&refused),
+                stored.map(|event| text_of(&event.content)),
+                len(&agent.asked)
+            ),
+            (
+                vec![KitError::Mutation(MutationError::ReentryLoopCap(room_id()))],
+                Some("hi".to_owned()),
+                1
+            ),
+            "deleting {deleting}"
+        );
+    }
+}
+
+/// A transport whose delivery of the customer's "go" updates `target` sixty
+/// times.
+struct Updating {
+    kit: RoomKit,
+    target: Arc<Mutex<Option<EventId>>>,
+    failures: Kept<KitError>,
+}
+
+impl Channel for Updating {
+    fn declaration(&self) -> ChannelDeclaration {
+        ChannelDeclaration {
+            recipient_key: None,
+            ..ChannelDeclaration::new(
+                channel("calling"),
+                ChannelType::Websocket,
+                ChannelCategory::Transport,
+                ChannelDirection::Bidirectional,
+            )
+        }
+    }
+
+    fn deliver(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let (kit, failures) = (self.kit.clone(), Arc::clone(&self.failures));
+        let target = self
+            .target
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        async move {
+            if let (Some(target), "go") = (target, text_of(&event.content).as_str()) {
+                update_sixty_times(&kit, &target, &failures).await;
+            }
+            Ok(ChannelOutput::default())
+        }
+    }
+}
+
+async fn update_sixty_times(kit: &RoomKit, target: &EventId, failures: &Kept<KitError>) {
+    for n in 0..60 {
+        let mut metadata = roomkit::model::Metadata::new();
+        metadata.insert("n".to_owned(), n.into());
+        let updates = EventUpdates {
+            metadata: Some(metadata),
+            ..EventUpdates::default()
+        };
+        if let Err(error) = kit.update_event(&room_id(), target, updates).await {
+            push(failures, error);
+            return;
+        }
+    }
+}
+
+/// RFC §10.3: a transport's delivery, or a SYNC hook under the lock, that
+/// makes sixty direct updates, six times the cap of ten, never fails: only
+/// an ASYNC hook's body draws on the hook calls.
+#[tokio::test]
+async fn work_outside_a_hook_body_draws_nothing() {
+    for locked_hook in [false, true] {
+        let kit = room(1).await;
+        let failures: Kept<KitError> = kept();
+        let target_id = Arc::new(Mutex::new(None));
+        if locked_hook {
+            let (hook_kit, hook_failures, hook_target) =
+                (kit.clone(), Arc::clone(&failures), Arc::clone(&target_id));
+            kit.before_broadcast("updates", move |event, _| {
+                let (kit, failures) = (hook_kit.clone(), Arc::clone(&hook_failures));
+                let target = hook_target
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                async move {
+                    if let (Some(target), "go") = (target, text_of(&event.content).as_str()) {
+                        update_sixty_times(&kit, &target, &failures).await;
+                    }
+                    Ok(HookResult::allow())
+                }
+            })
+            .unwrap();
+        } else {
+            kit.register_channel(Updating {
+                kit: kit.clone(),
+                target: Arc::clone(&target_id),
+                failures: Arc::clone(&failures),
+            })
+            .unwrap();
+            kit.attach(&room_id(), &channel("calling")).await.unwrap();
+        }
+        let target = kit
+            .send_event(
+                &room_id(),
+                DirectEvent::new(channel("sms"), EventContent::text("target")),
+            )
+            .await
+            .unwrap();
+        *target_id.lock().unwrap_or_else(PoisonError::into_inner) = Some(target.id.clone());
+        kit.send_event(
+            &room_id(),
+            DirectEvent::new(channel("sms"), EventContent::text("go")),
+        )
+        .await
+        .unwrap();
+        kit.idle().await;
+        let stored = kit.store().get_event(&target.id).await.unwrap().unwrap();
+        assert_eq!(
+            (taken(&failures), stored.metadata.get("n").cloned()),
+            (Vec::new(), Some(59.into())),
+            "locked hook {locked_hook}"
+        );
+    }
+}

@@ -36,7 +36,12 @@
 //!   its room on every turn stops at the chain-depth limit (RFC §8.3);
 //! - a call into the room a delivery set delivers in, made while the set's
 //!   call runs, draws on the budget of the cascade that delivers; a call
-//!   into another room has a budget of its own (gap G-070).
+//!   into another room has a budget of its own (gap G-070);
+//! - the body of an ASYNC hook a cascade fires once an event's delivery set
+//!   has run is that cascade's work while it runs (a [`HookBody`]): a call
+//!   it makes into the room draws one of the cascade's hook calls, and one
+//!   into any room is at least one deeper than the hook's event (gap
+//!   G-087).
 //!
 //! A refusal fails the call ([`KitError::Reentrant`](crate::KitError::Reentrant))
 //! rather than let it wait for itself.
@@ -64,6 +69,7 @@ mod run;
 
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use roomkit_core::model::{ChannelCategory, RoomId};
 use roomkit_core::ops::{ChannelRequest, Effect, EffectId, Request};
@@ -107,10 +113,61 @@ pub(crate) struct Work {
 }
 
 /// The frames of the calls the current task runs within, the innermost
-/// last.
+/// last, and the bodies of the ASYNC hooks it runs within.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExecutionContext {
     frames: Arc<[Frame]>,
+    bodies: Arc<[HookBody]>,
+}
+
+/// The body of an ASYNC hook a cascade fires once an event's delivery set
+/// has run, or a direct change does, while it runs: the cascade's work in
+/// its room (RFC §8.3, §9.5.1, §10.1 step 16, §10.3, gap G-087). A call it
+/// makes into the room draws on the cascade's hook calls, and one it makes
+/// into any room is at least `floor` deep. Once the body is over, a task it
+/// left running stands for no work: its calls start fresh.
+#[derive(Clone, Debug)]
+pub(crate) struct HookBody {
+    room_id: RoomId,
+    /// The cascade's budget, seen for its hooks' calls.
+    budget: ReentryBudget,
+    floor: u32,
+    /// Whether the body still runs.
+    live: Arc<AtomicBool>,
+}
+
+/// A hook's body that runs, over once dropped.
+#[derive(Debug)]
+pub(crate) struct BodyRunning(Arc<AtomicBool>);
+
+impl Drop for BodyRunning {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
+impl HookBody {
+    /// The body of a hook of `room_id`'s cascade, on `budget`, its calls at
+    /// least `floor` deep, running until it is [`over`](Self::over).
+    pub(crate) fn new(room_id: RoomId, budget: ReentryBudget, floor: u32) -> Self {
+        Self {
+            room_id,
+            budget,
+            floor,
+            live: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Marks the body over when the returned guard drops, as the body
+    /// ends or is cancelled: a copy of its context stands for no work any
+    /// more.
+    pub(crate) fn running(&self) -> BodyRunning {
+        BodyRunning(Arc::clone(&self.live))
+    }
+
+    fn runs(&self) -> bool {
+        self.live.load(Ordering::Relaxed)
+    }
 }
 
 impl Work {
@@ -192,7 +249,27 @@ impl ExecutionContext {
         let frames: Vec<Frame> = self.frames.iter().cloned().chain([frame]).collect();
         Self {
             frames: frames.into(),
+            bodies: Arc::clone(&self.bodies),
         }
+    }
+
+    /// The context of a hook's `body`, which runs outside every call.
+    pub(crate) fn of_hook_body(body: HookBody) -> Self {
+        Self {
+            frames: Arc::default(),
+            bodies: Arc::new([body]),
+        }
+    }
+
+    /// The running hook bodies of this context that work in `room_id`, the
+    /// innermost last.
+    fn bodies_in<'context>(
+        &'context self,
+        room_id: &'context RoomId,
+    ) -> impl DoubleEndedIterator<Item = &'context HookBody> + 'context {
+        self.bodies
+            .iter()
+            .filter(move |body| body.runs() && &body.room_id == room_id)
     }
 
     /// Runs `future` within this context.
@@ -230,6 +307,7 @@ impl ExecutionContext {
             || self.frames.iter().any(|frame| {
                 frame.work.delivering.as_ref() == Some(room_id) || frame.is_admitted_to(room_id)
             })
+            || self.bodies_in(room_id).next().is_some()
     }
 
     /// The least chain depth of a call made in this context, into whatever
@@ -237,11 +315,17 @@ impl ExecutionContext {
     /// still runs, `None` outside every running turn (RFC §10.6: a call a
     /// turn makes is at least as deep as the turn's response; gap G-070).
     pub(crate) fn turn_depth(&self) -> Option<u32> {
-        self.frames
+        let turns = self
+            .frames
             .iter()
             .filter(|frame| frame.runs())
-            .filter_map(|frame| frame.work.response_depth)
-            .max()
+            .filter_map(|frame| frame.work.response_depth);
+        let bodies = self
+            .bodies
+            .iter()
+            .filter(|body| body.runs())
+            .map(|body| body.floor);
+        turns.chain(bodies).max()
     }
 
     /// The reentry budget a call into `room_id` made in this context draws
@@ -254,6 +338,11 @@ impl ExecutionContext {
             .rev()
             .filter(|frame| frame.runs() && frame.work.delivering.as_ref() == Some(room_id))
             .find_map(|frame| frame.work.budget.clone())
+            .or_else(|| {
+                self.bodies_in(room_id)
+                    .next_back()
+                    .map(|body| body.budget.clone())
+            })
     }
 
     /// The room the innermost running frame of a delivery delivers in, and
@@ -265,6 +354,13 @@ impl ExecutionContext {
             .rev()
             .filter(|frame| frame.runs())
             .find_map(|frame| Some((frame.work.delivering.clone()?, frame.work.budget.clone()?)))
+            .or_else(|| {
+                self.bodies
+                    .iter()
+                    .rev()
+                    .find(|body| body.runs())
+                    .map(|body| (body.room_id.clone(), body.budget.clone()))
+            })
     }
 
     /// The innermost frame that runs under `room_id`'s lock or in its

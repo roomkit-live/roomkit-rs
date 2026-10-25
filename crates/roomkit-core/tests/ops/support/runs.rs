@@ -117,9 +117,9 @@ enum Mail {
     /// A call into its room, made within its effect `origin`, for it to
     /// adopt.
     Call {
-        entry: Entry,
+        entry: Box<Entry>,
         origin: EffectId,
-        call: Call,
+        call: Box<Call>,
     },
 }
 
@@ -295,7 +295,7 @@ impl Sim {
                     entry,
                     origin,
                     call,
-                } => self.offer(operation, entry, origin, call),
+                } => self.offer(operation, *entry, origin, *call),
             }
         }
         let step = operation.poll(&self.env);
@@ -398,9 +398,9 @@ impl Sim {
     fn place_call(&mut self, entry: Entry, call: Call) {
         match Self::taker(&call.context, entry.room_id()) {
             Some(frame) => self.state_mut(frame.run).mail.push_back(Mail::Call {
-                entry,
+                entry: Box::new(entry),
                 origin: frame.effect,
-                call,
+                call: Box::new(call),
             }),
             None => self.spawn(entry, call),
         }

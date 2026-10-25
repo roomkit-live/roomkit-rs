@@ -27,11 +27,12 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use self::change::{Commit, Delete, Update};
+use self::change::{Commit, Delete, DirectWork, Update};
 use self::section::EventSection;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use super::{Environment, KitConfig};
 use crate::model::{ErrorRecord, EventId, EventUpdates, RoomEvent, RoomId, RoomStatus};
+use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::idempotency;
 
 /// Why a direct call on a room's timeline failed: an update, a delete, or
@@ -69,6 +70,15 @@ pub enum MutationError {
     /// what was decided under the lock stands (gap G-025).
     #[error("the room lock failed: {0:?}")]
     Lock(ErrorRecord),
+    /// An update or a delete made from the body of an ASYNC hook a cascade
+    /// fires once an event's delivery set has run is past the hook calls of
+    /// the budget that body runs on (RFC §8.3, §10.3, gap G-087): nothing
+    /// was written.
+    #[error(
+        "a direct change from an ASYNC hook's body in room {0} is past the reentry budget \
+         that body runs on: nothing written"
+    )]
+    ReentryLoopCap(RoomId),
 }
 
 /// Replaces fields of a stored event whole, under the room's lock (RFC
@@ -97,10 +107,27 @@ impl UpdateEvent {
         updates: EventUpdates,
         organization_id: Option<String>,
     ) -> Self {
-        let change = Update::new(event_id, updates);
+        let work = DirectWork {
+            budget: ReentryBudget::new(config.max_chain_depth),
+            floor: 0,
+        };
+        let change = Update::new(event_id, updates, work);
         Self {
             section: EventSection::new(config, room_id, organization_id, change),
         }
+    }
+
+    /// The same update, made in the room's work whose budget is `budget`,
+    /// its calls at least `floor` deep (RFC §10.3 "A direct change from the
+    /// room's work", gap G-087): made from an ASYNC hook's body, `budget`
+    /// seen for hook calls, it draws one before it writes, and fails
+    /// [`MutationError::ReentryLoopCap`] past them, nothing written; its
+    /// trigger's hook bodies draw their calls on `budget`. Made from
+    /// outside the room's work, the update runs on a budget of its own.
+    #[must_use]
+    pub fn made_in(mut self, budget: ReentryBudget, floor: u32) -> Self {
+        self.section.change_mut().work = DirectWork { budget, floor };
+        self
     }
 }
 
@@ -149,10 +176,23 @@ impl DeleteEvent {
         cascade_replies: bool,
         organization_id: Option<String>,
     ) -> Self {
-        let change = Delete::new(event_id, cascade_replies);
+        let work = DirectWork {
+            budget: ReentryBudget::new(config.max_chain_depth),
+            floor: 0,
+        };
+        let change = Delete::new(event_id, cascade_replies, work);
         Self {
             section: EventSection::new(config, room_id, organization_id, change),
         }
+    }
+
+    /// The same delete, made in the room's work whose budget is `budget`,
+    /// as [`UpdateEvent::made_in`] says: from a hook's body it draws one
+    /// hook call before it removes an event the room holds.
+    #[must_use]
+    pub fn made_in(mut self, budget: ReentryBudget, floor: u32) -> Self {
+        self.section.change_mut().work = DirectWork { budget, floor };
+        self
     }
 }
 

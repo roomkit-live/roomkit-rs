@@ -182,7 +182,14 @@ as it stands.
   then its key: one its channel holds makes it a replay, which returns the
   event the key committed and draws nothing, past the
   budget too, its record looking the key up again under the lock (gap
-  G-081); a
+  G-081); the body of an ASYNC hook a cascade fires once an event's
+  delivery set has run (`AFTER_BROADCAST`, a change's mutation trigger) is
+  that cascade's work while it runs: its calls into the room draw on the
+  cascade's hook calls, a counter of `ReentryBudget` kept apart from its
+  passes, at least one deeper than its event, and a direct update or delete
+  it makes draws one too, `MutationError::ReentryLoopCap` past them,
+  nothing written (`AfterDelivery`, `UpdateEvent::made_in`,
+  `DeleteEvent::made_in`, gap G-087); a
   call that would wait for what its own context holds fails
   `KitError::Reentrant`. A call's ticket is released once no section of the
   call holds the room's lock, its decision and its delivery set not waiting

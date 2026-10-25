@@ -260,3 +260,85 @@ mod a_named_message {
         );
     }
 }
+
+/// RFC §8.3, §9.5.1, §10.1 step 16, gap G-087: the body of an ASYNC hook a
+/// cascade fires once an event's delivery set has run is that cascade's
+/// work, on a counter of hook calls kept apart from its passes.
+mod a_hook_s_body {
+    use pretty_assertions::assert_eq;
+    use roomkit_core::model::DirectEvent;
+    use roomkit_core::ops::{AfterDelivery, Notice};
+    use roomkit_core::rules::hook_registry::HookTrigger;
+
+    use super::*;
+
+    fn console(text: &str) -> DirectEvent {
+        DirectEvent::new(channel("ws"), EventContent::text(text))
+    }
+
+    fn room() -> Sim {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.transport("ws");
+        sim
+    }
+
+    /// The `AFTER_BROADCAST` hooks of an event run as its cascade's work:
+    /// on that cascade's budget, seen for hook calls, one deeper than the
+    /// event; a lifecycle observer runs as no work.
+    #[test]
+    fn runs_on_its_cascade_s_hook_calls_one_deeper_than_its_event() {
+        let mut sim = room();
+        sim.observer("notice", HookTrigger::AfterBroadcast);
+        sim.observer("attached", HookTrigger::OnChannelAttached);
+        let mut deep = console("Deep");
+        deep.chain_depth = 2;
+        sim.inject("room_1", deep).unwrap();
+        let works: Vec<(HookTrigger, Option<(bool, u32)>)> = sim
+            .notices
+            .iter()
+            .filter_map(|notice| match notice {
+                Notice::AsyncHooks {
+                    trigger,
+                    after_delivery,
+                    ..
+                } => Some((
+                    *trigger,
+                    after_delivery
+                        .as_ref()
+                        .map(|AfterDelivery { budget, floor }| (budget.draws_hook_calls(), *floor)),
+                )),
+                Notice::FrameworkEvent(_) => None,
+            })
+            .collect();
+        assert_eq!(works, [(HookTrigger::AfterBroadcast, Some((true, 3)))]);
+    }
+
+    /// A call a hook's body makes into the room draws one of the cascade's
+    /// hook calls, never one of its passes: past the hook calls it is
+    /// stored capped, whatever passes are left.
+    #[test]
+    fn draws_a_hook_call_past_which_its_call_is_capped() {
+        let mut sim = room();
+        let budget = ReentryBudget::new(1);
+        let hooks = budget.for_hook_calls();
+        let mut drawn = Vec::new();
+        for n in 0..=10 {
+            let operation = Inbound::inject(
+                sim.shared_config(),
+                room_id(),
+                None,
+                console(&format!("Noted {n}.")),
+            )
+            .drawing_on(hooks.clone());
+            let event = sim.run(operation).unwrap().event.unwrap();
+            drawn.push(event.blocked_by);
+        }
+        let mut expected = vec![None; 10];
+        expected.push(Some("reentry_loop_cap".to_owned()));
+        assert_eq!(
+            (drawn, budget.remaining(), budget.hook_calls_left()),
+            (expected, 10, 0)
+        );
+    }
+}

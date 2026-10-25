@@ -71,6 +71,11 @@ impl<C: EventChange> EventSection<C> {
         }
     }
 
+    /// The change, before the call starts.
+    pub(super) fn change_mut(&mut self) -> &mut C {
+        &mut self.section.work_mut().change
+    }
+
     /// Hands the driver's answer to effect `id`.
     pub(super) fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.io.complete(id, outcome)
