@@ -60,6 +60,55 @@ fn committed(called: &Called) -> Option<RoomEvent> {
     called.as_ref().ok().and_then(|result| result.event.clone())
 }
 
+/// The console's event `id`, "Heads up", committed under `key`.
+fn console_keyed(id: &str, key: &str) -> RoomEvent {
+    let mut event = notice_event(id, "Heads up");
+    event.source.channel_id = channel("ws");
+    event.idempotency_key = Some(key.to_owned());
+    event.status = EventStatus::Delivered;
+    event
+}
+
+/// The console's injection of "Heads up" under the key `alert_1`.
+fn replay_of_alert() -> Entry {
+    let mut replay = from_console("Heads up");
+    replay.idempotency_key = Some("alert_1".to_owned());
+    Entry::Direct {
+        room_id: room_id(),
+        organization_id: None,
+        event: Box::new(replay),
+    }
+}
+
+/// The ids of the events `seen` holds, in order.
+fn ids(seen: &Seen) -> Vec<String> {
+    seen.borrow()
+        .iter()
+        .map(|event| event.id.to_string())
+        .collect()
+}
+
+/// A locked hook that, on the customer's message, injects a replay of
+/// `alert_1` and waits for it; returns what its call returned.
+fn replaying(sim: &mut Sim) -> Seen {
+    let seen: Seen = Rc::new(RefCell::new(Vec::new()));
+    let kept = Rc::clone(&seen);
+    sim.reentrant_hook(
+        "notifier",
+        true,
+        Reentry {
+            entries: calling(|event| {
+                (event.source.channel_id.as_str() == "sms").then(replay_of_alert)
+            }),
+            answer: Answer::Awaits(Box::new(move |called| {
+                kept.borrow_mut().extend(committed(called));
+                HookOutcome::Returned(HookResult::allow())
+            })),
+        },
+    );
+    seen
+}
+
 /// The trace of a locked section, from the line starting with `start` to
 /// its release, without the lines of the delivery sets that run beside it
 /// once their place's turn comes.
@@ -659,6 +708,61 @@ mod an_entry_adopted_under_the_lock {
         );
     }
 
+    /// RFC §9.5.1 Past the cap, §13.4: a direct injection from the room's
+    /// work whose key its channel holds is a replay, its key read before
+    /// the budget: past the budget it returns the original, and nothing is
+    /// stored under the key again.
+    #[test]
+    fn with_a_key_already_committed_past_the_budget_returns_the_original() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 0;
+        sim.seed(console_keyed("evt_0", "alert_1"));
+        let seen = replaying(&mut sim);
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            (ids(&seen), sim.timeline_lines()),
+            (
+                vec!["evt_0".to_owned()],
+                vec![
+                    "#0 ws delivered \"Heads up\"".to_owned(),
+                    "#1 sms delivered \"hello\"".to_owned()
+                ]
+            )
+        );
+    }
+
+    /// RFC §9.5.1 Past the cap, §13.4: a replay draws nothing on its
+    /// caller's budget: ten replays leave its ten passes to the entry that
+    /// follows them, committed delivered.
+    #[test]
+    fn a_replay_draws_nothing_on_its_caller_s_budget() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 1;
+        sim.seed(console_keyed("evt_0", "alert_1"));
+        sim.reentrant_hook(
+            "notifier",
+            true,
+            Reentry {
+                entries: Box::new(|event| {
+                    if event.source.channel_id.as_str() != "sms" {
+                        return Vec::new();
+                    }
+                    let mut entries: Vec<Entry> = (0..10).map(|_| replay_of_alert()).collect();
+                    entries.push(send_event("Fresh"));
+                    entries
+                }),
+                answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        sim.send(hello()).unwrap();
+        let lines = sim.timeline_lines();
+        assert_eq!(
+            lines.iter().filter(|line| line.contains("blocked")).count(),
+            0,
+            "{lines:?}"
+        );
+    }
+
     /// Its caller receives the committed event at once, at its commit.
     #[test]
     fn returns_the_committed_event_to_its_caller() {
@@ -1238,6 +1342,56 @@ mod an_arrival_from_a_delivery {
         );
     }
 
+    /// RFC §9.5.1 Past the cap, §13.4: the turn's call whose key the
+    /// agent's channel holds is a replay, read before the budget it draws
+    /// on: past it, the call returns the original and stores nothing; and
+    /// the replays draw nothing, so the call that follows them is
+    /// committed delivered.
+    #[test]
+    fn with_a_key_its_channel_holds_is_a_replay_drawing_nothing() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 2;
+        sim.echo_agent("ai", "unused");
+        let mut said = notice_event("evt_0", "Checking.");
+        said.source.channel_id = channel("ai");
+        said.idempotency_key = Some("thought_1".to_owned());
+        said.status = EventStatus::Delivered;
+        sim.seed(said);
+        sim.reentrant_channel(
+            "ai",
+            Reentry {
+                entries: Box::new(|event| {
+                    if event.source.channel_id.as_str() != "sms" {
+                        return Vec::new();
+                    }
+                    let keyed = || {
+                        let mut event =
+                            DirectEvent::new(channel("ai"), EventContent::text("Checking."));
+                        event.idempotency_key = Some("thought_1".to_owned());
+                        Entry::Direct {
+                            room_id: room_id(),
+                            organization_id: None,
+                            event: Box::new(event),
+                        }
+                    };
+                    let mut entries: Vec<Entry> = (0..22).map(|_| keyed()).collect();
+                    entries.push(thought("Done."));
+                    entries
+                }),
+                answer: Answer::AtOnce(Box::new(|| Ok(ChannelOutput::default()))),
+            },
+        );
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            sim.timeline_lines(),
+            [
+                "#0 ai delivered \"Checking.\"",
+                "#1 sms delivered \"hello\"",
+                "#2 ai delivered \"Done.\"",
+            ]
+        );
+    }
+
     /// RFC §10.1 step 18: the call's result reports its own event's
     /// deliveries, none of the arrival's.
     #[test]
@@ -1608,6 +1762,45 @@ mod a_parse_that_fails_after_its_call {
 mod an_entry_adopted_from_an_off_lock_hook {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    /// RFC §14.3, §13.4: an entry made beside the work reads its key
+    /// holding no lock; past the budget, its record looks the key up again
+    /// under the lock before anything of it is committed: a key another
+    /// call committed meanwhile makes it a replay, nothing stored under it
+    /// again.
+    #[test]
+    fn past_the_budget_with_a_key_committed_meanwhile_is_a_replay() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 0;
+        sim.committed_after_unlocked_key_read = Some(console_keyed("evt_0", "alert_1"));
+        let seen: Seen = Rc::new(RefCell::new(Vec::new()));
+        let kept = Rc::clone(&seen);
+        sim.reentrant_hook(
+            "scanner",
+            false,
+            Reentry {
+                entries: calling(|event| {
+                    (event.source.channel_id.as_str() == "sms").then(replay_of_alert)
+                }),
+                answer: Answer::Awaits(Box::new(move |called| {
+                    kept.borrow_mut().extend(committed(called));
+                    HookOutcome::Returned(HookResult::allow())
+                })),
+            },
+        );
+        sim.send(hello()).unwrap();
+        assert_eq!(
+            (ids(&seen), sim.traced("find_key"), sim.timeline_lines()),
+            (
+                vec!["evt_0".to_owned()],
+                vec!["find_key alert_1", "find_key alert_1"],
+                vec![
+                    "#0 ws delivered \"Heads up\"".to_owned(),
+                    "#1 sms delivered \"hello\"".to_owned()
+                ]
+            )
+        );
+    }
 
     /// Every request of an entry adopted beside the operation's work stands
     /// in the room's admission order, its locked hooks' too.

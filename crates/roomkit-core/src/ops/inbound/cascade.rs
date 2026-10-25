@@ -369,6 +369,7 @@ pub(super) fn record_result(report: RecordReport) -> InboundResult {
             error: report.release_error,
             ..InboundResult::default()
         },
+        RecordResult::Replayed(original) => replay_result(&original),
         RecordResult::Refused => InboundResult {
             blocked: true,
             reason: Some("room_closed".to_owned()),
@@ -405,19 +406,24 @@ pub(super) fn entry_result(result: &PassResult) -> InboundResult {
             reason: Some(refusal.reason().to_owned()),
             ..InboundResult::default()
         },
-        PassResult::Duplicate { event } => {
-            let blocked = event.status == EventStatus::Blocked;
-            InboundResult {
-                event: Some((**event).clone()),
-                blocked,
-                reason: if blocked {
-                    event.blocked_by.clone()
-                } else {
-                    None
-                },
-                ..InboundResult::default()
-            }
-        }
+        PassResult::Duplicate { event } => replay_result(event),
+    }
+}
+
+/// The result of a replay, a call whose key its channel holds in the room
+/// (RFC §13.4): the event the key committed, its record's `blocked_by` as
+/// its reason when it was stored `BLOCKED`.
+pub(super) fn replay_result(original: &RoomEvent) -> InboundResult {
+    let blocked = original.status == EventStatus::Blocked;
+    InboundResult {
+        event: Some(original.clone()),
+        blocked,
+        reason: if blocked {
+            original.blocked_by.clone()
+        } else {
+            None
+        },
+        ..InboundResult::default()
     }
 }
 

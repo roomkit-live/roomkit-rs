@@ -28,6 +28,10 @@ use crate::rules::permissions;
 pub(super) enum RecordResult {
     /// Stored, with its index.
     Committed(Box<RoomEvent>),
+    /// A direct injection's record whose key its channel holds in the room:
+    /// a replay of the event the key committed, nothing stored (RFC §13.4,
+    /// §9.5.1 Past the cap).
+    Replayed(Box<RoomEvent>),
     /// The room no longer accepts events: nothing was stored.
     Refused,
 }
@@ -59,8 +63,21 @@ struct RecordWork {
     /// What a direct injection's record is checked for at the gate (gap
     /// G-069).
     direct: Option<DirectCall>,
-    /// The commit outstanding.
-    committing: Option<EffectId>,
+    /// The request outstanding.
+    waiting: Waiting,
+}
+
+/// What a record's commit waits for under the lock.
+#[derive(Debug)]
+enum Waiting {
+    Nothing,
+    /// A direct injection's key, looked up before anything of it is
+    /// committed (RFC §14.3, §13.4), then the commit with `counters`.
+    Key {
+        effect: EffectId,
+        counters: RoomCounters,
+    },
+    Commit(EffectId),
 }
 
 /// What a record's visibility is narrowed to at its commit, on the room as
@@ -94,7 +111,7 @@ impl RecordPass {
             refused_as,
             narrowing: Narrowing::SourceBinding,
             direct: None,
-            committing: None,
+            waiting: Waiting::Nothing,
         };
         Self {
             section: Section::new(room_id, work),
@@ -144,6 +161,18 @@ impl RecordPass {
     }
 }
 
+impl RecordWork {
+    /// Commits the record, the room's counters then `counters`.
+    fn commit(&mut self, cx: &mut Cx<'_>, counters: RoomCounters) {
+        let request = StoreRequest::Commit {
+            event: Box::new(self.record.clone()),
+            counters,
+            target: None,
+        };
+        self.waiting = Waiting::Commit(cx.io.issue_locked(request, self.record.room_id.clone()));
+    }
+}
+
 impl SectionWork for RecordWork {
     type Output = RecordResult;
     type Error = Abort;
@@ -170,7 +199,8 @@ impl SectionWork for RecordWork {
     /// The status gate, then the commit with the next index and the
     /// visibility step 12 would have given the record (gap G-036); a direct
     /// injection into a room that binds no channel it names is refused
-    /// first (gap G-069).
+    /// first (gap G-069), and one whose key its channel holds is a replay,
+    /// looked up before anything of it is committed (RFC §14.3, §13.4).
     fn begin(
         &mut self,
         cx: &mut Cx<'_>,
@@ -196,33 +226,51 @@ impl SectionWork for RecordWork {
             }
         };
         let counters = RoomCounters::after_commit(&context.room, self.record.index);
-        let request = StoreRequest::Commit {
-            event: Box::new(self.record.clone()),
-            counters,
-            target: None,
-        };
-        self.committing = Some(cx.io.issue_locked(request, self.record.room_id.clone()));
+        match self.record.idempotency_key.clone() {
+            Some(key) if self.direct.is_some() => {
+                let request = StoreRequest::GetEventByIdempotencyKey {
+                    room_id: self.record.room_id.clone(),
+                    channel_id: Some(self.record.source.channel_id.clone()),
+                    key,
+                };
+                let effect = cx.io.issue_locked(request, self.record.room_id.clone());
+                self.waiting = Waiting::Key { effect, counters };
+            }
+            Some(_) | None => self.commit(cx, counters),
+        }
         Progress::Waiting
     }
 
     fn accept(
         &mut self,
-        _cx: &mut Cx<'_>,
+        cx: &mut Cx<'_>,
         _effect: EffectId,
         outcome: Outcome,
     ) -> Progress<Result<RecordResult, Abort>> {
-        self.committing = None;
-        match outcome.into_committed() {
-            Ok(()) => {
-                let committed = RecordResult::Committed(Box::new(self.record.clone()));
-                Progress::Done(Ok(committed))
-            }
-            Err(error) => Progress::Done(Err(Abort::Store(error))),
+        match std::mem::replace(&mut self.waiting, Waiting::Nothing) {
+            Waiting::Key { counters, .. } => match outcome.into_idempotent() {
+                Ok(Some(original)) => Progress::Done(Ok(RecordResult::Replayed(original))),
+                Ok(None) => {
+                    self.commit(cx, counters);
+                    Progress::Waiting
+                }
+                Err(error) => Progress::Done(Err(Abort::Store(error))),
+            },
+            Waiting::Commit(_) | Waiting::Nothing => match outcome.into_committed() {
+                Ok(()) => {
+                    let committed = RecordResult::Committed(Box::new(self.record.clone()));
+                    Progress::Done(Ok(committed))
+                }
+                Err(error) => Progress::Done(Err(Abort::Store(error))),
+            },
         }
     }
 
     fn awaits(&self, effect: EffectId) -> bool {
-        self.committing == Some(effect)
+        match &self.waiting {
+            Waiting::Key { effect: waited, .. } | Waiting::Commit(waited) => *waited == effect,
+            Waiting::Nothing => false,
+        }
     }
 
     /// A record reports its refusal by the room's status under the lock,

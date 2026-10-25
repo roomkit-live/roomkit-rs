@@ -288,6 +288,10 @@ pub(crate) struct Sim {
     /// of it made holding no lock on it, as a direct call's once its lock
     /// is released.
     pub(crate) committed_before_unlocked_read: Option<RoomEvent>,
+    /// An event another call commits to `room_1` just after a read of a key
+    /// made holding no lock on the room, as one of the room's work reads its
+    /// key before its budget.
+    pub(crate) committed_after_unlocked_key_read: Option<RoomEvent>,
 }
 
 /// The instant the simulated clock starts at, 2026-10-22T14:03:00Z.
@@ -368,6 +372,7 @@ impl Sim {
             decisions: Vec::new(),
             failing_effect: None,
             committed_before_unlocked_read: None,
+            committed_after_unlocked_key_read: None,
         }
     }
 
@@ -1544,7 +1549,9 @@ impl Sim {
                 Outcome::Store(StoreOutcome::Context(Box::new(self.context(recent_events))))
             }
             StoreRequest::GetEventByIdempotencyKey {
-                channel_id, key, ..
+                room_id,
+                channel_id,
+                key,
             } => {
                 self.trace.push(format!("find_key {key}"));
                 let found = self
@@ -1558,6 +1565,11 @@ impl Sim {
                     })
                     .cloned()
                     .map(Box::new);
+                if !self.state(self.current).locks.contains(&room_id)
+                    && let Some(event) = self.committed_after_unlocked_key_read.take()
+                {
+                    self.seed(event);
+                }
                 Outcome::Store(StoreOutcome::Idempotent(found))
             }
             StoreRequest::Commit {

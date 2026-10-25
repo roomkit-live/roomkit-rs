@@ -23,8 +23,10 @@
 //! the caller does not reach (RFC §17.2).
 
 use super::arrival::Arrived;
+use super::cascade::replay_result;
 use super::deadline::Stopped;
 use super::instructions::{self, Admission};
+use super::replay::KeyRead;
 use super::{InboundError, InboundResult, Machine, Stage, stamp};
 use crate::model::{DirectEvent, Room, RoomContext, RoomEvent, RoomId};
 use crate::ops::io::Bound;
@@ -190,12 +192,55 @@ impl Machine {
             Ok(Admitted::Refused(refused)) => return self.end(cx, Ok(*refused)),
             Err(error) => return self.end(cx, Err(error)),
         };
-        // An event a delivery's code injects is charged on the cascade that
-        // delivers, as an adopted one is: past it, it is stored capped, and
-        // no hook runs for it (gap G-070).
+        if self.cascade.drawn_on().is_none() {
+            return self.go_in(cx, event, call);
+        }
+        // An event a delivery's code injects has its key read before it
+        // draws on the cascade that delivers: a replay draws nothing (RFC
+        // §9.5.1 Past the cap, §13.4).
+        match event.idempotency_key.clone() {
+            Some(key) => {
+                let read = KeyRead::start(cx, event, key, call, self.call.bound);
+                self.stage.enter(Stage::Replaying(Box::new(read)));
+            }
+            None => self.draw_and_go_in(cx, event, call),
+        }
+    }
+
+    /// Takes the answer of the key's read: a replay ends the call with the
+    /// event the key committed, drawing nothing; any other event draws on
+    /// the budget and goes in.
+    pub(super) fn on_key_read(
+        &mut self,
+        cx: &mut Cx<'_>,
+        read: Box<KeyRead>,
+        effect: EffectId,
+        outcome: Outcome,
+    ) {
+        match read.accept(effect, outcome) {
+            Progress::Waiting => self.stage.enter(Stage::Replaying(read)),
+            Progress::Done(Ok(Some(original))) => self.end(cx, Ok(replay_result(&original))),
+            Progress::Done(Ok(None)) => {
+                let (event, call) = read.into_parts();
+                self.draw_and_go_in(cx, event, call);
+            }
+            Progress::Done(Err(stopped)) => self.stop(cx, stopped),
+        }
+    }
+
+    /// An event a delivery's code injects is charged on the cascade that
+    /// delivers, as an adopted one is: past it, it is stored capped, and no
+    /// hook runs for it (gap G-070).
+    fn draw_and_go_in(&mut self, cx: &mut Cx<'_>, event: RoomEvent, call: DirectCall) {
         if self.cascade.drawn_on().is_some_and(|budget| !budget.take()) {
             return self.start_capped_trigger(event, call);
         }
+        self.go_in(cx, event, call);
+    }
+
+    /// The event's room is read for its off-lock check when an off-lock
+    /// hook fires for it, and its pass starts otherwise.
+    fn go_in(&mut self, cx: &mut Cx<'_>, event: RoomEvent, call: DirectCall) {
         if cx.config.hooks.off_lock_checks(&event.source).is_empty() {
             return self.start_trigger(event, None);
         }

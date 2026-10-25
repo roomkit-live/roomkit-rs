@@ -623,6 +623,68 @@ async fn a_delivery_that_calls_into_its_room_on_every_delivery_stops_at_the_reen
     );
 }
 
+/// RFC §9.5.1 Past the cap, §13.4: a delivery's injection whose key its
+/// channel holds is a replay, its key read before the budget it draws on.
+/// The delivery injects under the key `ECHO`, spends the budget with
+/// unkeyed events, then injects under `ECHO` again: past the budget, it
+/// receives the event its key committed, and nothing is stored under the
+/// key again.
+#[tokio::test]
+async fn a_delivery_s_keyed_injection_past_the_reentry_cap_is_a_replay() {
+    let (kit, _) = room().await;
+    kit.set_max_chain_depth(1);
+    let returned = Arc::new(Mutex::new(Vec::new()));
+    let (bot_kit, bot_returned) = (kit.clone(), Arc::clone(&returned));
+    let bot = Scripted::transport(
+        "bot",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, returned) = (bot_kit.clone(), Arc::clone(&bot_returned));
+            Box::pin(async move {
+                if event.source.channel_id != channel("sms") {
+                    return Ok(ChannelOutput::default());
+                }
+                for call in 0..12 {
+                    let mut echo = from_console(&format!("echo {call}"));
+                    if call == 0 || call == 11 {
+                        echo.idempotency_key = Some("ECHO".to_owned());
+                    }
+                    let injected = kit.send_event(&room_id(), echo).await?;
+                    returned
+                        .lock()
+                        .unwrap()
+                        .push((call, injected.id, injected.status));
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(bot).unwrap();
+    kit.attach(&room_id(), &channel("bot")).await.unwrap();
+    send(&kit, "hello").await.unwrap();
+    kit.idle().await;
+    let returned = returned.lock().unwrap().clone();
+    let first = returned.first().map(|(_, id, _)| id.clone());
+    let last = returned
+        .last()
+        .map(|(call, id, status)| (*call, id.clone(), *status));
+    let keyed = kit
+        .store()
+        .list_events(&room_id(), true)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.idempotency_key.as_deref() == Some("ECHO"))
+        .count();
+    assert_eq!(
+        (last, keyed, timeline(&kit).await.last().cloned()),
+        (
+            Some((11, first.unwrap(), EventStatus::Delivered)),
+            1,
+            Some("#11 ws blocked echo 10".to_owned())
+        )
+    );
+}
+
 /// RFC §13.5: the lock is reentrant within one execution context only.
 mod a_context {
     use super::*;

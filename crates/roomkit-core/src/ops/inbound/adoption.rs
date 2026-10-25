@@ -37,19 +37,22 @@
 //! its commit (detached completion: no delivery results, no completion
 //! handle), and its event takes its place in the room's lane at that
 //! commit. A message's arrival runs its step 2, then its channel's parse. A
-//! direct injection is admitted and stamped at once.
+//! direct injection is admitted and stamped at once, and its key, when it
+//! carries one, read before it draws on the budget: a replay draws nothing
+//! (RFC §9.5.1 Past the cap, §13.4).
 
 use std::mem;
 
 use super::arrival::{self, Arrival};
-use super::cascade::{self, entry_result};
+use super::cascade::{self, entry_result, replay_result};
 use super::deadline::Stopped;
 use super::direct::{self, DirectCall};
 use super::pass::{CommitPass, PassOrigin, PassReport};
 use super::record::{RecordPass, RecordReport};
+use super::replay::KeyRead;
 use super::{InboundError, InboundResult, Machine, result};
 use crate::model::{InboundMessage, RoomEvent, RoomId};
-use crate::ops::io::Io;
+use crate::ops::io::{Bound, Io};
 use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth;
@@ -94,6 +97,8 @@ struct AdoptedRun {
 enum RunState {
     /// A message's steps 2 to 4.
     Arriving(Box<Arrival>),
+    /// A direct injection's key, read before it draws on the budget.
+    Replaying(Box<KeyRead>),
     /// The entry's pass.
     Passing(Box<CommitPass>),
     /// The entry stored blocked, past its caller's reentry budget.
@@ -104,6 +109,9 @@ enum RunState {
 enum Advanced {
     Waiting,
     Arrived(Box<RoomEvent>),
+    /// A direct injection's key was read: the event it names, a replay, or
+    /// none.
+    KeyRead(Option<Box<RoomEvent>>),
     /// The entry stopped before its pass, with what its caller receives.
     Stopped(Box<Result<InboundResult, InboundError>>),
     Passed(Result<PassReport, Abort>),
@@ -168,6 +176,7 @@ impl AdoptedRun {
     fn awaits(&self, effect: EffectId) -> bool {
         match &self.state {
             RunState::Arriving(arrival) => arrival.awaits(effect),
+            RunState::Replaying(read) => read.awaits(effect),
             RunState::Passing(pass) => pass.awaits(effect),
             RunState::Recording(record) => record.awaits(effect),
         }
@@ -191,6 +200,20 @@ impl AdoptedRun {
                 // An adopted message is charged as its arrival starts.
                 Progress::Done(Err(Stopped::PastBudget)) => {
                     Advanced::Stopped(Box::new(Ok(result::past_the_budget())))
+                }
+            },
+            RunState::Replaying(read) => match read.accept(effect, outcome) {
+                Progress::Waiting => Advanced::Waiting,
+                Progress::Done(Ok(found)) => Advanced::KeyRead(found),
+                Progress::Done(Err(Stopped::Failed(error))) => {
+                    Advanced::Stopped(Box::new(Err(error)))
+                }
+                // An adopted entry carries no deadline (gap G-070), and is
+                // never refused past the budget before its key is read.
+                Progress::Done(Err(Stopped::Expired | Stopped::PastBudget)) => {
+                    Advanced::Stopped(Box::new(Err(InboundError::Store(
+                        Abort::DeadlinePassed(None).into_record(),
+                    ))))
                 }
             },
             RunState::Passing(pass) => match pass.accept(cx, effect, outcome) {
@@ -278,7 +301,7 @@ impl Machine {
             } => match direct::admit(cx, room_id, *event) {
                 Ok(direct::Admitted::Event(event)) => {
                     let call = DirectCall { organization_id };
-                    self.enter_pass(cx, adopted, *event, Some(call));
+                    self.read_key(cx, adopted, *event, call);
                 }
                 Ok(direct::Admitted::Refused(refused)) => {
                     self.settle_entry(cx, &adopted, Ok(*refused));
@@ -319,6 +342,42 @@ impl Machine {
             entry: adopted,
             state: RunState::Arriving(arrival),
         });
+    }
+
+    /// A direct injection's key, when it carries one, is read before it
+    /// draws on its caller's budget (RFC §9.5.1 Past the cap, §13.4); an
+    /// event that carries none goes to its pass at once.
+    fn read_key(&mut self, cx: &mut Cx<'_>, adopted: Adopted, event: RoomEvent, call: DirectCall) {
+        let Some(key) = event.idempotency_key.clone() else {
+            return self.enter_pass(cx, adopted, event, Some(call));
+        };
+        let read = within(cx, &adopted, |cx| {
+            KeyRead::start(cx, event, key, call, Bound::Unbounded)
+        });
+        self.adopted.running.push(AdoptedRun {
+            entry: adopted,
+            state: RunState::Replaying(Box::new(read)),
+        });
+    }
+
+    /// The entry's key is read: a replay answers its caller with the event
+    /// the key committed, drawing nothing; any other event goes to its pass.
+    fn on_entry_key(
+        &mut self,
+        cx: &mut Cx<'_>,
+        adopted: Adopted,
+        run: AdoptedRun,
+        found: Option<Box<RoomEvent>>,
+    ) {
+        if let Some(original) = found {
+            return self.settle_entry(cx, &adopted, Ok(replay_result(&original)));
+        }
+        let RunState::Replaying(read) = run.state else {
+            debug_assert!(false, "a key read answered an entry that read none");
+            return;
+        };
+        let (event, call) = read.into_parts();
+        self.enter_pass(cx, adopted, event, Some(call));
     }
 
     /// The entry's event goes through its pass, within its caller's reentry
@@ -372,6 +431,7 @@ impl Machine {
         match advanced {
             Advanced::Waiting => self.adopted.running.insert(index, run),
             Advanced::Arrived(event) => self.enter_pass(cx, adopted, *event, None),
+            Advanced::KeyRead(found) => self.on_entry_key(cx, adopted, run, found),
             Advanced::Stopped(stopped) => self.settle_entry(cx, &adopted, *stopped),
             Advanced::Passed(Ok(report)) => self.on_adopted_pass(cx, &adopted, report),
             Advanced::Passed(Err(abort)) | Advanced::Recorded(Err(abort)) => {

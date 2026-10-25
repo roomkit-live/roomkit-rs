@@ -3,8 +3,9 @@
 //! A call goes through its stages in this order (RFC §10.1, §10.5):
 //!
 //! - from its start, a message arrives (`Arriving`, steps 2 to 4); a direct
-//!   injection has its room read for its off-lock check (`Reading`), or its
-//!   pass is queued at once (`Cascade`);
+//!   injection from the room's work has its key read before its budget
+//!   (`Replaying`), then, as any direct injection, has its room read for its
+//!   off-lock check (`Reading`), or its pass queued at once (`Cascade`);
 //! - arrived, the trigger's off-lock check runs (`Checking`, step 5a) when an
 //!   off-lock hook fires for it, then its pass is queued (`Cascade`);
 //! - the trigger's pass over, the call releases the admission ticket it
@@ -24,6 +25,7 @@ use super::arrival::Arrival;
 use super::direct::DirectRead;
 use super::holds::AfterTicket;
 use super::off_lock::OffLockCheck;
+use super::replay::KeyRead;
 use super::{Call, InboundError, InboundResult};
 use crate::model::Task;
 use crate::ops::protocol::EffectId;
@@ -34,6 +36,9 @@ pub(super) enum Stage {
     Start(Box<Call>),
     /// A message's steps 2 to 4.
     Arriving(Box<Arrival>),
+    /// The read of a direct injection's key, from the room's work, before
+    /// its budget (RFC §9.5.1 Past the cap).
+    Replaying(Box<KeyRead>),
     /// A direct injection's read of its room for its off-lock check.
     Reading(Box<DirectRead>),
     /// Step 5a: the trigger's off-lock check, holding the room's ticket.
@@ -60,6 +65,7 @@ pub(super) enum Stage {
 enum StageName {
     Start,
     Arriving,
+    Replaying,
     Reading,
     Checking,
     Cascade,
@@ -74,6 +80,7 @@ impl Stage {
         match self {
             Self::Start(_) => StageName::Start,
             Self::Arriving(_) => StageName::Arriving,
+            Self::Replaying(_) => StageName::Replaying,
             Self::Reading(_) => StageName::Reading,
             Self::Checking(_) => StageName::Checking,
             Self::Cascade => StageName::Cascade,
@@ -90,12 +97,15 @@ impl Stage {
 /// work it started still runs, else into `Done`.
 fn follows(from: StageName, to: StageName) -> bool {
     use StageName::{
-        Arriving, Cascade, Checking, Done, Ending, Persisting, Reading, ReleasingTicket, Start,
+        Arriving, Cascade, Checking, Done, Ending, Persisting, Reading, ReleasingTicket, Replaying,
+        Start,
     };
     match from {
-        // A message arrives; a direct injection has its room read, or its
-        // pass is queued at once.
-        Start => matches!(to, Arriving | Reading | Cascade | Ending | Done),
+        // A message arrives; a direct injection from the room's work has
+        // its key read, then any has its room read, or its pass queued at
+        // once.
+        Start => matches!(to, Arriving | Replaying | Reading | Cascade | Ending | Done),
+        Replaying => matches!(to, Replaying | Reading | Cascade | Ending | Done),
         // Arrived: the off-lock check when an off-lock hook fires for the
         // trigger, else its pass. Each stays while it waits for more
         // answers.

@@ -156,7 +156,11 @@ as it stands.
   runs, into whatever room, is at least as deep as the turn's response
   (§10.6); work a turn or a delivery began starts fresh once that work is
   over, at depth 0 and on a budget of its
-  own (gap G-070); a
+  own (gap G-070); a direct injection from the room's work whose key its
+  channel holds is a replay, its key read before the budget it draws on,
+  which returns the event the key committed and draws nothing, past the
+  budget too, its record looking the key up again under the lock (gap
+  G-081); a
   call that would wait for what its own context holds fails
   `KitError::Reentrant`. A call's ticket is released once no section of the
   call holds the room's lock, its decision and its delivery set not waiting
