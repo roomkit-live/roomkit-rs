@@ -48,8 +48,8 @@ use roomkit_core::model::{
     Access, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelMediaType, ChannelOutput, ChannelType, DirectEvent, ErrorRecord, EventContent,
     EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates, HookResult,
-    Identity, InboundMessage, Observation, Participant, ParticipantId, Room, RoomContext,
-    RoomEvent, RoomId, RoomStatus, Task, Timestamp,
+    Identity, InboundMessage, Metadata, Observation, Participant, ParticipantId, Room, RoomContext,
+    RoomEvent, RoomId, RoomStatus, RoomUpdates, Task, Timestamp,
 };
 use roomkit_core::ops::{
     ChannelDeclaration, ChannelOutcome, ChannelRequest, CommitRecord, Decided, DeleteEvent, Effect,
@@ -146,6 +146,7 @@ struct StoredRoom {
     bindings: Vec<ChannelBinding>,
     participants: Vec<Participant>,
     timeline: Vec<RoomEvent>,
+    author_register: Option<Metadata>,
 }
 
 impl StoredRoom {
@@ -157,6 +158,7 @@ impl StoredRoom {
             bindings: Vec::new(),
             participants: Vec::new(),
             timeline: Vec::new(),
+            author_register: None,
         }
     }
 }
@@ -172,6 +174,8 @@ pub(crate) struct Sim {
     pub(crate) bindings: Vec<ChannelBinding>,
     pub(crate) participants: Vec<Participant>,
     pub(crate) timeline: Vec<RoomEvent>,
+    /// The room's register of authors, its private state (RFC §14.1).
+    pub(crate) author_register: Option<Metadata>,
     pub(crate) tasks: Vec<Task>,
     pub(crate) observations: Vec<Observation>,
     /// Every effect executed, in order.
@@ -328,6 +332,7 @@ impl Sim {
             bindings: Vec::new(),
             participants: Vec::new(),
             timeline: Vec::new(),
+            author_register: None,
             tasks: Vec::new(),
             observations: Vec::new(),
             trace: Vec::new(),
@@ -1060,6 +1065,9 @@ impl Sim {
                 format!("find_key {key}")
             }
             Request::Store(StoreRequest::GetEvent { event_id }) => format!("get_event {event_id}"),
+            Request::Store(StoreRequest::ListEvents { room_id }) => {
+                format!("list_events {room_id}")
+            }
             Request::Store(StoreRequest::Commit { .. }) => "commit".to_owned(),
             Request::Store(StoreRequest::PersistSideEffects { .. }) => "persist".to_owned(),
             Request::Store(StoreRequest::CreateRoom { room }) => format!("store room {}", room.id),
@@ -1361,6 +1369,9 @@ impl Sim {
             Request::Store(StoreRequest::ResolveIdentity { address, .. }) => {
                 (format!("resolve_identity {address}"), store_down())
             }
+            Request::Store(StoreRequest::ListEvents { room_id }) => {
+                (format!("list_events {room_id}"), store_down())
+            }
             Request::Route { query } => (
                 format!("route {}", query.channel_id),
                 ErrorRecord::new("RouterError", "the CRM is unreachable"),
@@ -1526,6 +1537,17 @@ impl Sim {
         mem::swap(&mut self.bindings, &mut other.bindings);
         mem::swap(&mut self.participants, &mut other.participants);
         mem::swap(&mut self.timeline, &mut other.timeline);
+        mem::swap(&mut self.author_register, &mut other.author_register);
+    }
+
+    /// Writes `updates` on the room, its register of authors apart, as a
+    /// store that keeps a room's private state apart does (RFC §14.1).
+    fn update_room(&mut self, mut updates: RoomUpdates) {
+        if let Some(register) = updates.private_state.remove("author_register") {
+            self.room.metadata.remove("author_register");
+            self.author_register = register;
+        }
+        updates.apply(&mut self.room);
     }
 
     /// The store, for the room the fields hold: its bindings, participants,
@@ -1576,7 +1598,8 @@ impl Sim {
                 event,
                 counters,
                 target,
-            } => self.commit(*event, &counters, target.as_ref()),
+            } => self.commit(*event, counters, target.as_ref()),
+            StoreRequest::ListEvents { room_id } => self.list_events(&room_id),
             StoreRequest::DeleteEvent {
                 event_id,
                 cascade_replies,
@@ -1602,7 +1625,7 @@ impl Sim {
                     self.state(self.current).locks.contains(&room_id) || updates.status.is_none(),
                     "a status was written outside the room lock"
                 );
-                updates.apply(&mut self.room);
+                self.update_room(updates);
                 self.trace
                     .push(format!("update room {room_id} {:?}", self.room.status));
                 Outcome::Store(StoreOutcome::Stored)
@@ -1669,12 +1692,25 @@ impl Sim {
         taken
     }
 
+    /// The room's timeline, the records stored `BLOCKED` left out (RFC
+    /// §14.1 `list_events`).
+    fn list_events(&mut self, room_id: &RoomId) -> Outcome {
+        self.trace.push(format!("list_events {room_id}"));
+        let received = self
+            .timeline
+            .iter()
+            .filter(|event| event.status != EventStatus::Blocked)
+            .cloned()
+            .collect();
+        Outcome::Store(StoreOutcome::Events(received))
+    }
+
     /// Commits `event` with the room's counters, under the room's lock, with
     /// the update an edit or a delete makes to its target in the same write.
     fn commit(
         &mut self,
         event: RoomEvent,
-        counters: &RoomCounters,
+        counters: RoomCounters,
         target: Option<&TargetUpdate>,
     ) -> Outcome {
         assert!(
@@ -1698,7 +1734,7 @@ impl Sim {
         self.room.event_count = counters.event_count;
         self.room.latest_index = Some(counters.latest_index);
         self.room.timers.last_activity_at = counters.last_activity_at;
-        counters.room.apply(&mut self.room);
+        self.update_room(counters.room);
         let updating = target.map_or_else(String::new, |update| {
             format!(" updating {}", update.event_id)
         });
@@ -1781,6 +1817,7 @@ impl Sim {
             bindings: self.bindings.clone(),
             participants: self.participants.clone(),
             recent_events: self.timeline.iter().skip(skip).cloned().collect(),
+            author_register: self.author_register.clone(),
         }
     }
 }
@@ -1793,7 +1830,8 @@ fn store_room(request: &StoreRequest) -> &RoomId {
         | StoreRequest::PersistSideEffects { room_id, .. }
         | StoreRequest::UpdateRoom { room_id, .. }
         | StoreRequest::DeleteBinding { room_id, .. }
-        | StoreRequest::DeleteEvent { room_id, .. } => room_id,
+        | StoreRequest::DeleteEvent { room_id, .. }
+        | StoreRequest::ListEvents { room_id } => room_id,
         StoreRequest::Commit { event, .. } => &event.room_id,
         StoreRequest::CreateRoom { room } => &room.id,
         StoreRequest::StoreBinding { binding } => &binding.room_id,

@@ -45,6 +45,10 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
             .get_event(&event_id)
             .await
             .map(|event| StoreOutcome::Event(event.map(Box::new))),
+        StoreRequest::ListEvents { room_id } => store
+            .list_events(&room_id, false)
+            .await
+            .map(StoreOutcome::Events),
         StoreRequest::Commit {
             event,
             counters,

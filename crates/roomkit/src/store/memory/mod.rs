@@ -4,13 +4,13 @@
 mod events;
 mod identities;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, EventStatus, EventUpdates, Identity,
-    IdentityId, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId,
-    RoomUpdates, Task,
+    IdentityId, Metadata, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent,
+    RoomId, RoomUpdates, Task,
 };
 use roomkit_core::ops::{RoomCounters, TargetUpdate};
 use roomkit_core::rules::{idempotency, routing};
@@ -18,10 +18,15 @@ use roomkit_core::rules::{idempotency, routing};
 use self::identities::Identities;
 use super::{ConversationStore, EventFilter, RoomFilter, StoreError};
 
+/// The key of a room's private state holding its register of authors (RFC
+/// §10.1 step 12, §14.1), which a context carries.
+const AUTHOR_REGISTER: &str = "author_register";
+
 /// A store that keeps everything in memory, for one process.
 ///
 /// Every read returns copies and every write copies in, so no caller can
-/// change stored state outside the store's methods (RFC §14.4).
+/// change stored state outside the store's methods (RFC §14.4). A room's
+/// private state is kept apart from its metadata (RFC §14.1).
 #[derive(Debug, Default)]
 pub struct InMemoryStore {
     rooms: Mutex<HashMap<RoomId, Record>>,
@@ -36,9 +41,29 @@ struct Record {
     events: Vec<RoomEvent>,
     tasks: Vec<Task>,
     observations: Vec<Observation>,
+    /// The room's private state, by key (RFC §14.1).
+    private: BTreeMap<String, Metadata>,
 }
 
 impl Record {
+    /// Writes `updates` on the room, its private state apart: a value
+    /// written or removed under a key removes the metadata's copy under it
+    /// (RFC §14.1 `set_private_state`).
+    fn update(&mut self, mut updates: RoomUpdates) {
+        for (key, value) in std::mem::take(&mut updates.private_state) {
+            self.room.metadata.remove(&key);
+            match value {
+                Some(value) => {
+                    self.private.insert(key, value);
+                }
+                None => {
+                    self.private.remove(&key);
+                }
+            }
+        }
+        updates.apply(&mut self.room);
+    }
+
     /// Whether the room has a participant with the id.
     fn has_participant(&self, participant_id: &ParticipantId) -> bool {
         self.participants
@@ -187,6 +212,7 @@ impl ConversationStore for InMemoryStore {
                 events: Vec::new(),
                 tasks: Vec::new(),
                 observations: Vec::new(),
+                private: BTreeMap::new(),
             },
         );
         Ok(())
@@ -198,9 +224,36 @@ impl ConversationStore for InMemoryStore {
         updates: RoomUpdates,
     ) -> Result<Room, StoreError> {
         self.write(room_id, |record| {
-            updates.apply(&mut record.room);
+            record.update(updates);
             Ok(record.room.clone())
         })
+    }
+
+    async fn get_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+    ) -> Result<Option<Metadata>, StoreError> {
+        Ok(self
+            .rooms()
+            .get(room_id)
+            .and_then(|record| record.private.get(key).cloned()))
+    }
+
+    async fn set_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+        value: Option<Metadata>,
+    ) -> Result<(), StoreError> {
+        let updates = RoomUpdates {
+            private_state: [(key.to_owned(), value)].into(),
+            ..RoomUpdates::default()
+        };
+        if let Some(record) = self.rooms().get_mut(room_id) {
+            record.update(updates);
+        }
+        Ok(())
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
@@ -283,6 +336,7 @@ impl ConversationStore for InMemoryStore {
                 bindings: record.bindings.clone(),
                 participants: record.participants.clone(),
                 recent_events: record.events.iter().skip(skip).cloned().collect(),
+                author_register: record.private.get(AUTHOR_REGISTER).cloned(),
             }
         }))
     }
@@ -446,7 +500,7 @@ impl ConversationStore for InMemoryStore {
             record.room.event_count = counters.event_count;
             record.room.latest_index = Some(counters.latest_index);
             record.room.timers.last_activity_at = counters.last_activity_at;
-            counters.room.apply(&mut record.room);
+            record.update(counters.room);
             record.events.push(event);
             Ok(())
         })

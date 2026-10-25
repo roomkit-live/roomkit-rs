@@ -246,6 +246,13 @@ enum State {
         payload: Box<RoomEvent>,
         context: Box<RoomContext>,
     },
+    /// The room's timeline is read, to rebuild the register of authors of a
+    /// room that holds none before the event is committed (RFC §10.1 step
+    /// 12, gap G-089).
+    ReadingTimeline {
+        effect: EffectId,
+        pending: Box<decision::Unrecorded>,
+    },
     Committing {
         effect: EffectId,
         result: PassResult,
@@ -278,6 +285,7 @@ impl State {
             | Self::Rereading { effect, .. }
             | Self::RootingHookParent { effect, .. }
             | Self::RereadingTarget { effect, .. }
+            | Self::ReadingTimeline { effect, .. }
             | Self::Committing { effect, .. }
             | Self::Placing { effect, .. }
             | Self::Releasing { effect, .. } => Some(*effect),
@@ -393,6 +401,7 @@ impl CommitPass {
             State::RereadingTarget {
                 payload, context, ..
             } => self.on_target_reread(cx, *payload, context, outcome),
+            State::ReadingTimeline { pending, .. } => self.on_timeline(cx, *pending, outcome),
             State::Committing { result, .. } => self.on_committed(cx, result, outcome),
             State::Placing { result, .. } => self.on_placed(cx, result, outcome),
             State::Releasing { result, .. } => {
@@ -445,6 +454,7 @@ impl CommitPass {
             // The commit, the place and the release carry no deadline (RFC
             // §13.6): `Io` answers them with no `DeadlinePassed`.
             state @ (State::Start
+            | State::ReadingTimeline { .. }
             | State::Committing { .. }
             | State::Placing { .. }
             | State::Releasing { .. }

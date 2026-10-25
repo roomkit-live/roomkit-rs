@@ -11,6 +11,7 @@ use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId};
 use crate::ops::protocol::{EffectId, Outcome, RoomCounters, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Cx, KitConfig, Progress};
+use crate::rules::authors::{self, AUTHOR_REGISTER, NeedsTimeline};
 use crate::rules::chain_depth::{Draw, ReentryBudget};
 use crate::rules::hook_registry::HookTrigger;
 
@@ -425,9 +426,10 @@ impl EventChange for Delete {
     }
 }
 
-/// The commit of a record outside the pipeline (RFC §10.5): its thread
-/// parent rooted under the lock, as every committed event's is (RFC §10.1
-/// step 8), then the record with the room's next index.
+/// The commit of a record outside the pipeline (RFC §10.5): its author
+/// recorded (RFC §10.1 step 12, gap G-089), its thread parent rooted under
+/// the lock, as every committed event's is (RFC §10.1 step 8), then the
+/// record with the room's next index.
 #[derive(Debug)]
 pub(super) struct Commit {
     record: Box<RoomEvent>,
@@ -438,6 +440,13 @@ pub(super) struct Commit {
 #[derive(Debug)]
 enum Waiting {
     Nothing,
+    /// A read of the room's timeline, to rebuild its register of authors,
+    /// then the record's author, its rooting and its commit.
+    Timeline {
+        effect: EffectId,
+        counters: RoomCounters,
+        context: Box<RoomContext>,
+    },
     /// A read of the parent's rooting, then the commit with `counters`.
     Root {
         effect: EffectId,
@@ -453,6 +462,45 @@ impl Commit {
         Self {
             record: Box::new(record),
             waiting: Waiting::Nothing,
+        }
+    }
+
+    /// Records the record's author on the room of `context`, its register
+    /// written with `counters` when it changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedsTimeline`] when the room's whole timeline is needed
+    /// and `timeline` is not given.
+    fn with_author(
+        &mut self,
+        context: &RoomContext,
+        timeline: Option<&[RoomEvent]>,
+        counters: &mut RoomCounters,
+    ) -> Result<(), NeedsTimeline> {
+        let (record, register) = authors::with_author((*self.record).clone(), context, timeline)?;
+        *self.record = record;
+        if let Some(register) = register {
+            counters
+                .room
+                .private_state
+                .insert(AUTHOR_REGISTER.to_owned(), Some(register));
+        }
+        Ok(())
+    }
+
+    /// Roots the record's thread parent, then commits it with `counters`.
+    fn root(&mut self, cx: &mut Cx<'_>, room_id: &RoomId, counters: RoomCounters) {
+        match Rooting::of(&self.record) {
+            Some((rooting, request)) => {
+                let effect = cx.io.issue_locked(request, room_id.clone());
+                self.waiting = Waiting::Root {
+                    effect,
+                    counters,
+                    rooting: Box::new(rooting),
+                };
+            }
+            None => self.commit(cx, counters),
         }
     }
 
@@ -494,18 +542,21 @@ impl EventChange for Commit {
             }));
         }
         self.record.index = context.room.event_count;
-        let counters = RoomCounters::after_commit(&context.room, self.record.index);
-        match Rooting::of(&self.record) {
-            Some((rooting, request)) => {
-                let effect = cx.io.issue_locked(request, room_id.clone());
-                self.waiting = Waiting::Root {
-                    effect,
-                    counters,
-                    rooting: Box::new(rooting),
-                };
-            }
-            None => self.commit(cx, counters),
+        let mut counters = RoomCounters::after_commit(&context.room, self.record.index);
+        if self.with_author(&context, None, &mut counters).is_ok() {
+            self.root(cx, room_id, counters);
+            return Progress::Waiting;
         }
+        // The room holds no register, and its window not its timeline whole.
+        let request = StoreRequest::ListEvents {
+            room_id: room_id.clone(),
+        };
+        let effect = cx.io.issue_locked(request, room_id.clone());
+        self.waiting = Waiting::Timeline {
+            effect,
+            counters,
+            context,
+        };
         Progress::Waiting
     }
 
@@ -515,6 +566,19 @@ impl EventChange for Commit {
         outcome: Outcome,
     ) -> Progress<Result<RoomEvent, MutationError>> {
         match std::mem::replace(&mut self.waiting, Waiting::Nothing) {
+            Waiting::Timeline {
+                counters, context, ..
+            } => match outcome.into_events() {
+                Ok(timeline) => {
+                    let room_id = self.record.room_id.clone();
+                    let mut counters = counters;
+                    // With the timeline given, the author is always recorded.
+                    let _recorded = self.with_author(&context, Some(&timeline), &mut counters);
+                    self.root(cx, &room_id, counters);
+                    Progress::Waiting
+                }
+                Err(error) => Progress::Done(Err(MutationError::Store(error))),
+            },
             Waiting::Root {
                 counters,
                 mut rooting,
@@ -545,7 +609,9 @@ impl EventChange for Commit {
 
     fn awaits(&self, effect: EffectId) -> bool {
         match &self.waiting {
-            Waiting::Root { effect: waited, .. } | Waiting::Commit(waited) => *waited == effect,
+            Waiting::Timeline { effect: waited, .. }
+            | Waiting::Root { effect: waited, .. }
+            | Waiting::Commit(waited) => *waited == effect,
             Waiting::Nothing => false,
         }
     }

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelBinding, ChannelId, Participant, Room, RoomEvent};
+use super::{ChannelBinding, ChannelId, Metadata, Participant, Room, RoomEvent};
 
 /// A room's state as one reader receives it (RFC §10.1 step 3).
 ///
@@ -22,6 +22,13 @@ pub struct RoomContext {
     /// The room's latest events, in timeline order.
     #[serde(default)]
     pub recent_events: Vec<RoomEvent>,
+    /// The room's register of authors, which ranks the sources whose names
+    /// read alike (RFC §6.4, §10.1 step 12, gap G-089): the room's private
+    /// state under `author_register` (RFC §14.1 `get_private_state`), kept
+    /// apart from its metadata, which clients may read. `None` when the
+    /// room holds none.
+    #[serde(default)]
+    pub author_register: Option<Metadata>,
 }
 
 impl RoomContext {
@@ -32,6 +39,7 @@ impl RoomContext {
             bindings: Vec::new(),
             participants: Vec::new(),
             recent_events: Vec::new(),
+            author_register: None,
         }
     }
 

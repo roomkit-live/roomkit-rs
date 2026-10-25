@@ -97,6 +97,10 @@ path = "send_event.rs"
 name = "host_post"
 path = "host_post.rs"
 
+[[example]]
+name = "names_that_read_alike"
+path = "names_that_read_alike.rs"
+
 # Routing and identities.
 
 [[example]]

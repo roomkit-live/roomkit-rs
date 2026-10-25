@@ -7,6 +7,7 @@
     reason = "the simulated driver fails the test on a broken invariant"
 )]
 
+mod authors;
 mod budget;
 mod edits;
 mod inbound;

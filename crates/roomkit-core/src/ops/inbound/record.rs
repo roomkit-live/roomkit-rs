@@ -24,7 +24,7 @@ use crate::ops::protocol::{EffectId, Outcome, RoomCounters, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::section::{Failure, Section, SectionWork};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
-use crate::rules::permissions;
+use crate::rules::{authors, permissions};
 
 /// What became of a record.
 #[derive(Clone, Debug, PartialEq)]
@@ -188,8 +188,11 @@ impl RecordWork {
         }
     }
 
-    /// Commits the record, the room's counters then `counters`.
+    /// Commits the record, the room's counters then `counters`. A record
+    /// stored `BLOCKED` takes no author record, one it came with dropped
+    /// (RFC §10.1 step 12).
     fn commit(&mut self, cx: &mut Cx<'_>, counters: RoomCounters) {
+        self.record.metadata.remove(authors::AUTHOR);
         let request = StoreRequest::Commit {
             event: Box::new(self.record.clone()),
             counters,

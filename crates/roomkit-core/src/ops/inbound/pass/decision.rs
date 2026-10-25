@@ -16,15 +16,25 @@ use super::super::commit::{self, Committing};
 use super::super::stamp;
 use super::{CommitPass, PassOrigin, PassResult, State, Verdict};
 use crate::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, Visibility};
-use crate::ops::protocol::{HoldRequest, Outcome, StoreRequest};
+use crate::ops::protocol::{HoldRequest, Outcome, StoreRequest, TargetUpdate};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
+use crate::rules::authors;
 use crate::rules::edits::EditRefusal;
 use crate::rules::hook_chain::{ChainDecision, ChainVerdict};
 use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::{self, DeliveryPlan, WriteRefusal};
 
 use super::super::chain::HookRun;
+
+/// An event the pass decided to deliver, before its author is recorded.
+#[derive(Debug)]
+pub(super) struct Unrecorded {
+    event: RoomEvent,
+    plan: DeliveryPlan,
+    context: Box<RoomContext>,
+    written: Option<(TargetUpdate, RoomEvent)>,
+}
 
 impl CommitPass {
     /// Step 9: the chain the off-lock check left goes on with the hooks
@@ -261,8 +271,13 @@ impl CommitPass {
                     Some(Some(written)) => Some(written),
                     None => None,
                 };
-                let delivered = commit::delivered(cx, event, plan, context, written);
-                self.committing(cx, delivered)
+                let unrecorded = Unrecorded {
+                    event,
+                    plan,
+                    context,
+                    written,
+                };
+                self.record_author(cx, unrecorded, None)
             }
             Err(refusal) => {
                 let blocked_by = refusal.blocked_by().to_owned();
@@ -271,6 +286,56 @@ impl CommitPass {
                     commit::blocked(cx, event, blocked_by.clone(), Some(blocked_by), &context);
                 self.committing(cx, blocked)
             }
+        }
+    }
+
+    /// Records the event's author, then commits it (RFC §10.1 step 12, gap
+    /// G-089); a room that holds no register, and whose timeline its
+    /// context's window does not hold whole, has its timeline read first,
+    /// under the lock, to rebuild one.
+    fn record_author(
+        &mut self,
+        cx: &mut Cx<'_>,
+        unrecorded: Unrecorded,
+        timeline: Option<&[RoomEvent]>,
+    ) -> State {
+        let Unrecorded {
+            event,
+            plan,
+            context,
+            written,
+        } = unrecorded;
+        if let Ok((event, register)) = authors::with_author(event.clone(), &context, timeline) {
+            let delivered = commit::delivered(cx, event, plan, context, written, register);
+            return self.committing(cx, delivered);
+        }
+        // The room holds no register, and its window not its timeline whole.
+        let room_id = event.room_id.clone();
+        let request = StoreRequest::ListEvents {
+            room_id: room_id.clone(),
+        };
+        State::ReadingTimeline {
+            effect: cx.io.issue_locked(request, room_id),
+            pending: Box::new(Unrecorded {
+                event,
+                plan,
+                context,
+                written,
+            }),
+        }
+    }
+
+    /// The room's timeline is read: the author is recorded with the register
+    /// it rebuilds.
+    pub(super) fn on_timeline(
+        &mut self,
+        cx: &mut Cx<'_>,
+        unrecorded: Unrecorded,
+        outcome: Outcome,
+    ) -> State {
+        match outcome.into_events() {
+            Ok(timeline) => self.record_author(cx, unrecorded, Some(&timeline)),
+            Err(error) => self.release(cx, Err(Abort::Store(error))),
         }
     }
 

@@ -141,8 +141,10 @@ pub enum HoldRequest {
 /// [`StoreOutcome`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum StoreRequest {
-    /// Read the room with its bindings, its participants and its latest
-    /// events, refused ones included (RFC §10.1 step 3). Answer
+    /// Read the room with its bindings, its participants, its latest
+    /// events, refused ones included (RFC §10.1 step 3), and its register of
+    /// authors, the room's private state under `author_register` (RFC §14.1
+    /// `get_private_state`, §10.1 step 12, gap G-089). Answer
     /// [`StoreOutcome::Context`], or [`StoreOutcome::RoomNotFound`].
     LoadContext {
         /// The room.
@@ -169,9 +171,19 @@ pub enum StoreRequest {
         /// The event.
         event_id: EventId,
     },
+    /// Read the room's whole timeline, in index order, the events stored
+    /// `BLOCKED` left out (RFC §14.1 `list_events`): what a register of
+    /// authors is rebuilt from, for a room that holds none and whose
+    /// timeline the context's window does not cover (RFC §10.1 step 12,
+    /// gap G-089). Answer [`StoreOutcome::Events`].
+    ListEvents {
+        /// The room.
+        room_id: RoomId,
+    },
     /// Store `event` and set the room's counters, as one atomic commit (RFC
     /// §14.3), with the update an edit or a delete makes to its target in
-    /// the same transaction (RFC §10.1 step 12). The store must refuse an
+    /// the same transaction (RFC §10.1 step 12), and what the counters
+    /// carry for the room, its register of authors among it (gap G-089). The store must refuse an
     /// index the room has given out already, a hard-deleted one included
     /// (RFC §8.1), and fail the whole commit when the target is gone.
     /// Answer [`StoreOutcome::Committed`].
@@ -417,6 +429,8 @@ pub enum StoreOutcome {
     Event(Option<Box<RoomEvent>>),
     /// The events a delete removed, the target first.
     Deleted(Vec<RoomEvent>),
+    /// The room's timeline, in index order.
+    Events(Vec<RoomEvent>),
     /// The commit is durable.
     Committed,
     /// The side effects are stored.

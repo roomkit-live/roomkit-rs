@@ -9,10 +9,11 @@
 
 use super::pass::{Changed, PassResult};
 use crate::model::{
-    EventStatus, EventType, RoomContext, RoomEvent, RoomUpdates, Timestamp, Visibility,
+    EventStatus, EventType, Metadata, RoomContext, RoomEvent, RoomUpdates, Timestamp, Visibility,
 };
 use crate::ops::protocol::{EffectId, RoomCounters, StoreRequest, TargetUpdate};
 use crate::ops::{Cx, FrameworkEvent, Notice};
+use crate::rules::authors::{AUTHOR, AUTHOR_REGISTER};
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::permissions::{self, DeliveryPlan};
 
@@ -31,13 +32,16 @@ pub(super) struct Committing {
 /// before (RFC §10.1 step 12, §10.3): `written` is the write on the target
 /// and the target as it leaves it. The delivery set reads the target so,
 /// and the result carries it, with the room as the commit leaves it, for
-/// the mutation trigger.
+/// the mutation trigger. `register` is the room's register of authors as
+/// the event's author record left it, written in the same commit when it
+/// changed (RFC §10.1 step 12, gap G-089).
 pub(super) fn delivered(
     cx: &mut Cx<'_>,
     mut event: RoomEvent,
     plan: DeliveryPlan,
     mut context: Box<RoomContext>,
     written: Option<(TargetUpdate, RoomEvent)>,
+    register: Option<Metadata>,
 ) -> Committing {
     event.status = EventStatus::Delivered;
     if event.event_type == EventType::Instruction {
@@ -54,8 +58,14 @@ pub(super) fn delivered(
         };
     }
     let now = cx.env.now();
-    let counters = RoomCounters::after_commit(&context.room, event.index)
+    let mut counters = RoomCounters::after_commit(&context.room, event.index)
         .moving_activity(now, resume(&mut context, now));
+    if let Some(register) = register {
+        counters
+            .room
+            .private_state
+            .insert(AUTHOR_REGISTER.to_owned(), Some(register));
+    }
     let (target, changed) = match written {
         Some((update, changed)) => {
             for recent in &mut context.recent_events {
@@ -114,7 +124,8 @@ fn committed(
 
 /// Commits `event` blocked by `blocked_by` (RFC §10.1 steps 10 and 11): the
 /// record takes its index and counts in the room, without moving its
-/// activity. An edit or a delete blocked leaves its target as it is (RFC
+/// activity. It takes no author record, one it came with dropped (§10.1
+/// step 12, gap G-089). An edit or a delete blocked leaves its target as it is (RFC
 /// §10.3). A blocked instruction is not stored, and `event_blocked` is
 /// emitted all the same (RFC §10.1.1 rule 4).
 pub(super) fn blocked(
@@ -126,6 +137,7 @@ pub(super) fn blocked(
 ) -> Committing {
     event.status = EventStatus::Blocked;
     event.blocked_by = Some(blocked_by.clone());
+    event.metadata.remove(AUTHOR);
     cx.io
         .notify(Notice::FrameworkEvent(FrameworkEvent::EventBlocked {
             room_id: event.room_id.clone(),

@@ -24,6 +24,7 @@ pub(crate) enum RequestKind {
     LoadContext,
     GetEventByIdempotencyKey,
     GetEvent,
+    ListEvents,
     DeleteEvent,
     Commit,
     PersistSideEffects,
@@ -76,6 +77,7 @@ impl StoreRequest {
             Self::LoadContext { .. } => RequestKind::LoadContext,
             Self::GetEventByIdempotencyKey { .. } => RequestKind::GetEventByIdempotencyKey,
             Self::GetEvent { .. } => RequestKind::GetEvent,
+            Self::ListEvents { .. } => RequestKind::ListEvents,
             Self::DeleteEvent { .. } => RequestKind::DeleteEvent,
             Self::Commit { .. } => RequestKind::Commit,
             Self::PersistSideEffects { .. } => RequestKind::PersistSideEffects,
@@ -104,6 +106,7 @@ impl RequestKind {
             Self::LoadContext => "Context or RoomNotFound",
             Self::GetEventByIdempotencyKey => "Idempotent",
             Self::GetEvent => "Event",
+            Self::ListEvents => "Events",
             Self::DeleteEvent => "Deleted",
             Self::Commit => "Committed",
             Self::PersistSideEffects => "Persisted",
@@ -136,6 +139,7 @@ impl RequestKind {
                 matches!(outcome, Outcome::Store(StoreOutcome::Idempotent(_)))
             }
             Self::GetEvent => matches!(outcome, Outcome::Store(StoreOutcome::Event(_))),
+            Self::ListEvents => matches!(outcome, Outcome::Store(StoreOutcome::Events(_))),
             Self::DeleteEvent => matches!(outcome, Outcome::Store(StoreOutcome::Deleted(_))),
             Self::Commit => matches!(outcome, Outcome::Store(StoreOutcome::Committed)),
             Self::PersistSideEffects => matches!(outcome, Outcome::Store(StoreOutcome::Persisted)),
@@ -269,6 +273,14 @@ impl Outcome {
         }
     }
 
+    /// The room's timeline, in index order.
+    pub(crate) fn into_events(self) -> Result<Vec<RoomEvent>, ErrorRecord> {
+        match self {
+            Self::Store(StoreOutcome::Events(events)) => Ok(events),
+            other => Err(other.into_failure()),
+        }
+    }
+
     pub(crate) fn into_committed(self) -> Result<(), ErrorRecord> {
         match self {
             Self::Store(StoreOutcome::Committed) => Ok(()),
@@ -372,6 +384,7 @@ impl Outcome {
                 StoreOutcome::Idempotent(_) => "Idempotent",
                 StoreOutcome::Event(_) => "Event",
                 StoreOutcome::Deleted(_) => "Deleted",
+                StoreOutcome::Events(_) => "Events",
                 StoreOutcome::Committed => "Committed",
                 StoreOutcome::Persisted => "Persisted",
                 StoreOutcome::Stored => "Stored",

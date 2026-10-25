@@ -11,8 +11,8 @@ use std::future::Future;
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, EventStatus, EventUpdates, Identity,
-    IdentityId, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId,
-    RoomStatus, RoomUpdates, Task,
+    IdentityId, Metadata, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent,
+    RoomId, RoomStatus, RoomUpdates, Task,
 };
 use roomkit_core::rules::timers;
 
@@ -97,12 +97,61 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// other one as stored, and returns the room as it now stands (RFC §14.1
     /// `update_room(room_id, updates)`). The write is atomic: a commit can
     /// neither fall in the middle of it nor be lost by it, whether or not
-    /// its caller holds the room's lock.
+    /// its caller holds the room's lock. The private state it names
+    /// (`RoomUpdates::private_state`) is written as
+    /// [`set_private_state`](Self::set_private_state) writes it.
     fn update_room(
         &self,
         room_id: &RoomId,
         updates: RoomUpdates,
     ) -> impl Future<Output = Result<Room, StoreError>> + Send;
+
+    /// The value the room keeps for itself under `key`, apart from its
+    /// metadata, which clients may read; `None` when the room does not exist
+    /// or holds none (RFC §14.1 `get_private_state`). The caller's own copy
+    /// (RFC §14.4). The register of authors is one, under `author_register`
+    /// (RFC §10.1 step 12).
+    ///
+    /// The keys are the implementation's, and each reserves the same key in
+    /// the room's metadata. This default reads the value from the metadata:
+    /// a store that keeps its rooms' private state apart overrides it, and
+    /// [`set_private_state`](Self::set_private_state), as
+    /// [`InMemoryStore`] does.
+    fn get_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+    ) -> impl Future<Output = Result<Option<Metadata>, StoreError>> + Send {
+        async move {
+            let room = self.get_room(room_id).await?;
+            Ok(room.and_then(|room| room.metadata.get(key)?.as_object().cloned()))
+        }
+    }
+
+    /// Keeps `value` under `key` for the room, apart from its metadata, or
+    /// removes the key for `None`; the copy the room's metadata may hold
+    /// under the key is removed in the same write (RFC §14.1
+    /// `set_private_state`). Writes nothing for a room the store does not
+    /// hold. Its caller holds the room's lock, and the room's deletion
+    /// takes its private state. This default keeps the value in the room's
+    /// metadata, through [`update_room`](Self::update_room).
+    fn set_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+        value: Option<Metadata>,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        async move {
+            let updates = RoomUpdates {
+                private_state: [(key.to_owned(), value)].into(),
+                ..RoomUpdates::default()
+            };
+            match self.update_room(room_id, updates).await {
+                Ok(_) | Err(StoreError::RoomNotFound(_)) => Ok(()),
+                Err(error) => Err(error),
+            }
+        }
+    }
 
     /// The room `room_id`, if it exists.
     fn get_room(
@@ -168,8 +217,10 @@ pub trait ConversationStore: Send + Sync + 'static {
         room_id: &RoomId,
     ) -> impl Future<Output = Result<Vec<ChannelBinding>, StoreError>> + Send;
 
-    /// The room with its bindings, its participants and its latest
-    /// `recent_events` events, refused ones included (RFC §10.1 step 3);
+    /// The room with its bindings, its participants, its latest
+    /// `recent_events` events, refused ones included (RFC §10.1 step 3),
+    /// and its register of authors, its private state under
+    /// `author_register` (`RoomContext::author_register`, RFC §10.1 step 12);
     /// `None` when the room does not exist.
     fn load_context(
         &self,
@@ -288,9 +339,11 @@ pub trait ConversationStore: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Option<RoomEvent>, StoreError>> + Send;
 
     /// Stores `event`, sets the room's counters, writes the room updates
-    /// they carry (a paused room's resume) and the update an edit or a
-    /// delete makes to its target, as one atomic commit (RFC §10.1 step 12,
-    /// §14.3). Refuses with [`StoreError::IndexTaken`] an index the room has
+    /// they carry (a paused room's resume, the register of authors the
+    /// event's record changed, its private state written as
+    /// [`set_private_state`](Self::set_private_state) writes it) and the
+    /// update an edit or a delete makes to its target, as one atomic commit
+    /// (RFC §10.1 step 12, §14.3). Refuses with [`StoreError::IndexTaken`] an index the room has
     /// given out already: one its timeline holds, or one a hard delete
     /// removed, since the counters count both (RFC §8.1, gap G-064). Refuses
     /// with [`StoreError::IdempotencyKeyTaken`] an event whose source

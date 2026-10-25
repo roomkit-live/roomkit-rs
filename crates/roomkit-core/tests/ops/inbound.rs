@@ -2106,6 +2106,7 @@ mod a_refused_operation {
                 bindings: sim.bindings.clone(),
                 participants: Vec::new(),
                 recent_events: Vec::new(),
+                author_register: None,
             },
         )));
         let failure = Outcome::Failed(ErrorRecord::new("ParseError", "bad payload"));

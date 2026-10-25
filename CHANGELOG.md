@@ -234,6 +234,20 @@ as it stands.
   record of the transition itself. A room with three attaches stores its
   first message at index 3. The integrator's pause, resume, reopen, close
   and archive, and a room's creation, write none.
+- **Authors** (§6.4, §10.1 step 12, §14.1, gap G-089, step 3 milestone
+  2): every event that names its sender is committed with the record of
+  its author (`metadata.author`: name, rank, source), the room's register
+  of authors ranking the sources whose names read alike, in case or in
+  Unicode's confusables, digest for digest and rank for rank as the Python
+  implementation does. The register is the room's private state, read with
+  the room (`RoomContext::author_register`) and written in the event's
+  commit (`RoomUpdates::private_state`), rebuilt from the timeline for a
+  room that holds none (`StoreRequest::ListEvents`), merged with one the
+  room's metadata still holds. A record stored `BLOCKED` takes none and
+  loses one it came with. The store gains `get_private_state` and
+  `set_private_state`, whose defaults keep the value in the room's
+  metadata; `InMemoryStore` keeps it apart. What reads alike is read over
+  Unicode tables generated from roomkit (`scripts/build-unicode-tables.py`).
 - **Organizations** (§17.2, decision 2 of step 2b, gap G-077): every room
   operation acts for an organization or for none.
   `RoomKit::for_organization(organization_id)` returns an `OrganizationKit`
@@ -292,7 +306,8 @@ as it stands.
   `edit_delete_messages`), rooms and channels (`room_lifecycle`,
   `channel_mute_unmute`, `room_membership`), hooks (`hook_moderation`,
   `hook_inject_welcome`, `hook_off_lock_check`), the pipeline
-  (`instruction_event`, `response_visibility`, `send_event`, `host_post`),
+  (`instruction_event`, `response_visibility`, `send_event`, `host_post`,
+  `names_that_read_alike`),
   and routing and
   identities (`shared_sms_number`, `paused_conversation`,
   `identity_addresses`).

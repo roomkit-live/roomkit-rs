@@ -100,6 +100,9 @@ pub fn context_for(reader: &ChannelBinding, whole: &RoomContext) -> RoomContext 
             .into_iter()
             .map(|event| withheld(event, &deleted))
             .collect(),
+        // The labels of the turns it reads take their ranks from it (RFC
+        // §6.4, gap G-089).
+        author_register: whole.author_register.clone(),
     }
 }
 

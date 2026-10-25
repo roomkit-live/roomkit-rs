@@ -72,6 +72,7 @@ pub(crate) fn issue_write(cx: &mut Cx<'_>, request: StoreRequest) -> EffectId {
         StoreRequest::LoadContext { .. }
         | StoreRequest::GetEventByIdempotencyKey { .. }
         | StoreRequest::GetEvent { .. }
+        | StoreRequest::ListEvents { .. }
         | StoreRequest::PersistSideEffects { .. }
         | StoreRequest::CreateRoom { .. }
         | StoreRequest::UpdateRoom { .. }

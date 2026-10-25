@@ -1,6 +1,9 @@
 //! Partial updates of the records a store keeps: a room (RFC §14.1
-//! `update_room(room_id, updates)`), an event (RFC §14.1
-//! `update_event(event_id, updates)`) and a binding (RFC §7.5 rule 6).
+//! `update_room(room_id, updates)`) and its private state
+//! (`set_private_state`), an event (RFC §14.1 `update_event(event_id,
+//! updates)`) and a binding (RFC §7.5 rule 6).
+
+use std::collections::BTreeMap;
 
 use super::{
     Access, ChannelBinding, EventContent, EventSource, Metadata, ParticipantId, Room, RoomEvent,
@@ -30,6 +33,14 @@ pub struct RoomUpdates {
     pub metadata: Metadata,
     /// Metadata keys to remove.
     pub removed_metadata: Vec<String>,
+    /// The room's private state to write, by key, `None` removing the key
+    /// (RFC §14.1 `set_private_state`): what the implementation keeps for
+    /// the room apart from its metadata, such as the register of authors
+    /// (`author_register`, §10.1 step 12, gap G-089). A store that keeps a
+    /// room's private state apart writes it there and removes the copy the
+    /// room's metadata holds under the key; one that keeps none writes it
+    /// in the metadata, as [`apply`](Self::apply) does.
+    pub private_state: BTreeMap<String, Option<Metadata>>,
 }
 
 impl RoomUpdates {
@@ -77,6 +88,19 @@ impl RoomUpdates {
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
+        // A store that keeps no private state keeps it in the metadata, under
+        // its key (RFC §14.1).
+        for (key, value) in &self.private_state {
+            match value {
+                Some(value) => {
+                    room.metadata
+                        .insert(key.clone(), serde_json::Value::Object(value.clone()));
+                }
+                None => {
+                    room.metadata.remove(key);
+                }
+            }
+        }
     }
 }
 
