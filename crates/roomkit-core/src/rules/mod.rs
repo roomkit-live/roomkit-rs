@@ -21,6 +21,7 @@
 //! | [`lifecycle`] | §5.1: which status each room transition leaves from, and what it writes |
 //! | [`timers`] | §5.1: which timer transition falls due, and when |
 //! | [`edits`] | §10.1 step 8a, §10.3: whether an edit or a delete may change its target, and what the commit writes on it |
+//! | [`idempotency`] | §13.4: a blank idempotency key is no key |
 //! | [`instructions`] | §10.1.1: what an instruction must be before anything is read, what a modify keeps of it, what its turn reads, and its responses' fingerprint |
 //!
 //! The crate's own `threads` (§5.2, §10.1 step 8) gives the thread root an
@@ -38,6 +39,7 @@ pub mod chain_depth;
 pub mod edits;
 pub mod hook_chain;
 pub mod hook_registry;
+pub mod idempotency;
 pub mod instructions;
 pub mod lifecycle;
 pub mod organizations;

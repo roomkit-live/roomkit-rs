@@ -4,7 +4,9 @@
 use std::error::Error;
 use std::ops::Deref;
 
-use roomkit_core::model::{ChannelType, ErrorRecord, EventId, IdentityId, ParticipantId, RoomId};
+use roomkit_core::model::{
+    ChannelId, ChannelType, ErrorRecord, EventId, IdentityId, ParticipantId, RoomId,
+};
 use thiserror::Error;
 
 use crate::error;
@@ -138,6 +140,23 @@ pub enum StoreError {
         /// The index.
         index: u64,
     },
+    /// The room holds an event of the same source channel with the same
+    /// idempotency key (RFC §13.4, §14.3): the commit is refused, nothing
+    /// written, and the event the key names is kept. The pipeline looks a
+    /// key up under the room lock before it commits, so a direct commit is
+    /// the one that meets it: a record committed outside the pipeline,
+    /// which is never a replay (RFC §10.5), or a caller of the store
+    /// itself. A blank key is no key, and an event under an id the store
+    /// holds is outside this rule.
+    #[error("room {room_id} holds an event of channel {channel_id} with the key {key:?}")]
+    IdempotencyKeyTaken {
+        /// The room.
+        room_id: RoomId,
+        /// The event's source channel.
+        channel_id: ChannelId,
+        /// The key.
+        key: String,
+    },
     /// The store could not be reached or failed: the error it met is the
     /// cause ([`std::error::Error::source`]), which the message leaves to
     /// a reader of the chain, [`to_record`](Self::to_record) among them.
@@ -165,6 +184,7 @@ impl StoreError {
             Self::AddressLinked { .. } => "AddressLinked",
             Self::EventNotFound(_) => "EventNotFound",
             Self::IndexTaken { .. } => "IndexTaken",
+            Self::IdempotencyKeyTaken { .. } => "IdempotencyKeyTaken",
             Self::Unavailable(_) => "StoreUnavailable",
         };
         ErrorRecord::new(error_type, error::with_causes(self))

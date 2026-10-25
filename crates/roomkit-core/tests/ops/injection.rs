@@ -131,6 +131,25 @@ mod an_injected_event {
         );
     }
 
+    /// RFC §13.4: a blank key is no key: two injections carrying one are
+    /// both committed, each with no key.
+    #[test]
+    fn with_a_blank_key_carries_none() {
+        let mut sim = room();
+        let mut keys = Vec::new();
+        for text in ["one", "two"] {
+            let mut event = from_console(text);
+            event.idempotency_key = Some(" ".to_owned());
+            let result = sim.inject("room_1", event).unwrap();
+            keys.push(
+                result
+                    .event
+                    .map(|event| (event.index, event.idempotency_key)),
+            );
+        }
+        assert_eq!(keys, [Some((0, None)), Some((1, None))]);
+    }
+
     /// Gap G-069: a transport's event travels in, as the message it stands
     /// for would.
     #[test]
@@ -2167,6 +2186,22 @@ mod a_committed_record {
                 }),
                 0
             )
+        );
+    }
+
+    /// RFC §13.4: a record's blank key is no key: it is stored with none.
+    #[test]
+    fn with_a_blank_key_is_stored_with_none() {
+        let mut sim = room();
+        let mut blank = record("snap_1", "room_1");
+        blank.idempotency_key = Some("  ".to_owned());
+        let committed = sim.commit_record("room_1", blank, None).unwrap();
+        assert_eq!(
+            (
+                committed.idempotency_key,
+                sim.timeline[0].idempotency_key.clone()
+            ),
+            (None, None)
         );
     }
 

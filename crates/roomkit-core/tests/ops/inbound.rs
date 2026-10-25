@@ -1254,6 +1254,31 @@ mod a_duplicate_message {
         );
     }
 
+    /// RFC §13.4: a blank key, empty or whitespace only, is no key: two
+    /// messages carrying one are two messages, each stored with no key.
+    #[test]
+    fn a_blank_key_is_no_key() {
+        let mut sim = room();
+        let mut stored = Vec::new();
+        for blank in ["", "   "] {
+            for text in ["one", "two"] {
+                let mut message = Sim::message("sms", text);
+                message.idempotency_key = Some(blank.to_owned());
+                let event = sim.send(message).unwrap().event.unwrap();
+                stored.push((
+                    roomkit_core::rules::transcoding::text_of(&event.content),
+                    event.idempotency_key,
+                ));
+            }
+        }
+        let one = || ("one".to_owned(), None);
+        let two = || ("two".to_owned(), None);
+        assert_eq!(
+            (stored, sim.traced("find_key").len()),
+            (vec![one(), two(), one(), two()], 0)
+        );
+    }
+
     #[test]
     fn a_response_never_carries_an_idempotency_key() {
         let mut sim = Sim::new();

@@ -36,7 +36,7 @@ use crate::ops::protocol::{ChannelRequest, EffectId, Outcome, Request, StoreRequ
 use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
 use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::routing::{self, RouteQuery, Sender};
-use crate::rules::{addresses, permissions};
+use crate::rules::{addresses, idempotency, permissions};
 
 /// How many times a message is routed before it gets a new room: once, then
 /// once more when the room it was routed to is no longer its own by the
@@ -72,9 +72,9 @@ pub(super) enum Admitted {
 /// work a message naming its room draws on, when it draws on one (RFC
 /// §8.3, §10.1 step 1, gap G-070): past it, the message is refused
 /// `reentry_loop_cap` first thing, with no event, its channel not looked
-/// up. Then step 1, and the refusals of an instruction that cannot be one
-/// (RFC §10.1.1) and of a visibility only the framework writes (gap
-/// G-041).
+/// up. Then step 1, its blank idempotency key read as none (RFC §13.4),
+/// and the refusals of an instruction that cannot be one (RFC §10.1.1) and
+/// of a visibility only the framework writes (gap G-041).
 ///
 /// # Errors
 ///
@@ -89,7 +89,8 @@ pub(super) fn admit(
     if budget.is_some_and(|budget| !budget.take()) {
         return Ok(Admitted::Refused(Box::new(result::past_the_budget())));
     }
-    let (channel, message) = resolve(config, message)?;
+    let (channel, mut message) = resolve(config, message)?;
+    message.idempotency_key = idempotency::key(message.idempotency_key);
     if let Admission::Refused(refusal) = instructions::admit(config, (&message).into())? {
         return Ok(Admitted::Refused(Box::new(instructions::refused(refusal))));
     }

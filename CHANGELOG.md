@@ -121,13 +121,17 @@ as it stands.
   `process_timeout`, writes nothing more of its event and delivers every
   event it committed (gap G-076). A cascade that fails still delivers what
   it committed.
+- **Idempotency keys** (§13.4, gap G-079): a blank key, empty or
+  whitespace only, is no key: a message, an injected event and a record
+  carrying one are processed and stored as carrying none.
 - **Direct calls.** `send_event` injects an event through the pipeline
   from its lock on, without a parse or step 2: a refusal before its commit
   is raised with nothing written (§10.5, gap G-069); its `DirectEvent` may
   say where its answers go (`response_visibility`), as a message does (gap
   G-073). `commit_event` commits
   a record under the room lock with the next index and nothing else: no
-  hook, no delivery, no activity (gap G-071). `update_event` and
+  hook, no delivery, no activity (gap G-071); it is never a replay, and a
+  key its channel holds fails it as the store refuses it (gap G-079). `update_event` and
   `delete_event`, the host's changes of stored events, run under the lock,
   fire their trigger after it with the room read then, and are a no-op on
   a missing target or room; a hard delete takes its replies one level deep
@@ -213,8 +217,12 @@ as it stands.
   each finding the sender by address or by identity, and
   events, a commit writing the event, the room's counters and an edit's or
   a delete's target in one transaction, an index below `event_count`
-  refused, the idempotency lookup from a channel or within the room
-  (`get_event_by_idempotency_key`), hard deletes and event counts.
+  refused, a key its source channel holds in the room refused
+  (`StoreError::IdempotencyKeyTaken`, nothing written, a blank key being
+  no key), the stored `delivery_results` kept by every write but the
+  commit, the idempotency lookup from a channel or within the room
+  (`get_event_by_idempotency_key`), hard deletes and event counts (§13.4,
+  §14.3, gaps G-079, G-080).
 - **Examples**, one runnable file each, every one checking what it shows:
   the RFC's Appendix B flows (`echo_room`, `new_conversation`,
   `block_and_inject`, `agent_chain`, `advisor_joins`,

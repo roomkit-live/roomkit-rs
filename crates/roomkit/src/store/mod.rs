@@ -292,8 +292,16 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// §14.3). Refuses with [`StoreError::IndexTaken`] an index the room has
     /// given out already: one its timeline holds, or one a hard delete
     /// removed, since the counters count both (RFC §8.1, gap G-064). Refuses
-    /// with [`StoreError::EventNotFound`] a target the room no longer holds,
-    /// writing nothing.
+    /// with [`StoreError::IdempotencyKeyTaken`] an event whose source
+    /// channel and idempotency key an event of the room carries, a blank key
+    /// being no key (RFC §13.4, §14.3). Refuses with
+    /// [`StoreError::EventNotFound`] a target the room no longer holds.
+    /// A refused commit writes nothing.
+    ///
+    /// The target's update keeps the `delivery_results` the store holds:
+    /// once stored, an event's `delivery_results` is written by the record
+    /// of its deliveries alone (RFC §14.3), which the kit does not make; the
+    /// event committed is stored with the ones it carries.
     fn commit(
         &self,
         event: RoomEvent,
@@ -309,9 +317,10 @@ pub trait ConversationStore: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Option<RoomEvent>, StoreError>> + Send;
 
     /// Writes the fields `updates` names on the stored event, keeping every
-    /// other one, and returns the event as it now stands (RFC §14.1
-    /// `update_event(event_id, updates)`). An event no room holds is refused
-    /// with [`StoreError::EventNotFound`].
+    /// other one, its `delivery_results` among them (RFC §14.3), and returns
+    /// the event as it now stands (RFC §14.1 `update_event(event_id,
+    /// updates)`). An event no room holds is refused with
+    /// [`StoreError::EventNotFound`].
     fn update_event(
         &self,
         event_id: &EventId,

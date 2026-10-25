@@ -30,8 +30,8 @@ use crate::model::{DirectEvent, Room, RoomContext, RoomEvent, RoomId};
 use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::{Cx, Progress};
-use crate::rules::organizations;
 use crate::rules::permissions::WriteRefusal;
+use crate::rules::{idempotency, organizations};
 
 /// What a direct injection is checked for on the room, before its hooks
 /// (RFC §10.5, §17.2, gap G-069).
@@ -143,7 +143,8 @@ pub(super) enum Admitted {
 
 /// Refuses `event` before anything is read when it cannot be one, or
 /// stamps it for `room_id` (RFC §10.5): its channel must be registered,
-/// and it is admitted as a message is (RFC §10.1.1, gap G-041).
+/// and it is admitted as a message is, a blank idempotency key read as
+/// none (RFC §13.4, §10.1.1, gap G-041).
 ///
 /// # Errors
 ///
@@ -151,8 +152,9 @@ pub(super) enum Admitted {
 pub(super) fn admit(
     cx: &mut Cx<'_>,
     room_id: RoomId,
-    event: DirectEvent,
+    mut event: DirectEvent,
 ) -> Result<Admitted, InboundError> {
+    event.idempotency_key = idempotency::key(event.idempotency_key);
     let channel = cx
         .config
         .channel(&event.channel_id)

@@ -13,7 +13,7 @@ use roomkit_core::model::{
     RoomUpdates, Task,
 };
 use roomkit_core::ops::{RoomCounters, TargetUpdate};
-use roomkit_core::rules::routing;
+use roomkit_core::rules::{idempotency, routing};
 
 use self::identities::Identities;
 use super::{ConversationStore, EventFilter, RoomFilter, StoreError};
@@ -96,6 +96,26 @@ fn names(
 ) -> bool {
     named == participant_id
         || identity_id.is_some_and(|identity| named.as_str() == identity.as_str())
+}
+
+/// The refusal of `event`'s commit when `events`, its room's timeline,
+/// holds an event of the same source channel with the same idempotency key
+/// (RFC §14.3); `None` for an event that carries no key, a blank one
+/// included (RFC §13.4).
+fn taken_key(events: &[RoomEvent], event: &RoomEvent) -> Option<StoreError> {
+    let key = event
+        .idempotency_key
+        .as_deref()
+        .filter(|key| idempotency::is_key(key))?;
+    let channel_id = &event.source.channel_id;
+    let taken = events.iter().any(|stored| {
+        stored.idempotency_key.as_deref() == Some(key) && &stored.source.channel_id == channel_id
+    });
+    taken.then(|| StoreError::IdempotencyKeyTaken {
+        room_id: event.room_id.clone(),
+        channel_id: channel_id.clone(),
+        key: key.to_owned(),
+    })
 }
 
 impl InMemoryStore {
@@ -408,6 +428,9 @@ impl ConversationStore for InMemoryStore {
                     room_id: room_id.clone(),
                     index: event.index,
                 });
+            }
+            if let Some(taken) = taken_key(&record.events, &event) {
+                return Err(taken);
             }
             if let Some(TargetUpdate { event_id, updates }) = &target {
                 let stored = record

@@ -21,14 +21,14 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    DirectEvent, EventContent, EventDirection, EventSource, EventStatus, EventType, HookResult,
-    InboundMessage, RoomContext, RoomEvent, RoomId, RoomStatus, Timestamp,
+    DirectEvent, EventContent, EventDirection, EventSource, EventStatus, EventType, EventUpdates,
+    HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, RoomStatus, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConversationStore, EventDraft, FrameworkEvent,
-    HookExecution, HookSpec, HookTrigger, InboundError, InboundRoomRouter, KitError, RoomFilter,
-    RoomKit, RouteQuery, RouterError, default_inbound_event, text_of,
+    HookExecution, HookSpec, HookTrigger, InboundError, InboundRoomRouter, KitError, MutationError,
+    RoomFilter, RoomKit, RouteQuery, RouterError, default_inbound_event, text_of,
 };
 use tokio::sync::Notify;
 
@@ -1962,24 +1962,31 @@ mod send_event {
     }
 }
 
-/// RFC §10.5: `commit_event` commits a record no one receives.
-#[tokio::test]
-async fn commit_event_reaches_no_channel() {
-    let (kit, audit) = room().await;
+/// The record `id` the console's channel holds, as `commit_event` takes it.
+fn console_record(id: &str, text: &str) -> RoomEvent {
     let source = EventSource::new(
         channel("ws"),
         ChannelType::Websocket,
         EventDirection::Inbound,
     );
-    let record = RoomEvent::new(
-        "snap_1".parse().unwrap(),
+    RoomEvent::new(
+        id.parse().unwrap(),
         room_id(),
         EventType::Message,
         source,
-        EventContent::text("Snapshot"),
+        EventContent::text(text),
         Timestamp::UNIX_EPOCH,
-    );
-    let committed = kit.commit_event(&room_id(), record).await.unwrap();
+    )
+}
+
+/// RFC §10.5: `commit_event` commits a record no one receives.
+#[tokio::test]
+async fn commit_event_reaches_no_channel() {
+    let (kit, audit) = room().await;
+    let committed = kit
+        .commit_event(&room_id(), console_record("snap_1", "Snapshot"))
+        .await
+        .unwrap();
     assert_eq!(
         (
             committed.index,
@@ -1987,5 +1994,58 @@ async fn commit_event_reaches_no_channel() {
             timeline(&kit).await.len()
         ),
         (0, 0, 1)
+    );
+}
+
+/// RFC §10.5, §14.3: a record is never a replay. Under a key its channel
+/// holds in the room, `commit_event` fails as the store refuses the
+/// duplicate key, nothing written, and the event the key names is kept.
+#[tokio::test]
+async fn commit_event_under_a_key_its_channel_holds_is_refused() {
+    let (kit, _) = room().await;
+    let mut sent = from_console("Hi");
+    sent.idempotency_key = Some("WS1".to_owned());
+    let sent = kit.send_event(&room_id(), sent).await.unwrap();
+    let mut record = console_record("snap_1", "Snapshot");
+    record.idempotency_key = Some("WS1".to_owned());
+    let refused = kit.commit_event(&room_id(), record).await;
+    let held = kit
+        .store()
+        .get_event_by_idempotency_key(&room_id(), Some(&channel("ws")), "WS1")
+        .await
+        .unwrap()
+        .map(|event| event.id);
+    let error_type = match refused {
+        Err(KitError::Mutation(MutationError::Store(record))) => record.error_type,
+        other => panic!("the record was not refused as a duplicate key: {other:?}"),
+    };
+    assert_eq!(
+        (error_type.as_str(), held, timeline(&kit).await.len()),
+        ("IdempotencyKeyTaken", Some(sent.id), 1)
+    );
+}
+
+/// RFC §10.5, §14.3: a record is stored with the `delivery_results` it
+/// brings, which a later update keeps.
+#[tokio::test]
+async fn commit_event_keeps_the_delivery_results_it_brings() {
+    let (kit, _) = room().await;
+    let mut record = console_record("snap_1", "Snapshot");
+    record
+        .delivery_results
+        .insert("sms".to_owned(), "failed".into());
+    kit.commit_event(&room_id(), record).await.unwrap();
+    let updates = EventUpdates {
+        content: Some(EventContent::text("Snapshot, corrected")),
+        ..EventUpdates::default()
+    };
+    let corrected = kit
+        .update_event(&room_id(), &"snap_1".parse().unwrap(), updates)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        corrected.delivery_results.get("sms").cloned(),
+        Some("failed".into())
     );
 }

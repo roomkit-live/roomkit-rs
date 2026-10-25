@@ -32,6 +32,7 @@ use self::section::EventSection;
 use super::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use super::{Environment, KitConfig};
 use crate::model::{ErrorRecord, EventId, EventUpdates, RoomEvent, RoomId, RoomStatus};
+use crate::rules::idempotency;
 
 /// Why a direct call on a room's timeline failed: an update, a delete, or
 /// a record's commit. Nothing was changed.
@@ -177,10 +178,13 @@ impl Operation for DeleteEvent {
 /// A record naming another room is refused before anything is read; a room
 /// missing or of another organization than the caller's is not found
 /// (§17.2), before its due timers are applied; a room whose status refuses
-/// events refuses it before anything is written (§5.1). The record is stored as the caller gives it, its
-/// index aside; it moves the room's `event_count` and `latest_index`, not
-/// its activity, so a paused room stays paused and its inactivity timer
-/// runs on (gap G-071). The room's delivery lane never waits for it.
+/// events refuses it before anything is written (§5.1). The record is
+/// stored as the caller gives it, its index aside, a blank idempotency key
+/// read as none (§13.4); it moves the room's `event_count` and
+/// `latest_index`, not its activity, so a paused room stays paused and its
+/// inactivity timer runs on (gap G-071). The room's delivery lane never
+/// waits for it. A key its channel holds in the room fails the commit, as
+/// the store refuses it (§14.3): a record is never a replay.
 #[derive(Debug)]
 pub struct CommitRecord {
     section: EventSection<Commit>,
@@ -192,9 +196,10 @@ impl CommitRecord {
     pub fn new(
         config: Arc<KitConfig>,
         room_id: RoomId,
-        record: RoomEvent,
+        mut record: RoomEvent,
         organization_id: Option<String>,
     ) -> Self {
+        record.idempotency_key = idempotency::key(record.idempotency_key);
         let other_room = (record.room_id != room_id).then(|| record.room_id.clone());
         let change = Commit::new(record);
         let section = match other_room {

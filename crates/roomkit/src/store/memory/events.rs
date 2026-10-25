@@ -258,6 +258,91 @@ mod tests {
             );
         }
 
+        /// `evt_{index}` from `channel`, carrying `key`.
+        fn keyed(index: u64, channel: &str, key: &str) -> RoomEvent {
+            let mut keyed = event(index, None);
+            keyed.id = EventId::new(format!("evt_k{index}")).unwrap();
+            keyed.source.channel_id = ChannelId::new(channel).unwrap();
+            keyed.idempotency_key = Some(key.to_owned());
+            keyed
+        }
+
+        /// RFC §14.3, §13.4: a key its channel holds in the room refuses
+        /// another event with nothing written, the stored one kept; another
+        /// channel's key is its own, and a blank key is no key.
+        #[tokio::test]
+        async fn a_key_its_channel_holds_refuses_another_event() {
+            let store = store().await;
+            store
+                .commit(keyed(2, "sms", "SM1"), counters(2), None)
+                .await
+                .unwrap();
+            let again = store
+                .commit(keyed(3, "sms", "SM1"), counters(3), Some(edited("hello")))
+                .await;
+            let (room, target) = (
+                store.get_room(&room_id()).await.unwrap().unwrap(),
+                store.get_event(&EventId::new("evt_0").unwrap()).await,
+            );
+            let others = [
+                store.commit(keyed(3, "ws", "SM1"), counters(3), None).await,
+                store.commit(keyed(4, "sms", " "), counters(4), None).await,
+                store.commit(keyed(5, "sms", " "), counters(5), None).await,
+            ];
+            assert_eq!(
+                (
+                    again,
+                    room.event_count,
+                    target.unwrap().unwrap().content,
+                    others,
+                ),
+                (
+                    Err(StoreError::IdempotencyKeyTaken {
+                        room_id: room_id(),
+                        channel_id: ChannelId::new("sms").unwrap(),
+                        key: "SM1".to_owned(),
+                    }),
+                    3,
+                    EventContent::text("hi"),
+                    [Ok(()), Ok(()), Ok(())],
+                )
+            );
+        }
+
+        /// RFC §14.3: once stored, an event's `delivery_results` is written
+        /// by the record of its deliveries alone: an update and the commit
+        /// of an edit's target keep what the store holds.
+        #[tokio::test]
+        async fn an_update_and_a_change_s_commit_keep_the_delivery_results() {
+            let store = InMemoryStore::new();
+            store
+                .create_room(Room::new(room_id(), Timestamp::UNIX_EPOCH))
+                .await
+                .unwrap();
+            let mut delivered = event(0, None);
+            delivered
+                .delivery_results
+                .insert("sms".to_owned(), "failed".into());
+            store.commit(delivered, counters(0), None).await.unwrap();
+            store
+                .update_event(&EventId::new("evt_0").unwrap(), edited("hi again").updates)
+                .await
+                .unwrap();
+            store
+                .commit(event(1, None), counters(1), Some(edited("hello")))
+                .await
+                .unwrap();
+            let stored = store
+                .get_event(&EventId::new("evt_0").unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                (stored.content, stored.delivery_results.get("sms").cloned()),
+                (EventContent::text("hello"), Some("failed".into()))
+            );
+        }
+
         /// RFC §10.1 step 12: the target and the edit are one write.
         #[tokio::test]
         async fn a_commit_updates_its_target_in_the_same_write() {
