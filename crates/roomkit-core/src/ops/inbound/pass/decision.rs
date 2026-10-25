@@ -83,10 +83,12 @@ impl CommitPass {
         self.next_hook(cx, run, context)
     }
 
-    /// The chain is over: its side effects are kept, and the room is read
-    /// again before its decision applies when a hook ran under the lock,
-    /// `asked` (gap G-070); `context`, the room the hooks were handed, is as
-    /// the gate read it otherwise.
+    /// The chain is over: its side effects are kept, the hooks registered
+    /// ASYNC on the trigger observe the event it allowed, as the SYNC hooks
+    /// left it (RFC §9.2, §9.3), and the room is read again before its
+    /// decision applies when a hook ran under the lock, `asked` (gap G-070);
+    /// `context`, the room the hooks were handed, is as the gate read it
+    /// otherwise.
     fn conclude_chain(
         &mut self,
         cx: &mut Cx<'_>,
@@ -99,11 +101,14 @@ impl CommitPass {
         self.tasks.extend(verdict.tasks);
         self.observations.extend(verdict.observations);
         let payload = stamp::keep_identity(&self.event, verdict.payload, &context.bindings);
-        let unchanged = (!asked).then_some(context);
         let blocked = match verdict.decision {
             ChainDecision::Blocked { by, reason } => Some((by, reason)),
             ChainDecision::Allowed => None,
         };
+        if blocked.is_none() {
+            cx.fire_observers(HookTrigger::BeforeBroadcast, &payload, &context);
+        }
+        let unchanged = (!asked).then_some(context);
         let verdict = Verdict { payload, blocked };
         match unchanged {
             Some(context) => self.apply(cx, verdict, context, false),

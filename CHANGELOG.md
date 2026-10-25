@@ -120,7 +120,11 @@ as it stands.
   message carrying it, for itself or for its answers, is refused (gaps
   G-041, G-073), a response carrying it is committed with
   `none`, and a hook's modify of an event marked `internal` keeps it (gap
-  G-041).
+  G-041). The hooks registered ASYNC on
+  `BEFORE_BROADCAST` run as observers once the chain allowed the event, on
+  the payload its SYNC hooks left (§9.2, found by the shared conformance
+  suite's `hooks/an-async-hook-on-a-sync-trigger-observes`, step 3
+  milestone 2); they never ran.
 - **Deadlines and callers that leave.** The kit's `process_timeout` bounds
   a call from its start to its decision, routing, the parse, the off-lock
   hooks, the ticket, the lock and the locked section, never the commit and

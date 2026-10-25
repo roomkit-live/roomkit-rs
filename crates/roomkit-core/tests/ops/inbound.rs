@@ -2661,3 +2661,60 @@ mod a_thread_parent {
         assert_eq!(parent_of(&sim, "Hello"), Some("evt_root".to_owned()));
     }
 }
+
+/// RFC §9.2, §9.3: a hook registered ASYNC on `BEFORE_BROADCAST`, a SYNC
+/// trigger, runs as an observer once the chain allowed the event, on the
+/// payload the SYNC hooks left; a blocked event fires none (the Python
+/// implementation's `run_sync_hooks`, conformance scenario
+/// `hooks/an-async-hook-on-a-sync-trigger-observes`).
+mod an_async_hook_on_before_broadcast {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn rewritten() -> Sim {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.transport("ws");
+        sim.before_broadcast(
+            "rewrite",
+            Box::new(|event| {
+                let mut rewritten = event.clone();
+                rewritten.content = roomkit_core::model::EventContent::text("rewritten");
+                HookOutcome::Returned(HookResult::modify(rewritten))
+            }),
+        );
+        sim.observer("watcher", HookTrigger::BeforeBroadcast);
+        sim
+    }
+
+    #[test]
+    fn observes_the_payload_the_chain_left() {
+        let mut sim = rewritten();
+        sim.send(Sim::message("sms", "original")).unwrap();
+        let observed: Vec<(HookTrigger, String)> = sim
+            .async_triggers()
+            .into_iter()
+            .zip(sim.async_payloads())
+            .map(|(trigger, event)| {
+                let text = roomkit_core::rules::transcoding::text_of(&event.content);
+                (trigger, text)
+            })
+            .filter(|(trigger, _)| *trigger == HookTrigger::BeforeBroadcast)
+            .collect();
+        assert_eq!(
+            observed,
+            [(HookTrigger::BeforeBroadcast, "rewritten".to_owned())]
+        );
+    }
+
+    #[test]
+    fn observes_nothing_of_a_blocked_event() {
+        let mut sim = rewritten();
+        sim.before_broadcast(
+            "policy",
+            Box::new(|_| HookOutcome::Returned(HookResult::block("not allowed"))),
+        );
+        sim.send(Sim::message("sms", "original")).unwrap();
+        assert!(!sim.async_triggers().contains(&HookTrigger::BeforeBroadcast));
+    }
+}

@@ -134,6 +134,31 @@ async fn an_after_broadcast_observer_runs_after_the_delivery() {
     assert_eq!(next(&mut observed).await, "Bonjour");
 }
 
+/// RFC §9.2, §9.3: a hook registered ASYNC on `BEFORE_BROADCAST` observes
+/// the event the SYNC chain allowed, as its hooks left it.
+#[tokio::test]
+async fn an_async_hook_on_before_broadcast_observes_the_payload_the_chain_left() {
+    let (kit, sms) = sms_and_agent().await;
+    kit.before_broadcast("rewrite", |event, _| {
+        let mut rewritten = event;
+        rewritten.content = EventContent::text("rewritten");
+        ready(Ok(HookResult::modify(rewritten)))
+    })
+    .unwrap();
+    let (seen, mut observed) = mpsc::unbounded_channel();
+    kit.observe("watcher", HookTrigger::BeforeBroadcast, move |event, _| {
+        let seen = seen.clone();
+        async move {
+            seen.send(text_of(&event.content)).unwrap();
+        }
+    })
+    .unwrap();
+    kit.process_inbound_in(&room_id(), message(&sms, "original"))
+        .await
+        .unwrap();
+    assert_eq!(next(&mut observed).await, "rewritten");
+}
+
 #[tokio::test]
 async fn a_hook_past_its_timeout_lets_the_message_through_and_is_reported() {
     let (kit, sms) = sms_and_agent().await;
