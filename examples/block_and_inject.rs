@@ -108,12 +108,17 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "the message is refused, with the hook's reason",
         result.blocked && result.reason.as_deref() == Some("SIN detected"),
     );
+    // The room's first events are its attaches' lifecycle records (RFC
+    // §5.1, gap G-046); the message is the first event of the SMS.
     checks.expect(
         "the message is stored blocked by the scanner, for audit",
-        timeline.first().is_some_and(|event| {
-            event.status == EventStatus::Blocked
-                && event.blocked_by.as_deref() == Some("sensitivity_scanner")
-        }),
+        timeline
+            .iter()
+            .find(|event| event.source.channel_type == ChannelType::Sms)
+            .is_some_and(|event| {
+                event.status == EventStatus::Blocked
+                    && event.blocked_by.as_deref() == Some("sensitivity_scanner")
+            }),
     );
     checks.expect(
         "the advisor never sees the number",

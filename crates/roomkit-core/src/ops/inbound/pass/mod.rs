@@ -40,7 +40,7 @@ use crate::model::{
     Visibility,
 };
 use crate::ops::io::Bound;
-use crate::ops::lifecycle::gate::{Pending, TimerHooks};
+use crate::ops::lifecycle::gate::{Applied, Pending, TimerHooks};
 use crate::ops::protocol::{EffectId, EntryId, HoldRequest, Outcome, StoreRequest};
 use crate::ops::rooting::Rooting;
 use crate::ops::{self, Abort, Cx, Progress};
@@ -367,9 +367,12 @@ impl CommitPass {
             State::Locking(_) => self.on_locked(cx, outcome),
             State::LoadingContext(_) => self.on_context(cx, outcome),
             State::ApplyingTimers { pending, .. } => match pending.stored(cx, outcome) {
-                Ok(opened) => {
+                Ok(Applied::Opened(opened)) => {
                     self.timer_hooks = opened.hooks;
                     self.on_gate(cx, opened.context)
+                }
+                Ok(Applied::Writing { effect, pending }) => {
+                    State::ApplyingTimers { effect, pending }
                 }
                 Err(error) => self.release(cx, Err(Abort::Store(error))),
             },

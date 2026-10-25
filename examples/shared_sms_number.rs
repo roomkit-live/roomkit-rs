@@ -17,8 +17,8 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    BindingOptions, ChannelId, ChannelType, EventContent, InboundMessage, Metadata, ParticipantId,
-    RoomId,
+    BindingOptions, ChannelId, ChannelType, EventContent, EventType, InboundMessage, Metadata,
+    ParticipantId, RoomId,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{HookTrigger, RoomKit};
@@ -90,7 +90,13 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let bobs = text(&kit, sms.id(), BOB, "I would like an appointment.").await?;
     checks.expect(
         "Bob, writing first, is not let into Alice's room: he gets a room of his own",
-        bobs != appointment && shared::timeline(&kit, &appointment).await?.is_empty(),
+        // Alice's room holds its attach's lifecycle record alone (RFC §5.1,
+        // gap G-046).
+        bobs != appointment
+            && shared::timeline(&kit, &appointment)
+                .await?
+                .iter()
+                .all(|event| event.event_type == EventType::ChannelAttached),
     );
     let alices = text(&kit, sms.id(), ALICE, "Confirming tomorrow.").await?;
     checks.expect(

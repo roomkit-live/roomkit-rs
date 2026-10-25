@@ -41,15 +41,17 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     shared::print_timeline(&timeline);
     println!("Delivered on SMS: {:?}", sms.texts());
 
+    // The two attaches' lifecycle records take indexes 0 and 1 (RFC §5.1,
+    // gap G-046); the conversation follows them.
     let mut checks = Checks::default();
     checks.expect(
-        "the customer's message is committed first, at index 0",
-        result.event.as_ref().map(|event| event.index) == Some(0),
+        "the customer's message is committed first, at index 2, after the attaches' records",
+        result.event.as_ref().map(|event| event.index) == Some(2),
     );
     checks.expect(
         "the agent's answer is committed next, one hop deeper",
         timeline
-            .get(1)
+            .get(3)
             .is_some_and(|reply| reply.source.channel_id == *agent.id() && reply.chain_depth == 1),
     );
     checks.expect(
@@ -58,7 +60,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "the agent does not receive its own answer",
-        timeline.len() == 2,
+        timeline.len() == 4,
     );
     Ok(checks.finish())
 }

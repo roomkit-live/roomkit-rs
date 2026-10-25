@@ -112,10 +112,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
                 ][..],
             ),
     );
+    // After the two attaches' lifecycle records (RFC §5.1, gap G-046).
     checks.expect(
         "the messages commit and are delivered in the order they arrived",
-        first.event.map(|event| event.index) == Some(0)
-            && second.event.map(|event| event.index) == Some(1)
+        first.event.map(|event| event.index) == Some(2)
+            && second.event.map(|event| event.index) == Some(3)
             && agent.texts() == ["first", "second"],
     );
 
@@ -132,7 +133,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         hung.blocked
             && hung.reason.as_deref() == Some("process_timeout")
             && hung.event.is_none()
-            && written == 2,
+            && written == 4,
     );
     checks.expect(
         "a process_timeout framework event reports it",

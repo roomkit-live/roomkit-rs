@@ -185,7 +185,9 @@ impl Channel for Scripted {
 }
 
 /// A kit with the customer's SMS, the advisor's console `ws` and an
-/// `audit` transport that records every event of `room_1`, in order.
+/// `audit` transport that records every event of `room_1`, in order. The
+/// three attaches' lifecycle records take the room's indexes 0 to 2 (gap
+/// G-046).
 async fn room() -> (RoomKit, RecordingTransport) {
     let kit = RoomKit::new();
     let audit = RecordingTransport::new(channel("audit"), ChannelType::Websocket);
@@ -279,7 +281,13 @@ mod a_locked_hook {
             (result.reason, timeline(&kit).await),
             (
                 Some("source_muted".to_owned()),
-                vec!["#0 sms blocked hello".to_owned()]
+                vec![
+                    "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
+                    "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
+                    "#2 system delivered Channel audit attached (read_write, all)".to_owned(),
+                    "#3 system delivered Channel sms muted".to_owned(),
+                    "#4 sms blocked hello".to_owned()
+                ]
             )
         );
     }
@@ -310,9 +318,10 @@ mod a_locked_hook {
         }
         assert_eq!(
             (result.reason, timeline(&kit).await.len(), names),
+            // The attaches' records; the close writes none (gap G-046).
             (
                 Some("room_closed".to_owned()),
-                0,
+                3,
                 vec!["room_closed", "room_refused_event"]
             )
         );
@@ -350,8 +359,8 @@ mod a_locked_hook {
                 audit.texts()
             ),
             (
-                Some(0),
-                Some(1),
+                Some(3),
+                Some(4),
                 vec!["Heads up".to_owned(), "hello".to_owned()]
             )
         );
@@ -389,7 +398,7 @@ mod a_locked_hook {
                 ahead,
                 timeline(&kit).await.len()
             ),
-            (Some(2), vec!["First".to_owned(), "Second".to_owned()], 3)
+            (Some(5), vec!["First".to_owned(), "Second".to_owned()], 6)
         );
     }
 
@@ -418,10 +427,13 @@ mod a_locked_hook {
                 audit.texts()
             ),
             (
-                Some(1),
+                Some(4),
                 vec![
-                    "#0 sms delivered trace".to_owned(),
-                    "#1 sms delivered hello".to_owned()
+                    "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
+                    "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
+                    "#2 system delivered Channel audit attached (read_write, all)".to_owned(),
+                    "#3 sms delivered trace".to_owned(),
+                    "#4 sms delivered hello".to_owned()
                 ],
                 vec!["hello".to_owned()]
             )
@@ -460,7 +472,13 @@ mod a_locked_hook {
             (result.reason, timeline(&kit).await),
             (
                 Some("source_muted".to_owned()),
-                vec!["#0 sms blocked hello".to_owned()]
+                vec![
+                    "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
+                    "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
+                    "#2 system delivered Channel audit attached (read_write, all)".to_owned(),
+                    "#3 system delivered Channel sms muted".to_owned(),
+                    "#4 sms blocked hello".to_owned()
+                ]
             )
         );
     }
@@ -485,7 +503,7 @@ async fn an_off_lock_hook_injects_without_a_ticket() {
     let result = send(&kit, "hello").await.unwrap();
     assert_eq!(
         (result.event.map(|event| event.index), audit.texts()),
-        (Some(1), vec!["Scanned".to_owned(), "hello".to_owned()])
+        (Some(4), vec!["Scanned".to_owned(), "hello".to_owned()])
     );
 }
 
@@ -532,7 +550,7 @@ async fn agent_injects() {
     assert_eq!(
         (*seen.lock().unwrap(), texts),
         (
-            Some((1, EventStatus::Delivered, EventDirection::Outbound, false)),
+            Some((5, EventStatus::Delivered, EventDirection::Outbound, false)),
             vec!["hello".to_owned(), "Let me check.".to_owned()]
         )
     );
@@ -570,7 +588,7 @@ async fn process_inbound_from_a_channel_into_its_own_room_returns_at_its_commit(
     assert_eq!(
         (*seen.lock().unwrap(), texts),
         (
-            Some((Some(1), 0)),
+            Some((Some(5), 0)),
             vec!["hello".to_owned(), "follow-up".to_owned()]
         )
     );
@@ -619,7 +637,8 @@ async fn a_delivery_that_calls_into_its_room_on_every_delivery_stops_at_the_reen
     let stored = timeline(&kit).await.len();
     assert_eq!(
         (refused.lock().unwrap().clone(), stored),
-        (vec![Some("reentry_loop_cap".to_owned())], 11)
+        // Four lifecycle records, then the eleven events (gap G-046).
+        (vec![Some("reentry_loop_cap".to_owned())], 15)
     );
 }
 
@@ -680,7 +699,7 @@ async fn a_delivery_s_keyed_injection_past_the_reentry_cap_is_a_replay() {
         (
             Some((11, first.unwrap(), EventStatus::Delivered)),
             1,
-            Some("#11 ws blocked echo 10".to_owned())
+            Some("#15 ws blocked echo 10".to_owned())
         )
     );
 }
@@ -820,9 +839,16 @@ async fn an_awaited_creation_hook_injects_into_the_room_being_created() {
         .collect();
     assert_eq!(
         (result.event.map(|event| event.index), texts),
+        // The hook's attach, its event, step 2's attach, then the message:
+        // each attach is recorded (gap G-046).
         (
-            Some(1),
-            vec![(0, "Welcome".to_owned()), (1, "hello".to_owned())]
+            Some(3),
+            vec![
+                (0, "Channel ws attached (read_write, all)".to_owned()),
+                (1, "Welcome".to_owned()),
+                (2, "Channel sms attached (read_write, all)".to_owned()),
+                (3, "hello".to_owned())
+            ]
         )
     );
 }
@@ -857,7 +883,8 @@ async fn an_integrator_creation_hook_sends_into_the_room_being_created() {
         .iter()
         .map(|event| text_of(&event.content))
         .collect();
-    assert_eq!(texts, ["Welcome"]);
+    // The hook's attach is recorded first (gap G-046).
+    assert_eq!(texts, ["Channel ws attached (read_write, all)", "Welcome"]);
 }
 
 on_both_runtimes!(
@@ -904,9 +931,13 @@ async fn an_entry_made_by_a_nested_entry_s_parse_is_nested_in_turn() {
     assert_eq!(
         timeline(&kit).await,
         [
-            "#0 ws delivered Parsed",
-            "#1 bot delivered Relayed",
-            "#2 sms delivered hello"
+            "#0 system delivered Channel sms attached (read_write, all)",
+            "#1 system delivered Channel ws attached (read_write, all)",
+            "#2 system delivered Channel audit attached (read_write, all)",
+            "#3 system delivered Channel bot attached (read_write, all)",
+            "#4 ws delivered Parsed",
+            "#5 bot delivered Relayed",
+            "#6 sms delivered hello"
         ]
     );
 }
@@ -943,7 +974,7 @@ async fn a_task_a_turn_awaits_as_its_own_keeps_the_turn_s_context() {
     let texts = delivered(&audit, 2).await;
     assert_eq!(
         (*seen.lock().unwrap(), texts),
-        (Some(1), vec!["hello".to_owned(), "Looked up.".to_owned()])
+        (Some(5), vec!["hello".to_owned(), "Looked up.".to_owned()])
     );
 }
 
@@ -981,7 +1012,8 @@ async fn a_parse_that_calls_into_its_room_for_every_message_is_bounded() {
     let stored = timeline(&kit).await.len();
     assert_eq!(
         (refused.lock().unwrap().clone(), stored),
-        (vec![Some("reentry_loop_cap".to_owned())], 11)
+        // Four lifecycle records, then the eleven events (gap G-046).
+        (vec![Some("reentry_loop_cap".to_owned())], 15)
     );
 }
 
@@ -1050,7 +1082,7 @@ async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
         ),
         (
             vec!["Heads up".to_owned()],
-            Some((1, EventStatus::Delivered))
+            Some((5, EventStatus::Delivered))
         )
     );
 }
@@ -1089,7 +1121,12 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
         (result.reason, timeline(&kit).await),
         (
             Some("process_timeout".to_owned()),
-            vec!["#0 ws delivered Heads up".to_owned()]
+            vec![
+                "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
+                "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
+                "#2 system delivered Channel audit attached (read_write, all)".to_owned(),
+                "#3 ws delivered Heads up".to_owned()
+            ]
         )
     );
 }
@@ -1130,7 +1167,7 @@ async fn a_hook_that_times_out_while_its_entry_works_is_heard_after_it() {
             audit.texts()
         ),
         (
-            Some((1, EventStatus::Delivered)),
+            Some((4, EventStatus::Delivered)),
             vec!["Heads up".to_owned(), "hello".to_owned()]
         )
     );
@@ -1399,7 +1436,7 @@ async fn a_call_that_could_only_wait_for_itself_fails() {
                 room_id: room_id(),
                 call: "process_inbound",
             })),
-            Some(0)
+            Some(3)
         )
     );
 }
@@ -1446,7 +1483,7 @@ async fn a_parse_that_routes_a_message_back_into_its_room_fails() {
             result.event.map(|event| event.index),
             stored
         ),
-        (vec![Some(reentrant)], Some(0), 1)
+        (vec![Some(reentrant)], Some(4), 5)
     );
 }
 
@@ -1493,7 +1530,7 @@ async fn an_off_lock_hook_routing_back_a_message_no_check_fires_for_fails() {
             result.event.map(|event| event.index),
             stored
         ),
-        (Some(Some(reentrant)), Some(0), 1)
+        (Some(Some(reentrant)), Some(3), 4)
     );
 }
 
@@ -1572,7 +1609,7 @@ async fn a_detached_run_s_turn_is_not_taken_by_a_finished_parse() {
         assert!(tokio::time::Instant::now() < deadline, "the turn never ran");
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    assert_eq!(*seen.lock().unwrap(), Some(Ok(1)));
+    assert_eq!(*seen.lock().unwrap(), Some(Ok(5)));
 }
 
 /// An agent whose turn, on the customer's `hello`, runs `call` with the kit
@@ -1659,12 +1696,16 @@ async fn a_turn_s_call_ticketed_behind_another_message_commits_after_it() {
             lines
         ),
         (
-            Some(1),
-            Some(Ok(2)),
+            Some(5),
+            Some(Ok(6)),
             vec![
-                "#0 sms delivered hello".to_owned(),
-                "#1 sms delivered A".to_owned(),
-                "#2 ws delivered E".to_owned()
+                "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
+                "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
+                "#2 system delivered Channel audit attached (read_write, all)".to_owned(),
+                "#3 system delivered Channel ai attached (read_write, all)".to_owned(),
+                "#4 sms delivered hello".to_owned(),
+                "#5 sms delivered A".to_owned(),
+                "#6 ws delivered E".to_owned()
             ]
         )
     );
@@ -1706,7 +1747,13 @@ async fn a_turn_s_call_meets_its_own_process_timeout() {
             Some(Some(KitError::Inbound(InboundError::Refused {
                 reason: "process_timeout".to_owned()
             }))),
-            vec!["#0 sms delivered hello".to_owned()]
+            vec![
+                "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
+                "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
+                "#2 system delivered Channel audit attached (read_write, all)".to_owned(),
+                "#3 system delivered Channel ai attached (read_write, all)".to_owned(),
+                "#4 sms delivered hello".to_owned()
+            ]
         )
     );
 }
@@ -1758,15 +1805,16 @@ async fn a_turn_s_calls_draw_on_the_reentry_budget_of_the_cascade_that_delivers(
     assert_eq!(
         (
             last_call.lock().unwrap().clone(),
-            lines.get(20).cloned(),
-            lines.get(21..).map(<[String]>::to_vec)
+            lines.get(24).cloned(),
+            lines.get(25..).map(<[String]>::to_vec)
         ),
+        // After four lifecycle records and the message (gap G-046).
         (
             Some((EventStatus::Blocked, cap)),
-            Some("#20 ai delivered Checking.".to_owned()),
+            Some("#24 ai delivered Checking.".to_owned()),
             Some(vec![
-                "#21 ai blocked Checking.".to_owned(),
-                "#22 ai blocked Hello back".to_owned()
+                "#25 ai blocked Checking.".to_owned(),
+                "#26 ai blocked Hello back".to_owned()
             ])
         )
     );
@@ -1816,10 +1864,14 @@ async fn an_agent_injecting_on_every_turn_stops_at_the_chain_depth_limit() {
         (
             vec![(0, 1), (1, 2)],
             vec![
-                "#0 sms delivered hello".to_owned(),
-                "#1 ws delivered Again".to_owned(),
-                "#2 ws delivered Again".to_owned(),
-                "#3 ai blocked ".to_owned()
+                "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
+                "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
+                "#2 system delivered Channel audit attached (read_write, all)".to_owned(),
+                "#3 system delivered Channel ai attached (read_write, all)".to_owned(),
+                "#4 sms delivered hello".to_owned(),
+                "#5 ws delivered Again".to_owned(),
+                "#6 ws delivered Again".to_owned(),
+                "#7 ai blocked ".to_owned()
             ]
         )
     );
@@ -1940,7 +1992,7 @@ async fn a_message_a_turn_routes_into_its_own_room_returns_at_its_decision() {
     kit.register_channel(agent).unwrap();
     kit.attach(&room_id(), &channel("ai")).await.unwrap();
     send(&kit, "hello").await.unwrap();
-    assert_eq!(*seen.lock().unwrap(), Some(Ok(Some(1))));
+    assert_eq!(*seen.lock().unwrap(), Some(Ok(Some(5))));
 }
 
 /// RFC §10.5: from outside, `send_event` waits for its delivery set and
@@ -1958,7 +2010,7 @@ mod send_event {
             .unwrap();
         assert_eq!(
             (event.index, event.status, audit.texts()),
-            (0, EventStatus::Delivered, vec!["Hi".to_owned()])
+            (3, EventStatus::Delivered, vec!["Hi".to_owned()])
         );
     }
 
@@ -1988,7 +2040,12 @@ mod send_event {
                 Err(KitError::Inbound(InboundError::Refused {
                     reason: "source_unbound".to_owned()
                 })),
-                vec![]
+                vec![
+                    "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
+                    "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
+                    "#2 system delivered Channel audit attached (read_write, all)".to_owned(),
+                    "#3 system delivered Channel ws detached".to_owned()
+                ]
             )
         );
     }
@@ -2006,7 +2063,11 @@ mod send_event {
             (refused, timeline(&kit).await),
             (
                 Err(KitError::Inbound(InboundError::RoomNotFound(room_id()))),
-                vec![]
+                vec![
+                    "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
+                    "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
+                    "#2 system delivered Channel audit attached (read_write, all)".to_owned()
+                ]
             )
         );
     }
@@ -2020,7 +2081,7 @@ mod send_event {
         clinic.attach(&room, &channel("ws")).await.unwrap();
         clinic.attach(&room, audit.id()).await.unwrap();
         let event = clinic.send_event(&room, from_console("Hi")).await.unwrap();
-        assert_eq!((event.index, audit.texts()), (0, vec!["Hi".to_owned()]));
+        assert_eq!((event.index, audit.texts()), (2, vec!["Hi".to_owned()]));
     }
 }
 
@@ -2055,7 +2116,7 @@ async fn commit_event_reaches_no_channel() {
             audit.texts().len(),
             timeline(&kit).await.len()
         ),
-        (0, 0, 1)
+        (3, 0, 4)
     );
 }
 
@@ -2083,7 +2144,7 @@ async fn commit_event_under_a_key_its_channel_holds_is_refused() {
     };
     assert_eq!(
         (error_type.as_str(), held, timeline(&kit).await.len()),
-        ("IdempotencyKeyTaken", Some(sent.id), 1)
+        ("IdempotencyKeyTaken", Some(sent.id), 4)
     );
 }
 
@@ -2109,7 +2170,9 @@ async fn a_blank_key_is_no_key() {
             record.idempotency_key = Some(blank.to_owned());
             kit.commit_event(&room_id(), record).await.unwrap();
         }
-        let stored = kit.store().list_events(&room_id(), true).await.unwrap();
+        let mut stored = kit.store().list_events(&room_id(), true).await.unwrap();
+        // The attaches' lifecycle records carry no key either (gap G-046).
+        stored.drain(..3);
         let keys: Vec<Option<String>> = stored.iter().map(|e| e.idempotency_key.clone()).collect();
         assert_eq!((stored.len(), keys), (6, vec![None; 6]), "blank {blank:?}");
     }

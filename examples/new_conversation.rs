@@ -115,10 +115,13 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "Jean's next message is routed back to Jean's room, after the first exchange",
+        // The room's first events are the lifecycle records of the agent the
+        // creation hook attached and of the SMS step 2 attached (RFC §5.1,
+        // gap G-046).
         jeans_again == jeans
             && jeans_timeline
-                .get(2)
-                .is_some_and(|event| text_of(&event.content) == "Merci" && event.index == 2),
+                .get(4)
+                .is_some_and(|event| text_of(&event.content) == "Merci" && event.index == 4),
     );
     checks.expect(
         "no answer reaches the other customer",

@@ -124,10 +124,11 @@ async fn a_slow_off_lock_hook_leaves_the_room_lock_free_for_a_lifecycle_change()
             result.event.map(|event| (event.index, event.status)),
             status_after
         ),
+        // The attach's lifecycle record took index 0 (gap G-046).
         (
             true,
             RoomStatus::Paused,
-            Some((0, EventStatus::Delivered)),
+            Some((1, EventStatus::Delivered)),
             RoomStatus::Active
         )
     );
@@ -144,13 +145,15 @@ async fn a_slow_locked_hook_holds_the_room_lock_from_a_lifecycle_change() {
     assert!(paused.is_err(), "the pause should wait for the room lock");
 }
 
-/// The texts of `room_1`'s timeline, in index order.
+/// The texts of `room_1`'s timeline, in index order, its lifecycle records
+/// left out (gap G-046).
 async fn texts(kit: &RoomKit) -> Vec<String> {
     kit.store()
         .list_events(&room_id(), true)
         .await
         .unwrap()
         .iter()
+        .filter(|event| event.source.channel_type != ChannelType::System)
         .map(|event| text_of(&event.content))
         .collect()
 }
@@ -215,10 +218,11 @@ async fn two_overlapping_checks_commit_in_ticket_order() {
             second.event.map(|event| event.index),
             texts(&kit).await
         ),
+        // After the attach's lifecycle record (gap G-046).
         (
             Vec::<String>::new(),
-            Some(0),
             Some(1),
+            Some(2),
             vec!["first".to_owned(), "second".to_owned()]
         )
     );
@@ -271,7 +275,8 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
             during.event.map(|event| event.index),
             customer.event.map(|event| event.index)
         ),
-        (Some(0), Some(1))
+        // After the two attaches' lifecycle records (gap G-046).
+        (Some(2), Some(3))
     );
 }
 
@@ -306,7 +311,8 @@ async fn a_call_cancelled_during_its_off_lock_check_releases_its_ticket() {
     .unwrap();
     assert_eq!(
         (dropped.is_err(), next.event.map(|event| event.index)),
-        (true, Some(0))
+        // After the attach's lifecycle record (gap G-046).
+        (true, Some(1))
     );
 }
 
@@ -350,7 +356,9 @@ async fn a_call_cancelled_in_a_locked_hook_after_its_check_leaves_everything_fre
             paused.is_ok(),
             next.event.map(|event| event.index)
         ),
-        (true, true, Some(0))
+        // After the attach's lifecycle record; the pause writes none (gap
+        // G-046).
+        (true, true, Some(1))
     );
 }
 
@@ -478,10 +486,14 @@ async fn b2_with_its_scanner_off_the_lock_gives_block_and_inject_s_timeline() {
     let off_lock = block_and_inject(false).await;
     assert_eq!(
         lines(&off_lock.timeline),
+        // The two attaches' lifecycle records come first (gap G-046), where
+        // RFC Appendix B, which assumes none, starts at the message.
         [
-            "#0 sms_customer blocked by sensitivity_scanner \"Mon NAS est 123-456-789\"",
-            "#1 system delivered \"Message blocked. Do not send your SIN by SMS.\"",
-            "#2 system delivered \"The client attempted to send a SIN. Blocked.\"",
+            "#0 system delivered \"Channel sms_customer attached (read_write, all)\"",
+            "#1 system delivered \"Channel ws_advisor attached (read_write, all)\"",
+            "#2 sms_customer blocked by sensitivity_scanner \"Mon NAS est 123-456-789\"",
+            "#3 system delivered \"Message blocked. Do not send your SIN by SMS.\"",
+            "#4 system delivered \"The client attempted to send a SIN. Blocked.\"",
         ]
     );
 }

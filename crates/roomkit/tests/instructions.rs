@@ -47,8 +47,11 @@ fn instruction(text: &str) -> InboundMessage {
     message
 }
 
+/// The room's timeline but the attaches' lifecycle records (gap G-046).
 async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
-    kit.store().list_events(&room_id(), true).await.unwrap()
+    let mut timeline = kit.store().list_events(&room_id(), true).await.unwrap();
+    timeline.retain(|event| event.source.channel_type != ChannelType::System);
+    timeline
 }
 
 /// RFC §10.1.1 rules 5 and 6.

@@ -371,6 +371,7 @@ mod a_binding_taken_meanwhile {
                 "lock new_room_1",
                 "load_context new_room_1",
                 "store binding sms",
+                "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                 "release new_room_1",
                 "handle_inbound sms",
             ]
@@ -406,7 +407,10 @@ mod a_binding_taken_meanwhile {
                 sim.other_room("new_room_1").is_none()
             ),
             (
-                vec!["#0 sms delivered \"Bonjour\"".to_owned()],
+                vec![
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Bonjour\"".to_owned()
+                ],
                 Some(ParticipantId::new(SENDER).unwrap()),
                 true
             )
@@ -427,8 +431,11 @@ mod a_binding_taken_meanwhile {
             ),
             (
                 vec!["route sms +15551234567"; 2],
-                vec!["enter lane new_room_1 evt_4"],
-                vec!["#0 sms delivered \"Bonjour\"".to_owned()]
+                vec!["enter lane new_room_1 evt_5"],
+                vec![
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Bonjour\"".to_owned()
+                ]
             )
         );
     }
@@ -478,6 +485,7 @@ mod a_room_that_heard_another_sender_meanwhile {
                 "lock new_room_1",
                 "load_context new_room_1",
                 "store binding sms",
+                "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                 "release new_room_1",
                 "handle_inbound sms",
             ]
@@ -581,7 +589,10 @@ mod a_routed_room_closed_by_its_lock {
                 ["room_paused", "room_closed", "room_created"]
                     .map(str::to_owned)
                     .to_vec(),
-                vec!["#0 sms delivered \"Bonjour\"".to_owned()]
+                vec![
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Bonjour\"".to_owned()
+                ]
             )
         );
     }
@@ -766,11 +777,15 @@ mod no_room_found {
                     "lock new_room_1",
                     "load_context new_room_1",
                     "store binding sms",
+                    "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                     "release new_room_1",
                     "handle_inbound sms",
                 ],
                 (Some(SENDER.to_owned()), json!({ "phone_number": SENDER })),
-                vec!["#0 sms delivered \"Bonjour\"".to_owned()]
+                vec![
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Bonjour\"".to_owned()
+                ]
             )
         );
     }
@@ -789,8 +804,9 @@ mod no_room_found {
             ),
             (
                 vec![
-                    "#0 sms delivered \"Bonjour\"".to_owned(),
-                    "#1 ai delivered \"Bonjour!\"".to_owned(),
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Bonjour\"".to_owned(),
+                    "#2 ai delivered \"Bonjour!\"".to_owned(),
                 ],
                 1
             )
@@ -1005,7 +1021,10 @@ mod a_routed_room {
                 named(binding.as_ref()).0
             ),
             (
-                vec!["#0 sms delivered \"Bonjour\"".to_owned()],
+                vec![
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Bonjour\"".to_owned()
+                ],
                 Some(SENDER.to_owned())
             )
         );

@@ -20,7 +20,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    EventContent, EventStatus, EventType, HookResult, InboundMessage, RoomContext, RoomEvent,
+    RoomId,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
@@ -140,7 +141,8 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
             timeline.iter().map(|event| event.index).collect::<Vec<_>>(),
             bindings.len(),
         ),
-        (1, [1, 1, 1], true, vec![0, 1], 1),
+        // The attach's lifecycle record, then the two messages (gap G-046).
+        (1, [1, 1, 1], true, vec![0, 1, 2], 1),
         "{names:?}"
     );
 }
@@ -206,7 +208,7 @@ async fn a_channel_that_panics_in_on_event_leaves_the_lane_and_the_lock_free() {
     let result = after_a_panic_in(true).await;
     assert_eq!(
         result.event.map(|event| (event.index, event.status)),
-        Some((2, EventStatus::Delivered))
+        Some((5, EventStatus::Delivered))
     );
 }
 
@@ -215,7 +217,7 @@ async fn a_channel_that_panics_in_deliver_leaves_the_lane_and_the_lock_free() {
     let result = after_a_panic_in(false).await;
     assert_eq!(
         result.event.map(|event| (event.index, event.status)),
-        Some((2, EventStatus::Delivered))
+        Some((5, EventStatus::Delivered))
     );
 }
 
@@ -272,14 +274,20 @@ impl Channel for Gated {
     }
 }
 
-/// Whether `events` reports `event_processed` for the room's first event
-/// within the bound.
+/// Whether `events` reports `event_processed` for the room's first message
+/// within the bound: the events before it are its attaches' lifecycle
+/// records (gap G-046).
 async fn first_event_processed(
     kit: &RoomKit,
     events: &mut broadcast::Receiver<FrameworkEvent>,
 ) -> bool {
     let timeline = kit.store().list_events(&room_id(), true).await.unwrap();
-    let first = timeline.first().unwrap().id.clone();
+    let first = timeline
+        .iter()
+        .find(|event| event.event_type == EventType::Message)
+        .unwrap()
+        .id
+        .clone();
     let processed = async {
         loop {
             if let Ok(FrameworkEvent::EventProcessed { event_id, .. }) = events.recv().await
@@ -360,6 +368,8 @@ async fn a_call_dropped_under_the_room_lock_leaves_the_lane_and_the_lock_free() 
             paused.is_ok(),
             next.event.map(|event| event.index)
         ),
-        (true, true, Some(0))
+        // The two attaches' lifecycle records take the first indexes; the
+        // integrator's pause writes none (gap G-046).
+        (true, true, Some(2))
     );
 }

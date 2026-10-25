@@ -26,7 +26,9 @@
 //! | [`instructions`] | §10.1.1: what an instruction must be before anything is read, what a modify keeps of it, what its turn reads, and its responses' fingerprint |
 //!
 //! The crate's own `threads` (§5.2, §10.1 step 8) gives the thread root an
-//! event's parent is rooted to; the pipeline alone applies it.
+//! event's parent is rooted to, and its own `records` (§5.1 Lifecycle
+//! records) what a lifecycle record says of its change; the pipeline alone
+//! applies them.
 //!
 //! Visibility itself (§7.3) is a model type: see
 //! [`Visibility::admits`](crate::model::Visibility::admits) and
@@ -46,6 +48,7 @@ pub mod instructions;
 pub mod lifecycle;
 pub mod organizations;
 pub mod permissions;
+pub(crate) mod records;
 pub mod routing;
 pub(crate) mod threads;
 pub mod timers;

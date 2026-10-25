@@ -567,12 +567,15 @@ mod unregistering {
         assert_eq!(timeline_texts(&kit).await, ["Back"]);
     }
 
+    /// The texts of the room's messages, its lifecycle records left out
+    /// (gap G-046).
     async fn timeline_texts(kit: &RoomKit) -> Vec<String> {
         kit.store()
             .list_events(&room_id(), true)
             .await
             .unwrap()
             .iter()
+            .filter(|event| event.source.channel_type != ChannelType::System)
             .map(|event| roomkit::text_of(&event.content))
             .collect()
     }

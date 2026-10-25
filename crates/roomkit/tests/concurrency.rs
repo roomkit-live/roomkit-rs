@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventStatus, HookResult, InboundMessage, RoomId,
+    ChannelId, ChannelType, EventContent, EventStatus, EventType, HookResult, InboundMessage,
+    RoomId,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{ConversationStore, HookExecution, HookSpec, HookTrigger, RoomKit, text_of};
@@ -96,10 +97,15 @@ async fn send_all(kit: RoomKit, task: usize) {
 /// What room `index` shows: whether its indices are consecutive from 0 and
 /// every event delivered, whether each task's messages kept their order,
 /// whether it holds the agent's answer to each message once and nothing
-/// else, and whether the reader got every event once, in index order.
+/// else but its attaches' lifecycle records (gap G-046), and whether the
+/// reader got every message once, in index order.
 async fn as_seen(kit: &RoomKit, ws: &RecordingTransport, index: usize) -> (bool, bool, bool, bool) {
     let timeline = kit.store().list_events(&room(index), true).await.unwrap();
-    let texts: Vec<String> = timeline
+    let messages: Vec<_> = timeline
+        .iter()
+        .filter(|event| event.event_type == EventType::Message)
+        .collect();
+    let texts: Vec<String> = messages
         .iter()
         .map(|event| text_of(&event.content))
         .collect();
@@ -130,7 +136,7 @@ async fn as_seen(kit: &RoomKit, ws: &RecordingTransport, index: usize) -> (bool,
         .filter(|delivery| delivery.event.room_id == room(index))
         .map(|delivery| delivery.event.index)
         .collect();
-    let indices: Vec<u64> = timeline.iter().map(|event| event.index).collect();
+    let indices: Vec<u64> = messages.iter().map(|event| event.index).collect();
     (consecutive, in_order, answered_once, read == indices)
 }
 

@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::mem;
 
 use super::io::Bound;
-use super::lifecycle::gate::{self, Gate, Opened, Pending, TimerHooks};
+use super::lifecycle::gate::{self, Applied, Gate, Opened, Pending, TimerHooks};
 use super::protocol::{EffectId, HoldRequest, Outcome, StoreRequest};
 use super::{Cx, Progress};
 use crate::model::{ErrorRecord, Room, RoomContext, RoomId};
@@ -233,15 +233,18 @@ impl<W: SectionWork> Section<W> {
             },
             State::Loading(_) => self.on_loaded(cx, outcome),
             State::ApplyingTimers { pending, .. } => match pending.stored(cx, outcome) {
-                Ok(Opened {
+                Ok(Applied::Opened(Opened {
                     context,
                     transitions,
                     hooks,
-                }) => {
+                })) => {
                     self.timers = transitions;
                     self.timer_hooks = hooks;
                     let begun = self.work.begin(cx, context);
                     self.working(cx, begun)
+                }
+                Ok(Applied::Writing { effect, pending }) => {
+                    State::ApplyingTimers { effect, pending }
                 }
                 Err(error) => self.release(cx, Err(W::failure(Failure::Store(error)))),
             },

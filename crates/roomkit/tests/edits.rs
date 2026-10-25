@@ -18,8 +18,8 @@ use roomkit::model::{
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, EventFilter, HookTrigger,
-    InboundResult, RoomKit, SequentialEnvironment, is_deleted, is_edited, text_of,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, Environment, EventFilter,
+    HookTrigger, InboundResult, RoomKit, SequentialEnvironment, is_deleted, is_edited, text_of,
 };
 use tokio::sync::{Barrier, Notify, mpsc};
 
@@ -104,11 +104,35 @@ struct Fixture {
     agent: Reader,
 }
 
+/// The environment the fixture is set up in: its events, the attaches'
+/// lifecycle records (gap G-046) among them, take ids of their own, so that
+/// the room's first message is `evt_1`.
+#[derive(Debug)]
+struct Setup(SequentialEnvironment);
+
+impl Environment for Setup {
+    fn now(&self) -> Timestamp {
+        self.0.now()
+    }
+
+    fn new_event_id(&self) -> EventId {
+        EventId::new(format!("setup_{}", self.0.new_event_id())).unwrap()
+    }
+
+    fn new_observation_id(&self) -> roomkit::model::ObservationId {
+        self.0.new_observation_id()
+    }
+
+    fn new_room_id(&self) -> RoomId {
+        self.0.new_room_id()
+    }
+}
+
 async fn room() -> Fixture {
     let kit = RoomKit::new();
-    kit.set_environment(SequentialEnvironment::new(
+    kit.set_environment(Setup(SequentialEnvironment::new(
         Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
-    ));
+    )));
     let wa = RecordingTransport::new(channel("wa"), ChannelType::Whatsapp);
     let ws = RecordingTransport::new(channel("ws"), ChannelType::Websocket)
         .with_capabilities(edits_natively());
@@ -122,7 +146,7 @@ async fn room() -> Fixture {
     for id in ["wa", "ws", "sms", "ai"] {
         kit.attach(&room_id(), &channel(id)).await.unwrap();
     }
-    // The setup's hook payloads drew ids; the room's events start at evt_1.
+    // The room's messages start at evt_1, after the attaches' records.
     kit.set_environment(SequentialEnvironment::new(
         Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
     ));
@@ -226,7 +250,8 @@ mod an_edit {
                 Some(is_edited(&target))
             ),
             (
-                Some((1, EventType::Edit)),
+                // Four lifecycle records and the target come first.
+                Some((5, EventType::Edit)),
                 EventContent::text("I need 50000$"),
                 Some(true)
             )
@@ -319,7 +344,7 @@ mod an_edit {
                 result.event,
                 stored
             ),
-            (true, Some("not_original_author"), None, Ok(1))
+            (true, Some("not_original_author"), None, Ok(5))
         );
     }
 }
@@ -468,7 +493,7 @@ mod a_direct_call {
                 stored.event_count,
                 room.kit.store().get_event_count(&room_id(), None).await
             ),
-            (vec!["evt_1", "evt_2"], 3, Ok(1))
+            (vec!["evt_1", "evt_2"], 7, Ok(5))
         );
     }
 
@@ -504,9 +529,10 @@ mod a_direct_call {
             .delete_event(&room_id(), &EventId::new("evt_1").unwrap(), true)
             .await
             .unwrap();
+        // The attaches' lifecycle records alone are left.
         assert_eq!(
             room.kit.store().get_event_count(&room_id(), None).await,
-            Ok(0)
+            Ok(4)
         );
     }
 
@@ -548,7 +574,7 @@ mod a_direct_call {
             .await;
         assert_eq!(
             (next.event.map(|event| event.index), received),
-            (Some(1), Ok(1))
+            (Some(5), Ok(5))
         );
     }
 }
@@ -703,12 +729,12 @@ mod changes_at_once {
                     .collect::<Vec<_>>()
             ),
             (
-                Some(1),
+                Some(5),
                 vec![
                     EventId::new("evt_1").unwrap(),
                     EventId::new("evt_2").unwrap()
                 ],
-                Vec::new()
+                vec![EventType::ChannelAttached; 4]
             )
         );
     }

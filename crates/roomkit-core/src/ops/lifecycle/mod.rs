@@ -16,6 +16,7 @@ pub(crate) mod change;
 pub(crate) mod gate;
 pub(crate) mod locked;
 mod payload;
+pub(crate) mod record;
 pub(crate) mod report;
 mod status;
 

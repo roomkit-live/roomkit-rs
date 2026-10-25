@@ -29,8 +29,10 @@ use shared::{Checks, Log, ScriptedAgent};
 /// The customer's number.
 const CUSTOMER: &str = "+15551234567";
 
-/// What the customer writes before the changes, `I need 5000$` at index 3
-/// (B.6) and `Sorry, wrong chat` at index 5 (B.7).
+/// What the customer writes before the changes, `I need 5000$` the fourth
+/// (index 3 in B.6) and `Sorry, wrong chat` the sixth (index 5 in B.7). The
+/// four attaches' lifecycle records come first (RFC §5.1, gap G-046), which
+/// B.6 and B.7 do not write: the messages take indexes 4 to 9 here.
 const MESSAGES: [&str; 6] = [
     "Hello",
     "I have a question about a transfer",
@@ -244,7 +246,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let updated = conversation.changes().await.last().cloned();
     checks.expect(
         "the edit is stored after its target, which now reads \"I need 50000$\" and is marked edited",
-        edited.event.as_ref().is_some_and(|event| event.index == 6)
+        edited.event.as_ref().is_some_and(|event| event.index == 10)
             && target.as_ref().is_some_and(|target| target.content == EventContent::text("I need 50000$"))
             && target.as_ref().is_some_and(is_edited),
     );
@@ -279,7 +281,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let removed = conversation.changes().await.last().cloned();
     checks.expect(
         "the delete is stored after its target, which is marked deleted",
-        deleted.event.as_ref().is_some_and(|event| event.index == 7)
+        deleted
+            .event
+            .as_ref()
+            .is_some_and(|event| event.index == 11)
             && target.as_ref().is_some_and(is_deleted),
     );
     checks.expect(

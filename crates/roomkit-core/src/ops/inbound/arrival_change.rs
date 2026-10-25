@@ -8,12 +8,14 @@
 use std::collections::VecDeque;
 use std::convert::Infallible;
 
-use crate::model::{ChannelBinding, RoomContext, Timestamp};
+use crate::model::{ChannelBinding, RoomContext};
+use crate::ops::Cx;
 use crate::ops::lifecycle::change::{self, Attached, Decision, SectionChange, Updated};
 use crate::ops::lifecycle::report::Reported;
 use crate::ops::protocol::StoreRequest;
 use crate::rules::addresses::AddressForm;
 use crate::rules::attachment;
+use crate::rules::records::Record;
 use crate::rules::routing::{self, Recording, Sender};
 
 /// A change step 2 makes under the room's lock.
@@ -77,11 +79,11 @@ impl SectionChange for ArrivalChange {
     fn decide(
         &self,
         context: Box<RoomContext>,
-        _now: Timestamp,
+        cx: &Cx<'_>,
     ) -> Result<Decision<Recorded>, Infallible> {
         Ok(match self {
-            Self::AttachAutomatically(binding) => attach_automatically(binding, context),
-            Self::RecordSender(record) => record_sender(record, context),
+            Self::AttachAutomatically(binding) => attach_automatically(cx, binding, context),
+            Self::RecordSender(record) => record_sender(cx, record, context),
         })
     }
 
@@ -96,10 +98,12 @@ impl SectionChange for ArrivalChange {
     }
 }
 
-/// Stores the binding, unless the room binds the channel, revoked it or
-/// refuses the message the attach is for (RFC §7.5 rule 7, gap G-053): the
-/// framework never replaces a binding, and never undoes a detach.
+/// Stores the binding, then its lifecycle record (gap G-046), unless the
+/// room binds the channel, revoked it or refuses the message the attach is
+/// for (RFC §7.5 rule 7, gap G-053): the framework never replaces a binding,
+/// and never undoes a detach.
 fn attach_automatically(
+    cx: &Cx<'_>,
     binding: &ChannelBinding,
     mut context: Box<RoomContext>,
 ) -> Decision<Recorded> {
@@ -107,10 +111,12 @@ fn attach_automatically(
         return Decision::unwritten(Recorded::Kept(context));
     }
     context.bindings.push(binding.clone());
+    let mut writes = VecDeque::from([StoreRequest::StoreBinding {
+        binding: binding.clone(),
+    }]);
+    change::write_records(cx, &mut writes, &mut context, &[Record::attached(binding)]);
     Decision {
-        writes: VecDeque::from([StoreRequest::StoreBinding {
-            binding: binding.clone(),
-        }]),
+        writes,
         done: Recorded::Attached(Attached {
             binding: Box::new(binding.clone()),
             context,
@@ -127,7 +133,11 @@ fn attach_automatically(
 /// it attached naming the sender, unless rule 7 refuses; one that binds it
 /// has the sender recorded through rule 6, unless the binding is declared
 /// `group` or has them already.
-fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<Recorded> {
+fn record_sender(
+    cx: &Cx<'_>,
+    record: &SenderRecord,
+    context: Box<RoomContext>,
+) -> Decision<Recorded> {
     let current = context.binding(&record.binding.channel_id).cloned();
     let kept = routing::kept_by_status(
         context.room.status,
@@ -141,7 +151,7 @@ fn record_sender(record: &SenderRecord, context: Box<RoomContext>) -> Decision<R
         return Decision::unwritten(Recorded::Rerouted(context));
     }
     let Some(current) = current else {
-        return attach_automatically(&record.binding, context);
+        return attach_automatically(cx, &record.binding, context);
     };
     let recording = routing::recording(
         &current,

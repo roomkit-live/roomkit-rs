@@ -290,6 +290,14 @@ impl Outcome {
         }
     }
 
+    /// A write's answer, a commit's included: `Stored` or `Committed`.
+    pub(crate) fn into_written(self) -> Result<(), ErrorRecord> {
+        match self {
+            Self::Store(StoreOutcome::Stored | StoreOutcome::Committed) => Ok(()),
+            other => Err(other.into_failure()),
+        }
+    }
+
     pub(crate) fn into_parsed(self) -> Result<Box<RoomEvent>, ErrorRecord> {
         match self {
             Self::Channel(ChannelOutcome::Parsed(event)) => Ok(event),

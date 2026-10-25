@@ -2213,19 +2213,23 @@ mod a_call_no_operation_adopts {
                     "lock room_2",
                     "load_context room_2",
                     "store binding sms",
+                    "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                     "release room_2",
                     "handle_inbound sms",
                     "lock room_2",
                     "load_context room_2",
                     "hook relay",
                     "load_context room_2",
-                    "commit #0 sms delivered \"Relayed\"",
-                    "enter lane room_2 evt_5",
+                    "commit #1 sms delivered \"Relayed\"",
+                    "enter lane room_2 evt_6",
                     "release room_2",
-                    "await lane room_2 evt_5",
-                    "leave lane room_2 evt_5",
+                    "await lane room_2 evt_6",
+                    "leave lane room_2 evt_6",
                 ],
-                vec!["#0 sms delivered \"Relayed\"".to_owned()]
+                vec![
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Relayed\"".to_owned()
+                ]
             )
         );
     }

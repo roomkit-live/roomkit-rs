@@ -97,7 +97,10 @@ mod a_routed_message {
             ),
             (
                 Ok(Some(room_2())),
-                vec!["#0 sms delivered \"Hi\"".to_owned()]
+                vec![
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Hi\"".to_owned()
+                ]
             )
         );
     }
@@ -121,7 +124,9 @@ mod a_routed_message {
             (
                 Ok((true, Some("reentry_loop_cap".to_owned()), true)),
                 Some(ParticipantId::new(SENDER).unwrap()),
-                Vec::<String>::new()
+                // The record of the attach that recorded the sender (gap
+                // G-046), and nothing of the message.
+                vec!["#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned()]
             )
         );
     }
@@ -223,8 +228,9 @@ mod a_room_created_meanwhile {
             (
                 0,
                 vec![
-                    "#0 sms delivered \"Bonjour\"".to_owned(),
-                    "#1 system delivered \"Heads up\"".to_owned()
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Bonjour\"".to_owned(),
+                    "#2 system delivered \"Heads up\"".to_owned()
                 ]
             )
         );

@@ -220,6 +220,20 @@ as it stands.
   that fell due, each at its instant, its framework event emitted at once
   and its trigger fired once the room's lock is released; a delivered event
   resumes a paused room (gap G-045).
+- **Lifecycle records** (§5.1 Lifecycle records, gap G-046, step 3
+  milestone 2): a channel's attach, the integrator's, step 2's or a first
+  post's, its detach, mute and unmute, a binding's access, visibility and
+  metadata change, and a timer's pause or close each write a record in the
+  timeline, as the Python implementation does: an event of the change's
+  type (`CHANNEL_ATTACHED`, `CHANNEL_DETACHED`, `CHANNEL_MUTED`,
+  `CHANNEL_UNMUTED`, `CHANNEL_UPDATED`, `SYSTEM` for a timer), the
+  framework's source, a `SystemContent` in the Python implementation's
+  form, `internal`, at the room's next index, committed under the room's
+  lock with the counters, no activity, never delivered and running no hook
+  of its own. A room whose status refuses events takes none but a timer's
+  record of the transition itself. A room with three attaches stores its
+  first message at index 3. The integrator's pause, resume, reopen, close
+  and archive, and a room's creation, write none.
 - **Organizations** (§17.2, decision 2 of step 2b, gap G-077): every room
   operation acts for an organization or for none.
   `RoomKit::for_organization(organization_id)` returns an `OrganizationKit`

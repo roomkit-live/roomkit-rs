@@ -452,7 +452,7 @@ mod a_timed_out_call {
     }
 
     /// Gap G-068: the room step 2 creates is attached whatever the
-    /// deadline; only the event is not written.
+    /// deadline, its attach recorded; only the event is not written.
     #[test]
     fn leaves_the_room_step_2_created_attached() {
         let mut sim = Sim::without_rooms();
@@ -472,7 +472,8 @@ mod a_timed_out_call {
                 timed_out(),
                 true,
                 1,
-                0,
+                // The attach's record alone (gap G-046).
+                1,
                 vec!["handle_inbound sms deadline passed"]
             )
         );

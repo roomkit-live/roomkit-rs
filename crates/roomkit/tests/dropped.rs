@@ -34,8 +34,9 @@ fn room_id() -> RoomId {
     RoomId::new("room_1").unwrap()
 }
 
-/// An in-memory store whose first commit tells `committing` it started,
-/// then waits for `go`, as a slow database does.
+/// An in-memory store whose first commit of an event that is not the
+/// framework's own lifecycle record (gap G-046) tells `committing` it
+/// started, then waits for `go`, as a slow database does.
 #[derive(Debug, Default)]
 struct GatedStore {
     store: InMemoryStore,
@@ -201,7 +202,8 @@ impl ConversationStore for GatedStore {
         counters: RoomCounters,
         target: Option<TargetUpdate>,
     ) -> Result<(), StoreError> {
-        if !self.started.swap(true, Ordering::SeqCst) {
+        let records = event.source.channel_type == ChannelType::System;
+        if !records && !self.started.swap(true, Ordering::SeqCst) {
             self.committing.notify_one();
             self.go.notified().await;
         }
@@ -293,13 +295,14 @@ async fn drop_during_the_commit<T>(kit: &RoomKit<GatedStore>, call: impl Future<
     tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
 }
 
-/// The room's events, as `status text`, and whether `events` reports each
-/// one's end.
+/// The room's events but its lifecycle records (gap G-046), as `status
+/// text`, and whether `events` reports each one's end.
 async fn delivered_and_processed(
     kit: &RoomKit<GatedStore>,
     events: &mut broadcast::Receiver<FrameworkEvent>,
 ) -> (Vec<(EventStatus, String)>, bool) {
-    let timeline = kit.store().list_events(&room_id(), true).await.unwrap();
+    let mut timeline = kit.store().list_events(&room_id(), true).await.unwrap();
+    timeline.retain(|event| event.source.channel_type != ChannelType::System);
     let mut processed = Vec::new();
     while let Ok(event) = events.try_recv() {
         if let FrameworkEvent::EventProcessed { event_id, .. } = event {

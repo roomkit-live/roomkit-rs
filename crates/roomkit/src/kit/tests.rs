@@ -84,8 +84,10 @@ async fn refusal(kit: &RoomKit, result: &InboundResult) -> (bool, Option<String>
     (result.blocked, result.reason.clone(), timeline.len())
 }
 
+/// The refusal, with the timeline holding the attach's lifecycle record
+/// alone (gap G-046).
 fn timed_out() -> (bool, Option<String>, usize) {
-    (true, Some("process_timeout".to_owned()), 0)
+    (true, Some("process_timeout".to_owned()), 1)
 }
 
 /// RFC §9.5.1, Bound: waiting for a turn counts against `process_timeout`.
@@ -109,7 +111,7 @@ async fn a_call_past_its_deadline_waiting_for_its_ticket_writes_nothing_and_rele
             next.event.map(|event| (event.index, event.status)),
             kit.inner.tickets.held(&room_id())
         ),
-        (timed_out(), 1, Some((0, EventStatus::Delivered)), 0)
+        (timed_out(), 1, Some((1, EventStatus::Delivered)), 0)
     );
 }
 
@@ -147,7 +149,7 @@ async fn a_call_past_its_deadline_waiting_for_the_room_lock_writes_nothing() {
         (
             timed_out(),
             vec![(Some(room_id()), Some("sms".to_owned()), None)],
-            Some(0),
+            Some(1),
             0
         )
     );

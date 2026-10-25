@@ -51,6 +51,18 @@ impl Timestamp {
     pub fn duration_since(self, earlier: Self) -> Option<Duration> {
         Duration::try_from(self.0.duration_since(earlier.0)).ok()
     }
+
+    /// The instant in UTC with an explicit offset, to the microsecond, its
+    /// fraction left out when it has none (`2026-10-22T14:03:00+00:00`,
+    /// `2026-10-22T14:03:00.250000+00:00`): the form the Python
+    /// implementation's records write an instant in (gap G-046).
+    pub(crate) fn to_iso_offset(self) -> String {
+        let seconds = self.0.strftime("%Y-%m-%dT%H:%M:%S");
+        match self.0.subsec_microsecond() {
+            0 => format!("{seconds}+00:00"),
+            micros => format!("{seconds}.{micros:06}+00:00"),
+        }
+    }
 }
 
 impl fmt::Display for Timestamp {

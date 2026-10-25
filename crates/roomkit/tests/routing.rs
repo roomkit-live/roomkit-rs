@@ -135,13 +135,15 @@ async fn correspondent(kit: &RoomKit, room_id: &RoomId) -> Option<String> {
         .and_then(|binding| binding.participant_id.map(String::from))
 }
 
-/// The texts of the room's timeline.
+/// The texts of the room's timeline, its lifecycle records left out (gap
+/// G-046).
 async fn texts(kit: &RoomKit, room_id: &RoomId) -> Vec<String> {
     kit.store()
         .list_events(room_id, true)
         .await
         .unwrap()
         .iter()
+        .filter(|event| event.source.channel_type != ChannelType::System)
         .map(|event| text_of(&event.content))
         .collect()
 }

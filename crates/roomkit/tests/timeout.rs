@@ -126,8 +126,11 @@ fn process_timeouts(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<(bo
     found
 }
 
+/// The room's timeline but its lifecycle records (gap G-046).
 async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
-    kit.store().list_events(&room_id(), true).await.unwrap()
+    let mut timeline = kit.store().list_events(&room_id(), true).await.unwrap();
+    timeline.retain(|event| event.source.channel_type != ChannelType::System);
+    timeline
 }
 
 #[tokio::test]
@@ -146,11 +149,12 @@ async fn a_timeout_during_an_off_lock_hook_writes_nothing_and_the_next_message_g
             process_timeouts(&mut events),
             next.event.map(|event| (event.index, event.status))
         ),
+        // The attach's lifecycle record took index 0 (gap G-046).
         (
             timed_out(),
             0,
             vec![(true, false)],
-            Some((0, EventStatus::Delivered))
+            Some((1, EventStatus::Delivered))
         )
     );
 }
@@ -174,12 +178,14 @@ async fn a_timeout_during_a_locked_hook_releases_the_lock_and_names_the_event() 
             paused.is_ok(),
             next.event.map(|event| (event.index, event.status))
         ),
+        // The attach's lifecycle record took index 0; the pause writes
+        // none (gap G-046).
         (
             timed_out(),
             0,
             vec![(false, true)],
             true,
-            Some((0, EventStatus::Delivered))
+            Some((1, EventStatus::Delivered))
         )
     );
 }
@@ -344,10 +350,11 @@ async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
             second.event.map(|event| (event.index, event.status)),
             process_timeouts(&mut events)
         ),
+        // After the two attaches' lifecycle records (gap G-046).
         (
             false,
-            Ok(Some(0)),
-            Some((1, EventStatus::Delivered)),
+            Ok(Some(2)),
+            Some((3, EventStatus::Delivered)),
             Vec::new()
         )
     );

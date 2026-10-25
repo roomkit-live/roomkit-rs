@@ -36,7 +36,7 @@ fn post(sim: &mut Sim, text: &str) -> Result<InboundResult, InboundError> {
 fn a_first_post_attaches_its_host_channel_under_the_lock_then_injects() {
     let mut sim = room();
     post(&mut sim, "Your order shipped.").unwrap();
-    let first: Vec<&str> = sim.trace.iter().map(String::as_str).take(8).collect();
+    let first: Vec<&str> = sim.trace.iter().map(String::as_str).take(9).collect();
     assert_eq!(
         first,
         [
@@ -44,10 +44,11 @@ fn a_first_post_attaches_its_host_channel_under_the_lock_then_injects() {
             "lock room_1",
             "load_context room_1",
             "store binding host",
+            "commit #0 system delivered \"Channel host attached (read_write, all)\"",
             "release room_1",
             "lock room_1",
             "load_context room_1",
-            "commit #0 host delivered \"Your order shipped.\"",
+            "commit #1 host delivered \"Your order shipped.\"",
         ]
     );
 }
@@ -67,7 +68,7 @@ fn a_later_post_takes_no_lock_for_an_attach() {
             "load_context room_1",
             "lock room_1",
             "load_context room_1",
-            "commit #1 host delivered \"It arrives tomorrow.\"",
+            "commit #2 host delivered \"It arrives tomorrow.\"",
         ]
     );
 }
@@ -100,7 +101,8 @@ fn a_first_post_waits_for_the_lock_within_the_call_s_bound() {
 
 /// RFC §10.5, §13.6: once the lock is held, the first post's attach runs to
 /// its end whatever becomes of the caller: a caller that leaves meanwhile
-/// leaves the host channel bound, and nothing of its post written.
+/// leaves the host channel bound and its attach recorded, and nothing of
+/// its post written.
 #[test]
 fn a_first_post_whose_caller_leaves_once_the_lock_is_held_attaches_to_its_end() {
     let mut sim = room();
@@ -113,6 +115,7 @@ fn a_first_post_whose_caller_leaves_once_the_lock_is_held_attaches_to_its_end() 
                 .any(|binding| binding.channel_id == channel("host")),
             sim.timeline.len()
         ),
-        (true, 0)
+        // The attach's record alone (gap G-046).
+        (true, 1)
     );
 }

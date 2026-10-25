@@ -4,10 +4,11 @@
 //! to the advisor, who answers the customer. Then the agent is made visible
 //! to all again, and answers the customer directly.
 //!
-//! B.5's timeline also shows `CHANNEL_ATTACHED`, `CHANNEL_MUTED` and
-//! `CHANNEL_UPDATED` rows: the RFC makes such lifecycle records optional,
-//! and roomkit-rs reports these changes through framework events and hooks
-//! instead (gap G-046), so its timeline holds the messages only.
+//! B.5's timeline numbers the messages alone. roomkit-rs writes a
+//! lifecycle record of each change, as the Python implementation does (RFC
+//! §5.1, gap G-046): a `CHANNEL_ATTACHED`, `CHANNEL_MUTED`, `CHANNEL_UPDATED`
+//! or `CHANNEL_UNMUTED` event at the room's next index, `internal` and
+//! never delivered, so its timeline holds them between the messages.
 //!
 //! ```sh
 //! cargo run --example advisor_joins
@@ -234,9 +235,13 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "visible to all again, the agent answers the customer directly",
         customer.last().map(String::as_str) == Some("You'll need: 1. ID 2. Income statements."),
     );
+    let (records, messages): (Vec<_>, Vec<_>) = timeline
+        .iter()
+        .partition(|event| event.visibility == Visibility::Internal);
     checks.expect(
-        "the timeline holds the nine messages in index order, and no lifecycle record",
-        timeline.len() == 9
+        "the timeline holds the nine messages and a lifecycle record of each of the seven changes, in index order",
+        messages.len() == 9
+            && records.len() == 7
             && timeline
                 .iter()
                 .zip(0..)

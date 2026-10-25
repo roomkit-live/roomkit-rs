@@ -154,9 +154,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let sent = kit.send_event(&room, shipped.clone()).await?;
     let delivered_on_return = customer.texts();
     let retried = kit.send_event(&room, shipped).await?;
+    // The three attaches' lifecycle records take indexes 0 to 2 (RFC §5.1,
+    // gap G-046).
     checks.expect(
         "the injected event is committed and delivered when send_event returns",
-        sent.index == 0 && delivered_on_return == ["Your order #42 has shipped."],
+        sent.index == 3 && delivered_on_return == ["Your order #42 has shipped."],
     );
     checks.expect(
         "a retry with the same idempotency key returns the first event, and delivers nothing",
@@ -171,7 +173,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         matches!(
             &refused,
             Err(KitError::Inbound(InboundError::Refused { reason })) if reason == "source_unbound"
-        ) && shared::timeline(&kit, &room).await?.len() == 1,
+        ) && shared::timeline(&kit, &room).await?.len() == 4,
     );
 
     println!("The customer asks; the agent's turn posts a note, then answers.");
@@ -197,7 +199,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     println!("Delivered on SMS: {:?}", customer.texts());
     checks.expect(
         "the turn's send_event returns the note committed, before its delivery",
-        note.event.index == 2 && !note.delivered_yet,
+        note.event.index == 5 && !note.delivered_yet,
     );
     checks.expect(
         "the note is delivered once the turn is over, ahead of the answer committed after it",

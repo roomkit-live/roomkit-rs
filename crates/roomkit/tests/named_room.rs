@@ -86,7 +86,8 @@ async fn two_messages_naming_one_missing_room_create_it_once() {
         .unwrap();
     assert_eq!(
         (rooms.len(), rooms_created(&mut events), indexes),
-        (1, 1, vec![0, 1])
+        // The attach's lifecycle record, then the two messages (gap G-046).
+        (1, 1, vec![0, 1, 2])
     );
 }
 
@@ -264,7 +265,8 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
         (
             true,
             vec![("sms".to_owned(), Some("+15551234567".to_owned()))],
-            0
+            // The attach's lifecycle record alone (gap G-046).
+            1
         )
     );
 }

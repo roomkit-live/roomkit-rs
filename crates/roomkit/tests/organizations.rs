@@ -92,8 +92,9 @@ async fn lifecycle_refusals(clinic: &OrganizationKit) -> Vec<Option<KitError>> {
     ]
 }
 
-/// `room_1` as the store holds it: its status, its event count, and its
-/// bindings as `(channel, muted)`, by channel.
+/// `room_1` as the store holds it: its status, its event count, its
+/// attach's lifecycle record among them (gap G-046), and its bindings as
+/// `(channel, muted)`, by channel.
 async fn as_stored(kit: &RoomKit) -> (RoomStatus, u64, Vec<(String, bool)>) {
     let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
     let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
@@ -130,7 +131,7 @@ async fn a_lifecycle_change_never_reaches_a_room_that_is_not_its_organization_s(
             (refusals, as_stored(&kit).await),
             (
                 (0..9).map(|_| not_found()).collect::<Vec<_>>(),
-                (RoomStatus::Active, 0, vec![("sms".to_owned(), false)])
+                (RoomStatus::Active, 1, vec![("sms".to_owned(), false)])
             ),
             "a room of {owner:?}"
         );
@@ -151,7 +152,7 @@ async fn a_record_is_never_committed_to_another_organization_s_room() {
         (refused, as_stored(&kit).await),
         (
             Err(KitError::Mutation(MutationError::RoomNotFound(room_id()))),
-            (RoomStatus::Active, 0, vec![("sms".to_owned(), false)])
+            (RoomStatus::Active, 1, vec![("sms".to_owned(), false)])
         )
     );
 }
@@ -183,7 +184,7 @@ async fn an_event_is_never_brought_into_another_organization_s_room() {
                 inbound(InboundError::OtherOrganization(room_id())),
                 inbound(InboundError::RoomNotFound(room_id()))
             ),
-            (RoomStatus::Active, 0, vec![("sms".to_owned(), false)])
+            (RoomStatus::Active, 1, vec![("sms".to_owned(), false)])
         )
     );
 }
@@ -272,9 +273,10 @@ async fn an_organization_s_calls_reach_its_own_rooms() {
     bank.pause_room(&room_id()).await.unwrap();
     assert_eq!(
         as_stored(&kit).await,
+        // Three lifecycle records and the record; the pause writes none.
         (
             RoomStatus::Paused,
-            1,
+            4,
             vec![("sms".to_owned(), true), ("ws".to_owned(), false)]
         )
     );
@@ -325,7 +327,8 @@ async fn an_organization_reads_its_own_rooms_only() {
                 Some(room_id()),
                 1,
                 Some(committed.id.clone()),
-                Ok(1),
+                // The attach's lifecycle record, then the record.
+                Ok(2),
                 Ok(1),
                 Ok(0),
                 Ok(None),
@@ -353,6 +356,6 @@ async fn the_kit_reaches_an_organization_s_room() {
     kit.pause_room(&room_id()).await.unwrap();
     assert_eq!(
         as_stored(&kit).await,
-        (RoomStatus::Paused, 1, vec![("sms".to_owned(), false)])
+        (RoomStatus::Paused, 2, vec![("sms".to_owned(), false)])
     );
 }

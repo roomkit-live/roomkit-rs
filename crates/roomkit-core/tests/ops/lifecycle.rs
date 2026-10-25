@@ -140,8 +140,10 @@ mod attach_channel {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// Gap G-046: the binding, then its lifecycle record, at the room's
+    /// next index, both under the lock.
     #[test]
-    fn stores_the_binding_under_the_room_lock() {
+    fn stores_the_binding_then_its_record_under_the_room_lock() {
         let mut sim = Sim::new();
         sim.run(AttachChannel::new(sim.shared_config(), sms_binding(), None))
             .unwrap();
@@ -151,6 +153,7 @@ mod attach_channel {
                 "lock room_1",
                 "load_context room_1",
                 "store binding sms",
+                "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                 "release room_1",
             ]
         );
@@ -261,6 +264,8 @@ mod attach_channel {
                     "load_context room_1".to_owned(),
                     "update room room_1 Active".to_owned(),
                     "store binding sms".to_owned(),
+                    "commit #1 system delivered \"Channel sms attached (read_write, all)\""
+                        .to_owned(),
                     "release room_1".to_owned(),
                 ],
                 false
@@ -325,6 +330,7 @@ mod detach_channel {
         sim
     }
 
+    /// Gap G-046: then its lifecycle record.
     #[test]
     fn records_the_revocation_then_removes_the_binding_under_the_lock() {
         assert_eq!(
@@ -334,6 +340,7 @@ mod detach_channel {
                 "load_context room_1",
                 "update room room_1 Active",
                 "delete binding sms",
+                "commit #0 system delivered \"Channel sms detached\"",
                 "release room_1",
             ]
         );
@@ -397,7 +404,10 @@ mod detach_channel {
         sim.send(Sim::message("sms", "Hello?")).unwrap();
         assert_eq!(
             sim.timeline_lines(),
-            ["#0 sms blocked:source_unbound \"Hello?\""]
+            [
+                "#0 system delivered \"Channel sms detached\"",
+                "#1 sms blocked:source_unbound \"Hello?\"",
+            ]
         );
     }
 
@@ -447,8 +457,9 @@ mod update_binding {
         ))
     }
 
+    /// Gap G-046: then its lifecycle record.
     #[test]
-    fn muting_stores_the_binding_under_the_lock() {
+    fn muting_stores_the_binding_then_its_record_under_the_lock() {
         let mut sim = room();
         update(&mut sim, BindingUpdate::mute()).unwrap();
         assert_eq!(
@@ -457,6 +468,7 @@ mod update_binding {
                 "lock room_1",
                 "load_context room_1",
                 "store binding ai",
+                "commit #0 system delivered \"Channel ai muted\"",
                 "release room_1",
             ]
         );
@@ -548,6 +560,107 @@ mod update_binding {
         );
     }
 
+    /// RFC §5.1 Lifecycle records, gap G-046: one record per field the
+    /// update changed, in the Python implementation's order; the record is
+    /// the framework's, `internal`, and no activity of the room.
+    #[test]
+    fn records_each_field_it_changed() {
+        let mut sim = room();
+        sim.room.timers.last_activity_at = Some(after_start(0));
+        let mut metadata = serde_json::Map::new();
+        metadata.insert("tier".to_owned(), serde_json::json!("gold"));
+        let changes = BindingUpdate {
+            muted: Some(true),
+            access: Some(Access::ReadOnly),
+            visibility: Some(Visibility::Transport),
+            metadata,
+            ..BindingUpdate::default()
+        };
+        update(&mut sim, changes).unwrap();
+        let records: Vec<(EventType, String, Visibility)> = sim
+            .timeline
+            .iter()
+            .map(|event| {
+                (
+                    event.event_type,
+                    event.source.channel_id.to_string(),
+                    event.visibility.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            (
+                sim.timeline_lines(),
+                records[0].clone(),
+                sim.room.timers.last_activity_at
+            ),
+            (
+                [
+                    "#0 system delivered \"Channel ai muted\"",
+                    "#1 system delivered \"Channel ai access: read_write -> read_only\"",
+                    "#2 system delivered \"Channel ai visibility: all -> transport\"",
+                    "#3 system delivered \"Channel ai metadata updated\"",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                (
+                    EventType::ChannelMuted,
+                    "system".to_owned(),
+                    Visibility::Internal
+                ),
+                Some(after_start(0))
+            )
+        );
+    }
+
+    /// RFC §5.1, gap G-046: a CLOSED room's timeline does not grow because a
+    /// binding changed: the binding is written, and no record.
+    #[test]
+    fn of_a_closed_room_writes_no_record() {
+        let mut sim = room();
+        sim.room.status = RoomStatus::Closed;
+        update(&mut sim, BindingUpdate::mute()).unwrap();
+        assert_eq!(
+            (sim.trace, sim.timeline.len()),
+            (
+                [
+                    "lock room_1",
+                    "load_context room_1",
+                    "store binding ai",
+                    "release room_1"
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                0
+            )
+        );
+    }
+
+    /// RFC §5.1: a record is no activity and is never delivered: a paused
+    /// room stays paused, and its channels receive nothing.
+    #[test]
+    fn records_a_mute_of_a_paused_room_without_resuming_it_or_delivering_it() {
+        let mut sim = room();
+        sim.transport("sms");
+        sim.room.status = RoomStatus::Paused;
+        sim.room.paused_at = Some(after_start(0));
+        update(&mut sim, BindingUpdate::mute()).unwrap();
+        assert_eq!(
+            (
+                sim.room.status,
+                sim.timeline.len(),
+                sim.traced("on_event"),
+                sim.traced("deliver")
+            ),
+            (
+                RoomStatus::Paused,
+                1,
+                Vec::<&str>::new(),
+                Vec::<&str>::new()
+            )
+        );
+    }
+
     /// RFC §7.2: a muted channel still reads, and its response is stored
     /// blocked.
     #[test]
@@ -559,8 +672,9 @@ mod update_binding {
         assert_eq!(
             sim.timeline_lines(),
             [
-                "#0 sms delivered \"Bonjour\"",
-                "#1 ai blocked:source_muted \"Hello back\"",
+                "#0 system delivered \"Channel ai muted\"",
+                "#1 sms delivered \"Bonjour\"",
+                "#2 ai blocked:source_muted \"Hello back\"",
             ]
         );
     }
@@ -861,6 +975,7 @@ mod check_timers {
                     "lock room_1".to_owned(),
                     "load_context room_1".to_owned(),
                     "update room room_1 Paused".to_owned(),
+                    "commit #0 system delivered \"Room room_1 paused by timer\"".to_owned(),
                     "release room_1".to_owned(),
                 ]
             )
@@ -1014,13 +1129,15 @@ mod the_status_gate {
                         event_type: EventType::Message,
                     },
                 ],
-                0
+                // The record of the close alone (gap G-046).
+                1
             )
         );
     }
 
+    /// Gap G-046: the close, then its record, which the CLOSED room takes.
     #[test]
-    fn writes_the_due_close_under_the_lock_before_the_refusal() {
+    fn writes_the_due_close_and_its_record_under_the_lock_before_the_refusal() {
         let mut sim = paused_room();
         sim.env.advance(Duration::from_secs(121));
         sim.send(Sim::message("sms", "Still there?")).unwrap();
@@ -1030,6 +1147,7 @@ mod the_status_gate {
                 "lock room_1",
                 "load_context room_1",
                 "update room room_1 Closed",
+                "commit #0 system delivered \"Room room_1 closed by timer\"",
                 "release room_1",
             ]
         );
@@ -1081,7 +1199,12 @@ mod the_status_gate {
                 sim.framework_events().last().copied().cloned()
             ),
             (
-                vec!["#0 sms delivered \"Bonjour\"".to_owned()],
+                // The records of the pause and the close (gap G-046).
+                vec![
+                    "#0 sms delivered \"Bonjour\"".to_owned(),
+                    "#1 system delivered \"Room room_1 paused by timer\"".to_owned(),
+                    "#2 system delivered \"Room room_1 closed by timer\"".to_owned(),
+                ],
                 [
                     "event_processed",
                     "room_paused",
@@ -1120,7 +1243,11 @@ mod the_status_gate {
                 sim.framework_events().last().copied().cloned()
             ),
             (
-                vec!["#0 sms delivered \"hello\"".to_owned()],
+                vec![
+                    "#0 sms delivered \"hello\"".to_owned(),
+                    "#1 system delivered \"Room room_1 paused by timer\"".to_owned(),
+                    "#2 system delivered \"Room room_1 closed by timer\"".to_owned(),
+                ],
                 ["room_paused", "room_closed", "room_refused_event"]
                     .map(str::to_owned)
                     .to_vec(),
@@ -1145,10 +1272,14 @@ mod the_status_gate {
             (
                 sim.timeline_lines(),
                 sim.framework_event_names(),
-                sim.trace[sim.trace.len() - 5..].to_vec()
+                sim.trace[sim.trace.len() - 7..].to_vec()
             ),
             (
-                vec!["#0 sms delivered \"Go deeper\"".to_owned()],
+                vec![
+                    "#0 sms delivered \"Go deeper\"".to_owned(),
+                    "#1 system delivered \"Room room_1 paused by timer\"".to_owned(),
+                    "#2 system delivered \"Room room_1 closed by timer\"".to_owned(),
+                ],
                 [
                     "delivery_succeeded",
                     "event_processed",
@@ -1163,6 +1294,8 @@ mod the_status_gate {
                     "lock room_1",
                     "load_context room_1",
                     "update room room_1 Closed",
+                    "commit #1 system delivered \"Room room_1 paused by timer\"",
+                    "commit #2 system delivered \"Room room_1 closed by timer\"",
                     "release room_1"
                 ]
                 .map(str::to_owned)
@@ -1186,10 +1319,13 @@ mod the_status_gate {
             (sim.framework_event_names(), sim.trace),
             (
                 vec!["room_closed".to_owned(), "room_channel_detached".to_owned()],
+                // The close's record; a CLOSED room takes no record of the
+                // detach (RFC §5.1, gap G-046).
                 [
                     "lock room_1",
                     "load_context room_1",
                     "update room room_1 Closed",
+                    "commit #0 system delivered \"Room room_1 closed by timer\"",
                     "update room room_1 Closed",
                     "delete binding sms",
                     "release room_1"

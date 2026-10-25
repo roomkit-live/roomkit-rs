@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::LifecycleError;
 use super::change::{Decision, SectionChange};
-use super::report;
+use super::{record, report};
 use crate::model::{ErrorRecord, Room, RoomContext, RoomId};
 use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Step};
@@ -166,7 +166,8 @@ impl<C: SectionChange> Changing<C> {
     ) -> Progress<SectionResult<C>> {
         match decision.writes.pop_front() {
             Some(request) => {
-                self.writing = Some((cx.io.issue(request), Box::new(decision)));
+                let effect = record::issue_write(cx, request);
+                self.writing = Some((effect, Box::new(decision)));
                 Progress::Waiting
             }
             None => Progress::Done(Ok(decision.done)),
@@ -197,8 +198,7 @@ impl<C: SectionChange> SectionWork for Changing<C> {
 
     /// Decides the change on the room as the gate left it.
     fn begin(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> Progress<SectionResult<C>> {
-        let now = cx.env.now();
-        match self.change.decide(context, now) {
+        match self.change.decide(context, cx) {
             Ok(decision) => self.write_next(cx, decision),
             Err(refusal) => Progress::Done(Err(SectionError::Refused(refusal))),
         }
@@ -213,7 +213,9 @@ impl<C: SectionChange> SectionWork for Changing<C> {
         let Some((_, decision)) = self.writing.take() else {
             return Progress::Waiting;
         };
-        match outcome.into_stored() {
+        // A lifecycle record's commit is answered `Committed`, every other
+        // write `Stored`.
+        match outcome.into_written() {
             Ok(()) => self.write_next(cx, *decision),
             Err(error) => Progress::Done(Err(SectionError::Store(error))),
         }

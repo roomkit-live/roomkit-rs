@@ -16,12 +16,14 @@
 //! the call's deadline (RFC §13.6); once the lock is held, the attach runs
 //! to its end. Then the post is injected as `send_event` injects.
 
+use std::collections::VecDeque;
+
 use super::InboundError;
 use super::deadline::Stopped;
 use super::direct::DirectCall;
-use crate::model::{ChannelBinding, RoomContext, RoomEvent, RoomId, Timestamp};
+use crate::model::{ChannelBinding, RoomContext, RoomEvent, RoomId};
 use crate::ops::io::Bound;
-use crate::ops::lifecycle::change::{Attached, Decision, SectionChange};
+use crate::ops::lifecycle::change::{self, Attached, Decision, SectionChange};
 use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
 use crate::ops::lifecycle::report::Reported;
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
@@ -29,6 +31,7 @@ use crate::ops::{Cx, Progress};
 use crate::rules::attachment;
 use crate::rules::host::{self, Speaker};
 use crate::rules::permissions::WriteRefusal;
+use crate::rules::records::Record;
 
 /// The first post's attach of its host channel, under the room's lock (RFC
 /// §10.5).
@@ -60,8 +63,9 @@ impl SectionChange for HostAttach {
     fn decide(
         &self,
         mut context: Box<RoomContext>,
-        now: Timestamp,
+        cx: &Cx<'_>,
     ) -> Result<Decision<HostAttached>, HostRefusal> {
+        let now = cx.env.now();
         let channel_id = &self.0.channel_id;
         if !context.room.status.accepts_events() {
             return Err(HostRefusal::Closed);
@@ -78,11 +82,13 @@ impl SectionChange for HostAttach {
             ..(*self.0).clone()
         };
         context.bindings.push(binding.clone());
+        let mut writes = VecDeque::from([StoreRequest::StoreBinding {
+            binding: binding.clone(),
+        }]);
+        let record = Record::attached(&binding);
+        change::write_records(cx, &mut writes, &mut context, &[record]);
         Ok(Decision {
-            writes: [StoreRequest::StoreBinding {
-                binding: binding.clone(),
-            }]
-            .into(),
+            writes,
             done: HostAttached::Attached(Attached {
                 binding: Box::new(binding),
                 context,

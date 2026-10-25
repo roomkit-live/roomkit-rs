@@ -11,11 +11,14 @@ use std::collections::VecDeque;
 use std::fmt::Debug;
 
 use super::LifecycleError;
+use super::record;
 use super::report::Reported;
-use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomUpdates, Timestamp};
+use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomUpdates};
+use crate::ops::Cx;
 use crate::ops::protocol::StoreRequest;
 use crate::rules::attachment;
 use crate::rules::lifecycle::{self, Transition};
+use crate::rules::records::Record;
 
 /// A change a locked section makes (`LockedSection`).
 pub(crate) trait SectionChange: Debug {
@@ -25,7 +28,8 @@ pub(crate) trait SectionChange: Debug {
     type Refusal: Debug;
 
     /// Decides the change on `context`, the room as the gate left it, at
-    /// `now`.
+    /// the instant `cx`'s environment reads, which also gives the ids of the
+    /// lifecycle records the change writes (gap G-046).
     ///
     /// # Errors
     ///
@@ -33,7 +37,7 @@ pub(crate) trait SectionChange: Debug {
     fn decide(
         &self,
         context: Box<RoomContext>,
-        now: Timestamp,
+        cx: &Cx<'_>,
     ) -> Result<Decision<Self::Done>, Self::Refusal>;
 
     /// What `done` reports once the lock is released, and the context its
@@ -64,6 +68,20 @@ impl<D> Decision<D> {
             writes: self.writes,
             done: map(self.done),
         }
+    }
+}
+
+/// Adds to `writes` the commit of each of `records` as the room's next
+/// events, which `context` then reflects (RFC §5.1 Lifecycle records, gap
+/// G-046): none in a room whose status refuses new events.
+pub(crate) fn write_records(
+    cx: &Cx<'_>,
+    writes: &mut VecDeque<StoreRequest>,
+    context: &mut RoomContext,
+    records: &[Record],
+) {
+    for record in records {
+        writes.extend(record::commit(cx, context, record));
     }
 }
 
@@ -130,15 +148,17 @@ impl SectionChange for AttachChange {
     type Done = Attached;
     type Refusal = LifecycleError;
 
-    /// Stores the binding in place of any the room has for its channel. An
-    /// explicit attach clears the channel's revocation first.
+    /// Stores the binding in place of any the room has for its channel, then
+    /// its lifecycle record (gap G-046). An explicit attach clears the
+    /// channel's revocation first.
     fn decide(
         &self,
         mut context: Box<RoomContext>,
-        now: Timestamp,
+        cx: &Cx<'_>,
     ) -> Result<Decision<Attached>, LifecycleError> {
         let binding = &self.0;
         let mut writes = VecDeque::new();
+        let now = cx.env.now();
         if let Some(updates) = attachment::clear_revocation(&context.room, &binding.channel_id, now)
         {
             writes.push_back(update_room(&mut context, updates));
@@ -150,6 +170,7 @@ impl SectionChange for AttachChange {
             .bindings
             .retain(|bound| bound.channel_id != binding.channel_id);
         context.bindings.push(ChannelBinding::clone(binding));
+        write_records(cx, &mut writes, &mut context, &[Record::attached(binding)]);
         let done = Attached {
             binding: binding.clone(),
             context,
@@ -170,19 +191,19 @@ impl SectionChange for DetachChange {
     type Done = Detached;
     type Refusal = LifecycleError;
 
-    /// Records the channel's revocation, then removes its binding. The
-    /// revocation is written first: a detach cut short leaves the channel
-    /// revoked and still bound, never unbound and free to be attached again
-    /// automatically. A channel the room does not bind is refused (gap
-    /// G-047).
+    /// Records the channel's revocation, then removes its binding, then
+    /// writes its lifecycle record (gap G-046). The revocation is written
+    /// first: a detach cut short leaves the channel revoked and still bound,
+    /// never unbound and free to be attached again automatically. A channel
+    /// the room does not bind is refused (gap G-047).
     fn decide(
         &self,
         mut context: Box<RoomContext>,
-        now: Timestamp,
+        cx: &Cx<'_>,
     ) -> Result<Decision<Detached>, LifecycleError> {
         let channel_id = &self.0;
         let binding = bound(&context, channel_id)?;
-        let revocation = attachment::revoke(&context.room, channel_id, now);
+        let revocation = attachment::revoke(&context.room, channel_id, cx.env.now());
         let mut writes = VecDeque::from([update_room(&mut context, revocation)]);
         writes.push_back(StoreRequest::DeleteBinding {
             room_id: context.room.id.clone(),
@@ -191,6 +212,8 @@ impl SectionChange for DetachChange {
         context
             .bindings
             .retain(|bound| &bound.channel_id != channel_id);
+        let record = Record::Detached(channel_id.clone());
+        write_records(cx, &mut writes, &mut context, &[record]);
         let done = Detached {
             binding: Box::new(binding),
             context,
@@ -215,12 +238,13 @@ impl SectionChange for UpdateChange {
     type Refusal = LifecycleError;
 
     /// Writes the binding as the update leaves it, every field it does not
-    /// name carried over; an update that changes nothing writes nothing
-    /// (gap G-047). A channel the room does not bind is refused.
+    /// name carried over, then a lifecycle record for each field it changed
+    /// (gap G-046); an update that changes nothing writes nothing (gap
+    /// G-047). A channel the room does not bind is refused.
     fn decide(
         &self,
         context: Box<RoomContext>,
-        _now: Timestamp,
+        cx: &Cx<'_>,
     ) -> Result<Decision<Updated>, LifecycleError> {
         let current = bound(&context, &self.channel_id)?;
         let updated = self.update.apply(&current);
@@ -231,7 +255,11 @@ impl SectionChange for UpdateChange {
                 context,
             }));
         }
-        Ok(store_updated(&current, updated, context))
+        let records = Record::of_update(&current, &updated, &self.update.metadata);
+        let mut decision = store_updated(&current, updated, context);
+        let Decision { writes, done } = &mut decision;
+        write_records(cx, writes, &mut done.context, &records);
+        Ok(decision)
     }
 
     fn reported(done: &Updated) -> Option<(Reported<'_>, &RoomContext)> {
@@ -253,8 +281,9 @@ impl SectionChange for TransitionChange {
     fn decide(
         &self,
         mut context: Box<RoomContext>,
-        now: Timestamp,
+        cx: &Cx<'_>,
     ) -> Result<Decision<Transitioned>, LifecycleError> {
+        let now = cx.env.now();
         let transition = self.0;
         let status = context.room.status;
         if transition.refuses(status) {
@@ -319,7 +348,7 @@ impl SectionChange for TimersChange {
     fn decide(
         &self,
         context: Box<RoomContext>,
-        _now: Timestamp,
+        _cx: &Cx<'_>,
     ) -> Result<Decision<Box<RoomContext>>, LifecycleError> {
         Ok(Decision::unwritten(context))
     }

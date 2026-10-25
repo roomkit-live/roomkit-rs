@@ -69,6 +69,7 @@ mod a_missing_room {
                 "lock room_1",
                 "load_context room_1",
                 "store binding sms",
+                "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                 "release room_1",
                 "emit room_channel_attached",
                 "fire on_channel_attached",
@@ -101,7 +102,8 @@ mod a_missing_room {
             (
                 Some("process_timeout".to_owned()),
                 Some("sms".to_owned()),
-                Vec::<String>::new(),
+                // The attach's record (gap G-046), nothing of the message.
+                vec!["#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned()],
                 Vec::<&str>::new(),
                 ["room_created", "room_channel_attached", "session_started"]
                     .map(str::to_owned)
@@ -146,10 +148,11 @@ mod a_missing_room {
             (sim.timeline_lines(), sim.traced("deliver")),
             (
                 vec![
-                    "#0 sms delivered \"Bonjour\"".to_owned(),
-                    "#1 ai delivered \"Bonjour Jean!\"".to_owned(),
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Bonjour\"".to_owned(),
+                    "#2 ai delivered \"Bonjour Jean!\"".to_owned(),
                 ],
-                vec!["deliver sms <- evt_5"]
+                vec!["deliver sms <- evt_6"]
             )
         );
     }
@@ -362,7 +365,8 @@ mod a_missing_room {
                 sim.bindings.len(),
                 sim.timeline.len()
             ),
-            (Some(1), vec!["sms".to_owned()], 0, 0)
+            // The attach's record and the message (gap G-046).
+            (Some(2), vec!["sms".to_owned()], 0, 0)
         );
     }
 }
@@ -456,12 +460,13 @@ mod an_existing_room {
         let mut sim = with_unbound_sms();
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
-            sim.trace[..6],
+            sim.trace[..7],
             [
                 "load_context room_1",
                 "lock room_1",
                 "load_context room_1",
                 "store binding sms",
+                "commit #0 system delivered \"Channel sms attached (read_write, all)\"",
                 "release room_1",
                 "handle_inbound sms",
             ]
@@ -495,7 +500,13 @@ mod an_existing_room {
         let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             (result.blocked, sim.timeline_lines()),
-            (false, vec!["#0 sms delivered \"Bonjour\"".to_owned()])
+            (
+                false,
+                vec![
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Bonjour\"".to_owned()
+                ]
+            )
         );
     }
 
@@ -739,8 +750,9 @@ mod a_recipient {
             (
                 Some(0),
                 vec![
-                    "#0 sms delivered \"Bonjour\"".to_owned(),
-                    "#1 ai delivered \"Bonjour Jean!\"".to_owned(),
+                    "#0 system delivered \"Channel sms attached (read_write, all)\"".to_owned(),
+                    "#1 sms delivered \"Bonjour\"".to_owned(),
+                    "#2 ai delivered \"Bonjour Jean!\"".to_owned(),
                 ],
                 1,
                 Vec::<&str>::new()
@@ -906,7 +918,7 @@ mod the_lane {
                 .into_iter()
                 .chain(sim.traced("leave lane"))
                 .collect::<Vec<_>>(),
-            ["enter lane room_2 evt_4", "leave lane room_2 evt_4"]
+            ["enter lane room_2 evt_5", "leave lane room_2 evt_5"]
         );
     }
 }

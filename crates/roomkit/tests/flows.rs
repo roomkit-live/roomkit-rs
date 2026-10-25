@@ -93,7 +93,9 @@ async fn the_timeline_reads_without_the_refused_events_by_default() {
         .await
         .unwrap();
     let received = kit.store().list_events(&room_id(), false).await.unwrap();
-    assert_eq!((received.len(), timeline(&kit).await.len()), (0, 1));
+    // The two attaches' lifecycle records are received (gap G-046); the
+    // refused message is read only when asked for.
+    assert_eq!((received.len(), timeline(&kit).await.len()), (2, 3));
 }
 
 #[tokio::test]
@@ -111,7 +113,8 @@ async fn two_messages_sent_together_take_distinct_indexes() {
         .iter()
         .map(|event| event.index)
         .collect();
-    assert_eq!(indexes, [0, 1, 2, 3]);
+    // After the two attaches' lifecycle records (gap G-046).
+    assert_eq!(indexes, [0, 1, 2, 3, 4, 5]);
 }
 
 #[tokio::test]

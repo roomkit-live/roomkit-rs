@@ -19,7 +19,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, InboundMessage, Room, RoomId, RoomOptions, RoomStatus,
+    ChannelId, ChannelType, EventContent, EventType, InboundMessage, Room, RoomId, RoomOptions,
+    RoomStatus,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -162,8 +163,14 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
     );
     checks.expect(
         "the advisor received the three messages delivered, and the room holds nothing it refused",
+        // Beside the lifecycle records of its attaches (RFC §5.1, gap G-046).
         desk.advisor.texts() == ["Hello", "Anyone there?", "Back again"]
-            && shared::timeline(kit, &room).await?.len() == 3,
+            && shared::timeline(kit, &room)
+                .await?
+                .iter()
+                .filter(|event| event.event_type == EventType::Message)
+                .count()
+                == 3,
     );
     Ok(())
 }
