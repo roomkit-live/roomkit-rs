@@ -6,11 +6,10 @@ use std::sync::Arc;
 use super::LifecycleError;
 use super::change::{AttachChange, DetachChange, UpdateChange};
 use super::locked::LockedChange;
-use crate::model::{
-    BindingUpdate, ChannelBinding, ChannelCategory, ChannelId, ChannelType, RoomId, Visibility,
-};
+use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomId, Visibility};
 use crate::ops::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use crate::ops::{Environment, KitConfig};
+use crate::rules::host;
 
 /// Attaches a channel to a room with its binding, under the room's lock,
 /// then fires `ON_CHANNEL_ATTACHED` and emits `room_channel_attached`. Its
@@ -53,9 +52,8 @@ fn refusal(binding: &ChannelBinding) -> Option<LifecycleError> {
     if binding.visibility == Visibility::Internal {
         return Some(LifecycleError::InternalVisibility);
     }
-    let host_as_intelligence = binding.channel_type == ChannelType::Host
-        && binding.category == ChannelCategory::Intelligence;
-    host_as_intelligence.then(|| LifecycleError::HostAsIntelligence(binding.channel_id.clone()))
+    host::host_as_intelligence(binding.channel_type, binding.category)
+        .then(|| LifecycleError::HostAsIntelligence(binding.channel_id.clone()))
 }
 
 impl Operation for AttachChannel {

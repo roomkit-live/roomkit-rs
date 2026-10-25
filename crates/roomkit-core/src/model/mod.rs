@@ -53,7 +53,9 @@ pub use event::{
 };
 pub use hook::{HookDecision, HookResult, InjectedEvent};
 pub use identity::Identity;
-pub use ids::{ChannelId, EventId, IdentityId, ObservationId, ParticipantId, RoomId, TaskId};
+pub use ids::{
+    ChannelId, EventId, HOST_CHANNEL_ID, IdentityId, ObservationId, ParticipantId, RoomId, TaskId,
+};
 pub use inbound::InboundMessage;
 pub use options::{BindingOptions, RoomOptions};
 pub use output::{ChannelOutput, ErrorRecord};

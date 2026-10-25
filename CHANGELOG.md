@@ -156,7 +156,9 @@ as it stands.
   `process_timeout`; its key makes a retry a replay. A message on a host
   channel is refused before anything is read
   (`InboundError::InboundOnHostChannel`), and so is an attach of one as an
-  intelligence channel (`LifecycleError::HostAsIntelligence`). The
+  intelligence channel (`LifecycleError::HostAsIntelligence`), a post's
+  first attach of one declared so included
+  (`InboundError::HostAsIntelligence`). The
   `host_post` example shows it.
 - **Reentrancy** (§13.5, §9.5.1 Reentrance, §10.1 step 18, gap G-070): code
   that runs inside a room's own work calls into the room without waiting

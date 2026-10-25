@@ -60,7 +60,7 @@ impl SectionChange for HostAttach {
     fn decide(
         &self,
         mut context: Box<RoomContext>,
-        _now: Timestamp,
+        now: Timestamp,
     ) -> Result<Decision<HostAttached>, HostRefusal> {
         let channel_id = &self.0.channel_id;
         if !context.room.status.accepts_events() {
@@ -72,14 +72,19 @@ impl SectionChange for HostAttach {
         if attachment::revoked(&context.room, channel_id) {
             return Err(HostRefusal::Detached);
         }
-        context.bindings.push((*self.0).clone());
+        // Attached as the section decides it, under the lock.
+        let binding = ChannelBinding {
+            attached_at: now,
+            ..(*self.0).clone()
+        };
+        context.bindings.push(binding.clone());
         Ok(Decision {
             writes: [StoreRequest::StoreBinding {
-                binding: (*self.0).clone(),
+                binding: binding.clone(),
             }]
             .into(),
             done: HostAttached::Attached(Attached {
-                binding: self.0.clone(),
+                binding: Box::new(binding),
                 context,
             }),
         })

@@ -153,6 +153,35 @@ pub enum ChannelMediaType {
     Template,
 }
 
+impl ChannelMediaType {
+    /// Every media type, as a channel that carries any declares them (a
+    /// host channel, RFC §10.5).
+    pub fn all() -> BTreeSet<Self> {
+        // The match lists every type: a type added to the enum fails to
+        // build until it is listed here too.
+        [
+            Self::Text,
+            Self::Rich,
+            Self::Media,
+            Self::Audio,
+            Self::Video,
+            Self::Location,
+            Self::Template,
+        ]
+        .into_iter()
+        .filter(|media_type| match media_type {
+            Self::Text
+            | Self::Rich
+            | Self::Media
+            | Self::Audio
+            | Self::Video
+            | Self::Location
+            | Self::Template => true,
+        })
+        .collect()
+    }
+}
+
 /// What a channel supports (RFC §5.8).
 ///
 /// The RFC gives no default; [`Default`] is a text-only channel with no

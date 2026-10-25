@@ -3,14 +3,11 @@
 
 use std::future::Future;
 
+pub use roomkit_core::model::HOST_CHANNEL_ID;
 use roomkit_core::model::{ChannelId, InboundMessage, RoomContext, RoomEvent};
 use roomkit_core::ops::ChannelDeclaration;
 
 use crate::channel::{Channel, ChannelError, EventDraft};
-
-/// The id of the kit's own host channel, which a post that names no channel
-/// speaks from, registered on first use (RFC §10.5).
-pub const HOST_CHANNEL_ID: &str = "host";
 
 /// A host channel (RFC §10.5, Appendix A.14.1): a transport of type `HOST`
 /// whose direction is `INBOUND`. It brings the host's words into rooms

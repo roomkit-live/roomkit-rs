@@ -88,16 +88,7 @@ impl ChannelDeclaration {
         );
         Self {
             capabilities: ChannelCapabilities {
-                media_types: [
-                    ChannelMediaType::Text,
-                    ChannelMediaType::Rich,
-                    ChannelMediaType::Media,
-                    ChannelMediaType::Audio,
-                    ChannelMediaType::Video,
-                    ChannelMediaType::Location,
-                    ChannelMediaType::Template,
-                ]
-                .into(),
+                media_types: ChannelMediaType::all(),
                 ..ChannelCapabilities::default()
             },
             provider_name: Some("HostChannel".to_owned()),

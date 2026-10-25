@@ -7,6 +7,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::future::{Future, ready};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -14,12 +15,15 @@ use pretty_assertions::assert_eq;
 use roomkit::model::{
     Access, AgentResponsePolicy, BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection,
     ChannelId, ChannelMediaType, ChannelOutput, ChannelType, DirectEvent, EventContent,
-    EventDirection, EventSource, EventType, HookResult, IdentityId, InboundMessage, Participant,
-    ParticipantId, Post, RoomContext, RoomEvent, RoomId, RoomOptions, Timestamp,
+    EventDirection, EventId, EventSource, EventType, EventUpdates, HookResult, Identity,
+    IdentityId, InboundMessage, Observation, Participant, ParticipantId, Post, Room, RoomContext,
+    RoomEvent, RoomId, RoomOptions, RoomUpdates, Task, Timestamp,
 };
+use roomkit::store::{RoomCounters, TargetUpdate};
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, FrameworkEvent, HookExecution,
-    HookSpec, HookTrigger, HostChannel, InboundError, KitError, LifecycleError, RoomKit, text_of,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, EventFilter, FrameworkEvent,
+    HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore, InboundError, KitError,
+    LifecycleError, RoomFilter, RoomKit, StoreError, text_of,
 };
 use tokio::sync::Notify;
 
@@ -141,9 +145,56 @@ impl Channel for Agent {
     }
 }
 
+/// A host channel that counts what it is asked to deliver: a host channel
+/// is never delivered to (RFC §10.5).
+#[derive(Clone)]
+struct CountingHost {
+    declaration: ChannelDeclaration,
+    delivered: Arc<Mutex<usize>>,
+}
+
+impl CountingHost {
+    fn new(id: &str) -> Self {
+        Self {
+            declaration: ChannelDeclaration::host(channel(id)),
+            delivered: Arc::default(),
+        }
+    }
+
+    fn delivered(&self) -> usize {
+        *self
+            .delivered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Channel for CountingHost {
+    fn declaration(&self) -> ChannelDeclaration {
+        self.declaration.clone()
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        *self
+            .delivered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) += 1;
+        ready(Ok(ChannelOutput::default()))
+    }
+}
+
 /// Room `r`, of `organization` when given: the customer on SMS, its binding
 /// naming their number.
-async fn sms_room(kit: &RoomKit, organization: Option<&str>, options: RoomOptions) -> Sms {
+async fn sms_room<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    organization: Option<&str>,
+    options: RoomOptions,
+) -> Sms {
     let sms = Sms::default();
     kit.register_channel(sms.clone()).unwrap();
     let mut binding = BindingOptions::default();
@@ -168,7 +219,7 @@ async fn sms_room(kit: &RoomKit, organization: Option<&str>, options: RoomOption
 
 /// What the room holds: its events, refused ones included, its bindings
 /// and the room itself.
-async fn written(kit: &RoomKit) -> String {
+async fn written<S: ConversationStore>(kit: &RoomKit<S>) -> String {
     let events = kit.store().list_events(&room_id(), true).await.unwrap();
     let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
     let room = kit.store().get_room(&room_id()).await.unwrap();
@@ -176,7 +227,10 @@ async fn written(kit: &RoomKit) -> String {
 }
 
 /// The room's binding of `channel_id`.
-async fn binding_of(kit: &RoomKit, channel_id: &str) -> Option<ChannelBinding> {
+async fn binding_of<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    channel_id: &str,
+) -> Option<ChannelBinding> {
     kit.store()
         .list_bindings(&room_id())
         .await
@@ -255,8 +309,8 @@ async fn a_post_addressed_to_an_agent_is_answered_and_names_its_speaker() {
     let agent = Agent::new("assistant", "It left the warehouse today.");
     kit.register_channel(agent.clone()).unwrap();
     kit.attach(&room_id(), &channel("assistant")).await.unwrap();
-    kit.register_channel(HostChannel::with_id(channel("desk-host")))
-        .unwrap();
+    let host = CountingHost::new("desk-host");
+    kit.register_channel(host.clone()).unwrap();
     kit.store()
         .create_participant(participant("desk", "desk-host"))
         .await
@@ -276,7 +330,8 @@ async fn a_post_addressed_to_an_agent_is_answered_and_names_its_speaker() {
                 .participant_id
                 .as_ref()
                 .map(ToString::to_string),
-            sms.sent().last().cloned()
+            sms.sent().last().cloned(),
+            host.delivered()
         ),
         (
             1,
@@ -284,7 +339,8 @@ async fn a_post_addressed_to_an_agent_is_answered_and_names_its_speaker() {
             Some((
                 CUSTOMER.to_owned(),
                 "It left the warehouse today.".to_owned()
-            ))
+            )),
+            0
         )
     );
 }
@@ -463,6 +519,7 @@ enum Setup {
     TakeTheHostId,
     CustomerOnSms,
     AnAgent,
+    AnIntelligentHost,
 }
 
 async fn set_up(kit: &RoomKit, setup: Setup) {
@@ -500,6 +557,9 @@ async fn set_up(kit: &RoomKit, setup: Setup) {
             acme.attach(&room_id(), &channel("assistant"))
                 .await
                 .unwrap();
+        }
+        Setup::AnIntelligentHost => {
+            kit.register_channel(IntelligentHost).unwrap();
         }
     }
 }
@@ -600,6 +660,12 @@ fn refusals() -> Vec<(&'static str, Setup, Arguments, KitError)> {
                 *organization = Some("other");
             },
             not_found(),
+        ),
+        (
+            "a host channel declared an intelligence channel",
+            Setup::AnIntelligentHost,
+            |_, _| {},
+            KitError::Inbound(InboundError::HostAsIntelligence(channel("host"))),
         ),
     ]
 }
@@ -712,7 +778,7 @@ async fn a_message_on_the_host_channel_is_refused_before_anything_is_written() {
     let routed = kit.process_inbound(message()).await;
     let rooms = kit
         .store()
-        .list_rooms(&roomkit::RoomFilter::default())
+        .list_rooms(&RoomFilter::default())
         .await
         .unwrap();
     let refused = || {
@@ -746,6 +812,12 @@ impl Channel for IntelligentHost {
 #[tokio::test]
 async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
     let mut refused = Vec::new();
+    // By a post's first attach, from a host channel declared intelligence.
+    let kit = RoomKit::new();
+    sms_room(&kit, None, RoomOptions::default()).await;
+    kit.register_channel(IntelligentHost).unwrap();
+    let posted = kit.post(&room_id(), Post::new(text("Notice."))).await;
+    let by_post = (posted.err(), binding_of(&kit, "host").await.is_none());
     for declared in [false, true] {
         let kit = RoomKit::new();
         sms_room(&kit, None, RoomOptions::default()).await;
@@ -770,7 +842,18 @@ async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
             true,
         )
     };
-    assert_eq!(refused, [refusal(), refusal()]);
+    assert_eq!(
+        (by_post, refused),
+        (
+            (
+                Some(KitError::Inbound(InboundError::HostAsIntelligence(
+                    channel("host")
+                ))),
+                true
+            ),
+            vec![refusal(), refusal()]
+        )
+    );
 }
 
 /// RFC §13.4, §10.5: a key the host channel holds is a replay that
@@ -873,4 +956,377 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
             "needs_lock {needs_lock}"
         );
     }
+}
+
+/// A gate a store's call waits at once armed, as a slow database holds it.
+#[derive(Debug, Default)]
+struct Gate {
+    armed: AtomicBool,
+    reached: Notify,
+    open: Notify,
+}
+
+impl Gate {
+    /// Holds the next call that reaches the gate until it opens.
+    fn arm(&self) {
+        self.armed.store(true, Ordering::SeqCst);
+    }
+
+    async fn pass(&self) {
+        if self.armed.swap(false, Ordering::SeqCst) {
+            self.reached.notify_one();
+            self.open.notified().await;
+        }
+    }
+}
+
+/// An in-memory store whose binding writes of the host channel, and whose
+/// room reads, wait at a gate once armed.
+#[derive(Debug, Default)]
+struct GatedStore {
+    store: InMemoryStore,
+    binding: Gate,
+    read: Gate,
+}
+
+impl ConversationStore for GatedStore {
+    async fn create_room(&self, room: Room) -> Result<(), StoreError> {
+        self.store.create_room(room).await
+    }
+
+    async fn update_room(
+        &self,
+        room_id: &RoomId,
+        updates: RoomUpdates,
+    ) -> Result<Room, StoreError> {
+        self.store.update_room(room_id, updates).await
+    }
+
+    async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
+        self.store.get_room(room_id).await
+    }
+
+    async fn list_rooms(&self, filter: &RoomFilter) -> Result<Vec<Room>, StoreError> {
+        self.store.list_rooms(filter).await
+    }
+
+    async fn find_room_id_by_binding(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &ParticipantId,
+        identity_id: Option<&IdentityId>,
+        filter: &RoomFilter,
+    ) -> Result<Option<RoomId>, StoreError> {
+        self.store
+            .find_room_id_by_binding(channel_id, participant_id, identity_id, filter)
+            .await
+    }
+
+    async fn find_room_id_by_participant(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &ParticipantId,
+        identity_id: Option<&IdentityId>,
+        filter: &RoomFilter,
+    ) -> Result<Option<RoomId>, StoreError> {
+        self.store
+            .find_room_id_by_participant(channel_id, participant_id, identity_id, filter)
+            .await
+    }
+
+    async fn store_binding(&self, binding: ChannelBinding) -> Result<(), StoreError> {
+        if binding.channel_id.as_str() == "host" {
+            self.binding.pass().await;
+        }
+        self.store.store_binding(binding).await
+    }
+
+    async fn delete_binding(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<(), StoreError> {
+        self.store.delete_binding(room_id, channel_id).await
+    }
+
+    async fn list_bindings(&self, room_id: &RoomId) -> Result<Vec<ChannelBinding>, StoreError> {
+        self.store.list_bindings(room_id).await
+    }
+
+    async fn load_context(
+        &self,
+        room_id: &RoomId,
+        recent_events: usize,
+    ) -> Result<Option<RoomContext>, StoreError> {
+        self.read.pass().await;
+        self.store.load_context(room_id, recent_events).await
+    }
+
+    async fn create_participant(&self, participant: Participant) -> Result<(), StoreError> {
+        self.store.create_participant(participant).await
+    }
+
+    async fn get_participant(
+        &self,
+        room_id: &RoomId,
+        participant_id: &ParticipantId,
+    ) -> Result<Option<Participant>, StoreError> {
+        self.store.get_participant(room_id, participant_id).await
+    }
+
+    async fn update_participant(&self, participant: Participant) -> Result<(), StoreError> {
+        self.store.update_participant(participant).await
+    }
+
+    async fn delete_participant(
+        &self,
+        room_id: &RoomId,
+        participant_id: &ParticipantId,
+    ) -> Result<(), StoreError> {
+        self.store.delete_participant(room_id, participant_id).await
+    }
+
+    async fn list_participants(&self, room_id: &RoomId) -> Result<Vec<Participant>, StoreError> {
+        self.store.list_participants(room_id).await
+    }
+
+    async fn create_identity(&self, identity: Identity) -> Result<(), StoreError> {
+        self.store.create_identity(identity).await
+    }
+
+    async fn get_identity(&self, identity_id: &IdentityId) -> Result<Option<Identity>, StoreError> {
+        self.store.get_identity(identity_id).await
+    }
+
+    async fn resolve_identity(
+        &self,
+        channel_type: ChannelType,
+        address: &str,
+        organization_id: Option<&str>,
+    ) -> Result<Option<Identity>, StoreError> {
+        self.store
+            .resolve_identity(channel_type, address, organization_id)
+            .await
+    }
+
+    async fn link_address(
+        &self,
+        identity_id: &IdentityId,
+        channel_type: ChannelType,
+        address: &str,
+        organization_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.store
+            .link_address(identity_id, channel_type, address, organization_id)
+            .await
+    }
+
+    async fn unlink_address(
+        &self,
+        identity_id: &IdentityId,
+        channel_type: ChannelType,
+        address: &str,
+        organization_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.store
+            .unlink_address(identity_id, channel_type, address, organization_id)
+            .await
+    }
+
+    async fn get_event_by_idempotency_key(
+        &self,
+        room_id: &RoomId,
+        channel_id: Option<&ChannelId>,
+        key: &str,
+    ) -> Result<Option<RoomEvent>, StoreError> {
+        self.store
+            .get_event_by_idempotency_key(room_id, channel_id, key)
+            .await
+    }
+
+    async fn commit(
+        &self,
+        event: RoomEvent,
+        counters: RoomCounters,
+        target: Option<TargetUpdate>,
+    ) -> Result<(), StoreError> {
+        self.store.commit(event, counters, target).await
+    }
+
+    async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
+        self.store.get_event(event_id).await
+    }
+
+    async fn update_event(
+        &self,
+        event_id: &EventId,
+        updates: EventUpdates,
+    ) -> Result<RoomEvent, StoreError> {
+        self.store.update_event(event_id, updates).await
+    }
+
+    async fn delete_event(
+        &self,
+        room_id: &RoomId,
+        event_id: &EventId,
+        cascade_replies: bool,
+    ) -> Result<Vec<RoomEvent>, StoreError> {
+        self.store
+            .delete_event(room_id, event_id, cascade_replies)
+            .await
+    }
+
+    async fn get_event_count(
+        &self,
+        room_id: &RoomId,
+        filter: Option<EventFilter>,
+    ) -> Result<u64, StoreError> {
+        self.store.get_event_count(room_id, filter).await
+    }
+
+    async fn persist_side_effects(
+        &self,
+        room_id: &RoomId,
+        tasks: Vec<Task>,
+        observations: Vec<Observation>,
+    ) -> Result<(), StoreError> {
+        self.store
+            .persist_side_effects(room_id, tasks, observations)
+            .await
+    }
+
+    async fn list_events(
+        &self,
+        room_id: &RoomId,
+        include_blocked: bool,
+    ) -> Result<Vec<RoomEvent>, StoreError> {
+        self.store.list_events(room_id, include_blocked).await
+    }
+
+    async fn list_tasks(&self, room_id: &RoomId) -> Result<Vec<Task>, StoreError> {
+        self.store.list_tasks(room_id).await
+    }
+
+    async fn list_observations(&self, room_id: &RoomId) -> Result<Vec<Observation>, StoreError> {
+        self.store.list_observations(room_id).await
+    }
+}
+
+/// A kit on a gated store, with room `r` and its SMS, and a 50 ms
+/// `process_timeout`.
+async fn gated_room() -> (RoomKit<GatedStore>, Sms) {
+    let kit = RoomKit::with_store(GatedStore::default());
+    let sms = sms_room(&kit, None, RoomOptions::default()).await;
+    kit.set_process_timeout(Some(Duration::from_millis(50)));
+    (kit, sms)
+}
+
+/// How many times the host channel was attached, as the kit reported it.
+fn host_attaches(events: &mut tokio::sync::broadcast::Receiver<FrameworkEvent>) -> usize {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|event| {
+            matches!(event, FrameworkEvent::RoomChannelAttached { channel_id, .. } if channel_id.as_str() == "host")
+        })
+        .count()
+}
+
+/// The room's messages from the host channel.
+async fn host_messages<S: ConversationStore>(kit: &RoomKit<S>) -> usize {
+    kit.store()
+        .list_events(&room_id(), true)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|event| event.source.channel_id.as_str() == "host")
+        .count()
+}
+
+/// RFC §10.5, §13.6: one `process_timeout` from the call's start to its
+/// commit, not one for the attach and another for the message: an attach
+/// that outlasts it runs to its end and stays, and the post is refused,
+/// its message not written.
+#[tokio::test]
+async fn a_first_post_s_attach_spends_the_deadline_its_message_shares() {
+    let (kit, sms) = gated_room().await;
+    let mut events = kit.subscribe();
+    kit.store().binding.arm();
+    let posting = {
+        let kit = kit.clone();
+        tokio::spawn(async move { kit.post(&room_id(), Post::new(text("Notice."))).await })
+    };
+    kit.store().binding.reached.notified().await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    kit.store().binding.open.notify_one();
+    let refused = posting.await.unwrap();
+    kit.idle().await;
+    assert_eq!(
+        (
+            refused,
+            binding_of(&kit, "host").await.is_some(),
+            host_attaches(&mut events),
+            host_messages(&kit).await,
+            sms.sent().len()
+        ),
+        (
+            Err(KitError::Inbound(InboundError::Refused {
+                reason: "process_timeout".to_owned()
+            })),
+            true,
+            1,
+            0,
+            0
+        )
+    );
+}
+
+/// RFC §10.5, §13.6: once the lock is held, the first post's attach runs
+/// to its end whatever becomes of its caller: a post dropped meanwhile
+/// leaves the host channel attached, and sends nothing.
+#[tokio::test]
+async fn a_cancelled_first_post_attaches_the_host_channel_to_its_end() {
+    let (kit, sms) = gated_room().await;
+    kit.set_process_timeout(None);
+    let mut events = kit.subscribe();
+    kit.store().binding.arm();
+    let posting = {
+        let kit = kit.clone();
+        tokio::spawn(async move { kit.post(&room_id(), Post::new(text("Notice."))).await })
+    };
+    kit.store().binding.reached.notified().await;
+    posting.abort();
+    assert!(posting.await.is_err_and(|ended| ended.is_cancelled()));
+    kit.store().binding.open.notify_one();
+    kit.idle().await;
+    assert_eq!(
+        (
+            binding_of(&kit, "host").await.is_some(),
+            host_attaches(&mut events),
+            host_messages(&kit).await,
+            sms.sent().len()
+        ),
+        (true, 1, 0, 0)
+    );
+}
+
+/// RFC §10.5, §13.6: the post's read of its room, before the lock, spends
+/// the call's `process_timeout` too: past it, the post is refused, nothing
+/// written.
+#[tokio::test]
+async fn a_first_post_s_read_of_its_room_waits_within_process_timeout() {
+    let (kit, sms) = gated_room().await;
+    let before = written(&kit).await;
+    kit.store().read.arm();
+    let refused = kit.post(&room_id(), Post::new(text("Notice."))).await;
+    kit.store().read.open.notify_one();
+    kit.idle().await;
+    assert_eq!(
+        (refused, written(&kit).await == before, sms.sent().len()),
+        (
+            Err(KitError::Inbound(InboundError::Refused {
+                reason: "process_timeout".to_owned()
+            })),
+            true,
+            0
+        )
+    );
 }

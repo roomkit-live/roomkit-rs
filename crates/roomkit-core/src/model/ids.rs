@@ -143,6 +143,10 @@ identifier!(
     channel_id_rules
 );
 
+/// The id of the kit's own host channel, which a post that names no
+/// channel speaks from, registered on first use (RFC §10.5).
+pub const HOST_CHANNEL_ID: &str = "host";
+
 impl ChannelId {
     /// The source of the records the framework writes itself, a lifecycle
     /// change or a task's creation.
@@ -150,10 +154,10 @@ impl ChannelId {
         Self("system".to_owned())
     }
 
-    /// The id of the kit's own host channel, `host`, which a post that
-    /// names no channel speaks from (RFC §10.5).
+    /// The id of the kit's own host channel, [`HOST_CHANNEL_ID`], which a
+    /// post that names no channel speaks from (RFC §10.5).
     pub fn host() -> Self {
-        Self("host".to_owned())
+        Self(HOST_CHANNEL_ID.to_owned())
     }
 }
 

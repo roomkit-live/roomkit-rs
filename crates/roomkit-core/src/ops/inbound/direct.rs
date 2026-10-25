@@ -36,7 +36,7 @@ use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
 use crate::rules::permissions::WriteRefusal;
-use crate::rules::{idempotency, organizations};
+use crate::rules::{host, idempotency, organizations};
 
 /// What a direct injection is checked for on the room, before its hooks
 /// (RFC §10.5, §17.2, gap G-069).
@@ -200,7 +200,9 @@ fn admit_from(
 ///
 /// Returns [`InboundError::UnknownChannel`] for a channel no one
 /// registered, [`InboundError::NotAHostChannel`] for one of another type,
-/// and what [`admit`] refuses.
+/// [`InboundError::HostAsIntelligence`] for a host channel declared an
+/// intelligence channel, which the first attach would bind as one (RFC
+/// §6.2), and what [`admit`] refuses.
 pub(super) fn admit_post(
     cx: &mut Cx<'_>,
     room_id: RoomId,
@@ -217,6 +219,9 @@ pub(super) fn admit_post(
     let channel_id = channel.channel_id.clone();
     if channel.channel_type != ChannelType::Host {
         return Err(InboundError::NotAHostChannel(channel_id));
+    }
+    if host::host_as_intelligence(channel.channel_type, channel.category) {
+        return Err(InboundError::HostAsIntelligence(channel_id));
     }
     let binding = channel.binding(room_id.clone(), cx.env.now());
     let admitted = admit_from(cx, room_id, post.into_event(channel_id), &channel)?;

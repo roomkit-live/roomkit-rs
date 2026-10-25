@@ -71,6 +71,11 @@ pub enum InboundError {
     /// is held by one (RFC §10.5). Nothing was written.
     #[error("channel {0} is not a host channel: post() speaks from a channel of type HOST")]
     NotAHostChannel(ChannelId),
+    /// The host channel a post speaks from declares itself an intelligence
+    /// channel: its first attach would bind it as one, which RFC §6.2 and
+    /// §10.5 refuse. Nothing was read or written.
+    #[error("channel {0} is a host channel, never bound as an intelligence channel")]
+    HostAsIntelligence(ChannelId),
     /// The speaker a post names is no participant of the room its host
     /// channel reaches, by their id or their identity's (RFC §10.5, §5.5):
     /// `reached_elsewhere` says whether the id names a participant of the
