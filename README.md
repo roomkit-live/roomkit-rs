@@ -114,6 +114,9 @@ Routing and identities:
   batch, done.
 - [RMK-944](docs/steps/rmk-944.md): the code-hygiene findings of a review,
   with no behaviour change, done.
+- [RMK-949](docs/steps/rmk-949.md): the code aligned with the RFC commits
+  after RMK-941, the host's own voice and an ASYNC hook's budget among
+  them, done.
 - [RFC gaps](docs/rfc-gaps.md): what the specification leaves open, and the
   decisions taken here.
 
