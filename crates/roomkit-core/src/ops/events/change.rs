@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use super::MutationError;
 use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId};
 use crate::ops::protocol::{EffectId, Outcome, RoomCounters, StoreRequest};
+use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Cx, Progress};
 use crate::rules::hook_registry::HookTrigger;
 
@@ -308,11 +309,26 @@ impl EventChange for Delete {
     }
 }
 
-/// A record committed outside the pipeline (RFC §10.5 `commit_event`).
+/// The commit of a record outside the pipeline (RFC §10.5): its thread
+/// parent rooted under the lock, as every committed event's is (RFC §10.1
+/// step 8), then the record with the room's next index.
 #[derive(Debug)]
 pub(super) struct Commit {
     record: Box<RoomEvent>,
-    committing: Option<EffectId>,
+    waiting: Waiting,
+}
+
+/// What a record's commit waits for.
+#[derive(Debug)]
+enum Waiting {
+    Nothing,
+    /// A read of the parent's rooting, then the commit with `counters`.
+    Root {
+        effect: EffectId,
+        counters: RoomCounters,
+        rooting: Box<Rooting>,
+    },
+    Commit(EffectId),
 }
 
 impl Commit {
@@ -320,8 +336,19 @@ impl Commit {
     pub(super) fn new(record: RoomEvent) -> Self {
         Self {
             record: Box::new(record),
-            committing: None,
+            waiting: Waiting::Nothing,
         }
+    }
+
+    /// Commits the record, the room's counters then `counters`.
+    fn commit(&mut self, cx: &mut Cx<'_>, counters: RoomCounters) {
+        let request = StoreRequest::Commit {
+            event: self.record.clone(),
+            counters,
+            target: None,
+        };
+        let room_id = self.record.room_id.clone();
+        self.waiting = Waiting::Commit(cx.io.issue_locked(request, room_id));
     }
 }
 
@@ -333,10 +360,10 @@ impl EventChange for Commit {
         Err(MutationError::RoomNotFound(room_id.clone()))
     }
 
-    /// Commits the record with the room's next index, unless its status
-    /// refuses events (RFC §10.5, §5.1). The record moves the room's
-    /// counters only: it is no activity, and a paused room stays paused
-    /// (gap G-071).
+    /// Roots the record's thread parent and commits it with the room's next
+    /// index, unless its status refuses events (RFC §10.5, §5.1, §10.1 step
+    /// 8). The record moves the room's counters only: it is no activity,
+    /// and a paused room stays paused (gap G-071).
     fn begin(
         &mut self,
         cx: &mut Cx<'_>,
@@ -352,29 +379,59 @@ impl EventChange for Commit {
         }
         self.record.index = context.room.event_count;
         let counters = RoomCounters::after_commit(&context.room, self.record.index);
-        let request = StoreRequest::Commit {
-            event: self.record.clone(),
-            counters,
-            target: None,
-        };
-        self.committing = Some(cx.io.issue_locked(request, room_id.clone()));
+        match Rooting::of(&self.record) {
+            Some((rooting, request)) => {
+                let effect = cx.io.issue_locked(request, room_id.clone());
+                self.waiting = Waiting::Root {
+                    effect,
+                    counters,
+                    rooting: Box::new(rooting),
+                };
+            }
+            None => self.commit(cx, counters),
+        }
         Progress::Waiting
     }
 
     fn accept(
         &mut self,
-        _cx: &mut Cx<'_>,
+        cx: &mut Cx<'_>,
         outcome: Outcome,
     ) -> Progress<Result<RoomEvent, MutationError>> {
-        self.committing = None;
-        match outcome.into_committed() {
-            Ok(()) => Progress::Done(Ok((*self.record).clone())),
-            Err(error) => Progress::Done(Err(MutationError::Store(error))),
+        match std::mem::replace(&mut self.waiting, Waiting::Nothing) {
+            Waiting::Root {
+                counters,
+                mut rooting,
+                ..
+            } => match rooting.on_read(outcome) {
+                Ok(Rooted::Read(request)) => {
+                    let effect = cx.io.issue_locked(*request, self.record.room_id.clone());
+                    self.waiting = Waiting::Root {
+                        effect,
+                        counters,
+                        rooting,
+                    };
+                    Progress::Waiting
+                }
+                Ok(Rooted::Parent(parent)) => {
+                    self.record.parent_event_id = parent;
+                    self.commit(cx, counters);
+                    Progress::Waiting
+                }
+                Err(error) => Progress::Done(Err(MutationError::Store(error))),
+            },
+            Waiting::Commit(_) | Waiting::Nothing => match outcome.into_committed() {
+                Ok(()) => Progress::Done(Ok((*self.record).clone())),
+                Err(error) => Progress::Done(Err(MutationError::Store(error))),
+            },
         }
     }
 
     fn awaits(&self, effect: EffectId) -> bool {
-        self.committing == Some(effect)
+        match &self.waiting {
+            Waiting::Root { effect: waited, .. } | Waiting::Commit(waited) => *waited == effect,
+            Waiting::Nothing => false,
+        }
     }
 
     /// A record fires no hook (RFC §10.5).

@@ -523,6 +523,21 @@ mod tests {
         );
     }
 
+    /// RFC §10.3: the changes of the target and of its replies go, not a
+    /// change of a change: an edit of the target's edit stays.
+    #[test]
+    fn a_delete_leaves_a_change_of_a_change() {
+        let mut events = vec![event(0, None), edit_of(1, 0), edit_of(2, 1)];
+        let removed = remove(&mut events, &EventId::new("evt_0").unwrap(), true);
+        assert_eq!(
+            (ids(&removed), ids(&events)),
+            (
+                ["evt_0", "evt_1"].map(str::to_owned).to_vec(),
+                vec!["evt_2".to_owned()]
+            )
+        );
+    }
+
     #[test]
     fn a_delete_without_cascade_still_takes_the_target_s_edits() {
         let mut events = timeline();

@@ -1,15 +1,16 @@
 //! A pass's gates before its hooks (RFC §10.1 steps 6 to 8a): the room as
 //! the lock finds it, its due timers applied, its status, the idempotency
-//! key, the provisional index and an entry's thread root, and an edit's or
-//! a delete's target.
+//! key, the provisional index and the event's thread root, and an edit's
+//! or a delete's target.
 
 use super::{CommitPass, PassOrigin, PassResult, State};
-use crate::model::{EventId, RoomContext, RoomEvent};
+use crate::model::RoomContext;
 use crate::ops::inbound::direct::DirectCall;
 use crate::ops::lifecycle::gate::{self, Gate};
 use crate::ops::protocol::{Outcome, StoreRequest};
+use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
-use crate::rules::{permissions, threads};
+use crate::rules::permissions;
 
 impl CommitPass {
     pub(super) fn on_locked(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> State {
@@ -106,31 +107,38 @@ impl CommitPass {
         }
     }
 
-    /// Step 8: an entry's thread, an inbound message's or a direct
-    /// injection's, is rooted: the event its parent names is read under the
-    /// lock (RFC §10.1 step 8). A response and an event a hook injected
-    /// keep the parent they came with.
+    /// Step 8: the event's thread is rooted, whatever its origin: the
+    /// event its parent names is read under the lock, then the root a
+    /// reply names (RFC §10.1 step 8, `ops::rooting`).
     fn root_parent(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
-        match self.event.parent_event_id.clone() {
-            Some(event_id) if self.origin.is_entry() => State::RootingParent {
-                effect: self.issue(cx, StoreRequest::GetEvent { event_id }),
+        match Rooting::of(&self.event) {
+            Some((rooting, request)) => State::RootingParent {
+                effect: self.issue(cx, request),
                 context,
+                rooting: Box::new(rooting),
             },
-            Some(_) | None => self.check_edit(cx, context),
+            None => self.check_edit(cx, context),
         }
     }
 
-    /// The parent is read: the event keeps its thread's root, or no parent
-    /// at all when the room holds no such event, then goes to step 8a.
+    /// A read of the parent's rooting is answered: the next one goes out,
+    /// or the event keeps its thread's root, or no parent at all when the
+    /// room holds no such event, then goes to step 8a.
     pub(super) fn on_parent(
         &mut self,
         cx: &mut Cx<'_>,
         context: Box<RoomContext>,
+        mut rooting: Box<Rooting>,
         outcome: Outcome,
     ) -> State {
-        match outcome.into_event() {
-            Ok(parent) => {
-                self.event.parent_event_id = rooted(&self.event, parent.as_deref());
+        match rooting.on_read(outcome) {
+            Ok(Rooted::Read(request)) => State::RootingParent {
+                effect: self.issue(cx, *request),
+                context,
+                rooting,
+            },
+            Ok(Rooted::Parent(parent)) => {
+                self.event.parent_event_id = parent;
                 self.check_edit(cx, context)
             }
             Err(error) => self.release(cx, Err(Abort::Store(error))),
@@ -172,22 +180,4 @@ impl CommitPass {
             Err(refusal) => self.refuse_edit(cx, refusal),
         }
     }
-}
-
-/// The parent `event` keeps once its thread is rooted on `parent`, the
-/// event its parent names as the store holds it (`rules::threads::root`).
-/// A parent the room does not hold is dropped with a warning: a stale
-/// reference does not lose the message, posted at the top level.
-pub(super) fn rooted(event: &RoomEvent, parent: Option<&RoomEvent>) -> Option<EventId> {
-    let root = threads::root(parent, &event.room_id);
-    if root.is_none() {
-        tracing::warn!(
-            target: "roomkit::core::inbound",
-            room_id = %event.room_id,
-            event_id = %event.id,
-            parent = ?event.parent_event_id,
-            "the thread parent names no event of the room; the event is posted at the top level"
-        );
-    }
-    root
 }

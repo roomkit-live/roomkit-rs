@@ -42,6 +42,7 @@ use crate::model::{
 use crate::ops::io::Bound;
 use crate::ops::lifecycle::gate::{Pending, TimerHooks};
 use crate::ops::protocol::{EffectId, EntryId, HoldRequest, Outcome, StoreRequest};
+use crate::ops::rooting::Rooting;
 use crate::ops::{self, Abort, Cx, Progress};
 use crate::rules::edits::EditRefusal;
 use crate::rules::hook_chain::HookChain;
@@ -207,10 +208,12 @@ enum State {
         effect: EffectId,
         context: Box<RoomContext>,
     },
-    /// Step 8 reads the event an entry's thread parent names, to root it.
+    /// Step 8 reads the event the thread parent names, then the root a
+    /// reply names, to root it.
     RootingParent {
         effect: EffectId,
         context: Box<RoomContext>,
+        rooting: Box<Rooting>,
     },
     /// Step 8a reads the target of an edit or a delete.
     ReadingTarget {
@@ -227,13 +230,14 @@ enum State {
         effect: EffectId,
         verdict: Box<Verdict>,
     },
-    /// The event a thread parent a hook set names is read, to root it
-    /// (RFC §10.1 step 9).
+    /// The event a thread parent a hook set names is read, then the root a
+    /// reply names, to root it (RFC §10.1 step 9).
     RootingHookParent {
         effect: EffectId,
         verdict: Box<Verdict>,
         context: Box<RoomContext>,
         reread: bool,
+        rooting: Box<Rooting>,
     },
     /// An accepted edit's or delete's target is read again, as the hooks
     /// left it.
@@ -370,7 +374,9 @@ impl CommitPass {
                 Err(error) => self.release(cx, Err(Abort::Store(error))),
             },
             State::CheckingKey { context, .. } => self.on_key(cx, context, outcome),
-            State::RootingParent { context, .. } => self.on_parent(cx, context, outcome),
+            State::RootingParent {
+                context, rooting, ..
+            } => self.on_parent(cx, context, rooting, outcome),
             State::ReadingTarget { context, .. } => self.on_target(cx, context, outcome),
             State::RunningHook { run, context, .. } => self.on_hook(cx, run, context, outcome),
             State::Rereading { verdict, .. } => self.on_reread(cx, *verdict, outcome),
@@ -378,8 +384,9 @@ impl CommitPass {
                 verdict,
                 context,
                 reread,
+                rooting,
                 ..
-            } => self.on_hook_parent(cx, *verdict, context, reread, outcome),
+            } => self.on_hook_parent(cx, *verdict, context, reread, rooting, outcome),
             State::RereadingTarget {
                 payload, context, ..
             } => self.on_target_reread(cx, *payload, context, outcome),

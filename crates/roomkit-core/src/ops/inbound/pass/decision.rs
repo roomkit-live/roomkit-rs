@@ -17,6 +17,7 @@ use super::super::stamp;
 use super::{CommitPass, PassOrigin, PassResult, State, Verdict};
 use crate::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, Visibility};
 use crate::ops::protocol::{HoldRequest, Outcome, StoreRequest};
+use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
 use crate::rules::edits::EditRefusal;
 use crate::rules::hook_chain::{ChainDecision, ChainVerdict};
@@ -164,31 +165,41 @@ impl CommitPass {
             .parent_event_id
             .clone()
             .filter(|parent| self.event.parent_event_id.as_ref() != Some(parent));
-        match set_by_a_hook {
-            Some(event_id) => State::RootingHookParent {
-                effect: self.issue(cx, StoreRequest::GetEvent { event_id }),
+        let rooting = set_by_a_hook.and_then(|_| Rooting::of(&verdict.payload));
+        match rooting {
+            Some((rooting, request)) => State::RootingHookParent {
+                effect: self.issue(cx, request),
                 verdict: Box::new(verdict),
                 context,
                 reread,
+                rooting: Box::new(rooting),
             },
             None => self.apply_verdict(cx, verdict, context, reread),
         }
     }
 
-    /// The event a hook set as the thread parent is read: the event keeps
-    /// its thread's root, or none, as at step 8 (RFC §10.1 step 9).
+    /// A read of the rooting of the thread parent a hook set is answered:
+    /// the next one goes out, or the event keeps its thread's root, or
+    /// none, as at step 8 (RFC §10.1 step 9).
     pub(super) fn on_hook_parent(
         &mut self,
         cx: &mut Cx<'_>,
         mut verdict: Verdict,
         context: Box<RoomContext>,
         reread: bool,
+        mut rooting: Box<Rooting>,
         outcome: Outcome,
     ) -> State {
-        match outcome.into_event() {
-            Ok(parent) => {
-                verdict.payload.parent_event_id =
-                    super::gates::rooted(&verdict.payload, parent.as_deref());
+        match rooting.on_read(outcome) {
+            Ok(Rooted::Read(request)) => State::RootingHookParent {
+                effect: self.issue(cx, *request),
+                verdict: Box::new(verdict),
+                context,
+                reread,
+                rooting,
+            },
+            Ok(Rooted::Parent(parent)) => {
+                verdict.payload.parent_event_id = parent;
                 self.apply_verdict(cx, verdict, context, reread)
             }
             Err(error) => self.release(cx, Err(Abort::Store(error))),

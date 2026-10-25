@@ -2437,10 +2437,10 @@ mod the_protocol {
     }
 }
 
-/// RFC §10.1 step 8, §5.2: an inbound message's and a direct injection's
-/// thread is rooted, a parent naming a reply replaced by that reply's own
-/// parent, one naming no event of the room dropped; a response keeps the
-/// parent it came with, and a parent a hook sets is rooted on every pass.
+/// RFC §10.1 step 8, §5.2: every path that commits an event roots its
+/// thread, a parent naming a reply replaced by that reply's own parent,
+/// one that, once rooted, names no event of the room dropped; a parent a
+/// hook sets is rooted on every pass.
 mod a_thread_parent {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -2484,8 +2484,8 @@ mod a_thread_parent {
         assert_eq!(parent_of(&sim, "Thanks"), Some("evt_root".to_owned()));
     }
 
-    /// The parent is read under the lock, after the key check and before
-    /// step 8a and the hooks.
+    /// The parent is read under the lock, then the root the reply names,
+    /// after the key check and before step 8a and the hooks.
     #[test]
     fn is_read_under_the_lock_before_the_hooks() {
         let mut sim = threaded();
@@ -2499,7 +2499,7 @@ mod a_thread_parent {
             .iter()
             .map(String::as_str)
             .skip_while(|line| !line.starts_with("lock"))
-            .take(4)
+            .take(5)
             .collect();
         assert_eq!(
             section,
@@ -2507,6 +2507,7 @@ mod a_thread_parent {
                 "lock room_1",
                 "load_context room_1",
                 "get_event evt_reply",
+                "get_event evt_root",
                 "hook audit"
             ]
         );
@@ -2543,10 +2544,10 @@ mod a_thread_parent {
         assert_eq!(parent_of(&sim, "Noted"), Some("evt_root".to_owned()));
     }
 
-    /// A response keeps the parent it came with: only an entry's is rooted
-    /// at step 8.
+    /// RFC §10.1 step 8: every path that commits an event roots its
+    /// parent, a response's included.
     #[test]
-    fn of_a_response_is_kept_as_it_came() {
+    fn of_a_response_is_rooted() {
         let mut sim = threaded();
         sim.agent(
             "advisor",
@@ -2562,7 +2563,67 @@ mod a_thread_parent {
         sim.send(Sim::message("sms", "Hello")).unwrap();
         assert_eq!(
             parent_of(&sim, "In the reply's thread"),
-            Some("evt_reply".to_owned())
+            Some("evt_root".to_owned())
+        );
+    }
+
+    /// RFC §10.1 step 8, §9.4: an event a hook injects is rooted at its
+    /// own pass.
+    #[test]
+    fn of_a_hook_s_injected_event_is_rooted() {
+        let mut sim = threaded();
+        sim.before_broadcast(
+            "notifier",
+            Box::new(|event| {
+                if event.source.channel_id.as_str() != "sms" {
+                    return HookOutcome::Returned(HookResult::allow());
+                }
+                let mut notice = notice_event("evt_notice", "Noticed");
+                notice.parent_event_id = Some(id("evt_reply"));
+                HookOutcome::Returned(
+                    HookResult::allow()
+                        .inject(InjectedEvent::to_channels(notice, vec![channel("ws")])),
+                )
+            }),
+        );
+        sim.send(Sim::message("sms", "Hello")).unwrap();
+        assert_eq!(parent_of(&sim, "Noticed"), Some("evt_root".to_owned()));
+    }
+
+    /// RFC §10.1 step 8: rooting reads the root it lands on. A reply whose
+    /// root a hard delete removed, its replies kept, names no event of the
+    /// room once rooted: a message, an injection and a response answering
+    /// it are posted at the top level.
+    #[test]
+    fn naming_a_reply_whose_root_is_gone_is_dropped() {
+        let mut sim = room();
+        let mut orphan = notice_event("evt_reply", "Reply");
+        orphan.parent_event_id = Some(id("evt_gone"));
+        sim.seed(orphan);
+        sim.agent(
+            "advisor",
+            Box::new(|event, _| {
+                if event.source.channel_id.as_str() != "sms" {
+                    return Ok(ChannelOutput::default());
+                }
+                let mut answer = response("advisor", event, "Answered");
+                answer.parent_event_id = Some(id("evt_reply"));
+                Ok(ChannelOutput::respond(vec![answer]))
+            }),
+        );
+        sim.send(replying("Thanks", "evt_reply")).unwrap();
+        let event = DirectEvent {
+            parent_event_id: Some(id("evt_reply")),
+            ..DirectEvent::new(channel("ws"), EventContent::text("Noted"))
+        };
+        sim.inject("room_1", event).unwrap();
+        assert_eq!(
+            [
+                parent_of(&sim, "Thanks"),
+                parent_of(&sim, "Answered"),
+                parent_of(&sim, "Noted")
+            ],
+            [None, None, None]
         );
     }
 

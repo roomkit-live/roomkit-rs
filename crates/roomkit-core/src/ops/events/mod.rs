@@ -179,7 +179,8 @@ impl Operation for DeleteEvent {
 /// missing or of another organization than the caller's is not found
 /// (§17.2), before its due timers are applied; a room whose status refuses
 /// events refuses it before anything is written (§5.1). The record is
-/// stored as the caller gives it, its index aside, a blank idempotency key
+/// stored as the caller gives it, its index aside, its thread parent rooted
+/// as every committed event's is (§10.1 step 8), a blank idempotency key
 /// read as none (§13.4); it moves the room's `event_count` and
 /// `latest_index`, not its activity, so a paused room stays paused and its
 /// inactivity timer runs on (gap G-071). The room's delivery lane never

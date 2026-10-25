@@ -85,9 +85,10 @@ as it stands.
   them (gaps G-055, G-061). Then the channel's parse, the off-lock checks
   ordered by the room's admission ticket (§9.5.1, gap G-067), and the pass
   under the room lock: the due timers applied, the status gate, the
-  idempotency key, an entry's thread parent rooted to its thread's root
-  (§10.1 step 8), an edit's or a delete's target, the hooks, a thread
-  parent a hook set rooted alike, the room
+  idempotency key, the event's thread parent rooted to its thread's root,
+  whatever the pass, the root it lands on read and a parent naming no event
+  of the room dropped (§10.1 step 8, gap G-083), an edit's or a delete's
+  target, the hooks, a thread parent a hook set rooted alike, the room
   read again after a hook that ran under the lock, the source's
   permissions, the commit with the room's counters and the event's place in
   the room's delivery lane. An accepted edit or delete fires
@@ -130,7 +131,9 @@ as it stands.
   say where its answers go (`response_visibility`), as a message does (gap
   G-073). `commit_event` commits
   a record under the room lock with the next index and nothing else: no
-  hook, no delivery, no activity (gap G-071); it is never a replay, and a
+  hook, no delivery, no activity (gap G-071), its thread parent rooted as
+  every committed event's, a record stored `BLOCKED` included (gap G-083);
+  it is never a replay, and a
   key its channel holds fails it as the store refuses it (gap G-079). `update_event` and
   `delete_event`, the host's changes of stored events, run under the lock,
   fire their trigger after it with the room read then, and are a no-op on

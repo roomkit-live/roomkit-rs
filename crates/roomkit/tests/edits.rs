@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, DeleteContent, DeleteType, EditContent, EditSource, EventContent,
-    EventId, EventType, EventUpdates, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
-    Timestamp,
+    ChannelOutput, ChannelType, DeleteContent, DeleteType, DirectEvent, EditContent, EditSource,
+    EventContent, EventDirection, EventId, EventSource, EventType, EventUpdates, HookResult,
+    InboundMessage, RoomContext, RoomEvent, RoomId, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -469,6 +469,44 @@ mod a_direct_call {
                 room.kit.store().get_event_count(&room_id(), None).await
             ),
             (vec!["evt_1", "evt_2"], 3, Ok(1))
+        );
+    }
+
+    /// RFC §10.1 step 8, §10.3: every path that commits an event roots its
+    /// parent, so a hard delete of the root takes the whole thread, one
+    /// level deep: a reply, a direct injection and a record answering that
+    /// reply all name the root.
+    #[tokio::test]
+    async fn delete_of_the_root_takes_every_answer_to_its_replies() {
+        let room = room().await;
+        let reply_to = |id: &str| Some(EventId::new(id).unwrap());
+        let mut reply = InboundMessage::new(channel("wa"), CUSTOMER, EventContent::text("Ok?"));
+        reply.parent_event_id = reply_to("evt_1");
+        let reply = send(&room.kit, reply).await.event.unwrap().id;
+        let mut injected = DirectEvent::new(channel("ws"), EventContent::text("Checking"));
+        injected.parent_event_id = Some(reply.clone());
+        room.kit.send_event(&room_id(), injected).await.unwrap();
+        let mut record = RoomEvent::new(
+            EventId::new("snap_1").unwrap(),
+            room_id(),
+            EventType::Message,
+            EventSource::new(
+                channel("ws"),
+                ChannelType::Websocket,
+                EventDirection::Inbound,
+            ),
+            EventContent::text("Snapshot"),
+            Timestamp::UNIX_EPOCH,
+        );
+        record.parent_event_id = Some(reply);
+        room.kit.commit_event(&room_id(), record).await.unwrap();
+        room.kit
+            .delete_event(&room_id(), &EventId::new("evt_1").unwrap(), true)
+            .await
+            .unwrap();
+        assert_eq!(
+            room.kit.store().get_event_count(&room_id(), None).await,
+            Ok(0)
         );
     }
 

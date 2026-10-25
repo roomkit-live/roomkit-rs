@@ -76,8 +76,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// §10.5 `commit_event`): a record no member is meant to receive, a
     /// trace, a display snapshot, a copy a branched conversation starts
     /// from. It is committed under the room lock with the room's next
-    /// index, as the caller gives it otherwise, and nothing follows: no
-    /// hook, no delivery, no framework event. It moves the room's counters,
+    /// index, its thread parent rooted as every committed event's is (RFC
+    /// §10.1 step 8), as the caller gives it otherwise, a blank
+    /// idempotency key read as none, and nothing follows: no hook, no
+    /// delivery, no framework event. It moves the room's counters,
     /// not its activity, so a paused room stays paused (gap G-071).
     ///
     /// The room is read unscoped; an organization's
@@ -90,8 +92,10 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// Returns [`KitError::Mutation`] when the record names another room,
     /// before anything is read; when the room does not exist; when its
-    /// status refuses events (RFC §5.1); or when the store or the room lock
-    /// fails.
+    /// status refuses events (RFC §5.1); when the store refuses it, a key
+    /// its channel holds in the room among others (`IdempotencyKeyTaken`:
+    /// a record is never a replay, RFC §14.3); or when the store or the
+    /// room lock fails.
     pub async fn commit_event(
         &self,
         room_id: &RoomId,

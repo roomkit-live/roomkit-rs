@@ -10,7 +10,9 @@
 //! room's due timer transitions apply first (gap G-045), and a room that no
 //! longer accepts events refuses the record, as it refuses any write, with
 //! `room_refused_event`: `reentry` for the framework's records, `inbound`
-//! for an adopted entry's (RFC §5.1, gap G-043). A direct injection adopted
+//! for an adopted entry's (RFC §5.1, gap G-043). A record's thread parent
+//! is rooted at its commit, as every committed event's is (RFC §10.1 step
+//! 8). A direct injection adopted
 //! past the budget is refused first, as its pass would have refused it, when
 //! the room is another organization's or binds no channel it names: nothing
 //! is stored (gap G-069).
@@ -19,6 +21,7 @@ use super::direct::DirectCall;
 use super::{commit, report};
 use crate::model::{ChannelId, ErrorRecord, EventStatus, Room, RoomContext, RoomEvent, RoomId};
 use crate::ops::protocol::{EffectId, Outcome, RoomCounters, StoreRequest};
+use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::section::{Failure, Section, SectionWork};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
 use crate::rules::permissions;
@@ -76,6 +79,13 @@ enum Waiting {
     Key {
         effect: EffectId,
         counters: RoomCounters,
+    },
+    /// A read of the record's thread parent's rooting (RFC §10.1 step 8),
+    /// then the commit with `counters`.
+    Root {
+        effect: EffectId,
+        counters: RoomCounters,
+        rooting: Box<Rooting>,
     },
     Commit(EffectId),
 }
@@ -162,6 +172,22 @@ impl RecordPass {
 }
 
 impl RecordWork {
+    /// Roots the record's thread parent, when it has one, as every
+    /// committed event's is (RFC §10.1 step 8), then commits it.
+    fn root_and_commit(&mut self, cx: &mut Cx<'_>, counters: RoomCounters) {
+        match Rooting::of(&self.record) {
+            Some((rooting, request)) => {
+                let effect = cx.io.issue_locked(request, self.record.room_id.clone());
+                self.waiting = Waiting::Root {
+                    effect,
+                    counters,
+                    rooting: Box::new(rooting),
+                };
+            }
+            None => self.commit(cx, counters),
+        }
+    }
+
     /// Commits the record, the room's counters then `counters`.
     fn commit(&mut self, cx: &mut Cx<'_>, counters: RoomCounters) {
         let request = StoreRequest::Commit {
@@ -236,7 +262,7 @@ impl SectionWork for RecordWork {
                 let effect = cx.io.issue_locked(request, self.record.room_id.clone());
                 self.waiting = Waiting::Key { effect, counters };
             }
-            Some(_) | None => self.commit(cx, counters),
+            Some(_) | None => self.root_and_commit(cx, counters),
         }
         Progress::Waiting
     }
@@ -251,6 +277,27 @@ impl SectionWork for RecordWork {
             Waiting::Key { counters, .. } => match outcome.into_idempotent() {
                 Ok(Some(original)) => Progress::Done(Ok(RecordResult::Replayed(original))),
                 Ok(None) => {
+                    self.root_and_commit(cx, counters);
+                    Progress::Waiting
+                }
+                Err(error) => Progress::Done(Err(Abort::Store(error))),
+            },
+            Waiting::Root {
+                counters,
+                mut rooting,
+                ..
+            } => match rooting.on_read(outcome) {
+                Ok(Rooted::Read(request)) => {
+                    let effect = cx.io.issue_locked(*request, self.record.room_id.clone());
+                    self.waiting = Waiting::Root {
+                        effect,
+                        counters,
+                        rooting,
+                    };
+                    Progress::Waiting
+                }
+                Ok(Rooted::Parent(parent)) => {
+                    self.record.parent_event_id = parent;
                     self.commit(cx, counters);
                     Progress::Waiting
                 }
@@ -268,7 +315,9 @@ impl SectionWork for RecordWork {
 
     fn awaits(&self, effect: EffectId) -> bool {
         match &self.waiting {
-            Waiting::Key { effect: waited, .. } | Waiting::Commit(waited) => *waited == effect,
+            Waiting::Key { effect: waited, .. }
+            | Waiting::Root { effect: waited, .. }
+            | Waiting::Commit(waited) => *waited == effect,
             Waiting::Nothing => false,
         }
     }

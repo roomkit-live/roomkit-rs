@@ -731,6 +731,50 @@ mod an_entry_adopted_under_the_lock {
         );
     }
 
+    /// RFC §10.1 step 8: the record of an entry past the budget, stored
+    /// `BLOCKED`, has its thread parent rooted at its commit.
+    #[test]
+    fn past_the_budget_has_its_record_s_parent_rooted() {
+        let mut sim = room();
+        sim.config.max_chain_depth = 0;
+        sim.seed(notice_event("evt_root", "Root"));
+        let mut reply = notice_event("evt_reply", "Reply");
+        reply.parent_event_id = Some("evt_root".parse().unwrap());
+        sim.seed(reply);
+        sim.reentrant_hook(
+            "notifier",
+            true,
+            Reentry {
+                entries: calling(|event| {
+                    if event.source.channel_id.as_str() != "sms" {
+                        return None;
+                    }
+                    let mut threaded = from_console("In the thread");
+                    threaded.parent_event_id = Some("evt_reply".parse().unwrap());
+                    Some(Entry::Direct {
+                        room_id: room_id(),
+                        organization_id: None,
+                        event: Box::new(threaded),
+                    })
+                }),
+                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        sim.send(hello()).unwrap();
+        let record = sim
+            .timeline
+            .iter()
+            .find(|event| text_of(&event.content) == "In the thread")
+            .unwrap();
+        assert_eq!(
+            (
+                record.status,
+                record.parent_event_id.as_ref().map(ToString::to_string)
+            ),
+            (EventStatus::Blocked, Some("evt_root".to_owned()))
+        );
+    }
+
     /// RFC §9.5.1 Past the cap, §13.4: a replay draws nothing on its
     /// caller's budget: ten replays leave its ten passes to the entry that
     /// follows them, committed delivered.
@@ -2418,6 +2462,37 @@ mod a_committed_record {
                     status: RoomStatus::Closed,
                 }),
                 0
+            )
+        );
+    }
+
+    /// RFC §10.5, §10.1 step 8: a record is stored as given but for its
+    /// thread parent, rooted as every committed event's is: one naming a
+    /// reply takes the reply's root, one naming no event of the room is
+    /// dropped.
+    #[test]
+    fn has_its_thread_parent_rooted() {
+        let mut sim = room();
+        sim.seed(notice_event("evt_root", "Root"));
+        let mut reply = notice_event("evt_reply", "Reply");
+        reply.parent_event_id = Some("evt_root".parse().unwrap());
+        sim.seed(reply);
+        let mut parents = Vec::new();
+        for (id, parent) in [("snap_1", "evt_reply"), ("snap_2", "evt_404")] {
+            let mut given = record(id, "room_1");
+            given.parent_event_id = Some(parent.parse().unwrap());
+            let committed = sim.commit_record("room_1", given, None).unwrap();
+            parents.push(committed.parent_event_id.map(|parent| parent.to_string()));
+        }
+        assert_eq!(
+            (parents, sim.traced("get_event")),
+            (
+                vec![Some("evt_root".to_owned()), None],
+                vec![
+                    "get_event evt_reply",
+                    "get_event evt_root",
+                    "get_event evt_404"
+                ]
             )
         );
     }
