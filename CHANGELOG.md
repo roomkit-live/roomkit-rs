@@ -224,8 +224,10 @@ as it stands.
   whose calls are the kit's, made for the organization, and whose reads
   (`get_room`, `list_rooms`, `get_event`, `list_events`, `list_bindings`,
   `list_participants`, `get_participant`) see its rooms only. A room of
-  another organization, or of none, is not found by its changes and its
-  injections (`RoomNotFound`), holds no event for its updates and deletes,
+  another organization, or of none, is not found by its changes, its
+  injections and its posts (`RoomNotFound`), before any hook runs or
+  anything is drawn, nor by the reads of its records and its roster (the
+  store's `RoomNotFound`), holds no event for its updates and deletes,
   and refuses its messages `OtherOrganization`, nothing written in it, its
   due timers included; a room it creates belongs to it, and its messages are
   routed among its rooms and identities only (gaps G-051, G-060). The kit

@@ -11,8 +11,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     BindingUpdate, ChannelId, ChannelType, DirectEvent, EventContent, EventDirection, EventSource,
-    EventType, EventUpdates, InboundMessage, RoomEvent, RoomId, RoomOptions, RoomStatus, Timestamp,
-    Visibility,
+    EventType, EventUpdates, InboundMessage, ParticipantId, RoomEvent, RoomId, RoomOptions,
+    RoomStatus, Timestamp, Visibility,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -282,7 +282,8 @@ async fn an_organization_s_calls_reach_its_own_rooms() {
 
 /// RFC §17.2: an organization reads its own rooms, their timelines,
 /// bindings and participants; another organization's room, or one of none,
-/// reads as a room that does not exist.
+/// reads as a room that does not exist, a read of its roster failing as
+/// not found.
 #[tokio::test]
 async fn an_organization_reads_its_own_rooms_only() {
     for (reader, own) in [("bank", true), ("clinic", false)] {
@@ -315,6 +316,9 @@ async fn an_organization_reads_its_own_rooms_only() {
                 .list_participants(&room)
                 .await
                 .map(|people| people.len()),
+            reader
+                .get_participant(&room, &ParticipantId::new("u").unwrap())
+                .await,
         );
         let expected = if own {
             (
@@ -324,12 +328,14 @@ async fn an_organization_reads_its_own_rooms_only() {
                 Ok(1),
                 Ok(1),
                 Ok(0),
+                Ok(None),
             )
         } else {
             (
                 None,
                 0,
                 None,
+                Err(not_found()),
                 Err(not_found()),
                 Err(not_found()),
                 Err(not_found()),

@@ -2,8 +2,9 @@
 //! a filter admits, a room's timeline, bindings and participants, each from
 //! the kit's store. Another organization's room, or one of none, reads as a
 //! room that does not exist, as the scoped calls do not find it: `None`
-//! where the store reads one, the store's `RoomNotFound` where it lists a
-//! room's records.
+//! where the store reads a room or an event, the store's `RoomNotFound`
+//! where it reads a room's records, its roster included (RFC §17.2: the
+//! reads of a room's roster fail as not found).
 
 use roomkit_core::model::{
     ChannelBinding, EventId, Participant, ParticipantId, Room, RoomEvent, RoomId,
@@ -95,19 +96,19 @@ impl<S: ConversationStore> OrganizationKit<S> {
     }
 
     /// The participant `participant_id` of the organization's room
-    /// `room_id`; `None` when the room is not the organization's.
+    /// `room_id`; `None` when the room holds no such participant.
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Store`] when the store fails a read.
+    /// As [`list_events`](Self::list_events): a read of the roster of a
+    /// room that is not the organization's fails as not found, as on a room
+    /// that does not exist (RFC §17.2).
     pub async fn get_participant(
         &self,
         room_id: &RoomId,
         participant_id: &ParticipantId,
     ) -> Result<Option<Participant>, KitError> {
-        if self.get_room(room_id).await?.is_none() {
-            return Ok(None);
-        }
+        self.own_room(room_id).await?;
         Ok(self
             .kit
             .store()
