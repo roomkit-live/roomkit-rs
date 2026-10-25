@@ -373,6 +373,7 @@ version = "0.1.0"
 dependencies = [
  "pretty_assertions",
  "roomkit-core",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",

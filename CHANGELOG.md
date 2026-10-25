@@ -54,8 +54,14 @@ as it stands.
   rules of gap G-052 and an email address lower-case, how each channel
   type is addressed, its recipient and chat keys, and what a recipient or
   a chat is, a string that is not blank or an integer, never a float, an
-  integer naming the address its digits write (gaps G-051, G-057, G-075,
-  G-078); the rooms an organization reaches (§17.2);
+  integer naming the address its digits write; the key absent, null or a
+  blank string is no value, and any other value is not a recipient, which
+  a delivery refuses and routing reads as someone else's address: no
+  routed sender is admitted into a room through it, under its lock
+  whatever strategy chose the room, the record never writes over it, a
+  `group` binding's is not read, and a warning names the binding and the
+  value's type, never the value (gaps G-051, G-057, G-075, G-078,
+  RMK-965); the rooms an organization reaches (§17.2);
   the default routing strategy, its steps 1 and 3 over ACTIVE and PAUSED
   rooms, what keeps a routed room under its lock and what step 2 records of
   a routed sender (§10.4, gaps G-045, G-055, G-058, G-061); the validation

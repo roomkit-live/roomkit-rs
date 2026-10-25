@@ -190,12 +190,41 @@ impl AddressForm {
     /// ([`has_recipient`]). An integer, a Telegram chat id, is written in
     /// its digits.
     pub fn recipient(&self, binding: &ChannelBinding) -> Option<String> {
-        let key = self.recipient_key.as_deref()?;
-        match written(binding.metadata.get(key)?)? {
-            Written::Text(recipient) => Some(self.normalize(recipient)),
-            Written::Integer(recipient) => Some(recipient.to_string()),
+        match self.held(binding) {
+            Held::Recipient(recipient) => Some(recipient),
+            Held::Nothing | Held::NotARecipient(_) => None,
         }
     }
+
+    /// What `binding` holds under the channel's recipient key (RFC §5.7):
+    /// its recipient in the channel's form, no value, or a value that is
+    /// not a recipient. A channel with no recipient key holds no value.
+    pub(crate) fn held(&self, binding: &ChannelBinding) -> Held<String> {
+        let Some(key) = self.recipient_key.as_deref() else {
+            return Held::Nothing;
+        };
+        match held(binding.metadata.get(key)) {
+            Held::Recipient(Written::Text(recipient)) => Held::Recipient(self.normalize(recipient)),
+            Held::Recipient(Written::Integer(recipient)) => Held::Recipient(recipient.to_string()),
+            Held::Nothing => Held::Nothing,
+            Held::NotARecipient(kind) => Held::NotARecipient(kind),
+        }
+    }
+}
+
+/// What a binding holds under its channel's recipient key, or a message
+/// under its chat key (RFC §5.7, gap G-078).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Held<T> {
+    /// No value: the key absent, null, or a blank string.
+    Nothing,
+    /// A recipient.
+    Recipient(T),
+    /// A value that is not a recipient, and is no absence either: a value
+    /// no one is reached at. Only its JSON type is kept (`boolean`,
+    /// `float`, `array`, `object`), which a log may show; the value itself
+    /// may be a person's address.
+    NotARecipient(&'static str),
 }
 
 /// An address as a JSON value holds it (RFC §5.7, gap G-075).
@@ -207,23 +236,39 @@ pub(crate) enum Written<'value> {
     Integer(&'value Number),
 }
 
-/// The address `value` holds (RFC §5.7, gap G-075): a string that is not
-/// blank, or an integer, a chat id written as one. Null, a blank string, a
-/// boolean, a float, a whole one included (`42.0`), an array and an object
-/// are none: a float has no single written form, so it cannot be compared
-/// as an address. A binding's recipient and a message's chat are read so.
-pub(crate) fn written(value: &Value) -> Option<Written<'_>> {
+/// What `value`, read under a recipient key or a chat key, holds (RFC
+/// §5.7, gaps G-075, G-078): an address when it is a string that is not
+/// blank, or an integer, a chat id written as one; no value when it is
+/// absent, null or a blank string; any other value (a boolean, a float, a
+/// whole one included (`42.0`), an array, an object) is not a recipient. A
+/// float has no single written form, so it cannot be compared as an
+/// address.
+pub(crate) fn held(value: Option<&Value>) -> Held<Written<'_>> {
+    let Some(value) = value else {
+        return Held::Nothing;
+    };
     match value {
-        Value::String(address) if !address.trim().is_empty() => Some(Written::Text(address)),
+        Value::Null => Held::Nothing,
+        Value::String(address) if address.trim().is_empty() => Held::Nothing,
+        Value::String(address) => Held::Recipient(Written::Text(address)),
         Value::Number(address) if address.is_i64() || address.is_u64() => {
-            Some(Written::Integer(address))
+            Held::Recipient(Written::Integer(address))
         }
-        Value::String(_)
-        | Value::Number(_)
-        | Value::Null
-        | Value::Bool(_)
-        | Value::Array(_)
-        | Value::Object(_) => None,
+        Value::Number(_) => Held::NotARecipient("float"),
+        Value::Bool(_) => Held::NotARecipient("boolean"),
+        Value::Array(_) => Held::NotARecipient("array"),
+        Value::Object(_) => Held::NotARecipient("object"),
+    }
+}
+
+/// The address `value` holds ([`held`]): `None` for no value and for a
+/// value that is not a recipient alike. A delivery reads a binding's
+/// recipient so, and refuses both `no_recipient`; a message's chat is read
+/// so, either being no chat.
+pub(crate) fn written(value: &Value) -> Option<Written<'_>> {
+    match held(Some(value)) {
+        Held::Recipient(address) => Some(address),
+        Held::Nothing | Held::NotARecipient(_) => None,
     }
 }
 
@@ -362,8 +407,9 @@ pub fn chat_key(channel_type: ChannelType) -> Option<&'static str> {
 
 /// Whether `binding` has a recipient under `key`, the one
 /// [`AddressForm::recipient`] reads: a string that is not blank, or an
-/// integer (RFC §5.7, §10.2 step 3d, gap G-075). A delivery to a binding
-/// with none is refused `no_recipient`.
+/// integer (RFC §5.7, §10.2 step 3d, gaps G-075, G-078). A delivery to a
+/// binding with none, no value or a value that is not a recipient alike, is
+/// refused `no_recipient`.
 pub fn has_recipient(binding: &ChannelBinding, key: &str) -> bool {
     binding.metadata.get(key).and_then(written).is_some()
 }

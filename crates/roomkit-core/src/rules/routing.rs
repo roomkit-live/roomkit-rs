@@ -37,7 +37,7 @@ use std::cmp::Ordering;
 
 use serde_json::Value;
 
-use super::addresses::{self, AddressForm, Addressing, SYSTEM_SENDER, Written};
+use super::addresses::{self, AddressForm, Addressing, Held, SYSTEM_SENDER, Written};
 use super::organizations;
 use crate::model::{
     BindingUpdate, ChannelBinding, ChannelCategory, ChannelId, ChannelType, EventStatus,
@@ -196,15 +196,45 @@ pub enum Refusal {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Recording {
     /// Nothing to write: the binding is declared `group`, names the sender
-    /// and their recipient already, or the message names no one to record.
+    /// and their recipient already (or a value that is not a recipient), or
+    /// the message names no one to record.
     Kept,
     /// The write that records the sender, through rule 6: their address as
     /// the correspondent where the binding names none, and on a transport as
-    /// its recipient where it has none.
+    /// its recipient where it holds no value under the key.
     Write(BindingUpdate),
     /// The binding names another sender: the message is routed once more
     /// (gap G-055).
     Taken,
+}
+
+/// The correspondent a binding names (RFC §5.7, gap G-078).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Correspondent {
+    /// Its participant, else its recipient, in the channel's form.
+    Address(String),
+    /// A value under the channel's recipient key that is not a recipient,
+    /// on a binding naming no participant: the address of someone other
+    /// than the sender, whoever writes. Only the value's JSON type is kept.
+    NotARecipient(&'static str),
+}
+
+impl Correspondent {
+    /// Whether it names `sender` on `channel_id`, in a room holding
+    /// `participants` ([`Sender::named_by`]): a value that is not a
+    /// recipient names no sender.
+    pub fn names(
+        &self,
+        sender: &Sender,
+        form: &AddressForm,
+        channel_id: &ChannelId,
+        participants: &[Participant],
+    ) -> bool {
+        match self {
+            Self::Address(address) => sender.named_by(address, form, channel_id, participants),
+            Self::NotARecipient(_) => false,
+        }
+    }
 }
 
 /// How a room is a sender's conversation on a channel by step 1 (RFC §10.4
@@ -344,7 +374,7 @@ pub(crate) fn conversation_through(
 ) -> Option<Through> {
     let named = binding
         .and_then(|binding| correspondent(binding, form))
-        .is_some_and(|named| sender.named_by(&named, form, channel_id, participants));
+        .is_some_and(|named| named.names(sender, form, channel_id, participants));
     if named {
         return Some(Through::Binding);
     }
@@ -425,7 +455,11 @@ pub fn sole_bound<'room>(
 /// is declared `group`, or all of these hold:
 ///
 /// - the binding names no participant, or names the sender;
-/// - the binding delivers to no one, or to the sender;
+/// - the binding holds no value under its recipient key, or delivers to
+///   the sender: a value there that is not a recipient is someone else's
+///   address (RFC §5.7), and refuses the sender as a recipient naming
+///   another does, logged as a warning naming the binding and the value's
+///   type;
 /// - no participant other than the sender was reached through the channel;
 /// - the room has heard no one else on the channel.
 ///
@@ -505,10 +539,16 @@ fn admission(
     {
         return Err(Refusal::NamesAnother);
     }
-    if let Some(recipient) = form.recipient(binding)
-        && !sender.is(&recipient, form)
-    {
-        return Err(Refusal::AddressedToAnother);
+    match form.held(binding) {
+        Held::Recipient(recipient) if !sender.is(&recipient, form) => {
+            return Err(Refusal::AddressedToAnother);
+        }
+        Held::NotARecipient(kind) => {
+            // Someone else's address, whoever writes (RFC §5.7).
+            not_a_recipient(binding, form, kind);
+            return Err(Refusal::AddressedToAnother);
+        }
+        Held::Recipient(_) | Held::Nothing => {}
     }
     let member = participants.iter().any(|participant| {
         reached_through(participant, channel_id) && !sender.is_participant(participant, form)
@@ -552,23 +592,50 @@ pub fn heard(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<ParticipantId>
         .collect()
 }
 
-/// The correspondent `binding` names, in the channel's form: its
-/// participant, or else its recipient, since a binding given a recipient
-/// and no correspondent is that recipient's conversation (RFC §5.7).
-pub fn correspondent(binding: &ChannelBinding, form: &AddressForm) -> Option<String> {
-    match &binding.participant_id {
-        Some(participant) => Some(form.normalize(participant.as_str())),
-        None => form.recipient(binding),
+/// The correspondent `binding` names: its participant, or else its
+/// recipient, since a binding given a recipient and no correspondent is
+/// that recipient's conversation (RFC §5.7). A binding naming no
+/// participant that holds a value under its recipient key that is not a
+/// recipient names someone other than the sender, whoever writes; one with
+/// no value there names no one.
+pub fn correspondent(binding: &ChannelBinding, form: &AddressForm) -> Option<Correspondent> {
+    if let Some(participant) = &binding.participant_id {
+        return Some(Correspondent::Address(form.normalize(participant.as_str())));
     }
+    match form.held(binding) {
+        Held::Recipient(recipient) => Some(Correspondent::Address(recipient)),
+        Held::NotARecipient(kind) => Some(Correspondent::NotARecipient(kind)),
+        Held::Nothing => None,
+    }
+}
+
+/// Logs that routing read a value under `binding`'s recipient key that is
+/// not a recipient (RFC §5.7 SHOULD): the binding and the value's type
+/// `kind`, never the value, which may be a person's address.
+fn not_a_recipient(binding: &ChannelBinding, form: &AddressForm, kind: &str) {
+    tracing::warn!(
+        target: "roomkit::core::routing",
+        room_id = %binding.room_id,
+        channel_id = %binding.channel_id,
+        recipient_key = %form.recipient_key.as_deref().unwrap_or_default(),
+        held = %kind,
+        "the binding holds a value under its recipient key that is not a recipient: \
+         routing reads it as someone else's address, so no sender the binding does not \
+         name is admitted through it, and deliveries to it are refused no_recipient"
+    );
 }
 
 /// What step 2 writes on `binding` for a routed message from `sender`, in a
 /// room holding `participants` (RFC §10.1 step 2, §5.7, gap G-061): nothing
 /// on a binding declared `group`; [`Recording::Taken`] when the binding
-/// names someone else; otherwise the sender's address as its correspondent
-/// where it names none, and on a transport as its recipient where it has
-/// none. The framework's own sender, and a message with no address, record
-/// no one. A binding naming a participant who is the sender names them.
+/// names someone else, a binding naming no participant that holds a value
+/// under its recipient key that is not a recipient included, logged as a
+/// warning; otherwise the sender's address as its correspondent where it
+/// names none, and on a transport as its recipient where it holds no value
+/// under the key, a value that is not a recipient kept, on a binding
+/// naming the sender too. The framework's own sender, and a message with
+/// no address, record no one. A binding naming a participant who is the
+/// sender names them.
 pub fn recording(
     binding: &ChannelBinding,
     sender: &Sender,
@@ -579,8 +646,11 @@ pub fn recording(
         return Recording::Kept;
     }
     if let Some(named) = correspondent(binding, form)
-        && !sender.named_by(&named, form, &binding.channel_id, participants)
+        && !named.names(sender, form, &binding.channel_id, participants)
     {
+        if let Correspondent::NotARecipient(kind) = named {
+            not_a_recipient(binding, form, kind);
+        }
         return Recording::Taken;
     }
     let Some(address) = &sender.address else {
@@ -590,8 +660,10 @@ pub fn recording(
     if binding.participant_id.is_none() {
         update.participant_id = Some(ParticipantId::new(address.clone()).ok());
     }
+    // Only where the binding holds no value: a value that is not a
+    // recipient is kept, as a recipient is (RFC §5.7).
     let addressed = binding.category == ChannelCategory::Transport;
-    if let (true, Some(key), None) = (addressed, &form.recipient_key, form.recipient(binding)) {
+    if let (true, Some(key), Held::Nothing) = (addressed, &form.recipient_key, form.held(binding)) {
         update
             .metadata
             .insert(key.clone(), Value::String(address.clone()));
@@ -1122,6 +1194,33 @@ mod tests {
             );
         }
 
+        /// RFC §5.7: no value under the recipient key names no one; a value
+        /// that is not a recipient is someone else's address, the sender's
+        /// own number written as a float included.
+        #[test]
+        fn a_binding_holding_what_is_not_a_recipient_admits_no_one() {
+            let held = [
+                (Value::Null, Ok(())),
+                (json!(" "), Ok(())),
+                (json!(true), Err(Refusal::AddressedToAnother)),
+                (json!([BOB]), Err(Refusal::AddressedToAnother)),
+                (json!({ "number": BOB }), Err(Refusal::AddressedToAnother)),
+                (json!(15_550_000_002.0), Err(Refusal::AddressedToAnother)),
+            ];
+            let admitted: Vec<_> = held
+                .iter()
+                .map(|(value, _)| {
+                    let room = bound_on(room("room_1", 0), "sms", |binding| {
+                        binding
+                            .metadata
+                            .insert(PHONE_NUMBER.to_owned(), value.clone());
+                    });
+                    (value.clone(), admits(&query(BOB), &room))
+                })
+                .collect();
+            assert_eq!(admitted, held);
+        }
+
         #[test]
         fn a_member_reached_through_the_channel_refuses_another_sender() {
             let room = with_member(bound(room("room_1", 0)), ALICE, "sms");
@@ -1508,19 +1607,59 @@ mod tests {
             );
         }
 
-        /// RFC §5.7: a binding found naming the sender without a recipient
-        /// gets their address as its recipient.
+        /// RFC §5.7: a binding found naming the sender with no value under
+        /// the recipient key gets their address as its recipient; a value
+        /// that is not a recipient is kept, as a recipient is.
         #[test]
-        fn a_binding_naming_the_sender_without_a_recipient_gets_one() {
-            let mut alices = binding();
-            alices.participant_id = Some(ParticipantId::new(ALICE).unwrap());
-            let Recording::Write(update) = recording(&alices, &sender(ALICE), &sms_form(), &[])
-            else {
-                panic!("the recipient is written");
-            };
+        fn a_binding_naming_the_sender_gets_its_address_where_it_holds_no_value() {
+            let written = Recording::Write(BindingUpdate {
+                metadata: [(PHONE_NUMBER.to_owned(), json!(ALICE))]
+                    .into_iter()
+                    .collect(),
+                ..BindingUpdate::default()
+            });
+            let held = [
+                (None, written.clone()),
+                (Some(Value::Null), written.clone()),
+                (Some(json!("  ")), written),
+                (Some(json!(15_550_000_001.0)), Recording::Kept),
+                (Some(json!([ALICE])), Recording::Kept),
+            ];
+            let recorded: Vec<_> = held
+                .iter()
+                .map(|(value, _)| {
+                    let mut alices = binding();
+                    alices.participant_id = Some(ParticipantId::new(ALICE).unwrap());
+                    if let Some(value) = value {
+                        alices
+                            .metadata
+                            .insert(PHONE_NUMBER.to_owned(), value.clone());
+                    }
+                    (
+                        value.clone(),
+                        recording(&alices, &sender(ALICE), &sms_form(), &[]),
+                    )
+                })
+                .collect();
+            assert_eq!(recorded, held);
+        }
+
+        /// RFC §5.7, §10.1 step 2: a binding naming no one that holds a
+        /// value that is not a recipient is someone else's, the sender's own
+        /// number written as a float included: the record leaves the room.
+        #[test]
+        fn a_binding_holding_what_is_not_a_recipient_is_taken() {
+            let taken: Vec<_> = [json!(false), json!({}), json!(15_550_000_001.0)]
+                .into_iter()
+                .map(|value| {
+                    let mut held = binding();
+                    held.metadata.insert(PHONE_NUMBER.to_owned(), value);
+                    recording(&held, &sender(ALICE), &sms_form(), &[])
+                })
+                .collect();
             assert_eq!(
-                (update.participant_id, Value::Object(update.metadata)),
-                (None, json!({ "phone_number": ALICE }))
+                taken,
+                [Recording::Taken, Recording::Taken, Recording::Taken]
             );
         }
 
