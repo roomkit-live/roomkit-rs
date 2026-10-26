@@ -1,0 +1,103 @@
+//! Every scenario of the suite, run on the kit the including crate makes
+//! (`crate::new_kit`), its known failures `crate::KNOWN_FAILURES`.
+
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
+
+use crate::{harness, shape};
+
+/// The repository's copy of the suite.
+pub(crate) fn suite() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
+}
+
+/// The scenario files under `directory`, in path order.
+pub(crate) fn scenarios(directory: &Path, found: &mut Vec<PathBuf>) {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            scenarios(&path, found);
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            found.push(path);
+        }
+    }
+}
+
+fn scenario_id(root: &Path, path: &Path) -> String {
+    let relative = path.strip_prefix(root).unwrap().with_extension("");
+    relative.to_string_lossy().replace('\\', "/")
+}
+
+/// Every scenario runs; those this implementation fails are exactly the
+/// known failures.
+#[expect(
+    clippy::print_stdout,
+    reason = "the suite prints its known failures and its count, as a test does"
+)]
+pub(crate) fn every_scenario_gives_what_the_rfc_says() {
+    let root = suite().join("scenarios");
+    let mut paths = Vec::new();
+    scenarios(&root, &mut paths);
+    assert!(!paths.is_empty(), "no scenario under {}", root.display());
+    let mut report = Vec::new();
+    let mut failing = Vec::new();
+    for path in &paths {
+        let id = scenario_id(&root, path);
+        let scenario: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(
+            scenario["id"],
+            id.as_str(),
+            "{} names another id",
+            path.display()
+        );
+        let unknown = shape::unknown_members(&scenario);
+        if !unknown.is_empty() {
+            report.push(format!(
+                "{id}: members the runner does not know:\n  {}",
+                unknown.join("\n  ")
+            ));
+            continue;
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let problems = runtime.block_on(async {
+            tokio::time::timeout(crate::SCENARIO_BOUND, harness::run(&scenario))
+                .await
+                .unwrap_or_else(|_| {
+                    vec![format!("did not finish within {:?}", crate::SCENARIO_BOUND)]
+                })
+        });
+        let known = crate::KNOWN_FAILURES.iter().any(|(known, _)| *known == id);
+        if !problems.is_empty() {
+            failing.push(id.clone());
+        }
+        match (problems.is_empty(), known) {
+            (true, true) => report.push(format!("{id}: passes, but is listed as a known failure")),
+            (false, false) => report.push(format!("{id}:\n  {}", problems.join("\n  "))),
+            (false, true) => println!("known failure {id}:\n  {}", problems.join("\n  ")),
+            (true, false) => {}
+        }
+    }
+    for (known, _) in crate::KNOWN_FAILURES {
+        if !paths.iter().any(|path| scenario_id(&root, path) == *known) {
+            report.push(format!("known failure {known} names no scenario"));
+        }
+    }
+    println!(
+        "{} scenarios, {} failing: {failing:?}",
+        paths.len(),
+        failing.len()
+    );
+    assert!(report.is_empty(), "\n{}", report.join("\n"));
+}

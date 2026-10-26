@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use roomkit::model::{ChannelId, RoomEvent, RoomId};
-use roomkit::{ConversationStore, FrameworkEvent, RoomKit};
+use roomkit::{ConversationStore, FrameworkEvent};
 use serde_json::{Map, Value, json};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -87,7 +87,7 @@ pub(crate) struct Check {
 
 /// One run of one scenario.
 pub(crate) struct Run {
-    kit: RoomKit,
+    kit: crate::Kit,
     /// The labels whose outcomes the scenario's `expect.actions` checks.
     asserted_actions: BTreeSet<String>,
     pub(crate) gates: Gates,
@@ -102,7 +102,7 @@ pub(crate) struct Run {
 
 impl Run {
     /// A run of `scenario` on `kit`, recording nothing yet.
-    pub(crate) fn new(kit: RoomKit, scenario: &Value) -> Self {
+    pub(crate) fn new(kit: crate::Kit, scenario: &Value) -> Self {
         let events = kit.subscribe();
         let asserted_actions = scenario["expect"]["actions"]
             .as_object()
@@ -125,7 +125,7 @@ impl Run {
         }
     }
 
-    pub(crate) fn kit(&self) -> &RoomKit {
+    pub(crate) fn kit(&self) -> &crate::Kit {
         &self.kit
     }
 

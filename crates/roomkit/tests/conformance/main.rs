@@ -23,58 +23,39 @@ mod harness;
 mod matching;
 mod normalize;
 mod run;
+mod scenarios;
 mod scripted;
 mod shape;
 mod templates;
 
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde_json::Value;
+use roomkit::{InMemoryStore, RoomKit};
 use sha2::{Digest, Sha256};
+
+use crate::scenarios::{scenarios, suite};
+
+/// The kit the scenarios run on, over the in-memory store; roomkit-sqlite
+/// runs them on its store too (crates/roomkit-sqlite/tests/conformance).
+pub(crate) type Kit = RoomKit<InMemoryStore>;
+
+/// A kit over an empty store, and what keeps the store until the run ends:
+/// nothing here.
+#[expect(
+    clippy::unused_async,
+    reason = "every store's kit is made the same way, some awaiting their store"
+)]
+pub(crate) async fn new_kit() -> (Kit, ()) {
+    (RoomKit::new(), ())
+}
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-const KNOWN_FAILURES: &[(&str, &str)] = &[];
+pub(crate) const KNOWN_FAILURES: &[(&str, &str)] = &[];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
-const SCENARIO_BOUND: Duration = Duration::from_secs(60);
-
-fn suite() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance")
-}
-
-fn scenarios(directory: &Path, found: &mut Vec<PathBuf>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(directory)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            scenarios(&path, found);
-        } else if path
-            .extension()
-            .is_some_and(|extension| extension == "json")
-        {
-            found.push(path);
-        }
-    }
-}
-
-fn scenario_id(root: &Path, path: &Path) -> String {
-    let relative = path.strip_prefix(root).unwrap().with_extension("");
-    relative.to_string_lossy().replace('\\', "/")
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::new(), |mut text, byte| {
-        let _ = write!(text, "{byte:02x}");
-        text
-    })
-}
+pub(crate) const SCENARIO_BOUND: Duration = Duration::from_secs(60);
 
 /// The copy is the one `make conformance-sync` took: the fingerprint it
 /// recorded, `sha256sum` over `sha256sum` of each file of `scenarios/` by
@@ -113,63 +94,17 @@ fn the_copy_is_the_one_synced_from_its_specs_commit() {
     );
 }
 
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut text, byte| {
+        let _ = write!(text, "{byte:02x}");
+        text
+    })
+}
+
 /// Every scenario runs; those this implementation fails are exactly the
 /// known failures.
 #[test]
 fn every_scenario_gives_what_the_rfc_says() {
-    let root = suite().join("scenarios");
-    let mut paths = Vec::new();
-    scenarios(&root, &mut paths);
-    assert!(!paths.is_empty(), "no scenario under {}", root.display());
-    let mut report = Vec::new();
-    let mut failing = Vec::new();
-    for path in &paths {
-        let id = scenario_id(&root, path);
-        let scenario: Value =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(
-            scenario["id"],
-            id.as_str(),
-            "{} names another id",
-            path.display()
-        );
-        let unknown = shape::unknown_members(&scenario);
-        if !unknown.is_empty() {
-            report.push(format!(
-                "{id}: members the runner does not know:\n  {}",
-                unknown.join("\n  ")
-            ));
-            continue;
-        }
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let problems = runtime.block_on(async {
-            tokio::time::timeout(SCENARIO_BOUND, harness::run(&scenario))
-                .await
-                .unwrap_or_else(|_| vec![format!("did not finish within {SCENARIO_BOUND:?}")])
-        });
-        let known = KNOWN_FAILURES.iter().any(|(known, _)| *known == id);
-        if !problems.is_empty() {
-            failing.push(id.clone());
-        }
-        match (problems.is_empty(), known) {
-            (true, true) => report.push(format!("{id}: passes, but is listed as a known failure")),
-            (false, false) => report.push(format!("{id}:\n  {}", problems.join("\n  "))),
-            (false, true) => println!("known failure {id}:\n  {}", problems.join("\n  ")),
-            (true, false) => {}
-        }
-    }
-    for (known, _) in KNOWN_FAILURES {
-        if !paths.iter().any(|path| scenario_id(&root, path) == *known) {
-            report.push(format!("known failure {known} names no scenario"));
-        }
-    }
-    println!(
-        "{} scenarios, {} failing: {failing:?}",
-        paths.len(),
-        failing.len()
-    );
-    assert!(report.is_empty(), "\n{}", report.join("\n"));
+    scenarios::every_scenario_gives_what_the_rfc_says();
 }

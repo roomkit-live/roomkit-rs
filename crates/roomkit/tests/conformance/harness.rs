@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use roomkit::model::RoomId;
-use roomkit::{ConversationStore, RoomFilter, RoomKit};
+use roomkit::{ConversationStore, RoomFilter};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -21,7 +21,8 @@ use crate::run::{Check, Run, Scope, lock};
 
 /// Runs `scenario`; returns every mismatch with its expectations.
 pub(crate) async fn run(scenario: &Value) -> Vec<String> {
-    let kit = RoomKit::new();
+    // The store's file, when it has one, goes once the run is over.
+    let (kit, _store_file) = crate::new_kit().await;
     let setup = scenario.get("setup").cloned().unwrap_or_default();
     if let Some(depth) = setup["kit"]["max_chain_depth"].as_u64() {
         kit.set_max_chain_depth(u32::try_from(depth).unwrap_or(u32::MAX));
