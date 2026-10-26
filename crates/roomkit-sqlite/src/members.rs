@@ -24,18 +24,22 @@ fn stored_binding(
         .optional()?)
 }
 
-/// Stores `binding`, in place of the room's binding of its channel, last of
-/// the room's bindings, as the in-memory store does.
+/// Stores `binding`, in place of the room's binding of its channel, in its
+/// row: the room lists its bindings in the order they were attached, as
+/// the Python implementation's stores do.
 pub(crate) fn store_binding(
     connection: &Connection,
     binding: &ChannelBinding,
 ) -> Result<(), Failure> {
     rooms::check(connection, &binding.room_id)?;
     let stored = stored_binding(connection, &binding.room_id, &binding.channel_id)?;
-    delete_binding(connection, &binding.room_id, &binding.channel_id)?;
     connection.execute(
         "INSERT INTO bindings(room_id, channel_id, participant_id, channel_type, data)
-         VALUES(?, ?, ?, ?, ?)",
+         VALUES(?, ?, ?, ?, ?)
+         ON CONFLICT(room_id, channel_id) DO UPDATE SET
+             participant_id = excluded.participant_id,
+             channel_type = excluded.channel_type,
+             data = excluded.data",
         params![
             binding.room_id.as_str(),
             binding.channel_id.as_str(),

@@ -332,10 +332,16 @@ impl ConversationStore for InMemoryStore {
     async fn store_binding(&self, binding: ChannelBinding) -> Result<(), StoreError> {
         let room_id = binding.room_id.clone();
         self.write(&room_id, |record| {
-            record
+            // In its place: the room lists its bindings in the order they
+            // were attached.
+            match record
                 .bindings
-                .retain(|bound| bound.channel_id != binding.channel_id);
-            record.bindings.push(binding);
+                .iter_mut()
+                .find(|bound| bound.channel_id == binding.channel_id)
+            {
+                Some(bound) => *bound = binding,
+                None => record.bindings.push(binding),
+            }
             Ok(())
         })
     }

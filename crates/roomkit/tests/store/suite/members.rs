@@ -19,15 +19,21 @@ async fn a_binding_is_read_as_it_was_stored() {
     assert_eq!(store.list_bindings(&room_id()).await, Ok(vec![stored]));
 }
 
-/// A binding stored again replaces the room's binding of its channel.
+/// A binding stored again replaces the room's binding of its channel, in
+/// its place: the room lists its bindings in the order they were attached,
+/// as the Python implementation's stores do.
 #[tokio::test]
-async fn a_binding_stored_again_replaces_the_one_of_its_channel() {
+async fn a_binding_stored_again_replaces_the_one_of_its_channel_in_its_place() {
     let store = with_room().await;
     store.store_binding(binding("sms")).await.unwrap();
+    store.store_binding(binding("ws")).await.unwrap();
     let mut muted = binding("sms");
     muted.muted = true;
     store.store_binding(muted.clone()).await.unwrap();
-    assert_eq!(store.list_bindings(&room_id()).await, Ok(vec![muted]));
+    assert_eq!(
+        store.list_bindings(&room_id()).await,
+        Ok(vec![muted, binding("ws")])
+    );
 }
 
 #[tokio::test]
