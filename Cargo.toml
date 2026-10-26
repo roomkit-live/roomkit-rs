@@ -40,6 +40,13 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 # with the JSON functions and the full-text index of the Python
 # implementation's schema.
 rusqlite = { version = "0.41", features = ["bundled"] }
+# The server example's (decision 4 of step 4), development only: axum's
+# WebSocket server over HTTP/1, the client its checks connect with, without
+# TLS, both on the tungstenite axum uses, and the combinators that split a
+# socket into its two directions.
+axum = { version = "0.8", default-features = false, features = ["http1", "query", "tokio", "ws"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

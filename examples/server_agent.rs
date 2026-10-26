@@ -1,0 +1,555 @@
+//! An AI agent served over WebSocket, its rooms kept in SQLite: an axum
+//! server where each WebSocket connection is a person taking part in a room
+//! through the `websocket` channel, an agent answering each message through
+//! an OpenAI-compatible endpoint (RFC §6.4), and the rooms in a SQLite file
+//! (RFC §14), so that a restarted server goes on with each conversation.
+//!
+//! - A connection to `/conversations/{conversation}?user=alice&name=Alice`
+//!   is the participant `alice`, named Alice, of the room whose id is the
+//!   conversation's (RFC §5.5). A new conversation's room is created with
+//!   the agent and the `websocket` channel attached.
+//! - Each text frame it sends is a message from `alice` into that room,
+//!   through the inbound pipeline (RFC §10.1).
+//! - The room's deliveries to `websocket` go out on each of the room's
+//!   connections, one JSON frame per event: the agent's answers. A room
+//!   delivers an event to every channel but its source (RFC §10.1), so the
+//!   people on `websocket` see the agent's answers, not each other's
+//!   messages.
+//! - The `user` parameter stands in for authentication, and anyone may join
+//!   any conversation: a real server takes the participant from its
+//!   session, never from what the client says, and checks they may join.
+//!
+//! Its checks run offline, against a fake of the OpenAI wire and a
+//! temporary file: Alice and Bob talk with the agent in one room, the
+//! server restarts on the same file, and Alice goes on.
+//!
+//! With `--serve`, it stays up on 127.0.0.1:8080, or the address given
+//! after the flag, its rooms in `server_agent.db`, until Ctrl+C. The agent
+//! calls the endpoint `OPENAI_BASE_URL`, `OPENAI_API_KEY` and
+//! `OPENAI_MODEL` name, or, without them, the fake, which answers from the
+//! checks' script.
+//!
+//! ```sh
+//! cargo run --example server_agent
+//! OPENAI_BASE_URL=https://api.openai.com/v1 OPENAI_API_KEY=sk-... \
+//!     OPENAI_MODEL=gpt-6-luna cargo run --example server_agent -- --serve
+//! websocat 'ws://127.0.0.1:8080/conversations/bakery?user=alice&name=Alice'
+//! ```
+
+#![expect(clippy::print_stdout, reason = "an example prints what it ran")]
+
+use std::collections::HashMap;
+use std::error::Error;
+use std::net::SocketAddr;
+use std::path::Path;
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
+use std::{env, io};
+
+use axum::Router;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{self, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use futures_util::{SinkExt, StreamExt};
+use roomkit::model::{
+    BindingOptions, ChannelId, EventContent, EventType, InboundMessage, Participant, ParticipantId,
+    RoomId,
+};
+use roomkit::{ConversationStore, Environment, RoomKit, SystemEnvironment, text_of};
+use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit_sqlite::SqliteStore;
+use serde_json::Value;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Mutex, mpsc, watch};
+use tokio::task::JoinHandle;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
+
+use shared::{Checks, OpenAiEndpoint, TempDatabase, WebSocketChannel};
+
+const SYSTEM_PROMPT: &str = "You answer the customers of a bakery, in one short sentence.";
+
+/// Where `--serve` listens unless told another address, and the file it
+/// keeps its rooms in.
+const SERVE_ADDRESS: &str = "127.0.0.1:8080";
+const SERVE_DATABASE: &str = "server_agent.db";
+
+/// The largest message a connection may send, in bytes.
+const MESSAGE_LIMIT: usize = 64 * 1024;
+
+/// The conversation of the checks, and what is said in it.
+const CONVERSATION: &str = "bakery";
+const ALICE_ASKS: &str = "Hi! Do you have sourdough today?";
+const BOB_ASKS: &str = "Can I pick up two loaves at 5?";
+const ALICE_AGAIN: &str = "Are the loaves still warm?";
+
+/// What the fake answers, turn after turn.
+const REPLIES: &[&str] = &[
+    "Yes, we have sourdough until noon.",
+    "Yes Bob, two loaves will be ready at 5.",
+    "They came out of the oven an hour ago, Alice.",
+];
+
+/// Where the checks' servers listen: a free port of the loopback.
+const ANY_PORT: &str = "127.0.0.1:0";
+
+/// How long a client waits for an answer: a real model's included.
+const ANSWER_PATIENCE: Duration = Duration::from_secs(60);
+
+#[tokio::main]
+async fn main() -> Result<ExitCode, Box<dyn Error>> {
+    let mut args = env::args().skip(1);
+    if args.next().as_deref() == Some("--serve") {
+        serve(args.next().as_deref().unwrap_or(SERVE_ADDRESS)).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    check().await
+}
+
+/// A running server: its address, its kit over the SQLite file, and what
+/// stops it.
+struct Server {
+    address: SocketAddr,
+    kit: RoomKit<SqliteStore>,
+    stop: watch::Sender<bool>,
+    serving: JoinHandle<io::Result<()>>,
+    /// Ends once every connection's task ended: each holds a sender.
+    connections: mpsc::Receiver<()>,
+}
+
+/// What each request and connection of the server works with.
+#[derive(Clone)]
+struct App {
+    kit: RoomKit<SqliteStore>,
+    websocket: WebSocketChannel,
+    agent: ChannelId,
+    /// One join at a time, so that a conversation's room is created once.
+    joining: Arc<Mutex<()>>,
+    stopping: watch::Receiver<bool>,
+    /// Held by every connection's task, so that the server sees the last
+    /// one end (`Server::connections`).
+    _alive: mpsc::Sender<()>,
+}
+
+impl Server {
+    /// A server on `address` keeping its rooms in the file `database`, its
+    /// agent calling `endpoint`.
+    async fn start(
+        database: &Path,
+        endpoint: &OpenAiEndpoint,
+        address: SocketAddr,
+    ) -> Result<Self, Box<dyn Error>> {
+        let kit = RoomKit::with_store(SqliteStore::open(database).await?);
+        let websocket = WebSocketChannel::new(ChannelId::new("websocket")?);
+        let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
+            .with_system_prompt(SYSTEM_PROMPT)
+            .with_history(20);
+        let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?;
+        let agent_id = agent.id().clone();
+        kit.register_channel(websocket.clone())?;
+        kit.register_channel(agent)?;
+
+        let (stop, stopping) = watch::channel(false);
+        let (alive, connections) = mpsc::channel(1);
+        let app = App {
+            kit: kit.clone(),
+            websocket,
+            agent: agent_id,
+            joining: Arc::default(),
+            stopping: stopping.clone(),
+            _alive: alive,
+        };
+        let listener = TcpListener::bind(address).await?;
+        let address = listener.local_addr()?;
+        let serving = tokio::spawn(listen(listener, app, stopping));
+        Ok(Self {
+            address,
+            kit,
+            stop,
+            serving,
+            connections,
+        })
+    }
+
+    /// Stops the server: it accepts no more connections, closes the ones
+    /// open, and returns once their work and the kit's are over, the kit
+    /// shut down and the file closed.
+    async fn stop(mut self) -> Result<(), Box<dyn Error>> {
+        self.stop.send_replace(true);
+        self.serving.await??;
+        while self.connections.recv().await.is_some() {}
+        self.kit.idle().await;
+        self.kit.shutdown().await;
+        Ok(())
+    }
+}
+
+/// Serves `app` on `listener` until `stopping` says to stop, then waits for
+/// the requests under way.
+async fn listen(
+    listener: TcpListener,
+    app: App,
+    mut stopping: watch::Receiver<bool>,
+) -> io::Result<()> {
+    let router = Router::new()
+        .route("/conversations/{conversation}", get(connect))
+        .with_state(app);
+    let stop = async move {
+        // A sender dropped stops the server as well.
+        let _stopped = stopping.wait_for(|stop| *stop).await;
+    };
+    axum::serve(listener, router)
+        .with_graceful_shutdown(stop)
+        .await
+}
+
+/// A connection asking to join a conversation: the conversation's id names
+/// its room, the `user` parameter its participant, `name` their name.
+async fn connect(
+    State(app): State<App>,
+    extract::Path(conversation): extract::Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    let (Ok(room_id), Some(Ok(user))) = (
+        RoomId::new(conversation),
+        query.get("user").map(ParticipantId::new),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "a conversation and a user are needed",
+        )
+            .into_response();
+    };
+    if let Err(error) = app.join(&room_id, &user, query.get("name").cloned()).await {
+        println!("  {user} could not join {room_id}: {error}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    upgrade
+        .max_message_size(MESSAGE_LIMIT)
+        .on_upgrade(move |socket| app.converse(socket, room_id, user))
+}
+
+impl App {
+    /// Makes `user` a participant of the room `room_id`, named `name`,
+    /// creating the room with the agent and the `websocket` channel
+    /// attached when it is new. A participant is written through the store
+    /// (RFC §14.1); one the room has already is kept as it is.
+    async fn join(
+        &self,
+        room_id: &RoomId,
+        user: &ParticipantId,
+        name: Option<String>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let _one_at_a_time = self.joining.lock().await;
+        let store = self.kit.store();
+        if store.get_room(room_id).await?.is_none() {
+            self.kit.create_room(room_id).await?;
+            self.kit.attach(room_id, &self.agent).await?;
+            // Several people share the channel's conversation (RFC §10.4).
+            let group = BindingOptions {
+                group: true,
+                ..BindingOptions::default()
+            };
+            self.kit
+                .attach_with(room_id, self.websocket.id(), group)
+                .await?;
+        }
+        if store.get_participant(room_id, user).await?.is_none() {
+            let mut person = Participant::new(
+                user.clone(),
+                room_id.clone(),
+                self.websocket.id().clone(),
+                SystemEnvironment.now(),
+            );
+            person.display_name = name;
+            store.create_participant(person).await?;
+        }
+        Ok(())
+    }
+
+    /// Runs a connection of `user` in `room_id`: each text frame it sends is
+    /// their message, and the room's deliveries go out on it, until it
+    /// closes or the server stops.
+    async fn converse(self, socket: WebSocket, room_id: RoomId, user: ParticipantId) {
+        let (connection, mut frames) = self.websocket.register_connection(room_id.clone());
+        let (mut outgoing, mut incoming) = socket.split();
+        let writer = tokio::spawn(async move {
+            while let Some(frame) = frames.recv().await {
+                if outgoing.send(Message::Text(frame.into())).await.is_err() {
+                    return;
+                }
+            }
+            // A socket already gone has nothing more to close.
+            let _closed = outgoing.close().await;
+        });
+        let mut stopping = self.stopping.clone();
+        loop {
+            let received = tokio::select! {
+                received = incoming.next() => received,
+                _ = stopping.wait_for(|stop| *stop) => None,
+            };
+            match received {
+                Some(Ok(Message::Text(text))) => self.say(&room_id, &user, text.as_str()).await,
+                Some(Ok(Message::Binary(_) | Message::Ping(_) | Message::Pong(_))) => {}
+                Some(Ok(Message::Close(_)) | Err(_)) | None => break,
+            }
+        }
+        self.websocket.unregister_connection(connection);
+        // The writer ends with its queue; a panic in it is the runtime's.
+        let _written = writer.await;
+    }
+
+    /// `user`'s message `text`, into the room `room_id`.
+    async fn say(&self, room_id: &RoomId, user: &ParticipantId, text: &str) {
+        let message = InboundMessage::new(
+            self.websocket.id().clone(),
+            user.as_str(),
+            EventContent::text(text),
+        );
+        match self.kit.process_inbound_in(room_id, message).await {
+            Ok(result) => {
+                if let Some(error) = result.error {
+                    println!("  the turn on {user}'s message failed: {}", error.message);
+                }
+            }
+            Err(error) => println!("  {user}'s message was refused: {error}"),
+        }
+    }
+}
+
+/// `--serve`: the server on `address`, until Ctrl+C.
+async fn serve(address: &str) -> Result<(), Box<dyn Error>> {
+    let endpoint = OpenAiEndpoint::from_env(REPLIES).await?;
+    let server = Server::start(Path::new(SERVE_DATABASE), &endpoint, address.parse()?).await?;
+    println!("The agent calls {}.", endpoint.shown_base_url());
+    println!(
+        "Serving ws://{}/conversations/{{conversation}}?user=...&name=..., \
+         the rooms in {SERVE_DATABASE}. Ctrl+C stops.",
+        server.address
+    );
+    tokio::signal::ctrl_c().await?;
+    server.stop().await
+}
+
+/// The checks: two people in one room, then a restart on the same file.
+async fn check() -> Result<ExitCode, Box<dyn Error>> {
+    let endpoint = OpenAiEndpoint::from_env(REPLIES).await?;
+    println!("The agent calls {}.", endpoint.shown_base_url());
+    let database = TempDatabase::new("server_agent");
+    let [first, second] = two_people_talk(database.path(), &endpoint).await?;
+    println!("The server restarts on the same file.");
+    let third = alice_goes_on(database.path(), &endpoint).await?;
+    let said = conversation_in(database.path()).await?;
+    let answers = [&first[0], &second[0], &third];
+
+    let mut checks = Checks::default();
+    checks.expect(
+        "the agent answers each message, and its answer reaches both people's sockets",
+        answers.iter().all(|answer| answer.is_some())
+            && first[0] == first[1]
+            && second[0] == second[1],
+    );
+    checks.expect(
+        "after the restart, the conversation goes on: Alice's next message is answered",
+        third.is_some(),
+    );
+    // Each question, then the answer the sockets received.
+    let conversation: Vec<Option<&str>> = [ALICE_ASKS, BOB_ASKS, ALICE_AGAIN]
+        .into_iter()
+        .zip(answers)
+        .flat_map(|(asked, answer)| [Some(asked), answer.as_deref()])
+        .collect();
+    checks.expect(
+        "the file holds the whole conversation, both servers' turns, in order",
+        said.iter().map(|text| Some(text.as_str())).eq(conversation),
+    );
+    if let Some(fake) = endpoint.fake() {
+        check_the_model_s_turns(&mut checks, &fake.requests(), &answers);
+    }
+    Ok(checks.finish())
+}
+
+/// The first server: Alice and Bob join the conversation, Alice asks, then
+/// Bob. For each question, the answer each socket received, Alice's then
+/// Bob's.
+async fn two_people_talk(
+    database: &Path,
+    endpoint: &OpenAiEndpoint,
+) -> Result<[[Option<String>; 2]; 2], Box<dyn Error>> {
+    let server = Server::start(database, endpoint, ANY_PORT.parse()?).await?;
+    let mut alice = Client::connect(server.address, "alice", "Alice").await?;
+    let mut bob = Client::connect(server.address, "bob", "Bob").await?;
+    alice.say(ALICE_ASKS).await?;
+    let first = [alice.answer().await, bob.answer().await];
+    bob.say(BOB_ASKS).await?;
+    let second = [alice.answer().await, bob.answer().await];
+    alice.close().await;
+    bob.close().await;
+    server.stop().await?;
+    Ok([first, second])
+}
+
+/// The second server, on the same file: Alice comes back and asks again.
+/// The answer she received.
+async fn alice_goes_on(
+    database: &Path,
+    endpoint: &OpenAiEndpoint,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let server = Server::start(database, endpoint, ANY_PORT.parse()?).await?;
+    let mut alice = Client::connect(server.address, "alice", "Alice").await?;
+    alice.say(ALICE_AGAIN).await?;
+    let answer = alice.answer().await;
+    alice.close().await;
+    server.stop().await?;
+    Ok(answer)
+}
+
+/// The texts of the conversation's messages, as the file holds them once
+/// both servers are gone. Prints its timeline.
+async fn conversation_in(database: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let store = SqliteStore::open(database).await?;
+    let timeline = store.list_events(&RoomId::new(CONVERSATION)?, true).await?;
+    shared::print_timeline(&timeline);
+    Ok(timeline
+        .iter()
+        .filter(|event| event.event_type == EventType::Message)
+        .map(|event| text_of(&event.content))
+        .collect())
+}
+
+/// The checks of what the agent sent the fake, turn after turn, and of the
+/// answers the sockets received from it.
+fn check_the_model_s_turns(checks: &mut Checks, requests: &[Value], answers: &[&Option<String>]) {
+    println!("The agent's turn after the restart sent:");
+    for message in requests.get(2).map(messages).unwrap_or_default() {
+        println!("  {message}");
+    }
+    checks.expect(
+        "the answers are the model's",
+        answers.len() == REPLIES.len()
+            && answers
+                .iter()
+                .zip(REPLIES)
+                .all(|(answer, reply)| answer.as_deref() == Some(*reply)),
+    );
+    checks.expect(
+        "the first turn labels Alice's message: two people take part, Bob silent",
+        requests.first().is_some_and(|request| {
+            matches!(sent(request).as_slice(), [system, alice]
+                if is_system(system) && is_labelled(alice, "Alice", ALICE_ASKS))
+        }),
+    );
+    checks.expect(
+        "the turn after the restart reads the conversation from the file, each person \
+         labelled as before",
+        requests.get(2).is_some_and(goes_on),
+    );
+}
+
+/// A person's WebSocket client in the checks' conversation.
+struct Client {
+    name: &'static str,
+    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+}
+
+impl Client {
+    /// `name`'s connection to the server at `address`, as the participant
+    /// `user`.
+    async fn connect(
+        address: SocketAddr,
+        user: &str,
+        name: &'static str,
+    ) -> Result<Self, Box<dyn Error>> {
+        let url = format!("ws://{address}/conversations/{CONVERSATION}?user={user}&name={name}");
+        let (socket, _response) = tokio_tungstenite::connect_async(url).await?;
+        println!("{name} connects to {CONVERSATION}.");
+        Ok(Self { name, socket })
+    }
+
+    /// Sends `text`.
+    async fn say(&mut self, text: &str) -> Result<(), Box<dyn Error>> {
+        println!("{} says {text:?}", self.name);
+        self.socket.send(tungstenite::Message::text(text)).await?;
+        Ok(())
+    }
+
+    /// The text of the next message the room delivers, if one comes in
+    /// time.
+    async fn answer(&mut self) -> Option<String> {
+        let next_message = async {
+            while let Some(Ok(received)) = self.socket.next().await {
+                let tungstenite::Message::Text(frame) = received else {
+                    continue;
+                };
+                let frame: Value = serde_json::from_str(frame.as_str()).unwrap_or_default();
+                let field = |key: &str| frame.get(key).and_then(Value::as_str);
+                if field("type") == Some("message") {
+                    return field("text").map(str::to_owned);
+                }
+            }
+            None
+        };
+        let answer = tokio::time::timeout(ANSWER_PATIENCE, next_message)
+            .await
+            .ok()
+            .flatten();
+        println!("  {} receives {answer:?}", self.name);
+        answer
+    }
+
+    /// Closes the connection, and waits for the server to close its side.
+    async fn close(mut self) {
+        // A connection the server closed first is closed already.
+        let _closed = self.socket.close(None).await;
+        let drained = async { while self.socket.next().await.is_some() {} };
+        let _drained = tokio::time::timeout(ANSWER_PATIENCE, drained).await;
+    }
+}
+
+/// The role and text of each message a Chat Completions request sent.
+fn sent(request: &Value) -> Vec<(String, String)> {
+    messages(request)
+        .iter()
+        .map(|message| {
+            let field = |key: &str| message[key].as_str().unwrap_or_default().to_owned();
+            (field("role"), field("content"))
+        })
+        .collect()
+}
+
+/// The messages of a Chat Completions request.
+fn messages(request: &Value) -> Vec<Value> {
+    request["messages"].as_array().cloned().unwrap_or_default()
+}
+
+fn is_system(message: &(String, String)) -> bool {
+    message == &("system".to_owned(), SYSTEM_PROMPT.to_owned())
+}
+
+/// Whether `message` is the user's `text`, labelled `label` (RFC §6.4).
+fn is_labelled(message: &(String, String), label: &str, text: &str) -> bool {
+    message.0 == "user" && message.1.starts_with(&format!("{label}: {text:?}"))
+}
+
+/// Whether the turn after the restart sent the system prompt, then the
+/// conversation before it: Alice's question, the first answer, Bob's, the
+/// second answer, and Alice's new question, labelled `Alice` as before
+/// rather than as a second Alice.
+fn goes_on(request: &Value) -> bool {
+    let sent = sent(request);
+    let [system, alice, first, bob, second, again] = sent.as_slice() else {
+        return false;
+    };
+    let answered = |message: &(String, String), reply: &str| {
+        message == &("assistant".to_owned(), reply.to_owned())
+    };
+    is_system(system)
+        && is_labelled(alice, "Alice", ALICE_ASKS)
+        && REPLIES.first().is_some_and(|reply| answered(first, reply))
+        && is_labelled(bob, "Bob", BOB_ASKS)
+        && REPLIES.get(1).is_some_and(|reply| answered(second, reply))
+        && is_labelled(again, "Alice", ALICE_AGAIN)
+}

@@ -11,9 +11,10 @@ for conversations between humans, AI agents and programs.
 > routing, edits and deletes and instructions to off-lock checks, the
 > processing timeout, direct injection and the reentrant lock. Step 4,
 > under way, brings a first usable version: an AI agent on an
-> OpenAI-compatible endpoint (`roomkit-openai`), then a SQLite store and a
-> server example. The turn backend and streamed responses come later, and
-> the API will change.
+> OpenAI-compatible endpoint (`roomkit-openai`), a SQLite store
+> (`roomkit-sqlite`), and a server example that puts them together; the
+> tag `v0.1.0` comes next. The turn backend and streamed responses come
+> later, and the API will change.
 
 ## Why a Rust implementation
 
@@ -27,7 +28,29 @@ The Python implementation is the reference. This one exists for two reasons:
   the Python code. Every place where the RFC does not say enough is recorded in
   [docs/rfc-gaps.md](docs/rfc-gaps.md).
 
-## A first room
+## Quickstart
+
+[`examples/server_agent.rs`](examples/server_agent.rs) is a whole service:
+an axum server where each WebSocket connection is a person in a room, an AI
+agent answering each message through an OpenAI-compatible endpoint
+(`roomkit-openai`), and the rooms kept in a SQLite file (`roomkit-sqlite`),
+so that a restarted server goes on with each conversation. Run its checks,
+offline against a fake of the OpenAI wire, or serve it and chat with it:
+
+```sh
+cargo run --example server_agent
+OPENAI_BASE_URL=https://api.openai.com/v1 OPENAI_API_KEY=sk-... \
+    OPENAI_MODEL=gpt-6-luna cargo run --example server_agent -- --serve
+websocat 'ws://127.0.0.1:8080/conversations/bakery?user=alice&name=Alice'
+```
+
+Its WebSocket channel is the example's own, a `Channel` in
+[`examples/shared/websocket.rs`](examples/shared/websocket.rs) for a
+service to copy and adapt; axum is a dependency of the examples only.
+
+### A first room
+
+The kit's calls on their own, with the crate's test channels:
 
 ```rust
 use roomkit::RoomKit;
@@ -79,9 +102,9 @@ cargo run --example room_lifecycle
 ```
 
 What they share, a kit on a clock that moves only when told, a scripted
-agent, an SMS number and the checks, is the `shared` library in
-[`examples/shared/`](examples/shared/), so that each example reads as the
-roomkit calls it shows.
+agent, an SMS number, a WebSocket channel and the checks, is the `shared`
+library in [`examples/shared/`](examples/shared/), so that each example
+reads as the roomkit calls it shows.
 
 The RFC's Appendix B flows:
 
@@ -120,6 +143,10 @@ Routing and identities:
 Agents:
 
 - `openai_agent`: an AI agent answers through an OpenAI-compatible endpoint, reading the conversation labelled by speaker; a local fake of the OpenAI wire stands in unless `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODEL` are set.
+
+A server:
+
+- `server_agent`: the quickstart's service, an agent over WebSocket with its rooms in SQLite; its checks restart the server on the same file, and `--serve` keeps it up.
 
 ## Documentation
 

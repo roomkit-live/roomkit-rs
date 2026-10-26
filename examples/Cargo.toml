@@ -21,6 +21,16 @@ serde_json.workspace = true
 # The fake of the OpenAI wire (shared/openai.rs) is a local HTTP server.
 tokio = { workspace = true, features = ["net", "io-util"] }
 
+# The server example's (server_agent.rs), which the shared library does not
+# use: its store, its WebSocket server and the client its checks connect
+# with, and the signal that stops it when it serves.
+[dev-dependencies]
+axum.workspace = true
+futures-util.workspace = true
+roomkit-sqlite.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+tokio-tungstenite.workspace = true
+
 [lints]
 workspace = true
 
@@ -123,3 +133,9 @@ path = "identity_addresses.rs"
 [[example]]
 name = "openai_agent"
 path = "openai_agent.rs"
+
+# A server: an agent over WebSocket, kept in SQLite.
+
+[[example]]
+name = "server_agent"
+path = "server_agent.rs"

@@ -12,6 +12,9 @@
 //!   room's binding names;
 //! - [`OpenAiEndpoint`] and [`FakeOpenAi`]: the endpoint an OpenAI agent
 //!   calls, the environment's or a local fake of the OpenAI wire;
+//! - [`WebSocketChannel`]: a WebSocket transport, its connections each
+//!   following a room;
+//! - [`TempDatabase`]: a database file the example leaves nothing of;
 //! - [`Checks`]: the checks that make an example verify what it shows, and
 //!   its exit code.
 
@@ -20,15 +23,19 @@
 mod agents;
 mod checks;
 mod clock;
+mod files;
 mod observe;
 mod openai;
 mod print;
 mod sms;
+mod websocket;
 
 pub use self::agents::{Script, ScriptedAgent, Turn};
 pub use self::checks::Checks;
 pub use self::clock::{Clock, kit};
+pub use self::files::TempDatabase;
 pub use self::observe::{Log, framework_events};
 pub use self::openai::{FakeOpenAi, OpenAiEndpoint};
 pub use self::print::{print_timeline, timeline};
 pub use self::sms::SmsNumber;
+pub use self::websocket::{ConnectionId, WebSocketChannel};

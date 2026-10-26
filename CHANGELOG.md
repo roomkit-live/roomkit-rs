@@ -402,6 +402,21 @@ as it stands.
   blocking threads, in WAL mode, for one process. The store suite and the
   conformance suite run on it, and a cross-read test reads and rewrites a
   file Python wrote (`make sqlite-fixture`).
+- **The server example** (`server_agent`, step 4 milestone 3): an axum
+  server where each WebSocket connection to
+  `/conversations/{conversation}?user=...&name=...` is a participant of the
+  conversation's room, written through the store, each text frame a
+  message run into the room, and the room's deliveries sent on each of its
+  connections as JSON frames; an `OpenAiAgent` answers each message, and a
+  `SqliteStore` keeps the rooms, so that a restarted server goes on with
+  each conversation's history. Its checks run offline, against the fake of
+  the OpenAI wire and a temporary file: two people in one room, labelled
+  as §6.4 asks, then a restart on the same file whose next turn reads the
+  earlier ones. `--serve [ADDRESS]` keeps it up for a person to chat with.
+  Its WebSocket channel is the example's (`examples/shared/websocket.rs`),
+  not a crate; `axum`, `tokio-tungstenite` and `futures-util` are
+  development dependencies of the examples only. The README's quickstart
+  points at it.
 - **Examples**, one runnable file each, every one checking what it shows:
   the RFC's Appendix B flows (`echo_room`, `new_conversation`,
   `block_and_inject`, `agent_chain`, `advisor_joins`,
@@ -412,6 +427,6 @@ as it stands.
   `names_that_read_alike`),
   routing and
   identities (`shared_sms_number`, `paused_conversation`,
-  `identity_addresses`), and an agent (`openai_agent`, against a local
+  `identity_addresses`), an agent (`openai_agent`, against a local
   fake of the OpenAI wire unless `OPENAI_BASE_URL`, `OPENAI_API_KEY` and
-  `OPENAI_MODEL` name an endpoint).
+  `OPENAI_MODEL` name an endpoint), and a server (`server_agent`).

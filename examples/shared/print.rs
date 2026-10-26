@@ -8,7 +8,10 @@ use roomkit::{ConversationStore, RoomKit, StoreError, is_deleted, is_edited, tex
 /// # Errors
 ///
 /// Returns the store's error when the read fails.
-pub async fn timeline(kit: &RoomKit, room_id: &RoomId) -> Result<Vec<RoomEvent>, StoreError> {
+pub async fn timeline<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    room_id: &RoomId,
+) -> Result<Vec<RoomEvent>, StoreError> {
     kit.store().list_events(room_id, true).await
 }
 
