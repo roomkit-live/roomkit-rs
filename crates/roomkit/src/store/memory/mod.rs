@@ -529,6 +529,9 @@ impl ConversationStore for InMemoryStore {
                     .find(|stored| &stored.id == event_id)
                     .ok_or_else(|| StoreError::EventNotFound(event_id.clone()))?;
                 updates.apply(stored);
+                if events::deletes(&event, event_id) {
+                    events::mark_edits_deleted(&mut record.events, event_id);
+                }
             }
             record.room.event_count = counters.event_count;
             record.room.latest_index = Some(counters.latest_index);

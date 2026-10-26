@@ -3,7 +3,8 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, EventContent, EventStatus, EventUpdates, Room, RoomEvent, RoomId, Timestamp,
+    ChannelId, DeleteContent, DeleteType, EventContent, EventStatus, EventType, EventUpdates, Room,
+    RoomEvent, RoomId, Timestamp,
 };
 use roomkit::store::TargetUpdate;
 use roomkit::{ConversationStore, EventFilter, StoreError};
@@ -524,4 +525,40 @@ async fn an_event_is_found_whichever_room_holds_it() {
         store.get_event(&event_id("evt_0")).await,
         Ok(Some(elsewhere))
     );
+}
+
+/// RFC §10.3: an edit holds a version of the text its target said, so a
+/// delete's commit marks the target's edits deleted with it, as the Python
+/// implementation's stores do, whose histories withhold an edit by its own
+/// mark; an edit of another event keeps its own.
+#[tokio::test]
+async fn a_delete_s_commit_marks_its_target_s_edits_deleted() {
+    let store = with_events(vec![event(0), edit_of(1, 0), event(2), edit_of(3, 2)]).await;
+    let mut delete = event(4);
+    delete.event_type = EventType::Delete;
+    delete.content = EventContent::Delete(DeleteContent {
+        target_event_id: event_id("evt_0"),
+        delete_type: DeleteType::Sender,
+        reason: None,
+    });
+    let deleted = TargetUpdate {
+        event_id: event_id("evt_0"),
+        updates: EventUpdates {
+            metadata: Some([("deleted".to_owned(), json!(true))].into_iter().collect()),
+            ..EventUpdates::default()
+        },
+    };
+    store
+        .commit(delete, counters(4), Some(deleted))
+        .await
+        .unwrap();
+    let marks: Vec<Option<serde_json::Value>> = store
+        .list_events(&room_id(), true)
+        .await
+        .unwrap()
+        .into_iter()
+        .take(4)
+        .map(|event| event.metadata.get("deleted").cloned())
+        .collect();
+    assert_eq!(marks, [Some(json!(true)), Some(json!(true)), None, None]);
 }

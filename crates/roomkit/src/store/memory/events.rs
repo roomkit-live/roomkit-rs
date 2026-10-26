@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 use std::mem;
 
-use roomkit_core::model::{EventId, RoomEvent};
-use roomkit_core::rules::edits;
+use roomkit_core::model::{EventContent, EventId, RoomEvent};
+use roomkit_core::rules::edits::{self, DELETED, Mutation};
 
 /// Removes `event_id` from `events`, with what goes with it (RFC §10.3,
 /// gap G-063):
@@ -63,4 +63,24 @@ fn changes_one_of(event: &RoomEvent, gone: &BTreeSet<&EventId>) -> bool {
         .ok()
         .flatten()
         .is_some_and(|mutation| gone.contains(mutation.target_event_id()))
+}
+
+/// Whether `event` is a delete of `target`, whose commit marks the target's
+/// edits deleted too (RFC §10.3).
+pub(super) fn deletes(event: &RoomEvent, target: &EventId) -> bool {
+    matches!(
+        edits::mutation(event),
+        Ok(Some(Mutation::Delete(delete))) if &delete.target_event_id == target
+    )
+}
+
+/// Marks every edit of `target` among `events` deleted, as the Python
+/// implementation's stores do: an edit holds a version of the deleted text
+/// (RFC §10.3), which a history withholds by the edit's own mark.
+pub(super) fn mark_edits_deleted(events: &mut [RoomEvent], target: &EventId) {
+    for event in events {
+        if matches!(&event.content, EventContent::Edit(edit) if &edit.target_event_id == target) {
+            event.metadata.insert(DELETED.to_owned(), true.into());
+        }
+    }
 }
