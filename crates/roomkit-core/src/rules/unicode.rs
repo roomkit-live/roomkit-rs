@@ -2,15 +2,16 @@
 //! reads them (RFC §6.4, §10.1 step 12, gap G-089): canonical composition
 //! (NFC), the combining marks, the characters `str.isalnum()` accepts, the
 //! characters a person's name keeps, those a name's letters are read past,
-//! and what each character reads as. The tables are generated from roomkit
-//! and the Unicode data of its Python (`unicode_data`), so that both
-//! implementations read a name alike, whatever Unicode version Rust's
-//! standard library carries.
+//! what each character reads as, and the opening and closing punctuation.
+//! The tables are generated from roomkit and the Unicode data of its
+//! Python (`unicode_data`), so that both implementations read a name alike,
+//! whatever Unicode version Rust's standard library carries.
 
 use std::cmp::Ordering;
 
 use super::unicode_data::{
-    ALNUM, COMBINING_CLASSES, COMPOSITIONS, DECOMPOSITIONS, JOINT, MARKS, NAME_CHARS, READS,
+    ALNUM, CLOSING, COMBINING_CLASSES, COMPOSITIONS, DECOMPOSITIONS, JOINT, MARKS, NAME_CHARS,
+    OPENING, READS,
 };
 
 /// Whether `ranges`, inclusive and sorted, holds `c`.
@@ -48,6 +49,17 @@ pub(crate) fn is_name_char(c: char) -> bool {
 /// line-break character, a combining mark of the Latin range.
 pub(crate) fn is_joint(c: char) -> bool {
     within(JOINT, c)
+}
+
+/// Whether `c` is opening punctuation (general category Ps): a bracket,
+/// `[` and its look-alike `［` among them.
+pub(crate) fn is_opening(c: char) -> bool {
+    within(OPENING, c)
+}
+
+/// Whether `c` is closing punctuation (general category Pe).
+pub(crate) fn is_closing(c: char) -> bool {
+    within(CLOSING, c)
 }
 
 /// What `c` reads as, when the look-alike tables read it as something.

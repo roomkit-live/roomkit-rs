@@ -12,6 +12,8 @@ and ranks every author as roomkit does (gap G-089):
 - the characters a person's name keeps (roomkit's `_text._a_name_s`);
 - the combining marks (general category M), the characters `str.isalnum()`
   accepts, and those a name's letters are read past (roomkit's `JOINT`);
+- the opening and closing punctuation (general categories Ps and Pe), the
+  brackets a copy of a runtime mark may open and close with;
 - canonical composition (NFC): each character's full canonical
   decomposition, the canonical combining classes, and the primary
   composites.
@@ -116,6 +118,8 @@ def main() -> None:
         ("MARKS", lambda ch: unicodedata.category(ch).startswith("M"), "The combining marks: general category M."),
         ("ALNUM", str.isalnum, "The characters Python's `str.isalnum()` accepts."),
         ("JOINT", lambda ch: joint.fullmatch(ch) is not None, "The characters a name's letters are read past: roomkit's\n`_lookalike.JOINT`."),
+        ("OPENING", lambda ch: unicodedata.category(ch) == "Ps", "The opening punctuation: general category Ps, `[` and its one\nconfusable, `［`, among them."),
+        ("CLOSING", lambda ch: unicodedata.category(ch) == "Pe", "The closing punctuation: general category Pe, `]` and `］` among them."),
     ):
         items = [f"({rust_char(start)}, {rust_char(end)})" for start, end in ranges(predicate)]
         parts.append(emit(name, "(char, char)", items, 4, doc + "\nInclusive ranges, sorted."))
