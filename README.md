@@ -63,7 +63,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `roomkit-openai`: `OpenAiAgent`, an AI agent channel answering through
   an OpenAI-compatible Chat Completions endpoint.
 - `roomkit-sqlite`: `SqliteStore`, a store in one SQLite file, on the Python
-  implementation's schema: either implementation reads the other's file.
+  implementation's schema: either implementation reads the other's file,
+  as long as its channel types are ones Python lists. A type of your own
+  (`ChannelType::new("slack")`) makes its room unreadable to Python until
+  Python opens its type (RMK-986).
 
 ## Examples
 

@@ -15,6 +15,13 @@
 //! - a file with a newer schema is refused rather than written, and a new
 //!   file is created at version 12, exactly as Python creates it.
 //!
+//! One condition holds for Python to read a file this crate wrote: every
+//! channel type in it is one Python's enumeration lists (`sms`, `teams`,
+//! `discord`, ...). A type of the integrator's own
+//! (`ChannelType::new("slack")`), which roomkit-rs reads and writes as any
+//! other, makes the bindings and events of its room unreadable to the
+//! Python implementation until it opens its type (RoomKit's RMK-986).
+//!
 //! One process uses a file at a time: the store holds one connection,
 //! called on tokio's blocking threads, in the write-ahead log's mode. Other
 //! processes on the same file, and the distributed lock they would need
