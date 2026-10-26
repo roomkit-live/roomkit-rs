@@ -133,6 +133,16 @@ pub(super) enum PassResult {
     },
 }
 
+impl PassResult {
+    /// The room's context at the commit, for a pass that committed.
+    pub(super) fn context(&self) -> Option<&RoomContext> {
+        match self {
+            Self::Delivered { context, .. } | Self::Blocked { context, .. } => Some(context),
+            Self::Refused { .. } | Self::Duplicate { .. } | Self::EditRefused { .. } => None,
+        }
+    }
+}
+
 /// What an accepted edit or delete changed, as its mutation trigger fires
 /// with it (RFC §10.3 "Mutation triggers", §9.2, gap G-062).
 #[derive(Clone, Debug, PartialEq)]

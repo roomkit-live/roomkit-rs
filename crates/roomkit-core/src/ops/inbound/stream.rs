@@ -18,10 +18,13 @@
 //! which commits as a response, through `BEFORE_BROADCAST` once (RFC
 //! §9.5), and is delivered to the others while the turn goes on; its
 //! reader is handed it once the store holds it. A row the target read in
-//! the stream is not delivered to it again (RFC §12.2 step 14s).
+//! the stream is not delivered to it again (RFC §12.2 step 14s). At each
+//! row the room is asked again for the target: once it no longer lets the
+//! target read the response (the agent muted, the target detached, or out
+//! of the agent's visibility), the target reads nothing more in the stream.
 
 use super::delivery::SetKind;
-use super::pass::{CommitPass, PassOrigin};
+use super::pass::{CommitPass, PassOrigin, PassResult};
 use super::queues::Lineage;
 use super::{InboundResult, stamp};
 use crate::model::{
@@ -30,11 +33,12 @@ use crate::model::{
 };
 use crate::ops::Cx;
 use crate::ops::protocol::{
-    ChannelRequest, EffectId, EntryId, Outcome, StoreRequest, StreamTarget, TURN_CUT,
+    ChannelRequest, EffectId, EntryId, Outcome, ROW_HIDDEN, ROW_WITHHELD, StoreRequest,
+    StreamTarget, TURN_CUT,
 };
 use crate::rules::chain_depth::{self, ReentryBudget};
 use crate::rules::hook_registry::HookTrigger;
-use crate::rules::permissions;
+use crate::rules::permissions::{self, DeliveryPlan};
 
 /// A turn's response whose stream is to be read.
 #[derive(Clone, Debug)]
@@ -276,6 +280,46 @@ impl StreamRead {
         let skips = streamed.then(|| self.target.clone()).flatten();
         (pass, skips)
     }
+
+    /// Why the target may not be handed the row whose pass ended with
+    /// `result`, read in the stream when `skips` names the target; `None`
+    /// when it may, the row's delivery then skipping a target that reads it
+    /// in the stream (RFC §12.2 step 14s).
+    ///
+    /// Whatever the row's type, the room as its pass read it is asked again
+    /// for the target: once the agent may no longer write (RFC §7.2), the
+    /// target is no longer bound (§7.5), or the agent's visibility no
+    /// longer reaches it, the response is withdrawn from the target
+    /// ([`ROW_WITHHELD`]), a row stored `BLOCKED` or refused included. A
+    /// message its hooks keep from the target withholds the rest too; a
+    /// tool-call row so kept is only hidden ([`ROW_HIDDEN`]), the stream
+    /// going on (review of step 4 milestone 6).
+    pub(super) fn keeps_from_target(
+        &self,
+        cx: &Cx<'_>,
+        result: &mut PassResult,
+        skips: Option<&ChannelId>,
+    ) -> Option<&'static str> {
+        if let Some(target) = &self.target {
+            let still = result
+                .context()
+                .and_then(|context| answer_plan(cx, &self.job, context))
+                .is_some_and(|plan| delivers_to(&plan, target));
+            if !still {
+                return Some(ROW_WITHHELD);
+            }
+        }
+        let (PassResult::Delivered { event, plan, .. }, Some(skips)) = (result, skips) else {
+            return None;
+        };
+        if !delivers_to(plan, skips) {
+            let message = event.event_type == EventType::Message;
+            return Some(if message { ROW_WITHHELD } else { ROW_HIDDEN });
+        }
+        plan.transports
+            .retain(|target| &target.binding.channel_id != skips);
+        None
+    }
 }
 
 /// The streaming target of `job`'s response in the room as `context` holds
@@ -284,6 +328,21 @@ impl StreamRead {
 /// streams; none when the agent cannot write (RFC §7.5 rule 2), when it is
 /// no longer bound, or when no such transport is bound.
 fn target(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Option<StreamTarget> {
+    let plan = answer_plan(cx, job, context)?;
+    plan.transports.into_iter().find_map(|transport| {
+        let declaration = cx.config.channel(&transport.binding.channel_id)?;
+        (transport.delivers && declaration.supports_streaming_delivery).then(|| StreamTarget {
+            context: Box::new(permissions::context_for(&transport.binding, context)),
+            tool_rows: declaration.receives_tool_calls,
+            binding: transport.binding,
+        })
+    })
+}
+
+/// Whom a text answer of `job`'s agent reaches in the room as `context`
+/// holds it (RFC §10.2 steps 2 and 3d); none when the agent cannot write
+/// (RFC §7.5 rule 2) or is no longer bound.
+fn answer_plan(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Option<DeliveryPlan> {
     let bindings = &context.bindings;
     let responder = context.binding(&job.responder.channel_id)?;
     if permissions::write_refusal(responder).is_some() {
@@ -304,20 +363,19 @@ fn target(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Option<StreamT
     let answer = stamp::stamp_response(answer, responder, &job.answers, job.answers.id.clone());
     let mut answer = stamp::answer_within(answer, job.answers_within.as_ref(), bindings);
     answer.visibility = permissions::effective_visibility(&answer.visibility, responder, bindings);
-    let plan = permissions::plan_delivery(
+    Some(permissions::plan_delivery(
         &answer,
         bindings,
         context.room.agent_response_policy,
         cx.config.max_chain_depth,
-    );
-    plan.transports.into_iter().find_map(|transport| {
-        let declaration = cx.config.channel(&transport.binding.channel_id)?;
-        (transport.delivers && declaration.supports_streaming_delivery).then(|| StreamTarget {
-            context: Box::new(permissions::context_for(&transport.binding, context)),
-            tool_rows: declaration.receives_tool_calls,
-            binding: transport.binding,
-        })
-    })
+    ))
+}
+
+/// Whether `plan` delivers to `channel_id`.
+fn delivers_to(plan: &DeliveryPlan, channel_id: &ChannelId) -> bool {
+    plan.transports
+        .iter()
+        .any(|target| &target.binding.channel_id == channel_id && target.delivers)
 }
 
 /// Fires `ON_ERROR` for the failure of `job`'s stream, `error` (RFC §9.2,

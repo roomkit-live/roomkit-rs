@@ -69,9 +69,11 @@ pub enum Entry {
     /// effect reading the stream; the operation commits it as a response to
     /// the event the stream answers, and settles it with the stored row at
     /// its commit, before its reader is handed it: delivered, refused or
-    /// stored `BLOCKED` as any response, and delivered with the reason
+    /// stored `BLOCKED` as any response. It is settled with the reason
     /// [`ROW_WITHHELD`](super::ROW_WITHHELD) when the stream's target may
-    /// not read it, which its reader is then never handed.
+    /// read nothing more of the response, and [`ROW_HIDDEN`](super::ROW_HIDDEN)
+    /// when only this tool-call row is kept from the target: its reader is
+    /// never handed such a row.
     Row {
         /// The room the stream answers in.
         room_id: RoomId,

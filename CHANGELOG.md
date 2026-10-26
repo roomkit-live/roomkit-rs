@@ -103,7 +103,10 @@ as it stands.
   as it is written, through `Channel::deliver_stream`: a `DeliveryStream`
   of `StreamItem`s, the text deltas, then each row once the store holds it,
   with its id and index (`DeliveryStream::next`); it is never delivered
-  those rows again, and it is handed no row it may not read. The default
+  those rows again, and it is handed no row it may not read, nor anything
+  more of an answer the room withdraws from it mid-turn (the agent muted,
+  the channel detached, the agent's visibility narrowed away from it). The
+  default
   reads the stream to its end, then delivers each row through `deliver()`.
   One such target per response, the first the rows reach; every other
   target receives the rows only. The reader sets the pace: one that stops,

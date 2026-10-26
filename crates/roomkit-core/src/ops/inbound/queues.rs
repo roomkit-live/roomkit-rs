@@ -178,6 +178,11 @@ impl Cascade {
         self.sets.push_back(delivery);
     }
 
+    /// The stream being read, if any.
+    pub(super) fn stream(&self) -> Option<&StreamRead> {
+        self.stream.as_ref()
+    }
+
     /// Queues the stream of a turn to be read, once the cascade's passes
     /// and sets are over; once the cascade stops, it is never read.
     pub(super) fn queue_stream(&mut self, job: StreamJob) {

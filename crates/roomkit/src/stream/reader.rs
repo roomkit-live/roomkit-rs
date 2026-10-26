@@ -29,7 +29,7 @@ use roomkit_core::model::{
     ChannelBinding, ChannelOutput, ErrorRecord, EventDirection, EventId, EventSource, EventType,
     EventUpdates, Metadata, RoomEvent, RoomId,
 };
-use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_WITHHELD, StreamTarget};
+use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_HIDDEN, ROW_WITHHELD, StreamTarget};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::segments::Segments;
@@ -451,19 +451,41 @@ impl Producer {
             event: Box::new(row),
             streamed,
         };
-        let Some((stored, withheld)) = stored(context::adopt_by_own_run(entry).await) else {
-            return;
-        };
-        self.segments.stored(&stored);
-        if withheld {
-            // The target may not read the row: it reads nothing more of the
-            // response in the stream, the rest delivered as each row's plan
-            // says.
-            self.reads = Reads::Lost;
-        } else if streamed {
-            self.ready.push_back(Ok(StreamItem::Row(Box::new(stored))));
+        match settled(context::adopt_by_own_run(entry).await) {
+            Settled::Stored(stored) => {
+                self.segments.stored(&stored);
+                if streamed {
+                    self.ready.push_back(Ok(StreamItem::Row(stored)));
+                }
+            }
+            Settled::Hidden(stored) => self.segments.stored(&stored),
+            Settled::Withheld(stored) => {
+                if let Some(stored) = stored {
+                    self.segments.stored(&stored);
+                }
+                // The target reads nothing more of the response in the
+                // stream, neither text nor rows, the rest delivered as each
+                // row's plan says.
+                self.reads = Reads::Lost;
+            }
+            Settled::Nothing => {}
         }
     }
+}
+
+/// What a row's settled entry tells its reader.
+enum Settled {
+    /// The store holds the row, which the target reads in the stream when
+    /// it reads the stream's rows of its kind.
+    Stored(Box<RoomEvent>),
+    /// The store holds the tool-call row, which the target may not read; it
+    /// reads the rest of the stream ([`ROW_HIDDEN`]).
+    Hidden(Box<RoomEvent>),
+    /// The target may read nothing more of the response in the stream
+    /// ([`ROW_WITHHELD`]); the row, when the store holds it unblocked.
+    Withheld(Option<Box<RoomEvent>>),
+    /// Refused or stored blocked: no reader is handed it.
+    Nothing,
 }
 
 /// Writes the turn's record, `metadata`, on its last message, `event_id`,
@@ -493,18 +515,21 @@ async fn write_record<S: ConversationStore>(
     }
 }
 
-/// The row the store holds, from a row's settled entry, and whether the
-/// target may not read it ([`ROW_WITHHELD`]): none when it was refused or
-/// stored blocked, which no reader is handed.
-fn stored(adopting: Adopting) -> Option<(RoomEvent, bool)> {
+/// What a row's settled entry tells its reader: a row settled
+/// [`ROW_WITHHELD`] withholds the rest of the stream, blocked or refused as
+/// it may be.
+fn settled(adopting: Adopting) -> Settled {
     let Adopting::Settled(result) = adopting else {
-        return None;
+        return Settled::Nothing;
     };
-    match *result {
-        Ok(result) if !result.blocked => {
-            let withheld = result.reason.as_deref() == Some(ROW_WITHHELD);
-            Some((result.event?, withheld))
-        }
-        Ok(_) | Err(_) => None,
+    let Ok(result) = *result else {
+        return Settled::Nothing;
+    };
+    let stored = result.event.filter(|_| !result.blocked).map(Box::new);
+    match (result.reason.as_deref(), stored) {
+        (Some(ROW_WITHHELD), stored) => Settled::Withheld(stored),
+        (Some(ROW_HIDDEN), Some(stored)) => Settled::Hidden(stored),
+        (_, Some(stored)) => Settled::Stored(stored),
+        (_, None) => Settled::Nothing,
     }
 }

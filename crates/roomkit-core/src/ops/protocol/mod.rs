@@ -100,12 +100,22 @@ pub struct Effect {
 /// `delivery_failed` with this error (gap G-048).
 pub const CHANNEL_NOT_REGISTERED: &str = "channel_not_registered";
 
-/// The reason a stream's row ([`Entry::Row`]) is settled with, the row
-/// committed and delivered, when the stream's target may not read it: its
-/// visibility, as its hooks left it, or the target's binding, as the room
-/// holds it, keeps the row from the target, which is handed it neither in
-/// the stream nor through `deliver()`.
+/// The reason a stream's row ([`Entry::Row`]) is settled with when the
+/// stream's target may not read it, and reads nothing more of the response
+/// in the stream: the room, as the row's pass read it, no longer lets the
+/// target read the response (the agent may not write, the target is no
+/// longer bound, or the agent's visibility no longer reaches it), the row
+/// then stored, stored `BLOCKED` or refused; or the row is a message whose
+/// visibility, as its hooks left it, keeps it from the target. The target
+/// is handed the row neither in the stream nor through `deliver()`, and the
+/// rows after it are delivered as their plans say.
 pub const ROW_WITHHELD: &str = "row_withheld";
+
+/// The reason a stream's tool-call row ([`Entry::Row`]) is settled with,
+/// the row committed and delivered, when its visibility, as its hooks left
+/// it, keeps it from the stream's target: the target is not handed it, and
+/// reads the rest of the response in the stream.
+pub const ROW_HIDDEN: &str = "row_hidden";
 
 /// The error type a turn the operation cut is answered with, by the
 /// operation itself ([`Operation::cancel_turns`]): no failure, nothing of it
