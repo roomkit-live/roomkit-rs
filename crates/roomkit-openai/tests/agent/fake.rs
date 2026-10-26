@@ -54,6 +54,34 @@ impl Reply {
         }
     }
 
+    /// A chat completion whose one choice says `text` and calls `name`
+    /// with the argument text `arguments`, as the call `id`.
+    pub(crate) fn calling(text: &str, id: &str, name: &str, arguments: &str) -> Self {
+        let body = json!({
+            "id": "chatcmpl-2",
+            "object": "chat.completion",
+            "model": "fake-model",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": text,
+                    "tool_calls": [{
+                        "id": id,
+                        "type": "function",
+                        "function": { "name": name, "arguments": arguments },
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "usage": { "prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25 },
+        });
+        Self {
+            body: body.to_string(),
+            ..Self::completion("")
+        }
+    }
+
     /// An answer of HTTP `status` holding `body`.
     pub(crate) fn status(status: u16, body: &str) -> Self {
         Self {

@@ -2,15 +2,19 @@
 //! Chat Completions endpoint: OpenAI's, or vLLM's, OpenRouter's, DeepSeek's,
 //! Mistral's, a local server's.
 //!
-//! [`OpenAiAgent`] is an intelligence channel (RFC §6.4): each event the
-//! room hands it is a turn, one completion that is not streamed and calls
-//! no tool. The turn sends the agent's system prompt, then the room's
-//! recent messages as the conversation RFC §6.4 requires
+//! [`OpenAiAgent`] is an intelligence channel (RFC §6.4), `roomkit-ai`'s
+//! [`AiAgent`](roomkit_ai::AiAgent) over the Chat Completions wire: each
+//! event the room hands it is a turn, one tool loop whose generations are
+//! completions, not streamed. The turn sends the agent's system prompt,
+//! then the room's recent messages as the conversation RFC §6.4 requires
 //! ([`roomkit::transcript`]): each in the role of whoever wrote it, labelled
 //! by its speaker once several speak, an instruction marked as the
-//! application's. The answer's text re-enters the room as the agent's
-//! response. A provider error fails the turn: the room keeps the event,
-//! `ON_ERROR` fires, and the caller reads the error on its result.
+//! application's. It declares the tools the agent serves
+//! ([`OpenAiAgent::with_tools`]), runs the calls the model makes and sends
+//! their results back, and the turn's rows re-enter the room as the agent's
+//! response: each round's text, each call's start and end. A provider error
+//! before any round fails the turn: the room keeps the event, `ON_ERROR`
+//! fires, and the caller reads the error on its result.
 //!
 //! ```
 //! use roomkit::RoomKit;

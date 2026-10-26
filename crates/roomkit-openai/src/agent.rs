@@ -1,13 +1,15 @@
-//! The agent: an intelligence channel whose turn is one chat completion.
+//! The agent: the AI channel of `roomkit-ai` over an OpenAI-compatible
+//! Chat Completions endpoint.
 
 use std::fmt;
+use std::sync::Arc;
+use std::time::Duration;
 
-use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventDirection, EventSource, EventType, RoomContext, RoomEvent,
-};
-use roomkit::transcript::{Message, conversation};
+use roomkit::model::{ChannelBinding, ChannelId, ChannelOutput, RoomContext, RoomEvent};
 use roomkit::{Channel, ChannelDeclaration, ChannelError};
+use roomkit_ai::{
+    AiAgent, AiError, AiProvider, AiRequest, ProviderResponse, ResponseStream, ToolPolicy, Toolset,
+};
 
 use crate::config::OpenAiConfig;
 use crate::error::OpenAiError;
@@ -16,29 +18,32 @@ use crate::wire::{self, CompletionRequest};
 /// The path a completion is asked at, after the base URL.
 const COMPLETIONS_PATH: &str = "/chat/completions";
 
-/// The longest answer a turn reads, in bytes: far more than a completion's
-/// text takes.
+/// The longest answer a generation reads, in bytes: far more than a
+/// completion's text and calls take.
 const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 
 /// An AI agent channel answering through an OpenAI-compatible Chat
-/// Completions endpoint (RFC §6.4).
+/// Completions endpoint (RFC §6.4): `roomkit-ai`'s [`AiAgent`] over its
+/// wire.
 ///
 /// Each turn sends the configuration's system prompt, then the conversation
 /// the room hands the agent ([`roomkit::transcript::conversation`]), and
-/// answers with the completion's text. It answers a message or an
-/// instruction, never its own events; a completion with no text answers
-/// nothing. A turn that fails returns an [`OpenAiError`]; an answer longer
-/// than 4 MiB fails it too. Cloning it shares its HTTP client.
+/// declares the tools the agent serves ([`with_tools`](Self::with_tools))
+/// that its policy permits. A completion's calls run, their results go back
+/// in the next completion, and the turn answers with what the model said,
+/// each round's text a message of its own, each call its two rows (see
+/// [`AiAgent`]). It answers a message or an instruction, never its own
+/// events; a turn with no text answers nothing. A completion that fails
+/// returns an [`OpenAiError`]; an answer longer than 4 MiB fails it too.
+/// Cloning it shares its HTTP client and its tools.
 #[derive(Clone)]
 pub struct OpenAiAgent {
-    declaration: ChannelDeclaration,
-    config: OpenAiConfig,
-    endpoint: reqwest::Url,
-    client: reqwest::Client,
+    agent: AiAgent<OpenAiProvider>,
 }
 
 impl OpenAiAgent {
-    /// An agent named `channel_id`, configured by `config`.
+    /// An agent named `channel_id`, configured by `config`, serving no tool
+    /// yet.
     ///
     /// # Errors
     ///
@@ -46,6 +51,97 @@ impl OpenAiAgent {
     /// `https` URL, or holds a query or a fragment, and
     /// [`OpenAiError::Client`] when the HTTP client cannot be built.
     pub fn new(channel_id: ChannelId, config: OpenAiConfig) -> Result<Self, OpenAiError> {
+        let mut agent = AiAgent::new(channel_id, OpenAiProvider::new(config.clone())?)
+            .with_history(config.history);
+        if let Some(prompt) = config.system_prompt {
+            agent = agent.with_system_prompt(prompt);
+        }
+        Ok(Self { agent })
+    }
+
+    /// The channel's id.
+    pub fn id(&self) -> &ChannelId {
+        self.agent.id()
+    }
+
+    /// The same agent, serving the tools of `toolset` too (see
+    /// [`AiAgent::with_tools`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AiError::DuplicateTool`] for a tool under a name the agent
+    /// serves already, or one the toolset declares twice.
+    pub fn with_tools(self, toolset: impl Toolset) -> Result<Self, AiError> {
+        Ok(Self {
+            agent: self.agent.with_tools(toolset)?,
+        })
+    }
+
+    /// The same agent, calling only the tools `policy` permits (RFC
+    /// §21.1).
+    #[must_use]
+    pub fn with_tool_policy(self, policy: ToolPolicy) -> Self {
+        Self {
+            agent: self.agent.with_tool_policy(policy),
+        }
+    }
+
+    /// The same agent, running at most `rounds` rounds of calls per turn
+    /// (Appendix A.9, 50 by default).
+    #[must_use]
+    pub fn with_max_rounds(self, rounds: u32) -> Self {
+        Self {
+            agent: self.agent.with_max_rounds(rounds),
+        }
+    }
+
+    /// The same agent, giving each tool's call `bound` at most (RFC §21.6,
+    /// 30 seconds by default); `None` bounds nothing.
+    #[must_use]
+    pub fn with_tool_timeout(self, bound: Option<Duration>) -> Self {
+        Self {
+            agent: self.agent.with_tool_timeout(bound),
+        }
+    }
+}
+
+impl Channel for OpenAiAgent {
+    fn declaration(&self) -> ChannelDeclaration {
+        self.agent.declaration()
+    }
+
+    async fn on_event(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        self.agent.on_event(event, binding, context).await
+    }
+}
+
+impl fmt::Debug for OpenAiAgent {
+    /// The channel's id, its tools and its configuration, whose `Debug`
+    /// hides the API key and the base URL's credentials.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenAiAgent")
+            .field("agent", &self.agent)
+            .field("config", &self.agent.provider().config)
+            .finish()
+    }
+}
+
+/// The provider of an OpenAI-compatible endpoint: one generation is one
+/// Chat Completions call, not streamed.
+pub(crate) struct OpenAiProvider {
+    config: Arc<OpenAiConfig>,
+    endpoint: reqwest::Url,
+    client: reqwest::Client,
+}
+
+impl OpenAiProvider {
+    /// The provider `config` names.
+    fn new(config: OpenAiConfig) -> Result<Self, OpenAiError> {
         let endpoint = endpoint(&config.base_url)?;
         // An API endpoint has no use for a redirect, which could carry the
         // key to another scheme of the same host.
@@ -54,42 +150,17 @@ impl OpenAiAgent {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(OpenAiError::client)?;
-        let mut declaration = ChannelDeclaration::new(
-            channel_id,
-            ChannelType::AI,
-            ChannelCategory::Intelligence,
-            ChannelDirection::Bidirectional,
-        );
-        declaration.provider_name = Some("openai".to_owned());
         Ok(Self {
-            declaration,
-            config,
+            config: Arc::new(config),
             endpoint,
             client,
         })
     }
 
-    /// The channel's id.
-    pub fn id(&self) -> &ChannelId {
-        &self.declaration.channel_id
-    }
-
-    /// Whether the agent takes a turn on `event`: a message or an
-    /// instruction, never one of its own (RFC §6.4).
-    fn answers(&self, event: &RoomEvent) -> bool {
-        &event.source.channel_id != self.id()
-            && (event.event_type == EventType::Message
-                || event.event_type == EventType::Instruction)
-    }
-
-    /// The text the model answers `conversation` with, if any.
-    async fn complete(&self, conversation: &[Message]) -> Result<Option<String>, OpenAiError> {
-        let request = CompletionRequest::new(
-            &self.config.model,
-            self.config.system_prompt.as_deref(),
-            conversation,
-        );
-        let mut call = self.client.post(self.endpoint.clone()).json(&request);
+    /// The completion answering `request`.
+    async fn complete(&self, request: &AiRequest) -> Result<ProviderResponse, OpenAiError> {
+        let body = CompletionRequest::new(&self.config.model, request);
+        let mut call = self.client.post(self.endpoint.clone()).json(&body);
         if !self.config.api_key.is_empty() {
             call = call.bearer_auth(&self.config.api_key);
         }
@@ -99,56 +170,17 @@ impl OpenAiAgent {
         if !status.is_success() {
             return Err(wire::status_error(status, &body, &self.config.api_key));
         }
-        wire::answer(&body, &self.config.api_key)
-    }
-
-    /// The agent's response to `event`, saying `text`.
-    fn response(&self, event: &RoomEvent, text: String) -> RoomEvent {
-        let source = EventSource::new(self.id().clone(), ChannelType::AI, EventDirection::Outbound);
-        // The pipeline gives the response its own id and depth, and makes it
-        // answer the event that asked: the id written here is a placeholder.
-        RoomEvent::new(
-            event.id.clone(),
-            event.room_id.clone(),
-            EventType::Message,
-            source,
-            EventContent::text(text),
-            event.created_at,
-        )
+        wire::response(&body, &self.config.api_key)
     }
 }
 
-impl Channel for OpenAiAgent {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+impl AiProvider for OpenAiProvider {
+    fn name(&self) -> Option<&str> {
+        Some("openai")
     }
 
-    async fn on_event(
-        &self,
-        event: RoomEvent,
-        _binding: ChannelBinding,
-        context: RoomContext,
-    ) -> Result<ChannelOutput, ChannelError> {
-        if !self.answers(&event) {
-            return Ok(ChannelOutput::default());
-        }
-        let conversation = conversation(self.id(), &event, &context, self.config.history);
-        let output = match self.complete(&conversation).await? {
-            Some(text) => ChannelOutput::respond(vec![self.response(&event, text)]),
-            None => ChannelOutput::default(),
-        };
-        Ok(output)
-    }
-}
-
-impl fmt::Debug for OpenAiAgent {
-    /// The channel's id and its configuration, whose `Debug` hides the API
-    /// key and the base URL's credentials.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OpenAiAgent")
-            .field("channel_id", self.id())
-            .field("config", &self.config)
-            .finish_non_exhaustive()
+    fn generate<'a>(&'a self, request: &'a AiRequest) -> ResponseStream<'a> {
+        ProviderResponse::into_stream(async move { Ok(self.complete(request).await?) })
     }
 }
 

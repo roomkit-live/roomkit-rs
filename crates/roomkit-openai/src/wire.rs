@@ -2,7 +2,9 @@
 //! of the answer.
 
 use reqwest::StatusCode;
+use roomkit::model::Metadata;
 use roomkit::transcript::{Message, Role};
+use roomkit_ai::{AiRequest, Done, ProviderResponse, ProviderToolCall};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -14,42 +16,119 @@ const MESSAGE_LIMIT: usize = 500;
 /// The longest error type or code an error keeps, in characters.
 const NAME_LIMIT: usize = 64;
 
-/// A Chat Completions request: one completion, not streamed, with no tool.
+/// A Chat Completions request: one completion, not streamed, declaring the
+/// round's tools when it has any, and neither `tool_choice` nor
+/// `parallel_tool_calls`.
 #[derive(Debug, Serialize)]
 pub(crate) struct CompletionRequest<'a> {
     model: &'a str,
     messages: Vec<WireMessage<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<WireTool<'a>>,
 }
 
 /// One message of a request.
 #[derive(Debug, Serialize)]
 struct WireMessage<'a> {
     role: &'static str,
-    content: &'a str,
+    /// The text; `null` for an assistant's message that only calls.
+    content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<WireCall<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<&'a str>,
+}
+
+/// A call an assistant's message made, as the wire writes it: its
+/// arguments as JSON text.
+#[derive(Debug, Serialize)]
+struct WireCall<'a> {
+    id: &'a str,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: WireFunction<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct WireFunction<'a> {
+    name: &'a str,
+    arguments: String,
+}
+
+/// A tool a request declares.
+#[derive(Debug, Serialize)]
+struct WireTool<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: WireToolFunction<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct WireToolFunction<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a Value,
 }
 
 impl<'a> CompletionRequest<'a> {
-    /// The request asking `model` to answer `conversation`, after
-    /// `system_prompt` when there is one.
-    pub(crate) fn new(
-        model: &'a str,
-        system_prompt: Option<&'a str>,
-        conversation: &'a [Message],
-    ) -> Self {
-        let system = system_prompt
+    /// The request asking `model` to answer `request`: its system prompt
+    /// when it has one, its conversation, its tools.
+    pub(crate) fn new(model: &'a str, request: &'a AiRequest) -> Self {
+        let system = request
+            .system_prompt
+            .as_deref()
             .filter(|prompt| !prompt.is_empty())
             .map(|prompt| WireMessage {
                 role: "system",
-                content: prompt,
+                content: Some(prompt),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
             });
         let messages = system
             .into_iter()
-            .chain(conversation.iter().map(|message| WireMessage {
-                role: role(message.role),
-                content: &message.text,
-            }))
+            .chain(request.messages.iter().map(wire_message))
             .collect();
-        Self { model, messages }
+        let tools = request
+            .tools
+            .iter()
+            .map(|tool| WireTool {
+                kind: "function",
+                function: WireToolFunction {
+                    name: &tool.name,
+                    description: &tool.description,
+                    parameters: &tool.parameters,
+                },
+            })
+            .collect();
+        Self {
+            model,
+            messages,
+            tools,
+        }
+    }
+}
+
+/// `message` as the wire writes it.
+fn wire_message(message: &Message) -> WireMessage<'_> {
+    let calls: Vec<WireCall<'_>> = message
+        .tool_calls
+        .iter()
+        .map(|call| WireCall {
+            id: &call.id,
+            kind: "function",
+            function: WireFunction {
+                name: &call.name,
+                arguments: Value::Object(call.arguments.clone()).to_string(),
+            },
+        })
+        .collect();
+    // An assistant's message that only calls has no text.
+    let content = Some(message.text.as_str()).filter(|text| calls.is_empty() || !text.is_empty());
+    WireMessage {
+        role: role(message.role),
+        content,
+        tool_calls: calls,
+        tool_call_id: message.tool_call_id.as_deref(),
     }
 }
 
@@ -57,6 +136,7 @@ impl<'a> CompletionRequest<'a> {
 fn role(role: Role) -> &'static str {
     match role {
         Role::Assistant => "assistant",
+        Role::Tool => "tool",
         // A role this agent does not know yet reads as a user's: never as
         // the model's own words, nor as the system's.
         Role::User | _ => "user",
@@ -67,12 +147,16 @@ fn role(role: Role) -> &'static str {
 #[derive(Debug, Deserialize)]
 struct Completion {
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Option<Usage>,
 }
 
 /// One choice of a completion.
 #[derive(Debug, Deserialize)]
 struct Choice {
     message: AnswerMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 /// The message a choice answers with.
@@ -80,30 +164,113 @@ struct Choice {
 struct AnswerMessage {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<AnswerCall>,
 }
 
-/// The text a completion's first choice answers with; `None` when it has
-/// none (an empty answer, or a refusal the provider gives apart).
+/// A call the answer makes.
+#[derive(Debug, Deserialize)]
+struct AnswerCall {
+    #[serde(default)]
+    id: String,
+    function: AnswerFunction,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnswerFunction {
+    #[serde(default)]
+    name: String,
+    /// The arguments' JSON text; some servers send an object instead.
+    #[serde(default)]
+    arguments: Value,
+}
+
+/// What a completion used.
+#[derive(Debug, Deserialize)]
+struct Usage {
+    #[serde(default)]
+    prompt_tokens: i64,
+    #[serde(default)]
+    completion_tokens: i64,
+    #[serde(default)]
+    prompt_tokens_details: Option<PromptDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PromptDetails {
+    #[serde(default)]
+    cached_tokens: i64,
+}
+
+/// What a completion's first choice answers: its text, empty when it has
+/// none (an empty answer, or a refusal the provider gives apart), its
+/// calls, why it stopped, and what it used, as the turn's record counts it
+/// (`input_tokens` without the cache's, `output_tokens`,
+/// `cache_read_input_tokens`).
 ///
 /// # Errors
 ///
 /// Returns [`OpenAiError::Malformed`] when `body` is no chat completion,
 /// saying why without `secret`, the API key.
-pub(crate) fn answer(body: &[u8], secret: &str) -> Result<Option<String>, OpenAiError> {
+pub(crate) fn response(body: &[u8], secret: &str) -> Result<ProviderResponse, OpenAiError> {
     let malformed = |reason: String| OpenAiError::Malformed {
         reason: cleaned(&reason, secret, MESSAGE_LIMIT),
     };
     let completion: Completion =
         serde_json::from_slice(body).map_err(|error| malformed(error.to_string()))?;
+    let usage = completion.usage.map(usage_of).unwrap_or_default();
     let choice = completion
         .choices
         .into_iter()
         .next()
         .ok_or_else(|| malformed("it has no choice".to_owned()))?;
-    Ok(choice
+    let text = choice
         .message
         .content
-        .filter(|text| !text.trim().is_empty()))
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_default();
+    let calls = choice
+        .message
+        .tool_calls
+        .into_iter()
+        .map(|call| {
+            let arguments = match call.function.arguments {
+                Value::String(text) => text,
+                Value::Null => String::new(),
+                other
+                @ (Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
+                    other.to_string()
+                }
+            };
+            ProviderToolCall::new(call.id, call.function.name, arguments)
+        })
+        .collect();
+    Ok(ProviderResponse::new(
+        text,
+        calls,
+        Done::new(choice.finish_reason, usage),
+    ))
+}
+
+/// A completion's usage as the turn's record counts it.
+fn usage_of(usage: Usage) -> Metadata {
+    let cached = usage
+        .prompt_tokens_details
+        .map(|details| details.cached_tokens)
+        .unwrap_or_default();
+    let mut counted = Metadata::new();
+    counted.insert(
+        "input_tokens".to_owned(),
+        Value::from(usage.prompt_tokens.saturating_sub(cached).max(0)),
+    );
+    counted.insert(
+        "output_tokens".to_owned(),
+        Value::from(usage.completion_tokens),
+    );
+    if cached > 0 {
+        counted.insert("cache_read_input_tokens".to_owned(), Value::from(cached));
+    }
+    counted
 }
 
 /// The error an answer of HTTP `status` holding `body` fails a turn with:
@@ -187,15 +354,48 @@ mod tests {
     }
 
     #[test]
-    fn a_completion_without_text_answers_nothing() {
+    fn a_completion_without_text_says_nothing() {
         let body = br#"{"choices": [{"message": {"role": "assistant", "content": null}}]}"#;
-        assert_eq!(answer(body, "sk-1"), Ok(None));
+        assert_eq!(
+            response(body, "sk-1").map(|read| read.text),
+            Ok(String::new())
+        );
+    }
+
+    #[test]
+    fn a_completion_s_calls_keep_their_argument_text() {
+        let body = br#"{"choices": [{"finish_reason": "tool_calls", "message": {"content": null,
+            "tool_calls": [{"id": "call_1", "type": "function",
+                "function": {"name": "lookup", "arguments": "{\"order\": \"42\"}"}}]}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 7,
+                "prompt_tokens_details": {"cached_tokens": 40}}}"#;
+        let read = response(body, "sk-1").unwrap();
+        assert_eq!(
+            (
+                read.calls,
+                read.done.finish_reason,
+                Value::Object(read.done.usage)
+            ),
+            (
+                vec![ProviderToolCall::new(
+                    "call_1",
+                    "lookup",
+                    r#"{"order": "42"}"#
+                )],
+                Some("tool_calls".to_owned()),
+                serde_json::json!({
+                    "input_tokens": 60,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 40
+                })
+            )
+        );
     }
 
     #[test]
     fn a_completion_with_no_choice_is_malformed() {
         assert_eq!(
-            answer(br#"{"id": "chatcmpl-1", "choices": []}"#, "sk-1"),
+            response(br#"{"id": "chatcmpl-1", "choices": []}"#, "sk-1"),
             Err(OpenAiError::Malformed {
                 reason: "it has no choice".to_owned()
             })
@@ -205,7 +405,7 @@ mod tests {
     #[test]
     fn a_malformed_answer_s_reason_holds_no_key() {
         let body = br#"{"choices": "sk-1"}"#;
-        let error = answer(body, "sk-1").unwrap_err();
+        let error = response(body, "sk-1").unwrap_err();
         assert!(!error.to_string().contains("sk-1"), "{error}");
     }
 }

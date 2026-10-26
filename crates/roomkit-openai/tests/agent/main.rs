@@ -22,6 +22,7 @@ use roomkit::{
     ConversationStore, HookExecution, HookSpec, HookTrigger, InboundResult, RoomKit,
     SequentialEnvironment, text_of,
 };
+use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -60,6 +61,26 @@ impl Room {
         api_key: &str,
         adjust: impl FnOnce(OpenAiConfig) -> OpenAiConfig,
     ) -> Self {
+        Self::built(replies, api_key, adjust, |agent| agent).await
+    }
+
+    /// The room, its agent serving `tools`.
+    async fn serving(replies: Vec<Reply>, tools: Tools) -> Self {
+        Self::built(
+            replies,
+            API_KEY,
+            |config| config,
+            |agent| agent.with_tools(tools).unwrap(),
+        )
+        .await
+    }
+
+    async fn built(
+        replies: Vec<Reply>,
+        api_key: &str,
+        adjust: impl FnOnce(OpenAiConfig) -> OpenAiConfig,
+        equip: impl FnOnce(OpenAiAgent) -> OpenAiAgent,
+    ) -> Self {
         let fake = FakeOpenAi::start(replies).await;
         let kit = RoomKit::new();
         kit.set_environment(SequentialEnvironment::new(
@@ -71,7 +92,7 @@ impl Room {
             OpenAiConfig::new(fake.base_url(), api_key, "fake-model")
                 .with_system_prompt(SYSTEM_PROMPT),
         );
-        let agent = OpenAiAgent::new(channel("assistant"), config).unwrap();
+        let agent = equip(OpenAiAgent::new(channel("assistant"), config).unwrap());
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(web.clone()).unwrap();
         kit.register_channel(agent).unwrap();
@@ -162,6 +183,61 @@ async fn a_turn_posts_the_system_prompt_and_the_conversation_to_chat_completions
                 { "role": "user", "content": "Are you open on Sunday?" },
             ],
         })
+    );
+}
+
+/// RFC §6.4: the round declares the tools, and the call's result goes back
+/// in the next completion, after the assistant's message that made it.
+#[tokio::test]
+async fn a_call_s_result_goes_back_in_the_next_completion() {
+    let lookup = ToolDefinition::new(
+        "lookup_order",
+        "Find an order",
+        json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
+    );
+    let tools = Tools::new().tool(lookup, |_call, _context| async {
+        Ok(ToolOutput::Json(json!({ "status": "shipped" })))
+    });
+    let replies = vec![
+        Reply::calling(
+            "Let me check.",
+            "call_1",
+            "lookup_order",
+            r#"{"order": "42"}"#,
+        ),
+        Reply::completion("It shipped."),
+    ];
+    let room = Room::serving(replies, tools).await;
+    room.says(&room.sms, "+15550001", "Alice", "Where is order 42?")
+        .await;
+    let requests = room.fake.requests();
+    assert_eq!(
+        (
+            requests[0].body["tools"].clone(),
+            messages(&room.fake, 1).get(2..).unwrap().to_vec()
+        ),
+        (
+            json!([{
+                "type": "function",
+                "function": {
+                    "name": "lookup_order",
+                    "description": "Find an order",
+                    "parameters": { "type": "object", "properties": { "order": { "type": "string" } } },
+                },
+            }]),
+            vec![
+                json!({
+                    "role": "assistant",
+                    "content": "Let me check.",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": { "name": "lookup_order", "arguments": r#"{"order":"42"}"# },
+                    }],
+                }),
+                json!({ "role": "tool", "tool_call_id": "call_1", "content": r#"{"status":"shipped"}"# }),
+            ]
+        )
     );
 }
 
