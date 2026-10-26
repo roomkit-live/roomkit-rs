@@ -16,7 +16,9 @@ as it stands.
   string newtype with the well-known names as constants
   (`ChannelType::SMS`, `ChannelType::TEAMS`, ..., `DISCORD` and `BUZZ`,
   which the Python implementation writes), serialized as the plain name,
-  so any name a shared store holds is read and written back. Write
+  so any name a shared store holds is read and written back. A name is
+  lowercase ASCII letters, digits, `_` and `-` (`ModelError::InvalidChannelType`
+  otherwise), as every name Python writes. Write
   `ChannelType::SMS` for `ChannelType::Sms`, and compare instead of
   matching. How a channel's senders are addressed is its declaration's
   (`ChannelDeclaration::addressing`, the type's default unless the channel
@@ -379,19 +381,22 @@ as it stands.
   no key), the stored `delivery_results` kept by every write but the
   commit, the idempotency lookup from a channel or within the room
   (`get_event_by_idempotency_key`), hard deletes and event counts (§13.4,
-  §14.3, gaps G-079, G-080).
+  §14.3, gaps G-079, G-080); a delete's commit marks its target's edits
+  deleted, and a binding stored again keeps its place, as the Python
+  implementation's stores do. A history hands an edit marked deleted as an
+  edit, its new content withheld (§10.3).
 - **The SQLite store** (`roomkit-sqlite`, step 4 milestone 2):
   `SqliteStore::open(path)`, a `ConversationStore` in one SQLite file on
   the Python implementation's schema, version 12, so that either
-  implementation reads the other's file: the same tables and indexed
-  columns, each record's JSON in `data`; a record's members roomkit-rs does
-  not model kept when it rewrites the record; the tables Python derives
-  from the timeline kept right (idempotency keys, the full-text index,
-  which a deleted message leaves, and the index sequences); a delete's
-  commit marking its target's edits deleted, as Python's store does and its
-  histories read (RFC §10.3); the delivery cursor read from its column; the tables it does not use left alone; a
-  new file created at version 12 as Python creates it, and a file of
-  another version refused (`OpenError`). One connection on tokio's
+  implementation reads the other's file, as long as its channel types are
+  ones Python lists (RMK-986): the same tables and indexed columns, each
+  record's JSON in `data`; a record's members roomkit-rs does not model
+  kept when it rewrites the record; the tables Python derives from the
+  timeline kept right (idempotency keys, the full-text index, which a
+  deleted message leaves, and the index sequences); the delivery cursor
+  read from its column; the tables it does not use left alone; a new file,
+  and its missing directory, created at version 12 as Python creates it,
+  and a file of another version refused (`OpenError`). One connection on tokio's
   blocking threads, in WAL mode, for one process. The store suite and the
   conformance suite run on it, and a cross-read test reads and rewrites a
   file Python wrote (`make sqlite-fixture`).
