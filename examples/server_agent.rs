@@ -9,7 +9,10 @@
 //!   conversation's (RFC §5.5). A new conversation's room is created with
 //!   the agent and the `websocket` channel attached.
 //! - Each text frame it sends is a message from `alice` into that room,
-//!   through the inbound pipeline (RFC §10.1).
+//!   through the inbound pipeline (RFC §10.1). A message the room refuses,
+//!   or whose turn fails, gets `{"error": "..."}` back, a reason of the
+//!   server's own. A message over 64 KiB closes the connection with 1009,
+//!   and a stop closes them all with 1001.
 //! - The room's deliveries to `websocket` go out on each of the room's
 //!   connections, one JSON frame per event: the agent's answers. A room
 //!   delivers an event to every channel but its source (RFC §10.1), so the
@@ -51,7 +54,7 @@ use std::time::Duration;
 use std::{env, io};
 
 use axum::Router;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{self, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -65,7 +68,7 @@ use roomkit::model::{
 use roomkit::{ConversationStore, Environment, RoomKit, SystemEnvironment, text_of};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use roomkit_sqlite::SqliteStore;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -79,6 +82,12 @@ const SYSTEM_PROMPT: &str = "You answer the customers of a bakery, in one short 
 /// keeps its rooms in.
 const SERVE_ADDRESS: &str = "127.0.0.1:8080";
 const SERVE_DATABASE: &str = "server_agent.db";
+
+/// What a client is told when the agent's turn on its message failed, and
+/// when the room refused its message: neither says more, so that no
+/// provider's error or room's state reaches it.
+const TURN_FAILED: &str = "the agent could not answer";
+const REFUSED: &str = "the room refused the message";
 
 /// The largest message a connection may send, in bytes.
 const MESSAGE_LIMIT: usize = 64 * 1024;
@@ -106,6 +115,11 @@ const KITCHEN: &str = "kitchen";
 const DAVE_LATE: &str = "Sorry, I was away. Is there any rye left?";
 const LARGE_POST: usize = 60 * 1024;
 const POSTS_AT_MOST: usize = 400;
+
+/// The conversation where the model is unreachable, and how long a client
+/// there waits to be told.
+const CELLAR: &str = "cellar";
+const TOLD_PATIENCE: Duration = Duration::from_secs(2);
 
 /// The receive buffer of a client that falls behind, in bytes.
 const SMALL_BUFFER: u32 = 4096;
@@ -390,74 +404,146 @@ impl App {
     ) {
         let _counted = self.live.enter();
         let (outgoing, incoming) = socket.split();
-        let mut writer = pin!(write(outgoing, frames, self.patience.send));
-        let reader_ended = tokio::select! {
-            () = &mut writer => false,
-            () = self.read(incoming, &room_id, &user) => true,
+        let patience = self.patience.send;
+        let mut writer = pin!(write(outgoing, frames, patience));
+        let ending = tokio::select! {
+            _ = &mut writer => return,
+            ending = self.read(incoming, &registration, &room_id, &user) => ending,
         };
         drop(registration);
-        if reader_ended {
-            // What was queued goes out, then the close.
-            writer.await;
-        }
+        // What was queued goes out, then the close that answers the ending.
+        let Some(mut outgoing) = writer.await else {
+            return;
+        };
+        // A socket gone meanwhile has nothing more to close.
+        let _closed = match ending {
+            Ending::Broken => return,
+            Ending::Closed => tokio::time::timeout(patience, outgoing.close()).await,
+            Ending::Stopping => {
+                let close = close_frame(close_code::AWAY, "the server is stopping");
+                tokio::time::timeout(patience, outgoing.send(close)).await
+            }
+            Ending::TooLarge => {
+                let close = close_frame(close_code::SIZE, "the message is too large");
+                tokio::time::timeout(patience, outgoing.send(close)).await
+            }
+        };
     }
 
     /// Reads `user`'s messages on `incoming` into `room_id`, until the
-    /// client closes the connection or the server stops.
+    /// client closes the connection, breaks it or sends a message over the
+    /// limit, or the server stops.
     async fn read(
         &self,
         mut incoming: SplitStream<WebSocket>,
+        registration: &Registration,
         room_id: &RoomId,
         user: &ParticipantId,
-    ) {
+    ) -> Ending {
         let mut stopping = self.stopping.clone();
         loop {
             let received = tokio::select! {
                 received = incoming.next() => received,
-                _ = stopping.wait_for(|stop| *stop) => None,
+                _ = stopping.wait_for(|stop| *stop) => return Ending::Stopping,
             };
             match received {
-                Some(Ok(Message::Text(text))) => self.say(room_id, user, text.as_str()).await,
+                Some(Ok(Message::Text(text))) => {
+                    self.say(registration, room_id, user, text.as_str()).await;
+                }
                 Some(Ok(Message::Binary(_) | Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Close(_)) | Err(_)) | None => return,
+                Some(Ok(Message::Close(_))) => return Ending::Closed,
+                Some(Err(error)) => return Ending::of(error),
+                None => return Ending::Broken,
             }
         }
     }
 
-    /// `user`'s message `text`, into the room `room_id`.
-    async fn say(&self, room_id: &RoomId, user: &ParticipantId, text: &str) {
+    /// `user`'s message `text`, into the room `room_id`. A message the room
+    /// refused, or whose turn failed, gets an error frame on the
+    /// connection, `{"error": "..."}`, its reason one of the server's own.
+    async fn say(
+        &self,
+        registration: &Registration,
+        room_id: &RoomId,
+        user: &ParticipantId,
+        text: &str,
+    ) {
         let message = InboundMessage::new(
             self.websocket.id().clone(),
             user.as_str(),
             EventContent::text(text),
         );
-        match self.kit.process_inbound_in(room_id, message).await {
-            Ok(result) => {
-                if let Some(error) = result.error {
-                    println!("  the turn on {user}'s message failed: {}", error.message);
-                }
+        let told = match self.kit.process_inbound_in(room_id, message).await {
+            Ok(result) if result.blocked => {
+                println!("  {user}'s message was refused: {:?}", result.reason);
+                REFUSED
             }
-            Err(error) => println!("  {user}'s message was refused: {error}"),
-        }
+            Ok(result) => {
+                let Some(error) = result.error else {
+                    return;
+                };
+                println!("  the turn on {user}'s message failed: {}", error.message);
+                TURN_FAILED
+            }
+            Err(error) => {
+                println!("  {user}'s message was refused: {error}");
+                REFUSED
+            }
+        };
+        // A connection that cannot take it now is not waited for.
+        let _told = registration.send(json!({ "error": told }).to_string());
     }
 }
 
 /// Sends each frame of `frames` on `outgoing` until the queue ends, then
-/// closes the socket. Each send gets `patience`: one that takes longer, a
-/// client that stopped reading, or that fails ends it at once.
+/// hands the socket back for its close. Each send gets `patience`: one that
+/// takes longer, a client that stopped reading, or that fails ends it at
+/// once, with no socket to close.
 async fn write(
     mut outgoing: SplitSink<WebSocket, Message>,
     mut frames: mpsc::Receiver<String>,
     patience: Duration,
-) {
+) -> Option<SplitSink<WebSocket, Message>> {
     while let Some(frame) = frames.recv().await {
         let sent = tokio::time::timeout(patience, outgoing.send(Message::Text(frame.into()))).await;
         if !matches!(sent, Ok(Ok(()))) {
-            return;
+            return None;
         }
     }
-    // A socket already gone has nothing more to close.
-    let _closed = tokio::time::timeout(patience, outgoing.close()).await;
+    Some(outgoing)
+}
+
+/// How a connection's reading ended, which decides how it is closed.
+#[derive(Clone, Copy, Debug)]
+enum Ending {
+    /// The client closed it: its close is answered.
+    Closed,
+    /// The server stops: closed with 1001, going away.
+    Stopping,
+    /// The client sent a message over the limit: closed with 1009, too
+    /// large.
+    TooLarge,
+    /// The connection broke: nothing more is sent.
+    Broken,
+}
+
+impl Ending {
+    /// The ending a read's `error` makes: too large for a message over the
+    /// limit, broken for any other.
+    fn of(error: axum::Error) -> Self {
+        match error.into_inner().downcast::<tungstenite::Error>() {
+            Ok(error) if matches!(*error, tungstenite::Error::Capacity(_)) => Self::TooLarge,
+            Ok(_) | Err(_) => Self::Broken,
+        }
+    }
+}
+
+/// A close frame of `code`, saying `reason`.
+fn close_frame(code: u16, reason: &'static str) -> Message {
+    Message::Close(Some(CloseFrame {
+        code,
+        reason: reason.into(),
+    }))
 }
 
 /// `--serve`: the server on `address`, until Ctrl+C.
@@ -486,6 +572,7 @@ async fn check() -> Result<ExitCode, Box<dyn Error>> {
     let mut checks = Checks::default();
     the_conversation_survives_a_restart(&mut checks).await?;
     a_client_stops_reading(&mut checks).await?;
+    what_a_client_is_told(&mut checks).await?;
     Ok(checks.finish())
 }
 
@@ -606,6 +693,55 @@ async fn a_client_stops_reading(checks: &mut Checks) -> Result<(), Box<dyn Error
     Ok(())
 }
 
+/// What a client is told. The model unreachable, Frank's message gets an
+/// error frame; Grace's message over the limit closes her connection with
+/// 1009 (too large); the server's stop closes Frank's with 1001 (going
+/// away).
+async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    println!("The model is unreachable.");
+    let endpoint = unreachable_model().await?;
+    let database = TempDatabase::new("server_agent_cellar");
+    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let mut frank = Client::connect(server.address, CELLAR, "frank", "Frank").await?;
+    frank.say("Is anyone there?").await?;
+    let told = frank.next_frame(TOLD_PATIENCE).await;
+    println!("  Frank receives {told:?}");
+    let mut grace = Client::connect(server.address, CELLAR, "grace", "Grace").await?;
+    println!("Grace sends a message one byte over the limit.");
+    grace.send("a".repeat(MESSAGE_LIMIT + 1)).await?;
+    let too_large = grace.close_code(TOLD_PATIENCE).await;
+    tokio::time::timeout(STOP_PATIENCE, server.stop()).await??;
+    let going_away = frank.close_code(TOLD_PATIENCE).await;
+
+    checks.expect(
+        "a turn that fails tells its client, with a reason that holds no secret",
+        told.as_ref()
+            .and_then(|frame| frame.get("error"))
+            .and_then(Value::as_str)
+            == Some(TURN_FAILED),
+    );
+    checks.expect(
+        "a message over the limit closes its connection with 1009, too large",
+        too_large == Some(1009),
+    );
+    checks.expect(
+        "a stop closes the connections with 1001, going away",
+        going_away == Some(1001),
+    );
+    Ok(())
+}
+
+/// An endpoint where nothing listens: a port the system gave and took
+/// back.
+async fn unreachable_model() -> Result<OpenAiEndpoint, Box<dyn Error>> {
+    let address = TcpListener::bind(ANY_PORT).await?.local_addr()?;
+    Ok(OpenAiEndpoint::Real {
+        base_url: format!("http://{address}/v1"),
+        api_key: String::new(),
+        model: "unreachable".to_owned(),
+    })
+}
+
 /// The timeline of the room `conversation`, as the file holds it once the
 /// servers are gone.
 async fn timeline_in(
@@ -705,6 +841,43 @@ impl Client {
         println!("{} says {text:?}", self.name);
         self.socket.send(tungstenite::Message::text(text)).await?;
         Ok(())
+    }
+
+    /// Sends `text` without printing it: a large one.
+    async fn send(&mut self, text: String) -> Result<(), Box<dyn Error>> {
+        self.socket.send(tungstenite::Message::text(text)).await?;
+        Ok(())
+    }
+
+    /// The next JSON frame the server sends, if one comes within
+    /// `patience`.
+    async fn next_frame(&mut self, patience: Duration) -> Option<Value> {
+        let next = async {
+            while let Some(Ok(received)) = self.socket.next().await {
+                if let tungstenite::Message::Text(frame) = received {
+                    return serde_json::from_str(frame.as_str()).ok();
+                }
+            }
+            None
+        };
+        tokio::time::timeout(patience, next).await.ok().flatten()
+    }
+
+    /// The code of the close frame the server sends, past any other frame;
+    /// `None` when the connection ends without one, or none comes within
+    /// `patience`.
+    async fn close_code(&mut self, patience: Duration) -> Option<u16> {
+        let closed = async {
+            while let Some(Ok(received)) = self.socket.next().await {
+                if let tungstenite::Message::Close(frame) = received {
+                    return frame.map(|frame| u16::from(frame.code));
+                }
+            }
+            None
+        };
+        let code = tokio::time::timeout(patience, closed).await.ok().flatten();
+        println!("  {} is closed with the code {code:?}", self.name);
+        code
     }
 
     /// The text of the next message the room delivers, if one comes in

@@ -408,7 +408,9 @@ as it stands.
   conversation's room, written through the store, each text frame a
   message run into the room, and the room's deliveries sent on each of its
   connections as JSON frames, each send bounded, a client that stops
-  reading dropped, reader included; an `OpenAiAgent` answers each message, and a
+  reading dropped, reader included; a refused message or a failed turn
+  answered with an error frame, a message over the limit closed with
+  1009, a stop with 1001; an `OpenAiAgent` answers each message, and a
   `SqliteStore` keeps the rooms, so that a restarted server goes on with
   each conversation's history. Its checks run offline, against the fake of
   the OpenAI wire and a temporary file: two people in one room, labelled

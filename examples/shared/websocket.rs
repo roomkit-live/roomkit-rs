@@ -120,6 +120,16 @@ impl Registration {
     pub fn id(&self) -> ConnectionId {
         self.id
     }
+
+    /// Queues `frame` for this connection alone, as a delivery is queued:
+    /// `false` when it cannot take it now or is gone.
+    pub fn send(&self, frame: String) -> bool {
+        self.channel
+            .lock()
+            .open
+            .get(&self.id)
+            .is_some_and(|connection| connection.frames.try_send(frame).is_ok())
+    }
 }
 
 impl Drop for Registration {
