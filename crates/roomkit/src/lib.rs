@@ -54,6 +54,7 @@ mod locks;
 mod queues;
 mod router;
 pub mod store;
+mod stream;
 mod tasks;
 pub mod testing;
 mod tools;
@@ -90,6 +91,7 @@ pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
 pub use self::store::{
     ConversationStore, EventFilter, InMemoryStore, RoomFilter, StoreError, StoreFailure,
 };
+pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem};
 pub use self::tools::{ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict};
 pub use self::turn::{ToolGate, TurnHost, current_turn};
 

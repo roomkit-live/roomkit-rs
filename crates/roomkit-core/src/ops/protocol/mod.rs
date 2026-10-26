@@ -25,7 +25,7 @@ pub(crate) use answers::RequestKind;
 pub use entries::{Decided, Entry, EntryId, Settled};
 pub use requests::{
     ChannelOutcome, ChannelRequest, HoldOutcome, HoldRequest, HookAnswer, HookRequest, Outcome,
-    Request, StoreOutcome, StoreRequest,
+    Request, StoreOutcome, StoreRequest, StreamTarget,
 };
 pub use results::{InboundError, InboundResult};
 

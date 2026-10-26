@@ -15,6 +15,7 @@
 mod calls;
 mod generation;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::TurnHost;
@@ -105,21 +106,22 @@ pub(crate) struct Bounds {
     pub(crate) tool_timeout: Option<Duration>,
 }
 
-/// One turn's loop: what it calls and how.
-pub(crate) struct Loop<'a, P> {
-    pub(crate) provider: &'a P,
-    pub(crate) toolbox: &'a Toolbox,
-    pub(crate) policy: &'a ToolPolicy,
-    pub(crate) bounds: &'a Bounds,
+/// One turn's loop: what it calls and how, owned, so that the turn's
+/// stream outlives the turn's `on_event()`, which hands it to the kit.
+pub(crate) struct Loop<P> {
+    pub(crate) provider: Arc<P>,
+    pub(crate) toolbox: Arc<Toolbox>,
+    pub(crate) policy: ToolPolicy,
+    pub(crate) bounds: Bounds,
     pub(crate) system_prompt: Option<String>,
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.
     pub(crate) turn: Option<TurnHost>,
     pub(crate) context: ToolContext,
 }
 
-impl<'a, P: AiProvider> Loop<'a, P> {
+impl<P: AiProvider> Loop<P> {
     /// The loop's items on `conversation`, as its reader pulls them.
-    pub(crate) fn run(self, conversation: Vec<Message>) -> TurnItems<'a> {
+    pub(crate) fn run(self, conversation: Vec<Message>) -> TurnItems<'static> {
         items(move |out| self.rounds(conversation, out))
     }
 
@@ -130,7 +132,7 @@ impl<'a, P: AiProvider> Loop<'a, P> {
         mut messages: Vec<Message>,
         out: Yielder<Result<TurnItem, ProviderError>>,
     ) {
-        let declared = self.toolbox.declared(self.policy);
+        let declared = self.toolbox.declared(&self.policy);
         let mut usage = Metadata::new();
         let mut had_tool_round = false;
         for round in 0..=self.bounds.max_rounds {
@@ -139,7 +141,7 @@ impl<'a, P: AiProvider> Loop<'a, P> {
                 messages.clone(),
                 declared.clone(),
             );
-            let generation = match Generation::read(self.provider, &request, round, &out).await {
+            let generation = match Generation::read(&*self.provider, &request, round, &out).await {
                 Ok(generation) => generation,
                 Err(error) => return failed(round, usage, error, &out).await,
             };

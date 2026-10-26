@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use roomkit::model::Metadata;
 
 use crate::provider::{
-    AiProvider, AiRequest, Done, ProviderResponse, ProviderToolCall, ResponseStream,
+    AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderToolCall, ResponseStream,
 };
+use crate::stream::{Yielder, items};
 
 /// A provider answering each generation with the next round of its script,
 /// and keeping each request it was asked. A generation past the script
@@ -40,16 +41,22 @@ struct Script {
 }
 
 /// One generation's answer: its text, its calls, why it stopped and what it
-/// used.
+/// used; or its text, then a failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ScriptedRound {
     /// What the model says.
     pub text: String,
+    /// The pieces it writes its text in, one text event each; none writes
+    /// the text in one.
+    pub deltas: Vec<String>,
     /// The calls it makes, each with its argument text.
     pub calls: Vec<ProviderToolCall>,
     /// How the generation ends.
     pub done: Done,
+    /// The failure the generation ends on, once its text is written, before
+    /// its calls and its done event: the provider's stream fails.
+    pub fails: Option<String>,
 }
 
 impl ScriptedRound {
@@ -57,8 +64,20 @@ impl ScriptedRound {
     pub fn answering(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
+            deltas: Vec::new(),
             calls: Vec::new(),
             done: Done::new(Some("stop".to_owned()), Metadata::new()),
+            fails: None,
+        }
+    }
+
+    /// A round answering the text `deltas` join to, written in those
+    /// pieces, calling nothing, ended `stop`.
+    pub fn writing<'a>(deltas: impl IntoIterator<Item = &'a str>) -> Self {
+        let deltas: Vec<String> = deltas.into_iter().map(str::to_owned).collect();
+        Self {
+            deltas: deltas.clone(),
+            ..Self::answering(deltas.concat())
         }
     }
 
@@ -70,12 +89,31 @@ impl ScriptedRound {
     ) -> Self {
         Self {
             text: text.into(),
+            deltas: Vec::new(),
             calls: calls
                 .into_iter()
                 .map(|(id, name, arguments)| ProviderToolCall::new(id, name, arguments))
                 .collect(),
             done: Done::new(Some("tool_calls".to_owned()), Metadata::new()),
+            fails: None,
         }
+    }
+
+    /// The same round, written in the pieces `deltas`, which join to its
+    /// text.
+    #[must_use]
+    pub fn in_pieces<'a>(mut self, deltas: impl IntoIterator<Item = &'a str>) -> Self {
+        self.deltas = deltas.into_iter().map(str::to_owned).collect();
+        self.text = self.deltas.concat();
+        self
+    }
+
+    /// The same round, failing with `message` once its text is written:
+    /// the provider's stream fails mid-answer.
+    #[must_use]
+    pub fn failing(mut self, message: impl Into<String>) -> Self {
+        self.fails = Some(message.into());
+        self
     }
 
     /// The same round, ending for `finish_reason`.
@@ -125,9 +163,37 @@ impl AiProvider for ScriptedProvider {
             script.requests.push(request.clone());
             script.rounds.pop_front()
         };
-        ProviderResponse::into_stream(async move {
-            let round = round.ok_or("the scripted model has no round left")?;
-            Ok(ProviderResponse::new(round.text, round.calls, round.done))
-        })
+        Box::pin(items(
+            move |out: Yielder<Result<ProviderEvent, ProviderError>>| async move {
+                let Some(round) = round else {
+                    return out
+                        .give(Err("the scripted model has no round left".into()))
+                        .await;
+                };
+                for delta in round.pieces() {
+                    out.give(Ok(ProviderEvent::Text(delta))).await;
+                }
+                if let Some(failure) = round.fails {
+                    return out.give(Err(failure.into())).await;
+                }
+                for call in round.calls {
+                    out.give(Ok(ProviderEvent::ToolCall(call))).await;
+                }
+                out.give(Ok(ProviderEvent::Done(round.done))).await;
+            },
+        ))
+    }
+}
+
+impl ScriptedRound {
+    /// The pieces the round writes its text in.
+    fn pieces(&self) -> Vec<String> {
+        if !self.deltas.is_empty() {
+            return self.deltas.clone();
+        }
+        if self.text.is_empty() {
+            return Vec::new();
+        }
+        vec![self.text.clone()]
     }
 }

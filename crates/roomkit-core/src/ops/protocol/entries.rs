@@ -13,7 +13,7 @@
 //! its delivery.
 
 use super::{InboundError, InboundResult};
-use crate::model::{DirectEvent, InboundMessage, Post, RoomId};
+use crate::model::{DirectEvent, InboundMessage, Post, RoomEvent, RoomId};
 
 /// Identifies an adopted entry within its operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -63,6 +63,23 @@ pub enum Entry {
         /// The post.
         post: Box<Post>,
     },
+    /// A row of a turn's streamed response, which its reader read to its
+    /// end: a text segment, a call's start or a call's end (RFC §12.2 step
+    /// 13s). Its origin is the [`ChannelRequest::ReadStream`](super::ChannelRequest::ReadStream)
+    /// effect reading the stream; the operation commits it as a response to
+    /// the event the stream answers, and settles it with the stored row at
+    /// its commit, before its reader is handed it.
+    Row {
+        /// The room the stream answers in.
+        room_id: RoomId,
+        /// The row as the stream wrote it: its type, its content and its
+        /// metadata; the pipeline stamps the rest, as on any response.
+        event: Box<RoomEvent>,
+        /// Whether the stream's target reads the row in the stream, or
+        /// stopped reading it: its delivery skips that target, which is
+        /// never handed one row twice (RFC §12.2 step 14s).
+        streamed: bool,
+    },
 }
 
 impl Entry {
@@ -71,7 +88,8 @@ impl Entry {
         match self {
             Self::Message { room_id, .. }
             | Self::Direct { room_id, .. }
-            | Self::Post { room_id, .. } => room_id,
+            | Self::Post { room_id, .. }
+            | Self::Row { room_id, .. } => room_id,
         }
     }
 }

@@ -1,12 +1,18 @@
-//! A turn's loop, buffered into the rows its response returns (RFC §6.4):
-//! each round's text as a MESSAGE, its calls' `TOOL_CALL_START` rows, then
-//! their `TOOL_CALL_END` rows in call order, the last MESSAGE carrying the
-//! turn's record.
+//! A turn's loop as its response: streamed to the kit item by item (RFC
+//! §6.1 `response_stream`), or, for a turn run outside a kit, buffered into
+//! the rows its output returns (RFC §6.4): each round's text as a MESSAGE,
+//! its calls' `TOOL_CALL_START` rows, then their `TOOL_CALL_END` rows in
+//! call order, the last MESSAGE carrying the turn's record.
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use futures_core::Stream;
 use roomkit::model::{
-    ChannelOutput, ErrorRecord, EventContent, EventSource, EventType, RoomEvent, ToolCall,
-    ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    ChannelOutput, ErrorRecord, EventContent, EventSource, EventType, Metadata, RoomEvent,
+    ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
+use roomkit::{ChannelError, ResponseItem, ResponseStream};
 use serde_json::Value;
 
 use crate::provider::ProviderError;
@@ -65,11 +71,11 @@ impl Rows<'_> {
             TurnItem::Text(delta) => self.segment.push_str(&delta),
             TurnItem::ToolStart(call) => {
                 self.end_segment();
-                let row = start_content(&call);
+                let row = EventContent::ToolCall(start_row(&call));
                 self.push(EventType::ToolCallStart, row);
             }
             TurnItem::ToolEnd(end) => {
-                let row = end_content(end);
+                let row = EventContent::ToolCall(end_row(end));
                 self.push(EventType::ToolCallEnd, row);
             }
             TurnItem::End(end) => {
@@ -98,12 +104,7 @@ impl Rows<'_> {
         else {
             return;
         };
-        message
-            .metadata
-            .insert(LOOP_END_REASON.to_owned(), Value::from(end.reason.as_str()));
-        message
-            .metadata
-            .insert(AI_USAGE.to_owned(), Value::Object(end.usage.clone()));
+        message.metadata.extend(record_of(end));
     }
 
     fn push(&mut self, event_type: EventType, content: EventContent) {
@@ -132,16 +133,59 @@ impl Rows<'_> {
     }
 }
 
+/// The turn's response, its loop's items as the kit reads them (RFC §6.1
+/// `response_stream`): text, each call's start and end rows, the turn's
+/// record, or the provider's error that ends it.
+pub(crate) fn response(turn: TurnItems<'static>) -> ResponseStream {
+    Box::pin(Responding { turn })
+}
+
+/// A turn's items read as its response.
+struct Responding {
+    turn: TurnItems<'static>,
+}
+
+impl Stream for Responding {
+    type Item = Result<ResponseItem, ChannelError>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let item = match Pin::new(&mut self.get_mut().turn).poll_next(context) {
+            Poll::Ready(item) => item,
+            Poll::Pending => return Poll::Pending,
+        };
+        Poll::Ready(item.map(|item| item.map(response_item)))
+    }
+}
+
+/// One item of the loop, as the response reads it.
+fn response_item(item: TurnItem) -> ResponseItem {
+    match item {
+        TurnItem::Text(delta) => ResponseItem::Text(delta),
+        TurnItem::ToolStart(call) => ResponseItem::ToolStart(start_row(&call)),
+        TurnItem::ToolEnd(end) => ResponseItem::ToolEnd(end_row(end)),
+        TurnItem::End(end) => ResponseItem::End(record_of(&end)),
+    }
+}
+
+/// The turn's record (RFC §6.4 "The turn's record"): how it ended and what
+/// its rounds used.
+fn record_of(end: &LoopEnd) -> Metadata {
+    let mut record = Metadata::new();
+    record.insert(LOOP_END_REASON.to_owned(), Value::from(end.reason.as_str()));
+    record.insert(AI_USAGE.to_owned(), Value::Object(end.usage.clone()));
+    record
+}
+
 /// A call's start row: its tool, its id and the model's arguments, pending.
-fn start_content(call: &ToolCall) -> EventContent {
+fn start_row(call: &ToolCall) -> ToolCallContent {
     let mut row = ToolCallContent::new(call.name.clone(), call.id.clone());
     row.arguments.clone_from(&call.arguments);
-    EventContent::ToolCall(row)
+    row
 }
 
 /// A call's end row: the arguments it ran with, how it ended, what the
 /// model read of it, and, when it did not serve, the same as its error.
-fn end_content(end: ToolEnd) -> EventContent {
+fn end_row(end: ToolEnd) -> ToolCallContent {
     let mut row = ToolCallContent::new(end.call.name, end.call.id);
     row.arguments = end.call.arguments;
     let served = end.outcome == ToolCallOutcome::Served;
@@ -154,5 +198,5 @@ fn end_content(end: ToolEnd) -> EventContent {
     row.error = (!served).then(|| end.result.clone());
     row.result = Value::String(end.result);
     row.duration_ms = u64::try_from(end.duration.as_millis()).ok();
-    EventContent::ToolCall(row)
+    row
 }

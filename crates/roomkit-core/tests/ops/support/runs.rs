@@ -498,6 +498,8 @@ impl Sim {
                 organization_id,
                 post,
             } => Inbound::post(config, room_id, organization_id, *post),
+            // No scripted channel streams: no stream's row is handed back.
+            Entry::Row { .. } => unreachable!("the simulated driver reads no stream"),
         };
         let operation = match call
             .context

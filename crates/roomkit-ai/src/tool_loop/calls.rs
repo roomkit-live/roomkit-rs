@@ -25,7 +25,7 @@ enum Gated {
     Refused(ToolCallEvent),
 }
 
-impl<P: AiProvider> Loop<'_, P> {
+impl<P: AiProvider> Loop<P> {
     /// Serves `called`: its gate, then its tool, then the kit's hooks on a
     /// served result; reports it once to the kit's observers (RFC §9.3:
     /// every call fires `ON_TOOL_CALL` once), and ends it as the model

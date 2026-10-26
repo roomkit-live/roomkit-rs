@@ -66,16 +66,13 @@ pub struct ChannelDeclaration {
     /// text (gap noted in docs/rfc-gaps.md, step 4 milestone 5). Its type's
     /// default: `true` for `websocket` and `webhook`.
     pub receives_tool_calls: bool,
-    /// Whether the channel, an intelligence channel, answers each turn as
-    /// one stream (RFC §6.1, §8.3), as an AI agent does, rather than as
-    /// buffered events. A stream another event's delivery asks for is a
-    /// chained stream: it draws one pass of its cascade's reentry budget
-    /// before the turn runs, and past the budget the turn does not run,
-    /// its channel's answer stored `BLOCKED` with `reentry_loop_cap`;
-    /// whatever its turn returns then re-enters without drawing more. A
-    /// buffered answer draws one pass per event as it re-enters. `false`
-    /// by default.
-    pub answers_as_stream: bool,
+    /// Whether the channel, a transport, takes a streamed response as it is
+    /// written (RFC §6.1 `supports_streaming_delivery`): the first transport
+    /// a response's rows reach that does reads its stream through its
+    /// `deliver_stream()`, the text as it comes and each row once the store
+    /// holds it, and is not delivered those rows again (RFC §12.2 steps 13s
+    /// and 14s). `false` by default.
+    pub supports_streaming_delivery: bool,
 }
 
 impl ChannelDeclaration {
@@ -99,7 +96,7 @@ impl ChannelDeclaration {
             chat_key: addresses::chat_key(&channel_type).map(str::to_owned),
             receives_tool_calls: channel_type == ChannelType::WEBSOCKET
                 || channel_type == ChannelType::WEBHOOK,
-            answers_as_stream: false,
+            supports_streaming_delivery: false,
             channel_type,
             category,
             direction,

@@ -10,12 +10,13 @@
 //! room lock, so sets keep index order: one event's set completes before
 //! the next one's begins (RFC §10.2).
 
-use super::delivery::{DeliverySet, Response, SetKind, SetOutcome};
+use super::delivery::{DeliverySet, Response, SetKind, SetOutcome, StreamedTurn};
 use super::holds::AfterTicket;
-use super::job::{Finished, Job, RecordNote};
+use super::job::{Finished, Job, RecordNote, RowNote};
 use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
 use super::queues::{Delivery, Lineage};
 use super::record::{RecordPass, RecordReport, RecordResult};
+use super::stream::{self, StreamJob};
 use super::{InboundError, InboundResult, Machine, instructions, report, stamp};
 use crate::model::{ChannelCategory, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId};
 use crate::ops::{Abort, Cx};
@@ -73,7 +74,7 @@ impl Machine {
                 finished @ Finished::Pass(Err(_), PassOrigin::Trigger) => {
                     return self.release_ticket(cx, AfterTicket::Settle(Box::new(finished)));
                 }
-                Finished::Pass(..) | Finished::Record(..) => {
+                Finished::Pass(..) | Finished::Record(..) | Finished::Row(..) => {
                     return self.settle_released(cx, finished);
                 }
             }
@@ -86,6 +87,12 @@ impl Machine {
         match finished {
             Finished::Pass(Ok(report), origin) => self.on_pass(cx, report, &origin),
             Finished::Record(Ok(report), note) => self.on_record(cx, report, note),
+            Finished::Row(Ok(report), note) => self.on_row(cx, report, &note),
+            Finished::Row(Err(abort), note) => {
+                cx.io
+                    .settle(note.entry, Ok(stream::row_refused("store_failed")));
+                self.abort(cx, abort);
+            }
             Finished::Pass(Err(abort), _) | Finished::Record(Err(abort), _) => {
                 self.abort(cx, abort);
             }
@@ -112,6 +119,23 @@ impl Machine {
             let decided = Ok(self.trigger.result.clone());
             self.publish(cx, &decided);
         }
+    }
+
+    /// A row's pass is over: its reader is handed what it stored, at its
+    /// commit, and it joins the cascade as a response, its delivery skipping
+    /// the stream's target when that target read it in the stream (RFC
+    /// §12.2 step 14s).
+    fn on_row(&mut self, cx: &mut Cx<'_>, mut report: PassReport, note: &RowNote) {
+        cx.io.settle(note.entry, Ok(entry_result(&report.result)));
+        if let (PassResult::Delivered { plan, .. }, Some(skips)) = (&mut report.result, &note.skips)
+        {
+            plan.transports
+                .retain(|target| &target.binding.channel_id != skips);
+        }
+        let origin = PassOrigin::Response {
+            answers_within: None,
+        };
+        self.add_to_cascade(cx, report, &origin);
     }
 
     /// What every pass adds to the cascade, whichever cascade it belongs
@@ -291,15 +315,30 @@ impl Machine {
                 },
             ));
         }
-        for agent in outcome.capped {
-            let record =
-                chain_depth::not_asked_record(cx.env.new_event_id(), event, &agent, cx.env.now());
-            let record =
-                stamp::answer_within(record, set.answers_within(), &set.context().bindings);
-            self.queue_refused(record, chain_depth::REENTRY_LOOP_CAP);
-        }
         for response in outcome.responses {
             self.queue_response(cx, response, set);
+        }
+        self.queue_streams(outcome.streams, set);
+    }
+
+    /// Queues the streams of the turns `set` asked, to be read once the
+    /// cascade's passes and sets are over (RFC §10.1 step 14); a cascade
+    /// whose turns are cut reads none (RFC §10.1 "Explicit delivery
+    /// cancellation").
+    fn queue_streams(&mut self, streams: Vec<StreamedTurn>, set: &DeliverySet) {
+        if self.cascade.turns_cut && set.lineage() == Lineage::Call {
+            return;
+        }
+        for StreamedTurn { responder, turn } in streams {
+            let job = StreamJob::new(
+                turn,
+                responder,
+                set.event().clone(),
+                set.kind(),
+                set.lineage(),
+                set.context().bindings.clone(),
+            );
+            self.cascade.queue_stream(job);
         }
     }
 
@@ -326,11 +365,8 @@ impl Machine {
     /// G-066).
     ///
     /// A buffered response draws one pass of the cascade's reentry budget
-    /// per event (RFC §8.3 "Reentry cap"). The answer of a channel whose
-    /// turn is one stream (`answers_as_stream`) draws none here: a chained
-    /// stream drew its pass before its turn ran, and one the trigger's own
-    /// delivery set asked for draws none, as a stream is read whichever
-    /// pass started it.
+    /// per event (RFC §8.3 "Reentry cap"); a turn whose response is a stream
+    /// draws its pass, when it is a chained stream, as it is read.
     fn queue_response(&mut self, cx: &mut Cx<'_>, response: Response, set: &DeliverySet) {
         // A cascade whose turns are cut takes no reentry (RFC §10.1
         // "Explicit delivery cancellation").
@@ -340,10 +376,6 @@ impl Machine {
         let Response { responder, events } = response;
         let trigger = set.event();
         let at_limit = chain_depth::reaches_limit(trigger.chain_depth, cx.config.max_chain_depth);
-        let streamed = cx
-            .config
-            .channel(&responder.channel_id)
-            .is_some_and(|declaration| declaration.answers_as_stream);
         let reentering = events
             .into_iter()
             .filter(|event| instructions::reenters(event, &responder.channel_id, trigger));
@@ -354,7 +386,7 @@ impl Machine {
                 // Only a transport is asked at the limit; what it answers is
                 // stored refused (RFC §8.3).
                 self.queue_refused(event, chain_depth::CHAIN_DEPTH_LIMIT);
-            } else if streamed || self.cascade.budget.take_pass() {
+            } else if self.cascade.budget.take_pass() {
                 let origin = PassOrigin::Response {
                     answers_within: set.answers_within().cloned(),
                 };
@@ -366,7 +398,7 @@ impl Machine {
         }
     }
 
-    fn queue_refused(&mut self, mut event: RoomEvent, blocked_by: &str) {
+    pub(super) fn queue_refused(&mut self, mut event: RoomEvent, blocked_by: &str) {
         event.blocked_by = Some(blocked_by.to_owned());
         self.cascade.queue(Job::Record(
             Box::new(RecordPass::new(event)),

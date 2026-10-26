@@ -10,6 +10,8 @@ use roomkit_core::model::{
 };
 use roomkit_core::ops::{ChannelDeclaration, default_inbound_event};
 
+use crate::stream::{DeliveryStream, StreamItem};
+
 /// What a channel's call failed with. The pipeline records it as the error's
 /// message; it never reaches a model or another channel.
 pub type ChannelError = Box<dyn Error + Send + Sync>;
@@ -128,6 +130,58 @@ pub trait Channel: Send + Sync + 'static {
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         async { Ok(ChannelOutput::default()) }
     }
+
+    /// Delivers a response as it is written (RFC §6.1 `deliver_stream`), for
+    /// a channel whose declaration says it
+    /// [`supports_streaming_delivery`](ChannelDeclaration::supports_streaming_delivery):
+    /// `stream` yields the response's text as it comes and each row once the
+    /// store holds it, with its id and its index; the channel is never
+    /// delivered those rows again. It sets the pace: returning before the
+    /// stream's end, or dropping it, stops the response, the text it was
+    /// handed stored marked `cancelled` (RFC §12.2 step 13s). The text is
+    /// shown before `BEFORE_BROADCAST` judges the row it ends in.
+    ///
+    /// The default reads the stream to its end, then delivers each row
+    /// through [`deliver`](Channel::deliver); a response that fails is
+    /// delivered as far as it came, then the failure is returned.
+    fn deliver_stream(
+        &self,
+        stream: DeliveryStream,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        async move {
+            let (rows, failure) = buffered(stream).await;
+            let mut output = ChannelOutput::default();
+            for row in rows {
+                let delivered = self.deliver(row, binding.clone(), context.clone()).await?;
+                output.tasks.extend(delivered.tasks);
+                output.observations.extend(delivered.observations);
+                output.metadata_updates.extend(delivered.metadata_updates);
+            }
+            match failure {
+                Some(failure) => Err(failure),
+                None => Ok(output),
+            }
+        }
+    }
+}
+
+/// The rows of `stream`, read to its end, and the failure it ended on.
+async fn buffered(mut stream: DeliveryStream) -> (Vec<RoomEvent>, Option<ChannelError>) {
+    let mut rows = Vec::new();
+    while let Some(item) = std::future::poll_fn(|context| {
+        futures_core::Stream::poll_next(Pin::new(&mut stream), context)
+    })
+    .await
+    {
+        match item {
+            Ok(StreamItem::Row(row)) => rows.push(*row),
+            Ok(StreamItem::Text(_)) => {}
+            Err(failure) => return (rows, Some(failure)),
+        }
+    }
+    (rows, None)
 }
 
 /// A boxed, sendable future, as a channel or a router behind a trait object
@@ -154,6 +208,13 @@ pub(crate) trait DynChannel: Send + Sync {
     fn deliver(
         &self,
         event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>>;
+
+    fn deliver_stream(
+        &self,
+        stream: DeliveryStream,
         binding: ChannelBinding,
         context: RoomContext,
     ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>>;
@@ -185,5 +246,14 @@ impl<C: Channel> DynChannel for C {
         context: RoomContext,
     ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>> {
         Box::pin(Channel::deliver(self, event, binding, context))
+    }
+
+    fn deliver_stream(
+        &self,
+        stream: DeliveryStream,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>> {
+        Box::pin(Channel::deliver_stream(self, stream, binding, context))
     }
 }

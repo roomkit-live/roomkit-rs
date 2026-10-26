@@ -85,7 +85,7 @@ use roomkit_core::model::{ChannelCategory, RoomId};
 use roomkit_core::ops::{ChannelRequest, Effect, EffectId, Request};
 use roomkit_core::rules::chain_depth::{self, Draw, ReentryBudget};
 
-pub(crate) use self::adoption::{Adopting, Adoption, Reply, adopt};
+pub(crate) use self::adoption::{Adopting, Adoption, Reply, adopt, adopt_by_own_run};
 use self::run::Lease;
 pub(crate) use self::run::RunShared;
 
@@ -205,6 +205,12 @@ impl Work {
             Request::Channel(ChannelRequest::Deliver { binding, .. }) => {
                 (Some(binding.room_id.clone()), None)
             }
+            // A turn's stream is read as the turn's work: it delivers in the
+            // room, its tools' calls at its response's depth.
+            Request::Channel(ChannelRequest::ReadStream { answers, .. }) => (
+                Some(answers.room_id.clone()),
+                Some(chain_depth::response_depth(answers)),
+            ),
             Request::Channel(ChannelRequest::HandleInbound { .. })
             | Request::Hold(_)
             | Request::Store(_)

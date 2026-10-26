@@ -46,9 +46,11 @@ impl Request {
             Self::Hold(request) => request.kind(),
             Self::Store(request) => request.kind(),
             Self::Channel(ChannelRequest::HandleInbound { .. }) => RequestKind::HandleInbound,
-            Self::Channel(ChannelRequest::OnEvent { .. } | ChannelRequest::Deliver { .. }) => {
-                RequestKind::ChannelCall
-            }
+            Self::Channel(
+                ChannelRequest::OnEvent { .. }
+                | ChannelRequest::Deliver { .. }
+                | ChannelRequest::ReadStream { .. },
+            ) => RequestKind::ChannelCall,
             Self::Hook(HookRequest::RunHook { .. }) => RequestKind::RunHook,
             Self::Hook(HookRequest::RunObservers { .. }) => RequestKind::RunObservers,
             Self::Route { .. } => RequestKind::Route,
@@ -146,7 +148,10 @@ impl RequestKind {
             Self::Write => matches!(outcome, Outcome::Store(StoreOutcome::Stored)),
             Self::ResolveIdentity => matches!(outcome, Outcome::Store(StoreOutcome::Resolved(_))),
             Self::HandleInbound => matches!(outcome, Outcome::Channel(ChannelOutcome::Parsed(_))),
-            Self::ChannelCall => matches!(outcome, Outcome::Channel(ChannelOutcome::Output(_))),
+            Self::ChannelCall => matches!(
+                outcome,
+                Outcome::Channel(ChannelOutcome::Output(_) | ChannelOutcome::Streamed(_))
+            ),
             Self::RunHook => matches!(outcome, Outcome::Hook(HookAnswer::Ran(_))),
             Self::RunObservers => matches!(outcome, Outcome::Hook(HookAnswer::Observed)),
             Self::Route => matches!(outcome, Outcome::Routed(_)),
@@ -324,6 +329,16 @@ impl Outcome {
         }
     }
 
+    /// What a turn returned, and whether the stream of its response
+    /// follows (RFC §6.1 `response_stream`).
+    pub(crate) fn into_turn_output(self) -> Result<(Box<ChannelOutput>, bool), ErrorRecord> {
+        match self {
+            Self::Channel(ChannelOutcome::Output(output)) => Ok((output, false)),
+            Self::Channel(ChannelOutcome::Streamed(output)) => Ok((output, true)),
+            other => Err(other.into_failure()),
+        }
+    }
+
     /// The identity an address resolved to, if any.
     pub(crate) fn into_resolved(self) -> Result<Option<IdentityId>, ErrorRecord> {
         match self {
@@ -392,6 +407,7 @@ impl Outcome {
             },
             Self::Channel(ChannelOutcome::Parsed(_)) => "Parsed",
             Self::Channel(ChannelOutcome::Output(_)) => "Output",
+            Self::Channel(ChannelOutcome::Streamed(_)) => "Streamed",
             Self::Hook(HookAnswer::Ran(_)) => "Ran",
             Self::Hook(HookAnswer::Observed) => "Observed",
             Self::Routed(_) => "Routed",

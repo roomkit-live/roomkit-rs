@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use super::{RoomCounters, TargetUpdate};
+use super::{EffectId, RoomCounters, TargetUpdate};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventId, EventUpdates,
     IdentityId, InboundMessage, Observation, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
@@ -311,6 +311,46 @@ pub enum ChannelRequest {
         /// The room's context, as the channel may see it.
         context: Box<RoomContext>,
     },
+    /// Read the stream of a turn's response to its end, or until its reader
+    /// stops (RFC §6.1 `response_stream`, §12.2 steps 13s and 14s): the
+    /// turn whose `OnEvent` was answered [`ChannelOutcome::Streamed`].
+    ///
+    /// The reader is `target`'s `deliver_stream()`, handed the text as it
+    /// is written and each row once the store holds it, or, with no
+    /// target, the driver itself. Each row the stream ends (a text segment,
+    /// a call's start, a call's end) is handed to the operation as an
+    /// [`Entry::Row`](super::Entry::Row) of this effect, which commits it
+    /// as a response to `answers` and settles it with the stored row,
+    /// before the reader is handed it. Nothing reaches a reader that the
+    /// store does not hold.
+    ///
+    /// Answer [`ChannelOutcome::Output`] once the stream is over: the
+    /// target's output, its `error` the response's failure, or the
+    /// target's own (RFC §6.1 `ChannelOutput.error`).
+    ReadStream {
+        /// The turn whose response it is.
+        turn: EffectId,
+        /// The intelligence channel whose response it is.
+        responder: ChannelBinding,
+        /// The event its response answers, as the turn was handed it.
+        answers: Box<RoomEvent>,
+        /// The channel that reads the stream as it is written, if one does:
+        /// one per response.
+        target: Option<StreamTarget>,
+    },
+}
+
+/// The channel that reads a turn's response as it is written (RFC §6.1
+/// `supports_streaming_delivery`, `deliver_stream`): a transport the
+/// response's rows reach, which declares it streams.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StreamTarget {
+    /// The channel's binding.
+    pub binding: ChannelBinding,
+    /// The room's context, as the channel may see it (RFC §7.5 rule 8).
+    pub context: Box<RoomContext>,
+    /// Whether it is handed the tool-call rows (`ChannelDeclaration::receives_tool_calls`).
+    pub tool_rows: bool,
 }
 
 /// The run of hooks (RFC §9.3), answered by a [`HookAnswer`].
@@ -448,6 +488,11 @@ pub enum ChannelOutcome {
     Parsed(Box<RoomEvent>),
     /// What the channel returned.
     Output(Box<ChannelOutput>),
+    /// What a turn returned, the stream of its response following (RFC
+    /// §6.1 `response_stream`): its rows are what reading the stream
+    /// stores ([`ChannelRequest::ReadStream`]), and the output's own
+    /// `response_events` are none.
+    Streamed(Box<ChannelOutput>),
 }
 
 /// The driver's answer to a [`HookRequest`].

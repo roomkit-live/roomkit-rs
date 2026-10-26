@@ -64,7 +64,7 @@ pub use protocol::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided, Effect,
     EffectId, Entry, EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest, Next, Notice,
     Operation, Outcome, ProtocolError, Request, RoomCounters, Settled, Step, StoreOutcome,
-    StoreRequest, TargetUpdate,
+    StoreRequest, StreamTarget, TargetUpdate,
 };
 
 use crate::model::{ErrorRecord, EventId, RoomContext, RoomEvent, RoomId};

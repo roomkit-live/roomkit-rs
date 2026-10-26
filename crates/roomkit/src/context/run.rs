@@ -15,6 +15,7 @@ use roomkit_core::ops::EffectId;
 use tokio::sync::mpsc;
 
 use super::adoption::Adoption;
+use crate::stream::KeptStream;
 
 /// What a run holds now, as the calls it makes read it.
 #[derive(Debug, Default)]
@@ -41,6 +42,9 @@ pub(crate) struct RunShared {
     holdings: Mutex<Holdings>,
     adoptions: mpsc::UnboundedSender<Adoption>,
     tenures: AtomicU64,
+    /// The streams the run's turns answered with, by their turn's effect,
+    /// until they are read (RFC §6.1 `response_stream`).
+    streams: Mutex<HashMap<EffectId, KeptStream>>,
 }
 
 /// A claim on one tenure of a room's lock, which code run under that lock
@@ -60,6 +64,7 @@ impl RunShared {
             holdings: Mutex::new(Holdings::default()),
             adoptions,
             tenures: AtomicU64::new(0),
+            streams: Mutex::new(HashMap::new()),
         });
         (shared, received)
     }
@@ -109,9 +114,30 @@ impl RunShared {
         self.adoptions.send(adoption).map_err(|unsent| unsent.0)
     }
 
-    /// Forgets everything the run held: it is over.
+    /// Forgets everything the run held: it is over. A stream never read is
+    /// dropped: nothing of it was generated.
     pub(crate) fn clear(&self) {
         *self.holdings() = Holdings::default();
+        self.streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    /// Keeps the stream the turn of `effect` answered with, until it is read.
+    pub(crate) fn keep_stream(&self, effect: EffectId, stream: KeptStream) {
+        self.streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(effect, stream);
+    }
+
+    /// The stream the turn of `effect` answered with, taken to be read.
+    pub(crate) fn take_stream(&self, effect: EffectId) -> Option<KeptStream> {
+        self.streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&effect)
     }
 
     /// The lease on the lock of `room_id` the run holds, by its own tenure

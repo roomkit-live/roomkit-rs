@@ -43,6 +43,11 @@
 //! or `ON_EVENT_DELETED` with the target as the commit left it, once the lock
 //! is released.
 //!
+//! A turn whose response is a stream is read once the cascade's passes and
+//! sets are over, its rows committed as its reader reads past them and
+//! delivered to the other targets while it goes on (RFC §6.1, §12.2 steps
+//! 13s and 14s, `stream`).
+//!
 //! An instruction (RFC §10.1.1) takes the same way without being stored:
 //! refused before anything is read when it names no agent or carries a key,
 //! decided by its pass without a commit, delivered to the agents it names,
@@ -81,6 +86,7 @@ mod report;
 mod result;
 mod stage;
 mod stamp;
+mod stream;
 mod work_read;
 
 use std::sync::Arc;
@@ -459,6 +465,9 @@ impl Machine {
         }
         if self.cascade.set_awaits(effect) {
             return self.on_set_outcome(cx, effect, outcome);
+        }
+        if self.cascade.stream_awaits(effect) {
+            return self.on_stream_outcome(cx, outcome);
         }
         match self.stage.take() {
             Stage::Arriving(arrival) => self.on_arrival(cx, arrival, effect, outcome),

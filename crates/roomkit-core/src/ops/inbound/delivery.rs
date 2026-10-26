@@ -62,16 +62,24 @@ pub(super) struct Response {
     pub(super) events: Vec<RoomEvent>,
 }
 
+/// A turn whose response is a stream, to be read (RFC §6.1
+/// `response_stream`).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct StreamedTurn {
+    pub(super) responder: ChannelBinding,
+    /// The turn's `OnEvent` effect, which the driver keeps the stream by.
+    pub(super) turn: EffectId,
+}
+
 /// What a finished delivery set produced.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct SetOutcome {
     /// The responses, in the order their channels answered.
     pub(super) responses: Vec<Response>,
+    /// The turns whose response is a stream, in the order they answered.
+    pub(super) streams: Vec<StreamedTurn>,
     /// The intelligence channels not asked at the chain-depth limit.
     pub(super) not_asked: Vec<ChannelBinding>,
-    /// The intelligence channels whose chained stream was not started, past
-    /// the cascade's reentry budget (RFC §8.3).
-    pub(super) capped: Vec<ChannelBinding>,
     pub(super) tasks: Vec<Task>,
     pub(super) observations: Vec<Observation>,
     /// The transports delivered to, with their results.
@@ -276,42 +284,10 @@ impl DeliverySet {
                 event: target.event.clone(),
                 context: target.context.clone(),
             };
-            if !self.admits_turn(cx, index) {
-                continue;
-            }
             let effect = cx.io.issue_drawing_on(request, &self.budget);
             self.calls.insert(effect, (index, Call::OnEvent));
         }
         self.progress(cx)
-    }
-
-    /// Whether the target at `index` is called: always, but for an agent
-    /// whose turn is one stream asked by a response's delivery, a chained
-    /// stream (RFC §8.3), which draws one pass of the cascade's reentry
-    /// budget before it runs. Past the budget the turn is not run, and the
-    /// agent's answer is recorded refused once the set is over.
-    fn admits_turn(&mut self, cx: &Cx<'_>, index: usize) -> bool {
-        let Some(target) = self.targets.get(index) else {
-            return false;
-        };
-        let streams = target.role == Role::Agent
-            && cx
-                .config
-                .channel(&target.binding.channel_id)
-                .is_some_and(|declaration| declaration.answers_as_stream);
-        if self.kind != SetKind::Response || !streams || self.budget.take_pass() {
-            return true;
-        }
-        tracing::warn!(
-            target: "roomkit::core::delivery",
-            room_id = %self.event.room_id,
-            event_id = %self.event.id,
-            channel_id = %target.binding.channel_id,
-            "the cascade's reentry budget is spent: the agent's turn is not run"
-        );
-        self.outcome.capped.push(target.binding.clone());
-        self.outcome.targets = self.outcome.targets.saturating_sub(1);
-        false
     }
 
     /// Takes the driver's answer to one of the set's requests.
@@ -339,8 +315,10 @@ impl DeliverySet {
             return self.progress(cx);
         };
         match call {
-            Call::OnEvent => match outcome.into_output() {
-                Ok(output) => self.on_output(cx, index, *output),
+            Call::OnEvent => match outcome.into_turn_output() {
+                Ok((output, streamed)) => {
+                    self.on_output(cx, index, *output, streamed.then_some(effect));
+                }
                 Err(error) => self.on_event_failed(cx, index, &error),
             },
             Call::Deliver => match outcome.into_output() {
@@ -404,8 +382,16 @@ impl DeliverySet {
         Progress::Waiting
     }
 
-    /// A target's `on_event()` returned (RFC §10.2 step 3c).
-    fn on_output(&mut self, cx: &mut Cx<'_>, index: usize, output: ChannelOutput) {
+    /// A target's `on_event()` returned (RFC §10.2 step 3c); an agent's
+    /// turn whose response is a stream, `streamed`, the effect it answered,
+    /// has its stream read once the set is over.
+    fn on_output(
+        &mut self,
+        cx: &mut Cx<'_>,
+        index: usize,
+        output: ChannelOutput,
+        streamed: Option<EffectId>,
+    ) {
         let Some(target) = self.targets.get(index) else {
             return;
         };
@@ -428,11 +414,15 @@ impl DeliverySet {
                 self.turn_failed(cx, index, error);
             }
         }
-        if output.responded && !output.response_events.is_empty() {
-            self.outcome.responses.push(Response {
-                responder,
-                events: output.response_events,
-            });
+        match streamed.filter(|_| is_agent) {
+            Some(turn) => self.outcome.streams.push(StreamedTurn { responder, turn }),
+            None if output.responded && !output.response_events.is_empty() => {
+                self.outcome.responses.push(Response {
+                    responder,
+                    events: output.response_events,
+                });
+            }
+            None => {}
         }
         self.deliver_if_transport(cx, index);
     }
@@ -490,7 +480,15 @@ impl DeliverySet {
         let id = cx.env.new_event_id();
         let now = cx.env.now();
         let within = self.event.response_visibility.as_ref();
-        let payload = stamp::error_event(id, &target.binding, &self.event, within, error, now);
+        let payload = stamp::error_event(
+            id,
+            &target.binding,
+            &self.event,
+            within,
+            error,
+            "generation",
+            now,
+        );
         cx.fire_observers(HookTrigger::OnError, &payload, &target.context);
         if self.outcome.error.is_none() {
             self.outcome.error = Some(error.clone());

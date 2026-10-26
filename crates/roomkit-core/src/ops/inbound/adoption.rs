@@ -280,6 +280,10 @@ impl Machine {
         entry: Entry,
         origin: EffectId,
     ) -> Result<EntryId, Box<Entry>> {
+        if matches!(entry, Entry::Row { .. }) {
+            let id = self.adopted.next_id();
+            return self.cascade.take_row(io, id, entry, origin);
+        }
         let room_id = entry.room_id();
         let nested = io.locked_for(origin) == Some(room_id);
         let beside = io.admitted_for(origin) == Some(room_id);
@@ -339,6 +343,10 @@ impl Machine {
                 organization_id,
                 post,
             } => self.post(cx, adopted, room_id, organization_id, *post),
+            // A row is taken by its stream's read as it is adopted.
+            Entry::Row { .. } => {
+                debug_assert!(false, "a row is never started as an adopted entry");
+            }
         }
     }
 

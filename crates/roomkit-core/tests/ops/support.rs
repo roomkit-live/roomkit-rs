@@ -1087,6 +1087,9 @@ impl Sim {
             Request::Channel(ChannelRequest::Deliver { binding, event, .. }) => {
                 format!("deliver {} <- {}", binding.channel_id, event.id)
             }
+            Request::Channel(ChannelRequest::ReadStream {
+                responder, answers, ..
+            }) => format!("read_stream {} <- {}", responder.channel_id, answers.id),
             Request::Hook(HookRequest::RunHook { hook, .. }) => {
                 format!("hook {}", self.config.hooks.get(*hook).unwrap().name)
             }
@@ -1139,6 +1142,10 @@ impl Sim {
             }) => self.on_event(&binding, &event, *context),
             Request::Channel(ChannelRequest::Deliver { binding, event, .. }) => {
                 self.deliver(&binding, &event)
+            }
+            // No scripted channel streams: a stream read hands back no row.
+            Request::Channel(ChannelRequest::ReadStream { .. }) => {
+                Outcome::Channel(ChannelOutcome::Output(Box::default()))
             }
             Request::Hook(HookRequest::RunHook {
                 hook,
@@ -1851,6 +1858,9 @@ fn entry_name(entry: &Entry) -> String {
         } => format!("process_inbound {room_id} {:?}", text_of(&message.content)),
         Entry::Post { room_id, post, .. } => {
             format!("post {room_id} {:?}", text_of(&post.content))
+        }
+        Entry::Row { room_id, event, .. } => {
+            format!("row {room_id} {:?}", text_of(&event.content))
         }
     }
 }

@@ -349,12 +349,15 @@ fn edit_with(original: &EditContent, new_content: Box<EventContent>) -> EventCon
 /// `trigger` (RFC §9.2): never stored, one hop deeper than the trigger, its
 /// text the error's message, and visible where the trigger's answers may
 /// go, `within`; to all when its message restricted nothing (gap G-073).
+/// Its `error_category` is `generation`, `streaming` for a response
+/// stream's failure, as the reference implementation writes them.
 pub(crate) fn error_event(
     id: EventId,
     channel: &ChannelBinding,
     trigger: &RoomEvent,
     within: Option<&Visibility>,
     error: &ErrorRecord,
+    category: &str,
     now: Timestamp,
 ) -> RoomEvent {
     let source = EventSource::new(
@@ -378,7 +381,7 @@ pub(crate) fn error_event(
     let mut metadata = Metadata::new();
     metadata.insert("error".to_owned(), error.message.clone().into());
     metadata.insert("error_type".to_owned(), error.error_type.clone().into());
-    metadata.insert("error_category".to_owned(), "generation".into());
+    metadata.insert("error_category".to_owned(), category.into());
     event.metadata = metadata;
     event
 }

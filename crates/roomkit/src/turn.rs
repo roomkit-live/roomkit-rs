@@ -4,11 +4,11 @@
 //! kit's tool hooks (RFC §9.3).
 
 use std::future::Future;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use roomkit_core::model::{
-    ChannelId, ChannelType, DirectEvent, EventDirection, EventSource, Metadata, RoomContext,
-    RoomEvent, RoomId, ToolCall, ToolCallOutcome,
+    ChannelId, ChannelOutput, ChannelType, DirectEvent, EventDirection, EventSource, Metadata,
+    RoomContext, RoomEvent, RoomId, ToolCall, ToolCallOutcome,
 };
 use roomkit_core::rules::hook_registry::{HookSpec, HookTrigger};
 use serde_json::Value;
@@ -19,6 +19,7 @@ use crate::context::ExecutionContext;
 use crate::error::KitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
+use crate::stream::ResponseStream;
 use crate::tools::{ToolCallEvent, ToolHandler, ToolUse, ToolVerdict, error_envelope};
 
 tokio::task_local! {
@@ -57,6 +58,8 @@ struct Shared {
     channel_type: ChannelType,
     context: RoomContext,
     kit: Arc<dyn TurnKit>,
+    /// The stream the turn answered with, until the kit takes it.
+    stream: Mutex<Option<ResponseStream>>,
 }
 
 impl std::fmt::Debug for TurnHost {
@@ -99,6 +102,34 @@ impl TurnHost {
     /// The room as the turn received it (RFC §21.4 `current_tool_room()`).
     pub fn context(&self) -> &RoomContext {
         &self.shared.context
+    }
+
+    /// Answers the turn with `stream`, its response as it is written (RFC
+    /// §6.1 `response_stream`, §6.4 "One loop, streamed or not"): the
+    /// channel's `on_event()` returns the output this gives, to which it may
+    /// add tasks, observations and room metadata updates, never response
+    /// events. The kit reads the stream once the event's delivery set is
+    /// over, stores each row as it ends, a text segment, a call's start or
+    /// end, and delivers it to the room's targets while the turn goes on; a
+    /// transport that streams reads it as it is written (step 4, decision
+    /// 9). Nothing of the stream runs but as it is read. A second call
+    /// replaces the first stream, which is dropped unread.
+    pub fn respond_with_stream(&self, stream: ResponseStream) -> ChannelOutput {
+        *self
+            .shared
+            .stream
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(stream);
+        ChannelOutput::default()
+    }
+
+    /// The stream the turn answered with, once its `on_event()` returned.
+    pub(crate) fn take_stream(&self) -> Option<ResponseStream> {
+        self.shared
+            .stream
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 
     /// Injects `event` into the turn's room, as
@@ -351,6 +382,7 @@ pub(crate) fn host<S: ConversationStore>(
             channel_type,
             context,
             kit: Arc::new(Arc::downgrade(inner)),
+            stream: Mutex::new(None),
         }),
     }
 }

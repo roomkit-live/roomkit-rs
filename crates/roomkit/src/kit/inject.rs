@@ -118,6 +118,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let chain_depth = match &mut entry {
             Entry::Message { message, .. } => &mut message.chain_depth,
             Entry::Direct { event, .. } => &mut event.chain_depth,
+            Entry::Row { event, .. } => &mut event.chain_depth,
             Entry::Post { post, .. } => &mut post.chain_depth,
         };
         context::as_deep_as_its_turn(chain_depth);
@@ -155,6 +156,9 @@ impl<S: ConversationStore> RoomKit<S> {
                 organization_id,
                 post,
             } => Inbound::post(self.config(), room_id, organization_id, *post),
+            // A stream's row goes to the run that reads the stream, never
+            // through a kit's call: one here is a defect of this crate.
+            Entry::Row { .. } => return Err(KitError::Stalled),
         };
         Ok(driver::run_inbound(&self.inner, call, Some(&room_id), operation).await??)
     }

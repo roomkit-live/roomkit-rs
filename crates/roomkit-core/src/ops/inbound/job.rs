@@ -2,8 +2,8 @@
 
 use super::pass::{CommitPass, PassOrigin, PassReport};
 use super::record::{RecordPass, RecordReport};
-use crate::model::{ChannelBinding, RoomEvent};
-use crate::ops::protocol::{EffectId, Outcome};
+use crate::model::{ChannelBinding, ChannelId, RoomEvent};
+use crate::ops::protocol::{EffectId, EntryId, Outcome};
 use crate::ops::{Abort, Cx, Progress};
 
 /// One pass of the cascade.
@@ -13,6 +13,19 @@ pub(super) enum Job {
     Pass(Box<CommitPass>, PassOrigin),
     /// A refused record's commit.
     Record(Box<RecordPass>, RecordNote),
+    /// The pass of a row a turn's stream ended, a response, which its
+    /// reader waits for (RFC §12.2 step 13s).
+    Row(Box<CommitPass>, RowNote),
+}
+
+/// What a row's pass settles once it is over.
+#[derive(Clone, Debug)]
+pub(super) struct RowNote {
+    /// The entry its reader handed it back as.
+    pub(super) entry: EntryId,
+    /// The channel its delivery skips: the stream's target, which read it
+    /// in the stream.
+    pub(super) skips: Option<ChannelId>,
 }
 
 /// What a stored record stands for.
@@ -42,13 +55,14 @@ pub(super) enum Run {
 pub(super) enum Finished {
     Pass(Result<PassReport, Abort>, PassOrigin),
     Record(Result<RecordReport, Abort>, RecordNote),
+    Row(Result<PassReport, Abort>, RowNote),
 }
 
 impl Job {
     /// Starts the pass: it asks for the room lock.
     pub(super) fn start(&mut self, cx: &mut Cx<'_>) {
         match self {
-            Self::Pass(pass, _) => pass.start(cx),
+            Self::Pass(pass, _) | Self::Row(pass, _) => pass.start(cx),
             Self::Record(pass, _) => pass.start(cx),
         }
     }
@@ -56,7 +70,7 @@ impl Job {
     /// Whether the pass waits for `effect`.
     pub(super) fn awaits(&self, effect: EffectId) -> bool {
         match self {
-            Self::Pass(pass, _) => pass.awaits(effect),
+            Self::Pass(pass, _) | Self::Row(pass, _) => pass.awaits(effect),
             Self::Record(pass, _) => pass.awaits(effect),
         }
     }
@@ -72,6 +86,10 @@ impl Job {
             Self::Record(mut pass, note) => match pass.accept(cx, effect, outcome) {
                 Progress::Waiting => Run::Running(Self::Record(pass, note)),
                 Progress::Done(result) => Run::Finished(Box::new(Finished::Record(result, note))),
+            },
+            Self::Row(mut pass, note) => match pass.accept(cx, effect, outcome) {
+                Progress::Waiting => Run::Running(Self::Row(pass, note)),
+                Progress::Done(result) => Run::Finished(Box::new(Finished::Row(result, note))),
             },
         }
     }

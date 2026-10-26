@@ -47,13 +47,19 @@ const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 /// - the loop ends when the model answers without calling, or at the
 ///   generation past its round bound (50 by default), whose calls never run.
 ///
-/// The turn returns its rows at its end (step 4, milestone 5): each round's
+/// Run by a kit, the turn answers with a stream (RFC §6.1
+/// `response_stream`, [`TurnHost::respond_with_stream`](roomkit::TurnHost::respond_with_stream)),
+/// which the kit reads once the event's delivery set is over: nothing of
+/// the loop runs but as it is read, so a call starts only once the reader
+/// read past its start. The kit stores each row as it ends: each round's
 /// text as a MESSAGE, a `TOOL_CALL_START` per call, then the round's
 /// `TOOL_CALL_END` rows in call order. The last MESSAGE carries the turn's
 /// record, `loop_end_reason` and `ai_usage` in its metadata. A provider's
-/// error before any round fails the turn; after one, the rows stand and the
-/// turn's error is reported (RFC §6.4 "A turn cut short"). A later turn
-/// reads each round's text, never its calls.
+/// error keeps the text it produced and fails the turn (RFC §12.2 step
+/// 13s); after a round, the rows stand and the record says `error` (RFC
+/// §6.4 "A turn cut short"). A later turn reads each round's text, never
+/// its calls. Called outside a kit, the turn returns the same rows at its
+/// end, buffered.
 ///
 /// It answers a message or an instruction, never its own events. Cloning
 /// it shares its provider and its tools.
@@ -93,10 +99,6 @@ impl<P: AiProvider> AiAgent<P> {
             ChannelDirection::Bidirectional,
         );
         declaration.provider_name = provider.name().map(str::to_owned);
-        // Its turn is one stream of rows, as RFC §6.4 reads every AI turn:
-        // a turn another event's delivery asks for draws its reentry pass
-        // before it runs (RFC §8.3).
-        declaration.answers_as_stream = true;
         Self {
             declaration,
             provider: Arc::new(provider),
@@ -212,15 +214,20 @@ impl<P: AiProvider> Channel for AiAgent<P> {
         let tools =
             ToolContext::new(context.room.id.clone(), self.id().clone()).within(turn.clone());
         let looped = Loop {
-            provider: &*self.provider,
-            toolbox: &self.toolbox,
-            policy: &self.policy,
-            bounds: &self.bounds,
+            provider: Arc::clone(&self.provider),
+            toolbox: Arc::clone(&self.toolbox),
+            policy: self.policy.clone(),
+            bounds: self.bounds.clone(),
             system_prompt: self.system_prompt.clone(),
-            turn,
+            turn: turn.clone(),
             context: tools,
         };
-        rows::collect(self.source(), &event, looped.run(messages)).await
+        let items = looped.run(messages);
+        match turn {
+            // Within the kit, the turn is one stream, read as it is written.
+            Some(turn) => Ok(turn.respond_with_stream(rows::response(items))),
+            None => Ok(rows::collect(self.source(), &event, items).await?),
+        }
     }
 }
 

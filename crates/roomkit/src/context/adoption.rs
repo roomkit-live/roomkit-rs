@@ -55,6 +55,17 @@ pub(crate) async fn adopt(entry: Entry) -> Adopting {
     hand(&frame, entry).await
 }
 
+/// Hands `entry` to the run whose call the current task runs, the innermost
+/// frame's: a row of the stream that call reads, which its operation commits
+/// (RFC §12.2 step 13s).
+pub(crate) async fn adopt_by_own_run(entry: Entry) -> Adopting {
+    let context = ExecutionContext::current();
+    let Some(frame) = context.frames.last().cloned() else {
+        return Adopting::Apart(entry);
+    };
+    hand(&frame, entry).await
+}
+
 /// Hands `entry` to `frame`'s run, and waits for its decision.
 async fn hand(frame: &Frame, entry: Entry) -> Adopting {
     let (reply, answer) = oneshot::channel();

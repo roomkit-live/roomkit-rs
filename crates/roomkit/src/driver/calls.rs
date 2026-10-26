@@ -8,8 +8,8 @@ use roomkit_core::model::{
     ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{
-    AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Environment, HookAnswer,
-    HookRequest, Notice, Outcome, StoreOutcome, StoreRequest,
+    AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, Environment,
+    HookAnswer, HookRequest, Notice, Outcome, StoreOutcome, StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
@@ -17,10 +17,11 @@ use roomkit_core::rules::routing::RouteQuery;
 use tokio::task::JoinSet;
 
 use crate::channel::{ChannelError, EventDraft};
-use crate::context::{ExecutionContext, HookBody};
+use crate::context::{ExecutionContext, HookBody, RunShared};
 use crate::hooks;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
+use crate::stream::{self, KeptStream};
 use crate::turn;
 
 /// Carries out a request on the store (RFC §14).
@@ -110,11 +111,15 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
     answer.map_or_else(|error| Outcome::Failed(error.to_record()), Outcome::from)
 }
 
-/// Calls a channel (RFC §6.1): a parse, a turn or a delivery; a parse
-/// drafts its event at `environment`'s instant, the run's.
+/// Calls a channel (RFC §6.1): a parse, a turn, a delivery or the read of
+/// a turn's stream; a parse drafts its event at `environment`'s instant,
+/// the run's. A turn that answers with a stream leaves it with its run,
+/// `shared`, by its effect, `effect`, until it is read.
 pub(super) async fn channel<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     environment: &(dyn Environment + Send + Sync),
+    shared: &RunShared,
+    effect: EffectId,
     request: ChannelRequest,
 ) -> Outcome {
     match request {
@@ -155,7 +160,18 @@ pub(super) async fn channel<S: ConversationStore>(
                 binding.channel_type.clone(),
                 (*context).clone(),
             );
-            channel_output(turn.scope(channel.on_event(event, binding, *context)).await)
+            let answered = turn
+                .clone()
+                .scope(channel.on_event(event, binding, *context))
+                .await;
+            match (answered, turn.take_stream()) {
+                (Ok(output), Some(stream)) => {
+                    shared.keep_stream(effect, KeptStream { host: turn, stream });
+                    ChannelOutcome::Streamed(Box::new(output)).into()
+                }
+                // A turn that failed drops the stream it answered with.
+                (answered, _) => channel_output(answered),
+            }
         }
         ChannelRequest::Deliver {
             binding,
@@ -166,6 +182,15 @@ pub(super) async fn channel<S: ConversationStore>(
                 return unregistered_channel(&binding.channel_id);
             };
             channel_output(channel.deliver(event, binding, *context).await)
+        }
+        ChannelRequest::ReadStream {
+            turn,
+            responder,
+            answers,
+            target,
+        } => {
+            let kept = shared.take_stream(turn);
+            Box::pin(stream::read(inner, kept, responder, *answers, target)).await
         }
     }
 }

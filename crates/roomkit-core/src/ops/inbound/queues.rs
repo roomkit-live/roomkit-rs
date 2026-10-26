@@ -20,21 +20,31 @@
 //! responses the set produced (RFC §9.4, §10.1 step 14). A cascade that
 //! stops, failed or past its deadline, runs no pass any more, and still
 //! delivers every event committed (RFC §13.6).
+//!
+//! The streams of its turns wait in `streams`, in the order the turns
+//! answered, and one is read at a time once no pass nor set is queued or
+//! running (RFC §10.1 step 14, `stream`): each row its reader hands back
+//! takes the head of the passes, so that the reader waits for nothing but
+//! its rows, and its delivery set runs while the stream goes on.
 
 use std::collections::VecDeque;
 
 use super::delivery::{DeliverySet, SetOutcome};
 use super::direct::DirectCall;
-use super::job::{Job, RecordNote, Run};
+use super::job::{Job, RecordNote, RowNote, Run};
 use super::pass::{CommitPass, PassOrigin};
 use super::record::RecordPass;
+use super::stream::{self, PendingRow, Read, StreamEnd, StreamJob, StreamRead};
 use super::{Machine, Stage};
-use crate::model::{RoomEvent, RoomId};
+use crate::model::{ChannelBinding, Metadata, RoomEvent, RoomId};
 use crate::ops::io::Io;
-use crate::ops::protocol::{EffectId, EntryId, Outcome};
+use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
 use crate::ops::{Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::{self, Draw, ReentryBudget};
 use crate::rules::hook_chain::HookChain;
+
+/// Why a row its cascade cut is not committed.
+const TURN_CUT_REASON: &str = "turn_cut";
 
 /// Whose cascade a pass or a delivery set belongs to: the call's own, or
 /// the cascade of an entry the operation adopted (gap G-070), whose caller
@@ -88,6 +98,13 @@ pub(super) struct Cascade {
     /// delivers in and its budget, which the message draws on once routed
     /// into that room or once it creates a room (gap G-070).
     from_delivery: Option<(RoomId, Draw)>,
+    /// The streams of the cascade's turns waiting to be read, in the order
+    /// the turns answered (RFC §10.1 step 14).
+    streams: VecDeque<StreamJob>,
+    /// The stream being read.
+    stream: Option<StreamRead>,
+    /// The rows a stream's reader handed back, waiting for their pass.
+    rows: Vec<PendingRow>,
 }
 
 impl Cascade {
@@ -103,6 +120,9 @@ impl Cascade {
             budget,
             drawn: None,
             from_delivery: None,
+            streams: VecDeque::new(),
+            stream: None,
+            rows: Vec::new(),
         }
     }
 
@@ -158,13 +178,23 @@ impl Cascade {
         self.sets.push_back(delivery);
     }
 
-    /// Stops the cascade: no pass nor record runs any more, but the
-    /// delivery set of every event committed already still runs, in index
-    /// order, so an event that is stored is delivered (RFC §13.6), an
-    /// adopted entry's caller having been told it is committed.
+    /// Queues the stream of a turn to be read, once the cascade's passes
+    /// and sets are over; once the cascade stops, it is never read.
+    pub(super) fn queue_stream(&mut self, job: StreamJob) {
+        if !self.stopping {
+            self.streams.push_back(job);
+        }
+    }
+
+    /// Stops the cascade: no pass nor record runs any more, and no stream
+    /// waiting is read, but the delivery set of every event committed
+    /// already still runs, in index order, so an event that is stored is
+    /// delivered (RFC §13.6), an adopted entry's caller having been told it
+    /// is committed. The stream being read goes on, its rows refused.
     pub(super) fn stop(&mut self) {
         self.stopping = true;
         self.passes.clear();
+        self.streams.clear();
         for delivery in self.sets.iter_mut().chain(self.delivery.as_mut()) {
             delivery.then.clear();
         }
@@ -179,30 +209,107 @@ impl Cascade {
     /// on, which the driver cuts and never answers.
     pub(super) fn cut_turns(&mut self, io: &mut Io) -> Vec<EffectId> {
         self.turns_cut = true;
+        let cut_rows: Vec<EntryId> = self
+            .passes
+            .iter()
+            .filter_map(|job| match job {
+                Job::Row(pass, note) if pass.lineage() == Lineage::Call => Some(note.entry),
+                Job::Pass(..) | Job::Record(..) | Job::Row(..) => None,
+            })
+            .collect();
         self.passes.retain(|job| match job {
-            Job::Pass(pass, _) => !(pass.is_response() && pass.lineage() == Lineage::Call),
+            Job::Pass(pass, _) | Job::Row(pass, _) => {
+                !(pass.is_response() && pass.lineage() == Lineage::Call)
+            }
             Job::Record(..) => true,
         });
+        for entry in cut_rows {
+            io.settle(entry, Ok(stream::row_refused(TURN_CUT_REASON)));
+        }
         for delivery in &mut self.sets {
             if delivery.set.lineage() == Lineage::Call {
                 delivery.set.cut();
             }
         }
-        match self.delivery.as_mut() {
+        self.streams.retain(|job| job.lineage != Lineage::Call);
+        let mut cut = match self.delivery.as_mut() {
             Some(delivery) if delivery.set.lineage() == Lineage::Call => {
                 let turns = delivery.set.cut();
                 io.cut(&turns)
             }
             Some(_) | None => Vec::new(),
+        };
+        // The stream being read is a turn of the cascade: its reader is cut.
+        if let Some(reading) = self
+            .stream
+            .as_ref()
+            .filter(|read| read.lineage() == Lineage::Call)
+            .and_then(StreamRead::reading)
+        {
+            cut.extend(io.cut(&[reading]));
         }
+        cut
     }
 
-    /// Whether the cascade has nothing queued nor running.
+    /// Whether the cascade has nothing queued nor running, no stream to
+    /// read included.
     pub(super) fn is_idle(&self) -> bool {
         self.passes.is_empty()
             && self.sets.is_empty()
             && self.pass.is_none()
             && self.delivery.is_none()
+            && self.streams.is_empty()
+            && self.stream.is_none()
+            && self.rows.is_empty()
+    }
+
+    /// Whether the cascade runs no pass nor set, and none is queued: a
+    /// stream is read only then (RFC §10.1 step 14).
+    fn is_between_streams(&self) -> bool {
+        self.passes.is_empty()
+            && self.sets.is_empty()
+            && self.pass.is_none()
+            && self.delivery.is_none()
+            && self.stream.is_none()
+            && self.rows.is_empty()
+    }
+
+    /// Whether the stream being read waits for `effect`.
+    pub(super) fn stream_awaits(&self, effect: EffectId) -> bool {
+        self.stream.as_ref().is_some_and(|read| read.awaits(effect))
+    }
+
+    /// Takes `entry`, a row the reader of the stream `origin` reads handed
+    /// back, for its pass; hands it back when no stream is read by
+    /// `origin`.
+    pub(super) fn take_row(
+        &mut self,
+        io: &Io,
+        id: EntryId,
+        entry: Entry,
+        origin: EffectId,
+    ) -> Result<EntryId, Box<Entry>> {
+        let reads = self.stream.as_ref().is_some_and(|read| read.reads(origin));
+        let Entry::Row {
+            event, streamed, ..
+        } = entry
+        else {
+            return Err(Box::new(entry));
+        };
+        if !reads || !io.is_outstanding(origin) {
+            return Err(Box::new(Entry::Row {
+                room_id: event.room_id.clone(),
+                event,
+                streamed,
+            }));
+        }
+        self.rows.push(PendingRow {
+            entry: id,
+            origin,
+            event,
+            streamed,
+        });
+        Ok(id)
     }
 
     /// Whether the running pass waits for `effect`.
@@ -286,6 +393,7 @@ impl Machine {
     /// are empty and no adopted entry may still add to them, the cascade
     /// ends.
     pub(super) fn run_queues(&mut self, cx: &mut Cx<'_>) {
+        self.start_rows(cx);
         loop {
             let passing = matches!(self.stage.current(), Stage::Cascade | Stage::Ending(_));
             if passing
@@ -305,6 +413,14 @@ impl Machine {
                 }
                 continue;
             }
+            if passing
+                && self.cascade.is_between_streams()
+                && self.adopted.is_idle()
+                && let Some(job) = self.cascade.streams.pop_front()
+            {
+                self.start_stream(cx, job);
+                continue;
+            }
             break;
         }
         if matches!(self.stage.current(), Stage::Cascade)
@@ -314,4 +430,111 @@ impl Machine {
             self.persist_side_effects(cx);
         }
     }
+}
+
+impl Machine {
+    /// Starts the passes of the rows a stream's reader handed back, each at
+    /// the head of the passes; a row of a stream no longer read, or of a
+    /// cascade that stopped or whose turns are cut, is refused at once.
+    fn start_rows(&mut self, cx: &mut Cx<'_>) {
+        for row in std::mem::take(&mut self.cascade.rows) {
+            let Some(read) = self
+                .cascade
+                .stream
+                .as_ref()
+                .filter(|read| read.reads(row.origin))
+            else {
+                cx.io
+                    .settle(row.entry, Ok(stream::row_refused("stream_over")));
+                continue;
+            };
+            let cut = self.cascade.turns_cut && read.lineage() == Lineage::Call;
+            if self.cascade.stopping || cut {
+                cx.io
+                    .settle(row.entry, Ok(stream::row_refused(TURN_CUT_REASON)));
+                continue;
+            }
+            let (pass, skips) = read.row_pass(cx, *row.event, row.streamed);
+            let note = RowNote {
+                entry: row.entry,
+                skips,
+            };
+            self.cascade.lead(Job::Row(Box::new(pass), note));
+        }
+    }
+
+    /// Starts the read of `job`'s stream, within the cascade's reentry
+    /// budget for a chained one (RFC §8.3): past it, the stream is closed
+    /// unread, and its agent's answer is stored refused `reentry_loop_cap`,
+    /// within where the answers to the event it answers may go.
+    fn start_stream(&mut self, cx: &mut Cx<'_>, job: StreamJob) {
+        match job.admit(cx, &self.cascade.budget) {
+            Ok(()) => self.cascade.stream = Some(StreamRead::start(cx, job)),
+            Err(record) => {
+                let record = super::stamp::answer_within(
+                    *record,
+                    job.answers_within.as_ref(),
+                    &job.bindings,
+                );
+                self.queue_refused(record, chain_depth::REENTRY_LOOP_CAP);
+            }
+        }
+    }
+
+    /// Hands the stream being read the answer to one of its requests.
+    pub(super) fn on_stream_outcome(&mut self, cx: &mut Cx<'_>, outcome: Outcome) {
+        let Some(read) = self.cascade.stream.take() else {
+            debug_assert!(
+                false,
+                "inbound received a stream's outcome with no stream read"
+            );
+            return;
+        };
+        let cut = self.cascade.turns_cut && read.lineage() == Lineage::Call;
+        match read.accept(cx, &self.cascade.budget, outcome, cut) {
+            Read::Reading(read) => self.cascade.stream = Some(*read),
+            Read::Over(end) => self.stream_over(cx, *end),
+        }
+    }
+
+    /// A stream is read: its target's side effects are kept, and its
+    /// failure, the response's or the target's, fires `ON_ERROR` and is the
+    /// call's error when the stream is the call's own (RFC §12.2 step 13s):
+    /// a chained stream's is not its caller's.
+    fn stream_over(&mut self, cx: &mut Cx<'_>, end: StreamEnd) {
+        let (Some(output), Some(context)) = (end.output, end.context) else {
+            return;
+        };
+        self.side_effects
+            .collect(output.tasks, output.observations, Some(&context));
+        self.side_effects
+            .update_metadata(kept_metadata(&end.job.responder, output.metadata_updates));
+        let Some(error) = output.error else {
+            return;
+        };
+        stream::report_failure(cx, &end.job, &context, &error);
+        if !end.job.chained && end.job.lineage == Lineage::Call {
+            self.trigger.note_error(Some(error));
+        }
+    }
+}
+
+/// `updates` without the keys the implementation reserves (RFC §10.6.5, gap
+/// G-049), which a stream's target may not write.
+fn kept_metadata(responder: &ChannelBinding, updates: Metadata) -> Metadata {
+    updates
+        .into_iter()
+        .filter(|(key, _)| {
+            let reserved = crate::rules::attachment::is_reserved_key(key);
+            if reserved {
+                tracing::warn!(
+                    target: "roomkit::core::inbound",
+                    room_id = %responder.room_id,
+                    key = %key,
+                    "a streaming target's room metadata update names a reserved key; the key is refused"
+                );
+            }
+            !reserved
+        })
+        .collect()
 }
