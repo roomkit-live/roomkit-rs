@@ -170,11 +170,7 @@ pub trait Channel: Send + Sync + 'static {
 /// The rows of `stream`, read to its end, and the failure it ended on.
 async fn buffered(mut stream: DeliveryStream) -> (Vec<RoomEvent>, Option<ChannelError>) {
     let mut rows = Vec::new();
-    while let Some(item) = std::future::poll_fn(|context| {
-        futures_core::Stream::poll_next(Pin::new(&mut stream), context)
-    })
-    .await
-    {
+    while let Some(item) = stream.next().await {
         match item {
             Ok(StreamItem::Row(row)) => rows.push(*row),
             Ok(StreamItem::Text(_)) => {}

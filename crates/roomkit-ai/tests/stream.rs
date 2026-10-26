@@ -4,7 +4,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::collections::VecDeque;
-use std::future::{Future, poll_fn};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -112,10 +112,6 @@ impl Streaming {
     }
 }
 
-async fn next(stream: &mut DeliveryStream) -> Option<Result<StreamItem, ChannelError>> {
-    poll_fn(|context| Pin::new(&mut *stream).poll_next(context)).await
-}
-
 impl Channel for Streaming {
     fn declaration(&self) -> ChannelDeclaration {
         self.declaration.clone()
@@ -140,11 +136,11 @@ impl Channel for Streaming {
         loop {
             let item = match &self.stop {
                 Stop::OnSignal(signal) => tokio::select! {
-                    item = next(&mut stream) => item,
+                    item = stream.next() => item,
                     () = signal.notified() => return Ok(ChannelOutput::default()),
                 },
                 Stop::Never | Stop::AfterText(_) | Stop::AtACallsStart | Stop::FailsAfter(_) => {
-                    next(&mut stream).await
+                    stream.next().await
                 }
             };
             let Some(item) = item else {

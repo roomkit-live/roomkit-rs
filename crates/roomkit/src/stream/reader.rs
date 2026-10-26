@@ -23,10 +23,8 @@
 
 use std::collections::VecDeque;
 use std::future::poll_fn;
-use std::pin::Pin;
 use std::sync::Arc;
 
-use futures_core::Stream;
 use roomkit_core::model::{
     ChannelBinding, ChannelOutput, ErrorRecord, EventDirection, EventId, EventSource, EventType,
     EventUpdates, Metadata, RoomEvent, RoomId,
@@ -158,7 +156,7 @@ pub(crate) async fn read<S: ConversationStore>(
 
 /// The driver's reader of a stream no channel streams: read to its end.
 async fn drain(mut stream: DeliveryStream) -> Result<ChannelOutput, ChannelError> {
-    while let Some(item) = poll_fn(|context| Pin::new(&mut stream).poll_next(context)).await {
+    while let Some(item) = stream.next().await {
         item?;
     }
     Ok(ChannelOutput::default())
