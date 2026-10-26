@@ -79,7 +79,14 @@ pub fn conversation(
         .filter(|turn| turn.role == Role::User && !turn.text.is_empty())
         .filter_map(|turn| turn.speaker.as_ref())
         .map(|speaker| speaker.source.as_str());
-    let labelled = labels_turns(sources, people_taking_part(context, channel_id, &authors));
+    // An instruction that stands alone reads nothing of the room, its roster
+    // included (RFC §10.1.1 rule 7).
+    let people = if is_standalone(event) {
+        0
+    } else {
+        people_taking_part(context, channel_id, &authors)
+    };
+    let labelled = labels_turns(sources, people);
     let turns = cleaned(turns, labelled);
     rendered(turns, labelled)
 }

@@ -264,6 +264,18 @@ fn an_instruction_that_stands_alone_reads_nothing_of_the_room() {
 }
 
 #[test]
+fn an_instruction_that_stands_alone_reads_no_one_taking_part() {
+    let mut room = Timeline::new();
+    room.joins("p-alice", "sms", "Alice", ParticipantRole::Member);
+    room.joins("p-bob", "web", "Bob", ParticipantRole::Member);
+    let event = room.instruction("Summarize the policy", true);
+    assert_eq!(
+        room.read(&event, 50),
+        vec![user(&format!("{INSTRUCTION_MARK}\nSummarize the policy"))]
+    );
+}
+
+#[test]
 fn the_history_holds_the_latest_messages_only() {
     let mut room = Timeline::new();
     for text in ["one", "two", "three"] {
