@@ -71,6 +71,15 @@ as it stands.
   and they register through the typed registrations below.
   `transcript::Message` gains `tool_calls` and `tool_call_id`, and `Role`
   gains `Tool`.
+- **A room's change made by a turn's tool runs its hooks at the turn's
+  depth** (RMK-1004, RFC §8.3, §10.3). The observers of `ON_CHANNEL_ATTACHED`,
+  `ON_CHANNEL_DETACHED`, `ON_CHANNEL_MUTED`, `ON_CHANNEL_UNMUTED`,
+  `ON_ROOM_PAUSED` and `ON_ROOM_CLOSED` that a change made in the room's
+  work fires run in that work, on its budget, their calls at least as deep
+  as the turn's response, as a direct `update_event()`'s already did: an
+  agent attaching a channel whose greeting it answers stops at the depth
+  limit. `AttachChannel`, `DetachChannel`, `UpdateBinding` and the status
+  changes gain `made_in(draw, floor)`.
 - **A round runs at most 32 tool calls** (step 4, milestone 6, review). An
   AI agent's round runs the first 32 calls its generation made, as the
   Python implementation does; the rest never run, are not stored, are left

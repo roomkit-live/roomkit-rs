@@ -16,6 +16,7 @@ use super::locked::LockedChange;
 use crate::model::{Room, RoomId};
 use crate::ops::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use crate::ops::{Environment, KitConfig};
+use crate::rules::chain_depth::Draw;
 use crate::rules::lifecycle::Transition;
 use crate::rules::timers::DueTransition;
 
@@ -41,6 +42,18 @@ macro_rules! status_change {
                 let change = TransitionChange($transition);
                 Self {
                     change: LockedChange::new(config, room_id, organization_id, change),
+                }
+            }
+
+            /// The same change, made in the room's work that `draw`
+            /// names, its trigger's hook bodies drawing their calls on
+            /// that work's budget, at least `floor` deep (RFC §8.3,
+            /// §10.3). Made from outside the room's work, they run
+            /// outside every work.
+            #[must_use]
+            pub fn made_in(self, draw: Draw, floor: u32) -> Self {
+                Self {
+                    change: self.change.made_in(draw, floor),
                 }
             }
         }

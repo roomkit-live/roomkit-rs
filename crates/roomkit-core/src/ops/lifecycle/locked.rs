@@ -16,6 +16,7 @@ use crate::ops::io::Io;
 use crate::ops::protocol::{EffectId, Outcome, ProtocolError, Step};
 use crate::ops::section::{Failure, Section, SectionWork};
 use crate::ops::{Cx, Environment, KitConfig, Progress};
+use crate::rules::chain_depth::Draw;
 use crate::rules::organizations;
 use crate::rules::timers::DueTransition;
 
@@ -121,6 +122,14 @@ impl<C: SectionChange<Refusal = LifecycleError>> LockedChange<C> {
     pub(super) fn complete(&mut self, id: EffectId, outcome: Outcome) -> Result<(), ProtocolError> {
         self.io.complete(id, outcome)
     }
+
+    /// The same change, made in the room's work that `draw` names, its
+    /// trigger's hook bodies drawing their calls on that work's budget, at
+    /// least `floor` deep (RFC §8.3, §10.3).
+    pub(super) fn made_in(mut self, draw: Draw, floor: u32) -> Self {
+        self.section.work_mut().work = Some((draw, floor));
+        self
+    }
 }
 
 /// One change of a room under its lock: the frame every locked change
@@ -147,6 +156,9 @@ pub(crate) struct Changing<C: SectionChange> {
     organization_id: Option<String>,
     /// The write outstanding, and the decision's writes left after it.
     writing: Option<(EffectId, Box<Decision<C::Done>>)>,
+    /// The room's work the change is made in, and the least depth of its
+    /// trigger's calls; `None` outside the room's work.
+    work: Option<(Draw, u32)>,
 }
 
 impl<C: SectionChange> Changing<C> {
@@ -155,6 +167,7 @@ impl<C: SectionChange> Changing<C> {
             change,
             organization_id,
             writing: None,
+            work: None,
         }
     }
 
@@ -231,8 +244,12 @@ impl<C: SectionChange> SectionWork for Changing<C> {
     /// reports no error beside its result, so the failure is only logged
     /// (gap G-025).
     fn report(&self, cx: &mut Cx<'_>, result: &SectionResult<C>) {
-        if let Some((reported, context)) = result.as_ref().ok().and_then(C::reported) {
-            report::report(cx, reported, context);
+        let Some((reported, context)) = result.as_ref().ok().and_then(C::reported) else {
+            return;
+        };
+        match &self.work {
+            Some(work) => report::report_within(cx, reported, context, work),
+            None => report::report(cx, reported, context),
         }
     }
 }

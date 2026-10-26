@@ -121,11 +121,30 @@ impl Cx<'_> {
         budget: &ReentryBudget,
         floor: u32,
     ) {
+        let floor = floor.max(payload.chain_depth.saturating_add(1));
+        self.fire_within(trigger, payload, context, budget, floor);
+    }
+
+    /// Fires `trigger`'s observers of `payload` as [`fire_observers`]
+    /// does, their bodies the work whose budget is `budget` while they run,
+    /// their calls into the room at least `floor` deep: a change of the
+    /// room made in the room's work, a turn's tool's attach for one, fires
+    /// its trigger so, under the work's floor (RFC §8.3 "A direct change's
+    /// own triggers run within it, under the same floor", §10.3).
+    ///
+    /// [`fire_observers`]: Self::fire_observers
+    pub(crate) fn fire_within(
+        &mut self,
+        trigger: HookTrigger,
+        payload: &RoomEvent,
+        context: &RoomContext,
+        budget: &ReentryBudget,
+        floor: u32,
+    ) {
         let hooks = self.config.hooks.observers(trigger, &payload.source);
         if hooks.is_empty() {
             return;
         }
-        let floor = floor.max(payload.chain_depth.saturating_add(1));
         self.io.notify(Notice::AsyncHooks {
             trigger,
             hooks,

@@ -10,6 +10,7 @@ use roomkit_core::ops::{
 };
 
 use super::RoomKit;
+use super::events::room_work;
 use super::scope::Scope;
 use crate::driver;
 use crate::error::KitError;
@@ -253,6 +254,10 @@ impl<S: ConversationStore> Scope<'_, S> {
         let environment = self.kit.inner.environment();
         let binding = options.apply(declaration.binding(room_id.clone(), environment.now()));
         let attach = AttachChannel::new(config, binding, self.organization_id());
+        let attach = match room_work(room_id) {
+            Some((draw, floor)) => attach.made_in(draw, floor),
+            None => attach,
+        };
         Ok(driver::run_on(&self.kit.inner, environment, "attach", attach).await??)
     }
 
@@ -268,6 +273,10 @@ impl<S: ConversationStore> Scope<'_, S> {
             channel_id.clone(),
             self.organization_id(),
         );
+        let detach = match room_work(room_id) {
+            Some((draw, floor)) => detach.made_in(draw, floor),
+            None => detach,
+        };
         Ok(driver::run(&self.kit.inner, "detach", detach).await??)
     }
 
@@ -285,36 +294,60 @@ impl<S: ConversationStore> Scope<'_, S> {
             update,
             self.organization_id(),
         );
+        let operation = match room_work(room_id) {
+            Some((draw, floor)) => operation.made_in(draw, floor),
+            None => operation,
+        };
         Ok(driver::run(&self.kit.inner, "update_binding", operation).await??)
     }
 
     /// Pauses a room the scope reaches.
     pub(super) async fn pause_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let pause = PauseRoom::new(self.kit.config(), room_id.clone(), self.organization_id());
+        let pause = match room_work(room_id) {
+            Some((draw, floor)) => pause.made_in(draw, floor),
+            None => pause,
+        };
         Ok(driver::run(&self.kit.inner, "pause_room", pause).await??)
     }
 
     /// Resumes a room the scope reaches.
     pub(super) async fn resume_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let resume = ResumeRoom::new(self.kit.config(), room_id.clone(), self.organization_id());
+        let resume = match room_work(room_id) {
+            Some((draw, floor)) => resume.made_in(draw, floor),
+            None => resume,
+        };
         Ok(driver::run(&self.kit.inner, "resume_room", resume).await??)
     }
 
     /// Reopens a room the scope reaches.
     pub(super) async fn reopen_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let reopen = ReopenRoom::new(self.kit.config(), room_id.clone(), self.organization_id());
+        let reopen = match room_work(room_id) {
+            Some((draw, floor)) => reopen.made_in(draw, floor),
+            None => reopen,
+        };
         Ok(driver::run(&self.kit.inner, "reopen_room", reopen).await??)
     }
 
     /// Closes a room the scope reaches.
     pub(super) async fn close_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let close = CloseRoom::new(self.kit.config(), room_id.clone(), self.organization_id());
+        let close = match room_work(room_id) {
+            Some((draw, floor)) => close.made_in(draw, floor),
+            None => close,
+        };
         Ok(driver::run(&self.kit.inner, "close_room", close).await??)
     }
 
     /// Archives a room the scope reaches.
     pub(super) async fn archive_room(&self, room_id: &RoomId) -> Result<Room, KitError> {
         let archive = ArchiveRoom::new(self.kit.config(), room_id.clone(), self.organization_id());
+        let archive = match room_work(room_id) {
+            Some((draw, floor)) => archive.made_in(draw, floor),
+            None => archive,
+        };
         Ok(driver::run(&self.kit.inner, "archive_room", archive).await??)
     }
 }

@@ -137,6 +137,7 @@ impl<S: ConversationStore> Scope<'_, S> {
 /// in, while it runs ([`ExecutionContext::room_work`]): what it draws on
 /// its cascade's budget, a hook call from a hook's body only, and the least
 /// depth of its triggers' calls (gap G-087); `None` outside the room's work.
-fn room_work(room_id: &RoomId) -> Option<(Draw, u32)> {
+/// A change of the room's lifecycle runs its triggers in it so.
+pub(super) fn room_work(room_id: &RoomId) -> Option<(Draw, u32)> {
     ExecutionContext::current().room_work(room_id)
 }

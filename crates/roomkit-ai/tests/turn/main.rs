@@ -11,20 +11,20 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelType, DirectEvent, EventContent, EventType, Metadata, RoomEvent, ToolCallContent,
-    ToolCallOutcome,
+    ChannelType, DirectEvent, EventContent, EventType, InboundMessage, Metadata, RoomEvent,
+    ToolCallContent, ToolCallOutcome,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    HookExecution, HookSpec, HookTrigger, KitError, RegistrationError, ToolUse, ToolVerdict,
-    current_turn,
+    ConversationStore, HookExecution, HookSpec, HookTrigger, KitError, RegistrationError, RoomKit,
+    ToolUse, ToolVerdict, current_turn,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, Tools};
+use roomkit_ai::{AiAgent, ToolDefinition, ToolError, ToolOutput, Tools};
 use serde_json::{Value, json};
 use tokio::sync::Barrier;
 
-use self::support::{Room, channel, served};
+use self::support::{Room, channel, room_id, served};
 
 /// The end row of the call `id` in `timeline`.
 fn end_row<'a>(timeline: &'a [RoomEvent], id: &str) -> &'a ToolCallContent {
@@ -369,6 +369,82 @@ async fn a_tool_writes_to_its_room_at_the_turn_s_depth() {
     );
 }
 
+/// RFC §8.3, §10.3: a change a turn's tool makes to the room runs its
+/// trigger's hooks under the turn's floor: an `ON_CHANNEL_ATTACHED`
+/// observer of a tool's attach, or an `ON_CHANNEL_MUTED` one of a tool's
+/// mute, posts at least as deep as the turn's response, so that an agent
+/// whose every answer attaches a channel a greeting answers ends at the
+/// depth limit (RMK-1004; such a post was at depth 0, each greeting a new
+/// chain).
+#[tokio::test]
+async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
+    for (tool, trigger) in [
+        ("attach_ws", HookTrigger::OnChannelAttached),
+        ("mute_ws", HookTrigger::OnChannelMuted),
+    ] {
+        let kit = RoomKit::new();
+        for (id, channel_type) in [("sms", ChannelType::SMS), ("ws", ChannelType::WEBSOCKET)] {
+            kit.register_channel(RecordingTransport::new(channel(id), channel_type))
+                .unwrap();
+        }
+        let weak = kit.downgrade();
+        let changes = Tools::new().tool(
+            ToolDefinition::new(tool, "Changes the room", json!({ "type": "object" })),
+            move |_call, _context| {
+                let kit = weak.upgrade().unwrap();
+                async move {
+                    if tool == "attach_ws" {
+                        kit.attach(&room_id(), &channel("ws")).await.unwrap();
+                    } else {
+                        kit.mute(&room_id(), &channel("ws")).await.unwrap();
+                    }
+                    Ok(ToolOutput::Text("done".to_owned()))
+                }
+            },
+        );
+        let model = ScriptedProvider::new([
+            ScriptedRound::calling("", [("c1", tool, "{}")]),
+            ScriptedRound::answering("Done."),
+            ScriptedRound::answering("Hello."),
+        ]);
+        let agent = AiAgent::new(channel("assistant"), model)
+            .with_tools(changes)
+            .unwrap();
+        kit.register_channel(agent).unwrap();
+        kit.create_room(&room_id()).await.unwrap();
+        let bound: &[&str] = if tool == "attach_ws" {
+            &["sms", "assistant"]
+        } else {
+            &["sms", "ws", "assistant"]
+        };
+        for id in bound {
+            kit.attach(&room_id(), &channel(id)).await.unwrap();
+        }
+        let weak = kit.downgrade();
+        kit.observe("greeting", trigger, move |_event, _context| {
+            let kit = weak.upgrade().unwrap();
+            async move {
+                let greeting = DirectEvent::new(channel("sms"), EventContent::text("Welcome."));
+                kit.send_event(&room_id(), greeting).await.unwrap();
+            }
+        })
+        .unwrap();
+        let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Go."));
+        kit.process_inbound_in(&room_id(), message).await.unwrap();
+        kit.idle().await;
+        let greeting = kit
+            .store()
+            .list_events(&room_id(), true)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|event| roomkit::text_of(&event.content) == "Welcome.")
+            .unwrap();
+        assert_eq!(greeting.chain_depth, 1, "{tool}");
+        kit.shutdown().await;
+    }
+}
+
 /// RFC §8.3 "Reentry cap": a turn is one stream, read to its end whichever
 /// pass started it, its rows drawing no pass each, as the reference
 /// implementation's turn: 6 rounds of 4 calls, 55 rows, and the answer is
@@ -456,10 +532,7 @@ async fn a_messaging_transport_is_handed_no_tool_row_and_a_websocket_is() {
     let room = Room::new(model, served()).await;
     let web = RecordingTransport::new(channel("web"), ChannelType::WEBSOCKET);
     room.kit.register_channel(web.clone()).unwrap();
-    room.kit
-        .attach(&support::room_id(), &channel("web"))
-        .await
-        .unwrap();
+    room.kit.attach(&room_id(), &channel("web")).await.unwrap();
     room.says("Order 1?").await;
     let kinds = |transport: &RecordingTransport| -> Vec<EventType> {
         transport

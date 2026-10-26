@@ -9,6 +9,7 @@ use super::locked::LockedChange;
 use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomId, Visibility};
 use crate::ops::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use crate::ops::{Environment, KitConfig};
+use crate::rules::chain_depth::Draw;
 use crate::rules::host;
 
 /// Attaches a channel to a room with its binding, under the room's lock,
@@ -42,6 +43,18 @@ impl AttachChannel {
             None => LockedChange::new(config, room_id, organization_id, change),
         };
         Self { change }
+    }
+
+    /// The same change, made in the room's work that `draw` names, its
+    /// trigger's hook bodies drawing their calls on that work's budget, at
+    /// least `floor` deep (RFC §8.3, §10.3): a turn's tool's change, its
+    /// hooks at least as deep as the turn's response. Made from outside the
+    /// room's work, they run outside every work.
+    #[must_use]
+    pub fn made_in(self, draw: Draw, floor: u32) -> Self {
+        Self {
+            change: self.change.made_in(draw, floor),
+        }
     }
 }
 
@@ -97,6 +110,18 @@ impl DetachChannel {
             change: LockedChange::new(config, room_id, organization_id, change),
         }
     }
+
+    /// The same change, made in the room's work that `draw` names, its
+    /// trigger's hook bodies drawing their calls on that work's budget, at
+    /// least `floor` deep (RFC §8.3, §10.3): a turn's tool's change, its
+    /// hooks at least as deep as the turn's response. Made from outside the
+    /// room's work, they run outside every work.
+    #[must_use]
+    pub fn made_in(self, draw: Draw, floor: u32) -> Self {
+        Self {
+            change: self.change.made_in(draw, floor),
+        }
+    }
 }
 
 impl Operation for DetachChannel {
@@ -148,6 +173,18 @@ impl UpdateBinding {
             LockedChange::new(config, room_id, organization_id, change)
         };
         Self { change }
+    }
+
+    /// The same change, made in the room's work that `draw` names, its
+    /// trigger's hook bodies drawing their calls on that work's budget, at
+    /// least `floor` deep (RFC §8.3, §10.3): a turn's tool's change, its
+    /// hooks at least as deep as the turn's response. Made from outside the
+    /// room's work, they run outside every work.
+    #[must_use]
+    pub fn made_in(self, draw: Draw, floor: u32) -> Self {
+        Self {
+            change: self.change.made_in(draw, floor),
+        }
     }
 }
 

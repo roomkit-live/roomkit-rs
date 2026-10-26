@@ -9,6 +9,7 @@ use crate::model::{
 };
 use crate::ops::protocol::{EffectId, HookRequest};
 use crate::ops::{Cx, FrameworkEvent, Notice, TransitionReason};
+use crate::rules::chain_depth::Draw;
 use crate::rules::hook_registry::{HookId, HookTrigger};
 
 /// A lifecycle change to report.
@@ -159,6 +160,25 @@ pub(crate) fn report(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomCont
     };
     let payload = payload(cx, reported, &context.room.id);
     cx.fire_observers(trigger, &payload, context);
+}
+
+/// Emits the change's framework event and fires its trigger's hooks as
+/// [`report`] does, their bodies the room's work the change was made in,
+/// `work`: they draw their calls on its budget, at least its floor deep
+/// (RFC §8.3, §10.3).
+pub(crate) fn report_within(
+    cx: &mut Cx<'_>,
+    reported: Reported<'_>,
+    context: &RoomContext,
+    work: &(Draw, u32),
+) {
+    announce(cx, reported, &context.room.id);
+    let Some(trigger) = reported.trigger() else {
+        return;
+    };
+    let payload = payload(cx, reported, &context.room.id);
+    let (draw, floor) = work;
+    cx.fire_within(trigger, &payload, context, draw.budget(), *floor);
 }
 
 /// Emits the change's framework event now, and hands back its trigger's
