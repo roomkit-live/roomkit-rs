@@ -454,8 +454,10 @@ pub(crate) fn as_deep_as_its_turn(chain_depth: &mut u32) {
 /// as the hook's or the turn's own would be. Once the call is over, the
 /// task acts for it no more: its calls are new arrivals, which wait for
 /// the room, its lock included, as any task's, on a budget and at a depth
-/// of their own. A task spawned without it acts for nothing from its
-/// start.
+/// of their own. They wait even when a later hook of the same pass awaits
+/// the task: that hook waits until its own timeout, the pass holding the
+/// lock the task's call waits for (decided in step 3 milestone 2). A task
+/// spawned without it acts for nothing from its start.
 ///
 /// ```no_run
 /// # async fn turn(kit: roomkit::RoomKit, room: roomkit::model::RoomId, event: roomkit::model::DirectEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

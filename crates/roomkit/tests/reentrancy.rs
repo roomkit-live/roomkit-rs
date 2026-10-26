@@ -1103,6 +1103,67 @@ async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_ove
     );
 }
 
+/// Decided for step 3 milestone 2 (the review's probe
+/// `a_later_hook_awaits_the_task_an_earlier_one_left`): a task a finished
+/// hook left running calls as an ordinary new arrival and waits for the
+/// lock, even when a later hook of the same pass awaits it. That hook waits
+/// until its own timeout, and fails open; the message commits, then the
+/// task's injection, which the later hook never sees.
+#[tokio::test]
+async fn a_later_hook_awaiting_a_task_an_earlier_one_left_waits_until_its_timeout() {
+    let (kit, _) = room().await;
+    let left: Arc<Mutex<Option<tokio::task::JoinHandle<Option<u64>>>>> = Arc::default();
+    let first_over = Arc::new(Notify::new());
+    let (hook_kit, put, over) = (kit.clone(), Arc::clone(&left), Arc::clone(&first_over));
+    kit.hook(before_broadcast("first", true), move |event, _| {
+        let (kit, put, over) = (hook_kit.clone(), Arc::clone(&put), Arc::clone(&over));
+        async move {
+            if event.source.channel_id == channel("sms") {
+                let task = tokio::spawn(roomkit::keep_context(async move {
+                    over.notified().await;
+                    let sent = kit.send_event(&room_id(), from_console("Heads up")).await;
+                    sent.ok().map(|event| event.index)
+                }));
+                *put.lock().unwrap() = Some(task);
+            }
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    let seen: Arc<Mutex<Option<Option<u64>>>> = Arc::default();
+    let (take, over, saw) = (
+        Arc::clone(&left),
+        Arc::clone(&first_over),
+        Arc::clone(&seen),
+    );
+    let second = HookSpec {
+        priority: 10,
+        timeout: Duration::from_millis(50),
+        ..before_broadcast("second", true)
+    };
+    kit.hook(second, move |event, _| {
+        let (take, over, saw) = (Arc::clone(&take), Arc::clone(&over), Arc::clone(&saw));
+        async move {
+            if event.source.channel_id == channel("sms") {
+                over.notify_one();
+                let task = take.lock().unwrap().take();
+                if let Some(task) = task {
+                    *saw.lock().unwrap() = Some(task.await.unwrap());
+                }
+            }
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    let result = send(&kit, "hello").await.unwrap();
+    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    let seen = *seen.lock().unwrap();
+    assert_eq!(
+        (result.blocked, seen, messages(&kit).await),
+        (false, None, vec!["#3 sms".to_owned(), "#4 ws".to_owned()])
+    );
+}
+
 /// RFC §8.3: a channel whose parse sends every message it parses back into
 /// its room is bounded by the reentry budget: each message is charged as it
 /// arrives, before its parse, and the one past the budget is refused.
