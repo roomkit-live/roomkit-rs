@@ -35,23 +35,7 @@ use sha2::{Digest, Sha256};
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs
 /// `conformance/README.md`, "Known failures").
-const KNOWN_FAILURES: &[(&str, &str)] = &[
-    (
-        "hooks/an-async-hook-on-a-sync-trigger-observes",
-        "RFC §9.2: a hook registered ASYNC on BEFORE_BROADCAST never runs; the inbound \
-         operation fires no observer of BEFORE_BROADCAST once its chain allowed the event",
-    ),
-    (
-        "inbound/an-author-s-name-and-rank-are-recorded",
-        "RFC §10.1 step 12: roomkit-rs records no author and keeps no register of them \
-         (step 3 decision 2, milestone 2)",
-    ),
-    (
-        "rooms/the-delivery-cursor-follows-the-lane",
-        "RFC §5.1, §1.4: roomkit-rs's Room has no delivered_index (step 3 decision 2, \
-         milestone 2)",
-    ),
-];
+const KNOWN_FAILURES: &[(&str, &str)] = &[];
 
 /// A scenario that has not finished by then fails instead of hanging the
 /// suite.
