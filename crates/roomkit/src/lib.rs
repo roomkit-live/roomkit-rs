@@ -22,6 +22,9 @@
 //! - [`store`]: where rooms live, in memory by default.
 //! - [`testing`]: a recording transport and an echo agent, for tests and
 //!   examples.
+//! - [`transcript`]: the conversation an agent's turn hands its model, each
+//!   message in its author's role and labelled by its speaker as RFC §6.4
+//!   requires of an AI channel.
 //!
 //! The core's model is re-exported whole as [`model`]. Of its operations
 //! and rules, only what a caller names is: the results and errors of the
@@ -65,6 +68,7 @@ pub use roomkit_core::rules::instructions::turn_context;
 pub use roomkit_core::rules::lifecycle::Transition;
 pub use roomkit_core::rules::routing::{Candidate, RouteQuery, Sender, route as default_route};
 pub use roomkit_core::rules::transcoding::text_of;
+pub use roomkit_core::rules::transcript;
 
 pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::context::keep_context;

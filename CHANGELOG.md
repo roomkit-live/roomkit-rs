@@ -261,6 +261,19 @@ as it stands.
   `set_private_state`, whose defaults keep the value in the room's
   metadata; `InMemoryStore` keeps it apart. What reads alike is read over
   Unicode tables generated from roomkit (`scripts/build-unicode-tables.py`).
+- **The conversation a turn reads** (§6.4, §10.1.1 rules 6 and 7, step 4
+  milestone 1): `roomkit::transcript::conversation` gives an agent channel
+  the room's latest messages before its turn's event, then the event, as
+  `Message`s of the `User` or the `Assistant` role. Once the turns hold two
+  speakers or more, or two people or more take part, each line of a
+  participant's turn reads `Name: "line"`, its author's name ranked when it
+  reads like another's (`Alice (2)`) or `@channel` for a sender with no
+  name, and the turn's notes say how speakers are named. An instruction is
+  the input, marked as the application's; one that stands alone reads no
+  history. A copy of the runtime's marks in a participant's text is replaced,
+  read in any case, spacing or look-alike letters, one that runs over
+  consecutive messages included. The marks are the Python
+  implementation's.
 - **A task a hook spawns** (§13.5, §9.5.1, decision 2 of step 3, gap
   G-070): a task spawned within a hook's or a turn's context
   (`keep_context`) acts for it while it runs, whether it awaits the task

@@ -543,6 +543,76 @@ pub(crate) fn keep_record(metadata: &mut Metadata, stored: &RoomEvent) {
     }
 }
 
+/// A turn's author as a reader names them (RFC §6.4): their name, and its
+/// rank among the room's sources whose names read alike.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Author {
+    pub(crate) name: String,
+    pub(crate) rank: u32,
+}
+
+/// The authors of a room's turns as a reader names them (RFC §6.4), the
+/// Python implementation's (`channels/_speaker.py`, `_label`): the record
+/// a turn was committed with, while the turn's source is the one recorded;
+/// else its author's name, ranked against a copy of the room's register
+/// extended with its named participants, then with each new source in the
+/// order the turns are read. The copy is made on first use, which a window
+/// of recorded turns never makes, and never written back.
+pub(crate) struct Authors<'a> {
+    people: People<'a>,
+    salt: &'a str,
+    stored: Option<&'a Metadata>,
+    register: Option<AuthorRegister>,
+}
+
+impl<'a> Authors<'a> {
+    /// The authors of the turns of `context`'s room.
+    pub(crate) fn new(context: &'a RoomContext) -> Self {
+        Self {
+            people: People::new(&context.participants),
+            salt: context.room.id.as_str(),
+            stored: context.author_register.as_ref(),
+            register: None,
+        }
+    }
+
+    /// `event`'s author, or `None` when they have no name.
+    pub(crate) fn of(&mut self, event: &RoomEvent) -> Option<Author> {
+        let source = digest(self.salt, &source_of(event, &self.people));
+        if let Some((name, rank, recorded)) = recorded_author(event)
+            && recorded == source
+        {
+            let name = person_name(&name);
+            if !name.is_empty() {
+                return Some(Author { name, rank });
+            }
+        }
+        let name = author_name(event, &self.people)?;
+        let names = name_keys(self.salt, &name);
+        let rank = self.register().rank(&source, &names);
+        Some(Author { name, rank })
+    }
+
+    /// One participant record per person, in the order they joined: an
+    /// identity's first record stands for all of its records.
+    pub(crate) fn persons(&self) -> &[&'a Participant] {
+        &self.people.persons
+    }
+
+    /// The copy of the room's register the turns that hold no record are
+    /// ranked against.
+    fn register(&mut self) -> &mut AuthorRegister {
+        self.register.get_or_insert_with(|| {
+            let mut register = self
+                .stored
+                .and_then(AuthorRegister::stored)
+                .unwrap_or_else(AuthorRegister::empty);
+            register.seed(&self.people, self.salt);
+            register
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
