@@ -43,8 +43,8 @@ impl OpenAiAgent {
     /// # Errors
     ///
     /// Returns [`OpenAiError::BaseUrl`] when the base URL is no `http` or
-    /// `https` URL, and [`OpenAiError::Client`] when the HTTP client cannot
-    /// be built.
+    /// `https` URL, or holds a query or a fragment, and
+    /// [`OpenAiError::Client`] when the HTTP client cannot be built.
     pub fn new(channel_id: ChannelId, config: OpenAiConfig) -> Result<Self, OpenAiError> {
         let endpoint = endpoint(&config.base_url)?;
         // An API endpoint has no use for a redirect, which could carry the
@@ -175,13 +175,25 @@ async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, OpenAiErr
     Ok(body)
 }
 
-/// The completions endpoint under `base_url`.
+/// The completions endpoint under `base_url`: `/chat/completions` after
+/// its path. A base URL with a query or a fragment is refused, since the
+/// path would follow them instead.
 fn endpoint(base_url: &str) -> Result<reqwest::Url, OpenAiError> {
+    let refused = |reason: &str| OpenAiError::BaseUrl {
+        reason: reason.to_owned(),
+    };
+    let not_http = || refused("it is not an http or https URL");
+    let base = reqwest::Url::parse(base_url).map_err(|_| not_http())?;
+    if base.query().is_some() || base.fragment().is_some() {
+        return Err(refused(
+            "it has a query or a fragment, which /chat/completions cannot follow",
+        ));
+    }
     let joined = format!("{}{COMPLETIONS_PATH}", base_url.trim_end_matches('/'));
-    let url = reqwest::Url::parse(&joined).map_err(|_| OpenAiError::BaseUrl)?;
+    let url = reqwest::Url::parse(&joined).map_err(|_| not_http())?;
     match url.scheme() {
         "http" | "https" => Ok(url),
-        _ => Err(OpenAiError::BaseUrl),
+        _ => Err(not_http()),
     }
 }
 
@@ -190,7 +202,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::config::tests::SECRET_URL;
 
     #[test]
     fn the_endpoint_is_the_base_url_s_chat_completions() {
@@ -203,7 +214,24 @@ mod tests {
     #[test]
     fn a_base_url_that_is_no_http_url_is_refused() {
         for base_url in ["api.openai.com/v1", "ftp://example.com", ""] {
-            assert_eq!(endpoint(base_url), Err(OpenAiError::BaseUrl), "{base_url}");
+            assert!(
+                matches!(endpoint(base_url), Err(OpenAiError::BaseUrl { .. })),
+                "{base_url}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_base_url_with_a_query_or_a_fragment_is_refused() {
+        for base_url in [
+            "https://example.openai.azure.com/openai/deployments/d?api-version=2024-10-21",
+            "https://api.openai.com/v1#chat",
+        ] {
+            let refused = endpoint(base_url);
+            assert!(
+                matches!(refused, Err(OpenAiError::BaseUrl { .. })),
+                "{base_url}: {refused:?}"
+            );
         }
     }
 
@@ -219,10 +247,14 @@ mod tests {
 
     #[test]
     fn the_agent_s_debug_form_hides_the_api_key_and_the_base_url_s_credentials() {
-        let config = OpenAiConfig::new(SECRET_URL, "sk-secret", "gpt-6-luna");
+        let config = OpenAiConfig::new(
+            "https://user:pass@example.com:8443/v1",
+            "sk-secret",
+            "gpt-6-luna",
+        );
         let agent = OpenAiAgent::new(ChannelId::new("assistant").unwrap(), config).unwrap();
         let printed = format!("{agent:?}");
-        for secret in ["sk-secret", "user", "pass", "token", "abc", "/v1"] {
+        for secret in ["sk-secret", "user", "pass", "/v1"] {
             assert!(!printed.contains(secret), "{secret} in {printed}");
         }
     }

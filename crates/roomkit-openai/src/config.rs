@@ -29,8 +29,9 @@ pub struct OpenAiConfig {
 impl OpenAiConfig {
     /// A configuration calling `{base_url}/chat/completions` with `api_key`
     /// as its bearer token, asking `model`. The base URL is the API's root,
-    /// `https://api.openai.com/v1` for OpenAI's; an empty key sends no
-    /// `Authorization` header, for a local server that asks for none.
+    /// `https://api.openai.com/v1` for OpenAI's, with no query or fragment;
+    /// an empty key sends no `Authorization` header, for a local server
+    /// that asks for none.
     ///
     /// It has no system prompt, sends the room's latest 50 messages, and
     /// waits 120 seconds for a completion.
@@ -108,11 +109,11 @@ fn shown_url(url: &str) -> String {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
 
     /// A base URL carrying credentials in its user info and its query.
-    pub(crate) const SECRET_URL: &str = "https://user:pass@example.com:8443/v1?token=abc";
+    const SECRET_URL: &str = "https://user:pass@example.com:8443/v1?token=abc";
 
     #[test]
     fn the_debug_form_hides_the_api_key_and_the_base_url_s_credentials() {

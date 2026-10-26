@@ -12,11 +12,16 @@ use std::error::Error;
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum OpenAiError {
-    /// The base URL, with `/chat/completions` after it, is no `http` or
-    /// `https` URL. The error does not repeat it: a URL may carry
+    /// The base URL is refused: it is no `http` or `https` URL once
+    /// `/chat/completions` follows it, or it holds a query or a fragment,
+    /// which the path would follow instead of the URL's path (Azure's
+    /// `?api-version=`). The error does not repeat the URL: a URL may carry
     /// credentials.
-    #[error("the base URL is not an http or https URL")]
-    BaseUrl,
+    #[error("the base URL is refused: {reason}")]
+    BaseUrl {
+        /// Why.
+        reason: String,
+    },
     /// The HTTP client could not be built.
     #[error("the HTTP client could not be built: {reason}")]
     Client {
