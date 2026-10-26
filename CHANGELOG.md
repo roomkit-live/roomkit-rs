@@ -268,12 +268,14 @@ as it stands.
   speakers or more, or two people or more take part, each line of a
   participant's turn reads `Name: "line"`, its author's name ranked when it
   reads like another's (`Alice (2)`) or `@channel` for a sender with no
-  name, and the turn's notes say how speakers are named. An instruction is
-  the input, marked as the application's; one that stands alone reads no
-  history. A copy of the runtime's marks in a participant's text is replaced,
-  read in any case, spacing or look-alike letters, one that runs over
-  consecutive messages included. The marks are the Python
-  implementation's.
+  name, a second such sender of the channel `@channel (2)`, speakers being
+  counted by who they come from, and the turn's notes say how speakers are
+  named. An instruction is the input, marked as the application's; one
+  that stands alone reads no history. A copy of the runtime's marks in a
+  participant's text is replaced, read in any case, spacing or look-alike
+  letters, one that runs over consecutive messages included, and so is a
+  mark's opening after any opening punctuation (`[`, `【`, `〔`, `(`…). The
+  marks are the Python implementation's.
 - **The OpenAI agent** (`roomkit-openai`, §6.4, step 4 milestone 1):
   `OpenAiAgent`, an intelligence channel whose turn is one Chat Completions
   call to an OpenAI-compatible endpoint, not streamed and with no tool,
@@ -281,9 +283,12 @@ as it stands.
   the completion's text. `OpenAiConfig` names the base URL, the API key
   (an empty one sends no `Authorization`; `Debug` never prints it), the
   model, the system prompt, how many messages a turn sends (50 by default)
-  and the request's timeout (120 seconds). A provider error, a request that
-  fails or an answer that is no chat completion fails the turn with an
-  `OpenAiError`: `ON_ERROR` fires and the caller reads it on its result.
+  and the request's timeout (120 seconds); `Debug` shows the base URL's
+  scheme, host and port only. A provider error, a request that fails, an
+  answer longer than 4 MiB or one that is no chat completion fails the turn
+  with an `OpenAiError`: `ON_ERROR` fires and the caller reads it on its
+  result. A provider error keeps the provider's type, code and message, on
+  one line, bounded, the API key removed; nothing else of its answer.
 - **A task a hook spawns** (§13.5, §9.5.1, decision 2 of step 3, gap
   G-070): a task spawned within a hook's or a turn's context
   (`keep_context`) acts for it while it runs, whether it awaits the task
