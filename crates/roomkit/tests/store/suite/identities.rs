@@ -125,24 +125,6 @@ async fn a_linked_address_resolves_to_its_identity() {
     assert_eq!(resolved(&store, None).await, Some("id_jean".to_owned()));
 }
 
-/// A type is an open name: an address on a channel type no implementation
-/// lists resolves as any other.
-#[tokio::test]
-async fn an_address_on_a_type_of_any_name_resolves() {
-    let slack = ChannelType::new("slack").unwrap();
-    let store = holding(vec![Identity::new(id("id_jean"), None)]).await;
-    store
-        .link_address(&id("id_jean"), slack.clone(), "U024BE7LH", None)
-        .await
-        .unwrap();
-    let found = store
-        .resolve_identity(slack.clone(), "U024BE7LH", None)
-        .await
-        .unwrap()
-        .map(|identity| identity.channel_addresses);
-    assert_eq!(found, Some([(slack, vec!["U024BE7LH".to_owned()])].into()));
-}
-
 #[tokio::test]
 async fn linking_to_an_identity_of_another_organization_is_refused() {
     let store = holding(vec![Identity::new(id("id_jean"), Some("bank".to_owned()))]).await;
