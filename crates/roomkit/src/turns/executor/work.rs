@@ -120,7 +120,10 @@ impl Pump<'_> {
                 return;
             }
             let (read, closing) = self.read(&mut stream).await;
-            if let Err(why) = self.sender.report_args(&self.host.ran_with()) {
+            let reported = self
+                .host
+                .with_ran_with(|ran_with| self.sender.report_args(ran_with));
+            if let Err(why) = reported {
                 return refuse(self.sender, "tool arguments", &why);
             }
             // An item read once the reader closed is the reader's no more;
@@ -180,6 +183,7 @@ impl Pump<'_> {
             }
             Some(Ok(ResponseItem::ToolEnd(end))) => {
                 self.starting = false;
+                self.host.forget_ran_with(&end.tool_id);
                 self.sender.send_end(end)
             }
             Some(Ok(ResponseItem::End(record))) => {

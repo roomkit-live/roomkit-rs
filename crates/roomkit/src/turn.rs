@@ -235,9 +235,16 @@ impl TurnHost {
         calls.running.push(running);
     }
 
-    /// The arguments each call of the turn runs with, by its id.
-    pub(crate) fn ran_with(&self) -> HashMap<String, Metadata> {
-        self.calls().ran_with.clone()
+    /// Runs `read` on the arguments each call of the turn runs with, by
+    /// its id, whose end was not sent yet.
+    pub(crate) fn with_ran_with<T>(&self, read: impl FnOnce(&HashMap<String, Metadata>) -> T) -> T {
+        read(&self.calls().ran_with)
+    }
+
+    /// The end of the call `call_id` was sent: what it ran with is kept no
+    /// more.
+    pub(crate) fn forget_ran_with(&self, call_id: &str) {
+        self.calls().ran_with.remove(call_id);
     }
 
     fn calls(&self) -> std::sync::MutexGuard<'_, Calls> {

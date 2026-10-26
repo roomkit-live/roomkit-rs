@@ -261,8 +261,8 @@ impl Pump {
         drop(self.main.send(main));
     }
 
-    /// The turn is over for the owner: its reader learns why, its verbs
-    /// are cancelled, and later frames are dropped.
+    /// The turn is over for the owner: its reader learns why; dropped, the
+    /// pump cancels its verbs and drops later frames.
     fn finish(self, ending: Ending) {
         match ending {
             Ending::Ended => {}
@@ -280,6 +280,14 @@ impl Pump {
             }
             Ending::Failed(error) => self.hand(Main::Failed(error)),
         }
+    }
+}
+
+impl Drop for Pump {
+    /// However the pump ends, its task aborted with the kit's shutdown
+    /// included: the turn is over for the owner, its verbs cancelled, its
+    /// pipes shut, and whoever awaits its end told.
+    fn drop(&mut self) {
         for call in self.calls.values() {
             call.abort();
         }

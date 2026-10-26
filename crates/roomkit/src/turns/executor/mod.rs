@@ -124,6 +124,7 @@ impl Executor {
             response_depth(&request.event),
         );
         let flow = Arc::new(Flow::default());
+        let _released = Released(Arc::clone(&link));
         let work: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(work(
             Arc::clone(&self.turn),
             Arc::clone(&self.sender),
@@ -248,6 +249,22 @@ impl Executor {
 
     fn send(&self, frame: &Frame) -> Result<u64, Uncarried> {
         self.sender.send(frame)
+    }
+}
+
+/// The turn's link let go of however its task ends, aborted with the kit's
+/// shutdown included: its host's verbs cross outside the turn from then
+/// on, and a verb still waiting for its answer fails, so that no task the
+/// turn spawned waits for ever.
+struct Released(Arc<HostLink>);
+
+impl Drop for Released {
+    fn drop(&mut self) {
+        self.0.close();
+        self.0.fail_all(&TurnError::new(
+            "backend_closed",
+            "the turn ended before the verb's answer",
+        ));
     }
 }
 

@@ -5,7 +5,9 @@
 //! drain with no target, pulls a [`DeliveryStream`]; each pull is answered
 //! here, one item at a time, and the response is pulled only then: a model
 //! round or a tool call runs only as it is read, so one that stops leaves
-//! no call started after that point. A text delta reaches the reader at
+//! no call started after that point. The response is the turn's on its
+//! owner's side (`turns::OwnerTurn`): each read pulls its executor across
+//! the turn backend (RFC §10.6.4). A text delta reaches the reader at
 //! once; a row the response ends is handed to the operation first
 //! ([`Entry::Row`]), which commits it, and the reader is handed it as the
 //! store holds it.
@@ -15,7 +17,11 @@
 //! response is closed before its next round. A call announced but not
 //! running never runs, its end stored `failed`. The text the reader was
 //! handed since the last row is stored marked `cancelled`, the turn's
-//! record `cancelled`. A response that fails stores the text it produced,
+//! record `cancelled`. A read stopped from outside, by the operation or the
+//! kit's shutdown, cuts the turn first: `cancel` crosses, its executor cuts
+//! the call it runs, and the turn's end is awaited within its cancel bound
+//! before the calls left open are ended `cancelled`. A response that fails
+//! stores the text it produced,
 //! hands its reader that row, then the failure; a streaming channel that
 //! fails leaves the text to every target. The turn's record, when no row
 //! carried it, is written on its last message once the response is over,
