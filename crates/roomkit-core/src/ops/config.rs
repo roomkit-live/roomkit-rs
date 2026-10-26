@@ -56,12 +56,22 @@ pub struct ChannelDeclaration {
     /// carrying private chats and groups (WhatsApp Personal), a message
     /// without the key is addressed by its sender.
     pub chat_key: Option<String>,
+    /// Whether the channel, a transport, is handed an agent's tool-call rows
+    /// (`TOOL_CALL_START`, `TOOL_CALL_END`, RFC §6.4): a channel that shows
+    /// a turn's activity, a WebSocket client or a webhook, which takes the
+    /// event as data. A messaging transport (SMS, email, a chat platform)
+    /// is not handed them, so that its delivery, sending the event's text,
+    /// never sends a person `[Tool call: x]`: the reference
+    /// implementation's message providers send nothing for a row with no
+    /// text (gap noted in docs/rfc-gaps.md, step 4 milestone 5). Its type's
+    /// default: `true` for `websocket` and `webhook`.
+    pub receives_tool_calls: bool,
 }
 
 impl ChannelDeclaration {
     /// A channel of `channel_type` with the RFC's defaults: the default
     /// capabilities, no provider name, no country code, and the addressing,
-    /// recipient key and chat key of its type ([`Addressing::of`],
+    /// recipient key, chat key and tool-call rows of its type ([`Addressing::of`],
     /// `addresses::recipient_key`, `addresses::chat_key`, gaps G-051 and
     /// G-057), which a name the RFC does not list has none of: its senders
     /// are addressed as written, with no recipient and no chat key, unless
@@ -77,6 +87,8 @@ impl ChannelDeclaration {
             addressing: Addressing::of(&channel_type),
             recipient_key: addresses::recipient_key(&channel_type).map(str::to_owned),
             chat_key: addresses::chat_key(&channel_type).map(str::to_owned),
+            receives_tool_calls: channel_type == ChannelType::WEBSOCKET
+                || channel_type == ChannelType::WEBHOOK,
             channel_type,
             category,
             direction,

@@ -425,11 +425,9 @@ impl CommitPass {
             if let Some(accepted) = &self.accepted {
                 accepted.narrow(event, bindings);
             }
-            return Ok(permissions::plan_targets(
-                event,
-                targets.as_deref(),
-                bindings,
-            ));
+            let mut plan = permissions::plan_targets(event, targets.as_deref(), bindings);
+            keep_tool_rows(cx, &mut plan, event);
+            return Ok(plan);
         }
         let source = context
             .binding(&event.source.channel_id)
@@ -441,12 +439,14 @@ impl CommitPass {
         if let Some(accepted) = &self.accepted {
             accepted.narrow(event, bindings);
         }
-        Ok(permissions::plan_delivery(
+        let mut plan = permissions::plan_delivery(
             event,
             bindings,
             context.room.agent_response_policy,
             cx.config.max_chain_depth,
-        ))
+        );
+        keep_tool_rows(cx, &mut plan, event);
+        Ok(plan)
     }
 
     /// Waits for the commit to be durable; an instruction, which writes
@@ -515,4 +515,15 @@ impl CommitPass {
         }
         self.release(cx, Ok(result))
     }
+}
+
+/// Keeps a tool-call row from the transports whose declaration does not
+/// take one; a channel the kit no longer holds is kept, its delivery failing
+/// as any such delivery does (gap G-048).
+fn keep_tool_rows(cx: &Cx<'_>, plan: &mut DeliveryPlan, event: &RoomEvent) {
+    permissions::keep_tool_rows_to(plan, event, |channel_id| {
+        cx.config
+            .channel(channel_id)
+            .is_none_or(|declaration| declaration.receives_tool_calls)
+    });
 }

@@ -11,9 +11,10 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    DirectEvent, EventContent, EventType, Metadata, RoomEvent, ToolCallContent,
+    ChannelType, DirectEvent, EventContent, EventType, Metadata, RoomEvent, ToolCallContent,
     ToolCallOutcome,
 };
+use roomkit::testing::RecordingTransport;
 use roomkit::{
     HookExecution, HookSpec, HookTrigger, KitError, RegistrationError, ToolUse, ToolVerdict,
     current_turn,
@@ -353,6 +354,50 @@ async fn a_long_turn_draws_one_pass_and_its_answer_is_delivered() {
     assert_eq!(
         (blocked, room.sms.texts().last().cloned()),
         (0, Some("The final answer.".to_owned()))
+    );
+}
+
+/// A messaging transport is not handed the turn's tool-call rows, so that
+/// its delivery of the event's text never sends `[Tool call: x]`; a
+/// WebSocket channel is, as the reference implementation's WebSocket shows
+/// the turn's activity (review F2, probe
+/// tasks/probes/step4-m5/f2_text_transport_probe.py).
+#[tokio::test]
+async fn a_messaging_transport_is_handed_no_tool_row_and_a_websocket_is() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling(
+            "Let me check.",
+            [("c1", "lookup_order", r#"{"order": "1"}"#)],
+        ),
+        ScriptedRound::answering("Order 1 shipped."),
+    ]);
+    let room = Room::new(model, served()).await;
+    let web = RecordingTransport::new(channel("web"), ChannelType::WEBSOCKET);
+    room.kit.register_channel(web.clone()).unwrap();
+    room.kit
+        .attach(&support::room_id(), &channel("web"))
+        .await
+        .unwrap();
+    room.says("Order 1?").await;
+    let kinds = |transport: &RecordingTransport| -> Vec<EventType> {
+        transport
+            .deliveries()
+            .iter()
+            .map(|delivery| delivery.event.event_type)
+            .collect()
+    };
+    assert_eq!(
+        (room.sms.texts(), kinds(&web)),
+        (
+            vec!["Let me check.".to_owned(), "Order 1 shipped.".to_owned()],
+            vec![
+                EventType::Message,
+                EventType::Message,
+                EventType::ToolCallStart,
+                EventType::ToolCallEnd,
+                EventType::Message,
+            ]
+        )
     );
 }
 

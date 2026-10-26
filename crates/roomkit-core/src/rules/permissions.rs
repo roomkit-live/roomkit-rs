@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use crate::model::{
     AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelId, EventContent, EventId,
-    EventStatus, Metadata, RoomContext, RoomEvent, Visibility,
+    EventStatus, EventType, Metadata, RoomContext, RoomEvent, Visibility,
 };
 use crate::rules::chain_depth;
 use crate::rules::edits::{self, Mutation};
@@ -295,6 +295,26 @@ pub(crate) fn plan_delivery(
         }
     }
     plan
+}
+
+/// Keeps `event`, when it is a tool-call row (`TOOL_CALL_START`,
+/// `TOOL_CALL_END`), from the transports of `plan` that do not take one, as
+/// `takes` says of each channel: a messaging transport delivers an event's
+/// text, and a row's names a tool to a person who called none (RFC §6.4;
+/// gap noted in docs/rfc-gaps.md, step 4 milestone 5). Any other event is
+/// left as planned.
+pub(crate) fn keep_tool_rows_to(
+    plan: &mut DeliveryPlan,
+    event: &RoomEvent,
+    takes: impl Fn(&ChannelId) -> bool,
+) {
+    if matches!(
+        event.event_type,
+        EventType::ToolCallStart | EventType::ToolCallEnd
+    ) {
+        plan.transports
+            .retain(|target| takes(&target.binding.channel_id));
+    }
 }
 
 /// The visibility of an event a hook injected for `targets` (RFC §9.4, gap

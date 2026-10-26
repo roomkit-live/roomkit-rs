@@ -16,7 +16,9 @@
 //!   (RFC §21.6).
 //!
 //! The room keeps the round's rows, a start and an end per call, then the
-//! answer, which carries the turn's record. It runs against a local fake of
+//! answer, which carries the turn's record. Alice's SMS receives the
+//! round's text and the answer, never a tool-call row: a messaging
+//! transport is not handed them. It runs against a local fake of
 //! the OpenAI wire, which scripts the model's calls, so it needs no
 //! network and no key.
 //!
@@ -119,8 +121,12 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         }),
     );
     checks.expect(
-        "Alice receives the round's text and the answer by SMS",
-        sms.texts().first().map(String::as_str) == Some("Let me look into order 42.")
+        "Alice receives the round's text and the answer by SMS, and no tool-call row",
+        sms.deliveries()
+            .iter()
+            .map(|delivery| delivery.event.event_type)
+            .eq([EventType::Message, EventType::Message])
+            && sms.texts().first().map(String::as_str) == Some("Let me look into order 42.")
             && sms
                 .texts()
                 .last()
