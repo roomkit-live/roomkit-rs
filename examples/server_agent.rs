@@ -153,12 +153,12 @@ const POSTS_AT_MOST: usize = 400;
 /// The conversation where the model is unreachable, and how long a client
 /// there waits to be told.
 const CELLAR: &str = "cellar";
+const TOLD_PATIENCE: Duration = Duration::from_secs(2);
 
 /// The length of the frame a client announces and never sends: far over
 /// the limit, far under what the WebSocket library takes by default
 /// (16 MiB).
 const ANNOUNCED: u64 = 1 << 20;
-const TOLD_PATIENCE: Duration = Duration::from_secs(2);
 
 /// The receive buffer of a client that falls behind, in bytes.
 const SMALL_BUFFER: u32 = 4096;
@@ -756,7 +756,7 @@ async fn alice_goes_on(
 /// sends then never enters the room, and a stop does not wait for him.
 async fn a_client_stops_reading(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     println!("Dave stops reading while the host posts large menus to the kitchen.");
-    let endpoint = OpenAiEndpoint::from_env(REPLIES).await?;
+    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(REPLIES).await?);
     let database = TempDatabase::new("server_agent_kitchen");
     let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
     let mut dave = Client::connect_reading_little(server.address, KITCHEN, "dave", "Dave").await?;
