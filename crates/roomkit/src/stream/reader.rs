@@ -361,11 +361,16 @@ impl Producer {
 
     /// The streaming channel failed, the response did not: what it was
     /// handed may not all have been shown, so what is left goes to every
-    /// target, the calls open closed `failed` (RFC §12.2 step 13s).
+    /// target. A round of calls running is let finish, its ends stored with
+    /// their real results, and the calls left open are closed `failed`
+    /// (RFC §12.2 step 13s).
     async fn target_failed(&mut self) {
         self.reads = Reads::Lost;
-        self.in_flight = None;
-        self.close_open(TURN_FAILED).await;
+        let error = match self.settle_in_flight().await {
+            ROUND_FAILED => ROUND_FAILED,
+            _ => TURN_FAILED,
+        };
+        self.close_open(error).await;
         self.stream = None;
         if let Some(row) = self.segments.last_text(false) {
             self.commit(row).await;

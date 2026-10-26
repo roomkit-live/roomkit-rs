@@ -60,6 +60,8 @@ enum Stop {
     OnSignal(Arc<Notify>),
     /// It fails once handed this text.
     FailsAfter(&'static str),
+    /// It fails when the signal comes, wherever it reads.
+    FailsOnSignal(Arc<Notify>),
 }
 
 /// A WebSocket-like channel that streams: it records what it reads and
@@ -139,6 +141,10 @@ impl Channel for Streaming {
                     item = stream.next() => item,
                     () = signal.notified() => return Ok(ChannelOutput::default()),
                 },
+                Stop::FailsOnSignal(signal) => tokio::select! {
+                    item = stream.next() => item,
+                    () = signal.notified() => return Err("the socket broke".into()),
+                },
                 Stop::Never | Stop::AfterText(_) | Stop::AtACallsStart | Stop::FailsAfter(_) => {
                     stream.next().await
                 }
@@ -160,7 +166,8 @@ impl Channel for Streaming {
                         | Stop::AfterText(_)
                         | Stop::AtACallsStart
                         | Stop::OnSignal(_)
-                        | Stop::FailsAfter(_) => {}
+                        | Stop::FailsAfter(_)
+                        | Stop::FailsOnSignal(_) => {}
                     }
                 }
                 Ok(StreamItem::Row(row)) => {
@@ -667,6 +674,48 @@ async fn a_streaming_channel_that_fails_leaves_the_text_to_every_target() {
         (room.ws.delivered(), room.web_rows()),
         (vec![3, 4], vec![(EventType::Message, 4)])
     );
+    room.kit.shutdown().await;
+}
+
+/// RFC §12.2 step 13s: a streaming channel that fails while a call runs
+/// lets the call finish, its end stored with its real result and delivered
+/// to every target, the failed channel included; the stream is closed
+/// before the model's next round, and the failure is the call's.
+#[tokio::test]
+async fn a_streaming_channel_that_fails_while_a_call_runs_lets_it_finish() {
+    let rounds = vec![
+        ScriptedRound::calling("Let me check.", [("call_1", "lookup_order", "{}")]),
+        ScriptedRound::answering("Shipped."),
+    ];
+    let runs = Arc::new(AtomicUsize::new(0));
+    let running = Arc::new(Notify::new());
+    let ws = Streaming::new(Stop::FailsOnSignal(Arc::clone(&running)));
+    let (room, model) = Room::new(rounds, lookup(Arc::clone(&runs), Some(running)), ws).await;
+    let result = room.says("Where is my order?").await;
+    assert!(
+        result
+            .error
+            .as_ref()
+            .is_some_and(|error| error.message.contains("the socket broke")),
+        "{result:?}"
+    );
+    let timeline = room.timeline().await;
+    let end = end_of(&timeline);
+    assert_eq!(
+        (
+            runs.load(Ordering::SeqCst),
+            model.requests(),
+            end.status,
+            end.result,
+        ),
+        (1, 1, ToolCallStatus::Completed, json!("shipped"))
+    );
+    let end_index = timeline
+        .iter()
+        .find(|event| event.event_type == EventType::ToolCallEnd)
+        .map(|event| event.index)
+        .unwrap();
+    assert_eq!(room.ws.delivered(), [3, end_index]);
     room.kit.shutdown().await;
 }
 
