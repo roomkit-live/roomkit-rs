@@ -194,6 +194,46 @@ async fn an_observer_of_before_broadcast_posting_on_every_event_stops_at_the_cap
     assert_eq!(taken(&posted), expected);
 }
 
+/// RFC §9.2, §10.1 step 18, the light review of step 3 milestone 2: the
+/// call an ASYNC hook of `BEFORE_BROADCAST` makes into its room returns once
+/// its delivery set has run, with its delivery results, as the Python
+/// implementation's does (`py_observer_return.py`: 202 ms, `['other']`):
+/// nothing waits for the observer, so its call waits for nothing it holds.
+/// It returned at its decision, no delivery result in it.
+#[tokio::test]
+async fn an_observer_of_before_broadcast_s_call_returns_with_its_delivery_results() {
+    let kit = room(5).await;
+    kit.register_channel(RecordingTransport::new(
+        channel("ws"),
+        ChannelType::Websocket,
+    ))
+    .unwrap();
+    kit.attach(&room_id(), &channel("ws")).await.unwrap();
+    let results: Kept<Vec<String>> = kept();
+    let (hook_kit, hook_results) = (kit.clone(), Arc::clone(&results));
+    kit.observe("watcher", HookTrigger::BeforeBroadcast, move |event, _| {
+        let (kit, results) = (hook_kit.clone(), Arc::clone(&hook_results));
+        async move {
+            if text_of(&event.content) == "hi" {
+                let again = kit.process_inbound_in(&room_id(), message("again")).await;
+                let delivered = again
+                    .unwrap()
+                    .delivery_results
+                    .keys()
+                    .map(ToString::to_string)
+                    .collect();
+                push(&results, delivered);
+            }
+        }
+    })
+    .unwrap();
+    kit.process_inbound_in(&room_id(), message("hi"))
+        .await
+        .unwrap();
+    kit.idle().await;
+    assert_eq!(taken(&results), vec![vec!["ws".to_owned()]]);
+}
+
 /// A router that opens a room for every message.
 struct NoRoom;
 

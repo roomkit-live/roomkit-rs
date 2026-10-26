@@ -10,7 +10,7 @@ use roomkit_core::ops::{
     HookRequest, Notice, Outcome, StoreOutcome, StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
-use roomkit_core::rules::hook_registry::{HookId, HookTrigger};
+use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
 use roomkit_core::rules::routing::RouteQuery;
 use tokio::task::JoinSet;
 
@@ -229,7 +229,8 @@ pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notic
                 let Some(observing) = observe(inner, trigger, hook, &event, &context) else {
                     continue;
                 };
-                let observing = in_its_work(&event.room_id, after_delivery.as_ref(), observing);
+                let observing =
+                    in_its_work(trigger, &event.room_id, after_delivery.as_ref(), observing);
                 if inner.tasks.spawn(observing).is_none() {
                     tracing::debug!(
                         target: "roomkit::hooks",
@@ -242,15 +243,21 @@ pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notic
     }
 }
 
-/// `observing`, a hook's body, run as the work `after_delivery` names, in
-/// `room_id`, until it is over; as it is outside every work otherwise.
+/// `observing`, a hook's body on `trigger`, run as the work
+/// `after_delivery` names, in `room_id`, until it is over; as it is outside
+/// every work otherwise. A call it makes into the room returns at its
+/// decision when `trigger` is an ASYNC trigger's (`AFTER_BROADCAST`, a
+/// change's), and once its delivery set has run when it is a SYNC
+/// trigger's, `BEFORE_BROADCAST`, as the Python implementation's calls do.
 fn in_its_work(
+    trigger: HookTrigger,
     room_id: &RoomId,
     after_delivery: Option<&AfterDelivery>,
     observing: impl Future<Output = ()> + Send + 'static,
 ) -> impl Future<Output = ()> + Send + 'static {
-    let body =
-        after_delivery.map(|work| HookBody::new(room_id.clone(), work.budget.clone(), work.floor));
+    let detaches = trigger.execution() == HookExecution::Async;
+    let body = after_delivery
+        .map(|work| HookBody::new(room_id.clone(), work.budget.clone(), work.floor, detaches));
     async move {
         let Some(body) = body else {
             return observing.await;

@@ -132,17 +132,23 @@ pub(crate) struct ExecutionContext {
 }
 
 /// The body of an ASYNC hook a cascade fires once an event's delivery set
-/// has run, or a direct change does, while it runs: the cascade's work in
-/// its room (RFC §8.3, §9.5.1, §10.1 step 16, §10.3, gap G-087). A call it
-/// makes into the room draws on the cascade's hook calls, and one it makes
-/// into any room is at least `floor` deep. Once the body is over, a task it
-/// left running stands for no work: its calls start fresh.
+/// has run, or a direct change does, or of an ASYNC hook of a SYNC trigger,
+/// while it runs: the cascade's work in its room (RFC §8.3, §9.2, §9.5.1,
+/// §10.1 step 16, §10.3, gap G-087). A call it makes into the room draws on
+/// the cascade's hook calls, and one it makes into any room is at least
+/// `floor` deep. Once the body is over, a task it left running stands for
+/// no work: its calls start fresh.
 #[derive(Clone, Debug)]
 pub(crate) struct HookBody {
     room_id: RoomId,
     /// The cascade's budget, whose hook calls the body's calls draw.
     budget: ReentryBudget,
     floor: u32,
+    /// Whether a call the body makes into the room returns at its decision
+    /// (RFC §10.1 step 18): an `AFTER_BROADCAST` body's, or a change's, does,
+    /// as the Python implementation's does; an observer of a SYNC trigger's
+    /// waits for its delivery, as Python's does, nothing waiting for it.
+    detaches: bool,
     /// Whether the body still runs.
     live: Arc<AtomicBool>,
 }
@@ -159,12 +165,14 @@ impl Drop for BodyRunning {
 
 impl HookBody {
     /// The body of a hook of `room_id`'s cascade, on `budget`, its calls at
-    /// least `floor` deep, running until it is [`over`](Self::over).
-    pub(crate) fn new(room_id: RoomId, budget: ReentryBudget, floor: u32) -> Self {
+    /// least `floor` deep, running until it is [`over`](Self::over); a call
+    /// it makes into the room returns at its decision when it `detaches`.
+    pub(crate) fn new(room_id: RoomId, budget: ReentryBudget, floor: u32, detaches: bool) -> Self {
         Self {
             room_id,
             budget,
             floor,
+            detaches,
             live: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -340,7 +348,7 @@ impl ExecutionContext {
             || self.frames.iter().any(|frame| {
                 frame.work.delivering.as_ref() == Some(room_id) || frame.is_admitted_to(room_id)
             })
-            || self.body_in(room_id).is_some()
+            || self.body_in(room_id).is_some_and(|body| body.detaches)
     }
 
     /// The least chain depth of a call made in this context, into whatever
