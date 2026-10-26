@@ -18,10 +18,14 @@ pub(crate) struct Database {
 }
 
 impl Database {
-    /// Opens the file at `path`, creating it at the schema version this crate
-    /// knows when it holds none, and refusing one of another version.
+    /// Opens the file at `path`, creating it, and its directory, at the
+    /// schema version this crate knows when it holds none, and refusing one
+    /// of another version.
     pub(crate) async fn open(path: PathBuf) -> Result<Self, OpenError> {
         let connection = tokio::task::spawn_blocking(move || {
+            if let Some(directory) = path.parent() {
+                std::fs::create_dir_all(directory).map_err(OpenError::Directory)?;
+            }
             let mut connection = Connection::open(path)?;
             schema::prepare(&mut connection)?;
             Ok::<_, OpenError>(connection)

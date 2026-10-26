@@ -31,6 +31,9 @@ pub enum OpenError {
         /// The version this crate knows.
         supported: i64,
     },
+    /// The file's directory, missing, could not be created.
+    #[error("the file's directory could not be created")]
+    Directory(#[source] std::io::Error),
     /// The database failed.
     #[error("the database failed")]
     Database(#[from] rusqlite::Error),

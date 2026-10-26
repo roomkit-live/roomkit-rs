@@ -33,13 +33,16 @@ pub struct SqliteStore {
 impl SqliteStore {
     /// Opens the file at `path`, creating it at schema version 12, as the
     /// Python implementation's `SQLiteStore` creates it, when it does not
-    /// exist or holds no schema.
+    /// exist or holds no schema, and its directory when it is missing. The
+    /// path is taken as written: unlike Python's store, a leading `~` is not
+    /// read as the home directory.
     ///
     /// # Errors
     ///
     /// Returns [`OpenError::NewerSchema`] for a file of a newer version,
     /// which is left as it is, [`OpenError::OlderSchema`] for one of an
-    /// older version, and [`OpenError::Database`] when SQLite fails.
+    /// older version, [`OpenError::Directory`] when the missing directory
+    /// cannot be created, and [`OpenError::Database`] when SQLite fails.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, OpenError> {
         let database = Database::open(path.as_ref().to_path_buf()).await?;
         Ok(Self { database })

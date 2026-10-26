@@ -641,3 +641,15 @@ async fn a_delete_marks_its_target_s_edits_as_python_reads_them() {
         (false, vec![Some(true), Some(true)])
     );
 }
+
+/// A file in a directory that does not exist yet is created with the
+/// directory, as the Python implementation creates it.
+#[tokio::test]
+async fn a_file_s_missing_directory_is_created() {
+    let directory = TempFile::new("missing");
+    let path = directory.path().with_extension("").join("nested/rooms.db");
+    let opened = SqliteStore::open(&path).await.map(drop);
+    let created = path.exists();
+    std::fs::remove_dir_all(directory.path().with_extension("")).ok();
+    assert_eq!((opened.is_ok(), created), (true, true));
+}
