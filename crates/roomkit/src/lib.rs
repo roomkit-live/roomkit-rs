@@ -75,7 +75,7 @@ pub use self::context::keep_context;
 pub use self::environment::SystemEnvironment;
 pub use self::error::KitError;
 pub use self::hooks::{HookError, HookFuture, HookHandler, HookReturn};
-pub use self::host::{HOST_CHANNEL_ID, HostChannel};
+pub use self::host::HostChannel;
 pub use self::kit::{OrganizationKit, RoomKit, TimerSweeper};
 pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
 pub use self::store::{

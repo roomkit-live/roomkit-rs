@@ -28,6 +28,16 @@ as it stands.
   `category()` is gone: a declaration names its category. A channel
   claiming `system`, or `host` without being a host channel, is refused at
   registration (`ConfigError::ReservedChannelType`).
+- **Breaking: a smaller public surface** (step 4, milestone 4). What no
+  crate outside its own names is crate-private: of the core's rules, 84
+  items, the modules `rules::permissions` and `rules::host` whole among
+  them (`routing::admitted`, which nothing called, is removed), and the
+  constant `ops::DEFAULT_CONTEXT_WINDOW`; `StoreError::to_record`; the
+  second path to the host channel's id, `roomkit::HOST_CHANNEL_ID`
+  (`roomkit::model::HOST_CHANNEL_ID` stays). `roomkit_sqlite::OpenError::Database`
+  holds a `StoreFailure` instead of `rusqlite::Error`, so the SQLite
+  library's version is no part of the crate's API; SQLite's error is its
+  source.
 
 ### Added
 

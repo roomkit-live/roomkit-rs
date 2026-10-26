@@ -15,7 +15,7 @@ use crate::rules::hook_registry::HookRegistry;
 use crate::rules::host;
 
 /// How many of a room's latest events a context holds by default.
-pub const DEFAULT_CONTEXT_WINDOW: usize = 50;
+const DEFAULT_CONTEXT_WINDOW: usize = 50;
 
 /// A registered channel, as the core knows it: its declaration, never the
 /// object behind it (RFC §10.6.2).

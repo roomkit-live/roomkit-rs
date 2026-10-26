@@ -50,7 +50,7 @@ mod protocol;
 mod rooting;
 mod section;
 
-pub use config::{ChannelDeclaration, ConfigError, DEFAULT_CONTEXT_WINDOW, KitConfig};
+pub use config::{ChannelDeclaration, ConfigError, KitConfig};
 pub use environment::{Environment, SequentialEnvironment};
 pub use events::{CommitRecord, DeleteEvent, MutationError, UpdateEvent};
 pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation, TransitionReason};

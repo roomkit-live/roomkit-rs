@@ -15,7 +15,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// name (RFC §10.5): a notice, a workflow's question, a reminder. It
     /// comes from a host channel, a transport of type `HOST`: the channel
     /// the post names, or the kit's own, registered on first use under the
-    /// id [`HOST_CHANNEL_ID`](crate::HOST_CHANNEL_ID). The room reads it as
+    /// id [`HOST_CHANNEL_ID`](crate::model::HOST_CHANNEL_ID). The room reads it as
     /// a party's message, `INBOUND`, broadcasts it to its transports, and
     /// asks the agents it addresses only, none by default (RFC §19.3).
     ///

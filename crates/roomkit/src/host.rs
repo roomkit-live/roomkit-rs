@@ -3,7 +3,6 @@
 
 use std::future::Future;
 
-pub use roomkit_core::model::HOST_CHANNEL_ID;
 use roomkit_core::model::{ChannelId, InboundMessage, RoomContext, RoomEvent};
 use roomkit_core::ops::ChannelDeclaration;
 

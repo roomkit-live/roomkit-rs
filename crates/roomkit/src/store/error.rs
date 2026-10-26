@@ -159,7 +159,8 @@ pub enum StoreError {
     },
     /// The store could not be reached or failed: the error it met is the
     /// cause ([`std::error::Error::source`]), which the message leaves to
-    /// a reader of the chain, [`to_record`](Self::to_record) among them.
+    /// a reader of the chain, the kit's record of a failed call among
+    /// them.
     #[error("the store failed")]
     Unavailable(#[source] StoreFailure),
 }
@@ -173,7 +174,7 @@ impl StoreError {
 
     /// The error as the core records it, its message followed by each of
     /// its causes': `the store failed: connection refused`.
-    pub fn to_record(&self) -> ErrorRecord {
+    pub(crate) fn to_record(&self) -> ErrorRecord {
         let error_type = match self {
             Self::RoomExists(_) => "RoomExists",
             Self::RoomNotFound(_) => "RoomNotFound",
