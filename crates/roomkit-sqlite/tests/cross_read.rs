@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, ChannelType, DeleteContent, DeleteType, EventContent, EventType, EventUpdates,
-    IdentityId, InboundMessage, RoomId, RoomUpdates, Timestamp,
+    ChannelId, ChannelType, DeleteContent, EventContent, EventType, EventUpdates, IdentityId,
+    InboundMessage, RoomId, RoomUpdates, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{ConversationStore, RoomFilter, RoomKit, SequentialEnvironment};
@@ -621,7 +621,7 @@ async fn a_delete_marks_its_target_s_edits_as_python_reads_them() {
     let mut delete = InboundMessage::new(
         channel("ws-user"),
         "user-1",
-        EventContent::Delete(DeleteContent::new(edited.clone(), DeleteType::Sender)),
+        EventContent::Delete(DeleteContent::new(edited.clone())),
     );
     delete.event_type = EventType::Delete;
     let result = kit.process_inbound_in(&full, delete).await.unwrap();

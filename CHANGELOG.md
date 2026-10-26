@@ -50,9 +50,10 @@ as it stands.
   true;` for `BindingOptions { group: true, ..Default::default() }`. The
   contents gain the constructors this needs, each taking the members the
   RFC requires (`MediaContent::new(url, mime_type)`,
-  `EditContent::new(target, new_content, edit_source)`,
-  `DeleteContent::new(target, delete_type)`, ...), and so does
-  `RetryPolicy`. A `match` on `EventContent`, `HookTrigger` or
+  `EditContent::new(target, new_content)`, `DeleteContent::new(target)`,
+  ...), and so does `RetryPolicy`; an edit's `edit_source` (null by
+  default) and a delete's `delete_type` (`SENDER` by default) are set with
+  `with_edit_source` and `with_delete_type`. A `match` on `EventContent`, `HookTrigger` or
   `FrameworkEvent` outside the core needs a wildcard arm. Each variant of
   `FrameworkEvent` is non-exhaustive too, so that a member RFC §8.2 adds
   to a row breaks no subscriber: a pattern on one names the members it

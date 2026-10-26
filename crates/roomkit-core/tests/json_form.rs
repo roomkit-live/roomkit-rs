@@ -17,8 +17,8 @@ use roomkit_core::model::{
     Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCategory, ChannelDirection,
     ChannelId, ChannelMediaType, ChannelOutput, ChannelType, Confidence, Consumption,
     ConsumptionState, DeleteContent, DeleteType, DeliveryError, DeliveryResult, DeliveryStatus,
-    EditContent, EventContent, EventDirection, EventId, EventSource, EventStatus, EventType,
-    HookResult, IdentificationStatus, Identity, InboundMessage, InjectedEvent, Latitude,
+    EditContent, EditSource, EventContent, EventDirection, EventId, EventSource, EventStatus,
+    EventType, HookResult, IdentificationStatus, Identity, InboundMessage, InjectedEvent, Latitude,
     LocationContent, Longitude, MediaContent, Metadata, Observation, ObservationId, Participant,
     ParticipantId, ParticipantRole, ParticipantStatus, RichContent, Room, RoomEvent, RoomId,
     RoomStatus, RoomTimers, SystemContent, Task, TaskId, TaskStatus, TemplateContent, TextContent,
@@ -503,9 +503,10 @@ fn hook_result_blocking_with_an_injected_event() {
 }
 
 /// RFC §5.3: a content built from its required members is the content its
-/// minimal form reads as, every other member at its default. Since the
+/// minimal form reads as, every other member at its default: an edit's
+/// `edit_source` null, a delete's `delete_type` `SENDER`. Since the
 /// contents are `#[non_exhaustive]`, a crate outside the core builds them
-/// this way only.
+/// this way only, and sets an optional member with its `with_*`.
 #[test]
 fn a_content_s_constructor_reads_as_its_minimal_form() {
     let target = EventId::new("evt_1").unwrap();
@@ -523,10 +524,14 @@ fn a_content_s_constructor_reads_as_its_minimal_form() {
         EventContent::Edit(EditContent::new(
             target.clone(),
             EventContent::text("Bonsoir"),
-            None,
         )),
-        EventContent::Delete(DeleteContent::new(target, DeleteType::Sender)),
+        EventContent::Delete(DeleteContent::new(target.clone())),
         EventContent::ToolCall(ToolCallContent::new("lookup", "call_1")),
+        EventContent::Edit(
+            EditContent::new(target.clone(), EventContent::text("Bonsoir"))
+                .with_edit_source(EditSource::System),
+        ),
+        EventContent::Delete(DeleteContent::new(target).with_delete_type(DeleteType::Admin)),
     ];
     let minimal = [
         json!({ "type": "text", "body": "Bonjour" }),
@@ -544,6 +549,13 @@ fn a_content_s_constructor_reads_as_its_minimal_form() {
         }),
         json!({ "type": "delete", "target_event_id": "evt_1" }),
         json!({ "type": "tool_call", "tool_name": "lookup", "tool_id": "call_1" }),
+        json!({
+            "type": "edit",
+            "target_event_id": "evt_1",
+            "new_content": { "type": "text", "body": "Bonsoir" },
+            "edit_source": "system",
+        }),
+        json!({ "type": "delete", "target_event_id": "evt_1", "delete_type": "admin" }),
     ]
     .map(|form| serde_json::from_value::<EventContent>(form).unwrap());
     assert_eq!(built, minimal);

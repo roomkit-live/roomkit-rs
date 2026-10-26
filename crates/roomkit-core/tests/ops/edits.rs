@@ -56,11 +56,10 @@ fn edit_from(sender: &str, target: &str, text: &str) -> InboundMessage {
     let mut message = InboundMessage::new(
         channel("wa"),
         sender,
-        EventContent::Edit(EditContent::new(
-            id(target),
-            EventContent::text(text),
-            Some(EditSource::Sender),
-        )),
+        EventContent::Edit(
+            EditContent::new(id(target), EventContent::text(text))
+                .with_edit_source(EditSource::Sender),
+        ),
     );
     message.event_type = EventType::Edit;
     message
@@ -76,7 +75,7 @@ fn delete_from(sender: &str, target: &str, delete_type: DeleteType) -> InboundMe
     let mut message = InboundMessage::new(
         channel("wa"),
         sender,
-        EventContent::Delete(DeleteContent::new(id(target), delete_type)),
+        EventContent::Delete(DeleteContent::new(id(target)).with_delete_type(delete_type)),
     );
     message.event_type = EventType::Delete;
     message
@@ -628,11 +627,13 @@ mod a_refused_change {
     fn whose_new_content_is_a_delete_is_refused_target_event_not_found() {
         let mut sim = room();
         let mut nested = edit();
-        nested.content = EventContent::Edit(EditContent::new(
-            id("evt_1"),
-            EventContent::Delete(DeleteContent::new(id("evt_9"), DeleteType::Sender)),
-            Some(EditSource::Sender),
-        ));
+        nested.content = EventContent::Edit(
+            EditContent::new(
+                id("evt_1"),
+                EventContent::Delete(DeleteContent::new(id("evt_9"))),
+            )
+            .with_edit_source(EditSource::Sender),
+        );
         let result = sim.send(nested).unwrap();
         assert_eq!(
             refusal(&result, &sim),
@@ -768,11 +769,10 @@ mod an_agent_s_response {
                 };
                 let mut correction = response("ai", event, "");
                 correction.event_type = EventType::Edit;
-                correction.content = EventContent::Edit(EditContent::new(
-                    target_event_id,
-                    EventContent::text("Hello"),
-                    Some(EditSource::Sender),
-                ));
+                correction.content = EventContent::Edit(
+                    EditContent::new(target_event_id, EventContent::text("Hello"))
+                        .with_edit_source(EditSource::Sender),
+                );
                 Ok(ChannelOutput::respond(vec![correction]))
             }),
         );
@@ -837,7 +837,7 @@ mod a_hook {
     fn moderation_delete(delete_type: DeleteType) -> RoomEvent {
         let mut delete = notice_event("placeholder", "");
         delete.event_type = EventType::Delete;
-        let mut content = DeleteContent::new(id("evt_1"), delete_type);
+        let mut content = DeleteContent::new(id("evt_1")).with_delete_type(delete_type);
         content.reason = Some("spam".to_owned());
         delete.content = EventContent::Delete(content);
         delete
@@ -946,11 +946,10 @@ mod a_hook {
             }),
         );
         sim.send(edit()).unwrap();
-        let redacted = EventContent::Edit(EditContent::new(
-            id("evt_1"),
-            EventContent::text("I need [redacted]"),
-            Some(EditSource::Sender),
-        ));
+        let redacted = EventContent::Edit(
+            EditContent::new(id("evt_1"), EventContent::text("I need [redacted]"))
+                .with_edit_source(EditSource::Sender),
+        );
         assert_eq!(
             (
                 stored(&sim, "evt_2").content.clone(),
@@ -970,8 +969,7 @@ mod a_hook {
             Box::new(|event| {
                 let mut nested = event.clone();
                 if let EventContent::Edit(edit) = &mut nested.content {
-                    *edit.new_content =
-                        EventContent::Delete(DeleteContent::new(id("evt_9"), DeleteType::Sender));
+                    *edit.new_content = EventContent::Delete(DeleteContent::new(id("evt_9")));
                 }
                 HookOutcome::Returned(HookResult::modify(nested))
             }),
@@ -1056,11 +1054,10 @@ mod a_hook {
             "forger",
             Box::new(|event| {
                 let mut forged = event.clone();
-                forged.content = EventContent::Edit(EditContent::new(
-                    id("evt_1"),
-                    EventContent::text("forged"),
-                    Some(EditSource::Sender),
-                ));
+                forged.content = EventContent::Edit(
+                    EditContent::new(id("evt_1"), EventContent::text("forged"))
+                        .with_edit_source(EditSource::Sender),
+                );
                 HookOutcome::Returned(HookResult::modify(forged))
             }),
         );
@@ -1503,10 +1500,7 @@ mod a_target_changed_by_a_hook {
                     (event.event_type == EventType::Edit).then(|| {
                         let mut delete = DirectEvent::new(
                             channel("wa"),
-                            EventContent::Delete(DeleteContent::new(
-                                id("evt_1"),
-                                DeleteType::Sender,
-                            )),
+                            EventContent::Delete(DeleteContent::new(id("evt_1"))),
                         );
                         delete.event_type = EventType::Delete;
                         delete.participant_id = Some(ParticipantId::new(SENDER).unwrap());
@@ -1688,11 +1682,10 @@ mod a_mutation_trigger {
         filtered(&mut sim, "of_system", "system");
         let mut correction = notice_event("placeholder", "");
         correction.event_type = EventType::Edit;
-        correction.content = EventContent::Edit(EditContent::new(
-            id("evt_1"),
-            EventContent::text("I need [redacted]"),
-            Some(EditSource::System),
-        ));
+        correction.content = EventContent::Edit(
+            EditContent::new(id("evt_1"), EventContent::text("I need [redacted]"))
+                .with_edit_source(EditSource::System),
+        );
         sim.before_broadcast(
             "redactor",
             Box::new(move |event| {

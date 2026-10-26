@@ -123,7 +123,7 @@ impl Team {
         target: &EventId,
     ) -> Result<InboundResult, Box<dyn Error>> {
         println!("  {who} deletes {target} as an administrator.");
-        let mut delete = DeleteContent::new(target.clone(), DeleteType::Admin);
+        let mut delete = DeleteContent::new(target.clone()).with_delete_type(DeleteType::Admin);
         delete.reason = Some("moderation".to_owned());
         let content = EventContent::Delete(delete);
         let message = InboundMessage {

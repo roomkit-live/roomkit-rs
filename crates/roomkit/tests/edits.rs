@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, DeleteContent, DeleteType, DirectEvent, EditContent, EditSource,
-    EventContent, EventDirection, EventId, EventSource, EventType, EventUpdates, HookResult,
-    InboundMessage, RoomContext, RoomEvent, RoomId, Timestamp,
+    ChannelOutput, ChannelType, DeleteContent, DirectEvent, EditContent, EditSource, EventContent,
+    EventDirection, EventId, EventSource, EventType, EventUpdates, HookResult, InboundMessage,
+    RoomContext, RoomEvent, RoomId, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -167,11 +167,10 @@ fn edit_from(sender: &str, text: &str) -> InboundMessage {
     let mut message = InboundMessage::new(
         channel("wa"),
         sender,
-        EventContent::Edit(EditContent::new(
-            EventId::new("evt_1").unwrap(),
-            EventContent::text(text),
-            Some(EditSource::Sender),
-        )),
+        EventContent::Edit(
+            EditContent::new(EventId::new("evt_1").unwrap(), EventContent::text(text))
+                .with_edit_source(EditSource::Sender),
+        ),
     );
     message.event_type = EventType::Edit;
     message
@@ -181,10 +180,7 @@ fn delete() -> InboundMessage {
     let mut message = InboundMessage::new(
         channel("wa"),
         CUSTOMER,
-        EventContent::Delete(DeleteContent::new(
-            EventId::new("evt_1").unwrap(),
-            DeleteType::Sender,
-        )),
+        EventContent::Delete(DeleteContent::new(EventId::new("evt_1").unwrap())),
     );
     message.event_type = EventType::Delete;
     message

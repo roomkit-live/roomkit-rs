@@ -18,8 +18,8 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelCapabilities, ChannelId, ChannelType, DeleteContent, DeleteType, EditContent,
-    EditSource, EventContent, EventId, EventType, HookResult, InboundMessage, RoomEvent, RoomId,
+    ChannelCapabilities, ChannelId, ChannelType, DeleteContent, EditContent, EditSource,
+    EventContent, EventId, EventType, HookResult, InboundMessage, RoomEvent, RoomId,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{ConversationStore, HookTrigger, RoomKit, is_deleted, is_edited, text_of};
@@ -144,11 +144,10 @@ impl Conversation {
         let mut message = InboundMessage::new(
             self.customer.id().clone(),
             CUSTOMER,
-            EventContent::Edit(EditContent::new(
-                target_event_id,
-                EventContent::text(text),
-                Some(EditSource::Sender),
-            )),
+            EventContent::Edit(
+                EditContent::new(target_event_id, EventContent::text(text))
+                    .with_edit_source(EditSource::Sender),
+            ),
         );
         message.event_type = EventType::Edit;
         Ok(message)
@@ -160,7 +159,7 @@ impl Conversation {
         let mut message = InboundMessage::new(
             self.customer.id().clone(),
             CUSTOMER,
-            EventContent::Delete(DeleteContent::new(target_event_id, DeleteType::Sender)),
+            EventContent::Delete(DeleteContent::new(target_event_id)),
         );
         message.event_type = EventType::Delete;
         Ok(message)

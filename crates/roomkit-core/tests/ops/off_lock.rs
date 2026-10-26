@@ -344,11 +344,10 @@ mod an_off_lock_block {
         let mut edit = InboundMessage::new(
             channel("sms"),
             SENDER,
-            EventContent::Edit(EditContent::new(
-                "evt_404".parse().unwrap(),
-                EventContent::text("Bonsoir"),
-                Some(EditSource::Sender),
-            )),
+            EventContent::Edit(
+                EditContent::new("evt_404".parse().unwrap(), EventContent::text("Bonsoir"))
+                    .with_edit_source(EditSource::Sender),
+            ),
         );
         edit.event_type = EventType::Edit;
         let result = sim.send(edit).unwrap();
@@ -642,11 +641,10 @@ mod the_ticket {
         let mut edit = InboundMessage::new(
             channel("sms"),
             SENDER,
-            EventContent::Edit(EditContent::new(
-                "evt_404".parse().unwrap(),
-                EventContent::text("Bonsoir"),
-                Some(EditSource::Sender),
-            )),
+            EventContent::Edit(
+                EditContent::new("evt_404".parse().unwrap(), EventContent::text("Bonsoir"))
+                    .with_edit_source(EditSource::Sender),
+            ),
         );
         edit.event_type = EventType::Edit;
         sim.send(edit).unwrap();

@@ -355,11 +355,10 @@ mod expiring_during {
         let mut edit = InboundMessage::new(
             channel("sms"),
             "+15551234567",
-            EventContent::Edit(EditContent::new(
-                "evt_404".parse().unwrap(),
-                EventContent::text("Bonsoir"),
-                Some(EditSource::Sender),
-            )),
+            EventContent::Edit(
+                EditContent::new("evt_404".parse().unwrap(), EventContent::text("Bonsoir"))
+                    .with_edit_source(EditSource::Sender),
+            ),
         );
         edit.event_type = EventType::Edit;
         let sim = under_the_lock_while("get_event", edit);

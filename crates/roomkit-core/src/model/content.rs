@@ -502,18 +502,21 @@ pub struct EditContent {
 }
 
 impl EditContent {
-    /// An edit of `target_event_id` to `new_content`, made by
-    /// `edit_source`.
-    pub fn new(
-        target_event_id: EventId,
-        new_content: EventContent,
-        edit_source: Option<EditSource>,
-    ) -> Self {
+    /// An edit of `target_event_id` to `new_content`, naming no source, as
+    /// the RFC's `edit_source` defaults to null (RFC §5.3).
+    pub fn new(target_event_id: EventId, new_content: EventContent) -> Self {
         Self {
             target_event_id,
             new_content: Box::new(new_content),
-            edit_source,
+            edit_source: None,
         }
+    }
+
+    /// The same edit, made by `edit_source`.
+    #[must_use]
+    pub fn with_edit_source(mut self, edit_source: EditSource) -> Self {
+        self.edit_source = Some(edit_source);
+        self
     }
 }
 
@@ -545,13 +548,21 @@ pub struct DeleteContent {
 }
 
 impl DeleteContent {
-    /// A delete of `target_event_id` by `delete_type`, with no reason.
-    pub fn new(target_event_id: EventId, delete_type: DeleteType) -> Self {
+    /// A delete of `target_event_id` by its author, as the RFC's
+    /// `delete_type` defaults to `SENDER` (RFC §5.3), with no reason.
+    pub fn new(target_event_id: EventId) -> Self {
         Self {
             target_event_id,
-            delete_type,
+            delete_type: DeleteType::default(),
             reason: None,
         }
+    }
+
+    /// The same delete, claiming `delete_type`.
+    #[must_use]
+    pub fn with_delete_type(mut self, delete_type: DeleteType) -> Self {
+        self.delete_type = delete_type;
+        self
     }
 }
 

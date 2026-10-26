@@ -69,7 +69,6 @@ pub(crate) fn edit_of(index: u64, target: u64) -> RoomEvent {
     edit.content = EventContent::Edit(EditContent::new(
         event_id(&format!("evt_{target}")),
         EventContent::text("corrected"),
-        None,
     ));
     edit
 }

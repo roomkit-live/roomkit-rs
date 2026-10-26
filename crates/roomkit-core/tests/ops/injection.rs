@@ -521,11 +521,10 @@ mod a_refusal_before_the_commit {
         let mut sim = room();
         let mut edit = DirectEvent::new(
             channel("ws"),
-            EventContent::Edit(EditContent::new(
-                "evt_404".parse().unwrap(),
-                EventContent::text("Bonsoir"),
-                Some(EditSource::Sender),
-            )),
+            EventContent::Edit(
+                EditContent::new("evt_404".parse().unwrap(), EventContent::text("Bonsoir"))
+                    .with_edit_source(EditSource::Sender),
+            ),
         );
         edit.event_type = EventType::Edit;
         assert_eq!(

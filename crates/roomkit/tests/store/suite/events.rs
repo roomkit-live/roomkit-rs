@@ -3,8 +3,8 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, DeleteContent, DeleteType, EventContent, EventStatus, EventType, EventUpdates, Room,
-    RoomEvent, RoomId, Timestamp,
+    ChannelId, DeleteContent, EventContent, EventStatus, EventType, EventUpdates, Room, RoomEvent,
+    RoomId, Timestamp,
 };
 use roomkit::store::TargetUpdate;
 use roomkit::{ConversationStore, EventFilter, StoreError};
@@ -530,8 +530,7 @@ async fn a_delete_s_commit_marks_its_target_s_edits_deleted() {
     let store = with_events(vec![event(0), edit_of(1, 0), event(2), edit_of(3, 2)]).await;
     let mut delete = event(4);
     delete.event_type = EventType::Delete;
-    delete.content =
-        EventContent::Delete(DeleteContent::new(event_id("evt_0"), DeleteType::Sender));
+    delete.content = EventContent::Delete(DeleteContent::new(event_id("evt_0")));
     let mut updates = EventUpdates::default();
     updates.metadata = Some([("deleted".to_owned(), json!(true))].into_iter().collect());
     let deleted = TargetUpdate {

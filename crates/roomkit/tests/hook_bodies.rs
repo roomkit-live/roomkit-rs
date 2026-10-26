@@ -21,9 +21,9 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    DeleteContent, DeleteType, DirectEvent, EditContent, EventContent, EventDirection, EventId,
-    EventSource, EventType, EventUpdates, HookResult, InboundMessage, ParticipantId, Post,
-    RoomContext, RoomEvent, RoomId,
+    DeleteContent, DirectEvent, EditContent, EventContent, EventDirection, EventId, EventSource,
+    EventType, EventUpdates, HookResult, InboundMessage, ParticipantId, Post, RoomContext,
+    RoomEvent, RoomId,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -387,13 +387,13 @@ async fn a_mutation_hook_changing_again_stops_at_the_cap() {
 
 /// The customer's edit of `target` to `text`.
 fn edit_of(target: &EventId, text: &str) -> DirectEvent {
-    let edit = EditContent::new(target.clone(), EventContent::text(text), None);
+    let edit = EditContent::new(target.clone(), EventContent::text(text));
     from_u(EventContent::Edit(edit), EventType::Edit)
 }
 
 /// The customer's delete of `target`.
 fn delete_of(target: &EventId) -> DirectEvent {
-    let delete = DeleteContent::new(target.clone(), DeleteType::Sender);
+    let delete = DeleteContent::new(target.clone());
     from_u(EventContent::Delete(delete), EventType::Delete)
 }
 
