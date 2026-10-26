@@ -470,6 +470,16 @@ mod tests {
         ] {
             cases.push((copy.to_owned(), format!("{COPIED_MARK}: x]")));
         }
+        // A whole mark with no bracket, a letter in a form only its
+        // titlecase pairs with (`ǆ` and `Ǆ` read as `d` through `ǅ`).
+        for (mark, replacement, word, disguised) in [
+            (INSTRUCTION_MARK, COPIED_MARK, "said", "sai\u{1c6}"),
+            (NOTES_HEADER, COPIED_HEADER_MARK, "Nobody", "Nobo\u{1c6}y"),
+            (SPEAKER_NOTE, COPIED_MARK, "placed", "place\u{1c4}"),
+        ] {
+            let bare = mark.trim_start_matches('[').replacen(word, disguised, 1);
+            cases.push((format!("a {bare} b"), format!("a {replacement} b")));
+        }
         // The Python implementation's own cases (tests/test_runtime_mark_copies.py).
         for (copy, rest) in [
             (

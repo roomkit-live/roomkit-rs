@@ -101,17 +101,14 @@ def phrase_reads(lookalike) -> tuple[list[tuple[str, list[str]]], list[tuple[int
         for run, pattern in sorted(sequences.items())
         if run.isalnum()
     ]
-    from roomkit._lookalike_data import FORMS, SEQUENCES
-
-    known = set(letters) | {c.upper() for c in letters}
-    for target, forms in FORMS.items():
-        if target in letters:
-            known |= set(forms)
-    for chars in SEQUENCES.values():
-        known |= set(chars)
-
-    def candidate(ch: str) -> bool:
-        return any(form in known for form in (ch, ch.lower(), ch.upper(), ch.casefold()))
+    # Every character is tried against the classes themselves, never
+    # against the forms they list: a class matches characters no form
+    # lists, by re.IGNORECASE (ǆ and Ǆ through the titlecase ǅ that
+    # FORMS['d'] holds). Their union tells the characters that match none
+    # at once.
+    anything = re.compile(
+        "|".join(f"(?:{pattern.pattern})" for _, pattern in classes), re.IGNORECASE
+    )
 
     reads = lookalike._reads()
     joint = lookalike._joint()
@@ -132,7 +129,11 @@ def phrase_reads(lookalike) -> tuple[list[tuple[str, list[str]]], list[tuple[int
     gaps = []
     for c in scalar_values():
         ch = chr(c)
-        runs = [run for run, pattern in classes if pattern.fullmatch(ch)] if candidate(ch) else []
+        runs = (
+            [run for run, pattern in classes if pattern.fullmatch(ch)]
+            if anything.fullmatch(ch)
+            else []
+        )
         named = as_a_name(ch)
         if named and named.isascii() and named not in runs:
             runs.append(named)
