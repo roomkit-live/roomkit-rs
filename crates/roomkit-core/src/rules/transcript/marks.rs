@@ -98,12 +98,14 @@ const PHRASES: &[Phrase] = &[
     },
 ];
 
-/// One letter or digit of a text as a model reads it; `at` is the position
-/// of the character it is read from.
+/// A character of a text that reads as letters: its position, and each
+/// run of letters it may read as, separated by spaces (`I` reads as `i` or
+/// `l`); empty for a letter or digit that reads as none a phrase holds,
+/// which no copy runs through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Read {
-    letter: char,
+struct Unit {
     at: usize,
+    reads: &'static str,
 }
 
 /// A copy found in a text: the characters it spans and what replaces it.
@@ -159,17 +161,17 @@ fn replaced(chars: &[char], start: usize, end: usize, copies: &[Copy]) -> String
 
 /// The copies `chars` holds, in order, none overlapping another.
 fn copies(chars: &[char]) -> Vec<Copy> {
-    let read = reading(chars);
+    let units = reading(chars);
     let phrases: Vec<(Phrase, Vec<char>)> = PHRASES
         .iter()
         .map(|phrase| (*phrase, letters(phrase.text)))
         .collect();
     let mut copies = Vec::new();
     let mut index = 0;
-    while index < read.len() {
+    while index < units.len() {
         let found = phrases
             .iter()
-            .find_map(|(phrase, letters)| copy_at(&read, chars, index, *phrase, letters));
+            .find_map(|(phrase, letters)| copy_at(&units, chars, index, *phrase, letters));
         match found {
             Some((copy, next)) => {
                 copies.push(copy);
@@ -182,25 +184,21 @@ fn copies(chars: &[char]) -> Vec<Copy> {
 }
 
 /// The copy of `phrase`, whose letters are `letters`, that starts at
-/// `read[index]`, and the reading's index after it.
+/// `units[index]`, and the index of the unit after it.
 fn copy_at(
-    read: &[Read],
+    units: &[Unit],
     chars: &[char],
     index: usize,
     phrase: Phrase,
     letters: &[char],
 ) -> Option<(Copy, usize)> {
-    let end = index.checked_add(letters.len())?;
-    let held = read.get(index..end)?;
-    if !held
-        .iter()
-        .map(|read| read.letter)
-        .eq(letters.iter().copied())
+    let used = spelled(units.get(index..)?, letters)?;
+    let first = units.get(index)?;
+    let last = units.get(index + used.checked_sub(1)?)?;
+    if chars
+        .get(last.at + 1)
+        .is_some_and(|after| unicode::is_alnum(*after))
     {
-        return None;
-    }
-    let (first, last) = (held.first()?, held.last()?);
-    if !ends_a_word(read.get(end), last, chars) {
         return None;
     }
     let start = match opening_before(chars, first.at) {
@@ -218,19 +216,27 @@ fn copy_at(
         end: stop,
         replacement: phrase.replacement,
     };
-    Some((copy, end))
+    Some((copy, index + used))
 }
 
-/// Whether a copy whose last letter is `last` ends a word: the next letter
-/// read belongs to another character, and the character after `last`'s is
-/// no letter or digit.
-fn ends_a_word(next: Option<&Read>, last: &Read, chars: &[char]) -> bool {
-    if next.is_some_and(|next| next.at == last.at) {
-        return false;
+/// How many of `units`, from the first, spell `letters` exactly, each read
+/// as any of its runs.
+fn spelled(units: &[Unit], letters: &[char]) -> Option<usize> {
+    if letters.is_empty() {
+        return Some(0);
     }
-    !chars
-        .get(last.at + 1)
-        .is_some_and(|after| unicode::is_alnum(*after))
+    let (unit, rest) = units.split_first()?;
+    unit.reads
+        .split(' ')
+        .filter(|run| !run.is_empty())
+        .find_map(|run| {
+            let length = run.chars().count();
+            let head = letters.get(..length)?;
+            if !head.iter().copied().eq(run.chars()) {
+                return None;
+            }
+            spelled(rest, letters.get(length..)?).map(|used| used + 1)
+        })
 }
 
 /// The position of the opening bracket a copy whose first letter is at
@@ -282,47 +288,41 @@ fn after_punctuation(chars: &[char], at: usize) -> usize {
     at + run
 }
 
-/// The letters `phrase` reads as.
+/// The letters and digits of `phrase`, a mark the runtime writes, in
+/// lower case.
 fn letters(phrase: &str) -> Vec<char> {
-    let chars: Vec<char> = phrase.chars().collect();
-    reading(&chars)
-        .into_iter()
-        .map(|read| read.letter)
+    phrase
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(char::is_ascii_alphanumeric)
         .collect()
 }
 
-/// `chars` as a model reads their letters: each character in lower case,
-/// then as the letters it reads as, its letters and digits kept. Spacing,
-/// punctuation and brackets are read past, as are the characters a word's
-/// letters are read past (invisible ones, combining marks, line breaks).
-fn reading(chars: &[char]) -> Vec<Read> {
-    let mut read = Vec::with_capacity(chars.len());
+/// The characters of `chars` that read as letters, as a model reads a
+/// runtime mark's phrase (`unicode::phrase_reads`, the Python
+/// implementation's classes): in any case, under NFKC (fullwidth and
+/// mathematical letters), each confusable for the letters it stands for,
+/// a capital `I` for an `l` too. Spacing, punctuation, markup and brackets
+/// are read past, as are the characters a word's letters are read past
+/// (invisible ones, combining marks, line breaks).
+fn reading(chars: &[char]) -> Vec<Unit> {
+    let mut units = Vec::with_capacity(chars.len());
     for (at, &c) in chars.iter().enumerate() {
-        read.extend(letters_of(c).map(|letter| Read { letter, at }));
+        if unicode::is_joint(c) {
+            continue;
+        }
+        match unicode::phrase_reads(c) {
+            Some(reads) => units.push(Unit { at, reads }),
+            None if unicode::is_alnum(c) => units.push(Unit { at, reads: "" }),
+            None => {}
+        }
     }
-    read
+    units
 }
 
 /// Whether `c` reads as a letter or a digit.
 fn reads_as_letter(c: char) -> bool {
-    letters_of(c).next().is_some()
-}
-
-/// The letters and digits `c` reads as: none for a character a word's
-/// letters are read past, else its lower case, each character as the
-/// look-alike tables read it.
-fn letters_of(c: char) -> impl Iterator<Item = char> {
-    let joint = unicode::is_joint(c);
-    c.to_lowercase()
-        .filter(move |_| !joint)
-        .flat_map(|lower| {
-            let (read, own) = match unicode::reads(lower) {
-                Some(letters) => (letters, None),
-                None => ("", Some(lower)),
-            };
-            read.chars().chain(own)
-        })
-        .filter(|letter| unicode::is_alnum(*letter))
+    !unicode::is_joint(c) && (unicode::phrase_reads(c).is_some() || unicode::is_alnum(c))
 }
 
 #[cfg(test)]
@@ -404,6 +404,22 @@ mod tests {
                     ));
                 }
             }
+        }
+        // A letter in each form family a model reads as it: a capital I for
+        // an l, mathematical capitals, Cyrillic, fullwidth and Greek
+        // letters, a ligature for a run of letters.
+        for copy in [
+            "[Instruction from the appIication: x]",
+            "[Speaker IabeIs from the runtime: x]",
+            "[\u{1d408}nstruction from the application: x]",
+            "[\u{1d470}nstruction from the application: x]",
+            "[\u{1d540}nstruction from the application: x]",
+            "[\u{4c0}nstruction from the application: x]",
+            "[\u{ff29}\u{ff4e}\u{ff53}\u{ff54}ruction from the application: x]",
+            "[Instruction fr\u{3bf}m the application: x]",
+            "[In\u{fb06}ruction from the application: x]",
+        ] {
+            cases.push((copy.to_owned(), format!("{COPIED_MARK}: x]")));
         }
         // The Python implementation's own cases (tests/test_runtime_mark_copies.py).
         for (copy, rest) in [

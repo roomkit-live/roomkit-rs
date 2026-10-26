@@ -13,7 +13,8 @@ and ranks every author as roomkit does (gap G-089):
 - the combining marks (general category M), the characters `str.isalnum()`
   accepts, and those a name's letters are read past (roomkit's `JOINT`);
 - the opening and closing punctuation (general categories Ps and Pe), the
-  brackets a copy of a runtime mark may open and close with;
+  brackets a copy of a runtime mark may open and close with, and what each
+  character reads as in a mark's phrase (roomkit's `char_class`);
 - canonical composition (NFC): each character's full canonical
   decomposition, the canonical combining classes, and the primary
   composites.
@@ -77,6 +78,46 @@ def emit(name: str, kind: str, items: list[str], per_line: int, doc: str) -> str
     return "\n".join(lines)
 
 
+def phrase_reads(lookalike) -> list[tuple[str, list[str]]]:
+    """Each character a phrase's letter or run of letters reads, with every
+    letter and run it reads as: roomkit's own classes, matched as its
+    patterns match them."""
+    import re
+
+    letters = [c for c in "abcdefghijklmnopqrstuvwxyz0123456789"]
+    classes = [
+        (letter, re.compile(lookalike.char_class(letter, phrase=True), re.IGNORECASE))
+        for letter in letters
+    ]
+    sequences = lookalike._sequences(phrase=True)
+    classes += [
+        (run, re.compile(pattern, re.IGNORECASE))
+        for run, pattern in sorted(sequences.items())
+        if run.isalnum()
+    ]
+    from roomkit._lookalike_data import FORMS, SEQUENCES
+
+    known = set(letters) | {c.upper() for c in letters}
+    for target, forms in FORMS.items():
+        if target in letters:
+            known |= set(forms)
+    for chars in SEQUENCES.values():
+        known |= set(chars)
+
+    def candidate(ch: str) -> bool:
+        return any(form in known for form in (ch, ch.lower(), ch.upper(), ch.casefold()))
+
+    found = []
+    for c in scalar_values():
+        ch = chr(c)
+        if not candidate(ch):
+            continue
+        runs = [run for run, pattern in classes if pattern.fullmatch(ch)]
+        if runs:
+            found.append((ch, runs))
+    return found
+
+
 def full_decomposition(ch: str) -> str:
     """`ch`'s full canonical decomposition, Hangul syllables left to the
     algorithm; `ch` itself when it has none."""
@@ -112,6 +153,17 @@ def main() -> None:
         [f"({rust_char(ord(ch))}, {rust_str(read)})" for ch, read in sorted(reads.items())],
         4,
         "What each character reads as, sorted by character: roomkit's\n`_lookalike._reads()`.",
+    ))
+    parts.append(emit(
+        "PHRASE_READS",
+        "(char, &str)",
+        [f"({rust_char(ord(ch))}, {rust_str(' '.join(runs))})" for ch, runs in phrase_reads(_lookalike)],
+        3,
+        "What each character reads as in a phrase, sorted by character: the\n"
+        "letters and digits whose class in roomkit's `_lookalike.char_class`\n"
+        "(phrase=True, with `re.IGNORECASE`) takes it, and the runs of letters\n"
+        "whose class in `_lookalike._sequences` does (`vi` for `ⅵ`), separated\n"
+        "by spaces. A copy of a runtime mark is read with it.",
     ))
     for name, predicate, doc in (
         ("NAME_CHARS", _text._a_name_s, "The characters a person's name keeps: roomkit's `_text._a_name_s`."),

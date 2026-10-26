@@ -2,7 +2,8 @@
 //! reads them (RFC §6.4, §10.1 step 12, gap G-089): canonical composition
 //! (NFC), the combining marks, the characters `str.isalnum()` accepts, the
 //! characters a person's name keeps, those a name's letters are read past,
-//! what each character reads as, and the opening and closing punctuation.
+//! what each character reads as in a name and in a phrase, and the opening
+//! and closing punctuation.
 //! The tables are generated from roomkit and the Unicode data of its
 //! Python (`unicode_data`), so that both implementations read a name alike,
 //! whatever Unicode version Rust's standard library carries.
@@ -11,7 +12,7 @@ use std::cmp::Ordering;
 
 use super::unicode_data::{
     ALNUM, CLOSING, COMBINING_CLASSES, COMPOSITIONS, DECOMPOSITIONS, JOINT, MARKS, NAME_CHARS,
-    OPENING, READS,
+    OPENING, PHRASE_READS, READS,
 };
 
 /// Whether `ranges`, inclusive and sorted, holds `c`.
@@ -68,6 +69,19 @@ pub(crate) fn reads(c: char) -> Option<&'static str> {
         .binary_search_by(|&(form, _)| form.cmp(&c))
         .ok()
         .and_then(|found| READS.get(found))
+        .map(|&(_, read)| read)
+}
+
+/// What `c` reads as in a phrase, as the Python implementation's pattern
+/// of a runtime mark reads it (`_lookalike.char_class`): each letter, digit
+/// or run of letters it may stand for, separated by spaces (`I` reads as
+/// `i` or `l`, `𝐈` too, `ⅵ` as `vi`); `None` for a character that reads as
+/// no letter.
+pub(crate) fn phrase_reads(c: char) -> Option<&'static str> {
+    PHRASE_READS
+        .binary_search_by(|&(form, _)| form.cmp(&c))
+        .ok()
+        .and_then(|found| PHRASE_READS.get(found))
         .map(|&(_, read)| read)
 }
 
