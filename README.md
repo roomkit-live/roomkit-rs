@@ -9,8 +9,10 @@ for conversations between humans, AI agents and programs.
 > chain-depth limit, on a tokio runtime and an in-memory store. Step 2 is
 > done: the rest of Level 0, from the room lifecycle and its timers,
 > routing, edits and deletes and instructions to off-lock checks, the
-> processing timeout, direct injection and the reentrant lock. The turn
-> backend and streamed responses come with step 4. No provider yet, and
+> processing timeout, direct injection and the reentrant lock. Step 4,
+> under way, brings a first usable version: an AI agent on an
+> OpenAI-compatible endpoint (`roomkit-openai`), then a SQLite store and a
+> server example. The turn backend and streamed responses come later, and
 > the API will change.
 
 ## Why a Rust implementation
@@ -51,6 +53,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Crates
+
+- `roomkit-core`: the sans-IO core, the RFC's model, rules and pipeline
+  operations, with no I/O and no async runtime.
+- `roomkit`: the runtime on tokio, `RoomKit`, the `Channel`,
+  `ConversationStore` and `InboundRoomRouter` traits, the in-memory store.
+- `roomkit-openai`: `OpenAiAgent`, an AI agent channel answering through
+  an OpenAI-compatible Chat Completions endpoint.
 
 ## Examples
 
@@ -100,6 +111,10 @@ Routing and identities:
 - `shared_sms_number`: one number, several correspondents, and a group's room.
 - `paused_conversation`: a sender returns to the conversation its timer paused.
 - `identity_addresses`: addresses linked to identities route to their person's room, and a room naming the identity keeps all its numbers.
+
+Agents:
+
+- `openai_agent`: an AI agent answers through an OpenAI-compatible endpoint, reading the conversation labelled by speaker; a local fake of the OpenAI wire stands in unless `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODEL` are set.
 
 ## Documentation
 

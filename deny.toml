@@ -11,8 +11,18 @@ yanked = "deny"
 # A license joins this list in the change that adds the dependency needing it.
 allow = [
     "MIT",
-    # unicode-ident, behind serde's and thiserror's derive macros.
+    # unicode-ident, behind serde's and thiserror's derive macros; the icu
+    # crates, behind reqwest's URL parsing (roomkit-openai).
     "Unicode-3.0",
+    # roomkit-openai's HTTP client (step 4): ring (Apache-2.0 AND ISC),
+    # sync_wrapper, and ryu (Apache-2.0 OR BSL-1.0).
+    "Apache-2.0",
+    # ring, rustls-webpki and untrusted, behind rustls.
+    "ISC",
+    # subtle, behind rustls.
+    "BSD-3-Clause",
+    # webpki-roots, the root certificates rustls checks a server against.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 

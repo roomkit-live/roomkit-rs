@@ -7,7 +7,7 @@ allow-dbg-in-tests = true
 allow-print-in-tests = true
 
 # Product names read as words in documentation, not as code.
-doc-valid-idents = ["RoomKit", "PyO3", "WhatsApp", ".."]
+doc-valid-idents = ["RoomKit", "PyO3", "WhatsApp", "OpenAI", "OpenRouter", "DeepSeek", ".."]
 
 # The clock is the operations' environment's (docs/architecture.md, "The
 # core"). The core's own clippy.toml (crates/roomkit-core) bans the system

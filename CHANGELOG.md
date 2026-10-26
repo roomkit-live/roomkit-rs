@@ -12,8 +12,8 @@ as it stands.
 
 ### Added
 
-- **Repository.** The `roomkit-core` and `roomkit` crates and the
-  `roomkit-examples` package; workspace lints; the gates `make all`, `make
+- **Repository.** The `roomkit-core`, `roomkit` and `roomkit-openai`
+  crates and the `roomkit-examples` package; workspace lints; the gates `make all`, `make
   examples` and `make msrv`; CI for commit messages, formatting, lints,
   tests, documentation, the examples, the core's dependencies, the minimum
   Rust version, the dependency policy, and a weekly check against the
@@ -274,6 +274,16 @@ as it stands.
   read in any case, spacing or look-alike letters, one that runs over
   consecutive messages included. The marks are the Python
   implementation's.
+- **The OpenAI agent** (`roomkit-openai`, §6.4, step 4 milestone 1):
+  `OpenAiAgent`, an intelligence channel whose turn is one Chat Completions
+  call to an OpenAI-compatible endpoint, not streamed and with no tool,
+  sending its system prompt and the turn's conversation and answering with
+  the completion's text. `OpenAiConfig` names the base URL, the API key
+  (an empty one sends no `Authorization`; `Debug` never prints it), the
+  model, the system prompt, how many messages a turn sends (50 by default)
+  and the request's timeout (120 seconds). A provider error, a request that
+  fails or an answer that is no chat completion fails the turn with an
+  `OpenAiError`: `ON_ERROR` fires and the caller reads it on its result.
 - **A task a hook spawns** (§13.5, §9.5.1, decision 2 of step 3, gap
   G-070): a task spawned within a hook's or a turn's context
   (`keep_context`) acts for it while it runs, whether it awaits the task
@@ -351,6 +361,8 @@ as it stands.
   `hook_inject_welcome`, `hook_off_lock_check`), the pipeline
   (`instruction_event`, `response_visibility`, `send_event`, `host_post`,
   `names_that_read_alike`),
-  and routing and
+  routing and
   identities (`shared_sms_number`, `paused_conversation`,
-  `identity_addresses`).
+  `identity_addresses`), and an agent (`openai_agent`, against a local
+  fake of the OpenAI wire unless `OPENAI_BASE_URL`, `OPENAI_API_KEY` and
+  `OPENAI_MODEL` name an endpoint).

@@ -14,8 +14,14 @@ publish = false
 [workspace.dependencies]
 roomkit = { path = "crates/roomkit" }
 roomkit-core = { path = "crates/roomkit-core" }
+roomkit-openai = { path = "crates/roomkit-openai" }
 
 jiff = { version = "0.2", default-features = false, features = ["alloc"] }
+# The OpenAI agent's HTTP client (step 4, decision 4): rustls with its ring
+# provider and the webpki roots, so no system TLS library is needed, and no
+# HTTP/2, proxy or charset support, which a Chat Completions call does not
+# need. 0.13 has no ring-backed rustls feature.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = { version = "0.10", default-features = false }
