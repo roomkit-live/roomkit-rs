@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    RoomContext, RoomEvent, RoomId,
+    EventContent, RoomContext, RoomEvent, RoomId,
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError, text_of};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
 /// How many frames a connection may fall behind before it is dropped.
@@ -33,7 +33,10 @@ pub type ConnectionId = u64;
 ///
 /// The frame of an event: `{"room_id": "...", "index": 3, "type":
 /// "message", "from": "assistant", "text": "..."}`, `from` naming the
-/// channel the event came from.
+/// channel the event came from. A tool call's row carries the call as
+/// `tool` (`name`, `id`, `status`, and `result` on its end row), and the
+/// message that ends an agent's turn its end as `ended` (the record's
+/// `loop_end_reason`).
 ///
 /// [`register_connection`]: Self::register_connection
 #[derive(Clone, Debug)]
@@ -149,14 +152,28 @@ impl Channel for WebSocketChannel {
         binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let frame = json!({
+        let mut frame = Map::new();
+        let fields = json!({
             "room_id": event.room_id,
             "index": event.index,
             "type": event.event_type,
             "from": event.source.channel_id,
             "text": text_of(&event.content),
-        })
-        .to_string();
+        });
+        frame.extend(fields.as_object().cloned().unwrap_or_default());
+        if let EventContent::ToolCall(call) = &event.content {
+            let tool = json!({
+                "name": call.tool_name,
+                "id": call.tool_id,
+                "status": call.status,
+                "result": call.result,
+            });
+            frame.insert("tool".to_owned(), tool);
+        }
+        if let Some(ended) = event.metadata.get("loop_end_reason") {
+            frame.insert("ended".to_owned(), ended.clone());
+        }
+        let frame = Value::Object(frame).to_string();
         // Only the connections of the room delivered to; one that cannot
         // take the frame now is dropped rather than waited for.
         self.lock().open.retain(|_, connection| {

@@ -6,7 +6,7 @@ use std::error::Error;
 use std::{env, fmt, io};
 
 use roomkit_openai::OpenAiConfig;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -40,12 +40,13 @@ pub enum OpenAiEndpoint {
 
 impl OpenAiEndpoint {
     /// The endpoint the environment names when its three variables are
-    /// set, else a fake answering with `replies`, in order.
+    /// set, else a fake answering with `replies`, in order: texts, or
+    /// [`Reply::calling`] for a round of calls.
     ///
     /// # Errors
     ///
     /// Returns the error binding the fake's port failed with.
-    pub async fn from_env(replies: &[&str]) -> Result<Self, Box<dyn Error>> {
+    pub async fn from_env<R: Clone + Into<Reply>>(replies: &[R]) -> Result<Self, Box<dyn Error>> {
         if let (Ok(base_url), Ok(api_key), Ok(model)) =
             (env::var(BASE_URL), env::var(API_KEY), env::var(MODEL))
         {
@@ -112,6 +113,78 @@ impl fmt::Debug for OpenAiEndpoint {
     }
 }
 
+/// What the fake answers a completion with: a text, or a text and calls.
+#[derive(Clone, Debug)]
+pub struct Reply {
+    text: String,
+    calls: Vec<(String, String, String)>,
+}
+
+impl Reply {
+    /// A completion saying `text` and making `calls`, each an id, a tool's
+    /// name and its argument text.
+    pub fn calling<'a>(
+        text: &str,
+        calls: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+    ) -> Self {
+        Self {
+            text: text.to_owned(),
+            calls: calls
+                .into_iter()
+                .map(|(id, name, arguments)| (id.to_owned(), name.to_owned(), arguments.to_owned()))
+                .collect(),
+        }
+    }
+
+    /// The text it says.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Whether it makes calls.
+    pub fn calls(&self) -> bool {
+        !self.calls.is_empty()
+    }
+
+    /// The completion's body.
+    fn completion(&self, number: usize) -> Value {
+        let calls: Vec<Value> = self
+            .calls
+            .iter()
+            .map(|(id, name, arguments)| {
+                json!({
+                    "id": id,
+                    "type": "function",
+                    "function": { "name": name, "arguments": arguments },
+                })
+            })
+            .collect();
+        let mut message = Map::new();
+        message.insert("role".to_owned(), json!("assistant"));
+        message.insert("content".to_owned(), json!(self.text));
+        if !calls.is_empty() {
+            message.insert("tool_calls".to_owned(), Value::Array(calls));
+        }
+        json!({
+            "id": format!("chatcmpl-{number}"),
+            "object": "chat.completion",
+            "model": "fake-model",
+            "choices": [{
+                "index": 0,
+                "message": message,
+                "finish_reason": if self.calls() { "tool_calls" } else { "stop" },
+            }],
+            "usage": { "prompt_tokens": 40, "completion_tokens": 10, "total_tokens": 50 },
+        })
+    }
+}
+
+impl From<&str> for Reply {
+    fn from(text: &str) -> Self {
+        Self::calling(text, [])
+    }
+}
+
 /// A local HTTP server speaking the Chat Completions wire: it answers each
 /// request with the next of its replies, the last one again once they are
 /// spent, and keeps the body of each. Stopped when dropped.
@@ -128,11 +201,11 @@ impl FakeOpenAi {
     /// # Errors
     ///
     /// Returns the error binding the port failed with.
-    pub async fn start(replies: &[&str]) -> io::Result<Self> {
+    pub async fn start<R: Clone + Into<Reply>>(replies: &[R]) -> io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let base_url = format!("http://{}/v1", listener.local_addr()?);
         let requests = Log::new();
-        let replies = replies.iter().map(|reply| (*reply).to_owned()).collect();
+        let replies = replies.iter().cloned().map(Into::into).collect();
         let server = tokio::spawn(serve(listener, replies, requests.clone()));
         Ok(Self {
             base_url,
@@ -154,26 +227,17 @@ impl Drop for FakeOpenAi {
 }
 
 /// Answers each connection with the next reply, one at a time.
-async fn serve(listener: TcpListener, replies: Vec<String>, requests: Log<Value>) {
+async fn serve(listener: TcpListener, replies: Vec<Reply>, requests: Log<Value>) {
     let mut next = 0;
     while let Ok((mut stream, _)) = listener.accept().await {
-        let reply = replies.get(next).or(replies.last());
+        let reply = replies.get(next).or(replies.last()).cloned();
         next += 1;
         let Ok(body) = request_body(&mut stream).await else {
             continue;
         };
         requests.push(serde_json::from_slice(&body).unwrap_or_default());
-        let completion = json!({
-            "id": format!("chatcmpl-{next}"),
-            "object": "chat.completion",
-            "model": "fake-model",
-            "choices": [{
-                "index": 0,
-                "message": { "role": "assistant", "content": reply },
-                "finish_reason": "stop",
-            }],
-        })
-        .to_string();
+        let reply = reply.unwrap_or_else(|| Reply::from(""));
+        let completion = reply.completion(next).to_string();
         let answer = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
              Connection: close\r\n\r\n{completion}",

@@ -16,7 +16,9 @@ path = "shared/lib.rs"
 
 [dependencies]
 roomkit.workspace = true
+roomkit-ai.workspace = true
 roomkit-openai.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 # The fake of the OpenAI wire (shared/openai.rs) is a local HTTP server.
 tokio = { workspace = true, features = ["net", "io-util"] }
@@ -133,6 +135,10 @@ path = "identity_addresses.rs"
 [[example]]
 name = "openai_agent"
 path = "openai_agent.rs"
+
+[[example]]
+name = "agent_tools"
+path = "agent_tools.rs"
 
 # A server: an agent over WebSocket, kept in SQLite.
 

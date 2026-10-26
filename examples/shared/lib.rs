@@ -10,8 +10,9 @@
 //!   script and keeping what it read;
 //! - [`SmsNumber`]: a business's SMS number, sending to the number each
 //!   room's binding names;
-//! - [`OpenAiEndpoint`] and [`FakeOpenAi`]: the endpoint an OpenAI agent
-//!   calls, the environment's or a local fake of the OpenAI wire;
+//! - [`OpenAiEndpoint`], [`FakeOpenAi`] and [`Reply`]: the endpoint an
+//!   OpenAI agent calls, the environment's or a local fake of the OpenAI
+//!   wire, and what the fake answers, texts or calls;
 //! - [`WebSocketChannel`]: a WebSocket transport, its connections each
 //!   following a room;
 //! - [`TempDatabase`]: a database file the example leaves nothing of;
@@ -35,7 +36,7 @@ pub use self::checks::Checks;
 pub use self::clock::{Clock, kit};
 pub use self::files::TempDatabase;
 pub use self::observe::{Log, framework_events};
-pub use self::openai::{FakeOpenAi, OpenAiEndpoint};
+pub use self::openai::{FakeOpenAi, OpenAiEndpoint, Reply};
 pub use self::print::{print_timeline, timeline};
 pub use self::sms::SmsNumber;
 pub use self::websocket::{ConnectionId, Registration, WebSocketChannel};

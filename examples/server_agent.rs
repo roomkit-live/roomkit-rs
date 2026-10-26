@@ -15,8 +15,14 @@
 //!   back, a reason of the server's own. A message or a frame over 64 KiB closes the connection
 //!   with 1009, a frame at its header, and a stop closes them all with
 //!   1001.
+//! - The agent serves a tool, `lookup_order`, which finds an order by its
+//!   number (RFC §6.4, §21): a turn that calls it stores the round's text,
+//!   the call's start and end rows, then the answer, which carries the
+//!   turn's record (`loop_end_reason`, `ai_usage`); a later turn reads what
+//!   each round said, never the call.
 //! - The room's deliveries to `websocket` go out on each of the room's
-//!   connections, one JSON frame per event: the agent's answers. A room
+//!   connections, one JSON frame per event: the agent's rows, a call's
+//!   `tool` and the turn's `ended` included, in index order. A room
 //!   delivers an event to every channel but its source (RFC §10.2 step 2),
 //!   so the people on `websocket` see the agent's answers, not each other's
 //!   messages. A client that stops reading is dropped, reader included,
@@ -50,8 +56,9 @@
 //!   buffers, several MB.
 //!
 //! Its checks run offline, against a fake of the OpenAI wire and a
-//! temporary file: Alice and Bob talk with the agent in one room, the
-//! server restarts on the same file, and Alice goes on.
+//! temporary file: Alice and Bob talk with the agent in one room, the agent
+//! looking up Bob's order, the server restarts on the same file, and Alice
+//! goes on.
 //!
 //! With `--serve`, it stays up on 127.0.0.1:8080, or the address given
 //! after the flag, its rooms in `server_agent.db`, until Ctrl+C. The agent
@@ -93,8 +100,10 @@ use roomkit::model::{
 use roomkit::{
     ConversationStore, Environment, HookTrigger, KitError, RoomKit, SystemEnvironment, text_of,
 };
+use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use roomkit_sqlite::SqliteStore;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
@@ -102,7 +111,9 @@ use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::{WebSocketStream, tungstenite};
 
-use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Registration, TempDatabase, WebSocketChannel};
+use shared::{
+    Checks, FakeOpenAi, OpenAiEndpoint, Registration, Reply, TempDatabase, WebSocketChannel,
+};
 
 const SYSTEM_PROMPT: &str = "You answer the customers of a bakery, in one short sentence.";
 
@@ -132,16 +143,35 @@ const MESSAGE_LIMIT: usize = 64 * 1024;
 /// The conversation of the checks, and what is said in it.
 const CONVERSATION: &str = "bakery";
 const ALICE_ASKS: &str = "Hi! Do you have sourdough today?";
-const BOB_ASKS: &str = "Can I pick up two loaves at 5?";
+const BOB_ASKS: &str = "Is my order 42 ready?";
 const ALICE_AGAIN: &str = "Are the loaves still warm?";
 
-/// What the fake answers, turn after turn.
-const REPLIES: &[&str] = &[
+/// What the fake answers, turn after turn: each turn's answer.
+const ANSWERS: &[&str] = &[
     "Yes, we have sourdough until noon.",
-    "Yes Bob, two loaves will be ready at 5.",
+    "Yes Bob, order 42 is ready: two loaves, to pick up at 5 pm.",
     "Yes Carol, flour comes in 1 kg bags.",
     "They came out of the oven an hour ago, Alice.",
 ];
+
+/// What the fake says before it looks up Bob's order, and the call.
+const LOOKING_UP: &str = "Let me look up your order.";
+const LOOKUP_CALL: &str = "call_order_42";
+
+/// The conversation's script: each answer, Bob's turn calling the lookup
+/// first.
+fn script() -> Vec<Reply> {
+    let mut script: Vec<Reply> = ANSWERS.iter().map(|answer| Reply::from(*answer)).collect();
+    let lookup = Reply::calling(
+        LOOKING_UP,
+        [(LOOKUP_CALL, "lookup_order", r#"{"order": "42"}"#)],
+    );
+    script.insert(1, lookup);
+    script
+}
+
+/// The order the lookup finds.
+const ORDER_42: &str = r#"{"items":"two loaves","order":"42","pickup":"5 pm","status":"ready"}"#;
 
 /// Another conversation on the first server, and what Carol asks in it.
 const PANTRY: &str = "pantry";
@@ -288,7 +318,7 @@ impl Server {
         let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
             .with_system_prompt(SYSTEM_PROMPT)
             .with_history(20);
-        let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?;
+        let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?.with_tools(orders())?;
         let agent_id = agent.id().clone();
         kit.register_channel(websocket.clone())?;
         kit.register_channel(agent)?;
@@ -351,6 +381,33 @@ impl Server {
         };
         Ok(served??)
     }
+}
+
+/// The bakery's tools: `lookup_order`, finding an order by its number (RFC
+/// §6.4, §21.4). A number it does not know is refused with words the model
+/// reads.
+fn orders() -> Tools {
+    #[derive(Deserialize)]
+    struct Lookup {
+        order: String,
+    }
+    let lookup = ToolDefinition::new(
+        "lookup_order",
+        "Find a customer's order by its number: what it holds, its status and its pickup time.",
+        json!({
+            "type": "object",
+            "properties": { "order": { "type": "string", "description": "The order's number" } },
+            "required": ["order"],
+        }),
+    );
+    Tools::new().tool(lookup, |call, _context| async move {
+        let Lookup { order } = roomkit_ai::arguments(&call)?;
+        if order != "42" {
+            return Err(ToolError::refused(format!("There is no order {order}.")));
+        }
+        let found: Value = serde_json::from_str(ORDER_42).map_err(|e| ToolError::raised(&e))?;
+        Ok(ToolOutput::Json(found))
+    })
 }
 
 /// Serves `app` on `listener` until `stopping` says to stop, then waits for
@@ -653,7 +710,7 @@ fn close_frame(code: u16, reason: &'static str) -> Message {
 
 /// `--serve`: the server on `address`, until Ctrl+C.
 async fn serve(address: &str) -> Result<(), Box<dyn Error>> {
-    let endpoint = OpenAiEndpoint::from_env(REPLIES).await?;
+    let endpoint = OpenAiEndpoint::from_env(&script()).await?;
     let server = Server::start(
         Path::new(SERVE_DATABASE),
         &endpoint,
@@ -687,10 +744,14 @@ async fn check() -> Result<ExitCode, Box<dyn Error>> {
 /// Alice and Bob talk with the agent, the server restarts on the same file,
 /// and Alice goes on.
 async fn the_conversation_survives_a_restart(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
-    let endpoint = OpenAiEndpoint::from_env(REPLIES).await?;
+    let endpoint = OpenAiEndpoint::from_env(&script()).await?;
     println!("The agent calls {}.", endpoint.shown_base_url());
     let database = TempDatabase::new("server_agent");
-    let ([first, second], pantry) = two_people_talk(database.path(), &endpoint).await?;
+    let (talked, pantry) = two_people_talk(database.path(), &endpoint).await?;
+    let Talked {
+        answers: [first, second],
+        bob_turn,
+    } = talked;
     println!("The server restarts on the same file.");
     let third = alice_goes_on(database.path(), &endpoint).await?;
     let timeline = timeline_in(database.path(), CONVERSATION).await?;
@@ -719,20 +780,108 @@ async fn the_conversation_survives_a_restart(checks: &mut Checks) -> Result<(), 
         pantry.as_ref().and_then(|frame| frame.get("room_id")) == Some(&Value::from(PANTRY))
             && carol.is_some(),
     );
-    // Each question, then the answer the sockets received.
-    let conversation: Vec<Option<&str>> = [ALICE_ASKS, BOB_ASKS, ALICE_AGAIN]
-        .into_iter()
-        .zip([&first[0], &second[0], &third])
-        .flat_map(|(asked, answer)| [Some(asked), answer.as_deref()])
-        .collect();
+    // Each question, then what the agent said to it: Bob's turn, every
+    // message it delivered.
+    let bob_said = texts_of(&messages_in(&bob_turn));
+    let mut conversation: Vec<Option<&str>> = vec![Some(ALICE_ASKS), first[0].as_deref()];
+    conversation.push(Some(BOB_ASKS));
+    conversation.extend(bob_said.iter().map(|text| Some(text.as_str())));
+    conversation.extend([Some(ALICE_AGAIN), third.as_deref()]);
     checks.expect(
         "the file holds the whole conversation, both servers' turns, in order",
         said.iter().map(|text| Some(text.as_str())).eq(conversation),
     );
+    checks.expect(
+        "Bob's turn reaches his socket in index order, and ends on its answer",
+        indexes_rise(&bob_turn)
+            && bob_turn.last().and_then(|frame| frame.get("ended")) == Some(&json!("completed")),
+    );
     if let Some(fake) = endpoint.fake() {
+        check_the_lookup(checks, &bob_turn, &timeline);
         check_the_model_s_turns(checks, &fake.requests(), &answers);
     }
     Ok(())
+}
+
+/// What the first server's checks read: the answers to Alice's and to Bob's
+/// questions, each as Alice's and Bob's sockets received it, and every
+/// frame of Bob's turn on his socket.
+struct Talked {
+    answers: [[Option<String>; 2]; 2],
+    bob_turn: Vec<Value>,
+}
+
+/// The checks of the lookup in Bob's turn, against the fake's script: the
+/// round's text, the call's two rows and the answer reach his socket, the
+/// file holds them with the turn's record on the answer.
+fn check_the_lookup(checks: &mut Checks, bob_turn: &[Value], timeline: &[RoomEvent]) {
+    let kinds: Vec<&str> = bob_turn
+        .iter()
+        .filter_map(|frame| frame["type"].as_str())
+        .collect();
+    checks.expect(
+        "Bob's socket receives the round's text, the call's start and end, then the answer",
+        kinds == ["message", "tool_call_start", "tool_call_end", "message"]
+            && bob_turn.first().map(|frame| &frame["text"]) == Some(&json!(LOOKING_UP))
+            && bob_turn
+                .get(2)
+                .and_then(|frame| frame.pointer("/tool/result"))
+                == Some(&json!(ORDER_42)),
+    );
+    let rows: Vec<&RoomEvent> = timeline
+        .iter()
+        .filter(|event| {
+            matches!(&event.content, EventContent::ToolCall(call) if call.tool_id == LOOKUP_CALL)
+        })
+        .collect();
+    let recorded = timeline.iter().find(|event| {
+        event.event_type == EventType::Message
+            && ANSWERS
+                .get(1)
+                .is_some_and(|answer| text_of(&event.content) == *answer)
+    });
+    checks.expect(
+        "the file holds the call's start and end rows, and the turn's record on its answer",
+        rows.iter()
+            .map(|event| event.event_type)
+            .eq([EventType::ToolCallStart, EventType::ToolCallEnd])
+            && recorded.is_some_and(|answer| {
+                answer.metadata.get("loop_end_reason") == Some(&json!("completed"))
+                    && answer
+                        .metadata
+                        .get("ai_usage")
+                        .is_some_and(Value::is_object)
+            }),
+    );
+}
+
+/// The message frames of `frames`.
+fn messages_in(frames: &[Value]) -> Vec<&Value> {
+    frames
+        .iter()
+        .filter(|frame| frame["type"] == "message")
+        .collect()
+}
+
+/// The texts of `frames`.
+fn texts_of(frames: &[&Value]) -> Vec<String> {
+    frames
+        .iter()
+        .filter_map(|frame| frame["text"].as_str())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether the frames' indexes rise, each event after the one before.
+fn indexes_rise(frames: &[Value]) -> bool {
+    let indexes: Vec<u64> = frames
+        .iter()
+        .filter_map(|frame| frame["index"].as_u64())
+        .collect();
+    indexes.len() == frames.len()
+        && indexes
+            .windows(2)
+            .all(|pair| matches!(pair, [earlier, later] if earlier < later))
 }
 
 /// The first server: Alice and Bob join the conversation, and Carol
@@ -742,7 +891,7 @@ async fn the_conversation_survives_a_restart(checks: &mut Checks) -> Result<(), 
 async fn two_people_talk(
     database: &Path,
     endpoint: &OpenAiEndpoint,
-) -> Result<([[Option<String>; 2]; 2], Option<Value>), Box<dyn Error>> {
+) -> Result<(Talked, Option<Value>), Box<dyn Error>> {
     let server = Server::start(database, endpoint, ANY_PORT.parse()?, CHECKING).await?;
     let mut alice = Client::connect(server.address, CONVERSATION, "alice", "Alice").await?;
     let mut bob = Client::connect(server.address, CONVERSATION, "bob", "Bob").await?;
@@ -750,7 +899,13 @@ async fn two_people_talk(
     alice.say(ALICE_ASKS).await?;
     let first = [alice.answer().await, bob.answer().await];
     bob.say(BOB_ASKS).await?;
-    let second = [alice.answer().await, bob.answer().await];
+    let alice_heard = alice.answer().await;
+    let bob_turn = bob.turn().await;
+    let bob_heard = messages_in(&bob_turn)
+        .last()
+        .and_then(|frame| frame["text"].as_str())
+        .map(str::to_owned);
+    let second = [alice_heard, bob_heard];
     // Had the bakery's answers reached her, they would come first.
     carol.say(CAROL_ASKS).await?;
     let pantry = carol.next_frame(ANSWER_PATIENCE).await;
@@ -759,7 +914,11 @@ async fn two_people_talk(
         client.close().await;
     }
     server.stop().await?;
-    Ok(([first, second], pantry))
+    let talked = Talked {
+        answers: [first, second],
+        bob_turn,
+    };
+    Ok((talked, pantry))
 }
 
 /// The second server, on the same file: Alice comes back and asks again.
@@ -783,7 +942,7 @@ async fn alice_goes_on(
 /// sends then never enters the room, and a stop does not wait for him.
 async fn a_client_stops_reading(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     println!("Dave stops reading while the host posts large menus to the kitchen.");
-    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(REPLIES).await?);
+    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(ANSWERS).await?);
     let database = TempDatabase::new("server_agent_kitchen");
     let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
     let mut dave = Client::connect_reading_little(server.address, KITCHEN, "dave", "Dave").await?;
@@ -870,7 +1029,7 @@ async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>
 /// connection here names one thing wrong, and is refused with 400.
 async fn what_a_connection_must_name(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     println!("Connections that name something wrong.");
-    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(REPLIES).await?);
+    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(ANSWERS).await?);
     let database = TempDatabase::new("server_agent_names");
     let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
     let long = "a".repeat(65);
@@ -925,7 +1084,7 @@ async fn what_a_connection_must_name(checks: &mut Checks) -> Result<(), Box<dyn 
 /// and the agent answers her: the room was made whole.
 async fn a_client_leaves_while_it_joins(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     println!("Ivan leaves while his join makes the porch's room.");
-    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(REPLIES).await?);
+    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(ANSWERS).await?);
     let database = TempDatabase::new("server_agent_porch");
     let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
     let (created, mut creating) = mpsc::channel(1);
@@ -1050,17 +1209,32 @@ fn messages_of(timeline: &[RoomEvent]) -> Vec<String> {
 /// The checks of what the agent sent the fake, turn after turn, and of the
 /// answers the sockets received from it.
 fn check_the_model_s_turns(checks: &mut Checks, requests: &[Value], answers: &[&Option<String>]) {
+    // Alice's turn, Bob's two rounds, Carol's, then the turn after the
+    // restart.
+    let after_the_restart = requests.get(4);
     println!("The agent's turn after the restart sent:");
-    for message in requests.get(3).map(messages).unwrap_or_default() {
+    for message in after_the_restart.map(messages).unwrap_or_default() {
         println!("  {message}");
     }
     checks.expect(
         "the answers are the model's",
-        answers.len() == REPLIES.len()
+        answers.len() == ANSWERS.len()
             && answers
                 .iter()
-                .zip(REPLIES)
+                .zip(ANSWERS)
                 .all(|(answer, reply)| answer.as_deref() == Some(*reply)),
+    );
+    checks.expect(
+        "the lookup's round declares the tool, and its result reaches the model's next round",
+        requests.get(1).is_some_and(|request| {
+            request.pointer("/tools/0/function/name") == Some(&json!("lookup_order"))
+        }) && requests.get(2).is_some_and(|request| {
+            messages(request).iter().any(|message| {
+                message["role"] == "tool"
+                    && message["tool_call_id"] == LOOKUP_CALL
+                    && message["content"] == ORDER_42
+            })
+        }),
     );
     checks.expect(
         "the first turn labels Alice's message: two people take part, Bob silent",
@@ -1071,8 +1245,8 @@ fn check_the_model_s_turns(checks: &mut Checks, requests: &[Value], answers: &[&
     );
     checks.expect(
         "the turn after the restart reads the conversation from the file, each person \
-         labelled as before",
-        requests.get(3).is_some_and(goes_on),
+         labelled as before, and replays no call",
+        after_the_restart.is_some_and(goes_on),
     );
 }
 
@@ -1200,28 +1374,54 @@ impl Client {
         code
     }
 
-    /// The text of the next message the room delivers, if one comes in
-    /// time.
-    async fn answer(&mut self) -> Option<String> {
-        let next_message = async {
+    /// The frames of the next turn the room delivers, up to the message
+    /// that ends it (`ended`), as many as come in time.
+    async fn turn(&mut self) -> Vec<Value> {
+        let mut frames = Vec::new();
+        let reading = async {
             while let Some(Ok(received)) = self.socket.next().await {
                 let tungstenite::Message::Text(frame) = received else {
                     continue;
                 };
                 let frame: Value = serde_json::from_str(frame.as_str()).unwrap_or_default();
-                let field = |key: &str| frame.get(key).and_then(Value::as_str);
-                if field("type") == Some("message") {
-                    return field("text").map(str::to_owned);
+                let ends = frame.get("ended").is_some();
+                frames.push(frame);
+                if ends {
+                    break;
                 }
             }
-            None
         };
-        let answer = tokio::time::timeout(ANSWER_PATIENCE, next_message)
-            .await
-            .ok()
-            .flatten();
-        println!("  {} receives {answer:?}", self.name);
-        answer
+        let _in_time = tokio::time::timeout(ANSWER_PATIENCE, reading).await;
+        for frame in &frames {
+            let shown = frame
+                .pointer("/tool/name")
+                .and_then(Value::as_str)
+                .map_or_else(
+                    || format!("{:?}", frame["text"].as_str().unwrap_or_default()),
+                    |tool| {
+                        format!(
+                            "{tool} {}",
+                            frame.pointer("/tool/status").unwrap_or(&Value::Null)
+                        )
+                    },
+                );
+            println!(
+                "  {} receives #{} {} {shown}",
+                self.name, frame["index"], frame["type"]
+            );
+        }
+        frames
+    }
+
+    /// The text of the message that ends the next turn the room delivers,
+    /// if it comes in time.
+    async fn answer(&mut self) -> Option<String> {
+        let frames = self.turn().await;
+        frames
+            .last()
+            .filter(|frame| frame.get("ended").is_some())
+            .and_then(|frame| frame["text"].as_str())
+            .map(str::to_owned)
     }
 
     /// Closes the connection, and waits for the server to close its side.
@@ -1259,21 +1459,27 @@ fn is_labelled(message: &(String, String), label: &str, text: &str) -> bool {
 }
 
 /// Whether the turn after the restart sent the system prompt, then the
-/// conversation before it: Alice's question, the first answer, Bob's, the
-/// second answer, and Alice's new question, labelled `Alice` as before
-/// rather than as a second Alice.
+/// conversation before it: Alice's question, the first answer, Bob's, what
+/// the agent said before its lookup and its answer, each a message of its
+/// own, and Alice's new question, labelled `Alice` as before rather than as
+/// a second Alice; and no call nor result of the lookup.
 fn goes_on(request: &Value) -> bool {
     let sent = sent(request);
-    let [system, alice, first, bob, second, again] = sent.as_slice() else {
+    let [system, alice, first, bob, looking, second, again] = sent.as_slice() else {
         return false;
     };
     let answered = |message: &(String, String), reply: &str| {
         message == &("assistant".to_owned(), reply.to_owned())
     };
+    let replays_no_call = messages(request)
+        .iter()
+        .all(|message| message["role"] != "tool" && message.get("tool_calls").is_none());
     is_system(system)
         && is_labelled(alice, "Alice", ALICE_ASKS)
-        && REPLIES.first().is_some_and(|reply| answered(first, reply))
+        && ANSWERS.first().is_some_and(|reply| answered(first, reply))
         && is_labelled(bob, "Bob", BOB_ASKS)
-        && REPLIES.get(1).is_some_and(|reply| answered(second, reply))
+        && answered(looking, LOOKING_UP)
+        && ANSWERS.get(1).is_some_and(|reply| answered(second, reply))
         && is_labelled(again, "Alice", ALICE_AGAIN)
+        && replays_no_call
 }
