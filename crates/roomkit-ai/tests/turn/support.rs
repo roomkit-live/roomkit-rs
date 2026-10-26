@@ -49,6 +49,7 @@ pub(crate) fn served() -> Tools {
 /// A room where Alice writes by SMS to an agent.
 pub(crate) struct Room {
     pub(crate) kit: RoomKit,
+    pub(crate) sms: RecordingTransport,
 }
 
 impl Room {
@@ -66,14 +67,14 @@ impl Room {
             .with_tools(tools)
             .unwrap();
         let kit = RoomKit::new();
-        kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-            .unwrap();
+        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+        kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(adjust(agent)).unwrap();
         kit.create_room(&room_id()).await.unwrap();
         for id in ["sms", "assistant"] {
             kit.attach(&room_id(), &channel(id)).await.unwrap();
         }
-        Self { kit }
+        Self { kit, sms }
     }
 
     pub(crate) async fn says(&self, text: &str) -> InboundResult {

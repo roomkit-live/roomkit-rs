@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    DirectEvent, EventContent, EventType, Metadata, RoomEvent, ToolCallContent, ToolCallOutcome,
+    DirectEvent, EventContent, EventType, Metadata, RoomEvent, ToolCallContent,
+    ToolCallOutcome,
 };
 use roomkit::{
     HookExecution, HookSpec, HookTrigger, KitError, RegistrationError, ToolUse, ToolVerdict,
@@ -319,6 +320,39 @@ async fn a_tool_writes_to_its_room_at_the_turn_s_depth() {
     assert_eq!(
         (notice.chain_depth, end_row(&timeline, "c1").result.clone()),
         (1, json!("sent at depth 1"))
+    );
+}
+
+/// RFC §8.3 "Reentry cap": a turn's output is one response, which draws one
+/// of its cascade's passes however many rows it holds, as the reference
+/// implementation's turn is one stream: 6 rounds of 4 calls, 55 rows, and
+/// the answer is delivered (review F1).
+#[tokio::test]
+async fn a_long_turn_draws_one_pass_and_its_answer_is_delivered() {
+    let ids: Vec<Vec<String>> = (0..6)
+        .map(|round| (0..4).map(|call| format!("c{round}_{call}")).collect())
+        .collect();
+    let mut rounds: Vec<ScriptedRound> = ids
+        .iter()
+        .enumerate()
+        .map(|(round, calls)| {
+            let calls = calls
+                .iter()
+                .map(|id| (id.as_str(), "lookup_order", r#"{"order": "1"}"#));
+            ScriptedRound::calling(format!("Round {round}."), calls)
+        })
+        .collect();
+    rounds.push(ScriptedRound::answering("The final answer."));
+    let room = Room::new(ScriptedProvider::new(rounds), served()).await;
+    room.says("Check them all").await;
+    let timeline = room.timeline().await;
+    let blocked = timeline
+        .iter()
+        .filter(|event| event.blocked_by.is_some())
+        .count();
+    assert_eq!(
+        (blocked, room.sms.texts().last().cloned()),
+        (0, Some("The final answer.".to_owned()))
     );
 }
 

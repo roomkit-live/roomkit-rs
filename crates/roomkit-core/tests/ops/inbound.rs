@@ -1950,13 +1950,50 @@ mod a_chain_of_agents {
     }
 }
 
-/// RFC §8.3: the responses one cascade re-enters share a budget.
+/// RFC §8.3: the responses one cascade re-enters share a budget, each
+/// response one draw on it, whatever number of events it holds.
 mod the_reentry_budget {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// How many events of the timeline the reentry cap refused.
+    fn capped(sim: &Sim) -> usize {
+        sim.timeline_lines()
+            .into_iter()
+            .filter(|line| line.contains("reentry_loop_cap"))
+            .count()
+    }
+
     #[test]
     fn stores_a_response_past_the_budget_blocked() {
+        let mut sim = Sim::new();
+        sim.config.max_chain_depth = 3;
+        sim.transport("sms");
+        // 31 agents answer the person's message, and nothing else, one
+        // response each: past 30 passes.
+        for n in 0..31 {
+            let id = format!("ai_{n:02}");
+            let replying = id.clone();
+            sim.agent(
+                &id,
+                Box::new(move |event, _| {
+                    if event.source.channel_id.as_str() != "sms" {
+                        return Ok(ChannelOutput::default());
+                    }
+                    Ok(ChannelOutput::respond(vec![response(
+                        &replying, event, "part",
+                    )]))
+                }),
+            );
+        }
+        sim.send(Sim::message("sms", "Tell me everything")).unwrap();
+        assert_eq!(capped(&sim), 1);
+    }
+
+    /// A turn's rounds and tool-call rows are one response: one pass, as a
+    /// streamed turn is one stream.
+    #[test]
+    fn a_response_of_many_events_draws_one_pass() {
         let mut sim = Sim::new();
         sim.config.max_chain_depth = 3;
         sim.transport("sms");
@@ -1974,12 +2011,12 @@ mod the_reentry_budget {
             }),
         );
         sim.send(Sim::message("sms", "Tell me everything")).unwrap();
-        let capped = sim
+        let parts = sim
             .timeline_lines()
             .into_iter()
-            .filter(|line| line.contains("reentry_loop_cap"))
+            .filter(|line| line.contains("\"part\""))
             .count();
-        assert_eq!(capped, 1);
+        assert_eq!((capped(&sim), parts), (0, 31));
     }
 }
 

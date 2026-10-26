@@ -317,6 +317,12 @@ impl Machine {
     /// it binds what answers it too (RFC §8.5, gap G-073), unless the room
     /// refuses it first (RFC §8.3). An instruction does not re-enter (gap
     /// G-066).
+    ///
+    /// The response is one draw on the reentry budget, whatever number of
+    /// events it holds (RFC §8.3 "Reentry cap": buffered responses, chained
+    /// streams and injected events alike): an agent's turn, its rounds'
+    /// texts and tool-call rows, costs what one streamed turn does. Past the
+    /// budget, every event of it is stored refused.
     fn queue_response(&mut self, cx: &mut Cx<'_>, response: Response, set: &DeliverySet) {
         // A cascade whose turns are cut takes no reentry (RFC §10.1
         // "Explicit delivery cancellation").
@@ -326,17 +332,21 @@ impl Machine {
         let Response { responder, events } = response;
         let trigger = set.event();
         let at_limit = chain_depth::reaches_limit(trigger.chain_depth, cx.config.max_chain_depth);
-        let reentering = events
+        let reentering: Vec<RoomEvent> = events
             .into_iter()
-            .filter(|event| instructions::reenters(event, &responder.channel_id, trigger));
+            .filter(|event| instructions::reenters(event, &responder.channel_id, trigger))
+            .collect();
+        // Only a transport is asked at the limit; what it answers is stored
+        // refused (RFC §8.3), and draws nothing.
+        let refused_at_limit = at_limit && responder.category == ChannelCategory::Transport;
+        let admitted =
+            !refused_at_limit && !reentering.is_empty() && self.cascade.budget.take_pass();
         for event in reentering {
             let event = stamp::stamp_response(event, &responder, trigger, cx.env.new_event_id());
             let event = stamp::answer_within(event, set.answers_within(), &set.context().bindings);
-            if at_limit && responder.category == ChannelCategory::Transport {
-                // Only a transport is asked at the limit; what it answers is
-                // stored refused (RFC §8.3).
+            if refused_at_limit {
                 self.queue_refused(event, chain_depth::CHAIN_DEPTH_LIMIT);
-            } else if self.cascade.budget.take_pass() {
+            } else if admitted {
                 let origin = PassOrigin::Response {
                     answers_within: set.answers_within().cloned(),
                 };

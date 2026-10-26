@@ -768,28 +768,33 @@ mod the_response {
     }
 
     /// A response stored refused past the cascade's reentry budget (RFC
-    /// §8.3) records it too.
+    /// §8.3) records it too: 21 agents asked, one response each, past 20
+    /// passes.
     #[test]
     fn refused_past_the_reentry_budget_records_the_fingerprint() {
         let mut sim = room();
         sim.config.max_chain_depth = 2;
-        sim.agent(
-            "ai",
-            Box::new(|event, _| {
-                let answers = (0..21)
-                    .map(|_| response("ai", event, "Hello, I am the assistant."))
-                    .collect();
-                Ok(ChannelOutput::respond(answers))
-            }),
-        );
-        sim.send(instruction()).unwrap();
-        let last = sim.timeline.last().unwrap();
+        let agents: Vec<String> = (0..21).map(|n| format!("ai_{n:02}")).collect();
+        for id in &agents {
+            let replying = id.clone();
+            sim.agent(
+                id,
+                Box::new(move |event, _| {
+                    let answer = response(&replying, event, "Hello, I am the assistant.");
+                    Ok(ChannelOutput::respond(vec![answer]))
+                }),
+            );
+        }
+        let addressed: Vec<&str> = agents.iter().map(String::as_str).collect();
+        sim.send(instruction_to(&addressed, TEXT)).unwrap();
+        let refused = sim
+            .timeline
+            .iter()
+            .find(|event| event.blocked_by.as_deref() == Some("reentry_loop_cap"))
+            .unwrap();
         assert_eq!(
-            (last.blocked_by.as_deref(), last.metadata.get("instruction")),
-            (
-                Some("reentry_loop_cap"),
-                Some(&json!({ "sha256": TEXT_SHA256, "length": 26 }))
-            )
+            refused.metadata.get("instruction"),
+            Some(&json!({ "sha256": TEXT_SHA256, "length": 26 }))
         );
     }
 
