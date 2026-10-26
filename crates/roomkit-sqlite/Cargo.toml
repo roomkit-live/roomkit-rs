@@ -1,0 +1,28 @@
+[package]
+name = "roomkit-sqlite"
+description = "A SQLite conversation store for RoomKit, on the Python implementation's schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+roomkit.workspace = true
+roomkit-core.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+# The fixture's fingerprint (tests/cross_read.rs).
+sha2.workspace = true
+# The conformance runner's, which the suite includes from roomkit.
+uuid.workspace = true
+
+[lints]
+workspace = true

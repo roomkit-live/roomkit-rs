@@ -23,6 +23,9 @@ allow = [
     "BSD-3-Clause",
     # webpki-roots, the root certificates rustls checks a server against.
     "CDLA-Permissive-2.0",
+    # foldhash, the hasher of rusqlite's statement cache (through hashlink
+    # and hashbrown), behind roomkit-sqlite.
+    "Zlib",
 ]
 confidence-threshold = 0.9
 

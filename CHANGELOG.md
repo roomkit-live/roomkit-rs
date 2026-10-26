@@ -380,6 +380,21 @@ as it stands.
   commit, the idempotency lookup from a channel or within the room
   (`get_event_by_idempotency_key`), hard deletes and event counts (§13.4,
   §14.3, gaps G-079, G-080).
+- **The SQLite store** (`roomkit-sqlite`, step 4 milestone 2):
+  `SqliteStore::open(path)`, a `ConversationStore` in one SQLite file on
+  the Python implementation's schema, version 12, so that either
+  implementation reads the other's file: the same tables and indexed
+  columns, each record's JSON in `data`; a record's members roomkit-rs does
+  not model kept when it rewrites the record; the tables Python derives
+  from the timeline kept right (idempotency keys, the full-text index,
+  which a deleted message leaves, and the index sequences); a delete's
+  commit marking its target's edits deleted, as Python's store does and its
+  histories read (RFC §10.3); the delivery cursor read from its column; the tables it does not use left alone; a
+  new file created at version 12 as Python creates it, and a file of
+  another version refused (`OpenError`). One connection on tokio's
+  blocking threads, in WAL mode, for one process. The store suite and the
+  conformance suite run on it, and a cross-read test reads and rewrites a
+  file Python wrote (`make sqlite-fixture`).
 - **Examples**, one runnable file each, every one checking what it shows:
   the RFC's Appendix B flows (`echo_room`, `new_conversation`,
   `block_and_inject`, `agent_chain`, `advisor_joins`,

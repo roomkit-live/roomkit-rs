@@ -62,6 +62,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   `ConversationStore` and `InboundRoomRouter` traits, the in-memory store.
 - `roomkit-openai`: `OpenAiAgent`, an AI agent channel answering through
   an OpenAI-compatible Chat Completions endpoint.
+- `roomkit-sqlite`: `SqliteStore`, a store in one SQLite file, on the Python
+  implementation's schema: either implementation reads the other's file.
 
 ## Examples
 
