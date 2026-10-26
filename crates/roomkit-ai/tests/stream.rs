@@ -559,7 +559,8 @@ async fn a_reader_that_stops_at_a_call_s_start_runs_no_call() {
 }
 
 /// RFC §12.2 step 13s: a call already running when its reader stops is let
-/// finish, its end stored with its real result, and the stream is closed
+/// finish, its end stored with its real result and delivered to the
+/// streaming channel too, which no longer reads it; the stream is closed
 /// before the model's next round.
 #[tokio::test]
 async fn a_reader_that_stops_while_a_call_runs_lets_it_finish_and_asks_no_more() {
@@ -572,7 +573,8 @@ async fn a_reader_that_stops_while_a_call_runs_lets_it_finish_and_asks_no_more()
     let ws = Streaming::new(Stop::OnSignal(Arc::clone(&running)));
     let (room, model) = Room::new(rounds, lookup(Arc::clone(&runs), Some(running)), ws).await;
     room.says("Where is my order?").await;
-    let end = end_of(&room.timeline().await);
+    let timeline = room.timeline().await;
+    let end = end_of(&timeline);
     assert_eq!(
         (
             runs.load(Ordering::SeqCst),
@@ -582,6 +584,12 @@ async fn a_reader_that_stops_while_a_call_runs_lets_it_finish_and_asks_no_more()
         ),
         (1, 1, ToolCallStatus::Completed, json!("shipped"))
     );
+    let end_index = timeline
+        .iter()
+        .find(|event| event.event_type == EventType::ToolCallEnd)
+        .map(|event| event.index)
+        .unwrap();
+    assert_eq!(room.ws.delivered(), [3, end_index]);
     assert_eq!(room.dropped.load(Ordering::SeqCst), 1);
     room.kit.shutdown().await;
 }

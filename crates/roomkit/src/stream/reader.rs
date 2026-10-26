@@ -380,8 +380,11 @@ impl Producer {
         loop {
             match read {
                 Some(Some(Ok(ResponseItem::ToolEnd(end)))) => {
-                    let rows = self.segments.end(end);
-                    self.commit_all(rows).await;
+                    // The stream no longer carries rows: to every target,
+                    // the streaming one included (RFC §12.2 step 13s).
+                    for row in self.segments.end(end) {
+                        self.commit_as(row, false).await;
+                    }
                     if !self.segments.has_open_calls() {
                         return CANCELLED;
                     }
