@@ -34,7 +34,10 @@ use crate::store::{ConversationStore, InMemoryStore};
 /// exist. The handle never hands back the kit, which reads every room:
 /// code given the handle reaches the organization's rooms and no other.
 ///
-/// Cloning the handle is cheap; it shares its kit.
+/// Cloning the handle is cheap; it shares its kit, which it holds strongly:
+/// a hook or a channel the kit holds keeps a [`WeakRoomKit`](crate::WeakRoomKit)
+/// and the organization's id instead, and calls
+/// `weak.upgrade()?.for_organization(id)`, so as to make no cycle.
 ///
 /// ```no_run
 /// # async fn example(kit: roomkit::RoomKit) -> Result<(), Box<dyn std::error::Error>> {

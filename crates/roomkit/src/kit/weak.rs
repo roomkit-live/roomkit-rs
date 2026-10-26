@@ -15,6 +15,14 @@ use crate::store::InMemoryStore;
 /// weak kit makes none: [`upgrade`](Self::upgrade) gives the kit back while
 /// any clone of it lives, and `None` once the host dropped the last one.
 ///
+/// The kit's own work holds it too, while it runs: a background task (an
+/// observer, an inbound call in flight) and a [`TimerSweeper`](crate::TimerSweeper)
+/// keep the kit alive. Inside a hook or a channel the kit runs, `upgrade`
+/// therefore always succeeds; `None` matters only to work detached from
+/// the kit, a task the hook spawned that outlives it. For a release at a
+/// known point, the store's file closed included, call
+/// [`shutdown`](RoomKit::shutdown), then drop the kit.
+///
 /// An `ON_ROOM_CREATED` hook attaching the agent to each new room (RFC
 /// Appendix B.1):
 ///
