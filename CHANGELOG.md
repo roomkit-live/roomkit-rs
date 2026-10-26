@@ -409,8 +409,8 @@ as it stands.
   even when its first client leaves meanwhile, each text frame a
   message run into the room, and the room's deliveries sent on each of its
   connections as JSON frames, each send bounded, a client that stops
-  reading dropped, reader included; a refused message or a failed turn
-  answered with an error frame, a message or a frame over the limit
+  reading dropped, reader included; a refused message, a failed turn or
+  one a stop ended answered with an error frame, a message or a frame over the limit
   closed with 1009, a frame at its header, a stop with 1001; the ids a
   connection names checked (1 to 64 letters, digits, `_` or `-`, a name
   of 64 characters at most with no control character, else 400), and

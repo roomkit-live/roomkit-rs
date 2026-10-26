@@ -11,8 +11,8 @@
 //!   client leaves meanwhile.
 //! - Each text frame it sends is a message from `alice` into that room,
 //!   through the inbound pipeline (RFC §10.1). A message the room refuses,
-//!   or whose turn fails, gets `{"error": "..."}` back, a reason of the
-//!   server's own. A message or a frame over 64 KiB closes the connection
+//!   or whose turn fails or is ended by a stop, gets `{"error": "..."}`
+//!   back, a reason of the server's own. A message or a frame over 64 KiB closes the connection
 //!   with 1009, a frame at its header, and a stop closes them all with
 //!   1001.
 //! - The room's deliveries to `websocket` go out on each of the room's
@@ -87,7 +87,9 @@ use roomkit::model::{
     BindingOptions, ChannelId, EventContent, EventType, InboundMessage, Participant, ParticipantId,
     Post, RoomEvent, RoomId,
 };
-use roomkit::{ConversationStore, Environment, HookTrigger, RoomKit, SystemEnvironment, text_of};
+use roomkit::{
+    ConversationStore, Environment, HookTrigger, KitError, RoomKit, SystemEnvironment, text_of,
+};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use roomkit_sqlite::SqliteStore;
 use serde_json::{Value, json};
@@ -106,11 +108,13 @@ const SYSTEM_PROMPT: &str = "You answer the customers of a bakery, in one short 
 const SERVE_ADDRESS: &str = "127.0.0.1:8080";
 const SERVE_DATABASE: &str = "server_agent.db";
 
-/// What a client is told when the agent's turn on its message failed, and
-/// when the room refused its message: neither says more, so that no
-/// provider's error or room's state reaches it.
+/// What a client is told when the agent's turn on its message failed,
+/// when the room refused its message, and when the server stopped before
+/// the answer: none says more, so that no provider's error or room's state
+/// reaches it.
 const TURN_FAILED: &str = "the agent could not answer";
 const REFUSED: &str = "the room refused the message";
+const STOPPED: &str = "the server stopped before the answer";
 
 /// The longest conversation id, user id and name a connection may give, in
 /// characters, and what the server answers a connection that names one
@@ -150,6 +154,9 @@ const KITCHEN: &str = "kitchen";
 const DAVE_LATE: &str = "Sorry, I was away. Is there any rye left?";
 const LARGE_POST: usize = 60 * 1024;
 const POSTS_AT_MOST: usize = 400;
+
+/// The conversation where a stop comes during a turn.
+const GARDEN: &str = "garden";
 
 /// The conversation a client leaves while its join makes the room.
 const PORCH: &str = "porch";
@@ -577,6 +584,11 @@ impl App {
                 );
                 TURN_FAILED
             }
+            // Stored, its turn ended by the kit's shutdown past the grace.
+            Err(KitError::ShutDown) => {
+                println!("  the server stopped before {:?}'s answer", user.as_str());
+                STOPPED
+            }
             Err(error) => {
                 println!("  {:?}'s message was refused: {error}", user.as_str());
                 REFUSED
@@ -667,6 +679,7 @@ async fn check() -> Result<ExitCode, Box<dyn Error>> {
     what_a_client_is_told(&mut checks).await?;
     what_a_connection_must_name(&mut checks).await?;
     a_client_leaves_while_it_joins(&mut checks).await?;
+    a_stop_during_a_turn(&mut checks).await?;
     Ok(checks.finish())
 }
 
@@ -956,6 +969,51 @@ async fn a_client_leaves_while_it_joins(checks: &mut Checks) -> Result<(), Box<d
                 == Some("message"),
     );
     Ok(())
+}
+
+/// Kim asks while the model takes longer to answer than the server's
+/// grace: the stop ends the turn, and Kim is told the server stopped
+/// before the answer, then closed with 1001.
+async fn a_stop_during_a_turn(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    println!("The model takes longer to answer than the server's grace.");
+    let (endpoint, silent) = silent_model().await?;
+    let database = TempDatabase::new("server_agent_garden");
+    let brief = Patience {
+        grace: Duration::from_millis(200),
+        ..CHECKING
+    };
+    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, brief).await?;
+    let mut kim = Client::connect(server.address, GARDEN, "kim", "Kim").await?;
+    kim.say("Are the tables outside free?").await?;
+    // Once the turn's request reached the model, which never answers.
+    let _asked = tokio::time::timeout(STOP_PATIENCE, silent.accept()).await??;
+    // The turn outlives the grace: the stop says so.
+    let _outlived = tokio::time::timeout(STOP_PATIENCE, server.stop()).await;
+    let told = kim.next_frame(TOLD_PATIENCE).await;
+    println!("  Kim receives {told:?}");
+    let going_away = kim.close_code(TOLD_PATIENCE).await;
+    checks.expect(
+        "a stop during a turn tells its client the server stopped before the answer, then \
+         closes with 1001",
+        told.as_ref()
+            .and_then(|frame| frame.get("error"))
+            .and_then(Value::as_str)
+            == Some(STOPPED)
+            && going_away == Some(1001),
+    );
+    Ok(())
+}
+
+/// An endpoint that takes connections and never answers, open while the
+/// listener it returns is held.
+async fn silent_model() -> Result<(OpenAiEndpoint, TcpListener), Box<dyn Error>> {
+    let listener = TcpListener::bind(ANY_PORT).await?;
+    let endpoint = OpenAiEndpoint::Real {
+        base_url: format!("http://{}/v1", listener.local_addr()?),
+        api_key: String::new(),
+        model: "silent".to_owned(),
+    };
+    Ok((endpoint, listener))
 }
 
 /// An endpoint where nothing listens: a port the system gave and took
