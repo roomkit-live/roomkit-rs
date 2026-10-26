@@ -14,6 +14,19 @@ use tokio::task::JoinHandle;
 pub(crate) struct Reply {
     status: u16,
     body: String,
+    length: Length,
+}
+
+/// The length an answer's head declares.
+#[derive(Clone, Copy, Debug)]
+enum Length {
+    /// The body's.
+    Body,
+    /// This one, whatever the body's.
+    Declared(usize),
+    /// None: the body runs until the connection closes, `usize` bytes of
+    /// it, or fewer when the client stops reading.
+    Streamed(usize),
 }
 
 impl Reply {
@@ -33,6 +46,7 @@ impl Reply {
         Self {
             status: 200,
             body: body.to_string(),
+            length: Length::Body,
         }
     }
 
@@ -41,6 +55,25 @@ impl Reply {
         Self {
             status,
             body: body.to_owned(),
+            length: Length::Body,
+        }
+    }
+
+    /// An answer whose head declares `length` bytes, holding a short body.
+    pub(crate) fn declaring(length: usize) -> Self {
+        Self {
+            length: Length::Declared(length),
+            ..Self::completion("short")
+        }
+    }
+
+    /// An answer that declares no length and streams `bytes` bytes, until
+    /// the client stops reading.
+    pub(crate) fn streaming(bytes: usize) -> Self {
+        Self {
+            status: 200,
+            body: String::new(),
+            length: Length::Streamed(bytes),
         }
     }
 }
@@ -148,18 +181,39 @@ async fn exchange(mut stream: TcpStream, reply: &Reply) -> Request {
         read_more(&mut stream, &mut received).await;
     }
     let body = serde_json::from_slice(&received[head_end..head_end + length]).unwrap_or_default();
-    let answer = format!(
-        "HTTP/1.1 {} Fake\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        reply.status,
-        reply.body.len(),
-        reply.body
-    );
-    stream.write_all(answer.as_bytes()).await.unwrap();
-    stream.shutdown().await.unwrap();
+    answer(&mut stream, reply).await;
     Request {
         path,
         authorization: header("authorization"),
         body,
+    }
+}
+
+/// Writes `reply` on `stream`, then closes it. A client that stops reading
+/// ends the answer early, which is no failure of the fake.
+async fn answer(stream: &mut TcpStream, reply: &Reply) {
+    let length = match reply.length {
+        Length::Body => format!("Content-Length: {}\r\n", reply.body.len()),
+        Length::Declared(length) => format!("Content-Length: {length}\r\n"),
+        Length::Streamed(_) => String::new(),
+    };
+    let head = format!(
+        "HTTP/1.1 {} Fake\r\nContent-Type: application/json\r\n{length}Connection: close\r\n\r\n",
+        reply.status
+    );
+    let mut sent = stream.write_all(head.as_bytes()).await.is_ok()
+        && stream.write_all(reply.body.as_bytes()).await.is_ok();
+    if let Length::Streamed(bytes) = reply.length {
+        let chunk = vec![b' '; 64 * 1024];
+        let mut left = bytes;
+        while sent && left > 0 {
+            let size = left.min(chunk.len());
+            sent = stream.write_all(&chunk[..size]).await.is_ok();
+            left -= size;
+        }
+    }
+    if sent {
+        stream.shutdown().await.ok();
     }
 }
 

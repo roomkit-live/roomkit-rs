@@ -1,6 +1,7 @@
 //! The Chat Completions wire: the request a turn sends, and what it reads
 //! of the answer.
 
+use reqwest::StatusCode;
 use roomkit::transcript::{Message, Role};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,6 +10,9 @@ use crate::error::OpenAiError;
 
 /// The longest provider message an error keeps, in characters.
 const MESSAGE_LIMIT: usize = 500;
+
+/// The longest error type or code an error keeps, in characters.
+const NAME_LIMIT: usize = 64;
 
 /// A Chat Completions request: one completion, not streamed, with no tool.
 #[derive(Debug, Serialize)]
@@ -81,40 +85,74 @@ struct AnswerMessage {
 ///
 /// # Errors
 ///
-/// Returns [`OpenAiError::Malformed`] when `body` is no chat completion.
-pub(crate) fn answer(body: &[u8]) -> Result<Option<String>, OpenAiError> {
+/// Returns [`OpenAiError::Malformed`] when `body` is no chat completion,
+/// saying why without `secret`, the API key.
+pub(crate) fn answer(body: &[u8], secret: &str) -> Result<Option<String>, OpenAiError> {
+    let malformed = |reason: String| OpenAiError::Malformed {
+        reason: cleaned(&reason, secret, MESSAGE_LIMIT),
+    };
     let completion: Completion =
-        serde_json::from_slice(body).map_err(|error| OpenAiError::Malformed {
-            reason: error.to_string(),
-        })?;
+        serde_json::from_slice(body).map_err(|error| malformed(error.to_string()))?;
     let choice = completion
         .choices
         .into_iter()
         .next()
-        .ok_or_else(|| OpenAiError::Malformed {
-            reason: "it has no choice".to_owned(),
-        })?;
+        .ok_or_else(|| malformed("it has no choice".to_owned()))?;
     Ok(choice
         .message
         .content
         .filter(|text| !text.trim().is_empty()))
 }
 
-/// What an error answer says: the provider's message (`error.message`, as
-/// OpenAI writes it, a top-level `message`, as vLLM does, or `error` as a
-/// string), else the start of the answer, within 500 characters.
-pub(crate) fn error_message(body: &[u8]) -> String {
+/// The error an answer of HTTP `status` holding `body` fails a turn with:
+/// the provider's type, code and message, as OpenAI writes them under
+/// `error`, or vLLM at the top level, else the status's reason. Each is on
+/// one line, bounded, and holds no `secret`, the API key: a provider may
+/// echo the request. The rest of the answer is left out.
+pub(crate) fn status_error(status: StatusCode, body: &[u8], secret: &str) -> OpenAiError {
     let parsed: Option<Value> = serde_json::from_slice(body).ok();
-    let message = parsed.as_ref().and_then(|value| {
-        value
-            .pointer("/error/message")
-            .or_else(|| value.get("message"))
-            .or_else(|| value.get("error"))
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-    });
-    let message = message.unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
-    message.trim().chars().take(MESSAGE_LIMIT).collect()
+    let field = |name: &str| {
+        let value = parsed.as_ref()?;
+        let error = value.get("error").filter(|error| error.is_object());
+        let found = error
+            .and_then(|error| error.get(name))
+            .or_else(|| value.get(name));
+        match found? {
+            Value::String(text) => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => None,
+        }
+    };
+    let message = field("message")
+        .or_else(|| {
+            let value = parsed.as_ref()?;
+            value.get("error")?.as_str().map(str::to_owned)
+        })
+        .unwrap_or_else(|| status.canonical_reason().unwrap_or("no message").to_owned());
+    let named = |text: String| Some(cleaned(&text, secret, NAME_LIMIT)).filter(|t| !t.is_empty());
+    OpenAiError::Status {
+        status: status.as_u16(),
+        error_type: field("type").and_then(named),
+        code: field("code").and_then(named),
+        message: cleaned(&message, secret, MESSAGE_LIMIT),
+    }
+}
+
+/// `text` as an error carries it: `secret` removed wherever it appears,
+/// on one line, within `limit` characters.
+fn cleaned(text: &str, secret: &str, limit: usize) -> String {
+    let removed = if secret.is_empty() {
+        text.to_owned()
+    } else {
+        text.replace(secret, "[removed]")
+    };
+    removed
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(limit)
+        .collect()
 }
 
 #[cfg(test)]
@@ -124,17 +162,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_error_answer_gives_the_provider_s_message() {
-        let openai = br#"{"error": {"message": "Incorrect API key provided", "type": "invalid_request_error"}}"#;
-        let vllm = br#"{"object": "error", "message": "The model does not exist.", "code": 404}"#;
-        assert_eq!(error_message(openai), "Incorrect API key provided");
-        assert_eq!(error_message(vllm), "The model does not exist.");
-        assert_eq!(error_message(b"Bad Gateway\n"), "Bad Gateway");
+    fn an_error_answer_gives_the_provider_s_type_code_and_message() {
+        let openai = br#"{"error": {"message": "Incorrect API key", "type": "invalid_request_error", "code": "invalid_api_key"}}"#;
+        let vllm = br#"{"object": "error", "message": "The model does not exist.", "type": "NotFoundError", "code": 404}"#;
+        assert_eq!(
+            status_error(StatusCode::UNAUTHORIZED, openai, "sk-1").to_string(),
+            "the provider answered HTTP 401 (invalid_request_error, invalid_api_key): Incorrect API key"
+        );
+        assert_eq!(
+            status_error(StatusCode::NOT_FOUND, vllm, "sk-1").to_string(),
+            "the provider answered HTTP 404 (NotFoundError, 404): The model does not exist."
+        );
+    }
+
+    #[test]
+    fn an_error_answer_that_is_no_json_gives_the_status_s_reason_only() {
+        let error = status_error(StatusCode::BAD_GATEWAY, b"<html>echo: sk-1</html>", "sk-1");
+        assert_eq!(
+            error.to_string(),
+            "the provider answered HTTP 502: Bad Gateway"
+        );
     }
 
     #[test]
     fn a_completion_without_text_answers_nothing() {
         let body = br#"{"choices": [{"message": {"role": "assistant", "content": null}}]}"#;
-        assert_eq!(answer(body), Ok(None));
+        assert_eq!(answer(body, "sk-1"), Ok(None));
+    }
+
+    #[test]
+    fn a_malformed_answer_s_reason_holds_no_key() {
+        let body = br#"{"choices": "sk-1"}"#;
+        let error = answer(body, "sk-1").unwrap_err();
+        assert!(!error.to_string().contains("sk-1"), "{error}");
     }
 }

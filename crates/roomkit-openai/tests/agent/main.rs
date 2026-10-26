@@ -104,6 +104,27 @@ impl Room {
     }
 }
 
+/// The events `ON_ERROR` fires with in `room`, as an observer receives them.
+fn on_error(room: &Room) -> mpsc::UnboundedReceiver<RoomEvent> {
+    let (errors, reported) = mpsc::unbounded_channel();
+    let spec = HookSpec::new("errors", HookTrigger::OnError, HookExecution::Async);
+    room.kit
+        .hook(spec, move |event, _| {
+            errors.send(event).unwrap();
+            async { Ok(roomkit::model::HookResult::allow()) }
+        })
+        .unwrap();
+    reported
+}
+
+/// The next event `reported`, or a failure after a second.
+async fn next(reported: &mut mpsc::UnboundedReceiver<RoomEvent>) -> RoomEvent {
+    tokio::time::timeout(Duration::from_secs(1), reported.recv())
+        .await
+        .unwrap()
+        .unwrap()
+}
+
 /// The messages of the `index`th request the fake received.
 fn messages(fake: &FakeOpenAi, index: usize) -> Vec<Value> {
     fake.requests()[index].body["messages"]
@@ -188,6 +209,22 @@ async fn the_history_carries_each_turn_in_its_role_and_labels_each_speaker() {
 }
 
 #[tokio::test]
+async fn two_senders_with_no_name_on_one_number_are_labelled_apart() {
+    let room = Room::new(vec![Reply::completion("Noted.")], API_KEY).await;
+    for (sender, text) in [("+15550001", "Refund me"), ("+15550002", "Do not")] {
+        let message = InboundMessage::new(room.sms.id().clone(), sender, EventContent::text(text));
+        room.kit
+            .process_inbound_in(&room_id(), message)
+            .await
+            .unwrap();
+    }
+    let sent = messages(&room.fake, 1);
+    assert_eq!(sent[1]["content"], "@sms: \"Refund me\"");
+    let input = sent[3]["content"].as_str().unwrap();
+    assert!(input.starts_with("@sms (2): \"Do not\"\n\n"), "{input}");
+}
+
+#[tokio::test]
 async fn an_instruction_is_sent_as_the_application_s_marked_input() {
     let room = Room::new(vec![Reply::completion("Welcome!")], API_KEY).await;
     let instruction = InboundMessage {
@@ -225,16 +262,10 @@ async fn a_provider_error_fails_the_turn_and_fires_on_error() {
         API_KEY,
     )
     .await;
-    let (errors, mut reported) = mpsc::unbounded_channel();
-    let spec = HookSpec::new("errors", HookTrigger::OnError, HookExecution::Async);
-    room.kit
-        .hook(spec, move |event, _| {
-            errors.send(event).unwrap();
-            async { Ok(roomkit::model::HookResult::allow()) }
-        })
-        .unwrap();
+    let mut reported = on_error(&room);
     let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
-    let message = "the provider answered HTTP 401: Incorrect API key provided.";
+    let message =
+        "the provider answered HTTP 401 (invalid_request_error): Incorrect API key provided.";
     assert_eq!(
         result.error,
         Some(ErrorRecord::new("ChannelError", message))
@@ -245,10 +276,7 @@ async fn a_provider_error_fails_the_turn_and_fires_on_error() {
         Vec::<String>::new(),
         "nothing reaches the room"
     );
-    let on_error = tokio::time::timeout(Duration::from_secs(1), reported.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let on_error = next(&mut reported).await;
     assert_eq!(text_of(&on_error.content), message);
     assert_eq!(on_error.metadata["error_category"], "generation");
 }
@@ -296,5 +324,55 @@ async fn an_unreachable_endpoint_fails_the_turn_without_naming_its_url() {
     assert!(
         !error.message.contains(&address.to_string()),
         "a base URL may carry a secret: {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_api_key_an_error_answer_echoes_reaches_neither_the_error_nor_on_error() {
+    for body in [
+        r#"{"error": {"message": "Bearer sk-test is refused", "type": "invalid_request_error", "code": "invalid_api_key"}}"#,
+        "Authorization: Bearer sk-test\r\nrefused",
+    ] {
+        let room = Room::new(vec![Reply::status(401, body)], API_KEY).await;
+        let mut reported = on_error(&room);
+        let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
+        let error = result.error.unwrap();
+        assert!(!error.message.contains(API_KEY), "{error:?}");
+        let on_error = serde_json::to_string(&next(&mut reported).await).unwrap();
+        assert!(!on_error.contains(API_KEY), "{on_error}");
+    }
+}
+
+#[tokio::test]
+async fn an_error_answer_keeps_the_provider_s_type_and_code() {
+    let body = r#"{"error": {"message": "Rate limit reached.", "type": "requests", "code": "rate_limit_exceeded"}}"#;
+    let room = Room::new(vec![Reply::status(429, body)], API_KEY).await;
+    let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
+    assert_eq!(
+        result.error.unwrap().message,
+        "the provider answered HTTP 429 (requests, rate_limit_exceeded): Rate limit reached."
+    );
+}
+
+/// Past the 4 MiB a turn reads of an answer.
+const TOO_LONG: usize = 5 * 1024 * 1024;
+
+#[tokio::test]
+async fn an_answer_streaming_past_the_limit_fails_the_turn() {
+    let room = Room::new(vec![Reply::streaming(TOO_LONG)], API_KEY).await;
+    let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
+    assert_eq!(
+        result.error.unwrap().message,
+        "the provider's answer is longer than 4194304 bytes"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_declaring_more_than_the_limit_fails_the_turn() {
+    let room = Room::new(vec![Reply::declaring(TOO_LONG)], API_KEY).await;
+    let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
+    assert_eq!(
+        result.error.unwrap().message,
+        "the provider's answer is longer than 4194304 bytes"
     );
 }

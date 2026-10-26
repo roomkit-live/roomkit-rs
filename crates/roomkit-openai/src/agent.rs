@@ -1,5 +1,7 @@
 //! The agent: an intelligence channel whose turn is one chat completion.
 
+use std::fmt;
+
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventContent, EventDirection, EventSource, EventType, RoomContext, RoomEvent,
@@ -14,6 +16,10 @@ use crate::wire::{self, CompletionRequest};
 /// The path a completion is asked at, after the base URL.
 const COMPLETIONS_PATH: &str = "/chat/completions";
 
+/// The longest answer a turn reads, in bytes: far more than a completion's
+/// text takes.
+const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
+
 /// An AI agent channel answering through an OpenAI-compatible Chat
 /// Completions endpoint (RFC §6.4).
 ///
@@ -21,9 +27,9 @@ const COMPLETIONS_PATH: &str = "/chat/completions";
 /// the room hands the agent ([`roomkit::transcript::conversation`]), and
 /// answers with the completion's text. It answers a message or an
 /// instruction, never its own events; a completion with no text answers
-/// nothing. A turn that fails returns an [`OpenAiError`]. Cloning it shares
-/// its HTTP client.
-#[derive(Clone, Debug)]
+/// nothing. A turn that fails returns an [`OpenAiError`]; an answer longer
+/// than 4 MiB fails it too. Cloning it shares its HTTP client.
+#[derive(Clone)]
 pub struct OpenAiAgent {
     declaration: ChannelDeclaration,
     config: OpenAiConfig,
@@ -91,14 +97,11 @@ impl OpenAiAgent {
         }
         let response = call.send().await.map_err(OpenAiError::request)?;
         let status = response.status();
-        let body = response.bytes().await.map_err(OpenAiError::request)?;
+        let body = read_body(response).await?;
         if !status.is_success() {
-            return Err(OpenAiError::Status {
-                status: status.as_u16(),
-                message: wire::error_message(&body),
-            });
+            return Err(wire::status_error(status, &body, &self.config.api_key));
         }
-        wire::answer(&body)
+        wire::answer(&body, &self.config.api_key)
     }
 
     /// The agent's response to `event`, saying `text`.
@@ -140,16 +143,45 @@ impl Channel for OpenAiAgent {
     }
 }
 
+impl fmt::Debug for OpenAiAgent {
+    /// The channel's id and its configuration, whose `Debug` hides the API
+    /// key and the base URL's credentials.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenAiAgent")
+            .field("channel_id", self.id())
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The body of `response`, refused past [`ANSWER_LIMIT`]: as its head
+/// declares it, then as it arrives, so that an endpoint that streams
+/// without end fails the turn instead of filling the memory.
+async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, OpenAiError> {
+    let too_long = OpenAiError::AnswerTooLong {
+        limit: ANSWER_LIMIT,
+    };
+    let declared = response.content_length().unwrap_or_default();
+    if usize::try_from(declared).map_or(true, |declared| declared > ANSWER_LIMIT) {
+        return Err(too_long);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(OpenAiError::request)? {
+        if body.len().saturating_add(chunk.len()) > ANSWER_LIMIT {
+            return Err(too_long);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 /// The completions endpoint under `base_url`.
 fn endpoint(base_url: &str) -> Result<reqwest::Url, OpenAiError> {
-    let refused = || OpenAiError::BaseUrl {
-        base_url: base_url.to_owned(),
-    };
     let joined = format!("{}{COMPLETIONS_PATH}", base_url.trim_end_matches('/'));
-    let url = reqwest::Url::parse(&joined).map_err(|_| refused())?;
+    let url = reqwest::Url::parse(&joined).map_err(|_| OpenAiError::BaseUrl)?;
     match url.scheme() {
         "http" | "https" => Ok(url),
-        _ => Err(refused()),
+        _ => Err(OpenAiError::BaseUrl),
     }
 }
 
@@ -158,6 +190,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::config::tests::SECRET_URL;
 
     #[test]
     fn the_endpoint_is_the_base_url_s_chat_completions() {
@@ -170,13 +203,27 @@ mod tests {
     #[test]
     fn a_base_url_that_is_no_http_url_is_refused() {
         for base_url in ["api.openai.com/v1", "ftp://example.com", ""] {
-            assert_eq!(
-                endpoint(base_url),
-                Err(OpenAiError::BaseUrl {
-                    base_url: base_url.to_owned()
-                }),
-                "{base_url}"
-            );
+            assert_eq!(endpoint(base_url), Err(OpenAiError::BaseUrl), "{base_url}");
+        }
+    }
+
+    #[test]
+    fn a_refused_base_url_is_not_repeated() {
+        let error = endpoint("ftp://user:pass@example.com/?token=abc").unwrap_err();
+        let printed = format!("{error} {error:?}");
+        assert!(
+            !printed.contains("pass") && !printed.contains("abc"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn the_agent_s_debug_form_hides_the_api_key_and_the_base_url_s_credentials() {
+        let config = OpenAiConfig::new(SECRET_URL, "sk-secret", "gpt-6-luna");
+        let agent = OpenAiAgent::new(ChannelId::new("assistant").unwrap(), config).unwrap();
+        let printed = format!("{agent:?}");
+        for secret in ["sk-secret", "user", "pass", "token", "abc", "/v1"] {
+            assert!(!printed.contains(secret), "{secret} in {printed}");
         }
     }
 }

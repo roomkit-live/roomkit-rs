@@ -13,12 +13,10 @@ use std::error::Error;
 #[non_exhaustive]
 pub enum OpenAiError {
     /// The base URL, with `/chat/completions` after it, is no `http` or
-    /// `https` URL.
-    #[error("the base URL {base_url:?} is not an http or https URL")]
-    BaseUrl {
-        /// The base URL as configured.
-        base_url: String,
-    },
+    /// `https` URL. The error does not repeat it: a URL may carry
+    /// credentials.
+    #[error("the base URL is not an http or https URL")]
+    BaseUrl,
     /// The HTTP client could not be built.
     #[error("the HTTP client could not be built: {reason}")]
     Client {
@@ -34,13 +32,23 @@ pub enum OpenAiError {
         reason: String,
     },
     /// The provider answered with an HTTP error.
-    #[error("the provider answered HTTP {status}: {message}")]
+    #[error("the provider answered HTTP {status}{}: {message}", detail(.error_type.as_deref(), .code.as_deref()))]
     Status {
         /// The HTTP status code.
         status: u16,
-        /// The provider's message, or the start of its answer when it gave
-        /// none.
+        /// The error's type, as the provider names it (`error.type`).
+        error_type: Option<String>,
+        /// The error's code, as the provider names it (`error.code`).
+        code: Option<String>,
+        /// The provider's message, or the status's reason when it gave
+        /// none: on one line, within 500 characters, the API key removed.
         message: String,
+    },
+    /// The provider's answer is longer than a turn reads.
+    #[error("the provider's answer is longer than {limit} bytes")]
+    AnswerTooLong {
+        /// How many bytes a turn reads at most.
+        limit: usize,
     },
     /// The provider's answer is no chat completion.
     #[error("the provider's answer is not a chat completion: {reason}")]
@@ -64,6 +72,16 @@ impl OpenAiError {
         Self::Client {
             reason: with_causes(&error.without_url()),
         }
+    }
+}
+
+/// The type and the code of a provider's error, in parentheses, as far as
+/// it gives them.
+fn detail(error_type: Option<&str>, code: Option<&str>) -> String {
+    match (error_type, code) {
+        (Some(error_type), Some(code)) => format!(" ({error_type}, {code})"),
+        (Some(named), None) | (None, Some(named)) => format!(" ({named})"),
+        (None, None) => String::new(),
     }
 }
 

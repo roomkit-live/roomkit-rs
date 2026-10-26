@@ -14,7 +14,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// The endpoint an agent calls, the model it asks, its system prompt, how
 /// much of the room it sends and how long it waits.
 ///
-/// The API key is never printed: the configuration's `Debug` hides it.
+/// The configuration's `Debug` never prints the API key, nor the base URL's
+/// user information, path or query, which may carry credentials.
 #[derive(Clone)]
 pub struct OpenAiConfig {
     pub(crate) base_url: String,
@@ -83,7 +84,7 @@ impl fmt::Debug for OpenAiConfig {
             "hidden"
         };
         f.debug_struct("OpenAiConfig")
-            .field("base_url", &self.base_url)
+            .field("base_url", &shown_url(&self.base_url))
             .field("api_key", &api_key)
             .field("model", &self.model)
             .field("system_prompt", &self.system_prompt)
@@ -93,15 +94,37 @@ impl fmt::Debug for OpenAiConfig {
     }
 }
 
+/// `url` as it may be shown: its scheme, host and port, never its user
+/// information, path or query, which may carry credentials.
+fn shown_url(url: &str) -> String {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return "(not a URL)".to_owned();
+    };
+    let host = parsed.host_str().unwrap_or_default();
+    match parsed.port() {
+        Some(port) => format!("{}://{host}:{port}", parsed.scheme()),
+        None => format!("{}://{host}", parsed.scheme()),
+    }
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
+    /// A base URL carrying credentials in its user info and its query.
+    pub(crate) const SECRET_URL: &str = "https://user:pass@example.com:8443/v1?token=abc";
+
     #[test]
-    fn the_debug_form_hides_the_api_key() {
-        let config = OpenAiConfig::new("https://api.openai.com/v1", "sk-secret", "gpt-6-luna");
+    fn the_debug_form_hides_the_api_key_and_the_base_url_s_credentials() {
+        let config = OpenAiConfig::new(SECRET_URL, "sk-secret", "gpt-6-luna");
         let printed = format!("{config:?}");
-        assert!(!printed.contains("sk-secret"), "{printed}");
+        for secret in ["sk-secret", "user", "pass", "token", "abc", "/v1"] {
+            assert!(!printed.contains(secret), "{secret} in {printed}");
+        }
         assert!(printed.contains("api_key: \"hidden\""), "{printed}");
+        assert!(
+            printed.contains("base_url: \"https://example.com:8443\""),
+            "{printed}"
+        );
     }
 }
