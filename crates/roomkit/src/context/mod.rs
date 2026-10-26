@@ -54,8 +54,8 @@
 //!
 //! A lease is live while the run that holds the lock keeps the tenure it
 //! was given under, so a context kept past the release grants nothing. A
-//! frame stands in an admission order, lends its turn's depth and lends its
-//! cascade's budget while its call runs, so a context kept past the call's
+//! frame lends its lease, stands in an admission order, lends its turn's
+//! depth and lends its cascade's budget while its call runs, so a context kept past the call's
 //! end, by a run the call started that goes on detached or a task it left
 //! running, stands in none and lends nothing: that work starts fresh, at
 //! depth 0 and on a budget of its own.
@@ -65,10 +65,13 @@
 //! `adoption`'s.
 //!
 //! tokio hands no task-local to a spawned task. A call that spawns a task
-//! and awaits it as its own (RFC §13.5: "the tasks it awaits as its own")
 //! wraps the task's future in [`keep_context`], so that it runs within the
-//! call's context; a task spawned without it, awaited or not, has none, and
-//! waits for the room as any task does.
+//! call's context and acts for the call while the call runs, awaited or not
+//! (decision 2 of step 3); a task spawned without it has none, and waits
+//! for the room as any task does. A frame lends its lease on a lock only
+//! while its call runs, as it stands in an admission order: once a locked
+//! hook is over, a task it left running holds nothing of the lock its run
+//! still holds, and its calls are new arrivals (RFC §9.5.1).
 
 mod adoption;
 mod run;
@@ -225,7 +228,17 @@ impl Frame {
     /// admission order: a call it makes into the room is its run's to
     /// adopt (RFC §9.5.1 Reentrance).
     fn adopts_into(&self, room_id: &RoomId) -> bool {
-        self.lease.as_ref().map(Lease::room_id) == Some(room_id) || self.is_admitted_to(room_id)
+        self.lease_on(room_id).is_some() || self.is_admitted_to(room_id)
+    }
+
+    /// The frame's lease on `room_id`'s lock while its call runs: a frame
+    /// kept past its call's end, by a task the call spawned and left
+    /// running, holds the room's lock for nothing it does (RFC §9.5.1: once
+    /// a hook's body is over, the work it began calls as a new arrival).
+    fn lease_on(&self, room_id: &RoomId) -> Option<&Lease> {
+        self.lease
+            .as_ref()
+            .filter(|lease| lease.room_id() == room_id && self.runs())
     }
 
     /// Whether the frame's call stands in `room_id`'s admission order: it
@@ -298,13 +311,13 @@ impl ExecutionContext {
     }
 
     /// A live lease on `room_id`'s lock, which a call of this context runs
-    /// under.
+    /// under and still runs.
     pub(crate) fn lease(&self, room_id: &RoomId) -> Option<Lease> {
         self.frames
             .iter()
             .rev()
-            .filter_map(|frame| frame.lease.as_ref())
-            .find(|lease| lease.room_id() == room_id && lease.is_live())
+            .filter_map(|frame| frame.lease_on(room_id))
+            .find(|lease| lease.is_live())
             .cloned()
     }
 
@@ -431,16 +444,18 @@ pub(crate) fn as_deep_as_its_turn(chain_depth: &mut u32) {
 }
 
 /// Runs `future` within the execution context of the current task, for a
-/// task the current call spawns and awaits as its own (RFC §13.5: the room
-/// lock is reentrant within "a task and the tasks it awaits as its own").
+/// task the current call spawns (RFC §13.5, §9.5.1; decision 2 of step 3).
 ///
 /// tokio hands a spawned task none of its spawner's context: a hook or a
-/// turn that runs part of its work in a task it spawns, then awaits, wraps
-/// that task's future with this, so that the task's calls into the room
-/// take the lock again and are adopted as the hook's or the turn's own
-/// would be. A task the call does not await must not be wrapped: its calls
-/// would run within a call that may be over; they take the lock for real,
-/// and wait for the room, as any task's.
+/// turn that runs part of its work in a task it spawns wraps that task's
+/// future with this, so that the task acts for the call while the call
+/// runs, whether the call awaits it or not, as a task spawned in a Python
+/// hook does: its calls into the room take the lock again and are adopted
+/// as the hook's or the turn's own would be. Once the call is over, the
+/// task acts for it no more: its calls are new arrivals, which wait for
+/// the room, its lock included, as any task's, on a budget and at a depth
+/// of their own. A task spawned without it acts for nothing from its
+/// start.
 ///
 /// ```no_run
 /// # async fn turn(kit: roomkit::RoomKit, room: roomkit::model::RoomId, event: roomkit::model::DirectEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -488,6 +503,7 @@ mod tests {
     fn a_lease_lives_while_its_tenure_is_held() {
         let (run, _queue) = RunShared::new();
         run.locked(room_id());
+        run.calling(effect());
         let context = ExecutionContext::default().within(Frame::new(
             &run,
             effect(),
@@ -593,11 +609,43 @@ mod tests {
         );
     }
 
+    /// RFC §9.5.1, decision 2 of step 3: a frame kept past its call's end,
+    /// by a task a locked hook spawned and left running, holds no lease on
+    /// the lock its run still holds: it is granted nothing, takes no call
+    /// and detaches none, and the task's calls are new arrivals.
+    #[test]
+    fn a_call_over_holds_no_lease_on_the_lock_its_run_still_holds() {
+        let (run, _queue) = RunShared::new();
+        run.locked(room_id());
+        run.calling(effect());
+        let context = ExecutionContext::default().within(Frame::new(
+            &run,
+            effect(),
+            Work {
+                locked: Some(room_id()),
+                ..Work::default()
+            },
+        ));
+        let running = (
+            context.lease(&room_id()).is_some(),
+            context.taker(&room_id()).is_some(),
+            context.detaches(&room_id()),
+        );
+        run.answered(effect());
+        let over = (
+            context.lease(&room_id()).is_some(),
+            context.taker(&room_id()).is_some(),
+            context.detaches(&room_id()),
+        );
+        assert_eq!((running, over), ((true, true, true), (false, false, false)));
+    }
+
     #[test]
     fn a_call_is_handed_to_the_innermost_frame_under_its_room_s_lock_or_in_its_order() {
         let (outer, _outer_queue) = RunShared::new();
         let (inner, _inner_queue) = RunShared::new();
         outer.locked(room_id());
+        outer.calling(effect());
         inner.calling(effect());
         let other = RoomId::new("room_2").unwrap();
         let context = ExecutionContext::default()

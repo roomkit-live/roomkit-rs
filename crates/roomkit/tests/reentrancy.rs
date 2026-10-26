@@ -978,6 +978,131 @@ async fn a_task_a_turn_awaits_as_its_own_keeps_the_turn_s_context() {
     );
 }
 
+/// The messages of the timeline, by source, from the room's first message
+/// on: its lifecycle records left out.
+async fn messages(kit: &RoomKit) -> Vec<String> {
+    kit.store()
+        .list_events(&room_id(), true)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|event| event.event_type == EventType::Message)
+        .map(|event| format!("#{} {}", event.index, event.source.channel_id))
+        .collect()
+}
+
+/// Decision 2 of step 3 (probe 7), RFC §13.5, §9.5.1: a task a locked hook
+/// spawns within the hook's context (`keep_context`) acts for the hook
+/// while the hook runs, whether the hook awaits it or not, as a task
+/// spawned in a Python hook does: its injection is adopted and commits
+/// ahead of the message. A task spawned bare holds no context, as tokio
+/// hands a spawned task none: its injection is a new arrival, committed
+/// after the message.
+#[tokio::test]
+async fn a_task_a_locked_hook_spawns_in_its_context_acts_for_it_while_it_runs() {
+    let mut orders = Vec::new();
+    for kept in [true, false] {
+        let (kit, _) = room().await;
+        let hook_kit = kit.clone();
+        kit.hook(before_broadcast("notifier", true), move |event, _| {
+            let kit = hook_kit.clone();
+            async move {
+                if event.source.channel_id == channel("sms") {
+                    let call = async move {
+                        kit.send_event(&room_id(), from_console("Heads up"))
+                            .await
+                            .map(|_| ())
+                    };
+                    // Fired and not awaited; the hook runs on meanwhile.
+                    if kept {
+                        drop(tokio::spawn(roomkit::keep_context(call)));
+                    } else {
+                        drop(tokio::spawn(call));
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Ok(HookResult::allow())
+            }
+        })
+        .unwrap();
+        send(&kit, "hello").await.unwrap();
+        tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+        orders.push(messages(&kit).await);
+    }
+    assert_eq!(
+        orders,
+        [["#3 ws", "#4 sms"], ["#3 sms", "#4 ws"]].map(|order| order.map(str::to_owned).to_vec())
+    );
+}
+
+/// RFC §9.5.1, decision 2 of step 3: once the hook is over, the task it
+/// left running within its context acts for it no more, though the pass
+/// still holds the room's lock for its next hook: its injection is a new
+/// arrival, committed after the message, where it was refused as a call
+/// waiting for itself.
+#[tokio::test]
+async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_over() {
+    let (kit, _) = room().await;
+    let (hook_over, calling) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let sent = Arc::new(Mutex::new(None));
+    let (hook_kit, notify_over, notify_calling, task_sent) = (
+        kit.clone(),
+        Arc::clone(&hook_over),
+        Arc::clone(&calling),
+        Arc::clone(&sent),
+    );
+    kit.hook(before_broadcast("notifier", true), move |event, _| {
+        let (kit, over, calling, sent) = (
+            hook_kit.clone(),
+            Arc::clone(&notify_over),
+            Arc::clone(&notify_calling),
+            Arc::clone(&task_sent),
+        );
+        async move {
+            if event.source.channel_id == channel("sms") {
+                let task_over = Arc::clone(&over);
+                drop(tokio::spawn(roomkit::keep_context(async move {
+                    task_over.notified().await;
+                    calling.notify_one();
+                    let result = kit.send_event(&room_id(), from_console("Heads up")).await;
+                    *sent.lock().unwrap() = Some(
+                        result
+                            .map(|event| event.index)
+                            .map_err(|error| error.to_string()),
+                    );
+                })));
+                over.notify_one();
+            }
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    // The pass's next hook, under the same lock, runs once the task calls.
+    let next = HookSpec {
+        priority: 10,
+        ..before_broadcast("next", true)
+    };
+    let next_calling = Arc::clone(&calling);
+    kit.hook(next, move |event, _| {
+        let calling = Arc::clone(&next_calling);
+        async move {
+            if event.source.channel_id == channel("sms") {
+                calling.notified().await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    send(&kit, "hello").await.unwrap();
+    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    let sent = sent.lock().unwrap().take();
+    assert_eq!(
+        (sent, messages(&kit).await),
+        (Some(Ok(4)), vec!["#3 sms".to_owned(), "#4 ws".to_owned()])
+    );
+}
+
 /// RFC §8.3: a channel whose parse sends every message it parses back into
 /// its room is bounded by the reentry budget: each message is charged as it
 /// arrives, before its parse, and the one past the budget is refused.

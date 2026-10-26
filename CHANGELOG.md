@@ -258,6 +258,12 @@ as it stands.
   `set_private_state`, whose defaults keep the value in the room's
   metadata; `InMemoryStore` keeps it apart. What reads alike is read over
   Unicode tables generated from roomkit (`scripts/build-unicode-tables.py`).
+- **A task a hook spawns** (§13.5, §9.5.1, decision 2 of step 3, gap
+  G-070): a task spawned within a hook's or a turn's context
+  (`keep_context`) acts for it while it runs, whether it awaits the task
+  or not, as a task spawned in a Python hook does. Once the hook is over,
+  the task's calls are new arrivals, waiting for the room's lock its pass
+  still holds; they were refused as `Reentrant`.
 - **The delivery cursor** (§5.1, §13.5, §14.1, gap G-091, step 3
   milestone 2): `Room::delivered_index`, the highest index whose delivery
   set has run, `-1` before any, crosses as the Python implementation
