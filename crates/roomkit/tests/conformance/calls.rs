@@ -13,8 +13,7 @@ use roomkit::model::{
     Metadata, Participant, ParticipantId, Post, RoomEvent, RoomId, RoomOptions, Visibility,
 };
 use roomkit::{
-    ConversationStore, HookExecution, HookFilter, HookSpec, HookTrigger, HostChannel,
-    InboundResult, KitError,
+    ConversationStore, HookExecution, HookSpec, HookTrigger, HostChannel, InboundResult, KitError,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -173,11 +172,10 @@ async fn lifecycle_call(
     Ok(match name {
         "update_event" => {
             let (room, event): (RoomId, EventId) = (room_id(spec)?, field(spec, "event_id")?);
-            let updates = EventUpdates {
-                content: optional::<EventContent>(spec, "content")?,
-                source: optional::<EventSource>(spec, "source")?,
-                metadata: optional::<Metadata>(spec, "metadata")?,
-            };
+            let mut updates = EventUpdates::default();
+            updates.content = optional::<EventContent>(spec, "content")?;
+            updates.source = optional::<EventSource>(spec, "source")?;
+            updates.metadata = optional::<Metadata>(spec, "metadata")?;
             let outcome = on_door!(run, spec, |door| door.update_event(&room, &event, updates));
             finish(run, name, outcome, dump)
         }
@@ -204,14 +202,12 @@ async fn lifecycle_call(
             let update = match name {
                 "mute" => BindingUpdate::mute(),
                 "unmute" => BindingUpdate::unmute(),
-                "set_access" => BindingUpdate {
-                    access: Some(field::<Access>(spec, "access")?),
-                    ..BindingUpdate::default()
-                },
-                _ => BindingUpdate {
-                    visibility: Some(field::<Visibility>(spec, "visibility")?),
-                    ..BindingUpdate::default()
-                },
+                "set_access" => {
+                    let mut update = BindingUpdate::default();
+                    update.access = Some(field::<Access>(spec, "access")?);
+                    update
+                }
+                _ => BindingUpdate::visibility(field::<Visibility>(spec, "visibility")?),
             };
             let outcome = on_door!(run, spec, |door| door
                 .update_binding(&room, &channel, update));
@@ -400,10 +396,8 @@ pub(crate) fn register_hook(
     }
     spec.fail_closed = optional(hook, "fail_closed")?.unwrap_or_default();
     spec.needs_lock = optional(hook, "needs_lock")?.unwrap_or(true);
-    spec.filter = HookFilter {
-        channel_types: optional::<BTreeSet<ChannelType>>(hook, "channel_types")?,
-        channel_ids: optional::<BTreeSet<ChannelId>>(hook, "channel_ids")?,
-        directions: optional::<BTreeSet<EventDirection>>(hook, "directions")?,
-    };
+    spec.filter.channel_types = optional::<BTreeSet<ChannelType>>(hook, "channel_types")?;
+    spec.filter.channel_ids = optional::<BTreeSet<ChannelId>>(hook, "channel_ids")?;
+    spec.filter.directions = optional::<BTreeSet<EventDirection>>(hook, "directions")?;
     Ok(run.kit().hook(spec, hook_handler(hook, run)).map(drop))
 }

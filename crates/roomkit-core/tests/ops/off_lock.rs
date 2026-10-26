@@ -195,11 +195,9 @@ mod an_off_lock_hook {
     #[test]
     fn failing_closed_on_its_timeout_blocks_the_event_at_step_nine() {
         let mut sim = room();
-        let spec = HookSpec {
-            needs_lock: false,
-            fail_closed: true,
-            ..HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync)
-        };
+        let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+        spec.needs_lock = false;
+        spec.fail_closed = true;
         sim.sync_hook(spec, Box::new(|_| HookOutcome::TimedOut));
         let result = sim.send(bonjour()).unwrap();
         assert_eq!(
@@ -346,11 +344,11 @@ mod an_off_lock_block {
         let mut edit = InboundMessage::new(
             channel("sms"),
             SENDER,
-            EventContent::Edit(EditContent {
-                target_event_id: "evt_404".parse().unwrap(),
-                new_content: Box::new(EventContent::text("Bonsoir")),
-                edit_source: Some(EditSource::Sender),
-            }),
+            EventContent::Edit(EditContent::new(
+                "evt_404".parse().unwrap(),
+                EventContent::text("Bonsoir"),
+                Some(EditSource::Sender),
+            )),
         );
         edit.event_type = EventType::Edit;
         let result = sim.send(edit).unwrap();
@@ -644,11 +642,11 @@ mod the_ticket {
         let mut edit = InboundMessage::new(
             channel("sms"),
             SENDER,
-            EventContent::Edit(EditContent {
-                target_event_id: "evt_404".parse().unwrap(),
-                new_content: Box::new(EventContent::text("Bonsoir")),
-                edit_source: Some(EditSource::Sender),
-            }),
+            EventContent::Edit(EditContent::new(
+                "evt_404".parse().unwrap(),
+                EventContent::text("Bonsoir"),
+                Some(EditSource::Sender),
+            )),
         );
         edit.event_type = EventType::Edit;
         sim.send(edit).unwrap();

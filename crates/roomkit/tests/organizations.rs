@@ -43,9 +43,10 @@ async fn room_of(owner: Option<&str>) -> (RoomKit, Arc<SequentialEnvironment>) {
         kit.register_channel(RecordingTransport::new(channel(id), channel_type))
             .unwrap();
     }
-    let timers = || RoomOptions {
-        inactive_after_seconds: Some(60),
-        ..RoomOptions::default()
+    let timers = || {
+        let mut options = RoomOptions::default();
+        options.inactive_after_seconds = Some(60);
+        options
     };
     if let Some(owner) = owner {
         let owner = kit.for_organization(owner);
@@ -242,10 +243,8 @@ async fn a_stored_event_of_another_organization_s_room_is_never_changed() {
         .event
         .unwrap();
     let clinic = kit.for_organization("clinic");
-    let updates = EventUpdates {
-        content: Some(EventContent::text("Changed")),
-        ..EventUpdates::default()
-    };
+    let mut updates = EventUpdates::default();
+    updates.content = Some(EventContent::text("Changed"));
     let changed = (
         clinic
             .update_event(&room_id(), &committed.id, updates)

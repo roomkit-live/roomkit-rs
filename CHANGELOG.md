@@ -38,6 +38,22 @@ as it stands.
   holds a `StoreFailure` instead of `rusqlite::Error`, so the SQLite
   library's version is no part of the crate's API; SQLite's error is its
   source.
+- **Breaking: the types that will grow are `#[non_exhaustive]`** (step 4,
+  milestone 4), so that a member added later breaks no caller: the
+  options and updates (`RoomOptions`, `BindingOptions`, `RoomUpdates`,
+  `EventUpdates`, `BindingUpdate`, `RoomFilter`, `EventFilter`,
+  `HookSpec`, `HookFilter`), a channel's declaration (`ChannelDeclaration`,
+  `ChannelCapabilities`, `RateLimit`, `RetryPolicy`), every content struct
+  and `EventContent`, `HookTrigger` and `FrameworkEvent`; the errors
+  already were. Build one from its `Default` or its constructor, then set
+  fields: `let mut options = BindingOptions::default(); options.group =
+  true;` for `BindingOptions { group: true, ..Default::default() }`. The
+  contents gain the constructors this needs, each taking the members the
+  RFC requires (`MediaContent::new(url, mime_type)`,
+  `EditContent::new(target, new_content, edit_source)`,
+  `DeleteContent::new(target, delete_type)`, ...), and so does
+  `RetryPolicy`. A `match` on `EventContent`, `HookTrigger` or
+  `FrameworkEvent` outside the core needs a wildcard arm.
 
 ### Added
 

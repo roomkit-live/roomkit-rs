@@ -130,10 +130,8 @@ impl Bank {
         room: &str,
     ) -> Result<RoomId, Box<dyn Error>> {
         let correspondent = ParticipantId::new(identity_id.as_str())?;
-        let naming = BindingOptions {
-            participant_id: Some(correspondent),
-            ..BindingOptions::default()
-        };
+        let mut naming = BindingOptions::default();
+        naming.participant_id = Some(correspondent);
         self.open(room, naming).await
     }
 

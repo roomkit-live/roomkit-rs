@@ -18,6 +18,7 @@ use super::{
 /// event committed meanwhile. A field of type `Option<Option<_>>` is written
 /// when it is `Some`, to the value it holds, `None` included.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct RoomUpdates {
     /// The room's status.
     pub status: Option<RoomStatus>,
@@ -115,6 +116,7 @@ impl RoomUpdates {
 /// delete its metadata (RFC §10.3); a host's direct `update_event` writes
 /// what it names (RFC §10.3 "Direct mutation").
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct EventUpdates {
     /// The event's new content.
     pub content: Option<EventContent>,
@@ -153,6 +155,7 @@ impl EventUpdates {
 /// only when the update names them. Recording a routed sender is one such
 /// write (RFC §10.1 step 2, gap G-061).
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct BindingUpdate {
     /// The binding's correspondent (RFC §10.4), written when `Some`, to the
     /// value it holds, `None` included.

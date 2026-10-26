@@ -31,11 +31,10 @@ const BOB: &str = "+15550000002";
 
 /// An hour without activity pauses a room; a day paused closes it.
 fn hourly() -> RoomOptions {
-    RoomOptions {
-        inactive_after_seconds: Some(3600),
-        closed_after_seconds: Some(86_400),
-        ..RoomOptions::default()
-    }
+    let mut options = RoomOptions::default();
+    options.inactive_after_seconds = Some(3600);
+    options.closed_after_seconds = Some(86_400);
+    options
 }
 
 /// A text from `from` on `channel`, naming no room; returns the room it was
@@ -135,15 +134,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     println!("The team's number is dedicated to its room, bound as a group.");
     let team_room = RoomId::new("team")?;
     kit.create_room_with(&team_room, hourly()).await?;
-    kit.attach_with(
-        &team_room,
-        team.id(),
-        BindingOptions {
-            group: true,
-            ..BindingOptions::default()
-        },
-    )
-    .await?;
+    let mut group = BindingOptions::default();
+    group.group = true;
+    kit.attach_with(&team_room, team.id(), group).await?;
     text(&kit, team.id(), ALICE, "Meeting at 3?").await?;
     two_hours_later(&kit, &clock).await?;
     let paused_group = status(&kit, &team_room).await?;

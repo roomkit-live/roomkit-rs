@@ -474,16 +474,9 @@ async fn what_python_reads_beside_the_timeline_is_kept_right() {
     let committed = derived(file.path());
     let mut deleted = event.metadata.clone();
     deleted.insert("deleted".to_owned(), true.into());
-    kit.store()
-        .update_event(
-            &event.id,
-            EventUpdates {
-                metadata: Some(deleted),
-                ..EventUpdates::default()
-            },
-        )
-        .await
-        .unwrap();
+    let mut marking = EventUpdates::default();
+    marking.metadata = Some(deleted);
+    kit.store().update_event(&event.id, marking).await.unwrap();
     let marked = derived(file.path());
     kit.store()
         .delete_event(&full, &event.id, true)
@@ -628,11 +621,7 @@ async fn a_delete_marks_its_target_s_edits_as_python_reads_them() {
     let mut delete = InboundMessage::new(
         channel("ws-user"),
         "user-1",
-        EventContent::Delete(DeleteContent {
-            target_event_id: edited.clone(),
-            delete_type: DeleteType::Sender,
-            reason: None,
-        }),
+        EventContent::Delete(DeleteContent::new(edited.clone(), DeleteType::Sender)),
     );
     delete.event_type = EventType::Delete;
     let result = kit.process_inbound_in(&full, delete).await.unwrap();

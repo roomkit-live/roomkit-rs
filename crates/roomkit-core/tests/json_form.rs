@@ -14,13 +14,15 @@ use std::collections::BTreeMap;
 
 use pretty_assertions::assert_eq;
 use roomkit_core::model::{
-    Access, AgentResponsePolicy, ChannelBinding, ChannelCapabilities, ChannelCategory,
-    ChannelDirection, ChannelId, ChannelMediaType, ChannelOutput, ChannelType, Confidence,
-    Consumption, ConsumptionState, DeliveryError, DeliveryResult, DeliveryStatus, EventContent,
-    EventDirection, EventId, EventSource, EventStatus, EventType, HookResult, IdentificationStatus,
-    Identity, InboundMessage, InjectedEvent, Metadata, Observation, ObservationId, Participant,
-    ParticipantId, ParticipantRole, ParticipantStatus, Room, RoomEvent, RoomId, RoomStatus,
-    RoomTimers, Task, TaskId, TaskStatus, Timestamp, VerificationStatus, Visibility,
+    Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCategory, ChannelDirection,
+    ChannelId, ChannelMediaType, ChannelOutput, ChannelType, Confidence, Consumption,
+    ConsumptionState, DeleteContent, DeleteType, DeliveryError, DeliveryResult, DeliveryStatus,
+    EditContent, EventContent, EventDirection, EventId, EventSource, EventStatus, EventType,
+    HookResult, IdentificationStatus, Identity, InboundMessage, InjectedEvent, Latitude,
+    LocationContent, Longitude, MediaContent, Metadata, Observation, ObservationId, Participant,
+    ParticipantId, ParticipantRole, ParticipantStatus, RichContent, Room, RoomEvent, RoomId,
+    RoomStatus, RoomTimers, SystemContent, Task, TaskId, TaskStatus, TemplateContent, TextContent,
+    Timestamp, ToolCallContent, VerificationStatus, VideoContent, Visibility,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -234,12 +236,9 @@ fn channel_binding() {
     binding.visibility = Visibility::Transport;
     binding.participant_id = Some(ParticipantId::new("p_advisor").unwrap());
     binding.last_read_index = Some(3);
-    binding.capabilities = ChannelCapabilities {
-        media_types: [ChannelMediaType::Text, ChannelMediaType::Rich].into(),
-        max_length: Some(4096),
-        supports_edit: true,
-        ..ChannelCapabilities::default()
-    };
+    binding.capabilities.media_types = [ChannelMediaType::Text, ChannelMediaType::Rich].into();
+    binding.capabilities.max_length = Some(4096);
+    binding.capabilities.supports_edit = true;
     binding.metadata = metadata(json!({ "persona": "formal" }));
 
     assert_json_form(
@@ -501,4 +500,51 @@ fn hook_result_blocking_with_an_injected_event() {
     });
 
     assert_json_form(&result, &form);
+}
+
+/// RFC §5.3: a content built from its required members is the content its
+/// minimal form reads as, every other member at its default. Since the
+/// contents are `#[non_exhaustive]`, a crate outside the core builds them
+/// this way only.
+#[test]
+fn a_content_s_constructor_reads_as_its_minimal_form() {
+    let target = EventId::new("evt_1").unwrap();
+    let latitude = Latitude::new(45.5).unwrap();
+    let longitude = Longitude::new(-73.6).unwrap();
+    let built = [
+        EventContent::Text(TextContent::new("Bonjour")),
+        EventContent::Rich(RichContent::new("**Bonjour**")),
+        EventContent::Media(MediaContent::new("https://example.com/a.png", "image/png")),
+        EventContent::Location(LocationContent::new(latitude, longitude)),
+        EventContent::Audio(AudioContent::new("https://example.com/a.ogg")),
+        EventContent::Video(VideoContent::new("https://example.com/a.mp4", "video/mp4")),
+        EventContent::System(SystemContent::new("Room paused")),
+        EventContent::Template(TemplateContent::new("welcome")),
+        EventContent::Edit(EditContent::new(
+            target.clone(),
+            EventContent::text("Bonsoir"),
+            None,
+        )),
+        EventContent::Delete(DeleteContent::new(target, DeleteType::Sender)),
+        EventContent::ToolCall(ToolCallContent::new("lookup", "call_1")),
+    ];
+    let minimal = [
+        json!({ "type": "text", "body": "Bonjour" }),
+        json!({ "type": "rich", "body": "**Bonjour**" }),
+        json!({ "type": "media", "url": "https://example.com/a.png", "mime_type": "image/png" }),
+        json!({ "type": "location", "latitude": 45.5, "longitude": -73.6 }),
+        json!({ "type": "audio", "url": "https://example.com/a.ogg" }),
+        json!({ "type": "video", "url": "https://example.com/a.mp4", "mime_type": "video/mp4" }),
+        json!({ "type": "system", "body": "Room paused" }),
+        json!({ "type": "template", "template_id": "welcome" }),
+        json!({
+            "type": "edit",
+            "target_event_id": "evt_1",
+            "new_content": { "type": "text", "body": "Bonsoir" },
+        }),
+        json!({ "type": "delete", "target_event_id": "evt_1" }),
+        json!({ "type": "tool_call", "tool_name": "lookup", "tool_id": "call_1" }),
+    ]
+    .map(|form| serde_json::from_value::<EventContent>(form).unwrap());
+    assert_eq!(built, minimal);
 }

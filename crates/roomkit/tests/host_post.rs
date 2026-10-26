@@ -383,10 +383,8 @@ async fn a_host_binding_the_integrator_sets_keeps_its_settings() {
         let kit = RoomKit::new();
         sms_room(&kit, None, RoomOptions::default()).await;
         kit.register_channel(HostChannel::new()).unwrap();
-        let mut options = BindingOptions {
-            access: Access::WriteOnly,
-            ..BindingOptions::default()
-        };
+        let mut options = BindingOptions::default();
+        options.access = Access::WriteOnly;
         options.metadata.insert("desk".to_owned(), "1".into());
         let attaching = {
             let kit = kit.clone();
@@ -422,20 +420,16 @@ async fn a_first_post_waits_for_the_room_lock_within_process_timeout() {
     let sms = sms_room(&kit, None, RoomOptions::default()).await;
     let (holding, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let (held, freed) = (Arc::clone(&holding), Arc::clone(&release));
-    kit.hook(
-        HookSpec {
-            needs_lock: true,
-            ..HookSpec::new("holder", HookTrigger::BeforeBroadcast, HookExecution::Sync)
-        },
-        move |_, _| {
-            let (held, freed) = (Arc::clone(&held), Arc::clone(&freed));
-            async move {
-                held.notify_one();
-                freed.notified().await;
-                Ok(HookResult::allow())
-            }
-        },
-    )
+    let mut holder = HookSpec::new("holder", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    holder.needs_lock = true;
+    kit.hook(holder, move |_, _| {
+        let (held, freed) = (Arc::clone(&held), Arc::clone(&freed));
+        async move {
+            held.notify_one();
+            freed.notified().await;
+            Ok(HookResult::allow())
+        }
+    })
     .unwrap();
     let holder = {
         let kit = kit.clone();
@@ -477,10 +471,8 @@ async fn the_host_s_words_are_a_person_s_message_to_the_room_s_routing() {
     let mut turns = Vec::new();
     for speak in ["post", "post to a", "unaddressed"] {
         let kit = RoomKit::new();
-        let options = RoomOptions {
-            agent_response_policy: AgentResponsePolicy::AddressedOnly,
-            ..RoomOptions::default()
-        };
+        let mut options = RoomOptions::default();
+        options.agent_response_policy = AgentResponsePolicy::AddressedOnly;
         let sms = sms_room(&kit, None, options).await;
         let (a, b) = (Agent::new("a", "A says."), Agent::new("b", "B says."));
         for agent in [&a, &b] {
@@ -839,10 +831,8 @@ async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
     let kit = RoomKit::new();
     sms_room(&kit, None, RoomOptions::default()).await;
     kit.register_channel(HostChannel::new()).unwrap();
-    let options = BindingOptions {
-        category: Some(ChannelCategory::Intelligence),
-        ..BindingOptions::default()
-    };
+    let mut options = BindingOptions::default();
+    options.category = Some(ChannelCategory::Intelligence);
     let attached = kit.attach_with(&room_id(), &channel("host"), options).await;
     assert_eq!(
         (attached.err(), binding_of(&kit, "host").await.is_none()),
@@ -894,30 +884,26 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
         let posted = Arc::new(Mutex::new(Vec::new()));
         let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
         let mut framework = kit.subscribe();
-        kit.hook(
-            HookSpec {
-                needs_lock,
-                ..HookSpec::new("ack", HookTrigger::BeforeBroadcast, HookExecution::Sync)
-            },
-            move |event, _| {
-                let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
-                async move {
-                    if event.source.channel_id == channel("sms") {
-                        for _ in 0..12 {
-                            let mut ack = Post::new(text("Received."));
-                            ack.idempotency_key = Some("ack".to_owned());
-                            let event = kit.post(&room_id(), ack).await?;
-                            posted.lock().unwrap().push(event.id);
-                        }
-                        let event = kit
-                            .post(&room_id(), Post::new(text("We answer within the hour.")))
-                            .await?;
+        let mut ack = HookSpec::new("ack", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+        ack.needs_lock = needs_lock;
+        kit.hook(ack, move |event, _| {
+            let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
+            async move {
+                if event.source.channel_id == channel("sms") {
+                    for _ in 0..12 {
+                        let mut ack = Post::new(text("Received."));
+                        ack.idempotency_key = Some("ack".to_owned());
+                        let event = kit.post(&room_id(), ack).await?;
                         posted.lock().unwrap().push(event.id);
                     }
-                    Ok(HookResult::allow())
+                    let event = kit
+                        .post(&room_id(), Post::new(text("We answer within the hour.")))
+                        .await?;
+                    posted.lock().unwrap().push(event.id);
                 }
-            },
-        )
+                Ok(HookResult::allow())
+            }
+        })
         .unwrap();
         let message = InboundMessage::new(channel("sms"), CUSTOMER, text("Hello?"));
         tokio::time::timeout(

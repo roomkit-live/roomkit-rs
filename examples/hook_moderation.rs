@@ -61,10 +61,9 @@ fn redacted(text: &str) -> String {
 
 /// A SYNC `BEFORE_BROADCAST` hook named `name` at `priority`.
 fn before_broadcast(name: &str, priority: i32) -> HookSpec {
-    HookSpec {
-        priority,
-        ..HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync)
-    }
+    let mut spec = HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    spec.priority = priority;
+    spec
 }
 
 /// Registers the filter, at priority 0, and the redactor, at priority 1;

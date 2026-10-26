@@ -79,10 +79,8 @@ async fn a_binding_of_another_channel_finds_no_room() {
 #[tokio::test]
 async fn a_room_the_filter_refuses_is_not_found_by_its_binding() {
     let store = bound(&[("room_1", Some(ALICE))]).await;
-    let filter = RoomFilter {
-        status: Some(RoomStatus::Paused),
-        ..RoomFilter::default()
-    };
+    let mut filter = RoomFilter::default();
+    filter.status = Some(RoomStatus::Paused);
     assert_eq!(by_binding(&store, None, &filter).await, None);
 }
 
@@ -189,10 +187,8 @@ async fn listing_the_rooms_a_channel_reaches_skips_the_others() {
         ))
         .await
         .unwrap();
-    let filter = RoomFilter {
-        channel_id: Some(channel("sms")),
-        ..RoomFilter::default()
-    };
+    let mut filter = RoomFilter::default();
+    filter.channel_id = Some(channel("sms"));
     let listed = store.list_rooms(&filter).await.unwrap();
     assert_eq!(
         listed

@@ -144,10 +144,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.attach(&room, &assistant).await?;
     // What the supervisor writes is for the people in the room, not for
     // its agents.
-    let for_people = BindingOptions {
-        visibility: Visibility::Transport,
-        ..BindingOptions::default()
-    };
+    let mut for_people = BindingOptions::default();
+    for_people.visibility = Visibility::Transport;
     kit.attach_with(&room, supervisor.id(), for_people).await?;
 
     let spoken = "What time is it?";

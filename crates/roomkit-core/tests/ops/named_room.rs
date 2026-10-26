@@ -630,15 +630,14 @@ mod the_sender {
     #[test]
     fn takes_the_country_code_its_channel_declares() {
         let mut sim = Sim::new();
-        sim.declare(ChannelDeclaration {
-            country_code: Some(CountryCode::new("33").unwrap()),
-            ..ChannelDeclaration::new(
-                channel("inbox"),
-                ChannelType::SMS,
-                ChannelCategory::Transport,
-                ChannelDirection::Bidirectional,
-            )
-        });
+        let mut declaration = ChannelDeclaration::new(
+            channel("inbox"),
+            ChannelType::SMS,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        );
+        declaration.country_code = Some(CountryCode::new("33").unwrap());
+        sim.declare(declaration);
         sim.send(message_from("inbox", "06 12 34 56 78", "Salut"))
             .unwrap();
         assert_eq!(sim.parsed_messages[0].sender_id, "+33612345678");

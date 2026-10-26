@@ -180,11 +180,9 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
 async fn by_timers(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     let (kit, room) = (&desk.kit, RoomId::new("timed")?);
     println!("The room `timed` pauses after 60 s without activity, and closes 120 s later.");
-    let timers = RoomOptions {
-        inactive_after_seconds: Some(60),
-        closed_after_seconds: Some(120),
-        ..RoomOptions::default()
-    };
+    let mut timers = RoomOptions::default();
+    timers.inactive_after_seconds = Some(60);
+    timers.closed_after_seconds = Some(120);
     desk.open(&room, timers).await?;
     desk.alice_says(&room, "Hello").await?;
     let mut events = kit.subscribe();

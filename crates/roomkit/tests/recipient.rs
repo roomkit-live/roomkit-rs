@@ -139,11 +139,9 @@ async fn open_room(kit: &RoomKit, id: &str, held: Option<Value>, group: bool) ->
     if let Some(held) = held {
         metadata.insert("phone_number".to_owned(), held);
     }
-    let options = BindingOptions {
-        group,
-        metadata,
-        ..BindingOptions::default()
-    };
+    let mut options = BindingOptions::default();
+    options.group = group;
+    options.metadata = metadata;
     kit.attach_with(&room_id, &channel("sms"), options)
         .await
         .unwrap();
@@ -390,10 +388,8 @@ async fn a_group_binding_s_recipient_is_not_read() {
         let team_beside = open_room(&kit, "team", held.clone(), true).await;
         let desk = room("desk");
         kit.create_room(&desk).await.unwrap();
-        let alices = BindingOptions {
-            participant_id: Some(ParticipantId::new(ALICE).unwrap()),
-            ..BindingOptions::default()
-        };
+        let mut alices = BindingOptions::default();
+        alices.participant_id = Some(ParticipantId::new(ALICE).unwrap());
         kit.attach_with(&desk, &channel("sms"), alices)
             .await
             .unwrap();

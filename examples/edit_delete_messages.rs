@@ -44,11 +44,10 @@ const MESSAGES: [&str; 6] = [
 
 /// Text, with edits and deletes delivered natively (RFC §5.8, §6.6).
 fn edits_natively() -> ChannelCapabilities {
-    ChannelCapabilities {
-        supports_edit: true,
-        supports_delete: true,
-        ..ChannelCapabilities::default()
-    }
+    let mut capabilities = ChannelCapabilities::default();
+    capabilities.supports_edit = true;
+    capabilities.supports_delete = true;
+    capabilities
 }
 
 /// A mutation trigger that fired: the trigger, its payload, and the id of
@@ -145,11 +144,11 @@ impl Conversation {
         let mut message = InboundMessage::new(
             self.customer.id().clone(),
             CUSTOMER,
-            EventContent::Edit(EditContent {
+            EventContent::Edit(EditContent::new(
                 target_event_id,
-                new_content: Box::new(EventContent::text(text)),
-                edit_source: Some(EditSource::Sender),
-            }),
+                EventContent::text(text),
+                Some(EditSource::Sender),
+            )),
         );
         message.event_type = EventType::Edit;
         Ok(message)
@@ -161,11 +160,7 @@ impl Conversation {
         let mut message = InboundMessage::new(
             self.customer.id().clone(),
             CUSTOMER,
-            EventContent::Delete(DeleteContent {
-                target_event_id,
-                delete_type: DeleteType::Sender,
-                reason: None,
-            }),
+            EventContent::Delete(DeleteContent::new(target_event_id, DeleteType::Sender)),
         );
         message.event_type = EventType::Delete;
         Ok(message)

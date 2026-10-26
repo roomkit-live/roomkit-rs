@@ -263,10 +263,8 @@ fn a_direct_update_keeps_the_record_the_event_was_committed_with() {
         json!({ "name": "Admin", "rank": 1, "source": OTHER }),
     );
     forged.insert("tag".to_owned(), json!("vip"));
-    let updates = EventUpdates {
-        metadata: Some(forged),
-        ..EventUpdates::default()
-    };
+    let mut updates = EventUpdates::default();
+    updates.metadata = Some(forged);
     let update = UpdateEvent::new(
         sim.shared_config(),
         room_id(),

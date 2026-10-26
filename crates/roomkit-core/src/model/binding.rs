@@ -42,6 +42,7 @@ impl Access {
 
 /// How a failed delivery is retried (RFC §13.2).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RetryPolicy {
     /// The maximum number of retries.
     pub max_retries: u32,
@@ -55,6 +56,21 @@ pub struct RetryPolicy {
     /// The error codes eligible for a retry, `None` for every retryable error.
     #[serde(default)]
     pub retryable_errors: Option<Vec<String>>,
+}
+
+impl RetryPolicy {
+    /// Up to `max_retries` retries, the first after `base_delay_seconds`,
+    /// each delay doubled up to `max_delay_seconds`, for every retryable
+    /// error.
+    pub fn new(max_retries: u32, base_delay_seconds: f64, max_delay_seconds: f64) -> Self {
+        Self {
+            max_retries,
+            base_delay_seconds,
+            exponential_base: default_exponential_base(),
+            max_delay_seconds,
+            retryable_errors: None,
+        }
+    }
 }
 
 fn default_exponential_base() -> f64 {

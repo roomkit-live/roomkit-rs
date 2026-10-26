@@ -13,6 +13,7 @@ use super::{
 /// creation. The organization it belongs to is its creator's, never an
 /// option (RFC §17.2).
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct RoomOptions {
     /// Seconds without an event before the active room pauses; `None`
     /// never pauses it.
@@ -51,6 +52,7 @@ impl RoomOptions {
 /// visible to all, naming no correspondent, with the channel's own category
 /// and capabilities.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct BindingOptions {
     /// Whether the channel reads, writes, both or neither (RFC §7.1).
     pub access: Access,

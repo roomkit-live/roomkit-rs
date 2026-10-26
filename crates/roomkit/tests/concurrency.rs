@@ -58,10 +58,8 @@ async fn rooms() -> (RoomKit, RecordingTransport) {
     kit.register_channel(EchoAgent::new(channel("ai"), "Echo: ").quoting())
         .unwrap();
     let meeting = Arc::new(Barrier::new(TASKS));
-    let check = HookSpec {
-        needs_lock: false,
-        ..HookSpec::new("meeting", HookTrigger::BeforeBroadcast, HookExecution::Sync)
-    };
+    let mut check = HookSpec::new("meeting", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    check.needs_lock = false;
     kit.hook(check, move |event, _| {
         let meeting = Arc::clone(&meeting);
         async move {

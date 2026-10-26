@@ -123,11 +123,9 @@ impl Team {
         target: &EventId,
     ) -> Result<InboundResult, Box<dyn Error>> {
         println!("  {who} deletes {target} as an administrator.");
-        let content = EventContent::Delete(DeleteContent {
-            target_event_id: target.clone(),
-            delete_type: DeleteType::Admin,
-            reason: Some("moderation".to_owned()),
-        });
+        let mut delete = DeleteContent::new(target.clone(), DeleteType::Admin);
+        delete.reason = Some("moderation".to_owned());
+        let content = EventContent::Delete(delete);
         let message = InboundMessage {
             event_type: EventType::Delete,
             ..InboundMessage::new(self.ws.clone(), who, content)

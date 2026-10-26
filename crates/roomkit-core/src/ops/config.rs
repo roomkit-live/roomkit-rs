@@ -20,6 +20,7 @@ const DEFAULT_CONTEXT_WINDOW: usize = 50;
 /// A registered channel, as the core knows it: its declaration, never the
 /// object behind it (RFC §10.6.2).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ChannelDeclaration {
     /// The channel's id.
     pub channel_id: ChannelId,

@@ -74,10 +74,9 @@ fn from_console(text: &str) -> DirectEvent {
 
 /// A SYNC `BEFORE_BROADCAST` hook named `name`, under the lock or off it.
 fn before_broadcast(name: &str, needs_lock: bool) -> HookSpec {
-    HookSpec {
-        needs_lock,
-        ..HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync)
-    }
+    let mut spec = HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    spec.needs_lock = needs_lock;
+    spec
 }
 
 /// A channel whose parse, turn or delivery runs a scripted call; a
@@ -107,17 +106,15 @@ impl Scripted {
 
     /// A transport needing no recipient whose delivery runs `deliver`.
     fn transport(id: &str, deliver: Call) -> Self {
-        let declaration = ChannelDeclaration::new(
+        let mut declaration = ChannelDeclaration::new(
             channel(id),
             ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
         );
+        declaration.recipient_key = None;
         Self {
-            declaration: ChannelDeclaration {
-                recipient_key: None,
-                ..declaration
-            },
+            declaration,
             parse: None,
             on_event: None,
             deliver: Some(deliver),
@@ -1078,10 +1075,8 @@ async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_ove
     })
     .unwrap();
     // The pass's next hook, under the same lock, runs once the task calls.
-    let next = HookSpec {
-        priority: 10,
-        ..before_broadcast("next", true)
-    };
+    let mut next = before_broadcast("next", true);
+    next.priority = 10;
     let next_calling = Arc::clone(&calling);
     kit.hook(next, move |event, _| {
         let calling = Arc::clone(&next_calling);
@@ -1136,11 +1131,9 @@ async fn a_later_hook_awaiting_a_task_an_earlier_one_left_waits_until_its_timeou
         Arc::clone(&first_over),
         Arc::clone(&seen),
     );
-    let second = HookSpec {
-        priority: 10,
-        timeout: Duration::from_millis(50),
-        ..before_broadcast("second", true)
-    };
+    let mut second = before_broadcast("second", true);
+    second.priority = 10;
+    second.timeout = Duration::from_millis(50);
     kit.hook(second, move |event, _| {
         let (take, over, saw) = (Arc::clone(&take), Arc::clone(&over), Arc::clone(&saw));
         async move {
@@ -1332,10 +1325,8 @@ async fn a_hook_that_times_out_while_its_entry_works_is_heard_after_it() {
     })
     .unwrap();
     let hook_kit = kit.clone();
-    let spec = HookSpec {
-        timeout: Duration::from_millis(50),
-        ..before_broadcast("notifier", true)
-    };
+    let mut spec = before_broadcast("notifier", true);
+    spec.timeout = Duration::from_millis(50);
     kit.hook(spec, move |event, _| {
         let kit = hook_kit.clone();
         async move {
@@ -1684,13 +1675,8 @@ async fn an_off_lock_hook_routing_back_a_message_no_check_fires_for_fails() {
     kit.set_router(ToRoom1);
     let refused = Arc::new(Mutex::new(None));
     let (hook_kit, hook_refused) = (kit.clone(), Arc::clone(&refused));
-    let customer_only = HookSpec {
-        filter: roomkit::HookFilter {
-            channel_ids: Some([channel("sms")].into()),
-            ..roomkit::HookFilter::default()
-        },
-        ..before_broadcast("forwarder", false)
-    };
+    let mut customer_only = before_broadcast("forwarder", false);
+    customer_only.filter.channel_ids = Some([channel("sms")].into());
     kit.hook(customer_only, move |event, _| {
         let (kit, refused) = (hook_kit.clone(), Arc::clone(&hook_refused));
         async move {
@@ -2374,10 +2360,8 @@ async fn commit_event_keeps_the_delivery_results_it_brings() {
         .delivery_results
         .insert("sms".to_owned(), "failed".into());
     kit.commit_event(&room_id(), record).await.unwrap();
-    let updates = EventUpdates {
-        content: Some(EventContent::text("Snapshot, corrected")),
-        ..EventUpdates::default()
-    };
+    let mut updates = EventUpdates::default();
+    updates.content = Some(EventContent::text("Snapshot, corrected"));
     let corrected = kit
         .update_event(&room_id(), &"snap_1".parse().unwrap(), updates)
         .await

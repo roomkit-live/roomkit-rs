@@ -16,6 +16,7 @@ use crate::rules::hook_registry::HookTrigger;
 /// A framework event (RFC §8.2), tagged by its RFC name under `event`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum FrameworkEvent {
     /// A channel was registered with the kit.
     ChannelRegistered {

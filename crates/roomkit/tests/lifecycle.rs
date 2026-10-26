@@ -64,11 +64,9 @@ async fn timed_room(clock: &Clock) -> (RoomKit, RecordingTransport) {
     kit.set_environment(Arc::clone(&clock.0));
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
-    let timers = RoomOptions {
-        inactive_after_seconds: Some(60),
-        closed_after_seconds: Some(120),
-        ..RoomOptions::default()
-    };
+    let mut timers = RoomOptions::default();
+    timers.inactive_after_seconds = Some(60);
+    timers.closed_after_seconds = Some(120);
     kit.create_room_with(&room_id(), timers).await.unwrap();
     kit.attach(&room_id(), sms.id()).await.unwrap();
     (kit, sms)
@@ -329,16 +327,9 @@ mod a_paused_conversation {
     async fn bound_as_a_group_takes_another_member_s_message_and_is_resumed() {
         let clock = Clock::new();
         let (kit, sms, ws) = with_websocket(&clock).await;
-        kit.attach_with(
-            &room_id(),
-            sms.id(),
-            BindingOptions {
-                group: true,
-                ..BindingOptions::default()
-            },
-        )
-        .await
-        .unwrap();
+        let mut group = BindingOptions::default();
+        group.group = true;
+        kit.attach_with(&room_id(), sms.id(), group).await.unwrap();
         kit.process_inbound(message(&sms, "Bonjour")).await.unwrap();
         let (paused, _) = paused_by_its_timer(&kit, &clock).await;
         let other = InboundMessage::new(
@@ -691,18 +682,12 @@ mod metadata_updates {
     #[tokio::test]
     async fn a_room_created_with_a_reserved_key_is_refused() {
         let kit = RoomKit::new();
-        let refused = kit
-            .create_room_with(
-                &room_id(),
-                RoomOptions {
-                    metadata: Metadata::from_iter([(
-                        "roomkit:detached_channels".to_owned(),
-                        Vec::<String>::new().into(),
-                    )]),
-                    ..RoomOptions::default()
-                },
-            )
-            .await;
+        let mut options = RoomOptions::default();
+        options.metadata = Metadata::from_iter([(
+            "roomkit:detached_channels".to_owned(),
+            Vec::<String>::new().into(),
+        )]);
+        let refused = kit.create_room_with(&room_id(), options).await;
         assert_eq!(
             refused,
             Err(KitError::Lifecycle(LifecycleError::ReservedMetadataKey(

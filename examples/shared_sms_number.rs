@@ -82,11 +82,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.create_room(&appointment).await?;
     let alice = ParticipantId::new(ALICE)?;
     // The binding names its correspondent, and the number it delivers to.
-    let alice_s_binding = BindingOptions {
-        participant_id: Some(alice),
-        metadata: Metadata::from_iter([("phone_number".to_owned(), ALICE.into())]),
-        ..BindingOptions::default()
-    };
+    let mut alice_s_binding = BindingOptions::default();
+    alice_s_binding.participant_id = Some(alice);
+    alice_s_binding.metadata = Metadata::from_iter([("phone_number".to_owned(), ALICE.into())]);
     kit.attach_with(&appointment, sms.id(), alice_s_binding)
         .await?;
 
@@ -115,15 +113,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     println!("The team's number is dedicated to the team's room, bound as a group.");
     let team_room = RoomId::new("team")?;
     kit.create_room(&team_room).await?;
-    kit.attach_with(
-        &team_room,
-        team.id(),
-        BindingOptions {
-            group: true,
-            ..BindingOptions::default()
-        },
-    )
-    .await?;
+    let mut group = BindingOptions::default();
+    group.group = true;
+    kit.attach_with(&team_room, team.id(), group).await?;
     let mut landed = Vec::new();
     for sender in [ALICE, BOB, CAROL] {
         landed.push(text(&kit, team.id(), sender, "Hi team").await?);

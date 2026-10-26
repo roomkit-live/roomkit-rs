@@ -406,16 +406,11 @@ async fn a_custom_router_s_group_room_takes_every_sender() {
     let (kit, _sms) = kit_with_agent();
     let group = room("group");
     kit.create_room(&group).await.unwrap();
-    kit.attach_with(
-        &group,
-        &channel("sms"),
-        BindingOptions {
-            group: true,
-            ..BindingOptions::default()
-        },
-    )
-    .await
-    .unwrap();
+    let mut options = BindingOptions::default();
+    options.group = true;
+    kit.attach_with(&group, &channel("sms"), options)
+        .await
+        .unwrap();
     kit.set_router(ByTicket::default());
     let landed = [
         routed(&kit, on_ticket(ALICE, "group")).await,

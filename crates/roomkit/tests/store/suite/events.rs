@@ -18,12 +18,11 @@ use crate::Store;
 
 /// The update an edit of `evt_0` writes, its text `text`.
 fn edited(text: &str) -> TargetUpdate {
+    let mut updates = EventUpdates::default();
+    updates.content = Some(EventContent::text(text));
     TargetUpdate {
         event_id: event_id("evt_0"),
-        updates: EventUpdates {
-            content: Some(EventContent::text(text)),
-            ..EventUpdates::default()
-        },
+        updates,
     }
 }
 
@@ -320,19 +319,14 @@ async fn a_filtered_count_leaves_refused_events_out_as_a_timeline_read_does() {
         .commit(event_stored(2, EventStatus::Blocked), counters(2), None)
         .await
         .unwrap();
+    let mut with_blocked = EventFilter::default();
+    with_blocked.include_blocked = true;
     let counts = (
         store.get_event_count(&room_id(), None).await,
         store
             .get_event_count(&room_id(), Some(EventFilter::default()))
             .await,
-        store
-            .get_event_count(
-                &room_id(),
-                Some(EventFilter {
-                    include_blocked: true,
-                }),
-            )
-            .await,
+        store.get_event_count(&room_id(), Some(with_blocked)).await,
         store
             .list_events(&room_id(), false)
             .await
@@ -536,17 +530,13 @@ async fn a_delete_s_commit_marks_its_target_s_edits_deleted() {
     let store = with_events(vec![event(0), edit_of(1, 0), event(2), edit_of(3, 2)]).await;
     let mut delete = event(4);
     delete.event_type = EventType::Delete;
-    delete.content = EventContent::Delete(DeleteContent {
-        target_event_id: event_id("evt_0"),
-        delete_type: DeleteType::Sender,
-        reason: None,
-    });
+    delete.content =
+        EventContent::Delete(DeleteContent::new(event_id("evt_0"), DeleteType::Sender));
+    let mut updates = EventUpdates::default();
+    updates.metadata = Some([("deleted".to_owned(), json!(true))].into_iter().collect());
     let deleted = TargetUpdate {
         event_id: event_id("evt_0"),
-        updates: EventUpdates {
-            metadata: Some([("deleted".to_owned(), json!(true))].into_iter().collect()),
-            ..EventUpdates::default()
-        },
+        updates,
     };
     store
         .commit(delete, counters(4), Some(deleted))

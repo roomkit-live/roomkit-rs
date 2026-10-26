@@ -54,17 +54,15 @@ impl OpenAiAgent {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(OpenAiError::client)?;
-        let declaration = ChannelDeclaration::new(
+        let mut declaration = ChannelDeclaration::new(
             channel_id,
             ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         );
+        declaration.provider_name = Some("openai".to_owned());
         Ok(Self {
-            declaration: ChannelDeclaration {
-                provider_name: Some("openai".to_owned()),
-                ..declaration
-            },
+            declaration,
             config,
             endpoint,
             client,

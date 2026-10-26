@@ -163,14 +163,12 @@ async fn an_async_hook_on_before_broadcast_observes_the_payload_the_chain_left()
 async fn a_hook_past_its_timeout_lets_the_message_through_and_is_reported() {
     let (kit, sms) = sms_and_agent().await;
     let mut events = kit.subscribe();
-    let spec = HookSpec {
-        timeout: Duration::from_millis(20),
-        ..HookSpec::new(
-            "slow_scan",
-            HookTrigger::BeforeBroadcast,
-            HookExecution::Sync,
-        )
-    };
+    let mut spec = HookSpec::new(
+        "slow_scan",
+        HookTrigger::BeforeBroadcast,
+        HookExecution::Sync,
+    );
+    spec.timeout = Duration::from_millis(20);
     kit.hook(spec, |_, _| async {
         tokio::time::sleep(Duration::from_secs(5)).await;
         Ok(HookResult::allow())
@@ -391,10 +389,8 @@ async fn a_muted_agent_is_asked_and_its_answer_stored_blocked() {
     kit.register_channel(agent.clone()).unwrap();
     kit.create_room(&room_id()).await.unwrap();
     kit.attach(&room_id(), sms.id()).await.unwrap();
-    let muted = BindingOptions {
-        muted: true,
-        ..BindingOptions::default()
-    };
+    let mut muted = BindingOptions::default();
+    muted.muted = true;
     kit.attach_with(&room_id(), agent.id(), muted)
         .await
         .unwrap();

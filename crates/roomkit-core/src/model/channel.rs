@@ -248,6 +248,7 @@ impl ChannelMediaType {
     clippy::struct_excessive_bools,
     reason = "mirrors the RFC §5.8 record field for field"
 )]
+#[non_exhaustive]
 pub struct ChannelCapabilities {
     /// The content categories the channel carries.
     pub media_types: BTreeSet<ChannelMediaType>,
@@ -332,6 +333,7 @@ impl Default for ChannelCapabilities {
 /// A rate limit (RFC §13.3).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct RateLimit {
     /// The maximum events per second.
     pub max_per_second: Option<f64>,

@@ -185,10 +185,8 @@ async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
 async fn an_on_room_created_hook_that_hangs_is_bounded_by_its_timeout() {
     let (kit, sms) = kit_without_rooms();
     let mut events = kit.subscribe();
-    let spec = HookSpec {
-        timeout: Duration::from_millis(50),
-        ..HookSpec::new("stuck", HookTrigger::OnRoomCreated, HookExecution::Async)
-    };
+    let mut spec = HookSpec::new("stuck", HookTrigger::OnRoomCreated, HookExecution::Async);
+    spec.timeout = Duration::from_millis(50);
     kit.hook(spec, |_, _| async {
         tokio::time::sleep(Duration::from_secs(3600)).await;
         Ok(HookResult::allow())
@@ -336,10 +334,8 @@ async fn sms_room(attach_sms: Option<&str>) -> (RoomKit, Sms) {
     kit.create_room(&room_id()).await.unwrap();
     kit.attach(&room_id(), &channel("ai")).await.unwrap();
     if let Some(number) = attach_sms {
-        let recipient = BindingOptions {
-            metadata: Metadata::from_iter([("phone_number".to_owned(), number.into())]),
-            ..BindingOptions::default()
-        };
+        let mut recipient = BindingOptions::default();
+        recipient.metadata = Metadata::from_iter([("phone_number".to_owned(), number.into())]);
         kit.attach_with(&room_id(), &channel("sms"), recipient)
             .await
             .unwrap();

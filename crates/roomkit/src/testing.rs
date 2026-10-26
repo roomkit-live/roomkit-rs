@@ -39,18 +39,16 @@ pub struct RecordingTransport {
 impl RecordingTransport {
     /// A bidirectional text transport of `channel_type` named `channel_id`.
     pub fn new(channel_id: ChannelId, channel_type: ChannelType) -> Self {
-        let declaration = ChannelDeclaration::new(
+        let mut declaration = ChannelDeclaration::new(
             channel_id,
             channel_type,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
         );
+        declaration.provider_name = Some("RecordingTransport".to_owned());
+        declaration.recipient_key = None;
         Self {
-            declaration: ChannelDeclaration {
-                provider_name: Some("RecordingTransport".to_owned()),
-                recipient_key: None,
-                ..declaration
-            },
+            declaration,
             deliveries: Arc::default(),
         }
     }
@@ -117,17 +115,15 @@ pub struct EchoAgent {
 impl EchoAgent {
     /// An agent named `channel_id` answering `reply`.
     pub fn new(channel_id: ChannelId, reply: impl Into<String>) -> Self {
-        let declaration = ChannelDeclaration::new(
+        let mut declaration = ChannelDeclaration::new(
             channel_id,
             ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         );
+        declaration.provider_name = Some("EchoAgent".to_owned());
         Self {
-            declaration: ChannelDeclaration {
-                provider_name: Some("EchoAgent".to_owned()),
-                ..declaration
-            },
+            declaration,
             reply: reply.into(),
             quote: false,
         }

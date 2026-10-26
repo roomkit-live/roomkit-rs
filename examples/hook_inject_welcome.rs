@@ -33,10 +33,9 @@ fn welcome(event: &RoomEvent, newcomer: &ChannelId) -> InjectedEvent {
         ChannelType::SYSTEM,
         EventDirection::Outbound,
     );
-    let content = EventContent::System(SystemContent {
-        code: Some("welcome".to_owned()),
-        ..SystemContent::new(format!("Welcome to {}, {newcomer}!", event.room_id))
-    });
+    let mut welcome = SystemContent::new(format!("Welcome to {}, {newcomer}!", event.room_id));
+    welcome.code = Some("welcome".to_owned());
+    let content = EventContent::System(welcome);
     // The pipeline gives every injected event a fresh id and its index.
     let welcome = RoomEvent::new(
         event.id.clone(),

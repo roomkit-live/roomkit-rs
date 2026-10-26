@@ -15,6 +15,7 @@ pub const MAX_COMPOSITE_DEPTH: usize = 5;
 /// names of RFC §5.3.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum EventContent {
     /// Plain text.
     Text(TextContent),
@@ -70,6 +71,7 @@ impl EventContent {
 
 /// Plain text (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TextContent {
     /// The message text.
     pub body: String,
@@ -101,6 +103,7 @@ pub enum RichFormat {
 
 /// Formatted text with interactive elements (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RichContent {
     /// The primary text, in `format`.
     pub body: String,
@@ -121,8 +124,24 @@ pub struct RichContent {
     pub quick_replies: Vec<String>,
 }
 
+impl RichContent {
+    /// Formatted text in the default format, with no plain-text fallback
+    /// and no interactive element.
+    pub fn new(body: impl Into<String>) -> Self {
+        Self {
+            body: body.into(),
+            format: RichFormat::default(),
+            plain_text: None,
+            buttons: Vec::new(),
+            cards: Vec::new(),
+            quick_replies: Vec::new(),
+        }
+    }
+}
+
 /// A file, an image or a document (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MediaContent {
     /// A link, a `data:` URI, or a reference the application resolves.
     pub url: String,
@@ -139,8 +158,22 @@ pub struct MediaContent {
     pub size_bytes: Option<u64>,
 }
 
+impl MediaContent {
+    /// A file at `url` of type `mime_type`, with no name, caption or size.
+    pub fn new(url: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            mime_type: mime_type.into(),
+            filename: None,
+            caption: None,
+            size_bytes: None,
+        }
+    }
+}
+
 /// Geographic coordinates (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LocationContent {
     /// The latitude.
     pub latitude: Latitude,
@@ -152,6 +185,18 @@ pub struct LocationContent {
     /// The street address.
     #[serde(default)]
     pub address: Option<String>,
+}
+
+impl LocationContent {
+    /// The point at `latitude` and `longitude`, with no label or address.
+    pub fn new(latitude: Latitude, longitude: Longitude) -> Self {
+        Self {
+            latitude,
+            longitude,
+            label: None,
+            address: None,
+        }
+    }
 }
 
 /// A latitude in degrees, from -90 to 90.
@@ -239,6 +284,7 @@ fn in_range(name: &'static str, value: f64, bound: f64) -> Result<f64, ModelErro
 
 /// An audio message or voice note (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AudioContent {
     /// The audio URL, or a `data:` URI.
     pub url: String,
@@ -253,12 +299,25 @@ pub struct AudioContent {
     pub transcript: Option<String>,
 }
 
+impl AudioContent {
+    /// The audio at `url`, `audio/ogg`, with no duration or transcript.
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            duration_seconds: None,
+            mime_type: default_audio_mime_type(),
+            transcript: None,
+        }
+    }
+}
+
 fn default_audio_mime_type() -> String {
     "audio/ogg".to_owned()
 }
 
 /// A video message (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct VideoContent {
     /// The video URL, or a `data:` URI.
     pub url: String,
@@ -270,6 +329,18 @@ pub struct VideoContent {
     /// A preview image URL.
     #[serde(default)]
     pub thumbnail_url: Option<String>,
+}
+
+impl VideoContent {
+    /// The video at `url` of type `mime_type`, with no duration or preview.
+    pub fn new(url: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            duration_seconds: None,
+            mime_type: mime_type.into(),
+            thumbnail_url: None,
+        }
+    }
 }
 
 /// Several parts in order (RFC §5.3): at least one, nesting at most
@@ -350,6 +421,7 @@ impl TryFrom<RawCompositeContent> for CompositeContent {
 
 /// A framework-generated message (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SystemContent {
     /// A human-readable description.
     pub body: String,
@@ -374,6 +446,7 @@ impl SystemContent {
 
 /// A pre-approved template (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateContent {
     /// The template's id.
     pub template_id: String,
@@ -386,6 +459,19 @@ pub struct TemplateContent {
     /// The text for channels without template support.
     #[serde(default)]
     pub body: Option<String>,
+}
+
+impl TemplateContent {
+    /// The template `template_id`, in English, with no substitution and no
+    /// fallback text.
+    pub fn new(template_id: impl Into<String>) -> Self {
+        Self {
+            template_id: template_id.into(),
+            language: default_template_language(),
+            parameters: BTreeMap::new(),
+            body: None,
+        }
+    }
 }
 
 fn default_template_language() -> String {
@@ -404,6 +490,7 @@ pub enum EditSource {
 
 /// An edit of a previous message (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EditContent {
     /// The edited event.
     pub target_event_id: EventId,
@@ -412,6 +499,22 @@ pub struct EditContent {
     /// Who made the edit.
     #[serde(default)]
     pub edit_source: Option<EditSource>,
+}
+
+impl EditContent {
+    /// An edit of `target_event_id` to `new_content`, made by
+    /// `edit_source`.
+    pub fn new(
+        target_event_id: EventId,
+        new_content: EventContent,
+        edit_source: Option<EditSource>,
+    ) -> Self {
+        Self {
+            target_event_id,
+            new_content: Box::new(new_content),
+            edit_source,
+        }
+    }
 }
 
 /// Who deleted a message (RFC §5.3).
@@ -429,6 +532,7 @@ pub enum DeleteType {
 
 /// A deletion of a previous message (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DeleteContent {
     /// The deleted event.
     pub target_event_id: EventId,
@@ -438,6 +542,17 @@ pub struct DeleteContent {
     /// Why.
     #[serde(default)]
     pub reason: Option<String>,
+}
+
+impl DeleteContent {
+    /// A delete of `target_event_id` by `delete_type`, with no reason.
+    pub fn new(target_event_id: EventId, delete_type: DeleteType) -> Self {
+        Self {
+            target_event_id,
+            delete_type,
+            reason: None,
+        }
+    }
 }
 
 /// Where a tool call stands (RFC §5.3).
@@ -473,6 +588,7 @@ pub enum ToolCallOutcome {
 
 /// A tool call (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolCallContent {
     /// The tool called.
     pub tool_name: String,
@@ -502,6 +618,25 @@ pub struct ToolCallContent {
     /// The call ran although RoomKit refused it (RFC §9.3).
     #[serde(default)]
     pub refused_but_ran: bool,
+}
+
+impl ToolCallContent {
+    /// The call `tool_id` of `tool_name`, pending, with no argument and no
+    /// result yet.
+    pub fn new(tool_name: impl Into<String>, tool_id: impl Into<String>) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            tool_id: tool_id.into(),
+            arguments: Metadata::new(),
+            result: Value::Null,
+            status: ToolCallStatus::default(),
+            duration_ms: None,
+            error: None,
+            structured_content: None,
+            outcome: None,
+            refused_but_ran: false,
+        }
+    }
 }
 
 #[cfg(test)]

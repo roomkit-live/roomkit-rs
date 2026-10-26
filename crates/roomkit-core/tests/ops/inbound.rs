@@ -1416,10 +1416,8 @@ mod an_unusable_hook {
     #[test]
     fn that_times_out_on_a_fail_closed_hook_blocks_naming_the_timeout() {
         let mut sim = room();
-        let spec = HookSpec {
-            fail_closed: true,
-            ..HookSpec::new("pii", HookTrigger::BeforeBroadcast, HookExecution::Sync)
-        };
+        let mut spec = HookSpec::new("pii", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+        spec.fail_closed = true;
         sim.sync_hook(spec, Box::new(|_| HookOutcome::TimedOut));
         let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(

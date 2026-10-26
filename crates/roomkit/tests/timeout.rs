@@ -71,10 +71,8 @@ async fn room() -> RoomKit {
 /// that outlasts the timeout the first time it runs and allows at once
 /// after.
 fn slow_the_first_time(kit: &RoomKit, needs_lock: bool) {
-    let spec = HookSpec {
-        needs_lock,
-        ..HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync)
-    };
+    let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    spec.needs_lock = needs_lock;
     let slowed = Arc::new(AtomicBool::new(false));
     kit.hook(spec, move |_, _| {
         let first = !slowed.swap(true, Ordering::SeqCst);
@@ -196,10 +194,8 @@ async fn a_timeout_during_a_locked_hook_releases_the_lock_and_names_the_event() 
 async fn a_hook_s_own_timeout_stays_a_hook_error() {
     let kit = room().await;
     kit.set_process_timeout(Some(BOUND));
-    let spec = HookSpec {
-        timeout: Duration::from_millis(20),
-        ..HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync)
-    };
+    let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    spec.timeout = Duration::from_millis(20);
     kit.hook(spec, |_, _| async {
         tokio::time::sleep(Duration::from_secs(3600)).await;
         Ok(HookResult::allow())

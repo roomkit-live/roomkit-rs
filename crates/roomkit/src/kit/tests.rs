@@ -60,10 +60,8 @@ async fn checked_room() -> RoomKit {
     kit.attach(&room_id(), &ChannelId::new("sms").unwrap())
         .await
         .unwrap();
-    let spec = HookSpec {
-        needs_lock: false,
-        ..HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync)
-    };
+    let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    spec.needs_lock = false;
     kit.hook(spec, |_, _| async { Ok(HookResult::allow()) })
         .unwrap();
     kit.set_process_timeout(Some(TIMEOUT));

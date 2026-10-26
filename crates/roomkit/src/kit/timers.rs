@@ -204,10 +204,8 @@ mod tests {
     /// A kit whose room's inactivity timer fell due at its creation.
     async fn timed_kit() -> RoomKit {
         let kit = RoomKit::new();
-        let options = RoomOptions {
-            inactive_after_seconds: Some(0),
-            ..RoomOptions::default()
-        };
+        let mut options = RoomOptions::default();
+        options.inactive_after_seconds = Some(0);
         kit.create_room_with(&room_id(), options).await.unwrap();
         kit
     }

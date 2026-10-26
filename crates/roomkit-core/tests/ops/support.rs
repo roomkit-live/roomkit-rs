@@ -316,10 +316,9 @@ pub(crate) fn room_id() -> RoomId {
 
 /// The capabilities of every channel the simulated driver registers: text.
 fn text_only() -> ChannelCapabilities {
-    ChannelCapabilities {
-        media_types: [ChannelMediaType::Text].into(),
-        ..ChannelCapabilities::default()
-    }
+    let mut capabilities = ChannelCapabilities::default();
+    capabilities.media_types = [ChannelMediaType::Text].into();
+    capabilities
 }
 
 impl Sim {
@@ -422,14 +421,9 @@ impl Sim {
 
     /// Registers a transport that no room binds, declared as `declaration`
     /// says, with text capabilities; it answers nothing and delivers.
-    pub(crate) fn declare(&mut self, declaration: ChannelDeclaration) {
-        self.register(
-            ChannelDeclaration {
-                capabilities: text_only(),
-                ..declaration
-            },
-            Box::new(|_, _| Ok(ChannelOutput::default())),
-        );
+    pub(crate) fn declare(&mut self, mut declaration: ChannelDeclaration) {
+        declaration.capabilities = text_only();
+        self.register(declaration, Box::new(|_, _| Ok(ChannelOutput::default())));
     }
 
     /// Registers a text transport of `channel_type` that no room binds, with
@@ -446,15 +440,13 @@ impl Sim {
     /// Registers an agent that no room binds, answering every event it is
     /// asked with `reply`.
     pub(crate) fn unbound_agent(&mut self, id: &str, reply: &'static str) {
-        let declaration = ChannelDeclaration {
-            capabilities: text_only(),
-            ..ChannelDeclaration::new(
-                channel(id),
-                ChannelType::AI,
-                ChannelCategory::Intelligence,
-                ChannelDirection::Bidirectional,
-            )
-        };
+        let mut declaration = ChannelDeclaration::new(
+            channel(id),
+            ChannelType::AI,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+        );
+        declaration.capabilities = text_only();
         self.register(declaration, echo(id, reply));
     }
 
@@ -489,15 +481,13 @@ impl Sim {
         category: ChannelCategory,
         on_event: OnEvent,
     ) -> &mut ChannelBinding {
-        let declaration = ChannelDeclaration {
-            capabilities: text_only(),
-            ..ChannelDeclaration::new(
-                channel(id),
-                channel_type,
-                category,
-                ChannelDirection::Bidirectional,
-            )
-        };
+        let mut declaration = ChannelDeclaration::new(
+            channel(id),
+            channel_type,
+            category,
+            ChannelDirection::Bidirectional,
+        );
+        declaration.capabilities = text_only();
         self.register(declaration, on_event);
         self.attach(id)
     }
@@ -538,10 +528,8 @@ impl Sim {
     /// Registers a SYNC `BEFORE_BROADCAST` hook named `name` that runs off
     /// the room lock (RFC §9.5.1).
     pub(crate) fn off_lock_check(&mut self, name: &str, hook: Hook) -> HookId {
-        let spec = HookSpec {
-            needs_lock: false,
-            ..HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync)
-        };
+        let mut spec = HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync);
+        spec.needs_lock = false;
         self.sync_hook(spec, hook)
     }
 
@@ -573,10 +561,8 @@ impl Sim {
         needs_lock: bool,
         reentry: Reentry<HookOutcome<RoomEvent>>,
     ) -> HookId {
-        let spec = HookSpec {
-            needs_lock,
-            ..HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync)
-        };
+        let mut spec = HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync);
+        spec.needs_lock = needs_lock;
         let id = self.sync_hook(
             spec,
             Box::new(|_| HookOutcome::Returned(HookResult::allow())),

@@ -22,6 +22,7 @@ use crate::rules::permissions::WriteRefusal;
 /// voice and AI steps fire. The list grows with each step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum HookTrigger {
     /// Before an event reaches the room's channels; can block or modify it.
     BeforeBroadcast,
@@ -129,6 +130,7 @@ pub struct HookId(usize);
 /// Which events a hook fires for (RFC §9.1). An absent filter lets every
 /// event through.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HookFilter {
     /// Only events from these channel types.
     pub channel_types: Option<BTreeSet<ChannelType>>,
@@ -157,6 +159,7 @@ impl HookFilter {
 
 /// A hook's registration, without its handler (RFC §9.1).
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HookSpec {
     /// The hook's name, unique in its registry; a block names it (gap
     /// G-018).

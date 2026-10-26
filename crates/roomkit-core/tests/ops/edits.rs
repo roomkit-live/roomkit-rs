@@ -56,11 +56,11 @@ fn edit_from(sender: &str, target: &str, text: &str) -> InboundMessage {
     let mut message = InboundMessage::new(
         channel("wa"),
         sender,
-        EventContent::Edit(EditContent {
-            target_event_id: id(target),
-            new_content: Box::new(EventContent::text(text)),
-            edit_source: Some(EditSource::Sender),
-        }),
+        EventContent::Edit(EditContent::new(
+            id(target),
+            EventContent::text(text),
+            Some(EditSource::Sender),
+        )),
     );
     message.event_type = EventType::Edit;
     message
@@ -76,11 +76,7 @@ fn delete_from(sender: &str, target: &str, delete_type: DeleteType) -> InboundMe
     let mut message = InboundMessage::new(
         channel("wa"),
         sender,
-        EventContent::Delete(DeleteContent {
-            target_event_id: id(target),
-            delete_type,
-            reason: None,
-        }),
+        EventContent::Delete(DeleteContent::new(id(target), delete_type)),
     );
     message.event_type = EventType::Delete;
     message
@@ -632,15 +628,11 @@ mod a_refused_change {
     fn whose_new_content_is_a_delete_is_refused_target_event_not_found() {
         let mut sim = room();
         let mut nested = edit();
-        nested.content = EventContent::Edit(EditContent {
-            target_event_id: id("evt_1"),
-            new_content: Box::new(EventContent::Delete(DeleteContent {
-                target_event_id: id("evt_9"),
-                delete_type: DeleteType::Sender,
-                reason: None,
-            })),
-            edit_source: Some(EditSource::Sender),
-        });
+        nested.content = EventContent::Edit(EditContent::new(
+            id("evt_1"),
+            EventContent::Delete(DeleteContent::new(id("evt_9"), DeleteType::Sender)),
+            Some(EditSource::Sender),
+        ));
         let result = sim.send(nested).unwrap();
         assert_eq!(
             refusal(&result, &sim),
@@ -776,11 +768,11 @@ mod an_agent_s_response {
                 };
                 let mut correction = response("ai", event, "");
                 correction.event_type = EventType::Edit;
-                correction.content = EventContent::Edit(EditContent {
+                correction.content = EventContent::Edit(EditContent::new(
                     target_event_id,
-                    new_content: Box::new(EventContent::text("Hello")),
-                    edit_source: Some(EditSource::Sender),
-                });
+                    EventContent::text("Hello"),
+                    Some(EditSource::Sender),
+                ));
                 Ok(ChannelOutput::respond(vec![correction]))
             }),
         );
@@ -845,11 +837,9 @@ mod a_hook {
     fn moderation_delete(delete_type: DeleteType) -> RoomEvent {
         let mut delete = notice_event("placeholder", "");
         delete.event_type = EventType::Delete;
-        delete.content = EventContent::Delete(DeleteContent {
-            target_event_id: id("evt_1"),
-            delete_type,
-            reason: Some("spam".to_owned()),
-        });
+        let mut content = DeleteContent::new(id("evt_1"), delete_type);
+        content.reason = Some("spam".to_owned());
+        delete.content = EventContent::Delete(content);
         delete
     }
 
@@ -956,11 +946,11 @@ mod a_hook {
             }),
         );
         sim.send(edit()).unwrap();
-        let redacted = EventContent::Edit(EditContent {
-            target_event_id: id("evt_1"),
-            new_content: Box::new(EventContent::text("I need [redacted]")),
-            edit_source: Some(EditSource::Sender),
-        });
+        let redacted = EventContent::Edit(EditContent::new(
+            id("evt_1"),
+            EventContent::text("I need [redacted]"),
+            Some(EditSource::Sender),
+        ));
         assert_eq!(
             (
                 stored(&sim, "evt_2").content.clone(),
@@ -980,11 +970,8 @@ mod a_hook {
             Box::new(|event| {
                 let mut nested = event.clone();
                 if let EventContent::Edit(edit) = &mut nested.content {
-                    *edit.new_content = EventContent::Delete(DeleteContent {
-                        target_event_id: id("evt_9"),
-                        delete_type: DeleteType::Sender,
-                        reason: None,
-                    });
+                    *edit.new_content =
+                        EventContent::Delete(DeleteContent::new(id("evt_9"), DeleteType::Sender));
                 }
                 HookOutcome::Returned(HookResult::modify(nested))
             }),
@@ -1069,11 +1056,11 @@ mod a_hook {
             "forger",
             Box::new(|event| {
                 let mut forged = event.clone();
-                forged.content = EventContent::Edit(EditContent {
-                    target_event_id: id("evt_1"),
-                    new_content: Box::new(EventContent::text("forged")),
-                    edit_source: Some(EditSource::Sender),
-                });
+                forged.content = EventContent::Edit(EditContent::new(
+                    id("evt_1"),
+                    EventContent::text("forged"),
+                    Some(EditSource::Sender),
+                ));
                 HookOutcome::Returned(HookResult::modify(forged))
             }),
         );
@@ -1097,10 +1084,9 @@ mod a_direct_update {
     use pretty_assertions::assert_eq;
 
     fn rewrite(text: &str) -> EventUpdates {
-        EventUpdates {
-            content: Some(EventContent::text(text)),
-            ..EventUpdates::default()
-        }
+        let mut updates = EventUpdates::default();
+        updates.content = Some(EventContent::text(text));
+        updates
     }
 
     /// RFC §10.3: the trigger fires once the lock is released, with the
@@ -1147,10 +1133,8 @@ mod a_direct_update {
         sim.timeline[0]
             .metadata
             .insert("crm".to_owned(), json!("c_1"));
-        let update = EventUpdates {
-            metadata: Some([("tag".to_owned(), json!("vip"))].into_iter().collect()),
-            ..EventUpdates::default()
-        };
+        let mut update = EventUpdates::default();
+        update.metadata = Some([("tag".to_owned(), json!("vip"))].into_iter().collect());
         sim.update_event("evt_1", update).unwrap();
         assert_eq!(
             serde_json::Value::Object(stored(&sim, "evt_1").metadata.clone()),
@@ -1519,11 +1503,10 @@ mod a_target_changed_by_a_hook {
                     (event.event_type == EventType::Edit).then(|| {
                         let mut delete = DirectEvent::new(
                             channel("wa"),
-                            EventContent::Delete(DeleteContent {
-                                target_event_id: id("evt_1"),
-                                delete_type: DeleteType::Sender,
-                                reason: None,
-                            }),
+                            EventContent::Delete(DeleteContent::new(
+                                id("evt_1"),
+                                DeleteType::Sender,
+                            )),
                         );
                         delete.event_type = EventType::Delete;
                         delete.participant_id = Some(ParticipantId::new(SENDER).unwrap());
@@ -1563,7 +1546,7 @@ mod a_mutation_trigger {
     use pretty_assertions::assert_eq;
     use roomkit_core::model::{ChannelId, RoomContext};
     use roomkit_core::ops::Notice;
-    use roomkit_core::rules::hook_registry::{HookExecution, HookFilter, HookSpec};
+    use roomkit_core::rules::hook_registry::{HookExecution, HookSpec};
 
     /// The context `trigger`'s observers were handed.
     fn context_of(sim: &Sim, trigger: HookTrigger) -> RoomContext {
@@ -1697,24 +1680,19 @@ mod a_mutation_trigger {
     fn reaches_the_observers_filtered_on_its_target_s_channel() {
         let mut sim = room();
         let filtered = |sim: &mut Sim, name: &str, channel_id: &str| {
-            let spec = HookSpec {
-                filter: HookFilter {
-                    channel_ids: Some([ChannelId::new(channel_id).unwrap()].into()),
-                    ..HookFilter::default()
-                },
-                ..HookSpec::new(name, HookTrigger::OnEventUpdated, HookExecution::Async)
-            };
+            let mut spec = HookSpec::new(name, HookTrigger::OnEventUpdated, HookExecution::Async);
+            spec.filter.channel_ids = Some([ChannelId::new(channel_id).unwrap()].into());
             sim.config.hooks.register(spec).unwrap()
         };
         let of_the_target = filtered(&mut sim, "of_wa", "wa");
         filtered(&mut sim, "of_system", "system");
         let mut correction = notice_event("placeholder", "");
         correction.event_type = EventType::Edit;
-        correction.content = EventContent::Edit(EditContent {
-            target_event_id: id("evt_1"),
-            new_content: Box::new(EventContent::text("I need [redacted]")),
-            edit_source: Some(EditSource::System),
-        });
+        correction.content = EventContent::Edit(EditContent::new(
+            id("evt_1"),
+            EventContent::text("I need [redacted]"),
+            Some(EditSource::System),
+        ));
         sim.before_broadcast(
             "redactor",
             Box::new(move |event| {

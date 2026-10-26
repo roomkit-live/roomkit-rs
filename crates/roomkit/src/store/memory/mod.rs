@@ -259,10 +259,8 @@ impl ConversationStore for InMemoryStore {
         key: &str,
         value: Option<Metadata>,
     ) -> Result<(), StoreError> {
-        let updates = RoomUpdates {
-            private_state: [(key.to_owned(), value)].into(),
-            ..RoomUpdates::default()
-        };
+        let mut updates = RoomUpdates::default();
+        updates.private_state = [(key.to_owned(), value)].into();
         if let Some(record) = self.rooms().get_mut(room_id) {
             record.update(updates);
         }

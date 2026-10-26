@@ -12,6 +12,10 @@ use crate::records::{self, Kind};
 /// The text of a message the full-text index holds, as the Python
 /// implementation reads it: the body, or a media's caption, of the content
 /// and of a composite's parts, one level deep.
+#[expect(
+    clippy::match_same_arms,
+    reason = "the named arms decide every content the model knows, the wildcard one a later version adds"
+)]
 fn searchable_text(content: &EventContent) -> String {
     let parts = match content {
         EventContent::Composite(composite) => composite.parts(),
@@ -26,6 +30,7 @@ fn searchable_text(content: &EventContent) -> String {
         | EventContent::Edit(_)
         | EventContent::Delete(_)
         | EventContent::ToolCall(_) => &[],
+        _ => &[],
     };
     std::iter::once(content)
         .chain(parts)
@@ -37,6 +42,10 @@ fn searchable_text(content: &EventContent) -> String {
 
 /// The text a content gives the full-text index: its body, or a media's
 /// caption.
+#[expect(
+    clippy::match_same_arms,
+    reason = "the named arms decide every content the model knows, the wildcard one a later version adds"
+)]
 fn text_of(content: &EventContent) -> Option<&str> {
     match content {
         EventContent::Text(text) => Some(text.body.as_str()),
@@ -51,6 +60,7 @@ fn text_of(content: &EventContent) -> Option<&str> {
         | EventContent::Edit(_)
         | EventContent::Delete(_)
         | EventContent::ToolCall(_) => None,
+        _ => None,
     }
 }
 

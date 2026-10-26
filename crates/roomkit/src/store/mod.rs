@@ -24,6 +24,7 @@ pub use self::memory::InMemoryStore;
 /// Which rooms [`ConversationStore::list_rooms`] returns; an empty filter
 /// returns every room.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RoomFilter {
     /// Only the rooms of this organization.
     pub organization_id: Option<String>,
@@ -68,6 +69,7 @@ impl RoomFilter {
 /// the rows [`ConversationStore::list_events`] serves under the same
 /// criteria.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EventFilter {
     /// Whether the events stored `BLOCKED` count; a timeline read serves
     /// what the room received by default.
@@ -142,10 +144,8 @@ pub trait ConversationStore: Send + Sync + 'static {
         value: Option<Metadata>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send {
         async move {
-            let updates = RoomUpdates {
-                private_state: [(key.to_owned(), value)].into(),
-                ..RoomUpdates::default()
-            };
+            let mut updates = RoomUpdates::default();
+            updates.private_state = [(key.to_owned(), value)].into();
             match self.update_room(room_id, updates).await {
                 Ok(_) | Err(StoreError::RoomNotFound(_)) => Ok(()),
                 Err(error) => Err(error),

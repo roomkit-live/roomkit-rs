@@ -66,11 +66,11 @@ pub(crate) fn reply(index: u64, parent: u64) -> RoomEvent {
 pub(crate) fn edit_of(index: u64, target: u64) -> RoomEvent {
     let mut edit = event(index);
     edit.event_type = EventType::Edit;
-    edit.content = EventContent::Edit(EditContent {
-        target_event_id: event_id(&format!("evt_{target}")),
-        new_content: Box::new(EventContent::text("corrected")),
-        edit_source: None,
-    });
+    edit.content = EventContent::Edit(EditContent::new(
+        event_id(&format!("evt_{target}")),
+        EventContent::text("corrected"),
+        None,
+    ));
     edit
 }
 

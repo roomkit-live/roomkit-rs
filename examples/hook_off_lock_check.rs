@@ -34,14 +34,12 @@ const PROCESS_TIMEOUT: Duration = Duration::from_millis(300);
 /// Registers the scanner, off the room lock. It notes in `scans` when each
 /// scan starts and ends; the message `hang` it never answers.
 fn scan_off_the_lock(kit: &RoomKit, scans: &Log<String>) -> Result<(), Box<dyn Error>> {
-    let spec = HookSpec {
-        needs_lock: false,
-        ..HookSpec::new(
-            "pii_scan",
-            HookTrigger::BeforeBroadcast,
-            HookExecution::Sync,
-        )
-    };
+    let mut spec = HookSpec::new(
+        "pii_scan",
+        HookTrigger::BeforeBroadcast,
+        HookExecution::Sync,
+    );
+    spec.needs_lock = false;
     let scans = scans.clone();
     kit.hook(spec, move |event, _| {
         let (scans, text) = (scans.clone(), text_of(&event.content));

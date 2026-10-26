@@ -461,10 +461,8 @@ impl App {
             self.kit.create_room(room_id).await?;
             self.kit.attach(room_id, &self.agent).await?;
             // Several people share the channel's conversation (RFC §10.4).
-            let group = BindingOptions {
-                group: true,
-                ..BindingOptions::default()
-            };
+            let mut group = BindingOptions::default();
+            group.group = true;
             self.kit
                 .attach_with(room_id, self.websocket.id(), group)
                 .await?;

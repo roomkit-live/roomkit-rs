@@ -55,15 +55,14 @@ impl Reader {
 
 impl Channel for Reader {
     fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration {
-            capabilities: edits_natively(),
-            ..ChannelDeclaration::new(
-                channel("ai"),
-                ChannelType::AI,
-                ChannelCategory::Intelligence,
-                ChannelDirection::Bidirectional,
-            )
-        }
+        let mut declaration = ChannelDeclaration::new(
+            channel("ai"),
+            ChannelType::AI,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+        );
+        declaration.capabilities = edits_natively();
+        declaration
     }
 
     fn on_event(
@@ -87,11 +86,10 @@ impl Channel for Reader {
 
 /// Text, with edits and deletes delivered natively.
 fn edits_natively() -> ChannelCapabilities {
-    ChannelCapabilities {
-        supports_edit: true,
-        supports_delete: true,
-        ..ChannelCapabilities::default()
-    }
+    let mut capabilities = ChannelCapabilities::default();
+    capabilities.supports_edit = true;
+    capabilities.supports_delete = true;
+    capabilities
 }
 
 /// The room of Appendix B.6: the customer on WhatsApp, an advisor on a
@@ -169,11 +167,11 @@ fn edit_from(sender: &str, text: &str) -> InboundMessage {
     let mut message = InboundMessage::new(
         channel("wa"),
         sender,
-        EventContent::Edit(EditContent {
-            target_event_id: EventId::new("evt_1").unwrap(),
-            new_content: Box::new(EventContent::text(text)),
-            edit_source: Some(EditSource::Sender),
-        }),
+        EventContent::Edit(EditContent::new(
+            EventId::new("evt_1").unwrap(),
+            EventContent::text(text),
+            Some(EditSource::Sender),
+        )),
     );
     message.event_type = EventType::Edit;
     message
@@ -183,11 +181,10 @@ fn delete() -> InboundMessage {
     let mut message = InboundMessage::new(
         channel("wa"),
         CUSTOMER,
-        EventContent::Delete(DeleteContent {
-            target_event_id: EventId::new("evt_1").unwrap(),
-            delete_type: DeleteType::Sender,
-            reason: None,
-        }),
+        EventContent::Delete(DeleteContent::new(
+            EventId::new("evt_1").unwrap(),
+            DeleteType::Sender,
+        )),
     );
     message.event_type = EventType::Delete;
     message
@@ -420,10 +417,8 @@ mod a_direct_call {
     async fn update_rewrites_the_event_without_a_marker_and_fires_on_event_updated() {
         let room = room().await;
         let mut updated = observed(&room.kit, HookTrigger::OnEventUpdated);
-        let update = EventUpdates {
-            content: Some(EventContent::text("I need 6000$")),
-            ..EventUpdates::default()
-        };
+        let mut update = EventUpdates::default();
+        update.content = Some(EventContent::text("I need 6000$"));
         let returned = room
             .kit
             .update_event(&room_id(), &EventId::new("evt_1").unwrap(), update)

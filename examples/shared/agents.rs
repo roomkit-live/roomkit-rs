@@ -40,17 +40,15 @@ pub struct Turn {
 impl ScriptedAgent {
     /// An agent named `channel_id`, answering from `script`.
     pub fn new(channel_id: ChannelId, script: Script) -> Self {
-        let declaration = ChannelDeclaration::new(
+        let mut declaration = ChannelDeclaration::new(
             channel_id,
             ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         );
+        declaration.provider_name = Some("ScriptedAgent".to_owned());
         Self {
-            declaration: ChannelDeclaration {
-                provider_name: Some("ScriptedAgent".to_owned()),
-                ..declaration
-            },
+            declaration,
             script,
             turns: Log::new(),
         }

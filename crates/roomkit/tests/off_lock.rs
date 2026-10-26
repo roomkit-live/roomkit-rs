@@ -46,10 +46,9 @@ fn message(text: &str) -> InboundMessage {
 /// A SYNC `BEFORE_BROADCAST` hook named `name`, off the room lock or under
 /// it.
 fn before_broadcast(name: &str, needs_lock: bool) -> HookSpec {
-    HookSpec {
-        needs_lock,
-        ..HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync)
-    }
+    let mut spec = HookSpec::new(name, HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    spec.needs_lock = needs_lock;
+    spec
 }
 
 /// A kit with an SMS transport attached to `room_1`.
@@ -242,13 +241,8 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
     kit.attach(&room_id(), &channel("ws")).await.unwrap();
     let (held, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let (hook_held, hook_go) = (Arc::clone(&held), Arc::clone(&go));
-    let spec = HookSpec {
-        filter: roomkit::HookFilter {
-            channel_ids: Some([channel("sms")].into()),
-            ..roomkit::HookFilter::default()
-        },
-        ..before_broadcast("scanner", false)
-    };
+    let mut spec = before_broadcast("scanner", false);
+    spec.filter.channel_ids = Some([channel("sms")].into());
     kit.hook(spec, move |_, _| {
         let (held, go) = (Arc::clone(&hook_held), Arc::clone(&hook_go));
         async move {
