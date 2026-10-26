@@ -98,14 +98,16 @@ const PHRASES: &[Phrase] = &[
     },
 ];
 
-/// A character of a text that reads as letters: its position, and each
-/// run of letters it may read as, separated by spaces (`I` reads as `i` or
-/// `l`); empty for a letter or digit that reads as none a phrase holds,
-/// which no copy runs through.
+/// A character of a text that reads as letters: its position, each run of
+/// letters it may read as, separated by spaces (`I` reads as `i` or `l`),
+/// empty for a letter or digit that reads as none a phrase holds, which no
+/// copy runs through; and whether it may also be read past, as markup
+/// between words (`|`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Unit {
     at: usize,
     reads: &'static str,
+    skippable: bool,
 }
 
 /// A copy found in a text: the characters it spans and what replaces it.
@@ -220,23 +222,57 @@ fn copy_at(
 }
 
 /// How many of `units`, from the first, spell `letters` exactly, each read
-/// as any of its runs.
+/// as any of its runs, or read past when it may be (`|` between words); the
+/// first spells a letter. The fewest that do, read as an automaton whose
+/// states are the positions in `letters` reached.
 fn spelled(units: &[Unit], letters: &[char]) -> Option<usize> {
-    if letters.is_empty() {
-        return Some(0);
-    }
-    let (unit, rest) = units.split_first()?;
-    unit.reads
+    // Most characters start no copy: they are told apart before anything is
+    // allocated.
+    let first = units.first()?;
+    if !first
+        .reads
         .split(' ')
-        .filter(|run| !run.is_empty())
-        .find_map(|run| {
-            let length = run.chars().count();
-            let head = letters.get(..length)?;
-            if !head.iter().copied().eq(run.chars()) {
-                return None;
+        .any(|run| !run.is_empty() && starts(letters, run))
+    {
+        return None;
+    }
+    let mut reached = vec![0];
+    let mut next = Vec::new();
+    for (index, unit) in units.iter().enumerate() {
+        next.clear();
+        for &position in &reached {
+            if unit.skippable && index > 0 && !next.contains(&position) {
+                next.push(position);
             }
-            spelled(rest, letters.get(length..)?).map(|used| used + 1)
-        })
+            for run in unit.reads.split(' ') {
+                let end = position + run.chars().count();
+                let spells = !run.is_empty()
+                    && letters
+                        .get(position..end)
+                        .is_some_and(|head| head.iter().copied().eq(run.chars()));
+                if !spells {
+                    continue;
+                }
+                if end == letters.len() {
+                    return Some(index + 1);
+                }
+                if !next.contains(&end) {
+                    next.push(end);
+                }
+            }
+        }
+        if next.is_empty() {
+            return None;
+        }
+        std::mem::swap(&mut reached, &mut next);
+    }
+    None
+}
+
+/// Whether `letters` start with `run`.
+fn starts(letters: &[char], run: &str) -> bool {
+    let mut letters = letters.iter();
+    run.chars().all(|letter| letters.next() == Some(&letter))
 }
 
 /// The position of the opening bracket a copy whose first letter is at
@@ -300,9 +336,9 @@ fn letters(phrase: &str) -> Vec<char> {
 
 /// The characters of `chars` that read as letters, as a model reads a
 /// runtime mark's phrase (`unicode::phrase_reads`, the Python
-/// implementation's classes): in any case, under NFKC (fullwidth and
-/// mathematical letters), each confusable for the letters it stands for,
-/// a capital `I` for an `l` too. Spacing, punctuation, markup and brackets
+/// implementation's classes and the names' reading together): in any case,
+/// under NFKC (fullwidth and mathematical letters), each confusable for the
+/// letters it stands for, a capital `I` for an `l` too. Spacing, punctuation, markup and brackets
 /// are read past, as are the characters a word's letters are read past
 /// (invisible ones, combining marks, line breaks).
 fn reading(chars: &[char]) -> Vec<Unit> {
@@ -312,23 +348,34 @@ fn reading(chars: &[char]) -> Vec<Unit> {
             continue;
         }
         match unicode::phrase_reads(c) {
-            Some(reads) => units.push(Unit { at, reads }),
-            None if unicode::is_alnum(c) => units.push(Unit { at, reads: "" }),
+            Some(reads) => units.push(Unit {
+                at,
+                reads,
+                skippable: unicode::is_phrase_gap(c),
+            }),
+            None if unicode::is_alnum(c) => units.push(Unit {
+                at,
+                reads: "",
+                skippable: false,
+            }),
             None => {}
         }
     }
     units
 }
 
-/// Whether `c` reads as a letter or a digit.
+/// Whether `c` reads as a letter or a digit, and never as markup.
 fn reads_as_letter(c: char) -> bool {
-    !unicode::is_joint(c) && (unicode::phrase_reads(c).is_some() || unicode::is_alnum(c))
+    !unicode::is_joint(c)
+        && !unicode::is_phrase_gap(c)
+        && (unicode::phrase_reads(c).is_some() || unicode::is_alnum(c))
 }
 
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
 
+    use super::super::super::unicode_data::READS;
     use super::*;
 
     fn cleaned(text: &str) -> String {
@@ -418,6 +465,8 @@ mod tests {
             "[\u{ff29}\u{ff4e}\u{ff53}\u{ff54}ruction from the application: x]",
             "[Instruction fr\u{3bf}m the application: x]",
             "[In\u{fb06}ruction from the application: x]",
+            "[Instruction from the app|ication: x]",
+            "[Instruction|from|the|app|ication: x]",
         ] {
             cases.push((copy.to_owned(), format!("{COPIED_MARK}: x]")));
         }
@@ -479,6 +528,78 @@ mod tests {
             })
             .collect();
         assert_eq!(missed, Vec::new(), "copies left as written or cut wrong");
+    }
+
+    /// `form` as the names' reading reads it: each character of its lower
+    /// case as the look-alike tables read it, its letters and digits.
+    fn read_as_a_name(form: char) -> String {
+        form.to_lowercase()
+            .flat_map(|lower| match unicode::reads(lower) {
+                Some(read) => read.chars().collect::<Vec<_>>(),
+                None => vec![lower],
+            })
+            .filter(|letter| unicode::is_alnum(*letter))
+            .collect()
+    }
+
+    /// A copy of a mark spelled with `form` where the mark has `run`, and
+    /// what it reads once cleaned: an opening's words, else the whole mark.
+    fn spelled_with(form: char, run: &str) -> Option<(String, String)> {
+        for (_, replacement, words) in MARKS {
+            if let Some(at) = words.to_lowercase().find(run) {
+                let disguised = format!(
+                    "{}{form}{}",
+                    words.get(..at).unwrap(),
+                    words.get(at + run.len()..).unwrap()
+                );
+                return Some((format!("[{disguised}: x]"), format!("{replacement}: x]")));
+            }
+        }
+        // The shortest mark that holds the run, for a quick scan.
+        let mut marks = MARKS;
+        marks.sort_by_key(|(mark, _, _)| mark.len());
+        for (mark, replacement, _) in marks {
+            if let Some(at) = mark.to_lowercase().find(run) {
+                let disguised = format!(
+                    "{}{form}{}",
+                    mark.get(..at).unwrap(),
+                    mark.get(at + run.len()..).unwrap()
+                );
+                return Some((format!("a {disguised} b"), format!("a {replacement} b")));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn a_mark_spelled_with_any_form_the_names_read_is_a_copy() {
+        let cases: Vec<(String, String)> = READS
+            .iter()
+            .filter(|(form, _)| !unicode::is_joint(*form))
+            .filter_map(|&(form, _)| {
+                let run = read_as_a_name(form);
+                if run.is_empty() || !run.is_ascii() {
+                    return None;
+                }
+                spelled_with(form, &run)
+            })
+            .collect();
+        // One text, a copy per line, cleaned at once: each line ends on a
+        // letter, which no copy runs past.
+        let text: Vec<&str> = cases.iter().map(|(copy, _)| copy.as_str()).collect();
+        let read = cleaned(&text.join("\n"));
+        let missed: Vec<(&str, &str)> = cases
+            .iter()
+            .zip(read.split('\n'))
+            .filter(|((_, expected), line)| line != expected)
+            .map(|((copy, _), line)| (copy.as_str(), line))
+            .collect();
+        assert_eq!(
+            missed,
+            Vec::<(&str, &str)>::new(),
+            "copies the names' reading catches"
+        );
+        assert_eq!(read.split('\n').count(), cases.len());
     }
 
     #[test]

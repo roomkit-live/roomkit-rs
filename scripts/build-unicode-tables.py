@@ -78,10 +78,16 @@ def emit(name: str, kind: str, items: list[str], per_line: int, doc: str) -> str
     return "\n".join(lines)
 
 
-def phrase_reads(lookalike) -> list[tuple[str, list[str]]]:
-    """Each character a phrase's letter or run of letters reads, with every
-    letter and run it reads as: roomkit's own classes, matched as its
-    patterns match them."""
+def phrase_reads(lookalike) -> tuple[list[tuple[str, list[str]]], list[tuple[int, int]]]:
+    """Each character that reads as letters in a phrase, with every letter
+    and run it reads as, and the ranges of those that may also sit between
+    a phrase's words as spacing or markup.
+
+    A character reads as what roomkit's own classes take it for, matched as
+    its patterns match them, and also as the names' reading gives it (its
+    lower case, each character as `_lookalike._reads()` reads it), so that
+    a phrase is read at least as a name is: `|` reads as `l` there, while
+    roomkit's phrase classes take it for markup."""
     import re
 
     letters = [c for c in "abcdefghijklmnopqrstuvwxyz0123456789"]
@@ -107,15 +113,34 @@ def phrase_reads(lookalike) -> list[tuple[str, list[str]]]:
     def candidate(ch: str) -> bool:
         return any(form in known for form in (ch, ch.lower(), ch.upper(), ch.casefold()))
 
+    reads = lookalike._reads()
+    joint = lookalike._joint()
+    spacing = lookalike._spacing(True)
+
+    def as_a_name(ch: str) -> str:
+        """`ch` as the names' reading reads it, its letters and digits."""
+        if joint.fullmatch(ch):
+            return ""
+        return "".join(
+            letter
+            for lower in ch.lower()
+            for letter in reads.get(lower, lower)
+            if letter.isalnum()
+        )
+
     found = []
+    gaps = []
     for c in scalar_values():
         ch = chr(c)
-        if not candidate(ch):
-            continue
-        runs = [run for run, pattern in classes if pattern.fullmatch(ch)]
+        runs = [run for run, pattern in classes if pattern.fullmatch(ch)] if candidate(ch) else []
+        named = as_a_name(ch)
+        if named and named.isascii() and named not in runs:
+            runs.append(named)
         if runs:
             found.append((ch, runs))
-    return found
+            if spacing.fullmatch(ch) and not joint.fullmatch(ch):
+                gaps.append(c)
+    return found, [(c, c) for c in gaps]
 
 
 def full_decomposition(ch: str) -> str:
@@ -154,16 +179,27 @@ def main() -> None:
         4,
         "What each character reads as, sorted by character: roomkit's\n`_lookalike._reads()`.",
     ))
+    phrase, gaps = phrase_reads(_lookalike)
     parts.append(emit(
         "PHRASE_READS",
         "(char, &str)",
-        [f"({rust_char(ord(ch))}, {rust_str(' '.join(runs))})" for ch, runs in phrase_reads(_lookalike)],
+        [f"({rust_char(ord(ch))}, {rust_str(' '.join(runs))})" for ch, runs in phrase],
         3,
         "What each character reads as in a phrase, sorted by character: the\n"
         "letters and digits whose class in roomkit's `_lookalike.char_class`\n"
-        "(phrase=True, with `re.IGNORECASE`) takes it, and the runs of letters\n"
-        "whose class in `_lookalike._sequences` does (`vi` for `ⅵ`), separated\n"
-        "by spaces. A copy of a runtime mark is read with it.",
+        "(phrase=True, with `re.IGNORECASE`) takes it, the runs of letters\n"
+        "whose class in `_lookalike._sequences` does (`vi` for `ⅵ`), and what\n"
+        "the names' reading reads it as (`|` as `l`), separated by spaces. A\n"
+        "copy of a runtime mark is read with it.",
+    ))
+    parts.append(emit(
+        "PHRASE_GAPS",
+        "(char, char)",
+        [f"({rust_char(start)}, {rust_char(end)})" for start, end in gaps],
+        4,
+        "The characters that read as letters in a phrase but that roomkit's\n"
+        "phrase pattern also takes for spacing or markup between words (`|`).\n"
+        "Inclusive ranges, sorted.",
     ))
     for name, predicate, doc in (
         ("NAME_CHARS", _text._a_name_s, "The characters a person's name keeps: roomkit's `_text._a_name_s`."),

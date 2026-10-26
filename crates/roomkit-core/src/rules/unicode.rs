@@ -12,7 +12,7 @@ use std::cmp::Ordering;
 
 use super::unicode_data::{
     ALNUM, CLOSING, COMBINING_CLASSES, COMPOSITIONS, DECOMPOSITIONS, JOINT, MARKS, NAME_CHARS,
-    OPENING, PHRASE_READS, READS,
+    OPENING, PHRASE_GAPS, PHRASE_READS, READS,
 };
 
 /// Whether `ranges`, inclusive and sorted, holds `c`.
@@ -73,16 +73,22 @@ pub(crate) fn reads(c: char) -> Option<&'static str> {
 }
 
 /// What `c` reads as in a phrase, as the Python implementation's pattern
-/// of a runtime mark reads it (`_lookalike.char_class`): each letter, digit
-/// or run of letters it may stand for, separated by spaces (`I` reads as
-/// `i` or `l`, `𝐈` too, `ⅵ` as `vi`); `None` for a character that reads as
-/// no letter.
+/// of a runtime mark reads it (`_lookalike.char_class`) and as a name reads
+/// it: each letter, digit or run of letters it may stand for, separated by
+/// spaces (`I` reads as `i` or `l`, `𝐈` too, `ⅵ` as `vi`, `|` as `l`);
+/// `None` for a character that reads as no letter.
 pub(crate) fn phrase_reads(c: char) -> Option<&'static str> {
     PHRASE_READS
         .binary_search_by(|&(form, _)| form.cmp(&c))
         .ok()
         .and_then(|found| PHRASE_READS.get(found))
         .map(|&(_, read)| read)
+}
+
+/// Whether `c`, which reads as a letter in a phrase, may also sit between
+/// its words as markup (`|`).
+pub(crate) fn is_phrase_gap(c: char) -> bool {
+    within(PHRASE_GAPS, c)
 }
 
 /// The canonical combining class of `c`, 0 for a starter.
