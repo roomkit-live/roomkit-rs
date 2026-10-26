@@ -39,7 +39,7 @@ const REPLIES: &[&str] = &[
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let endpoint = OpenAiEndpoint::from_env(REPLIES).await?;
-    println!("The agent calls {}.", endpoint.base_url());
+    println!("The agent calls {}.", endpoint.shown_base_url());
     let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
         .with_system_prompt(SYSTEM_PROMPT)
         .with_history(20);

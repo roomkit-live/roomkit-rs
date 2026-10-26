@@ -2,9 +2,8 @@
 //! environment names, or a fake of the OpenAI wire, so that the example
 //! runs offline and without a key.
 
-use std::env;
 use std::error::Error;
-use std::io;
+use std::{env, fmt, io};
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -21,8 +20,8 @@ const MODEL: &str = "OPENAI_MODEL";
 /// The largest request the fake reads.
 const REQUEST_LIMIT: usize = 1 << 20;
 
-/// The endpoint an example's agent calls.
-#[derive(Debug)]
+/// The endpoint an example's agent calls. Its `Debug` hides the key and
+/// the base URL's credentials, as the crate's own does.
 pub enum OpenAiEndpoint {
     /// The endpoint `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODEL`
     /// name.
@@ -82,11 +81,37 @@ impl OpenAiEndpoint {
         }
     }
 
+    /// The API's root as it may be shown: its scheme, host and port, never
+    /// its user information, path or query, which may carry credentials.
+    pub fn shown_base_url(&self) -> String {
+        let base_url = self.base_url();
+        let Some((scheme, rest)) = base_url.split_once("://") else {
+            return "(not a URL)".to_owned();
+        };
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        let host = authority.rsplit('@').next().unwrap_or_default();
+        format!("{scheme}://{host}")
+    }
+
     /// The fake, when the example runs against it.
     pub fn fake(&self) -> Option<&FakeOpenAi> {
         match self {
             Self::Real { .. } => None,
             Self::Fake(fake) => Some(fake),
+        }
+    }
+}
+
+impl fmt::Debug for OpenAiEndpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Real { model, .. } => f
+                .debug_struct("Real")
+                .field("base_url", &self.shown_base_url())
+                .field("api_key", &"hidden")
+                .field("model", model)
+                .finish(),
+            Self::Fake(fake) => f.debug_tuple("Fake").field(fake).finish(),
         }
     }
 }
@@ -198,4 +223,23 @@ async fn read_more(stream: &mut TcpStream, received: &mut Vec<u8>) -> io::Result
     }
     received.extend(chunk.get(..read).unwrap_or_default());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn neither_debug_nor_the_shown_url_holds_a_secret() {
+        let endpoint = OpenAiEndpoint::Real {
+            base_url: "https://user:pass@example.com:8443/v1".to_owned(),
+            api_key: "sk-secret".to_owned(),
+            model: "gpt-6-luna".to_owned(),
+        };
+        let printed = format!("{endpoint:?} {}", endpoint.shown_base_url());
+        for secret in ["sk-secret", "user", "pass"] {
+            assert!(!printed.contains(secret), "{secret} in {printed}");
+        }
+        assert_eq!(endpoint.shown_base_url(), "https://example.com:8443");
+    }
 }
