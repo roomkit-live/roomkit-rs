@@ -11,8 +11,9 @@
 //! - Each text frame it sends is a message from `alice` into that room,
 //!   through the inbound pipeline (RFC §10.1). A message the room refuses,
 //!   or whose turn fails, gets `{"error": "..."}` back, a reason of the
-//!   server's own. A message over 64 KiB closes the connection with 1009,
-//!   and a stop closes them all with 1001.
+//!   server's own. A message or a frame over 64 KiB closes the connection
+//!   with 1009, a frame at its header, and a stop closes them all with
+//!   1001.
 //! - The room's deliveries to `websocket` go out on each of the room's
 //!   connections, one JSON frame per event: the agent's answers. A room
 //!   delivers an event to every channel but its source (RFC §10.1), so the
@@ -69,6 +70,7 @@ use roomkit::{ConversationStore, Environment, RoomKit, SystemEnvironment, text_o
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use roomkit_sqlite::SqliteStore;
 use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -89,7 +91,7 @@ const SERVE_DATABASE: &str = "server_agent.db";
 const TURN_FAILED: &str = "the agent could not answer";
 const REFUSED: &str = "the room refused the message";
 
-/// The largest message a connection may send, in bytes.
+/// The largest message, and frame, a connection may send, in bytes.
 const MESSAGE_LIMIT: usize = 64 * 1024;
 
 /// The conversation of the checks, and what is said in it.
@@ -119,6 +121,11 @@ const POSTS_AT_MOST: usize = 400;
 /// The conversation where the model is unreachable, and how long a client
 /// there waits to be told.
 const CELLAR: &str = "cellar";
+
+/// The length of the frame a client announces and never sends: far over
+/// the limit, far under what the WebSocket library takes by default
+/// (16 MiB).
+const ANNOUNCED: u64 = 1 << 20;
 const TOLD_PATIENCE: Duration = Duration::from_secs(2);
 
 /// The receive buffer of a client that falls behind, in bytes.
@@ -345,7 +352,10 @@ async fn connect(
     // once the client is connected misses it; an upgrade that fails drops
     // the registration with the callback.
     let connection = app.websocket.register_connection(room_id.clone());
+    // The frame's limit too: a frame is refused at its header, before the
+    // library reads its body, up to 16 MiB by default.
     upgrade
+        .max_frame_size(MESSAGE_LIMIT)
         .max_message_size(MESSAGE_LIMIT)
         .on_upgrade(move |socket| app.converse(socket, connection, room_id, user))
 }
@@ -695,8 +705,8 @@ async fn a_client_stops_reading(checks: &mut Checks) -> Result<(), Box<dyn Error
 
 /// What a client is told. The model unreachable, Frank's message gets an
 /// error frame; Grace's message over the limit closes her connection with
-/// 1009 (too large); the server's stop closes Frank's with 1001 (going
-/// away).
+/// 1009 (too large), and so does Henry's frame announced over it, before
+/// its body; the server's stop closes Frank's with 1001 (going away).
 async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     println!("The model is unreachable.");
     let endpoint = unreachable_model().await?;
@@ -710,6 +720,10 @@ async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>
     println!("Grace sends a message one byte over the limit.");
     grace.send("a".repeat(MESSAGE_LIMIT + 1)).await?;
     let too_large = grace.close_code(TOLD_PATIENCE).await;
+    let mut henry = Client::connect(server.address, CELLAR, "henry", "Henry").await?;
+    println!("Henry announces a frame of {ANNOUNCED} bytes and sends its first KiB.");
+    henry.announce(ANNOUNCED).await?;
+    let refused_at_header = henry.close_code(TOLD_PATIENCE).await;
     tokio::time::timeout(STOP_PATIENCE, server.stop()).await??;
     let going_away = frank.close_code(TOLD_PATIENCE).await;
 
@@ -723,6 +737,10 @@ async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>
     checks.expect(
         "a message over the limit closes its connection with 1009, too large",
         too_large == Some(1009),
+    );
+    checks.expect(
+        "a frame announced over the limit is refused at its header, before its body",
+        refused_at_header == Some(1009),
     );
     checks.expect(
         "a stop closes the connections with 1001, going away",
@@ -846,6 +864,19 @@ impl Client {
     /// Sends `text` without printing it: a large one.
     async fn send(&mut self, text: String) -> Result<(), Box<dyn Error>> {
         self.socket.send(tungstenite::Message::text(text)).await?;
+        Ok(())
+    }
+
+    /// Writes, under the WebSocket, the header of a text frame of `length`
+    /// bytes, then its first KiB, and nothing more.
+    async fn announce(&mut self, length: u64) -> Result<(), Box<dyn Error>> {
+        // FIN and text; masked, a 64-bit length, the mask 0 leaving the
+        // payload as it is.
+        let mut frame = vec![0x81, 0x80 | 127];
+        frame.extend_from_slice(&length.to_be_bytes());
+        frame.extend_from_slice(&[0; 4]);
+        frame.extend_from_slice(&[b'a'; 1024]);
+        self.socket.get_mut().write_all(&frame).await?;
         Ok(())
     }
 
