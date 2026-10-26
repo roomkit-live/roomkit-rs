@@ -26,6 +26,17 @@ pub enum ModelError {
         reason: &'static str,
     },
 
+    /// A channel type's name holds a character other than a lowercase ASCII
+    /// letter, a digit, `_` or `-`.
+    #[error(
+        "channel type {value:?} is not allowed: a name is lowercase ASCII letters, digits, `_` \
+         and `-`"
+    )]
+    InvalidChannelType {
+        /// The refused name.
+        value: String,
+    },
+
     /// A visibility does not follow the grammar of RFC §7.3 (gap G-002).
     #[error("visibility {value:?} is not valid: {reason}")]
     InvalidVisibility {

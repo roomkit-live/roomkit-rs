@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use super::{Metadata, ModelError};
 
-/// The kind of a channel (RFC §6.2): an open name, written as a plain
-/// string (`sms`, `teams`).
+/// The kind of a channel (RFC §6.2): an open name of lowercase ASCII
+/// letters, digits, `_` and `-`, written as a plain string (`sms`, `teams`).
 ///
 /// The RFC lists the types it knows, and the Python implementation writes
 /// more (`discord`, `buzz`); any other name is a type too, so a record that
@@ -79,17 +79,30 @@ impl ChannelType {
     /// The framework's own records. Reserved: no channel may claim it.
     pub const SYSTEM: Self = Self(Cow::Borrowed("system"));
 
-    /// The type named `name`.
+    /// The type named `name`: lowercase ASCII letters, digits, `_` and `-`,
+    /// as every name the Python implementation writes, so that a name is
+    /// written one way only (`SMS` is not `sms`).
     ///
     /// # Errors
     ///
-    /// Returns [`ModelError::EmptyIdentifier`] for an empty name.
+    /// Returns [`ModelError::EmptyIdentifier`] for an empty name, and
+    /// [`ModelError::InvalidChannelType`] for one holding another
+    /// character.
     pub fn new(name: impl Into<String>) -> Result<Self, ModelError> {
         let name = name.into();
         if name.is_empty() {
             return Err(ModelError::EmptyIdentifier {
                 kind: "channel type",
             });
+        }
+        let allowed = |character: char| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || character == '_'
+                || character == '-'
+        };
+        if !name.chars().all(allowed) {
+            return Err(ModelError::InvalidChannelType { value: name });
         }
         Ok(Self(Cow::Owned(name)))
     }
@@ -358,11 +371,24 @@ mod tests {
         );
     }
 
+    /// A name is lowercase ASCII letters, digits, `_` and `-`, as every
+    /// name the Python implementation writes: `SMS` would miss `sms`'s
+    /// identities, hook filters and addressing, and `HOST` would pass for
+    /// an ordinary name.
     #[test]
-    fn an_empty_name_is_refused() {
+    fn a_name_other_than_lowercase_letters_digits_underscore_or_hyphen_is_refused() {
+        let refused = |names: &[&str]| -> Vec<bool> {
+            names
+                .iter()
+                .map(|name| serde_json::from_value::<ChannelType>(json!(name)).is_err())
+                .collect()
+        };
         assert_eq!(
-            serde_json::from_value::<ChannelType>(json!("")).is_err(),
-            true
+            (
+                refused(&["", " ", "SMS", "Sms", "x\ny", "HOST", "System", "sms "]),
+                refused(&["slack", "whatsapp_personal", "my-type", "x2"])
+            ),
+            (vec![true; 8], vec![false; 4])
         );
     }
 
