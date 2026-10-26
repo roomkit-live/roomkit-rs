@@ -143,9 +143,12 @@ fn role(role: Role) -> &'static str {
     }
 }
 
-/// A chat completion, as far as a turn reads it.
+/// A chat completion, as far as a turn reads it. An OpenAI-compatible
+/// server may write `null` for any member it leaves out: each reads as
+/// absent ([`nullable`]).
 #[derive(Debug, Deserialize)]
 struct Completion {
+    #[serde(default, deserialize_with = "nullable")]
     choices: Vec<Choice>,
     #[serde(default)]
     usage: Option<Usage>,
@@ -164,21 +167,22 @@ struct Choice {
 struct AnswerMessage {
     #[serde(default)]
     content: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     tool_calls: Vec<AnswerCall>,
 }
 
 /// A call the answer makes.
 #[derive(Debug, Deserialize)]
 struct AnswerCall {
-    #[serde(default)]
+    /// Empty when the server gave none: the loop makes one.
+    #[serde(default, deserialize_with = "nullable")]
     id: String,
     function: AnswerFunction,
 }
 
 #[derive(Debug, Deserialize)]
 struct AnswerFunction {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     name: String,
     /// The arguments' JSON text; some servers send an object instead.
     #[serde(default)]
@@ -188,9 +192,9 @@ struct AnswerFunction {
 /// What a completion used.
 #[derive(Debug, Deserialize)]
 struct Usage {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     prompt_tokens: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     completion_tokens: i64,
     #[serde(default)]
     prompt_tokens_details: Option<PromptDetails>,
@@ -198,8 +202,18 @@ struct Usage {
 
 #[derive(Debug, Deserialize)]
 struct PromptDetails {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable")]
     cached_tokens: i64,
+}
+
+/// A member that reads `null` as absent: its type's default, a count of 0,
+/// an empty text or list, as the reference implementation reads it.
+fn nullable<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// What a completion's first choice answers: its text, empty when it has
@@ -390,6 +404,35 @@ mod tests {
                 })
             )
         );
+    }
+
+    /// An OpenAI-compatible server may write `null` for any member it
+    /// leaves out: each reads as absent, a count as 0, a call's id made by
+    /// the loop.
+    #[test]
+    fn a_completion_s_nulls_read_as_absent() {
+        let body = br#"{"id": null, "choices": [{"index": 0, "finish_reason": null,
+            "message": {"role": "assistant", "content": null, "refusal": null,
+                "tool_calls": [{"id": null, "type": "function",
+                    "function": {"name": "lookup", "arguments": null}}]}}],
+            "usage": {"prompt_tokens": null, "completion_tokens": 7, "total_tokens": null,
+                "prompt_tokens_details": {"cached_tokens": null}}}"#;
+        let read = response(body, "sk-1").unwrap();
+        assert_eq!(
+            (read.calls, Value::Object(read.done.usage)),
+            (
+                vec![ProviderToolCall::new("", "lookup", "")],
+                serde_json::json!({ "input_tokens": 0, "output_tokens": 7 })
+            )
+        );
+    }
+
+    #[test]
+    fn a_message_with_null_calls_says_its_text() {
+        let body = br#"{"choices": [{"message": {"content": "Hi", "tool_calls": null}}],
+            "usage": null}"#;
+        let read = response(body, "sk-1").unwrap();
+        assert_eq!((read.text.as_str(), read.calls.len()), ("Hi", 0));
     }
 
     #[test]
