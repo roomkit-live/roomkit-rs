@@ -27,7 +27,7 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, FrameworkEvent, InboundError, KitError, RoomKit,
-    text_of,
+    WeakRoomKit, text_of,
 };
 
 use shared::{Checks, Log};
@@ -41,10 +41,11 @@ struct Note {
 }
 
 /// An agent whose turn, on each of the customer's messages, first posts a
-/// note into the room with `send_event`, then answers.
+/// note into the room with `send_event`, then answers. The kit holds the
+/// agent, so the agent holds the kit weakly.
 struct Agent {
     declaration: ChannelDeclaration,
-    kit: RoomKit,
+    kit: WeakRoomKit,
     customer: RecordingTransport,
     notes: Log<Note>,
 }
@@ -64,7 +65,7 @@ impl Agent {
         );
         Self {
             declaration,
-            kit: kit.clone(),
+            kit: kit.downgrade(),
             customer: customer.clone(),
             notes: notes.clone(),
         }
@@ -106,12 +107,17 @@ impl Channel for Agent {
             self.declaration.channel_id.clone(),
             EventContent::text("Let me check your refund..."),
         );
-        let (kit, customer, notes) = (self.kit.clone(), self.customer.clone(), self.notes.clone());
+        let (kit, customer, notes) = (
+            self.kit.upgrade(),
+            self.customer.clone(),
+            self.notes.clone(),
+        );
         async move {
             if !from_customer {
                 return Ok(ChannelOutput::default());
             }
             // A call from a turn into its own room returns at its decision.
+            let kit = kit.ok_or("the kit was dropped")?;
             let sent = kit.send_event(&event.room_id, note).await?;
             let delivered_yet = customer.texts().contains(&text_of(&sent.content));
             notes.push(Note {

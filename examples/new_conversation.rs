@@ -2,7 +2,9 @@
 //! room of theirs yet. The router finds none, so each first message opens a
 //! room of its own, bound to its sender (RFC §10.4, §10.1 step 2). An
 //! `ON_ROOM_CREATED` hook attaches the agent, which answers each customer at
-//! their own number. The first customer's next message is routed back to
+//! their own number. The hook holds its kit weakly (`RoomKit::downgrade`):
+//! the kit holds the hook, so a clone would keep the kit and its store from
+//! ever being freed. The first customer's next message is routed back to
 //! their room.
 //!
 //! ```sh
@@ -68,16 +70,19 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let agent = EchoAgent::new(ChannelId::new("ai")?, "Bonjour! You said: ").quoting();
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent.clone())?;
-    let attaching = kit.clone();
+    let attaching = kit.downgrade();
     let agent_id = agent.id().clone();
     kit.observe(
         "attach_agent",
         HookTrigger::OnRoomCreated,
         move |event, _| {
-            let (kit, agent_id) = (attaching.clone(), agent_id.clone());
+            let (kit, agent_id) = (attaching.upgrade(), agent_id.clone());
             async move {
-                // The hook's failure would be logged; the example's checks see it.
-                let _attached = kit.attach(&event.room_id, &agent_id).await;
+                // No kit once the host dropped it. The hook's failure would
+                // be logged; the example's checks see it.
+                if let Some(kit) = kit {
+                    let _attached = kit.attach(&event.room_id, &agent_id).await;
+                }
             }
         },
     )?;

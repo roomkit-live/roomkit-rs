@@ -47,15 +47,18 @@ async fn text(
 /// Registers an observer of `ON_ROOM_CREATED` that attaches the agent to
 /// every room created, by the host or for a first message.
 fn agent_joins_every_room(kit: &RoomKit, agent: &ChannelId) -> Result<(), Box<dyn Error>> {
-    let (attaching, agent) = (kit.clone(), agent.clone());
+    // The kit holds the hook, so the hook holds the kit weakly.
+    let (attaching, agent) = (kit.downgrade(), agent.clone());
     kit.observe(
         "agent_joins",
         HookTrigger::OnRoomCreated,
         move |event, _| {
-            let (kit, agent) = (attaching.clone(), agent.clone());
+            let (kit, agent) = (attaching.upgrade(), agent.clone());
             async move {
                 // A failure would be logged; the example's checks see it.
-                let _attached = kit.attach(&event.room_id, &agent).await;
+                if let Some(kit) = kit {
+                    let _attached = kit.attach(&event.room_id, &agent).await;
+                }
             }
         },
     )?;

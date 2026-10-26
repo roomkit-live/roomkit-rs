@@ -9,6 +9,7 @@
 //!   pipeline;
 //! - `timers`: applying room timers, on demand or in the background;
 //! - `background`: waiting for the kit's background work, and ending it;
+//! - `weak`: the kit held without keeping it alive;
 //! - `organization`: the kit acting for one organization;
 //! - `scope`: the organization a call acts for, which every call is
 //!   written once for.
@@ -24,6 +25,7 @@ mod scope;
 #[cfg(test)]
 mod tests;
 mod timers;
+mod weak;
 
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -40,6 +42,7 @@ use tokio::sync::broadcast;
 pub use self::organization::OrganizationKit;
 use self::scope::Scope;
 pub use self::timers::TimerSweeper;
+pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;
 use crate::context;
 use crate::cursors::RoomCursors;
@@ -66,7 +69,9 @@ const PROCESS_INBOUND_IN: &str = "process_inbound_in";
 
 /// A RoomKit deployment: its channels, its hooks and its store.
 ///
-/// Cloning a kit is cheap; every clone is the same kit.
+/// Cloning a kit is cheap; every clone is the same kit. A hook or a channel
+/// the kit holds, which would make a cycle with a clone, holds the kit
+/// weakly ([`downgrade`](Self::downgrade)).
 ///
 /// ```no_run
 /// # async fn example(sms: impl roomkit::Channel) -> Result<(), Box<dyn std::error::Error>> {

@@ -436,6 +436,11 @@ as it stands.
   not a crate; `axum`, `tokio-tungstenite` and `futures-util` are
   development dependencies of the examples only. The README's quickstart
   points at it.
+- **A kit held weakly** (step 4, milestone 4): `RoomKit::downgrade()`
+  gives a `WeakRoomKit`, whose `upgrade()` gives the kit back while a
+  clone of it lives and `None` once the host dropped the last. A hook or a
+  channel the kit holds holds its kit so: a `RoomKit` clone made a cycle,
+  and the kit and its store, a SQLite file included, were never freed.
 - **Examples**, one runnable file each, every one checking what it shows:
   the RFC's Appendix B flows (`echo_room`, `new_conversation`,
   `block_and_inject`, `agent_chain`, `advisor_joins`,

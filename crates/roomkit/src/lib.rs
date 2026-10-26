@@ -15,6 +15,8 @@
 //!   a call made under the lock or in the room's admission order is adopted
 //!   by the call whose work made it, and a turn's or a delivery's call
 //!   returns at its decision.
+//! - [`WeakRoomKit`]: the kit held without keeping it alive, for a hook or
+//!   a channel that calls into the kit holding it.
 //! - [`OrganizationKit`]: the kit acting for one organization, every call
 //!   reaching its rooms only (RFC §17.2); the kit itself acts for none.
 //! - [`InboundRoomRouter`]: a routing strategy; [`DefaultRouter`] is the
@@ -76,7 +78,7 @@ pub use self::environment::SystemEnvironment;
 pub use self::error::KitError;
 pub use self::hooks::{HookError, HookFuture, HookHandler, HookReturn};
 pub use self::host::HostChannel;
-pub use self::kit::{OrganizationKit, RoomKit, TimerSweeper};
+pub use self::kit::{OrganizationKit, RoomKit, TimerSweeper, WeakRoomKit};
 pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
 pub use self::store::{
     ConversationStore, EventFilter, InMemoryStore, RoomFilter, StoreError, StoreFailure,
