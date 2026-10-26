@@ -29,36 +29,36 @@ use crate::model::{ChannelBinding, ChannelType};
 
 /// The binding metadata key of a recipient's phone number (Appendix A.1,
 /// A.3, A.4).
-pub const PHONE_NUMBER: &str = "phone_number";
+pub(crate) const PHONE_NUMBER: &str = "phone_number";
 
 /// The binding metadata key of a recipient's email address (Appendix A.2).
-pub const EMAIL_ADDRESS: &str = "email_address";
+pub(crate) const EMAIL_ADDRESS: &str = "email_address";
 
 /// The binding metadata key of a Messenger recipient (Appendix A.5).
-pub const FACEBOOK_USER_ID: &str = "facebook_user_id";
+pub(crate) const FACEBOOK_USER_ID: &str = "facebook_user_id";
 
 /// The binding metadata key of a Teams conversation (Appendix A.6).
-pub const TEAMS_CONVERSATION_ID: &str = "teams_conversation_id";
+pub(crate) const TEAMS_CONVERSATION_ID: &str = "teams_conversation_id";
 
 /// The binding metadata key of a Telegram chat, which its provider sends to
 /// (Appendix A.13, gap G-051).
-pub const TELEGRAM_CHAT_ID: &str = "telegram_chat_id";
+pub(crate) const TELEGRAM_CHAT_ID: &str = "telegram_chat_id";
 
 /// The metadata key under which a Telegram message carries the chat it was
 /// posted in (Appendix A.13, gap G-057).
-pub const TELEGRAM_CHAT: &str = "chat_id";
+pub(crate) const TELEGRAM_CHAT: &str = "chat_id";
 
 /// The metadata key under which a Teams message carries the conversation it
 /// was posted in (Appendix A.6, gap G-057).
-pub const TEAMS_CONVERSATION: &str = "conversation_id";
+pub(crate) const TEAMS_CONVERSATION: &str = "conversation_id";
 
 /// The metadata key under which a WhatsApp Personal group message carries
 /// its group (Appendix A.4, gap G-057); a private message carries none.
-pub const WHATSAPP_GROUP: &str = "group_jid";
+pub(crate) const WHATSAPP_GROUP: &str = "group_jid";
 
 /// The sender under which the framework writes into a room itself; it names
 /// no correspondent (RFC §10.4).
-pub const SYSTEM_SENDER: &str = "system";
+pub(crate) const SYSTEM_SENDER: &str = "system";
 
 /// The most digits a phone number holds (ITU-T E.164).
 const MAX_DIGITS: usize = 15;
@@ -171,7 +171,7 @@ impl AddressForm {
 
     /// The recipient `binding` delivers to, in the channel's form: its
     /// value under the channel's recipient key, when it is one
-    /// ([`has_recipient`]). An integer, a Telegram chat id, is written in
+    /// (`has_recipient`). An integer, a Telegram chat id, is written in
     /// its digits.
     pub fn recipient(&self, binding: &ChannelBinding) -> Option<String> {
         match self.held(binding) {
@@ -259,7 +259,7 @@ pub(crate) fn written(value: &Value) -> Option<Written<'_>> {
 /// `address` in the form of a channel addressed by `addressing` (RFC §5.7,
 /// §10.1 step 1): a phone number in E.164 when it reads as one, an email
 /// address lower-case without its display name, any other id as written.
-pub fn normalize(
+pub(crate) fn normalize(
     address: &str,
     addressing: Addressing,
     country_code: Option<&CountryCode>,
@@ -292,7 +292,7 @@ pub fn normalize(
 /// national number in China, `+13800138000` one in North America), and
 /// reading them as international would merge two people. No E.164 number
 /// starts with `0`.
-pub fn phone_number(address: &str, country_code: Option<&CountryCode>) -> Option<String> {
+pub(crate) fn phone_number(address: &str, country_code: Option<&CountryCode>) -> Option<String> {
     let number = without_trunk_mark(without_scheme(address.trim()));
     let (international, digits) = dial(&number)?;
     if international {
@@ -313,7 +313,7 @@ pub fn phone_number(address: &str, country_code: Option<&CountryCode>) -> Option
 
 /// `address` lower-case, without its display name (RFC §5.7): `Alice
 /// <Alice@Example.com>` is `alice@example.com`.
-pub fn email_address(address: &str) -> String {
+pub(crate) fn email_address(address: &str) -> String {
     let address = address.trim();
     let bare = address
         .strip_suffix('>')
@@ -330,7 +330,7 @@ pub fn email_address(address: &str) -> String {
 /// destination of its own, a WebSocket's connections, a webhook's URL, a
 /// voice session, which needs no recipient (RFC §10.2 step 3d), and for any
 /// name not listed: a channel's declaration sets its own.
-pub fn recipient_key(channel_type: &ChannelType) -> Option<&'static str> {
+pub(crate) fn recipient_key(channel_type: &ChannelType) -> Option<&'static str> {
     match channel_type.as_str() {
         "sms" | "mms" | "rcs" | "whatsapp" | "whatsapp_personal" => Some(PHONE_NUMBER),
         "email" => Some(EMAIL_ADDRESS),
@@ -348,7 +348,7 @@ pub fn recipient_key(channel_type: &ChannelType) -> Option<&'static str> {
 /// group's and private messages their sender's. `None` for every other
 /// name, whose messages are routed by their sender, unless a channel's
 /// declaration sets a key.
-pub fn chat_key(channel_type: &ChannelType) -> Option<&'static str> {
+pub(crate) fn chat_key(channel_type: &ChannelType) -> Option<&'static str> {
     match channel_type.as_str() {
         "telegram" => Some(TELEGRAM_CHAT),
         "teams" => Some(TEAMS_CONVERSATION),
@@ -362,7 +362,7 @@ pub fn chat_key(channel_type: &ChannelType) -> Option<&'static str> {
 /// integer (RFC §5.7, §10.2 step 3d, gaps G-075, G-078). A delivery to a
 /// binding with none, no value or a value that is not a recipient alike, is
 /// refused `no_recipient`.
-pub fn has_recipient(binding: &ChannelBinding, key: &str) -> bool {
+pub(crate) fn has_recipient(binding: &ChannelBinding, key: &str) -> bool {
     binding.metadata.get(key).and_then(written).is_some()
 }
 

@@ -22,7 +22,10 @@ use crate::model::{
 /// - Text is then cut to the channel's `max_length`, counted in Unicode code
 ///   points; a cut text ends with `...` within the limit, unless the limit
 ///   is below 4 code points (gap G-008).
-pub fn transcode(content: &EventContent, capabilities: &ChannelCapabilities) -> EventContent {
+pub(crate) fn transcode(
+    content: &EventContent,
+    capabilities: &ChannelCapabilities,
+) -> EventContent {
     let transcoded = transcode_content(content, capabilities);
     match capabilities.max_length {
         Some(max_length) => truncate(transcoded, max_length),

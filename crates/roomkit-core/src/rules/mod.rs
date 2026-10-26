@@ -9,7 +9,7 @@
 //!
 //! | Module | RFC |
 //! |---|---|
-//! | [`permissions`] | §7.5, §10.2 step 2, §19.3: who reads, who writes, whom a broadcast reaches |
+//! | `permissions` | §7.5, §10.2 step 2, §19.3: who reads, who writes, whom a broadcast reaches |
 //! | [`attachment`] | §7.5 rule 7, §10.6.5: a detach's revocation, when the framework attaches a channel itself, and the room metadata the implementation reserves |
 //! | [`addresses`] | §5.7, §10.1 step 1, §10.2 step 3d: an address in its channel's form, and a binding's recipient |
 //! | [`organizations`] | §17.2: which rooms a caller reaches, by the organization it acts for |
@@ -22,7 +22,7 @@
 //! | [`timers`] | §5.1: which timer transition falls due, and when |
 //! | [`edits`] | §10.1 step 8a, §10.3: whether an edit or a delete may change its target, and what the commit writes on it |
 //! | [`idempotency`] | §13.4: a blank idempotency key is no key |
-//! | [`host`] | §10.5: who a post of the host's own voice may speak as |
+//! | `host` | §10.5: who a post of the host's own voice may speak as |
 //! | [`instructions`] | §10.1.1: what an instruction must be before anything is read, what a modify keeps of it, what its turn reads, and its responses' fingerprint |
 //! | [`transcript`] | §6.4, §10.1.1 rule 6: the conversation an intelligence channel's turn reads, each message in its author's role, labelled by its speaker when several speak, an instruction marked as the application's, and no copy of the runtime's marks |
 //!
@@ -44,13 +44,13 @@ pub mod chain_depth;
 pub mod edits;
 pub mod hook_chain;
 pub mod hook_registry;
-pub mod host;
+pub(crate) mod host;
 pub mod idempotency;
 pub mod instructions;
 pub mod lifecycle;
 mod lookalike;
 pub mod organizations;
-pub mod permissions;
+pub(crate) mod permissions;
 pub(crate) mod records;
 pub mod routing;
 pub(crate) mod threads;

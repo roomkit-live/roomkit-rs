@@ -180,7 +180,7 @@ pub struct HookSpec {
 }
 
 /// A hook's timeout when its registration names none (RFC §9.1).
-pub const DEFAULT_HOOK_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const DEFAULT_HOOK_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl HookSpec {
     /// A hook named `name` on `trigger`, run as `execution`, with the RFC

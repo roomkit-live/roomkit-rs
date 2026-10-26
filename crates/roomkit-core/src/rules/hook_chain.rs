@@ -42,7 +42,7 @@ impl<P> HookOutcome<P> {
 
 /// What went wrong with a hook that produced no usable result (RFC §9.3).
 #[derive(Clone, Debug, PartialEq)]
-pub enum HookProblem {
+pub(crate) enum HookProblem {
     /// It raised.
     Raised(ErrorRecord),
     /// It ran past its timeout.
@@ -53,7 +53,7 @@ pub enum HookProblem {
 
 impl HookProblem {
     /// The code a fail-closed block names the problem with (RFC §9.3).
-    pub fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::Raised(_) => "hook_error",
             Self::TimedOut => "hook_timeout",
@@ -65,7 +65,7 @@ impl HookProblem {
 /// A hook that produced no usable result: the operation logs it and emits
 /// the framework event it calls for (`hook_error`, `hook_timeout`).
 #[derive(Clone, Debug, PartialEq)]
-pub struct HookIncident {
+pub(crate) struct HookIncident {
     /// The hook's name.
     pub hook: String,
     /// What went wrong.
@@ -77,7 +77,7 @@ pub struct HookIncident {
 
 /// What the chain decided on its payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ChainDecision {
+pub(crate) enum ChainDecision {
     /// The payload goes on.
     Allowed,
     /// A hook stopped it.
@@ -93,7 +93,7 @@ pub enum ChainDecision {
 
 /// Everything a finished chain produced.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ChainVerdict<P> {
+pub(crate) struct ChainVerdict<P> {
     /// Allowed or blocked.
     pub decision: ChainDecision,
     /// The payload as the last modify before the end or the block left it:
@@ -111,7 +111,7 @@ pub struct ChainVerdict<P> {
 
 /// A chain of SYNC hooks on one payload, fed one outcome at a time.
 #[derive(Clone, Debug)]
-pub struct HookChain<P> {
+pub(crate) struct HookChain<P> {
     payload: P,
     trigger_fails_closed: bool,
     block: Option<(String, Option<String>)>,
@@ -123,7 +123,7 @@ pub struct HookChain<P> {
 
 impl<P> HookChain<P> {
     /// A chain of `trigger`'s hooks on `payload`.
-    pub fn new(trigger: HookTrigger, payload: P) -> Self {
+    pub(crate) fn new(trigger: HookTrigger, payload: P) -> Self {
         Self {
             payload,
             trigger_fails_closed: trigger.fails_closed(),
@@ -137,25 +137,26 @@ impl<P> HookChain<P> {
 
     /// The payload the next hook receives: the original, or the last
     /// replacement.
-    pub fn payload(&self) -> &P {
+    pub(crate) fn payload(&self) -> &P {
         &self.payload
     }
 
     /// Whether a hook blocked: no further hook may run (RFC §9.3).
-    pub fn is_blocked(&self) -> bool {
+    pub(crate) fn is_blocked(&self) -> bool {
         self.block.is_some()
     }
 
     /// Applies what `hook` produced. Once the chain is blocked, nothing more
     /// is applied: a blocked chain runs no further hook.
-    pub fn apply(&mut self, hook: &HookSpec, outcome: HookOutcome<P>) {
+    #[cfg(test)]
+    pub(crate) fn apply(&mut self, hook: &HookSpec, outcome: HookOutcome<P>) {
         self.apply_kept(hook, outcome, |payload| payload);
     }
 
     /// Applies what `hook` produced, a replacement payload as `keep` keeps
     /// it: what the hook may change of the payload it was handed, the rest
     /// put back from it before the next hook reads it (RFC §9.4).
-    pub fn apply_kept(
+    pub(crate) fn apply_kept(
         &mut self,
         hook: &HookSpec,
         outcome: HookOutcome<P>,
@@ -185,12 +186,12 @@ impl<P> HookChain<P> {
     /// Hands over the hooks that produced no usable result so far, so that
     /// a chain run in two phases reports each phase's when it ends (RFC
     /// §9.5.1: the off-lock hooks before the lock, the others under it).
-    pub fn take_incidents(&mut self) -> Vec<HookIncident> {
+    pub(crate) fn take_incidents(&mut self) -> Vec<HookIncident> {
         std::mem::take(&mut self.incidents)
     }
 
     /// What the chain decided, with everything its hooks produced.
-    pub fn finish(self) -> ChainVerdict<P> {
+    pub(crate) fn finish(self) -> ChainVerdict<P> {
         let decision = match self.block {
             Some((by, reason)) => ChainDecision::Blocked { by, reason },
             None => ChainDecision::Allowed,

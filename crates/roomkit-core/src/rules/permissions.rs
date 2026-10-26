@@ -12,7 +12,7 @@ use crate::rules::edits::{self, Mutation};
 
 /// Why a source's event may not be broadcast (RFC §7.5 rule 2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum WriteRefusal {
+pub(crate) enum WriteRefusal {
     /// The binding's access does not include writing.
     ReadOnly,
     /// The binding is muted.
@@ -25,7 +25,7 @@ pub enum WriteRefusal {
 
 impl WriteRefusal {
     /// The `blocked_by` value the refused event is stored with.
-    pub fn blocked_by(self) -> &'static str {
+    pub(crate) fn blocked_by(self) -> &'static str {
         match self {
             Self::ReadOnly => "source_read_only",
             Self::Muted => "source_muted",
@@ -39,7 +39,7 @@ impl WriteRefusal {
 ///
 /// An access without writing, `none` included, is reported before a mute:
 /// it is the lasting cause (gap G-015).
-pub fn write_refusal(source: &ChannelBinding) -> Option<WriteRefusal> {
+pub(crate) fn write_refusal(source: &ChannelBinding) -> Option<WriteRefusal> {
     if !source.access.writes() {
         Some(WriteRefusal::ReadOnly)
     } else if source.muted {
@@ -52,7 +52,7 @@ pub fn write_refusal(source: &ChannelBinding) -> Option<WriteRefusal> {
 /// Whether `reader` receives `event` through `on_event()`: it reads, the
 /// event is not its own, and the event's visibility admits it (RFC §7.5
 /// rules 1 and 5).
-pub fn receives(reader: &ChannelBinding, event: &RoomEvent) -> bool {
+pub(crate) fn receives(reader: &ChannelBinding, event: &RoomEvent) -> bool {
     reader.access.reads()
         && reader.channel_id != event.source.channel_id
         && event.visibility.admits(&reader.channel_id, reader.category)
@@ -66,7 +66,7 @@ pub fn receives(reader: &ChannelBinding, event: &RoomEvent) -> bool {
 /// reads and the event's visibility admits it. The event's visibility is the
 /// one stamped at its commit (gap G-009), so the answer does not change when
 /// a binding changes later.
-pub fn history_for<'timeline>(
+pub(crate) fn history_for<'timeline>(
     reader: &ChannelBinding,
     timeline: &'timeline [RoomEvent],
 ) -> Vec<&'timeline RoomEvent> {
@@ -90,7 +90,7 @@ pub fn history_for<'timeline>(
 /// parses a message with, and the one each target of a broadcast is told
 /// and delivered with. Hooks, which are host code, receive the room whole,
 /// as the store keeps it.
-pub fn context_for(reader: &ChannelBinding, whole: &RoomContext) -> RoomContext {
+pub(crate) fn context_for(reader: &ChannelBinding, whole: &RoomContext) -> RoomContext {
     let deleted = deleted_events(&whole.recent_events);
     RoomContext {
         room: whole.room.clone(),
@@ -157,7 +157,7 @@ fn withheld(event: &RoomEvent, deleted: &BTreeSet<&EventId>) -> RoomEvent {
 
 /// The visibility an event is committed with: what its sender asked,
 /// narrowed to what its source binding allows (gap G-009).
-pub fn effective_visibility(
+pub(crate) fn effective_visibility(
     requested: &Visibility,
     source: &ChannelBinding,
     bindings: &[ChannelBinding],
@@ -171,7 +171,7 @@ pub fn effective_visibility(
 /// listed channel's category read from the room's `bindings`. It is never
 /// wider than either; its commit narrows it once more, to its source
 /// binding's ([`effective_visibility`]).
-pub fn answer_visibility(
+pub(crate) fn answer_visibility(
     given: &Visibility,
     within: &Visibility,
     bindings: &[ChannelBinding],
@@ -223,7 +223,7 @@ fn category_in(
 
 /// Whom the broadcast of one event reaches (RFC §10.2 steps 2 and 3c).
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct DeliveryPlan {
+pub(crate) struct DeliveryPlan {
     /// The transport channels that receive the event, in channel id order.
     pub transports: Vec<TransportTarget>,
     /// The intelligence channels asked to act on the event, a turn each.
@@ -235,7 +235,7 @@ pub struct DeliveryPlan {
 
 /// A transport channel a broadcast reaches.
 #[derive(Clone, Debug, PartialEq)]
-pub struct TransportTarget {
+pub(crate) struct TransportTarget {
     /// The channel's binding, as planned under the room lock.
     pub binding: ChannelBinding,
     /// Whether `deliver()` is called after `on_event()`: only for a channel
@@ -257,7 +257,7 @@ pub struct TransportTarget {
 ///
 /// A solicited channel whose response would reach `max_chain_depth` is not
 /// asked (RFC §8.3).
-pub fn plan_delivery(
+pub(crate) fn plan_delivery(
     event: &RoomEvent,
     bindings: &[ChannelBinding],
     policy: AgentResponsePolicy,
@@ -300,7 +300,7 @@ pub fn plan_delivery(
 /// The visibility of an event a hook injected for `targets` (RFC §9.4, gap
 /// G-031): the targets the room binds, among its `bindings`; `none` when it
 /// binds none of them, or when the event is stored only (`None`).
-pub fn targets_visibility(
+pub(crate) fn targets_visibility(
     targets: Option<&[ChannelId]>,
     bindings: &[ChannelBinding],
 ) -> Visibility {
@@ -321,7 +321,7 @@ pub fn targets_visibility(
 /// within `given`, the visibility they were given, and within the targets
 /// the room binds now, among its `bindings`. A hook may narrow it, never
 /// widen it.
-pub fn injected_visibility(
+pub(crate) fn injected_visibility(
     requested: &Visibility,
     given: &Visibility,
     targets: Option<&[ChannelId]>,
@@ -342,7 +342,7 @@ pub fn injected_visibility(
 /// A named intelligence channel is not asked: an injected event asks no
 /// agent (gap G-021). Its visibility names the agent, which reads it in its
 /// history at its next turn.
-pub fn plan_targets(
+pub(crate) fn plan_targets(
     event: &RoomEvent,
     targets: Option<&[ChannelId]>,
     bindings: &[ChannelBinding],

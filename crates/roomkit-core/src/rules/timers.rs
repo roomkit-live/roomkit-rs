@@ -26,7 +26,7 @@ pub struct DueTransition {
 
 /// The room's next timer transition and when it falls due, whether or not
 /// it has; `None` when no timer of its status is set.
-pub fn next(room: &Room) -> Option<DueTransition> {
+pub(crate) fn next(room: &Room) -> Option<DueTransition> {
     let (transition, since, seconds) = match room.status {
         RoomStatus::Active => (
             Transition::Pause,

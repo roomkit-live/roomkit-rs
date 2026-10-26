@@ -9,13 +9,13 @@ use crate::model::{
 };
 
 /// The default `max_chain_depth` (RFC §8.3).
-pub const DEFAULT_MAX_CHAIN_DEPTH: u32 = 5;
+pub(crate) const DEFAULT_MAX_CHAIN_DEPTH: u32 = 5;
 
 /// The `blocked_by` of a channel not asked at the chain-depth limit.
-pub const CHAIN_DEPTH_LIMIT: &str = "event_chain_depth_limit";
+pub(crate) const CHAIN_DEPTH_LIMIT: &str = "event_chain_depth_limit";
 
 /// The `blocked_by` of a response past its cascade's reentry budget.
-pub const REENTRY_LOOP_CAP: &str = "reentry_loop_cap";
+pub(crate) const REENTRY_LOOP_CAP: &str = "reentry_loop_cap";
 
 /// The chain depth of a response to `trigger`: one more than the trigger's,
 /// whichever path produces it (RFC §8.3).
@@ -26,7 +26,7 @@ pub fn response_depth(trigger: &RoomEvent) -> u32 {
 /// Whether a response to an event of `trigger_depth` would reach
 /// `max_chain_depth`, so that no intelligence channel may be asked for it
 /// (RFC §8.3: `chain_depth + 1 >= max_chain_depth`).
-pub fn reaches_limit(trigger_depth: u32, max_chain_depth: u32) -> bool {
+pub(crate) fn reaches_limit(trigger_depth: u32, max_chain_depth: u32) -> bool {
     trigger_depth.saturating_add(1) >= max_chain_depth
 }
 
@@ -36,7 +36,7 @@ pub fn reaches_limit(trigger_depth: u32, max_chain_depth: u32) -> bool {
 ///
 /// The record answers `trigger` (RFC §8.5) and travels outbound, as a
 /// response does (gap G-013).
-pub fn not_asked_record(
+pub(crate) fn not_asked_record(
     id: EventId,
     trigger: &RoomEvent,
     agent: &ChannelBinding,
@@ -65,7 +65,7 @@ pub fn not_asked_record(
 /// The observation that goes with a not-asked record (RFC §8.3: "its own
 /// observation"), whose content and category the RFC leaves open (gap
 /// G-016).
-pub fn not_asked_observation(
+pub(crate) fn not_asked_observation(
     id: ObservationId,
     trigger: &RoomEvent,
     agent: &ChannelBinding,
@@ -136,7 +136,7 @@ impl ReentryBudget {
     }
 
     /// Spends one pass, or answers `false` when none is left: the response
-    /// or the injection is then stored blocked with [`REENTRY_LOOP_CAP`]
+    /// or the injection is then stored blocked with `REENTRY_LOOP_CAP`
     /// instead.
     pub fn take_pass(&self) -> bool {
         take_one(&self.passes)

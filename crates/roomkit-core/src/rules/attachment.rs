@@ -31,7 +31,7 @@ use crate::model::{ChannelId, Metadata, Room, RoomContext, RoomUpdates, Timestam
 
 /// The prefix of the room metadata keys the implementation reserves (gap
 /// G-049).
-pub const RESERVED_PREFIX: &str = "roomkit:";
+pub(crate) const RESERVED_PREFIX: &str = "roomkit:";
 
 /// The room metadata key holding the room's revocations: the list of the
 /// revoked channels' ids.
@@ -40,16 +40,16 @@ pub const REVOCATIONS_KEY: &str = "roomkit:detached_channels";
 /// The key of the record roomkit-rs kept before, a map of each revoked
 /// channel to the instant it was detached; read, and folded into
 /// [`REVOCATIONS_KEY`] by the next write.
-pub const FORMER_REVOCATIONS_KEY: &str = "roomkit:detached";
+pub(crate) const FORMER_REVOCATIONS_KEY: &str = "roomkit:detached";
 
 /// Whether a room metadata key belongs to the implementation's namespace,
 /// which integrator writes refuse (RFC §10.6.5).
-pub fn is_reserved_key(key: &str) -> bool {
+pub(crate) fn is_reserved_key(key: &str) -> bool {
     key.starts_with(RESERVED_PREFIX)
 }
 
 /// The first key of `metadata` an integrator may not write, if any.
-pub fn reserved_key(metadata: &Metadata) -> Option<&str> {
+pub(crate) fn reserved_key(metadata: &Metadata) -> Option<&str> {
     metadata
         .keys()
         .map(String::as_str)
@@ -66,7 +66,7 @@ pub fn revoked(room: &Room, channel: &ChannelId) -> bool {
 /// message arriving on it (RFC §10.1 step 2): never once the channel was
 /// detached from the room, never over a binding the room has (RFC §7.5 rule
 /// 7), and never to a room whose status refuses the message (gap G-053).
-pub fn may_attach_automatically(context: &RoomContext, channel: &ChannelId) -> bool {
+pub(crate) fn may_attach_automatically(context: &RoomContext, channel: &ChannelId) -> bool {
     let bound = context.binding(channel).is_some();
     !bound && !revoked(&context.room, channel) && context.room.status.accepts_events()
 }
@@ -84,7 +84,11 @@ pub fn revoke(room: &Room, channel: &ChannelId, at: Timestamp) -> RoomUpdates {
 /// The write that clears `channel`'s revocation as of `at`, for an explicit
 /// attach; `None` when the channel is not revoked. The record goes once it
 /// holds no revocation.
-pub fn clear_revocation(room: &Room, channel: &ChannelId, at: Timestamp) -> Option<RoomUpdates> {
+pub(crate) fn clear_revocation(
+    room: &Room,
+    channel: &ChannelId,
+    at: Timestamp,
+) -> Option<RoomUpdates> {
     let mut revocations = revocations(room);
     let before = revocations.len();
     revocations.retain(|item| !names(item, channel));

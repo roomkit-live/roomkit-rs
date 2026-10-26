@@ -96,7 +96,7 @@ impl Transition {
 /// the state they leave (gap G-045). The room's `updated_at` is the caller's
 /// to write: a transition applied late takes the instant it fell due, while
 /// the room is modified when the write happens.
-pub fn apply(room: &mut Room, transition: Transition, at: Timestamp) -> bool {
+pub(crate) fn apply(room: &mut Room, transition: Transition, at: Timestamp) -> bool {
     if !transition.leaves_from(room.status) {
         return false;
     }

@@ -7,16 +7,16 @@
 //! [`DeleteContent`]. A type and a content that disagree name no target the
 //! pipeline can check, and are refused as an event whose target is not
 //! found ([`mutation`], gap G-062). So is an edit or a delete held anywhere
-//! else: an edit's new content, or a composite's part ([`holds_change`]).
+//! else: an edit's new content, or a composite's part (`holds_change`).
 //!
-//! Step 8a checks, in order ([`validate`]):
+//! Step 8a checks, in order (`validate`):
 //!
 //! 1. the target: an event of the same room, received (not `BLOCKED`), not
 //!    deleted, and itself neither an edit nor a delete;
 //! 2. who may make the change, by the authority it claims ([`Authority`]):
 //!    - its author, for a `SENDER` delete and an edit whose `edit_source` is
 //!      `sender` or null: the same participant on their channel (RFC §5.5),
-//!      or the same sender id on the same channel ([`author`]);
+//!      or the same sender id on the same channel (`author`);
 //!    - an administrator, for an `ADMIN` delete: an OWNER or an AGENT, as
 //!      the participant the sender is on their channel;
 //!    - the system, for a `SYSTEM` delete and an edit whose `edit_source` is
@@ -27,10 +27,10 @@
 //! participant's name. Each failed check is one of the RFC's four reasons
 //! ([`EditRefusal`]).
 //!
-//! The target is changed at the commit, never before ([`target_updates`]):
+//! The target is changed at the commit, never before (`target_updates`):
 //! an edit writes its new content and `metadata.edited = true`, a delete
 //! `metadata.deleted = true`. The change reaches no one who could not see
-//! its target ([`visibility_within`]).
+//! its target (`visibility_within`).
 
 use serde_json::Value;
 
@@ -41,7 +41,7 @@ use crate::model::{
 };
 
 /// The metadata key an accepted edit sets on its target (RFC §10.3).
-pub const EDITED: &str = "edited";
+pub(crate) const EDITED: &str = "edited";
 
 /// The metadata key an accepted delete sets on its target (RFC §10.3).
 pub const DELETED: &str = "deleted";
@@ -121,7 +121,7 @@ pub enum Authority {
 
 /// Who brought the event to the pass that checks it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Origin {
+pub(crate) enum Origin {
     /// A channel: an inbound message, or a channel's response.
     Channel,
     /// A hook, which injected the event (RFC §9.4).
@@ -131,7 +131,7 @@ pub enum Origin {
 /// Who wrote an event, as authorship is compared (RFC §10.3 validation rule
 /// 2, §5.5).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Author {
+pub(crate) enum Author {
     /// A participant of the room, named on a channel it was reached through.
     Participant(ParticipantId),
     /// A sender who names no participant: their id on their channel.
@@ -172,7 +172,7 @@ pub fn mutation(event: &RoomEvent) -> Result<Option<Mutation<'_>>, EditRefusal> 
 /// Whether `content` is, or holds, an edit or a delete: itself, a part of a
 /// composite, or an edit's new content (gap G-062). Only the whole content
 /// of an `EDIT` or a `DELETE` event may be one.
-pub fn holds_change(content: &EventContent) -> bool {
+pub(crate) fn holds_change(content: &EventContent) -> bool {
     match content {
         EventContent::Edit(_) | EventContent::Delete(_) => true,
         EventContent::Composite(composite) => composite.parts().iter().any(holds_change),
@@ -197,7 +197,7 @@ pub fn holds_change(content: &EventContent) -> bool {
 /// # Errors
 ///
 /// Returns the first check that fails, as an [`EditRefusal`].
-pub fn validate(
+pub(crate) fn validate(
     event: &RoomEvent,
     mutation: &Mutation<'_>,
     target: Option<&RoomEvent>,
@@ -305,7 +305,7 @@ fn check_author(
 ///
 /// Ids compare as written: the pipeline writes a sender in its channel's
 /// form before anything reads it (RFC §10.1 step 1).
-pub fn author(event: &RoomEvent, participants: &[Participant]) -> Option<Author> {
+pub(crate) fn author(event: &RoomEvent, participants: &[Participant]) -> Option<Author> {
     let source = &event.source;
     if source.direction == EventDirection::Outbound {
         return Some(Author::Channel(source.channel_id.clone()));
@@ -349,7 +349,7 @@ pub fn is_edited(event: &RoomEvent) -> bool {
 /// What the commit writes on `target` for an accepted `mutation` (RFC §10.3
 /// state updates): an edit's new content and `metadata.edited = true`, a
 /// delete's `metadata.deleted = true`. The target's other metadata is kept.
-pub fn target_updates(mutation: &Mutation<'_>, target: &RoomEvent) -> EventUpdates {
+pub(crate) fn target_updates(mutation: &Mutation<'_>, target: &RoomEvent) -> EventUpdates {
     let mut metadata = target.metadata.clone();
     match mutation {
         Mutation::Edit(edit) => {
@@ -374,7 +374,7 @@ pub fn target_updates(mutation: &Mutation<'_>, target: &RoomEvent) -> EventUpdat
 /// narrowed to its target's, so that the change reaches no one who could
 /// not see what it changes (gap G-062). A correction of a message an
 /// advisor alone saw is never delivered to the customer.
-pub fn visibility_within(
+pub(crate) fn visibility_within(
     visibility: &Visibility,
     target: &RoomEvent,
     category_of: impl Fn(&ChannelId) -> Option<ChannelCategory>,

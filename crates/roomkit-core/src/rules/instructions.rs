@@ -21,16 +21,16 @@ use crate::rules::transcoding;
 /// produced it (RFC §10.1.1 rule 6). The pipeline's alone: it writes the key
 /// on a response to an instruction and removes it from every other event
 /// (gap G-065).
-pub const INSTRUCTION: &str = "instruction";
+pub(crate) const INSTRUCTION: &str = "instruction";
 
 /// The metadata key under which an instruction carries its `standalone`
 /// word, the typed field's (RFC §10.1.1 rules 4 and 7).
-pub const STANDALONE: &str = "standalone";
+pub(crate) const STANDALONE: &str = "standalone";
 
 /// Why an instruction is refused before anything is written (RFC §10.1.1
 /// rules 1 and 2). The caller's result reports the reason.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum InstructionRefusal {
+pub(crate) enum InstructionRefusal {
     /// It names no registered intelligence channel: no address, an empty
     /// one, or one naming only channels that are not agents (gap G-065).
     Unaddressed,
@@ -41,7 +41,7 @@ pub enum InstructionRefusal {
 
 impl InstructionRefusal {
     /// The reason the refusal reports (RFC §10.1.1).
-    pub fn reason(self) -> &'static str {
+    pub(crate) fn reason(self) -> &'static str {
         match self {
             Self::Unaddressed => "instruction_unaddressed",
             Self::NotIdempotent => "instruction_not_idempotent",
@@ -57,7 +57,7 @@ impl InstructionRefusal {
 /// intelligence channel. An address must name at least one; the other names
 /// it holds ask nobody, as an address naming a channel the room does not
 /// bind (RFC §19.3 rule 2, gap G-065).
-pub fn refusal(
+pub(crate) fn refusal(
     addressed_to: Option<&[ChannelId]>,
     idempotency_key: Option<&str>,
     is_intelligence: impl Fn(&ChannelId) -> bool,
@@ -70,7 +70,7 @@ pub fn refusal(
 
 /// Whether an event of `event_type` may stand alone: an instruction only
 /// (RFC §10.1.1 rule 7).
-pub fn may_stand_alone(event_type: EventType) -> bool {
+pub(crate) fn may_stand_alone(event_type: EventType) -> bool {
     event_type == EventType::Instruction
 }
 
@@ -78,7 +78,7 @@ pub fn may_stand_alone(event_type: EventType) -> bool {
 /// parser's keys keep their values, the caller's `caller` metadata fills
 /// the others, and `standalone` is the typed field's word whatever either
 /// wrote (RFC §10.1.1 rule 4).
-pub fn metadata(mut parsed: Metadata, caller: &Metadata, standalone: bool) -> Metadata {
+pub(crate) fn metadata(mut parsed: Metadata, caller: &Metadata, standalone: bool) -> Metadata {
     for (key, value) in caller {
         if !parsed.contains_key(key) {
             parsed.insert(key.clone(), value.clone());
@@ -92,7 +92,7 @@ pub fn metadata(mut parsed: Metadata, caller: &Metadata, standalone: bool) -> Me
 /// owns: the visibility `intelligence`, whatever the caller asked, and the
 /// caller's metadata with the `standalone` word (RFC §10.1.1 rules 3 and
 /// 4).
-pub fn stamp(instruction: &mut RoomEvent, caller: &Metadata, standalone: bool) {
+pub(crate) fn stamp(instruction: &mut RoomEvent, caller: &Metadata, standalone: bool) {
     instruction.visibility = Visibility::Intelligence;
     let parsed = std::mem::take(&mut instruction.metadata);
     instruction.metadata = metadata(parsed, caller, standalone);
@@ -100,7 +100,7 @@ pub fn stamp(instruction: &mut RoomEvent, caller: &Metadata, standalone: bool) {
 
 /// Whether `event` is an instruction that stands alone (RFC §10.1.1 rule
 /// 7).
-pub fn is_standalone(event: &RoomEvent) -> bool {
+pub(crate) fn is_standalone(event: &RoomEvent) -> bool {
     event.event_type == EventType::Instruction
         && event.metadata.get(STANDALONE) == Some(&Value::Bool(true))
 }
@@ -118,7 +118,7 @@ pub fn is_standalone(event: &RoomEvent) -> bool {
 ///
 /// The rest, an instruction's text and its other metadata included, is the
 /// hook's to change.
-pub fn keep_checked(original: &RoomEvent, modified: &mut RoomEvent) {
+pub(crate) fn keep_checked(original: &RoomEvent, modified: &mut RoomEvent) {
     keep_fingerprint(original, modified);
     if original.event_type != EventType::Instruction {
         return;
@@ -174,7 +174,7 @@ pub fn turn_context(event: &RoomEvent, context: RoomContext) -> RoomContext {
 /// What a response records of the instruction that produced it, never its
 /// text (RFC §10.1.1 rule 6).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Fingerprint {
+pub(crate) struct Fingerprint {
     /// The SHA-256 of the text's UTF-8 bytes, in lowercase hexadecimal.
     pub sha256: String,
     /// The text's length in Unicode code points.
@@ -183,7 +183,7 @@ pub struct Fingerprint {
 
 impl Fingerprint {
     /// The fingerprint of `text`.
-    pub fn of(text: &str) -> Self {
+    pub(crate) fn of(text: &str) -> Self {
         let digest = Sha256::digest(text.as_bytes());
         let sha256 = digest
             .iter()
@@ -200,13 +200,13 @@ impl Fingerprint {
 
     /// The fingerprint of `instruction`: of the text its content reads as,
     /// its body for a text (RFC §6.6, gap G-065).
-    pub fn of_instruction(instruction: &RoomEvent) -> Self {
+    pub(crate) fn of_instruction(instruction: &RoomEvent) -> Self {
         Self::of(&transcoding::text_of(&instruction.content))
     }
 
     /// The fingerprint as a response's metadata holds it:
     /// `{"sha256": ..., "length": ...}`.
-    pub fn to_value(&self) -> Value {
+    pub(crate) fn to_value(&self) -> Value {
         let mut fields = Metadata::new();
         fields.insert("sha256".to_owned(), Value::from(self.sha256.clone()));
         fields.insert("length".to_owned(), Value::from(self.length));
@@ -216,7 +216,7 @@ impl Fingerprint {
     /// The fingerprint `value` holds in the form [`to_value`](Self::to_value)
     /// writes: those two fields only, the digest as 64 lowercase hexadecimal
     /// digits. `None` for any other value, a text among them.
-    pub fn from_value(value: &Value) -> Option<Self> {
+    pub(crate) fn from_value(value: &Value) -> Option<Self> {
         let fields = value.as_object().filter(|fields| fields.len() == 2)?;
         let sha256 = fields.get("sha256")?.as_str().filter(|digest| {
             digest.len() == 64
@@ -238,7 +238,7 @@ impl Fingerprint {
 /// under the key, so the instruction's text never rides there. For any
 /// other trigger the key is removed: a response to a message records no
 /// instruction (gap G-065).
-pub fn mark_response(response: &mut RoomEvent, trigger: &RoomEvent) {
+pub(crate) fn mark_response(response: &mut RoomEvent, trigger: &RoomEvent) {
     if trigger.event_type != EventType::Instruction {
         return clear_fingerprint(response);
     }
@@ -252,7 +252,7 @@ pub fn mark_response(response: &mut RoomEvent, trigger: &RoomEvent) {
 /// fingerprint, whoever wrote it: a channel's parser, the caller of an
 /// instruction, a hook's injected event (gap G-065). The RFC defines the
 /// key on a response to an instruction only, where the pipeline writes it.
-pub fn clear_fingerprint(event: &mut RoomEvent) {
+pub(crate) fn clear_fingerprint(event: &mut RoomEvent) {
     event.metadata.remove(INSTRUCTION);
 }
 

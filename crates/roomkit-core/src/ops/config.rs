@@ -61,7 +61,7 @@ impl ChannelDeclaration {
     /// A channel of `channel_type` with the RFC's defaults: the default
     /// capabilities, no provider name, no country code, and the addressing,
     /// recipient key and chat key of its type ([`Addressing::of`],
-    /// [`addresses::recipient_key`], [`addresses::chat_key`], gaps G-051 and
+    /// `addresses::recipient_key`, `addresses::chat_key`, gaps G-051 and
     /// G-057), which a name the RFC does not list has none of: its senders
     /// are addressed as written, with no recipient and no chat key, unless
     /// the channel sets them.

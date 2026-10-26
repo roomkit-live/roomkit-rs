@@ -8,7 +8,7 @@ use crate::model::{
 /// §5.5): an id names its participant only on the channels the room
 /// reached them through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Speaker {
+pub(crate) enum Speaker {
     /// A participant of the room the host channel reaches, by their id or
     /// their identity's: the post speaks as them.
     Reached,
@@ -24,7 +24,7 @@ pub enum Speaker {
 /// id that is a participant's own, reached through other channels only,
 /// names them elsewhere; an identity's id names nobody unless the host
 /// channel reaches its participant, as Python's post reads it.
-pub fn speaker(
+pub(crate) fn speaker(
     participants: &[Participant],
     participant_id: &ParticipantId,
     channel_id: &ChannelId,
@@ -55,7 +55,7 @@ pub fn speaker(
 /// Whether a channel of `channel_type` would be bound as `category` against
 /// RFC §6.2 and §10.5: a host channel is bound as a transport only. The
 /// attach of the lifecycle and a post's first attach both refuse it.
-pub fn host_as_intelligence(channel_type: &ChannelType, category: ChannelCategory) -> bool {
+pub(crate) fn host_as_intelligence(channel_type: &ChannelType, category: ChannelCategory) -> bool {
     channel_type == &ChannelType::HOST && category == ChannelCategory::Intelligence
 }
 
@@ -64,7 +64,7 @@ pub fn host_as_intelligence(channel_type: &ChannelType, category: ChannelCategor
 /// the framework's own records', which no channel may claim, and `host`,
 /// which only a host channel may, a transport whose direction is `INBOUND`
 /// (RFC §6.2, §10.5, Appendix A.14.1). Its registration is refused.
-pub fn claims_reserved_type(
+pub(crate) fn claims_reserved_type(
     channel_type: &ChannelType,
     category: ChannelCategory,
     direction: ChannelDirection,

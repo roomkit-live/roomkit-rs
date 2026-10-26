@@ -10,28 +10,28 @@
 //!
 //! - step 1: the newest ACTIVE or PAUSED room whose binding of the channel
 //!   names the sender, else the newest where a participant the sender is
-//!   was reached through the channel ([`conversation`]): a conversation its
+//!   was reached through the channel (`conversation`): a conversation its
 //!   timer paused is the sender's still, and their message resumes it (gap
 //!   G-045);
 //! - step 3: else the one room bound to the channel, ACTIVE or PAUSED with
 //!   its binding declared `group` (gap G-045), when it admits the sender
-//!   ([`admits`]): its binding is declared `group`, or it names no one
+//!   (`admits`): its binding is declared `group`, or it names no one
 //!   else, delivers to no one else, and the room has neither a member nor
 //!   a message of anyone else on the channel;
 //! - step 4: else none: the framework creates a room.
 //!
 //! The strategy never guesses: two rooms bound to the channel give none at
 //! step 3 (RFC §10.4 "A router MUST NOT guess"). Its answer depends on the
-//! rooms read, never on the order they were read in: [`newest`] tells rooms
+//! rooms read, never on the order they were read in: `newest` tells rooms
 //! created at one instant apart by their id.
 //!
 //! Once a room is chosen, step 2 records the sender on its binding of the
-//! channel, under the room lock ([`recording`]). A binding found naming
+//! channel, under the room lock (`recording`). A binding found naming
 //! another sender by then sends the message to be routed once more (gap
 //! G-055), and so does a room found PAUSED that neither is the sender's
 //! conversation by step 1 nor binds the channel as a group, or found CLOSED
-//! or ARCHIVED: the lock tells it by [`kept_by_status`], which applies
-//! [`paused_room_takes`], the tests of the strategy's steps 1 and 3.
+//! or ARCHIVED: the lock tells it by `kept_by_status`, which applies
+//! `paused_room_takes`, the tests of the strategy's steps 1 and 3.
 
 use std::cmp::Ordering;
 
@@ -49,7 +49,7 @@ use crate::model::{
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Sender {
     /// The address the message is routed by, in the channel's form: the
-    /// sender's, or the chat's on a chat channel ([`routing_address`]).
+    /// sender's, or the chat's on a chat channel (`routing_address`).
     /// `None` for a message with no address, and for the framework's own
     /// sender `system`.
     pub address: Option<String>,
@@ -200,7 +200,7 @@ pub enum Refusal {
 /// What step 2 does with a routed message's sender on the binding it finds
 /// under the room lock (RFC §10.1 step 2, §5.7, gap G-061).
 #[derive(Clone, Debug, PartialEq)]
-pub enum Recording {
+pub(crate) enum Recording {
     /// Nothing to write: the binding is declared `group`, names the sender
     /// and their recipient already (or a value that is not a recipient), or
     /// the message names no one to record.
@@ -234,7 +234,7 @@ pub struct Routed {
 
 /// The correspondent a binding names (RFC §5.7, gap G-078).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Correspondent {
+pub(crate) enum Correspondent {
     /// Its participant, else its recipient, in the channel's form.
     Address(String),
     /// A value under the channel's recipient key that is not a recipient,
@@ -247,7 +247,7 @@ impl Correspondent {
     /// Whether it names `sender` on `channel_id`, in a room holding
     /// `participants` ([`Sender::named_by`]): a value that is not a
     /// recipient names no sender.
-    pub fn names(
+    pub(crate) fn names(
         &self,
         sender: &Sender,
         form: &AddressForm,
@@ -277,7 +277,7 @@ pub(crate) enum Through {
 /// channel whose replies go to the sender, the sender's address. `None` for
 /// a chat message without its chat, for an empty sender, and for the
 /// framework's own sender `system`, which names no correspondent.
-pub fn routing_address(
+pub(crate) fn routing_address(
     addressing: Addressing,
     sender_id: &str,
     metadata: &Metadata,
@@ -378,7 +378,7 @@ pub fn step_three_considers(query: &RouteQuery, candidate: &Candidate) -> bool {
 /// channel names the sender, else the newest where a participant the sender
 /// is was reached through the channel (RFC §10.4 step 1, gap G-058), each
 /// speaking for its own channel only.
-pub fn conversation<'room>(
+pub(crate) fn conversation<'room>(
     query: &RouteQuery,
     candidates: &[&'room Candidate],
 ) -> Option<&'room Candidate> {
@@ -435,7 +435,7 @@ pub(crate) fn conversation_through(
 /// which step 3 considers paused ([`step_three_considers`]). Any other
 /// PAUSED room would take the sender in by step 3's admission, which it
 /// does not give a PAUSED room, whatever strategy chose it.
-pub fn paused_room_takes(
+pub(crate) fn paused_room_takes(
     sender: &Sender,
     form: &AddressForm,
     channel_id: &ChannelId,
@@ -457,7 +457,7 @@ pub fn paused_room_takes(
 /// A room the default strategy read ACTIVE is found PAUSED by the lock when
 /// its gate applied a pause that fell due meanwhile, and is kept by the
 /// same test.
-pub fn kept_by_status(
+pub(crate) fn kept_by_status(
     status: RoomStatus,
     sender: &Sender,
     form: &AddressForm,
@@ -470,17 +470,6 @@ pub fn kept_by_status(
         RoomStatus::Paused => paused_room_takes(sender, form, channel_id, binding, participants),
         RoomStatus::Closed | RoomStatus::Archived => false,
     }
-}
-
-/// Steps 3 and 4: the one room bound to the channel, when it admits the
-/// sender; `None` when no room or several are bound, or when the one room
-/// refuses (RFC §10.4).
-pub fn admitted<'room>(
-    query: &RouteQuery,
-    candidates: &[&'room Candidate],
-) -> Option<&'room Candidate> {
-    let room = sole_bound(query, candidates)?;
-    admits(query, room).is_ok().then_some(room)
 }
 
 /// The one room of `candidates` bound to the channel, which step 3 reads;
@@ -515,7 +504,7 @@ pub fn sole_bound<'room>(
 /// # Errors
 ///
 /// Returns the first condition that does not hold, as a [`Refusal`].
-pub fn admits(query: &RouteQuery, candidate: &Candidate) -> Result<(), Refusal> {
+pub(crate) fn admits(query: &RouteQuery, candidate: &Candidate) -> Result<(), Refusal> {
     let binding = candidate
         .binding(&query.channel_id)
         .ok_or(Refusal::Unbound)?;
@@ -553,7 +542,7 @@ pub fn admits(query: &RouteQuery, candidate: &Candidate) -> Result<(), Refusal> 
 ///
 /// Returns the first of step 3's conditions that no longer holds, as a
 /// [`Refusal`].
-pub fn still_admits(
+pub(crate) fn still_admits(
     binding: &ChannelBinding,
     sender: &Sender,
     form: &AddressForm,
@@ -608,7 +597,7 @@ fn admission(
 /// created at one instant the one whose id sorts last, so that the answer
 /// never depends on the order the rooms were read in (RFC §10.4 "Routing
 /// MUST be deterministic").
-pub fn newest<'room>(
+pub(crate) fn newest<'room>(
     candidates: impl IntoIterator<Item = &'room Candidate>,
 ) -> Option<&'room Candidate> {
     candidates
@@ -641,7 +630,7 @@ pub fn heard(events: &[RoomEvent], channel_id: &ChannelId) -> Vec<ParticipantId>
 /// recipient names someone other than the sender, whoever writes; one with
 /// no value there names no one. Routing does not read a `group` binding's
 /// recipient (RFC §5.7): one naming no participant names no one.
-pub fn correspondent(binding: &ChannelBinding, form: &AddressForm) -> Option<Correspondent> {
+pub(crate) fn correspondent(binding: &ChannelBinding, form: &AddressForm) -> Option<Correspondent> {
     if let Some(participant) = &binding.participant_id {
         return Some(Correspondent::Address(form.normalize(participant.as_str())));
     }
@@ -666,7 +655,7 @@ pub fn correspondent(binding: &ChannelBinding, form: &AddressForm) -> Option<Cor
 /// naming the sender too. The framework's own sender, and a message with
 /// no address, record no one. A binding naming a participant who is the
 /// sender names them.
-pub fn recording(
+pub(crate) fn recording(
     binding: &ChannelBinding,
     sender: &Sender,
     form: &AddressForm,
