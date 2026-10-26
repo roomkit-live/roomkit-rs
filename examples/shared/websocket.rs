@@ -24,7 +24,9 @@ pub type ConnectionId = u64;
 /// A WebSocket channel: a transport whose connections each follow one room.
 /// A delivery to a room goes out, as one JSON text frame, on each of the
 /// room's connections, through the queue [`register_connection`] returns,
-/// which the server's socket writer empties. A delivery never waits for a
+/// which the server's socket writer empties. A server registers a
+/// connection before it answers the upgrade, so that no delivery made
+/// once the client is connected misses it. A delivery never waits for a
 /// socket: a connection whose queue is full, a client that stopped
 /// reading, is dropped, and its queue ends. Cloning it shares its
 /// connections.
@@ -73,20 +75,29 @@ impl WebSocketChannel {
         &self.declaration.channel_id
     }
 
-    /// Registers a connection following `room_id`: its id, and the frames
-    /// the room's deliveries send it, which end once it is unregistered or
-    /// dropped.
-    pub fn register_connection(&self, room_id: RoomId) -> (ConnectionId, mpsc::Receiver<String>) {
+    /// Registers a connection following `room_id`: its registration, which
+    /// unregisters it when dropped, and the frames the room's deliveries
+    /// send it, which end once it is unregistered or dropped.
+    pub fn register_connection(&self, room_id: RoomId) -> (Registration, mpsc::Receiver<String>) {
         let (frames, queue) = mpsc::channel(BACKLOG);
         let mut connections = self.lock();
         connections.next += 1;
         let id = connections.next;
         connections.open.insert(id, Connection { room_id, frames });
-        (id, queue)
+        let registration = Registration {
+            channel: self.clone(),
+            id,
+        };
+        (registration, queue)
+    }
+
+    /// How many connections are registered.
+    pub fn connections(&self) -> usize {
+        self.lock().open.len()
     }
 
     /// Unregisters the connection `id`, which then receives nothing more.
-    pub fn unregister_connection(&self, id: ConnectionId) {
+    fn unregister_connection(&self, id: ConnectionId) {
         self.lock().open.remove(&id);
     }
 
@@ -94,6 +105,26 @@ impl WebSocketChannel {
         self.connections
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A connection registered on a [`WebSocketChannel`], until it is dropped.
+#[derive(Debug)]
+pub struct Registration {
+    channel: WebSocketChannel,
+    id: ConnectionId,
+}
+
+impl Registration {
+    /// The connection's id.
+    pub fn id(&self) -> ConnectionId {
+        self.id
+    }
+}
+
+impl Drop for Registration {
+    fn drop(&mut self) {
+        self.channel.unregister_connection(self.id);
     }
 }
 

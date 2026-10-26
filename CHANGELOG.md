@@ -407,7 +407,8 @@ as it stands.
   `/conversations/{conversation}?user=...&name=...` is a participant of the
   conversation's room, written through the store, each text frame a
   message run into the room, and the room's deliveries sent on each of its
-  connections as JSON frames; an `OpenAiAgent` answers each message, and a
+  connections as JSON frames, each send bounded, a client that stops
+  reading dropped, reader included; an `OpenAiAgent` answers each message, and a
   `SqliteStore` keeps the rooms, so that a restarted server goes on with
   each conversation's history. Its checks run offline, against the fake of
   the OpenAI wire and a temporary file: two people in one room, labelled

@@ -38,4 +38,4 @@ pub use self::observe::{Log, framework_events};
 pub use self::openai::{FakeOpenAi, OpenAiEndpoint};
 pub use self::print::{print_timeline, timeline};
 pub use self::sms::SmsNumber;
-pub use self::websocket::{ConnectionId, WebSocketChannel};
+pub use self::websocket::{ConnectionId, Registration, WebSocketChannel};
