@@ -16,8 +16,8 @@
 //!   1001.
 //! - The room's deliveries to `websocket` go out on each of the room's
 //!   connections, one JSON frame per event: the agent's answers. A room
-//!   delivers an event to every channel but its source (RFC §10.1), so the
-//!   people on `websocket` see the agent's answers, not each other's
+//!   delivers an event to every channel but its source (RFC §10.2 step 2),
+//!   so the people on `websocket` see the agent's answers, not each other's
 //!   messages. A client that stops reading is dropped, reader included,
 //!   once one send waits 5 seconds; a stop gives the connections and the
 //!   kit 10 seconds.
