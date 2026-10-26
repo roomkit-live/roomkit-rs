@@ -15,8 +15,12 @@
 //! `tokio::time::timeout` that expired), detaches the run, which is never
 //! dropped for its caller (decision 1 of step 2b, gap G-076). Once the call
 //! is decided, its event committed or its instruction decided, the run
-//! goes on, delivers the event and the cascade it starts, and logs its end:
-//! an event stored is delivered (RFC §13.6). Before the decision the call
+//! goes on, delivers the event to every target but the agents its cascade
+//! would ask, whose turns it cuts (`Operation::cancel_turns`, RFC §10.1
+//! "Explicit delivery cancellation", decision 2 of step 3): a turn not
+//! started never starts, a running one is aborted and joined, and no
+//! answer of the cascade re-enters. It logs its end: an event stored is
+//! delivered (RFC §13.6). Before the decision the call
 //! expires as one past its `process_timeout` does (`Operation::expire`):
 //! its requests within the call's bound are given up on, nothing more of
 //! its trigger is written, what it holds is let go, and every event it
@@ -54,9 +58,20 @@ pub(super) struct Caller {
     decided: bool,
     /// Whether the run saw that its caller stopped waiting.
     gone: bool,
-    /// Whether the run expired its operation, its caller gone before the
-    /// decision.
-    expired: bool,
+    /// What the run did once its caller was gone.
+    departure: Departure,
+}
+
+/// What a run did once its caller was gone: expired its operation before
+/// the call's decision, then cut its turns once the call was decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Departure {
+    /// Nothing yet.
+    Unseen,
+    /// The run expired its operation, its caller gone before the decision.
+    Expired,
+    /// The run cut its call's turns, the call decided.
+    TurnsCut,
 }
 
 impl Caller {
@@ -67,7 +82,7 @@ impl Caller {
             answer: Some(answer),
             decided: false,
             gone: false,
-            expired: false,
+            departure: Departure::Unseen,
         }
     }
 
@@ -124,9 +139,23 @@ impl Caller {
     /// Whether the run expires its operation now: its caller stopped
     /// waiting before the call's decision, and it did not yet.
     pub(super) fn expires(&mut self) -> bool {
-        let expires = self.gone && !self.decided && !self.expired;
-        self.expired |= expires;
+        let expires = self.gone && !self.decided && self.departure == Departure::Unseen;
+        if expires {
+            self.departure = Departure::Expired;
+        }
         expires
+    }
+
+    /// Whether the run cuts its call's turns now: its caller stopped waiting
+    /// and the call is decided, before or after its caller left, and it did
+    /// not yet (RFC §10.1: the awaited path propagates its caller's
+    /// cancellation, decision 2 of step 3).
+    pub(super) fn cuts(&mut self) -> bool {
+        let cuts = self.gone && self.decided && self.departure != Departure::TurnsCut;
+        if cuts {
+            self.departure = Departure::TurnsCut;
+        }
+        cuts
     }
 
     /// Whether nobody reads the run's output: its caller was answered at

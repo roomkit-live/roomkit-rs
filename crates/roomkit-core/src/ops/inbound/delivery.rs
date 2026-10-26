@@ -21,13 +21,14 @@
 
 use std::collections::BTreeMap;
 
+use super::queues::Lineage;
 use super::stamp;
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, DeliveryError, DeliveryResult, DeliveryStatus,
     ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
 };
 use crate::ops::protocol::{
-    CHANNEL_NOT_REGISTERED, ChannelRequest, EffectId, HoldRequest, Outcome,
+    CHANNEL_NOT_REGISTERED, ChannelRequest, EffectId, HoldRequest, Outcome, TURN_CUT,
 };
 use crate::ops::{Cx, Progress};
 use crate::rules::chain_depth::ReentryBudget;
@@ -138,6 +139,11 @@ pub(super) struct DeliverySet {
     budget: ReentryBudget,
     calls: BTreeMap<EffectId, (usize, Call)>,
     outcome: SetOutcome,
+    /// Whose cascade the set belongs to.
+    lineage: Lineage,
+    /// Whether its turns are cut: it asks no agent, and the turns it asked
+    /// are given up on (RFC §10.1 "Explicit delivery cancellation").
+    turns_cut: bool,
 }
 
 impl DeliverySet {
@@ -151,6 +157,7 @@ impl DeliverySet {
         context: Box<RoomContext>,
         placed: bool,
         budget: ReentryBudget,
+        lineage: Lineage,
     ) -> Self {
         let targets = targets_of(&plan, &event, &context);
         let outcome = SetOutcome {
@@ -167,7 +174,34 @@ impl DeliverySet {
             budget,
             calls: BTreeMap::new(),
             outcome,
+            lineage,
+            turns_cut: false,
         }
+    }
+
+    /// Whose cascade the set belongs to.
+    pub(super) fn lineage(&self) -> Lineage {
+        self.lineage
+    }
+
+    /// Cuts the set's turns: it asks no agent from now on, and the turns it
+    /// asked are no longer waited for; returns them. A transport target is
+    /// delivered to all the same.
+    pub(super) fn cut(&mut self) -> Vec<EffectId> {
+        self.turns_cut = true;
+        let turns: Vec<EffectId> = self
+            .calls
+            .iter()
+            .filter(|(_, (index, call))| {
+                *call == Call::OnEvent
+                    && self
+                        .targets
+                        .get(*index)
+                        .is_some_and(|target| target.role == Role::Agent)
+            })
+            .map(|(effect, _)| *effect)
+            .collect();
+        turns
     }
 
     /// Whether the set waits for `effect`.
@@ -229,6 +263,9 @@ impl DeliverySet {
             };
             if cx.config.channel(&target.binding.channel_id).is_none() {
                 self.not_registered(index);
+                continue;
+            }
+            if self.turns_cut && target.role == Role::Agent {
                 continue;
             }
             let request = ChannelRequest::OnEvent {
@@ -391,6 +428,10 @@ impl DeliverySet {
     fn on_event_failed(&mut self, cx: &mut Cx<'_>, index: usize, error: &ErrorRecord) {
         if error.error_type == CHANNEL_NOT_REGISTERED {
             return self.not_registered(index);
+        }
+        // A turn its cascade cut is no failure: nothing of it is reported.
+        if error.error_type == TURN_CUT {
+            return;
         }
         let Some(target) = self.targets.get(index) else {
             return;

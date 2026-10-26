@@ -30,10 +30,24 @@ use super::pass::{CommitPass, PassOrigin};
 use super::record::RecordPass;
 use super::{Machine, Stage};
 use crate::model::{RoomEvent, RoomId};
-use crate::ops::protocol::{EffectId, Outcome};
+use crate::ops::io::Io;
+use crate::ops::protocol::{EffectId, EntryId, Outcome};
 use crate::ops::{Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::{self, Draw, ReentryBudget};
 use crate::rules::hook_chain::HookChain;
+
+/// Whose cascade a pass or a delivery set belongs to: the call's own, or
+/// the cascade of an entry the operation adopted (gap G-070), whose caller
+/// was answered at its commit. Cutting the call's turns, once its caller
+/// stopped waiting, cuts its own cascade's alone (RFC §10.1 "Explicit
+/// delivery cancellation", gap G-076).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Lineage {
+    /// The call's own cascade.
+    Call,
+    /// The cascade of the entry the operation adopted.
+    Entry(EntryId),
+}
 
 /// A committed event's delivery set, and the passes that follow it.
 #[derive(Debug)]
@@ -57,6 +71,10 @@ pub(super) struct Cascade {
     /// Whether the cascade stopped, failed or past its deadline: no pass
     /// runs any more, committed events are still delivered.
     stopping: bool,
+    /// Whether the call's own turns are cut, its caller gone once the call
+    /// was decided: no turn of its cascade starts, and no response of it
+    /// re-enters (RFC §10.1 "Explicit delivery cancellation").
+    pub(super) turns_cut: bool,
     /// The reentry budget every cascade of the operation draws on, an
     /// adopted entry's on its caller's (RFC §8.3), and the calls its
     /// delivery sets' targets make into a room too (gap G-070).
@@ -81,6 +99,7 @@ impl Cascade {
             sets: VecDeque::new(),
             delivery: None,
             stopping: false,
+            turns_cut: false,
             budget,
             drawn: None,
             from_delivery: None,
@@ -148,6 +167,33 @@ impl Cascade {
         self.passes.clear();
         for delivery in self.sets.iter_mut().chain(self.delivery.as_mut()) {
             delivery.then.clear();
+        }
+    }
+
+    /// Cuts the call's own turns (RFC §10.1 "Explicit delivery
+    /// cancellation", gap G-076): the sets of its cascade queued ask no
+    /// agent, the turns its running set asked are given up on, answered
+    /// here, and the responses of its cascade queued do not re-enter. Its
+    /// events are still delivered to every other target, and the entries
+    /// the operation adopted keep their turns. Returns the turns given up
+    /// on, which the driver cuts and never answers.
+    pub(super) fn cut_turns(&mut self, io: &mut Io) -> Vec<EffectId> {
+        self.turns_cut = true;
+        self.passes.retain(|job| match job {
+            Job::Pass(pass, _) => !(pass.is_response() && pass.lineage() == Lineage::Call),
+            Job::Record(..) => true,
+        });
+        for delivery in &mut self.sets {
+            if delivery.set.lineage() == Lineage::Call {
+                delivery.set.cut();
+            }
+        }
+        match self.delivery.as_mut() {
+            Some(delivery) if delivery.set.lineage() == Lineage::Call => {
+                let turns = delivery.set.cut();
+                io.cut(&turns)
+            }
+            Some(_) | None => Vec::new(),
         }
     }
 

@@ -14,7 +14,7 @@ use super::delivery::{DeliverySet, Response, SetKind, SetOutcome};
 use super::holds::AfterTicket;
 use super::job::{Finished, Job, RecordNote};
 use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
-use super::queues::Delivery;
+use super::queues::{Delivery, Lineage};
 use super::record::{RecordPass, RecordReport, RecordResult};
 use super::{InboundError, InboundResult, Machine, instructions, report, stamp};
 use crate::model::{ChannelCategory, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId};
@@ -140,7 +140,7 @@ impl Machine {
         self.trigger.note_error(report.release_error);
         let injected = match &report.result {
             PassResult::Delivered { event, .. } | PassResult::Blocked { event, .. } => {
-                self.injected(cx, report.injected_events, event)
+                self.injected(cx, report.injected_events, event, report.lineage)
             }
             PassResult::Refused { .. }
             | PassResult::Duplicate { .. }
@@ -174,7 +174,11 @@ impl Machine {
             PassOrigin::Injected { .. } => SetKind::Injected,
         };
         let budget = self.cascade.budget.clone();
-        let set = DeliverySet::new(kind, *event, plan, context, report.placed, budget);
+        let lineage = report.lineage;
+        let mut set = DeliverySet::new(kind, *event, plan, context, report.placed, budget, lineage);
+        if self.cascade.turns_cut && lineage == Lineage::Call {
+            set.cut();
+        }
         self.cascade.queue_set(Delivery {
             set: Box::new(set),
             then: injected,
@@ -188,6 +192,7 @@ impl Machine {
         cx: &mut Cx<'_>,
         injected: Vec<InjectedEvent>,
         trigger: &RoomEvent,
+        lineage: Lineage,
     ) -> Vec<Job> {
         let mut jobs = Vec::new();
         for injected in instructions::without_instructions(injected, trigger) {
@@ -195,12 +200,15 @@ impl Machine {
             let event = stamp::stamp_injected(injected, trigger, cx.env.new_event_id());
             let job = if self.cascade.budget.take_pass() {
                 Job::Pass(
-                    Box::new(CommitPass::new(
-                        PassOrigin::Injected {
-                            targets: targets.clone(),
-                        },
-                        event,
-                    )),
+                    Box::new(
+                        CommitPass::new(
+                            PassOrigin::Injected {
+                                targets: targets.clone(),
+                            },
+                            event,
+                        )
+                        .within(lineage),
+                    ),
                     PassOrigin::Injected { targets },
                 )
             } else {
@@ -310,6 +318,11 @@ impl Machine {
     /// refuses it first (RFC §8.3). An instruction does not re-enter (gap
     /// G-066).
     fn queue_response(&mut self, cx: &mut Cx<'_>, response: Response, set: &DeliverySet) {
+        // A cascade whose turns are cut takes no reentry (RFC §10.1
+        // "Explicit delivery cancellation").
+        if self.cascade.turns_cut && set.lineage() == Lineage::Call {
+            return;
+        }
         let Response { responder, events } = response;
         let trigger = set.event();
         let at_limit = chain_depth::reaches_limit(trigger.chain_depth, cx.config.max_chain_depth);
@@ -327,10 +340,8 @@ impl Machine {
                 let origin = PassOrigin::Response {
                     answers_within: set.answers_within().cloned(),
                 };
-                self.cascade.queue(Job::Pass(
-                    Box::new(CommitPass::new(origin.clone(), event)),
-                    origin,
-                ));
+                let pass = CommitPass::new(origin.clone(), event).within(set.lineage());
+                self.cascade.queue(Job::Pass(Box::new(pass), origin));
             } else {
                 self.queue_refused(event, chain_depth::REENTRY_LOOP_CAP);
             }

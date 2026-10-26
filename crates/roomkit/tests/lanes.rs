@@ -20,8 +20,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventStatus, EventType, HookResult, InboundMessage, RoomContext, RoomEvent,
-    RoomId,
+    EventContent, EventDirection, EventSource, EventStatus, EventType, HookResult, InboundMessage,
+    RoomContext, RoomEvent, RoomId,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
@@ -336,6 +336,143 @@ async fn a_call_dropped_during_its_delivery_still_delivers_its_event() {
             processed
         ),
         (Some("Bonjour".to_owned()), true, true)
+    );
+}
+
+/// An agent whose turn says it started, waits for `go`, then answers
+/// "late answer"; `log` records whether the turn answered or its work was
+/// dropped unfinished.
+#[derive(Clone)]
+struct SlowAgent {
+    declaration: ChannelDeclaration,
+    turning: Arc<Notify>,
+    go: Arc<Notify>,
+    log: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl SlowAgent {
+    fn new() -> Self {
+        Self {
+            declaration: ChannelDeclaration::new(
+                channel("ai"),
+                ChannelType::Ai,
+                ChannelCategory::Intelligence,
+                ChannelDirection::Bidirectional,
+            ),
+            turning: Arc::default(),
+            go: Arc::default(),
+            log: Arc::default(),
+        }
+    }
+}
+
+/// Logs that the turn's work was dropped unfinished, unless it answered.
+struct Unfinished {
+    log: Arc<Mutex<Vec<&'static str>>>,
+    answered: bool,
+}
+
+impl Drop for Unfinished {
+    fn drop(&mut self) {
+        if !self.answered {
+            self.log.lock().unwrap().push("dropped unfinished");
+        }
+    }
+}
+
+impl Channel for SlowAgent {
+    fn declaration(&self) -> ChannelDeclaration {
+        self.declaration.clone()
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let agent = self.clone();
+        async move {
+            let mut unfinished = Unfinished {
+                log: Arc::clone(&agent.log),
+                answered: false,
+            };
+            agent.turning.notify_one();
+            agent.go.notified().await;
+            unfinished.answered = true;
+            agent.log.lock().unwrap().push("answered");
+            let source = EventSource::new(channel("ai"), ChannelType::Ai, EventDirection::Outbound);
+            let answer = RoomEvent::new(
+                event.id.clone(),
+                event.room_id.clone(),
+                EventType::Message,
+                source,
+                EventContent::text("late answer"),
+                event.created_at,
+            );
+            Ok(ChannelOutput::respond(vec![answer]))
+        }
+    }
+}
+
+/// RFC §10.1 "Explicit delivery cancellation", decision 2 of step 3, gap
+/// G-076: the caller gives up during the agent's turn, as a
+/// `tokio::time::timeout` that expires then drops its call (probe 6 of
+/// step 3). The turn is cut and joined: its work is dropped unfinished
+/// before the run ends, and no answer is committed, even once the agent
+/// could have given one. The event stays delivered, the advisor's console
+/// receives it, and its `AFTER_BROADCAST` hooks run.
+#[tokio::test]
+async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_event() {
+    let kit = RoomKit::new();
+    let ws = RecordingTransport::new(channel("ws"), ChannelType::Websocket);
+    let agent = SlowAgent::new();
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+        .unwrap();
+    kit.register_channel(ws.clone()).unwrap();
+    kit.register_channel(agent.clone()).unwrap();
+    kit.create_room(&room_id()).await.unwrap();
+    for id in ["sms", "ws", "ai"] {
+        kit.attach(&room_id(), &channel(id)).await.unwrap();
+    }
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&observed);
+    kit.observe("audit", HookTrigger::AfterBroadcast, move |event, _| {
+        seen.lock().unwrap().push(text_of(&event.content));
+        ready(())
+    })
+    .unwrap();
+    let room = room_id();
+    let call = kit.process_inbound_in(&room, message("sms", "+15551234567", "Bonjour"));
+    tokio::select! {
+        result = call => panic!("the call ended before its agent's turn: {result:?}"),
+        () = agent.turning.notified() => {}
+    }
+    // The agent could answer now: a turn left running would.
+    agent.go.notify_one();
+    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    let timeline: Vec<(String, EventStatus)> = kit
+        .store()
+        .list_events(&room_id(), true)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.event_type == EventType::Message)
+        .map(|event| (text_of(&event.content), event.status))
+        .collect();
+    assert_eq!(
+        (
+            timeline,
+            ws.texts(),
+            agent.log.lock().unwrap().clone(),
+            observed.lock().unwrap().clone()
+        ),
+        (
+            vec![("Bonjour".to_owned(), EventStatus::Delivered)],
+            vec!["Bonjour".to_owned()],
+            vec!["dropped unfinished"],
+            vec!["Bonjour".to_owned()]
+        )
     );
 }
 

@@ -222,9 +222,14 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 && let Some(caller) = self.caller.as_deref_mut()
             {
                 caller.offer(&self.context, self.call, decided, self.refused.as_ref());
+                // A caller gone before a commit in flight decided the call.
+                self.cut_turns_once_gone(&mut operation);
             }
             let effects = match step.next {
-                Next::Ready(output) => return self.finish(output),
+                Next::Ready(output) => {
+                    self.join_given_up().await;
+                    return self.finish(output);
+                }
                 Next::Waiting => Vec::new(),
                 Next::Effects(effects) => effects,
             };
@@ -255,6 +260,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                         self.give_up(&given_up);
                         return Ok(());
                     }
+                    if self.cut_turns_once_gone(operation) {
+                        return Ok(());
+                    }
                 }
                 Some(Event::Waited(id, waited)) => {
                     let outcome = self.held.settle(waited);
@@ -274,6 +282,32 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 None => return Err(KitError::Stalled),
             }
         }
+    }
+
+    /// Cuts the turns of the call's cascade once its caller is gone and the
+    /// call decided, once (RFC §10.1 "Explicit delivery cancellation"): the
+    /// operation gives them up, and their calls are aborted. Whether it did.
+    fn cut_turns_once_gone<O: Operation>(&mut self, operation: &mut O) -> bool {
+        if !self.caller.as_deref_mut().is_some_and(Caller::cuts) {
+            return false;
+        }
+        tracing::debug!(
+            target: "roomkit::driver",
+            call = self.call,
+            "the caller of a decided call stopped waiting; its turns are cut, its events delivered"
+        );
+        let cut = operation.cancel_turns();
+        self.give_up(&cut);
+        true
+    }
+
+    /// Joins the calls the operation gave up on, aborted: the run ends once
+    /// their work and its finalizers are over, a cut turn's among them (RFC
+    /// §10.1 "Explicit delivery cancellation": the cancellation joins the
+    /// turns it cuts). Nothing else is left running once the operation is
+    /// over.
+    async fn join_given_up(&mut self) {
+        while self.calls.join_next().await.is_some() {}
     }
 
     /// Drops the waits and the calls of `effects`, which the operation gave

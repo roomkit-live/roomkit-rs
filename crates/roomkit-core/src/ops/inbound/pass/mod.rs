@@ -35,6 +35,7 @@ use std::mem;
 
 use super::direct::DirectCall;
 use super::edits::Accepted;
+use super::queues::Lineage;
 use crate::model::{
     ChannelId, ErrorRecord, InjectedEvent, Observation, RoomContext, RoomEvent, RoomStatus, Task,
     Visibility,
@@ -156,6 +157,8 @@ pub(super) struct PassReport {
     pub(super) release_error: Option<ErrorRecord>,
     /// Whether the event delivered took its place in the room's lane.
     pub(super) placed: bool,
+    /// Whose cascade the pass belongs to.
+    pub(super) lineage: Lineage,
 }
 
 /// One event's pass through the locked section.
@@ -163,6 +166,8 @@ pub(super) struct PassReport {
 pub(super) struct CommitPass {
     origin: PassOrigin,
     event: RoomEvent,
+    /// Whose cascade the pass belongs to: the call's, or an entry's.
+    lineage: Lineage,
     state: State,
     /// The edit or the delete step 8a accepted, with its target.
     accepted: Option<Accepted>,
@@ -297,9 +302,16 @@ impl State {
 impl CommitPass {
     /// A pass of `event`, stamped already, from `origin`.
     pub(super) fn new(origin: PassOrigin, event: RoomEvent) -> Self {
+        let lineage = match origin {
+            PassOrigin::Adopted(entry) => Lineage::Entry(entry),
+            PassOrigin::Trigger | PassOrigin::Response { .. } | PassOrigin::Injected { .. } => {
+                Lineage::Call
+            }
+        };
         Self {
             origin,
             event,
+            lineage,
             state: State::Start,
             accepted: None,
             bound: Bound::Unbounded,
@@ -430,7 +442,27 @@ impl CommitPass {
             observations: mem::take(&mut self.observations),
             release_error: self.release_error.take(),
             placed: self.placed,
+            lineage: self.lineage,
         }))
+    }
+
+    /// The same pass, of the cascade `lineage`: a response or an injected
+    /// event belongs to the cascade of the event that made it.
+    #[must_use]
+    pub(super) fn within(mut self, lineage: Lineage) -> Self {
+        self.lineage = lineage;
+        self
+    }
+
+    /// Whose cascade the pass belongs to.
+    pub(super) fn lineage(&self) -> Lineage {
+        self.lineage
+    }
+
+    /// Whether the pass is a response's, which re-enters (RFC §10.1 step
+    /// 14).
+    pub(super) fn is_response(&self) -> bool {
+        matches!(self.origin, PassOrigin::Response { .. })
     }
 
     /// The call's deadline passed (RFC §13.6): nothing is stored, and the

@@ -100,6 +100,11 @@ pub struct Effect {
 /// `delivery_failed` with this error (gap G-048).
 pub const CHANNEL_NOT_REGISTERED: &str = "channel_not_registered";
 
+/// The error type a turn the operation cut is answered with, by the
+/// operation itself ([`Operation::cancel_turns`]): no failure, nothing of it
+/// reported.
+pub(crate) const TURN_CUT: &str = "turn_cut";
+
 /// The room's counters after a commit (RFC §10.1 step 12).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoomCounters {
@@ -289,6 +294,24 @@ pub trait Operation {
     /// driver answering its other effects as before. An operation decided
     /// already, or that has no caller to lose, gives up on nothing.
     fn expire(&mut self) -> Vec<EffectId> {
+        Vec::new()
+    }
+
+    /// Cuts the turns of the call's own cascade (RFC §10.1 "Explicit
+    /// delivery cancellation", §13.6, gap G-076): a turn its cascade has not
+    /// started never starts, a running one is given up on, and no response
+    /// of its cascade re-enters. Its committed events are still delivered to
+    /// every other target, their `AFTER_BROADCAST` hooks fire, and the
+    /// cascades of the entries it adopted keep their turns. A driver calls
+    /// it when the caller of a decided call stopped waiting, and may call
+    /// it before the decision, when the call's delivery is cancelled by
+    /// another way: its event is committed and delivered all the same, and
+    /// none of its turns starts.
+    ///
+    /// Returns the effects the operation gives up on, the turns in flight:
+    /// the driver cuts them, joins them, and never answers them. An
+    /// operation that runs no turn gives up on nothing.
+    fn cancel_turns(&mut self) -> Vec<EffectId> {
         Vec::new()
     }
 }

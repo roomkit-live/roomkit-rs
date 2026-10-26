@@ -125,6 +125,13 @@ enum Mail {
     },
 }
 
+/// When a run's caller stopped waiting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Gone {
+    BeforeTheDecision,
+    OnceDecided,
+}
+
 /// What the driver keeps of one run.
 pub(super) struct RunState {
     /// The context the run is made within, the innermost frame last.
@@ -134,6 +141,10 @@ pub(super) struct RunState {
     started: bool,
     /// Whether it published its decision.
     decided: bool,
+    /// When its caller stopped waiting, if it did: before the decision,
+    /// its turns are cut once it is decided, as the runtime's driver cuts
+    /// them.
+    gone: Option<Gone>,
     done: bool,
     /// Its effects not answered yet.
     outstanding: BTreeSet<EffectId>,
@@ -160,6 +171,7 @@ impl RunState {
             mail: VecDeque::new(),
             started: false,
             decided: false,
+            gone: None,
             done: false,
             outstanding: BTreeSet::new(),
             given_up: BTreeSet::new(),
@@ -314,6 +326,11 @@ impl Sim {
         }
         if let Some(decided) = step.decided {
             self.record_decision(decided);
+            // A caller gone before a commit in flight decided the call.
+            if self.state(run).gone == Some(Gone::BeforeTheDecision) {
+                let given_up = operation.cancel_turns();
+                self.drop_given_up(run, &given_up);
+            }
         }
         match step.next {
             Next::Ready(output) => {
@@ -333,7 +350,16 @@ impl Sim {
                 let mut expired_now = false;
                 for effect in effects {
                     if run == ROOT && self.caller_leaves_before(&effect.request) {
-                        let given_up = operation.expire();
+                        // Before the decision the call expires; once decided,
+                        // its turns are cut (RFC §10.1, §13.6), as the
+                        // runtime's driver does.
+                        let given_up = if self.state(run).decided {
+                            self.state_mut(run).gone = Some(Gone::OnceDecided);
+                            operation.cancel_turns()
+                        } else {
+                            self.state_mut(run).gone = Some(Gone::BeforeTheDecision);
+                            operation.expire()
+                        };
                         self.drop_given_up(run, &given_up);
                         expired_now = true;
                     }

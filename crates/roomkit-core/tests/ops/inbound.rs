@@ -2330,6 +2330,9 @@ mod the_decision {
 /// RFC §13.6, gap G-076: a caller that stops waiting before the call's
 /// decision expires it, as a passed `process_timeout` does, without the
 /// `process_timeout` event; once anything is committed, it is delivered.
+/// RFC §10.1 "Explicit delivery cancellation": once the call is decided,
+/// its caller gone cuts the turns of its cascade, and its events are still
+/// delivered to every other target.
 mod a_caller_that_stops_waiting {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -2378,9 +2381,10 @@ mod a_caller_that_stops_waiting {
 
     /// A commit is never within the call's bound: the caller gone while it
     /// is in flight, it is answered, the call is decided, and the event is
-    /// delivered, the agent's answer after it.
+    /// delivered; the agent's turn never starts, as the Python
+    /// implementation's does not (probe 6 of step 3).
     #[test]
-    fn during_its_commit_has_its_event_delivered() {
+    fn during_its_commit_has_its_event_delivered_and_starts_no_turn() {
         let mut sim = scanned_room();
         sim.leaves_before = Some("commit");
         let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
@@ -2390,15 +2394,93 @@ mod a_caller_that_stops_waiting {
         assert_eq!(
             (
                 result.event.map(|event| event.status),
-                sim.timeline_lines().first().cloned(),
-                sim.traced("deliver ws"),
+                sim.timeline_lines(),
+                sim.traced("deliver"),
+                sim.traced("on_event ai"),
                 processed
             ),
             (
                 Some(EventStatus::Delivered),
-                Some("#0 sms delivered \"Bonjour\"".to_owned()),
-                vec!["deliver ws <- evt_1", "deliver ws <- evt_2"],
+                vec!["#0 sms delivered \"Bonjour\"".to_owned()],
+                vec!["deliver ws <- evt_1"],
+                Vec::<&str>::new(),
                 true
+            )
+        );
+    }
+
+    /// RFC §10.1 "Explicit delivery cancellation", gap G-076: the caller of
+    /// a decided call gone once the agent was asked, its turn in flight, or
+    /// once it answered, the turn is cut, or its answer does not re-enter:
+    /// no answer is committed. The event is delivered to the advisor all the
+    /// same, and its `AFTER_BROADCAST` hooks fire, as the Python
+    /// implementation's are (probe 6 of step 3).
+    #[test]
+    fn during_a_decided_call_s_turn_commits_no_answer_and_delivers_the_event() {
+        let seen: Vec<_> = ["on_event ai", "deliver ws"]
+            .into_iter()
+            .map(|leaves_before| {
+                let mut sim = room();
+                sim.observer("audit", HookTrigger::AfterBroadcast);
+                sim.leaves_before = Some(leaves_before);
+                let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
+                let observed = sim
+                    .fired
+                    .iter()
+                    .filter(|(trigger, _)| *trigger == HookTrigger::AfterBroadcast)
+                    .count();
+                (
+                    result.event.map(|event| event.status),
+                    sim.timeline_lines(),
+                    sim.traced("deliver").join(", "),
+                    sim.traced("on_event ai").len(),
+                    observed,
+                )
+            })
+            .collect();
+        let delivered = |answered| {
+            (
+                Some(EventStatus::Delivered),
+                vec!["#0 sms delivered \"Bonjour\"".to_owned()],
+                "deliver ws <- evt_1".to_owned(),
+                answered,
+                1,
+            )
+        };
+        // The turn in flight is given up on, never answered: the simulated
+        // driver never runs it.
+        assert_eq!(seen, [delivered(0), delivered(1)]);
+    }
+
+    /// RFC §10.1 "Explicit delivery cancellation": a call whose turns are
+    /// cut before it starts, as a delivery cancelled by its key would be,
+    /// commits and delivers its event, and asks no agent.
+    #[test]
+    fn cut_before_its_start_commits_and_delivers_its_event_and_asks_no_agent() {
+        let mut sim = room();
+        let target = InboundTarget::Room(room_id());
+        let mut inbound = Inbound::new(
+            sim.shared_config(),
+            target,
+            None,
+            Sim::message("sms", "Bonjour"),
+        );
+        let in_flight = inbound.cancel_turns();
+        let result = sim.run(inbound).unwrap();
+        assert_eq!(
+            (
+                in_flight,
+                result.event.map(|event| event.status),
+                sim.timeline_lines(),
+                sim.traced("deliver").join(", "),
+                sim.traced("on_event ai").len()
+            ),
+            (
+                Vec::new(),
+                Some(EventStatus::Delivered),
+                vec!["#0 sms delivered \"Bonjour\"".to_owned()],
+                "deliver ws <- evt_1".to_owned(),
+                0
             )
         );
     }

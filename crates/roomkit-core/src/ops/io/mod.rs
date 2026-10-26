@@ -28,10 +28,10 @@ use std::collections::{BTreeMap, VecDeque};
 use self::locks::RoomLocks;
 use super::protocol::{
     ChannelRequest, Decided, Effect, EffectId, EntryId, HoldOutcome, HoldRequest, Next, Notice,
-    Outcome, ProtocolError, Request, RequestKind, Settled, Step,
+    Outcome, ProtocolError, Request, RequestKind, Settled, Step, TURN_CUT,
 };
 use super::{InboundError, InboundResult};
-use crate::model::{RoomId, Timestamp};
+use crate::model::{ErrorRecord, RoomId, Timestamp};
 use crate::rules::chain_depth::ReentryBudget;
 
 /// What bounds a request in time (RFC §13.6).
@@ -359,6 +359,22 @@ impl Io {
             .into_iter()
             .filter(|id| !held.contains(id))
             .collect()
+    }
+
+    /// Gives up on `effects`, turns its operation cut (RFC §10.1 "Explicit
+    /// delivery cancellation"): each one outstanding is answered here, as a
+    /// turn cut, and returns those the driver holds, which it cuts and never
+    /// answers.
+    pub(crate) fn cut(&mut self, effects: &[EffectId]) -> Vec<EffectId> {
+        let mut cut = Vec::new();
+        for effect in effects {
+            if self.outstanding.remove(effect).is_some() {
+                let error = ErrorRecord::new(TURN_CUT, "the turn's cascade was cancelled");
+                self.inbox.push_back((*effect, Outcome::Failed(error)));
+                cut.push(*effect);
+            }
+        }
+        cut
     }
 
     /// Whether the call expired, its caller gone before its decision.

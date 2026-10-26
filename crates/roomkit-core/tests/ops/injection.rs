@@ -655,6 +655,63 @@ mod an_entry_adopted_under_the_lock {
         );
     }
 
+    /// RFC §10.1 "Explicit delivery cancellation", gap G-076: a locked hook
+    /// on the agent's answer injects "Heads up", an entry the call adopts,
+    /// whose caller is answered at its commit. The caller of the call gone
+    /// during the agent's turn on that entry's event, once the call is
+    /// decided, cuts the call's own turns only: the entry keeps its turn,
+    /// and the agent's answer to it is committed.
+    #[test]
+    fn keeps_its_turns_when_the_caller_of_the_call_stops_waiting() {
+        let mut sim = room();
+        sim.echo_agent("ai", "Hello back");
+        let mut injected = false;
+        sim.reentrant_hook(
+            "notifier",
+            true,
+            Reentry {
+                entries: calling(move |event| {
+                    let first = event.source.channel_id.as_str() == "ai" && !injected;
+                    injected |= first;
+                    first.then(|| send_event("Heads up"))
+                }),
+                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            },
+        );
+        sim.leaves_before = Some("on_event ai <- evt_3");
+        sim.send(hello()).unwrap();
+        let answered: Vec<(String, Option<String>)> = sim
+            .timeline
+            .iter()
+            .map(|event| {
+                let answers = event.responds_to.as_ref().map(ToString::to_string);
+                (text_of(&event.content), answers)
+            })
+            .collect();
+        let pairs = |rows: &[(&str, Option<&str>)]| -> Vec<(String, Option<String>)> {
+            rows.iter()
+                .map(|(text, answers)| ((*text).to_owned(), answers.map(str::to_owned)))
+                .collect()
+        };
+        assert_eq!(
+            (
+                answered,
+                sim.traced("caller gone"),
+                sim.traced("on_event ai")
+            ),
+            (
+                pairs(&[
+                    ("hello", None),
+                    ("Heads up", None),
+                    ("Hello back", Some("evt_1")),
+                    ("Hello back", Some("evt_3")),
+                ]),
+                vec!["caller gone"],
+                vec!["on_event ai <- evt_1", "on_event ai <- evt_3"]
+            )
+        );
+    }
+
     /// RFC §13.4, gap G-023: an adopted entry's key is checked as any
     /// direct injection's: a replay answers the event its key committed,
     /// and nothing more is stored.

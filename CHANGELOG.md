@@ -130,10 +130,15 @@ as it stands.
   hooks, the ticket, the lock and the locked section, never the commit and
   what follows it (§13.6, gap G-068). A caller that stops waiting, its
   future dropped, never drops the call once anything it ran is committed:
-  decided, the call delivers its cascade; before, it expires as one past its
-  `process_timeout`, writes nothing more of its event and delivers every
-  event it committed (gap G-076). A cascade that fails still delivers what
-  it committed.
+  before the decision, it expires as one past its `process_timeout`, writes
+  nothing more of its event and delivers every event it committed (gap
+  G-076). Once the call is decided, its turns are cut (§10.1 "Explicit
+  delivery cancellation", decision 2 of step 3, `Operation::cancel_turns`),
+  as the Python implementation cuts them: a turn of its cascade not started
+  never starts, one running is aborted and joined before the run ends, and
+  no answer re-enters; its events are delivered to every other target, and
+  the entries it adopted keep their turns. A cascade that fails still
+  delivers what it committed.
 - **Idempotency keys** (§13.4, gap G-079): a blank key, empty or
   whitespace only, is no key: a message, an injected event and a record
   carrying one are processed and stored as carrying none.

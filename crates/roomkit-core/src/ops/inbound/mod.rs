@@ -299,6 +299,12 @@ impl Operation for Inbound {
         }
         self.io.expire()
     }
+
+    /// Cuts the turns of the call's own cascade (RFC §10.1 "Explicit
+    /// delivery cancellation"), the entries it adopted keeping theirs.
+    fn cancel_turns(&mut self) -> Vec<EffectId> {
+        self.machine.cascade.cut_turns(&mut self.io)
+    }
 }
 
 /// What the call brings into the room.
