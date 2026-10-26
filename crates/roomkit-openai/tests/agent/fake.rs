@@ -15,6 +15,8 @@ pub(crate) struct Reply {
     status: u16,
     body: String,
     length: Length,
+    location: Option<String>,
+    silent: bool,
 }
 
 /// The length an answer's head declares.
@@ -47,6 +49,8 @@ impl Reply {
             status: 200,
             body: body.to_string(),
             length: Length::Body,
+            location: None,
+            silent: false,
         }
     }
 
@@ -56,6 +60,8 @@ impl Reply {
             status,
             body: body.to_owned(),
             length: Length::Body,
+            location: None,
+            silent: false,
         }
     }
 
@@ -71,9 +77,25 @@ impl Reply {
     /// the client stops reading.
     pub(crate) fn streaming(bytes: usize) -> Self {
         Self {
-            status: 200,
-            body: String::new(),
             length: Length::Streamed(bytes),
+            ..Self::status(200, "")
+        }
+    }
+
+    /// A temporary redirect to `location`, which keeps the method and the
+    /// body of the request a client follows it with.
+    pub(crate) fn redirect(location: &str) -> Self {
+        Self {
+            location: Some(location.to_owned()),
+            ..Self::status(307, "")
+        }
+    }
+
+    /// No answer at all: the connection stays open, silent.
+    pub(crate) fn silent() -> Self {
+        Self {
+            silent: true,
+            ..Self::status(200, "")
         }
     }
 }
@@ -192,13 +214,21 @@ async fn exchange(mut stream: TcpStream, reply: &Reply) -> Request {
 /// Writes `reply` on `stream`, then closes it. A client that stops reading
 /// ends the answer early, which is no failure of the fake.
 async fn answer(stream: &mut TcpStream, reply: &Reply) {
+    if reply.silent {
+        std::future::pending::<()>().await;
+    }
+    let location = reply
+        .location
+        .as_ref()
+        .map(|location| format!("Location: {location}\r\n"))
+        .unwrap_or_default();
     let length = match reply.length {
         Length::Body => format!("Content-Length: {}\r\n", reply.body.len()),
         Length::Declared(length) => format!("Content-Length: {length}\r\n"),
         Length::Streamed(_) => String::new(),
     };
     let head = format!(
-        "HTTP/1.1 {} Fake\r\nContent-Type: application/json\r\n{length}Connection: close\r\n\r\n",
+        "HTTP/1.1 {} Fake\r\nContent-Type: application/json\r\n{length}{location}Connection: close\r\n\r\n",
         reply.status
     );
     let mut sent = stream.write_all(head.as_bytes()).await.is_ok()

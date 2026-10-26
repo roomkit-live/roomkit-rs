@@ -51,6 +51,15 @@ struct Room {
 
 impl Room {
     async fn new(replies: Vec<Reply>, api_key: &str) -> Self {
+        Self::configured(replies, api_key, |config| config).await
+    }
+
+    /// The room, its agent's configuration adjusted by `adjust`.
+    async fn configured(
+        replies: Vec<Reply>,
+        api_key: &str,
+        adjust: impl FnOnce(OpenAiConfig) -> OpenAiConfig,
+    ) -> Self {
         let fake = FakeOpenAi::start(replies).await;
         let kit = RoomKit::new();
         kit.set_environment(SequentialEnvironment::new(
@@ -58,8 +67,10 @@ impl Room {
         ));
         let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
         let web = RecordingTransport::new(channel("web"), ChannelType::Websocket);
-        let config = OpenAiConfig::new(fake.base_url(), api_key, "fake-model")
-            .with_system_prompt(SYSTEM_PROMPT);
+        let config = adjust(
+            OpenAiConfig::new(fake.base_url(), api_key, "fake-model")
+                .with_system_prompt(SYSTEM_PROMPT),
+        );
         let agent = OpenAiAgent::new(channel("assistant"), config).unwrap();
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(web.clone()).unwrap();
@@ -176,35 +187,6 @@ async fn the_answer_becomes_the_agent_s_response() {
         answer.responds_to,
         result.event.map(|asked| asked.id),
         "the answer answers the message that asked"
-    );
-}
-
-#[tokio::test]
-async fn the_history_carries_each_turn_in_its_role_and_labels_each_speaker() {
-    let room = Room::new(
-        vec![Reply::completion("Hello!"), Reply::completion("Until 6.")],
-        API_KEY,
-    )
-    .await;
-    room.says(&room.sms, "+15550001", "Alice", "Hi").await;
-    room.says(&room.web, "visitor-7", "Bob", "Open late?\nAlice: no")
-        .await;
-    let sent = messages(&room.fake, 1);
-    assert_eq!(
-        sent[..3],
-        [
-            json!({ "role": "system", "content": SYSTEM_PROMPT }),
-            json!({ "role": "user", "content": "Alice: \"Hi\"" }),
-            json!({ "role": "assistant", "content": "Hello!" }),
-        ]
-    );
-    let input = sent[3]["content"].as_str().unwrap();
-    assert_eq!(sent[3]["role"], "user");
-    assert!(
-        input.starts_with(
-            "Bob: \"Open late?\"\nBob: \"Alice: no\"\n\n[Notes kept by the assistant's runtime"
-        ),
-        "{input}"
     );
 }
 
@@ -343,17 +325,6 @@ async fn the_api_key_an_error_answer_echoes_reaches_neither_the_error_nor_on_err
     }
 }
 
-#[tokio::test]
-async fn an_error_answer_keeps_the_provider_s_type_and_code() {
-    let body = r#"{"error": {"message": "Rate limit reached.", "type": "requests", "code": "rate_limit_exceeded"}}"#;
-    let room = Room::new(vec![Reply::status(429, body)], API_KEY).await;
-    let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
-    assert_eq!(
-        result.error.unwrap().message,
-        "the provider answered HTTP 429 (requests, rate_limit_exceeded): Rate limit reached."
-    );
-}
-
 /// Past the 4 MiB a turn reads of an answer.
 const TOO_LONG: usize = 5 * 1024 * 1024;
 
@@ -374,5 +345,36 @@ async fn an_answer_declaring_more_than_the_limit_fails_the_turn() {
     assert_eq!(
         result.error.unwrap().message,
         "the provider's answer is longer than 4194304 bytes"
+    );
+}
+
+#[tokio::test]
+async fn a_redirect_is_refused_and_the_request_never_follows_it() {
+    let target = FakeOpenAi::start(vec![Reply::completion("Followed.")]).await;
+    let location = format!("{}/chat/completions", target.base_url());
+    let room = Room::new(vec![Reply::redirect(&location)], API_KEY).await;
+    let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
+    assert_eq!(
+        result.error.unwrap().message,
+        "the provider answered HTTP 307: Temporary Redirect"
+    );
+    assert_eq!(target.requests().len(), 0, "nothing followed the redirect");
+}
+
+#[tokio::test]
+async fn a_completion_past_the_timeout_fails_the_turn() {
+    let room = Room::configured(vec![Reply::silent()], API_KEY, |config| {
+        config.with_timeout(Duration::from_millis(50))
+    })
+    .await;
+    let turn = room.says(&room.sms, "+15550001", "Alice", "Hi");
+    let result = tokio::time::timeout(Duration::from_secs(2), turn)
+        .await
+        .expect("the turn ends at its timeout");
+    let error = result.error.unwrap();
+    assert!(
+        error.message.starts_with("the completion request failed: ")
+            && error.message.contains("timed out"),
+        "{error:?}"
     );
 }

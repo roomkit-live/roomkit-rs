@@ -193,6 +193,16 @@ mod tests {
     }
 
     #[test]
+    fn a_completion_with_no_choice_is_malformed() {
+        assert_eq!(
+            answer(br#"{"id": "chatcmpl-1", "choices": []}"#, "sk-1"),
+            Err(OpenAiError::Malformed {
+                reason: "it has no choice".to_owned()
+            })
+        );
+    }
+
+    #[test]
     fn a_malformed_answer_s_reason_holds_no_key() {
         let body = br#"{"choices": "sk-1"}"#;
         let error = answer(body, "sk-1").unwrap_err();

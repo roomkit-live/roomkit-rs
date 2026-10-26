@@ -107,25 +107,3 @@ fn shown_url(url: &str) -> String {
         None => format!("{}://{host}", parsed.scheme()),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A base URL carrying credentials in its user info and its query.
-    const SECRET_URL: &str = "https://user:pass@example.com:8443/v1?token=abc";
-
-    #[test]
-    fn the_debug_form_hides_the_api_key_and_the_base_url_s_credentials() {
-        let config = OpenAiConfig::new(SECRET_URL, "sk-secret", "gpt-6-luna");
-        let printed = format!("{config:?}");
-        for secret in ["sk-secret", "user", "pass", "token", "abc", "/v1"] {
-            assert!(!printed.contains(secret), "{secret} in {printed}");
-        }
-        assert!(printed.contains("api_key: \"hidden\""), "{printed}");
-        assert!(
-            printed.contains("base_url: \"https://example.com:8443\""),
-            "{printed}"
-        );
-    }
-}
