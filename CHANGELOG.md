@@ -71,9 +71,14 @@ as it stands.
   and they register through the typed registrations below.
   `transcript::Message` gains `tool_calls` and `tool_call_id`, and `Role`
   gains `Tool`.
-- **A channel's output is one draw on the reentry budget** (RFC §8.3),
-  whatever number of events it returns: it drew one pass per event, which
-  stored a long turn's answer `reentry_loop_cap`.
+- **An AI agent's turn draws one reentry pass, before it runs** (RFC
+  §8.3): a channel whose turn is one stream
+  (`ChannelDeclaration::answers_as_stream`, which `AiAgent` sets) draws one
+  pass when a response's delivery asks it for a turn, and does not run past
+  the cascade's budget, its answer stored `BLOCKED` `reentry_loop_cap`; its
+  rows re-enter without drawing more, so a long turn's answer is
+  delivered. A buffered channel still draws one pass per event. A
+  tool-call row asks no agent.
 - **A tool-call row reaches only the transports that take one**: a
   channel declares it (`ChannelDeclaration::receives_tool_calls`, true by
   default for `websocket` and `webhook`), so an SMS or a chat transport is
