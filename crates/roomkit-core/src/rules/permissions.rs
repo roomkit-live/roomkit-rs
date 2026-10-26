@@ -130,8 +130,9 @@ fn deleted_events(timeline: &[RoomEvent]) -> BTreeSet<&EventId> {
 /// `event` as a reader is handed it: whole, unless it was deleted or is an
 /// edit of an event that was (gap G-062). What was said is then withheld: a
 /// deleted event's content, or an edit's new content, the edit marked
-/// deleted itself or not, becomes an empty text, and the provider's original payload, which holds the text, is left
-/// out (`source.raw_payload`). The rest stays: the id, index, type, source
+/// deleted itself or not, becomes an empty text, and the provider's
+/// original payload, which holds the text, is left out
+/// (`source.raw_payload`). The rest stays: the id, index, type, source
 /// with the provider's message id, thread, metadata with `metadata.deleted`,
 /// and the provider's structured data (`channel_data`), so the reader tells
 /// a deleted event from an empty one, the delete that follows names an
