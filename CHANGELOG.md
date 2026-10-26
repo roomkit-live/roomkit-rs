@@ -282,7 +282,8 @@ as it stands.
   sending its system prompt and the turn's conversation and answering with
   the completion's text. `OpenAiConfig` names the base URL, the API key
   (an empty one sends no `Authorization`; `Debug` never prints it), the
-  model, the system prompt, how many messages a turn sends (50 by default)
+  model, the system prompt, how many messages a turn sends at most (all
+  those among the 50 events the kit's context holds, by default)
   and the request's timeout (120 seconds); `Debug` shows the base URL's
   scheme, host and port only. A provider error, a request that fails, an
   answer longer than 4 MiB or one that is no chat completion fails the turn
