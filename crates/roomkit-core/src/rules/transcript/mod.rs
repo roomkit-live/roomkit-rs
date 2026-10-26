@@ -4,12 +4,13 @@
 //!
 //! - The channel's own messages are the assistant's; everyone else's are
 //!   the user's.
-//! - Once the turns hold two speakers or more, or two people or more take
-//!   part, each line of a participant's turn opens with its author's label
-//!   (their name, ranked when it reads like another's, or `@channel` for a
-//!   sender with no name), then what they typed on it as a JSON string; the
-//!   turn's notes then say how speakers are named. A one-to-one
-//!   conversation reads as it was written.
+//! - Once the turns hold two speakers or more, counted by who they come
+//!   from, or two people or more take part, each line of a participant's
+//!   turn opens with its author's label (their name, ranked when it reads
+//!   like another's, or `@channel` for a sender with no name, the second
+//!   such sender of a channel `@channel (2)`), then what they typed on it
+//!   as a JSON string; the turn's notes then say how speakers are named. A
+//!   one-to-one conversation reads as it was written.
 //! - An instruction is the turn's input, marked as the application's and
 //!   never attributed to a speaker; one that stands alone reads nothing of
 //!   the room (rule 7).
@@ -25,7 +26,9 @@ mod speakers;
 mod tests;
 
 use self::marks::{INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies};
-use self::speakers::{label, labelled_lines, labels_turns, people_taking_part};
+use self::speakers::{
+    Speaker, labelled_lines, labels_turns, people_taking_part, speaker, tell_apart,
+};
 use super::authors::Authors;
 use super::edits::is_deleted;
 use super::instructions::is_standalone;
@@ -70,23 +73,25 @@ pub fn conversation(
     let mut authors = Authors::new(context);
     let mut turns = past_turns(channel_id, event, context, history, &mut authors);
     turns.push(Turn::input(event, &mut authors));
-    let speakers = turns
+    tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
+    let sources = turns
         .iter()
         .filter(|turn| turn.role == Role::User && !turn.text.is_empty())
-        .filter_map(|turn| turn.label.as_deref());
-    let labelled = labels_turns(speakers, people_taking_part(context, channel_id, &authors));
+        .filter_map(|turn| turn.speaker.as_ref())
+        .map(|speaker| speaker.source.as_str());
+    let labelled = labels_turns(sources, people_taking_part(context, channel_id, &authors));
     let turns = cleaned(turns, labelled);
     rendered(turns, labelled)
 }
 
 /// A turn of the conversation before it is rendered: its role, the text
-/// its event brings, its author's label, whether it is the application's
+/// its event brings, who said it, whether it is the application's
 /// instruction, and whether it is the turn's input.
 #[derive(Clone, Debug)]
 struct Turn {
     role: Role,
     text: String,
-    label: Option<String>,
+    speaker: Option<Speaker>,
     instruction: bool,
     input: bool,
 }
@@ -98,7 +103,7 @@ impl Turn {
         Self {
             role: if own { Role::Assistant } else { Role::User },
             text: text_of(&event.content),
-            label: if own { None } else { label(event, authors) },
+            speaker: if own { None } else { speaker(event, authors) },
             instruction: false,
             input: false,
         }
@@ -111,10 +116,10 @@ impl Turn {
         Self {
             role: Role::User,
             text: text_of(&event.content),
-            label: if instruction {
+            speaker: if instruction {
                 None
             } else {
-                label(event, authors)
+                speaker(event, authors)
             },
             instruction,
             input: true,
@@ -125,7 +130,7 @@ impl Turn {
     /// a user turn the runtime does not label. A labelled turn is strings
     /// after its author's label, which no copy runs out of.
     fn is_piece(&self, labelled: bool) -> bool {
-        self.role == Role::User && !(labelled && self.label.is_some())
+        self.role == Role::User && !(labelled && self.speaker.is_some())
     }
 }
 
@@ -197,10 +202,10 @@ fn rendered(turns: Vec<Turn>, labelled: bool) -> Vec<Message> {
     let mut messages: Vec<Message> = turns
         .into_iter()
         .map(|turn| {
-            let text = match (&turn.label, turn.instruction) {
+            let text = match (&turn.speaker, turn.instruction) {
                 (_, true) => format!("{INSTRUCTION_MARK}\n{}", turn.text),
-                (Some(label), false) if labelled && turn.role == Role::User => {
-                    labelled_lines(&turn.text, label)
+                (Some(speaker), false) if labelled && turn.role == Role::User => {
+                    labelled_lines(&turn.text, &speaker.label)
                 }
                 (_, false) => turn.text,
             };

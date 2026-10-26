@@ -576,9 +576,16 @@ impl<'a> Authors<'a> {
         }
     }
 
+    /// Who `event` comes from, as a digest salted with the room's id: the
+    /// room's participant, whichever channel reached them; else its sender
+    /// on its channel; else its channel.
+    pub(crate) fn source(&self, event: &RoomEvent) -> String {
+        digest(self.salt, &source_of(event, &self.people))
+    }
+
     /// `event`'s author, or `None` when they have no name.
     pub(crate) fn of(&mut self, event: &RoomEvent) -> Option<Author> {
-        let source = digest(self.salt, &source_of(event, &self.people));
+        let source = self.source(event);
         if let Some((name, rank, recorded)) = recorded_author(event)
             && recorded == source
         {

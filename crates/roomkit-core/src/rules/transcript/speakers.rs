@@ -8,7 +8,7 @@
 //! its own labels (`You`, `assistant`), which §6.4 does not ask for: here
 //! the agent's turns carry a role, never a label.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -69,19 +69,62 @@ const BIDI_CONTROLS: &[char] = &[
     '\u{2069}',
 ];
 
-/// The label `event` opens with where a model reads it (RFC §6.4): its
-/// author's name, with its rank when an earlier source's name reads like
-/// it (`Alice (2)`), or its channel as the room addresses it (`@sms1`)
-/// when its author has no name; `None` for the runtime's system events.
-pub(super) fn label(event: &RoomEvent, authors: &mut Authors<'_>) -> Option<String> {
+/// Who said a turn, as the conversation names them (RFC §6.4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Speaker {
+    /// Who the turn comes from (`Authors::source`): two turns of one
+    /// speaker have the same source, whatever their labels.
+    pub(super) source: String,
+    /// The label the turn's lines open with.
+    pub(super) label: String,
+    /// Whether the label is its author's name rather than its channel.
+    named: bool,
+}
+
+/// Who said `event` (RFC §6.4): its author's name, with its rank when an
+/// earlier source's name reads like it (`Alice (2)`), or its channel as the
+/// room addresses it (`@sms1`) when its author has no name; `None` for the
+/// runtime's system events.
+pub(super) fn speaker(event: &RoomEvent, authors: &mut Authors<'_>) -> Option<Speaker> {
     if event.source.channel_type == ChannelType::System {
         return None;
     }
-    Some(match authors.of(event) {
-        Some(Author { name, rank: 1 }) => name,
-        Some(Author { name, rank }) => format!("{name} ({rank})"),
-        None => channel_label(&event.source.channel_id),
+    let source = authors.source(event);
+    let (label, named) = match authors.of(event) {
+        Some(Author { name, rank: 1 }) => (name, true),
+        Some(Author { name, rank }) => (format!("{name} ({rank})"), true),
+        None => (channel_label(&event.source.channel_id), false),
+    };
+    Some(Speaker {
+        source,
+        label,
+        named,
     })
+}
+
+/// `speakers`, in the order the conversation reads them, with each
+/// nameless sender told apart from another of its channel: the second
+/// source labelled `@sms` reads `@sms (2)`, and so on, in the order they
+/// first speak, as a name's rank reads. One nameless source of a channel
+/// keeps its channel's label.
+pub(super) fn tell_apart<'a>(speakers: impl IntoIterator<Item = &'a mut Speaker>) {
+    let mut sources_by_label: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for speaker in speakers {
+        if speaker.named {
+            continue;
+        }
+        let sources = sources_by_label.entry(speaker.label.clone()).or_default();
+        let rank = if let Some(index) = sources.iter().position(|source| *source == speaker.source)
+        {
+            index + 1
+        } else {
+            sources.push(speaker.source.clone());
+            sources.len()
+        };
+        if rank > 1 {
+            speaker.label = format!("{} ({rank})", speaker.label);
+        }
+    }
 }
 
 /// The label of a turn whose author has no name: its channel, `@` then
@@ -165,10 +208,12 @@ fn reaches(person: &Participant, context: &RoomContext, reader: &ChannelBinding)
 }
 
 /// Whether a conversation labels its participants' turns (RFC §6.4): the
-/// turns it reads hold two speakers or more, or two people or more take
-/// part. A one-to-one conversation is left as it is.
-pub(super) fn labels_turns<'a>(labels: impl IntoIterator<Item = &'a str>, people: usize) -> bool {
-    people >= 2 || labels.into_iter().collect::<BTreeSet<_>>().len() >= 2
+/// turns it reads hold two speakers or more, counted by source, so that
+/// two senders sharing a label count twice and one sender under two names
+/// once; or two people or more take part. A one-to-one conversation is
+/// left as it is.
+pub(super) fn labels_turns<'a>(sources: impl IntoIterator<Item = &'a str>, people: usize) -> bool {
+    people >= 2 || sources.into_iter().collect::<BTreeSet<_>>().len() >= 2
 }
 
 /// `text` with each of its lines given as `label`, then the line as a JSON

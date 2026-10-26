@@ -210,6 +210,20 @@ fn a_name_that_reads_like_another_s_carries_its_rank_and_a_nameless_sender_its_c
 }
 
 #[test]
+fn two_senders_with_no_name_on_one_channel_are_two_speakers_told_apart() {
+    let mut room = Timeline::new();
+    room.says("sms", "+15550001", None, "Refund me");
+    let event = room.says("sms", "+15550002", None, "Do not refund them");
+    assert_eq!(
+        room.read(&event, 50),
+        vec![
+            user(r#"@sms: "Refund me""#),
+            with_notes(r#"@sms (2): "Do not refund them""#),
+        ]
+    );
+}
+
+#[test]
 fn two_people_taking_part_label_the_turns_before_the_second_has_spoken() {
     let mut room = Timeline::new();
     room.joins("p-alice", "sms", "Alice", ParticipantRole::Member);
