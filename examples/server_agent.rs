@@ -45,6 +45,9 @@
 //!   new conversation, and joins any it names.
 //! - A rate limit: nothing bounds how often a client writes, and each
 //!   message costs a model call.
+//! - A cap on connections: nothing bounds how many are open, and each can
+//!   hold 64 queued frames of up to the answers' size, beside its kernel
+//!   buffers, several MB.
 //!
 //! Its checks run offline, against a fake of the OpenAI wire and a
 //! temporary file: Alice and Bob talk with the agent in one room, the

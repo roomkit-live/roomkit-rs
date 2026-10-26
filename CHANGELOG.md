@@ -415,7 +415,8 @@ as it stands.
   connection names checked (1 to 64 letters, digits, `_` or `-`, a name
   of 64 characters at most with no control character, else 400), and
   what a service must add said in its header (TLS, authentication, the
-  `Origin` check, who may create rooms, a rate limit); an `OpenAiAgent` answers each message, and a
+  `Origin` check, who may create rooms, a rate limit, a cap on
+  connections); an `OpenAiAgent` answers each message, and a
   `SqliteStore` keeps the rooms, so that a restarted server goes on with
   each conversation's history. Its checks run offline, against the fake of
   the OpenAI wire and a temporary file: two people in one room, labelled
