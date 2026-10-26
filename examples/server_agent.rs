@@ -22,12 +22,21 @@
 //!   each round said, never the call.
 //! - The room's deliveries to `websocket` go out on each of the room's
 //!   connections, one JSON frame per event: the agent's rows, a call's
-//!   `tool` and the turn's `ended` included, in index order. A room
-//!   delivers an event to every channel but its source (RFC §10.2 step 2),
-//!   so the people on `websocket` see the agent's answers, not each other's
-//!   messages. A client that stops reading is dropped, reader included,
-//!   once one send waits 5 seconds; a stop gives the connections and the
-//!   kit 10 seconds.
+//!   `tool` and the turn's `ended` included, in index order, each with its
+//!   `id` and `index`. A room delivers an event to every channel but its
+//!   source (RFC §10.2 step 2), so the people on `websocket` see the
+//!   agent's answers, not each other's messages. A client that stops
+//!   reading is dropped, reader included, once one send waits 5 seconds; a
+//!   stop gives the connections and the kit 10 seconds.
+//! - The agent's answer streams (RFC §6.1, §12.2 steps 13s and 14s): a
+//!   connection opened with `&stream=1` receives its text as the model
+//!   writes it, `{"type": "delta", "text": "..."}` frames, then each row as
+//!   the store holds it, the deltas joining to the row's text; any other
+//!   connection receives the rows only. Once every client of the room has
+//!   left, the answer stops: the text sent so far is stored marked
+//!   `cancelled`, and nothing more is generated. The deltas are shown
+//!   before `BEFORE_BROADCAST` judges the row they end in (RFC §6.4): a
+//!   service whose hooks rewrite answers keeps its clients from streaming.
 //! - The conversation and the `user` are 1 to 64 letters, digits, `_` or
 //!   `-`, and the name 64 characters at most, none a control character;
 //!   anything else is refused with 400.
@@ -55,10 +64,11 @@
 //!   hold 64 queued frames of up to the answers' size, beside its kernel
 //!   buffers, several MB.
 //!
-//! Its checks run offline, against a fake of the OpenAI wire and a
-//! temporary file: Alice and Bob talk with the agent in one room, the agent
-//! looking up Bob's order, the server restarts on the same file, and Alice
-//! goes on.
+//! Its checks run offline, against a fake of the OpenAI wire, which streams,
+//! and a temporary file: Alice and Bob talk with the agent in one room, the
+//! agent looking up Bob's order, the server restarts on the same file, and
+//! Alice goes on; Erin reads an answer as it is written beside Finn, who
+//! reads its rows; Gina leaves mid-answer.
 //!
 //! With `--serve`, it stays up on 127.0.0.1:8080, or the address given
 //! after the flag, its rooms in `server_agent.db`, until Ctrl+C. The agent
@@ -70,7 +80,7 @@
 //! cargo run --example server_agent
 //! OPENAI_BASE_URL=https://api.openai.com/v1 OPENAI_API_KEY=sk-... \
 //!     OPENAI_MODEL=gpt-6-luna cargo run --example server_agent -- --serve
-//! websocat 'ws://127.0.0.1:8080/conversations/bakery?user=alice&name=Alice'
+//! websocat 'ws://127.0.0.1:8080/conversations/bakery?user=alice&name=Alice&stream=1'
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
@@ -193,6 +203,20 @@ const GARDEN: &str = "garden";
 
 /// The conversation a client leaves while its join makes the room.
 const PORCH: &str = "porch";
+
+/// The conversation where Erin reads the answer as it is written and Finn
+/// its rows, what Erin asks, and what the model answers.
+const STUDIO: &str = "studio";
+const ERIN_ASKS: &str = "When does the rye come out?";
+const RYE: &str = "Fresh rye comes out of the oven at noon.";
+
+/// The conversation Gina leaves mid-answer, what she asks, the answer the
+/// model writes slowly, and how many of its pieces she reads.
+const TERRACE: &str = "terrace";
+const GINA_ASKS: &str = "When does the terrace open?";
+const TERRACE_OPENS: &str = "The terrace opens at nine in the morning, every day of the week.";
+const GINA_READS: usize = 2;
+const WORD_PAUSE: Duration = Duration::from_millis(50);
 
 /// The conversation where the model is unreachable, and how long a client
 /// there waits to be told.
@@ -441,6 +465,7 @@ async fn connect(
     let Some((room_id, user, name)) = named(&conversation, &query) else {
         return (StatusCode::BAD_REQUEST, NAMING).into_response();
     };
+    let streams = query.get("stream").is_some_and(|stream| stream == "1");
     // A task of its own: a client that leaves drops this handler and what
     // it awaits, which must not leave a new room half made, without its
     // agent or its binding.
@@ -460,7 +485,7 @@ async fn connect(
     // Registered before the upgrade is answered, so that no delivery made
     // once the client is connected misses it; an upgrade that fails drops
     // the registration with the callback.
-    let connection = app.websocket.register_connection(room_id.clone());
+    let connection = app.websocket.register_connection(room_id.clone(), streams);
     // The frame's limit too: a frame is refused at its header, before the
     // library reads its body, up to 16 MiB by default.
     upgrade
@@ -733,6 +758,8 @@ async fn serve(address: &str) -> Result<(), Box<dyn Error>> {
 async fn check() -> Result<ExitCode, Box<dyn Error>> {
     let mut checks = Checks::default();
     the_conversation_survives_a_restart(&mut checks).await?;
+    a_client_reads_the_answer_as_it_is_written(&mut checks).await?;
+    a_client_leaves_mid_answer(&mut checks).await?;
     a_client_stops_reading(&mut checks).await?;
     what_a_client_is_told(&mut checks).await?;
     what_a_connection_must_name(&mut checks).await?;
@@ -934,6 +961,118 @@ async fn alice_goes_on(
     alice.close().await;
     server.stop().await?;
     Ok(answer)
+}
+
+/// Erin reads the answer as the model writes it, Finn, in the same room,
+/// reads its rows: Erin's deltas join to the row's text, which comes with
+/// its id and index, and every frame Finn receives is a row the file holds
+/// (RFC §6.1, §12.2 step 14s).
+async fn a_client_reads_the_answer_as_it_is_written(
+    checks: &mut Checks,
+) -> Result<(), Box<dyn Error>> {
+    println!("Erin reads the answer as it is written; Finn reads its rows.");
+    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(&[RYE]).await?);
+    let database = TempDatabase::new("server_agent_studio");
+    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let mut erin = Client::connect_streaming(server.address, STUDIO, "erin", "Erin").await?;
+    let mut finn = Client::connect(server.address, STUDIO, "finn", "Finn").await?;
+    erin.say(ERIN_ASKS).await?;
+    let read = erin.turn().await;
+    let finn_read = finn.turn().await;
+    for client in [erin, finn] {
+        client.close().await;
+    }
+    server.stop().await?;
+    let timeline = timeline_in(database.path(), STUDIO).await?;
+    let deltas: String = read
+        .iter()
+        .filter(|frame| frame["type"] == "delta")
+        .filter_map(|frame| frame["text"].as_str())
+        .collect();
+    let row = read.last();
+    let stored = row.and_then(|row| {
+        timeline
+            .iter()
+            .find(|event| Some(&json!(event.id)) == row.get("id"))
+    });
+    checks.expect(
+        "a client that streams receives the answer's pieces, then its row with its id and \
+         index, the pieces joining to the row's text",
+        read.len() > 2
+            && read
+                .iter()
+                .take(read.len() - 1)
+                .all(|frame| frame["type"] == "delta")
+            && deltas == RYE
+            && row.and_then(|row| row["text"].as_str()) == Some(RYE)
+            && stored.is_some_and(|event| {
+                row.and_then(|row| row["index"].as_u64()) == Some(event.index)
+            }),
+    );
+    let held = |frame: &Value| {
+        timeline
+            .iter()
+            .any(|event| Some(&json!(event.id)) == frame.get("id"))
+    };
+    checks.expect(
+        "a client that does not stream receives the rows only, each an event the file holds",
+        !finn_read.is_empty()
+            && finn_read
+                .iter()
+                .all(|frame| frame["type"] != "delta" && held(frame))
+            && messages_in(&finn_read)
+                .last()
+                .and_then(|frame| frame["text"].as_str())
+                == Some(RYE),
+    );
+    Ok(())
+}
+
+/// Gina reads the first pieces of an answer the model writes slowly, then
+/// leaves: the answer stops, the text she was sent stored marked
+/// `cancelled` (RFC §12.2 step 13s).
+async fn a_client_leaves_mid_answer(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    println!("Gina leaves while the answer is written.");
+    let slow = Reply::from(TERRACE_OPENS).pausing(WORD_PAUSE);
+    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(&[slow]).await?);
+    let database = TempDatabase::new("server_agent_terrace");
+    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let mut gina = Client::connect_streaming(server.address, TERRACE, "gina", "Gina").await?;
+    gina.say(GINA_ASKS).await?;
+    let mut read = String::new();
+    for _ in 0..GINA_READS {
+        if let Some(frame) = gina.next_frame(ANSWER_PATIENCE).await {
+            read.push_str(
+                frame
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+        }
+    }
+    println!("  Gina read {read:?}, and leaves");
+    gina.leave();
+    tokio::time::timeout(STOP_PATIENCE, server.kit.idle()).await?;
+    server.stop().await?;
+    let timeline = timeline_in(database.path(), TERRACE).await?;
+    let answer = timeline
+        .iter()
+        .find(|event| event.source.channel_id.as_str() == "assistant");
+    let stored = answer.map(|answer| text_of(&answer.content));
+    println!("  the file holds {stored:?}");
+    checks.expect(
+        "a client that leaves mid-answer leaves the text it was sent stored, marked \
+         cancelled, and nothing more of the answer",
+        answer.is_some_and(|answer| {
+            let text = text_of(&answer.content);
+            text.starts_with(&read)
+                && text.len() < TERRACE_OPENS.len()
+                && TERRACE_OPENS.starts_with(&text)
+                && answer.metadata.get("cancelled") == Some(&json!(true))
+                && answer.metadata.get("loop_end_reason") == Some(&json!("cancelled"))
+        }),
+    );
+    Ok(())
 }
 
 /// Dave joins the kitchen's conversation and stops reading, while the host
@@ -1268,6 +1407,18 @@ impl Client {
         Self::open(address, conversation, user, name, TcpSocket::new_v4()?).await
     }
 
+    /// The same connection, asking for the agent's answers as they are
+    /// written (`&stream=1`).
+    async fn connect_streaming(
+        address: SocketAddr,
+        conversation: &str,
+        user: &str,
+        name: &'static str,
+    ) -> Result<Self, Box<dyn Error>> {
+        let conversation = format!("{conversation}?user={user}&name={name}&stream=1");
+        Self::open_at(address, &conversation, name, TcpSocket::new_v4()?).await
+    }
+
     /// The same connection, whose socket takes in a few KiB at most before
     /// the server must wait for it to read: a client that falls behind
     /// quickly.
@@ -1289,9 +1440,22 @@ impl Client {
         name: &'static str,
         socket: TcpSocket,
     ) -> Result<Self, Box<dyn Error>> {
+        let path = format!("{conversation}?user={user}&name={name}");
+        Self::open_at(address, &path, name, socket).await
+    }
+
+    /// `name`'s connection to the conversation `path` names, its query
+    /// included.
+    async fn open_at(
+        address: SocketAddr,
+        path: &str,
+        name: &'static str,
+        socket: TcpSocket,
+    ) -> Result<Self, Box<dyn Error>> {
         let stream = socket.connect(address).await?;
-        let url = format!("ws://{address}/conversations/{conversation}?user={user}&name={name}");
+        let url = format!("ws://{address}/conversations/{path}");
         let (socket, _response) = tokio_tungstenite::client_async(url, stream).await?;
+        let conversation = path.split('?').next().unwrap_or_default();
         println!("{name} connects to {conversation}.");
         Ok(Self { name, socket })
     }
@@ -1422,6 +1586,12 @@ impl Client {
             .filter(|frame| frame.get("ended").is_some())
             .and_then(|frame| frame["text"].as_str())
             .map(str::to_owned)
+    }
+
+    /// Leaves at once, as a closed browser tab does: the connection is
+    /// dropped, with no close handshake.
+    fn leave(self) {
+        drop(self.socket);
     }
 
     /// Closes the connection, and waits for the server to close its side.

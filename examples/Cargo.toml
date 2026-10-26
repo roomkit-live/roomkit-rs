@@ -143,5 +143,9 @@ path = "agent_tools.rs"
 # A server: an agent over WebSocket, kept in SQLite.
 
 [[example]]
+name = "streamed_answer"
+path = "streamed_answer.rs"
+
+[[example]]
 name = "server_agent"
 path = "server_agent.rs"

@@ -3,6 +3,7 @@
 //! runs offline and without a key.
 
 use std::error::Error;
+use std::time::Duration;
 use std::{env, fmt, io};
 
 use roomkit_openai::OpenAiConfig;
@@ -114,10 +115,15 @@ impl fmt::Debug for OpenAiEndpoint {
 }
 
 /// What the fake answers a completion with: a text, or a text and calls.
+/// Asked to stream (`stream: true`), it sends the text word by word as
+/// server-sent events, each call's arguments in two fragments, then the
+/// completion's end and its usage; otherwise the whole completion.
 #[derive(Clone, Debug)]
 pub struct Reply {
     text: String,
     calls: Vec<(String, String, String)>,
+    /// How long it waits between two words of a streamed text.
+    pause: Duration,
 }
 
 impl Reply {
@@ -133,7 +139,22 @@ impl Reply {
                 .into_iter()
                 .map(|(id, name, arguments)| (id.to_owned(), name.to_owned(), arguments.to_owned()))
                 .collect(),
+            pause: Duration::ZERO,
         }
+    }
+
+    /// The same reply, waiting `pause` between two words of its streamed
+    /// text, as a model writing slowly.
+    #[must_use]
+    pub fn pausing(mut self, pause: Duration) -> Self {
+        self.pause = pause;
+        self
+    }
+
+    /// The words its streamed text is written in, each with the space after
+    /// it.
+    pub fn words(&self) -> Vec<&str> {
+        self.text.split_inclusive(' ').collect()
     }
 
     /// The text it says.
@@ -176,6 +197,36 @@ impl Reply {
             }],
             "usage": { "prompt_tokens": 40, "completion_tokens": 10, "total_tokens": 50 },
         })
+    }
+}
+
+impl Reply {
+    /// The completion's chunks as a stream sends them (`stream_options.
+    /// include_usage`): one per word, each call's start and the two halves of
+    /// its arguments, the end, then the usage.
+    fn chunks(&self) -> Vec<Value> {
+        let delta = |delta: Value| json!({ "choices": [{ "index": 0, "delta": delta }] });
+        let mut chunks: Vec<Value> = self
+            .words()
+            .into_iter()
+            .map(|word| delta(json!({ "content": word })))
+            .collect();
+        for (index, (id, name, arguments)) in self.calls.iter().enumerate() {
+            let middle = arguments
+                .char_indices()
+                .nth(arguments.chars().count() / 2)
+                .map_or(arguments.len(), |(at, _)| at);
+            let (first, second) = arguments.split_at(middle);
+            chunks.push(delta(json!({ "tool_calls": [{ "index": index, "id": id,
+                "type": "function", "function": { "name": name, "arguments": first } }] })));
+            chunks.push(delta(json!({ "tool_calls": [{ "index": index,
+                "function": { "arguments": second } }] })));
+        }
+        let finish = if self.calls() { "tool_calls" } else { "stop" };
+        chunks.push(json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": finish }] }));
+        chunks.push(json!({ "choices": [],
+            "usage": { "prompt_tokens": 40, "completion_tokens": 10, "total_tokens": 50 } }));
+        chunks
     }
 }
 
@@ -235,18 +286,43 @@ async fn serve(listener: TcpListener, replies: Vec<Reply>, requests: Log<Value>)
         let Ok(body) = request_body(&mut stream).await else {
             continue;
         };
-        requests.push(serde_json::from_slice(&body).unwrap_or_default());
+        let request: Value = serde_json::from_slice(&body).unwrap_or_default();
+        let streams = request.get("stream") == Some(&Value::Bool(true));
+        requests.push(request);
         let reply = reply.unwrap_or_else(|| Reply::from(""));
+        // A client gone meanwhile reports it itself; the connection closes as
+        // the stream is dropped.
+        if streams {
+            // One at a time, as a model answers: the next request waits.
+            let _sent = send_events(&mut stream, &reply).await;
+            continue;
+        }
         let completion = reply.completion(next).to_string();
         let answer = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
              Connection: close\r\n\r\n{completion}",
             completion.len()
         );
-        // A client gone meanwhile reports it itself; the connection closes as
-        // the stream is dropped.
         let _sent = stream.write_all(answer.as_bytes()).await;
     }
+}
+
+/// Sends `reply` as a stream of server-sent events, its words `pause`
+/// apart, until it is over or the client stops reading.
+async fn send_events(stream: &mut TcpStream, reply: &Reply) -> io::Result<()> {
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+    stream.write_all(head.as_bytes()).await?;
+    for (position, chunk) in reply.chunks().iter().enumerate() {
+        if position > 0 && !reply.pause.is_zero() && position < reply.words().len() {
+            tokio::time::sleep(reply.pause).await;
+        }
+        stream
+            .write_all(format!("data: {chunk}\n\n").as_bytes())
+            .await?;
+        stream.flush().await?;
+    }
+    stream.write_all(b"data: [DONE]\n\n").await?;
+    stream.shutdown().await
 }
 
 /// The body of the HTTP/1.1 request `stream` sends.
