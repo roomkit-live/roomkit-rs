@@ -369,6 +369,31 @@ async fn two_agents_answering_each_other_take_at_most_the_budget_s_turns() {
     assert!(turns <= 52, "{turns} turns");
 }
 
+/// RFC §8.3, §9.5.1: a streamed turn the delivery of a call's own event
+/// asks for draws no pass of its own; the call drew what it costs as it
+/// started, when the room's work made it. A hook that calls into the room
+/// on every row of the agent's turns, each call asking the agent again, is
+/// bounded by the cascade's budget: a locked hook's `send_event`, an entry
+/// the hook's operation adopts, one pass each, 50 at the default depth
+/// limit; an observer's `post`, a hook body's call, one hook call each, 100
+/// at a depth limit of 10. Past the budget the call is refused, its event
+/// stored refused, and the agent is never asked. (The security review's
+/// finding on the F1 rework, a streamed turn asked from a non-Response set
+/// running free, does not apply: no such turn runs uncharged.)
+#[tokio::test]
+async fn a_turn_asked_by_a_hook_s_call_runs_on_the_call_s_draw() {
+    for (echo, depth, budget) in [
+        (support::Echo::HookSend, 5, 50),
+        (support::Echo::ObserverPost, 10, 100),
+    ] {
+        let (turns, capped) = support::a_hook_calling_per_row(echo, depth).await;
+        assert!(
+            turns <= budget + 1 && capped > 0,
+            "{echo:?}: {turns} turns, {capped} capped"
+        );
+    }
+}
+
 /// A messaging transport is not handed the turn's tool-call rows, so that
 /// its delivery of the event's text never sends `[Tool call: x]`; a
 /// WebSocket channel is, as the reference implementation's WebSocket shows

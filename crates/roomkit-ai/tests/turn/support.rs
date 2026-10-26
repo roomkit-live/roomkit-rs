@@ -3,15 +3,15 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use roomkit::model::Metadata;
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent,
-    InboundMessage, RoomContext, RoomEvent, RoomId,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, HookResult,
+    InboundMessage, Metadata, Post, RoomContext, RoomEvent, RoomId,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::transcript::Role;
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, InboundResult, RoomKit,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, HookExecution, HookSpec,
+    HookTrigger, InboundResult, RoomKit,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -206,13 +206,19 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
     depths.into_iter().map(|(_, depth)| depth).collect()
 }
 
-/// A model that never runs out: each turn makes `rounds` rounds of a text
-/// and one call, then answers. It counts its turns.
+/// A model that answers each turn with `rounds` rounds of a text and one
+/// call, then its answer, for `MOST_TURNS` turns; past them it answers
+/// nothing, so that a loop no budget bounds ends all the same, its turns
+/// counted, instead of running the machine out of memory.
 #[derive(Clone)]
 pub(crate) struct Endless {
     rounds: usize,
     pub(crate) turns: Arc<AtomicUsize>,
 }
+
+/// The turns an `Endless` model takes at most: far over any budget a test
+/// checks.
+const MOST_TURNS: usize = 400;
 
 impl Endless {
     pub(crate) fn new(rounds: usize) -> Self {
@@ -237,8 +243,10 @@ impl AiProvider for Endless {
             })
             .filter(|message| message.role == Role::Assistant)
             .count();
-        if done == 0 {
-            self.turns.fetch_add(1, Ordering::SeqCst);
+        if done == 0 && self.turns.fetch_add(1, Ordering::SeqCst) >= MOST_TURNS {
+            let finish = Done::new(Some("stop".to_owned()), Metadata::new());
+            let silence = ProviderResponse::new("", Vec::new(), finish);
+            return ProviderResponse::into_stream(async move { Ok(silence) });
         }
         let response = if done < self.rounds {
             let call =
@@ -276,4 +284,91 @@ pub(crate) async fn two_agents(rounds: usize) -> usize {
     kit.idle().await;
     kit.shutdown().await;
     alpha.turns.load(Ordering::SeqCst) + beta.turns.load(Ordering::SeqCst)
+}
+
+/// How a hook calls into the room on every row of the agent's turn.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Echo {
+    /// A locked SYNC `BEFORE_BROADCAST` hook's `send_event` from the SMS
+    /// channel: an entry the hook's operation adopts, which draws one pass
+    /// of the cascade's reentry budget as it starts (RFC §8.3, §9.5.1).
+    HookSend,
+    /// An ASYNC `AFTER_BROADCAST` observer's `post` addressed to the
+    /// agent: a call of a hook's body, which draws one of the cascade's
+    /// hook calls as it starts, at least one deeper than the row (RFC §8.3
+    /// "The hook calls of a cascade").
+    ObserverPost,
+}
+
+/// The turns an agent takes when `echo` calls into the room on every row of
+/// its turns, each call asking the agent again, at `max_chain_depth`; and
+/// the calls stored refused past the cascade's budget.
+pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> (usize, usize) {
+    let model = Endless::new(2);
+    let kit = RoomKit::new();
+    kit.set_max_chain_depth(max_chain_depth);
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
+        .unwrap();
+    let agent = AiAgent::new(channel("assistant"), model.clone())
+        .with_tools(served())
+        .unwrap();
+    kit.register_channel(agent).unwrap();
+    kit.create_room(&room_id()).await.unwrap();
+    for id in ["sms", "assistant"] {
+        kit.attach(&room_id(), &channel(id)).await.unwrap();
+    }
+    let calling = kit.downgrade();
+    match echo {
+        Echo::HookSend => {
+            let spec = HookSpec::new("echo", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+            kit.hook(spec, move |event, _context| {
+                let kit = calling
+                    .upgrade()
+                    .filter(|_| event.source.channel_id == channel("assistant"));
+                async move {
+                    if let Some(kit) = kit {
+                        let echo = DirectEvent::new(channel("sms"), EventContent::text("Echo"));
+                        // Past the budget the call is refused, its event
+                        // stored refused.
+                        let _sent = kit.send_event(&room_id(), echo).await;
+                    }
+                    Ok(HookResult::allow())
+                }
+            })
+            .unwrap();
+        }
+        Echo::ObserverPost => {
+            kit.observe(
+                "echo",
+                HookTrigger::AfterBroadcast,
+                move |event, _context| {
+                    let kit = calling
+                        .upgrade()
+                        .filter(|_| event.source.channel_id == channel("assistant"));
+                    async move {
+                        if let Some(kit) = kit {
+                            let mut post = Post::new(EventContent::text("Echo"));
+                            post.addressed_to = vec![channel("assistant")];
+                            // Past the hook calls the post is stored refused.
+                            let _posted = kit.post(&room_id(), post).await;
+                        }
+                    }
+                },
+            )
+            .unwrap();
+        }
+    }
+    let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Go"));
+    kit.process_inbound_in(&room_id(), message).await.unwrap();
+    kit.idle().await;
+    let capped = kit
+        .store()
+        .list_events(&room_id(), true)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|event| event.blocked_by.as_deref() == Some("reentry_loop_cap"))
+        .count();
+    kit.shutdown().await;
+    (model.turns.load(Ordering::SeqCst), capped)
 }
