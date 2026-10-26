@@ -7,9 +7,9 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync
+.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check
 
-all: fmt-check clippy test doc deny check-core-deps examples
+all: conformance-check fmt-check clippy test doc deny check-core-deps examples
 
 fmt:
 	$(CARGO) fmt --all
@@ -83,3 +83,20 @@ conformance-sync:
 	(cd conformance && find scenarios -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-64) \
 		> conformance/SCENARIOS_SHA256 && \
 	echo "conformance synced from roomkit-specs $$commit"
+
+# A local gate, which `make all` runs first: the copy's roomkit-specs commit is
+# on roomkit-specs' origin/main, so a copy synced from a commit not pushed yet
+# is never pushed itself. Skipped without a roomkit-specs checkout, as in CI;
+# ALLOW_UNPUSHED=1 only warns, for local work.
+conformance-check:
+	@commit=$$(cat conformance/SPECS_COMMIT) && \
+	if ! git -C "$(SPECS_DIR)" rev-parse --git-dir >/dev/null 2>&1; then \
+		echo "conformance-check: no roomkit-specs checkout at $(SPECS_DIR), skipped"; \
+	elif git -C "$(SPECS_DIR)" merge-base --is-ancestor "$$commit" origin/main 2>/dev/null; then \
+		echo "conformance-check: roomkit-specs $$commit is on origin/main"; \
+	elif [ "$(ALLOW_UNPUSHED)" = 1 ]; then \
+		echo "warning: roomkit-specs $$commit is not on origin/main: sync again once it is"; \
+	else \
+		echo "conformance-check: roomkit-specs $$commit is not on origin/main: push it, fetch, and run make conformance-sync"; \
+		exit 1; \
+	fi
