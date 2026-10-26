@@ -80,8 +80,10 @@ impl ChannelType {
     pub const SYSTEM: Self = Self(Cow::Borrowed("system"));
 
     /// The type named `name`: lowercase ASCII letters, digits, `_` and `-`,
-    /// as every name the Python implementation writes, so that a name is
-    /// written one way only (`SMS` is not `sms`).
+    /// as every type of the Python implementation's enumeration, so that a
+    /// name is written one way only (`SMS` is not `sms`). Python takes any
+    /// key in an identity's addresses; a store reads a key that is no name
+    /// as a member the model does not hold.
     ///
     /// # Errors
     ///
@@ -371,8 +373,8 @@ mod tests {
         );
     }
 
-    /// A name is lowercase ASCII letters, digits, `_` and `-`, as every
-    /// name the Python implementation writes: `SMS` would miss `sms`'s
+    /// A name is lowercase ASCII letters, digits, `_` and `-`, as every type
+    /// of the Python implementation's enumeration: `SMS` would miss `sms`'s
     /// identities, hook filters and addressing, and `HOST` would pass for
     /// an ordinary name.
     #[test]

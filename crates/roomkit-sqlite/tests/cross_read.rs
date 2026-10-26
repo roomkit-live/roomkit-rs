@@ -653,3 +653,49 @@ async fn a_file_s_missing_directory_is_created() {
     std::fs::remove_dir_all(directory.path().with_extension("")).ok();
     assert_eq!((opened.is_ok(), created), (true, true));
 }
+
+/// The Python implementation takes any key in an identity's addresses; a
+/// key that is no channel type's name for roomkit-rs (`Slack`) is a member
+/// it does not model. The identity reads and resolves on its other
+/// addresses, the key unread, and a rewrite keeps it as Python wrote it.
+#[tokio::test]
+async fn an_identity_with_a_key_rust_does_not_read_resolves_and_keeps_it() {
+    let file = copy();
+    let store = SqliteStore::open(file.path()).await.unwrap();
+    let lena = IdentityId::new("id-lena").unwrap();
+    let resolved = store
+        .resolve_identity(ChannelType::SMS, "+15559876543", Some("org-1"))
+        .await
+        .map(|identity| identity.map(|identity| identity.id.to_string()));
+    let read = store
+        .get_identity(&lena)
+        .await
+        .map(|identity| identity.map(|identity| identity.channel_addresses.len()));
+    store
+        .link_address(&lena, ChannelType::EMAIL, "lena@example.com", Some("org-1"))
+        .await
+        .unwrap();
+    let kept: Value = {
+        let connection = Connection::open(file.path()).unwrap();
+        connection
+            .query_row(
+                "SELECT json_extract(data, '$.channel_addresses') FROM identities WHERE id = 'id-lena'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map(|text| serde_json::from_str(&text).unwrap())
+            .unwrap()
+    };
+    assert_eq!(
+        (resolved, read, kept),
+        (
+            Ok(Some("id-lena".to_owned())),
+            Ok(Some(1)),
+            serde_json::json!({
+                "sms": ["+15559876543"],
+                "Slack": ["U07LENA"],
+                "email": ["lena@example.com"],
+            })
+        )
+    );
+}

@@ -18,7 +18,9 @@ as it stands.
   which the Python implementation writes), serialized as the plain name,
   so any name a shared store holds is read and written back. A name is
   lowercase ASCII letters, digits, `_` and `-` (`ModelError::InvalidChannelType`
-  otherwise), as every name Python writes. Write
+  otherwise), as every type of Python's enumeration; an identity's address
+  under another key, which Python takes as written, is kept by the SQLite
+  store as a member it does not read, and resolves nothing. Write
   `ChannelType::SMS` for `ChannelType::Sms`, and compare instead of
   matching. How a channel's senders are addressed is its declaration's
   (`ChannelDeclaration::addressing`, the type's default unless the channel

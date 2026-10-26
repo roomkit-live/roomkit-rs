@@ -27,7 +27,7 @@ fn stored(
             |row| row.get(0),
         )
         .optional()?;
-    data.map(|data| Ok((records::read(&data)?, data)))
+    data.map(|data| Ok((records::read_identity(&data)?, data)))
         .transpose()
 }
 

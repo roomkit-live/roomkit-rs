@@ -214,6 +214,16 @@ async def bindings_and_people(store: SQLiteStore) -> None:
     await store.link_address("id-jean", "email", "jean@example.com", organization_id="org-1")
     # A name no implementation knows.
     await store.link_address("id-jean", "slack", "U024BE7LH", organization_id="org-1")
+    # A key Python takes as written, which is no channel type's name for
+    # roomkit-rs (lowercase letters, digits, `_` and `-`).
+    await store.create_identity(
+        Identity(
+            id="id-lena",
+            organization_id="org-1",
+            display_name="Lena",
+            channel_addresses={"sms": ["+15559876543"], "Slack": ["U07LENA"]},
+        )
+    )
 
 
 async def side_effects(store: SQLiteStore) -> None:

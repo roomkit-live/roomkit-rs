@@ -8,7 +8,7 @@
 //! structure of its own. The record's maps (`metadata`, `raw_payload`, ...)
 //! are written as the record holds them: a key it removed stays removed.
 
-use roomkit::model::{EventContent, Timestamp};
+use roomkit::model::{ChannelType, EventContent, Identity, Timestamp};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
@@ -53,6 +53,36 @@ pub(crate) fn read<T: DeserializeOwned>(data: &str) -> Result<T, Failure> {
     Ok(serde_json::from_str(data)?)
 }
 
+/// The member of an identity's JSON holding its addresses by channel type.
+const ADDRESSES: &str = "channel_addresses";
+
+/// The identity a row's `data` holds. The Python implementation takes any
+/// key in its addresses; one that is no channel type's name for roomkit-rs
+/// (`Slack`) is a member the model does not read, left out here and kept
+/// by [`written`], so that it never makes the identity unreadable.
+pub(crate) fn read_identity(data: &str) -> Result<Identity, Failure> {
+    let mut value: Value = serde_json::from_str(data)?;
+    if let Some(Value::Object(addresses)) = value.get_mut(ADDRESSES) {
+        addresses.retain(|channel_type, _| ChannelType::new(channel_type.as_str()).is_ok());
+    }
+    Ok(serde_json::from_value(value)?)
+}
+
+/// Puts back in `rewritten` the addresses `stored` keeps under keys that
+/// are no channel type's name, which the model never read.
+fn keep_unread_addresses(stored: &Value, rewritten: &mut Value) {
+    let (Some(Value::Object(kept)), Some(Value::Object(addresses))) =
+        (stored.get(ADDRESSES), rewritten.get_mut(ADDRESSES))
+    else {
+        return;
+    };
+    for (channel_type, value) in kept {
+        if ChannelType::new(channel_type.as_str()).is_err() {
+            addresses.insert(channel_type.clone(), value.clone());
+        }
+    }
+}
+
 /// The JSON `record` is written as, keeping what `stored`, the row's
 /// current JSON, holds that the record does not model.
 pub(crate) fn written<T: Serialize>(
@@ -63,8 +93,10 @@ pub(crate) fn written<T: Serialize>(
     let mut value = serde_json::to_value(record)?;
     if let Some(stored) = stored {
         let stored: Value = serde_json::from_str(stored)?;
-        if matches!(kind, Kind::Event) {
-            keep_unchanged_content(&stored, &mut value);
+        match kind {
+            Kind::Event => keep_unchanged_content(&stored, &mut value),
+            Kind::Identity => keep_unread_addresses(&stored, &mut value),
+            Kind::Room | Kind::Binding | Kind::Participant | Kind::Task | Kind::Observation => {}
         }
         for pointer in kind.structures() {
             if let (Some(Value::Object(kept)), Some(Value::Object(rewritten))) =
