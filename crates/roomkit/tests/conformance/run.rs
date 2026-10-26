@@ -155,6 +155,22 @@ impl Run {
             .push(serde_json::to_value(event).unwrap_or_default());
     }
 
+    /// One item a streaming channel's `deliver_stream` read, as the scenario
+    /// reads it: `{"text": ...}`, `{"row": event}`, or `{"failed": true}`
+    /// where the stream raised.
+    pub(crate) fn record_streamed(&self, room_id: &str, channel_id: &ChannelId, item: Value) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        lock(&self.observed)
+            .streamed
+            .entry(room_id.to_owned())
+            .or_default()
+            .entry(channel_id.to_string())
+            .or_default()
+            .push(item);
+    }
+
     pub(crate) fn record_hook(
         &self,
         name: &str,

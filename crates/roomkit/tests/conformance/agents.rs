@@ -88,11 +88,17 @@ fn round(spec: &Value) -> Result<ScriptedRound, String> {
         Some(usage) => serde_json::from_value(usage.clone()).map_err(|e| e.to_string())?,
         None => Metadata::new(),
     };
-    Ok(
-        ScriptedRound::calling(spec["text"].as_str().unwrap_or_default(), made)
-            .with_finish_reason(finish)
-            .with_usage(usage),
-    )
+    let mut round = ScriptedRound::calling(spec["text"].as_str().unwrap_or_default(), made)
+        .with_finish_reason(finish)
+        .with_usage(usage);
+    if let Some(deltas) = spec.get("deltas") {
+        let deltas = deltas.as_array().ok_or("deltas: not a list")?;
+        round = round.in_pieces(deltas.iter().filter_map(Value::as_str));
+    }
+    if let Some(failure) = spec.get("fails") {
+        round = round.failing(failure.as_str().ok_or("fails: not a text")?);
+    }
+    Ok(round)
 }
 
 /// The scripted tools of `spec`, each answering every call one way.

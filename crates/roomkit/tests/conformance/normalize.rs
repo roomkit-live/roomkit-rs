@@ -41,6 +41,8 @@ pub(crate) struct Observed {
     pub(crate) hooks: BTreeMap<String, Vec<Value>>,
     pub(crate) hook_order: Vec<String>,
     pub(crate) deliveries: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
+    /// Per room and streaming channel, the items its `deliver_stream` read.
+    pub(crate) streamed: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     pub(crate) turns: BTreeMap<String, BTreeMap<String, Vec<Value>>>,
     pub(crate) observations: BTreeMap<String, Vec<Value>>,
     pub(crate) tasks: BTreeMap<String, Vec<Value>>,
@@ -233,7 +235,12 @@ fn observed_values(observed: &Observed) -> Value {
     all.extend(observed.actions.values().flatten().cloned());
     all.extend(observed.framework_events.iter().cloned());
     all.extend(observed.hooks.values().flatten().cloned());
-    for per_room in observed.turns.values().chain(observed.deliveries.values()) {
+    for per_room in observed
+        .turns
+        .values()
+        .chain(observed.deliveries.values())
+        .chain(observed.streamed.values())
+    {
         all.extend(per_room.values().flatten().cloned());
     }
     all.extend(observed.timelines.values().flatten().cloned());

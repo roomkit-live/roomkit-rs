@@ -12,7 +12,8 @@ use roomkit::model::{
     ChannelOutput, ChannelType, HookResult, InboundMessage, RoomContext, RoomEvent,
 };
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, EventDraft, HookReturn, default_inbound_event,
+    Channel, ChannelDeclaration, ChannelError, DeliveryStream, EventDraft, HookReturn, StreamItem,
+    default_inbound_event,
 };
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -180,6 +181,7 @@ pub(crate) struct ScriptedChannel {
     parse: Reactions,
     on_event: Reactions,
     deliver: Reactions,
+    deliver_stream: Reactions,
 }
 
 impl ScriptedChannel {
@@ -216,12 +218,14 @@ impl ScriptedChannel {
             .and_then(Value::as_str)
             .map(str::to_owned);
         declaration.chat_key = None;
+        declaration.supports_streaming_delivery = spec.get("streams") == Some(&Value::Bool(true));
         Ok(Self {
             declaration,
             run: Arc::downgrade(run),
             parse: Reactions::new(spec.get("parse")),
             on_event: Reactions::new(spec.get("on_event")),
             deliver: Reactions::new(spec.get("deliver")),
+            deliver_stream: Reactions::new(spec.get("deliver_stream")),
         })
     }
 
@@ -339,6 +343,54 @@ impl Channel for ScriptedChannel {
             run.record("deliveries", &event, &self.declaration.channel_id);
         }
         self.react(&self.deliver, &event, false).await
+    }
+
+    /// Reads the stream it is handed, recording each delta and row, to its
+    /// end, or until the delta its reaction's `stop_after` names.
+    async fn deliver_stream(
+        &self,
+        mut stream: DeliveryStream,
+        binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        let Some(run) = self.run.upgrade() else {
+            return Ok(ChannelOutput::default());
+        };
+        let room_id = binding.room_id.to_string();
+        let reaction = self
+            .deliver_stream
+            .pick(&json!({ "room_id": room_id }))
+            .unwrap_or_default();
+        let mut held = reaction.clone();
+        if let Some(held) = held.as_object_mut() {
+            held.remove("fail");
+        }
+        perform(&run, &held, &Scope::in_room(&room_id)).await?;
+        let stop_after = reaction.get("stop_after").and_then(Value::as_str);
+        let channel_id = &self.declaration.channel_id;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(StreamItem::Text(text)) => {
+                    run.record_streamed(&room_id, channel_id, json!({ "text": text }));
+                    if stop_after == Some(text.as_str()) {
+                        break;
+                    }
+                }
+                Ok(StreamItem::Row(row)) => {
+                    let row = serde_json::to_value(&*row).unwrap_or_default();
+                    run.record_streamed(&room_id, channel_id, json!({ "row": row }));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    run.record_streamed(&room_id, channel_id, json!({ "failed": true }));
+                    return Err(error);
+                }
+            }
+        }
+        match reaction.get("fail").and_then(Value::as_str) {
+            Some(message) => Err(ScriptedFailure(message.to_owned()).into()),
+            None => Ok(ChannelOutput::default()),
+        }
     }
 }
 

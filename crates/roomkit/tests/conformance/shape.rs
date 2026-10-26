@@ -31,13 +31,15 @@ const CHANNEL: &[&str] = &[
     "parse",
     "on_event",
     "deliver",
+    "streams",
+    "deliver_stream",
     "model",
     "tools",
     "tool_policy",
     "max_tool_rounds",
 ];
 const MODEL: &[&str] = &["rounds"];
-const MODEL_ROUND: &[&str] = &["text", "calls", "finish_reason", "usage"];
+const MODEL_ROUND: &[&str] = &["text", "deltas", "calls", "finish_reason", "usage", "fails"];
 const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut"];
 const TOOL: &[&str] = &[
     "name",
@@ -83,7 +85,15 @@ const HOOK: &[&str] = &[
     "reactions",
 ];
 const REACTION: &[&str] = &[
-    "when", "repeat", "gate", "do", "fail", "respond", "output", "result",
+    "when",
+    "repeat",
+    "gate",
+    "do",
+    "fail",
+    "respond",
+    "output",
+    "result",
+    "stop_after",
 ];
 const WHEN: &[&str] = &[
     "room_id",
@@ -119,6 +129,7 @@ const EXPECT: &[&str] = &[
     "actions",
     "lifecycle",
     "models",
+    "streamed",
 ];
 const NEW_ROOM: &[&str] = &["id", "organization_id", "metadata", "timers"];
 const STEPS: &[(&str, &[&str])] = &[
@@ -253,7 +264,7 @@ fn optional(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) 
 
 fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
     members(channel, CHANNEL, path, found);
-    for kind in ["parse", "on_event", "deliver"] {
+    for kind in ["parse", "on_event", "deliver", "deliver_stream"] {
         for (index, reaction) in items(&channel[kind]) {
             self::reaction(reaction, &format!("{path}.{kind}[{index}]"), found);
         }

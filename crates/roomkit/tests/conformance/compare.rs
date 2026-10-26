@@ -155,6 +155,7 @@ impl Comparison<'_> {
         let expect = self.expect;
         for (kind, recorded) in [
             ("deliveries", &self.observed.deliveries),
+            ("streamed", &self.observed.streamed),
             ("turns", &self.observed.turns),
         ] {
             for (alias, channels) in expect[kind].as_object().into_iter().flatten() {
