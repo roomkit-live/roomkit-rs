@@ -13,7 +13,11 @@ roomkit-core.workspace = true
 # The `Stream` a turn's response and a streaming delivery are read as (step
 # 4, decision 11).
 futures-core.workspace = true
-# A tool call's result as its hooks read it (RFC §9.3), a JSON value.
+# The messages of the turn backend (RFC §10.6.3), in the serialized form
+# of RFC §1.4; already the core's.
+serde.workspace = true
+# A tool call's result as its hooks read it (RFC §9.3), a JSON value; the
+# turn backend's messages, serialized and parsed.
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -25,8 +29,9 @@ pretty_assertions.workspace = true
 # The conformance runner's scripted agent (roomkit-specs conformance/README.md,
 # "Scripted agents"): roomkit-ai's AI channel over a scripted model.
 roomkit-ai.workspace = true
-serde.workspace = true
 sha2.workspace = true
+# The turn backend's liveness, tested on tokio's paused clock.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

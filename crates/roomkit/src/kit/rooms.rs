@@ -2,7 +2,8 @@
 //! kit's calls for each lifecycle operation of the core.
 
 use roomkit_core::model::{
-    BindingOptions, BindingUpdate, ChannelBinding, ChannelId, Room, RoomId, RoomOptions,
+    BindingOptions, BindingUpdate, ChannelBinding, ChannelCategory, ChannelId, Room, RoomId,
+    RoomOptions,
 };
 use roomkit_core::ops::{
     ArchiveRoom, AttachChannel, CloseRoom, CreateRoom, DetachChannel, PauseRoom, ReopenRoom,
@@ -258,7 +259,11 @@ impl<S: ConversationStore> Scope<'_, S> {
             Some((draw, floor)) => attach.made_in(draw, floor),
             None => attach,
         };
-        Ok(driver::run_on(&self.kit.inner, environment, "attach", attach).await??)
+        let binding = driver::run_on(&self.kit.inner, environment, "attach", attach).await??;
+        if binding.category == ChannelCategory::Intelligence {
+            self.kit.inner.turns.attached(&binding);
+        }
+        Ok(binding)
     }
 
     /// Detaches the channel from a room the scope reaches.
@@ -277,7 +282,14 @@ impl<S: ConversationStore> Scope<'_, S> {
             Some((draw, floor)) => detach.made_in(draw, floor),
             None => detach,
         };
-        Ok(driver::run(&self.kit.inner, "detach", detach).await??)
+        let binding = driver::run(&self.kit.inner, "detach", detach).await??;
+        if binding.category == ChannelCategory::Intelligence {
+            self.kit
+                .inner
+                .turns
+                .detached(&binding.channel_id, &binding.room_id);
+        }
+        Ok(binding)
     }
 
     /// Changes the channel's binding to a room the scope reaches.

@@ -56,6 +56,7 @@ use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::KitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
+use crate::turns::Canceller;
 
 /// The kit's clock and the runtime's, read together at a run's start: a
 /// deadline the core set on the kit's clock is waited for on the runtime's,
@@ -152,6 +153,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         environment,
         refused: None,
         caller,
+        cut: Vec::new(),
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -196,6 +198,9 @@ struct Driver<'kit, S> {
     /// The caller of an inbound call's run, which the operation's decision
     /// goes to.
     caller: Option<&'kit mut Caller>,
+    /// The turns the run cut as it gave their calls up, whose end it joins
+    /// before it ends (RFC §10.1 "Explicit delivery cancellation").
+    cut: Vec<Canceller>,
 }
 
 impl<S> Drop for Driver<'_, S> {
@@ -328,6 +333,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// over.
     async fn join_given_up(&mut self) {
         while self.calls.join_next().await.is_some() {}
+        for turn in std::mem::take(&mut self.cut) {
+            turn.ended().await;
+        }
     }
 
     /// Drops the waits and the calls of `effects`, which the operation gave
@@ -336,6 +344,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     fn give_up(&mut self, effects: &[EffectId]) {
         self.waits.retain(|(effect, _)| !effects.contains(effect));
         for effect in effects {
+            // The turn the call awaits is cut before the call is dropped,
+            // so its executor reads its cancel before it goes on.
+            self.cut.extend(self.shared.cut_turn(*effect));
             if let Some(call) = self.call_of_effect.remove(effect) {
                 call.abort();
                 self.effect_of_task.remove(&call.id());

@@ -6,6 +6,7 @@ use roomkit_core::rules::hook_registry::RegistrationError;
 use thiserror::Error;
 
 use crate::store::StoreError;
+use crate::turns::TurnError;
 
 /// Why a kit call failed.
 #[derive(Debug, PartialEq, Eq, Error)]
@@ -85,6 +86,11 @@ pub enum KitError {
     /// ended it, what it wrote by then not known.
     #[error("the kit is shut down")]
     ShutDown,
+    /// A call across the turn backend failed (RFC §10.6.8): a turn's host
+    /// verb whose link failed or that its owner refused, or one whose error
+    /// on the owner this side does not rebuild, its kind and message kept.
+    #[error(transparent)]
+    Turn(#[from] TurnError),
 }
 
 /// `error`'s message, then each of its causes', joined by `: `: what a log

@@ -22,7 +22,6 @@
 //! a direct update (`ON_EVENT_UPDATED` fires) made in the room's work.
 
 use std::collections::VecDeque;
-use std::future::poll_fn;
 use std::sync::Arc;
 
 use roomkit_core::model::{
@@ -33,13 +32,13 @@ use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_HIDDEN, ROW_WITHHELD
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::segments::Segments;
-use super::{DeliveryStream, Pulled, ResponseItem, ResponseStream, StreamItem};
+use super::{DeliveryStream, Pulled, ResponseItem, StreamItem};
 use crate::RoomKit;
 use crate::channel::ChannelError;
 use crate::context::{self, Adopting};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::turn::TurnHost;
+use crate::turns::{OwnerTurn, RemoteItem, record_of};
 
 /// The error of a call a stream's reader stopped before it ended.
 const CANCELLED: &str = "cancelled";
@@ -51,24 +50,23 @@ const TURN_FAILED: &str = "turn failed";
 /// The error of a call whose round failed after its reader stopped.
 const ROUND_FAILED: &str = "tool round failed";
 
-/// A turn's stream, kept by the run from its turn's end until it is read:
-/// the stream, and the turn's host, which its tools read as it is pulled.
+/// A turn's stream, kept by the run from its turn's output until it is
+/// read: the owner's side of the turn, whose reads pull its executor
+/// (RFC §10.6.4). Dropped unread, it closes the turn's stream.
+#[derive(Debug)]
 pub(crate) struct KeptStream {
-    pub(crate) host: TurnHost,
-    pub(crate) stream: ResponseStream,
-}
-
-impl std::fmt::Debug for KeptStream {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("KeptStream")
-            .field("host", &self.host)
-            .finish_non_exhaustive()
-    }
+    pub(crate) turn: OwnerTurn,
 }
 
 /// What a read of the turn's response gave.
-type Read = Option<Result<ResponseItem, ChannelError>>;
+type Read = Option<Result<RemoteItem, ChannelError>>;
+
+/// The reason a read the operation stops cuts its turn with (RFC §10.1
+/// "Explicit delivery cancellation").
+const CALLER_CANCELLED: &str = "caller_cancelled";
+
+/// The reason the kit's shutdown cuts a turn with (RFC §10.6.8).
+const KIT_CLOSED: &str = "kit_closed";
 
 /// Who reads a stream's rows in the stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +97,7 @@ enum Over {
 pub(crate) async fn read<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     kept: Option<KeptStream>,
-    stop: watch::Receiver<bool>,
+    stops: Stops,
     responder: ChannelBinding,
     answers: RoomEvent,
     target: Option<StreamTarget>,
@@ -121,8 +119,8 @@ pub(crate) async fn read<S: ConversationStore>(
     let mut producer = Producer {
         room_id: answers.room_id.clone(),
         segments: Segments::new(source, answers),
-        stream: Some(kept.stream),
-        host: kept.host,
+        stream: Some(kept.turn),
+        cut: None,
         reads: channel
             .as_ref()
             .map_or(Reads::Nobody, |(_, target)| Reads::Target {
@@ -147,7 +145,7 @@ pub(crate) async fn read<S: ConversationStore>(
         let _signalled = done.send(());
         read
     };
-    let (read, ()) = tokio::join!(reader, producer.serve(pulled, reader_done, stop));
+    let (read, ()) = tokio::join!(reader, producer.serve(pulled, reader_done, stops));
     let output = producer.finish(read).await;
     if let Some((event_id, metadata)) = producer.segments.owed_record() {
         write_record(inner, &producer.room_id, &event_id, metadata).await;
@@ -163,13 +161,37 @@ async fn drain(mut stream: DeliveryStream) -> Result<ChannelOutput, ChannelError
     Ok(ChannelOutput::default())
 }
 
+/// What stops a read from outside: the operation's stop of this read, and
+/// the kit's shutdown, which cuts every turn.
+#[derive(Debug)]
+pub(crate) struct Stops {
+    /// `true` once the operation stops the read.
+    pub(crate) read: watch::Receiver<bool>,
+    /// `true` once the kit shuts down.
+    pub(crate) kit: watch::Receiver<bool>,
+}
+
+impl Stops {
+    /// Returns once the read is stopped: the reason its turn is cut with.
+    async fn stopped(&mut self) -> &'static str {
+        let read = async { self.read.wait_for(|stopped| *stopped).await.is_ok() };
+        let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
+        tokio::select! {
+            true = read => CALLER_CANCELLED,
+            true = kit => KIT_CLOSED,
+            else => std::future::pending().await,
+        }
+    }
+}
+
 /// The answering side of a stream's pulls.
 struct Producer {
     room_id: RoomId,
     segments: Segments,
     /// The turn's response, until it is closed.
-    stream: Option<ResponseStream>,
-    host: TurnHost,
+    stream: Option<OwnerTurn>,
+    /// Why the read was stopped from outside, once it was: the turn is cut.
+    cut: Option<&'static str>,
     /// Who reads the stream's rows in it.
     reads: Reads,
     /// What the reader is handed next, in order.
@@ -191,19 +213,22 @@ impl Producer {
         &mut self,
         mut pulls: mpsc::UnboundedReceiver<oneshot::Sender<Pulled>>,
         mut reader_done: oneshot::Receiver<()>,
-        mut stop: watch::Receiver<bool>,
+        mut stops: Stops,
     ) {
         loop {
             let pull = tokio::select! {
                 biased;
                 _ = &mut reader_done => return,
-                _ = stop.wait_for(|stopped| *stopped) => return,
+                reason = stops.stopped() => {
+                    self.cut = Some(reason);
+                    return;
+                }
                 pull = pulls.recv() => match pull {
                     Some(pull) => pull,
                     None => return,
                 },
             };
-            if !self.answer(pull, &mut stop).await {
+            if !self.answer(pull, &mut stops).await {
                 return;
             }
         }
@@ -213,11 +238,7 @@ impl Producer {
     /// none is ready; whether the reader goes on. A read `stop` stops while
     /// the response is read is abandoned, a running call cut with it, as a
     /// turn cancelled from outside is (RFC §12.2 step 13s).
-    async fn answer(
-        &mut self,
-        pull: oneshot::Sender<Pulled>,
-        stop: &mut watch::Receiver<bool>,
-    ) -> bool {
+    async fn answer(&mut self, pull: oneshot::Sender<Pulled>, stops: &mut Stops) -> bool {
         loop {
             if let Some(item) = self.ready.pop_front() {
                 return self.hand(pull, Some(item));
@@ -227,7 +248,10 @@ impl Producer {
             }
             let read = tokio::select! {
                 biased;
-                _ = stop.wait_for(|stopped| *stopped) => return false,
+                reason = stops.stopped() => {
+                    self.cut = Some(reason);
+                    return false;
+                }
                 read = self.pull_turn() => read,
             };
             if pull.is_closed() {
@@ -260,13 +284,10 @@ impl Producer {
         !ends
     }
 
-    /// Reads the turn's response one item further, within its turn's host,
-    /// which its tools read (RFC §21.4).
+    /// Reads the turn's response one item further: a pull its executor
+    /// reads on (RFC §10.6.4).
     async fn pull_turn(&mut self) -> Read {
-        let stream = self.stream.as_mut()?;
-        let host = self.host.clone();
-        host.scope(poll_fn(|context| stream.as_mut().poll_next(context)))
-            .await
+        self.stream.as_mut()?.next_item().await
     }
 
     /// Takes what a read gave: text for the reader, the rows a call's start
@@ -280,24 +301,33 @@ impl Producer {
                 self.over = Some(Over::End);
             }
             // The target reads the text as it comes; nobody else does.
-            Some(Ok(ResponseItem::Text(delta))) => match self.reads {
+            Some(Ok(RemoteItem::Item(ResponseItem::Text(delta)))) => match self.reads {
                 Reads::Target { .. } => self.ready.push_back(Ok(StreamItem::Text(delta))),
                 Reads::Nobody | Reads::Lost => self.segments.text(&delta),
             },
-            Some(Ok(ResponseItem::ToolStart(start))) => {
+            Some(Ok(RemoteItem::Item(ResponseItem::ToolStart(start)))) => {
                 let rows = self.segments.start(start);
                 self.commit_all(rows).await;
             }
-            Some(Ok(ResponseItem::ToolEnd(end))) => {
+            Some(Ok(RemoteItem::Item(ResponseItem::ToolEnd(end)))) => {
                 let rows = self.segments.end(end);
                 self.commit_all(rows).await;
             }
-            Some(Ok(ResponseItem::End(record))) => self.segments.end_turn(record),
+            Some(Ok(RemoteItem::Item(ResponseItem::End(record)))) => {
+                self.segments.end_turn(record);
+            }
+            // The loop goes on after a round without a call: its text is a
+            // segment of its own (RFC §6.4).
+            Some(Ok(RemoteItem::SegmentBreak)) => {
+                if let Some(row) = self.segments.last_text(false) {
+                    self.commit(row).await;
+                }
+            }
             Some(Err(error)) => {
                 if let Some(row) = self.segments.last_text(false) {
                     self.commit(row).await;
                 }
-                let record = ErrorRecord::new("ChannelError", error.to_string());
+                let record = record_of(&*error);
                 self.ready.push_back(Err(error));
                 self.over = Some(Over::Failed(record));
             }
@@ -348,6 +378,7 @@ impl Producer {
     /// text the reader was handed is stored marked `cancelled`, the turn
     /// recording `cancelled`. `ended` says the response had reached its end.
     async fn stopped(&mut self, ended: bool) {
+        self.cut_turn().await;
         let error = self.settle_in_flight().await;
         self.close_open(error).await;
         self.stream = None;
@@ -357,6 +388,17 @@ impl Producer {
         if let Some(row) = self.segments.last_text(true) {
             self.commit(row).await;
         }
+    }
+
+    /// Cuts the turn a stop from outside stopped (RFC §10.6.8): `cancel`
+    /// crosses, its executor cuts the call it runs, and the turn's end is
+    /// awaited within its cancel bound before its rows are settled.
+    async fn cut_turn(&mut self) {
+        let (Some(reason), Some(turn)) = (self.cut, self.stream.as_mut()) else {
+            return;
+        };
+        turn.cancel(reason);
+        turn.ended().await;
     }
 
     /// The streaming channel failed, the response did not: what it was
@@ -384,7 +426,7 @@ impl Producer {
         let mut read = self.in_flight.take();
         loop {
             match read {
-                Some(Some(Ok(ResponseItem::ToolEnd(end)))) => {
+                Some(Some(Ok(RemoteItem::Item(ResponseItem::ToolEnd(end))))) => {
                     // The stream no longer carries rows: to every target,
                     // the streaming one included (RFC §12.2 step 13s).
                     for row in self.segments.end(end) {
@@ -396,7 +438,7 @@ impl Producer {
                     read = Some(self.pull_turn().await);
                 }
                 // A start: the round had not begun to run.
-                Some(Some(Ok(ResponseItem::ToolStart(start)))) => {
+                Some(Some(Ok(RemoteItem::Item(ResponseItem::ToolStart(start))))) => {
                     self.segments.opened_unwritten(start);
                     return CANCELLED;
                 }
@@ -409,7 +451,14 @@ impl Producer {
                     );
                     return ROUND_FAILED;
                 }
-                Some(Some(Ok(ResponseItem::Text(_) | ResponseItem::End(_))) | None) | None => {
+                Some(
+                    Some(Ok(
+                        RemoteItem::Item(ResponseItem::Text(_) | ResponseItem::End(_))
+                        | RemoteItem::SegmentBreak,
+                    ))
+                    | None,
+                )
+                | None => {
                     return CANCELLED;
                 }
             }
@@ -420,7 +469,9 @@ impl Producer {
     /// the streaming one included: the stream no longer carries rows (RFC
     /// §12.2 step 13s).
     async fn close_open(&mut self, error: &str) {
-        for row in self.segments.close_open(error) {
+        let stream = self.stream.as_ref();
+        let ran_with = |tool_id: &str| stream.and_then(|turn| turn.ran_with(tool_id));
+        for row in self.segments.close_open(error, ran_with) {
             self.commit_as(row, false).await;
         }
     }

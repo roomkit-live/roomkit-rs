@@ -32,6 +32,11 @@
 //!   hooks ([`RoomKit::before_tool_use`], [`RoomKit::on_tool_call`],
 //!   [`RoomKit::observe_tool_calls`], RFC §9.3) on each call its tool loop
 //!   makes.
+//! - The turn backend (RFC §10.6): every intelligence turn runs through the
+//!   kit's in-memory backend, between the kit, the room's owner, and the
+//!   kit's own turn executor, as serialized messages; its bounds are
+//!   [`TurnTimeouts`] ([`RoomKit::set_turn_timeouts`]), a failure it carries
+//!   a [`TurnError`], and [`testing::TurnTap`] shows what crosses.
 //!
 //! The core's model is re-exported whole as [`model`]. Of its operations
 //! and rules, only what a caller names is: the results and errors of the
@@ -59,6 +64,7 @@ mod tasks;
 pub mod testing;
 mod tools;
 mod turn;
+mod turns;
 
 pub use roomkit_core::model;
 pub use roomkit_core::ops::{
@@ -94,6 +100,7 @@ pub use self::store::{
 pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem};
 pub use self::tools::{ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict};
 pub use self::turn::{ToolGate, TurnHost, current_turn};
+pub use self::turns::{TurnError, TurnTimeouts};
 
 /// The README's code, compiled and run as doctests, so that the first room
 /// it shows is one the crate runs.

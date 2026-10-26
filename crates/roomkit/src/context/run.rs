@@ -16,6 +16,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::adoption::Adoption;
 use crate::stream::KeptStream;
+use crate::turns::Canceller;
 
 /// What a run holds now, as the calls it makes read it.
 #[derive(Debug, Default)]
@@ -47,6 +48,9 @@ pub(crate) struct RunShared {
     streams: Mutex<HashMap<EffectId, KeptStream>>,
     /// The signal each read of a stream is stopped with, by its effect.
     stops: Mutex<HashMap<EffectId, watch::Sender<bool>>>,
+    /// The turns the run's calls submitted and await the output of, by
+    /// their effect: a call given up cuts its turn at once.
+    turns: Mutex<HashMap<EffectId, Canceller>>,
 }
 
 /// A claim on one tenure of a room's lock, which code run under that lock
@@ -68,6 +72,7 @@ impl RunShared {
             tenures: AtomicU64::new(0),
             streams: Mutex::new(HashMap::new()),
             stops: Mutex::new(HashMap::new()),
+            turns: Mutex::new(HashMap::new()),
         });
         (shared, received)
     }
@@ -129,6 +134,38 @@ impl RunShared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+        self.turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    /// The call of `effect` submitted a turn, which `turn` cuts.
+    pub(crate) fn turn_submitted(&self, effect: EffectId, turn: Canceller) {
+        self.turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(effect, turn);
+    }
+
+    /// The call of `effect` read its turn's output.
+    pub(crate) fn turn_answered(&self, effect: EffectId) {
+        self.turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&effect);
+    }
+
+    /// Cuts the turn the call of `effect` awaits, if any (RFC §10.1
+    /// "Explicit delivery cancellation"): what awaits its end.
+    pub(crate) fn cut_turn(&self, effect: EffectId) -> Option<Canceller> {
+        let turn = self
+            .turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&effect)?;
+        turn.cancel("cancelled");
+        Some(turn)
     }
 
     /// Keeps the stream the turn of `effect` answered with, until it is read.

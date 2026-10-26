@@ -1,5 +1,6 @@
 //! Channels for tests and examples: a transport that records what it
-//! delivers, and an agent that echoes what it is asked.
+//! delivers, and an agent that echoes what it is asked; and a tap on the
+//! messages a kit's turn backend carries.
 
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -12,7 +13,10 @@ use roomkit_core::model::{
 use roomkit_core::ops::ChannelDeclaration;
 use roomkit_core::rules::transcoding::text_of;
 
+use crate::RoomKit;
 use crate::channel::{Channel, ChannelError};
+use crate::store::ConversationStore;
+use crate::turns::Carried;
 
 /// A delivery a [`RecordingTransport`] made.
 #[derive(Clone, Debug, PartialEq)]
@@ -179,5 +183,60 @@ impl Channel for EchoAgent {
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         ready(Ok(ChannelOutput::respond(vec![self.reply_to(&event)])))
+    }
+}
+
+/// A tap on a kit's turn backend (RFC §10.6.3): every message the turns
+/// submitted after it was set carry, as each is serialized, in the order
+/// they cross. Cloning it shares the record.
+///
+/// The messages are the backend's own: a test or a tool reads them to see
+/// a turn cross, never to build on. A request is written whole for the
+/// tap, its events included, which the in-memory backend hands over as
+/// they are (RFC §10.6.1).
+#[derive(Clone, Debug, Default)]
+pub struct TurnTap {
+    messages: Arc<Mutex<Vec<TappedMessage>>>,
+}
+
+/// One message a [`TurnTap`] saw.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TappedMessage {
+    /// Its family: `request`, `frame` (executor to owner), `control`
+    /// (owner to executor), `channel_control`, `room_call` (a host verb
+    /// after its turn) or `room_call_result`.
+    pub family: &'static str,
+    /// The message as it crossed, in the serialized form of RFC §1.4: a
+    /// frame or a control message in its numbered envelope.
+    pub json: String,
+}
+
+impl TurnTap {
+    /// Taps `kit`'s turn backend, for the turns submitted from now on, in
+    /// place of any tap set before.
+    pub fn on<S: ConversationStore>(kit: &RoomKit<S>) -> Self {
+        let tap = Self::default();
+        let record = Arc::clone(&tap.messages);
+        kit.inner
+            .turns
+            .set_tap(Arc::new(move |carried: Carried, json: &str| {
+                record
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(TappedMessage {
+                        family: carried.name(),
+                        json: json.to_owned(),
+                    });
+            }));
+        tap
+    }
+
+    /// The messages seen so far, in order.
+    pub fn messages(&self) -> Vec<TappedMessage> {
+        self.messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }

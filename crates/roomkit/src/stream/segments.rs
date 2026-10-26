@@ -145,10 +145,15 @@ impl Segments {
         self.segment(cancelled)
     }
 
-    /// The ends of the calls still open, each `failed` with `error`, and
-    /// the start row of one whose start was never written (RFC §12.2 step
-    /// 13s: no start row stays pending).
-    pub(super) fn close_open(&mut self, error: &str) -> Vec<RoomEvent> {
+    /// The ends of the calls still open, each `failed` with `error`, with
+    /// the arguments `ran_with` says it ran with when its gate fixed them,
+    /// and the start row of one whose start was never written (RFC §12.2
+    /// step 13s: no start row stays pending; §10.6.4).
+    pub(super) fn close_open(
+        &mut self,
+        error: &str,
+        ran_with: impl Fn(&str) -> Option<Metadata>,
+    ) -> Vec<RoomEvent> {
         let mut rows = Vec::new();
         for open in std::mem::take(&mut self.open) {
             if !open.written {
@@ -158,6 +163,9 @@ impl Segments {
                 ));
             }
             let mut end = open.start;
+            if let Some(arguments) = ran_with(&end.tool_id) {
+                end.arguments = arguments;
+            }
             end.status = ToolCallStatus::Failed;
             end.outcome = Some(ToolCallOutcome::Cancelled);
             end.error = Some(error.to_owned());
@@ -338,7 +346,7 @@ mod tests {
         segments.handed();
         segments.start(ToolCallContent::new("lookup", "call_1"));
         segments.opened_unwritten(ToolCallContent::new("lookup", "call_2"));
-        let closed = segments.close_open("cancelled");
+        let closed = segments.close_open("cancelled", |_| None);
         let kinds: Vec<(EventType, Option<ToolCallStatus>)> = closed
             .iter()
             .map(|row| {

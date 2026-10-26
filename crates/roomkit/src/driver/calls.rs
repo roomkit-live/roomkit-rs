@@ -21,8 +21,9 @@ use crate::context::{ExecutionContext, HookBody, RunShared};
 use crate::hooks;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::stream::{self, KeptStream};
-use crate::turn;
+use crate::stream::{self, KeptStream, Stops};
+use crate::turn::TurnKit;
+use crate::turns::Answer;
 
 /// Carries out a request on the store (RFC §14).
 pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest) -> Outcome {
@@ -153,24 +154,18 @@ pub(super) async fn channel<S: ConversationStore>(
             if binding.category != ChannelCategory::Intelligence {
                 return channel_output(channel.on_event(event, binding, *context).await);
             }
-            // A turn: the code it runs reaches it as its host (RFC §21.4).
-            let turn = turn::host(
-                inner,
-                binding.channel_id.clone(),
-                binding.channel_type.clone(),
-                (*context).clone(),
-            );
-            let answered = turn
-                .clone()
-                .scope(channel.on_event(event, binding, *context))
-                .await;
-            match (answered, turn.take_stream()) {
-                (Ok(output), Some(stream)) => {
-                    shared.keep_stream(effect, KeptStream { host: turn, stream });
-                    ChannelOutcome::Streamed(Box::new(output)).into()
+            // A turn: it runs through the turn backend (RFC §10.6).
+            let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
+            let cut = |turn| shared.turn_submitted(effect, turn);
+            let answered = inner.turns.run(&kit, &binding, event, *context, cut).await;
+            shared.turn_answered(effect);
+            match answered {
+                Ok(Answer::Output(output)) => ChannelOutcome::Output(output).into(),
+                Ok(Answer::Streamed(output, turn)) => {
+                    shared.keep_stream(effect, KeptStream { turn });
+                    ChannelOutcome::Streamed(output).into()
                 }
-                // A turn that failed drops the stream it answered with.
-                (answered, _) => channel_output(answered),
+                Err(error) => Outcome::Failed(error),
             }
         }
         ChannelRequest::Deliver {
@@ -189,9 +184,16 @@ pub(super) async fn channel<S: ConversationStore>(
             answers,
             target,
         } => {
+            let _working = inner.turns.working();
             let kept = shared.take_stream(turn);
-            let stop = shared.stop_signal(effect);
-            Box::pin(stream::read(inner, kept, stop, responder, *answers, target)).await
+            let stops = Stops {
+                read: shared.stop_signal(effect),
+                kit: inner.turns.cutting(),
+            };
+            Box::pin(stream::read(
+                inner, kept, stops, responder, *answers, target,
+            ))
+            .await
         }
     }
 }

@@ -25,6 +25,9 @@ pub(crate) struct Tasks {
 
 #[derive(Debug, Default)]
 struct State {
+    /// Whether the kit is shutting down: no call starts an operation any
+    /// more, while the work under way is given its end.
+    closing: bool,
     /// Whether the kit is shut down: no task is spawned any more.
     shut_down: bool,
     /// The key the next task is tracked under.
@@ -85,6 +88,18 @@ impl Tasks {
     /// Whether the kit is shut down.
     pub(crate) fn is_shut_down(&self) -> bool {
         self.state().shut_down
+    }
+
+    /// Refuses the calls that would start an operation from now on, the
+    /// tasks running going on, as the kit's shutdown begins.
+    pub(crate) fn close(&self) {
+        self.state().closing = true;
+    }
+
+    /// Whether the kit's shutdown began.
+    pub(crate) fn is_closing(&self) -> bool {
+        let state = self.state();
+        state.closing || state.shut_down
     }
 
     /// Waits until no tracked task runs.

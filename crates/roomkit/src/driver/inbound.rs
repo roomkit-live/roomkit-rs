@@ -256,15 +256,17 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     };
     tokio::select! {
         biased;
-        joined = &mut task => ended(joined, inner.tasks.is_shut_down()),
+        joined = &mut task => ended(joined, inner.tasks.is_closing()),
         Ok(answer) = decided => answer,
     }
 }
 
 /// The output of a run's task that ended, cancelled by the kit's shutdown
-/// when `shut_down`, by the runtime otherwise.
+/// when `shut_down`, by the runtime otherwise. A run that ended once the
+/// shutdown began, its turns cut by it (RFC §10.6.8), was ended by it too.
 fn ended(joined: Result<InboundOutput, JoinError>, shut_down: bool) -> InboundOutput {
     match joined {
+        Ok(_ended) if shut_down => Err(KitError::ShutDown),
         Ok(output) => output,
         // A panic of the driver's own loop is a defect of this crate: the
         // caller receives it as it would from a run it drove itself.

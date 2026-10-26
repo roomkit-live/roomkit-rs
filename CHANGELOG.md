@@ -12,6 +12,27 @@ as it stands.
 
 ### Changed
 
+- **Every intelligence turn runs through the turn backend** (step 4,
+  milestone 7, RFC §10.6). An intelligence channel's turn runs on the
+  kit's own turn executor, behind the in-memory backend: its request, its
+  output, each item of its stream and each verb of its host cross as
+  messages serialized and parsed anew, the request's events alone handed
+  over as they are. Its `on_event()` runs in a copy of the execution
+  context of the call that submitted it, its stream in that of the call
+  that first read it, so reentrancy, depth and budgets hold as before; the
+  part of `on_event()` that runs before its future is first polled is
+  outside the turn (`current_turn()` is `None` there). Each side beats
+  every 2 seconds: a turn busy for as long as it likes is never lost, an
+  executor or an owner silent for 10 seconds is. `TurnHost::send_event`
+  crosses as a `host_call`, and after its turn as a `room_call`, refused
+  once a later turn of the agent was sent in the room; its errors come
+  back as the `KitError` they were when it carries no data, as the new
+  `KitError::Turn` otherwise. A turn whose work panics fails `Panic` at
+  once. The kit's shutdown cuts the turns first: each crosses as `cancel`,
+  the tool calls it ran are reported `cancelled` to their observers and
+  their ends stored `cancelled`, the text a reader was handed stored
+  `cancelled`, within twice the cancel bound (10 seconds by default), and
+  an inbound call running when it began answers `KitError::ShutDown`.
 - **Breaking: `ChannelType` is an open name.** It was an enum; it is now a
   string newtype with the well-known names as constants
   (`ChannelType::SMS`, `ChannelType::TEAMS`, ..., `DISCORD` and `BUZZ`,
@@ -111,6 +132,15 @@ as it stands.
 
 ### Added
 
+- **The turn backend** (step 4, milestone 7, RFC §10.6):
+  `RoomKit::set_turn_timeouts` with `TurnTimeouts` (accept, heartbeat
+  interval and timeout, cancel; the RFC's defaults), `TurnError`, the
+  failure a crossing carries, and `testing::TurnTap`, which records every
+  message the kit's turns carry as it is serialized. The messages are
+  written as the Python implementation's codec writes them, proven both
+  ways by a cross-read fixture (`make turns-fixture`); a frame and a
+  request are bounded at 16 MiB, and a reader that stops pulling holds
+  the executor at a window of 64 items.
 - **Streamed responses** (step 4, milestone 6, RFC §6.1, §12.2 steps 13s
   and 14s). A transport that declares
   `ChannelDeclaration::supports_streaming_delivery` reads an agent's answer

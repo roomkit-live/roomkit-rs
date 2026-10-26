@@ -3,6 +3,7 @@
 //! current task runs within, which writes to the turn's room and runs the
 //! kit's tool hooks (RFC §9.3).
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
@@ -10,17 +11,20 @@ use roomkit_core::model::{
     ChannelId, ChannelOutput, ChannelType, DirectEvent, EventDirection, EventSource, Metadata,
     RoomContext, RoomEvent, RoomId, ToolCall, ToolCallOutcome,
 };
+use roomkit_core::ops::FrameworkEvent;
 use roomkit_core::rules::hook_registry::{HookSpec, HookTrigger};
 use serde_json::Value;
+use tokio::task::AbortHandle;
 
 use crate::RoomKit;
-use crate::channel::BoxFuture;
+use crate::channel::{BoxFuture, DynChannel};
 use crate::context::ExecutionContext;
 use crate::error::KitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::stream::ResponseStream;
 use crate::tools::{ToolCallEvent, ToolHandler, ToolUse, ToolVerdict, error_envelope};
+use crate::turns::{HostLink, TurnError, send_event_arguments};
 
 tokio::task_local! {
     static TURN: TurnHost;
@@ -30,10 +34,13 @@ tokio::task_local! {
 /// its `on_event()` runs; `None` anywhere else (RFC §21.4
 /// `current_turn_host()`).
 ///
-/// The kit sets it around every intelligence turn, so a tool the turn calls
-/// reads it at any depth, without a kit clone of its own. A task the turn
-/// spawns reads it when its future is wrapped in
-/// [`keep_context`](crate::keep_context).
+/// The kit's turn executor sets it around every intelligence turn's work,
+/// its `on_event()`'s future and its stream, so a tool the turn calls reads
+/// it at any depth, without a kit clone of its own. A task the turn spawns
+/// reads it when its future is wrapped in
+/// [`keep_context`](crate::keep_context), as does an observer of its tool
+/// calls, after the turn too. The code `on_event()` runs before its future
+/// is first polled is outside the turn.
 ///
 /// ```
 /// // Outside every turn there is none.
@@ -45,8 +52,15 @@ pub fn current_turn() -> Option<TurnHost> {
 
 /// The turn's host (RFC §10.6.5 `TurnHost`): the turn's room and agent,
 /// its one verb, `send_event`, and the tool hooks the agent's tool loop
-/// runs on each call (RFC §9.3). Cloning it is cheap; a clone kept past the
-/// turn writes as any call does, at the depth of its own event.
+/// runs on each call (RFC §9.3). Cloning it is cheap.
+///
+/// The turn runs on the kit's turn executor, behind the turn backend (RFC
+/// §10.6): `send_event` crosses to the room's owner as a `host_call` while
+/// the turn runs, and as a `room_call` after it, from work the turn began
+/// (a task it spawned, an observer of its calls). After the turn, the
+/// owner takes it from the room's last turn of the agent alone, as a new
+/// arrival at the depth of its own event, or at the floor of the observer
+/// that sends it.
 #[derive(Clone)]
 pub struct TurnHost {
     shared: Arc<Shared>,
@@ -60,7 +74,26 @@ struct Shared {
     kit: Arc<dyn TurnKit>,
     /// The stream the turn answered with, until the kit takes it.
     stream: Mutex<Option<ResponseStream>>,
+    /// The way to the room's owner.
+    link: Arc<HostLink>,
+    /// The depth of the turn's response (RFC §8.3).
+    response_depth: u32,
+    /// The calls the gate let run, until they are reported.
+    calls: Mutex<Calls>,
 }
+
+/// The calls of a turn its gate let run.
+#[derive(Debug, Default)]
+struct Calls {
+    /// The arguments each call runs with, by its id: what the gate left.
+    ran_with: HashMap<String, Metadata>,
+    /// The calls running: let run, not reported yet.
+    running: Vec<ToolCall>,
+}
+
+/// What a call the turn's cut stopped reads (RFC §9.3), as the Python
+/// implementation writes it.
+const CUT_HINT: &str = "The turn ended before its result.";
 
 impl std::fmt::Debug for TurnHost {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -134,16 +167,30 @@ impl TurnHost {
 
     /// Injects `event` into the turn's room, as
     /// [`RoomKit::send_event`](crate::RoomKit::send_event) does, at least as
-    /// deep as the turn's response while the turn runs (RFC §10.5, §8.3).
+    /// deep as the turn's response while the turn runs, and as the work
+    /// that sends it otherwise (RFC §10.5, §8.3, §10.6.5).
     ///
     /// # Errors
     ///
-    /// As `send_event`; [`KitError::ShutDown`] once the kit is gone.
+    /// As `send_event`, the kit's error rebuilt when it carries no data;
+    /// [`KitError::Turn`] for any other, for a link that failed, and for a
+    /// call after the turn that the owner refuses: one made once a later
+    /// turn of the agent was sent in the room.
     pub async fn send_event(&self, event: DirectEvent) -> Result<RoomEvent, KitError> {
-        self.shared
-            .kit
-            .send_event(self.shared.room_id.clone(), event)
-            .await
+        let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
+        let arguments = send_event_arguments(&self.shared.room_id, event, floor)
+            .map_err(|why| KitError::Turn(TurnError::new("TypeError", why.0)))?;
+        let sent = self
+            .shared
+            .link
+            .verb(crate::turns::SEND_EVENT, arguments, floor)
+            .await?;
+        serde_json::from_value(sent).map_err(|error| {
+            KitError::Turn(TurnError::new(
+                "frame_invalid",
+                format!("the event sent could not be read: {error}"),
+            ))
+        })
     }
 
     /// Runs the kit's `BEFORE_TOOL_USE` hooks on `call`, in chain order
@@ -173,7 +220,31 @@ impl TurnHost {
                 }
             }
         }
+        self.runs(call, &arguments);
         ToolGate::Allowed(arguments)
+    }
+
+    /// The gate let `call` run with `arguments`: they cross before what
+    /// the stream yields next (RFC §10.6.3 `tool_args`), and a cut reports
+    /// it cancelled until it is reported.
+    fn runs(&self, call: &ToolCall, arguments: &Metadata) {
+        let mut calls = self.calls();
+        calls.ran_with.insert(call.id.clone(), arguments.clone());
+        let mut running = call.clone();
+        running.arguments.clone_from(arguments);
+        calls.running.push(running);
+    }
+
+    /// The arguments each call of the turn runs with, by its id.
+    pub(crate) fn ran_with(&self) -> HashMap<String, Metadata> {
+        self.calls().ran_with.clone()
+    }
+
+    fn calls(&self) -> std::sync::MutexGuard<'_, Calls> {
+        self.shared
+            .calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Runs the kit's SYNC `ON_TOOL_CALL` hooks on `event`, a served call,
@@ -219,8 +290,46 @@ impl TurnHost {
     /// was now, once the turn is over too (RFC §8.3, "The hook calls of a
     /// cascade").
     pub fn report_tool_call(&self, event: &ToolCallEvent) {
+        {
+            let mut calls = self.calls();
+            if let Some(position) = calls
+                .running
+                .iter()
+                .position(|call| call.id == event.call.id)
+            {
+                calls.running.remove(position);
+            }
+        }
         let execution = ExecutionContext::current();
         let floor = execution.turn_depth().unwrap_or(0);
+        self.observe(event, &execution, floor);
+    }
+
+    /// Reports the calls the turn's cut stopped while they ran `cancelled`
+    /// to the kit's observers (RFC §9.3): each with the arguments it ran
+    /// with, what it reads saying the turn ended first, at least as deep as
+    /// the turn's response, in `execution`, the turn's context.
+    pub(crate) fn report_cut(&self, execution: &ExecutionContext, reason: &str) {
+        let running = std::mem::take(&mut self.calls().running);
+        for call in running {
+            let tool = serde_json::to_string(&call.name).unwrap_or_default();
+            let read = format!(
+                "{{\"error\": \"Tool call cancelled\", \"tool\": {tool}, \"hint\": \"{CUT_HINT}\"}}"
+            );
+            let event = ToolCallEvent::new(
+                self.shared.channel_id.clone(),
+                self.shared.room_id.clone(),
+                call,
+            )
+            .ended(ToolCallOutcome::Cancelled, Value::String(read))
+            .with_error_detail(format!("cancelled: {reason}"));
+            self.observe(&event, execution, self.shared.response_depth);
+        }
+    }
+
+    /// Runs the kit's ASYNC `ON_TOOL_CALL` hooks on `event` in the
+    /// background, in `execution`, at least `floor` deep.
+    fn observe(&self, event: &ToolCallEvent, execution: &ExecutionContext, floor: u32) {
         for (spec, handler) in self.hooks(HookTrigger::OnToolCall) {
             let ToolHandler::Observer(observer) = handler else {
                 continue;
@@ -315,8 +424,9 @@ fn skipped(spec: &HookSpec, error: &str) {
     );
 }
 
-/// What a turn's host needs of its kit, whatever its store: the one verb,
-/// the tool hooks, and a background task.
+/// What the turn backend needs of its kit, whatever its store: the owner's
+/// one verb, the executor's tool hooks and channels, its background tasks,
+/// and the framework events a turn emits.
 pub(crate) trait TurnKit: Send + Sync {
     /// Injects `event` into `room_id`.
     fn send_event(
@@ -335,7 +445,19 @@ pub(crate) trait TurnKit: Send + Sync {
 
     /// Runs `task` in the background, tracked; `false` once the kit is
     /// shut down.
-    fn spawn(&self, task: BoxFuture<'static, ()>) -> bool;
+    fn spawn(&self, task: BoxFuture<'static, ()>) -> bool {
+        self.spawn_tracked(task).is_some()
+    }
+
+    /// Runs `task` in the background, tracked: what aborts it; `None` once
+    /// the kit is shut down.
+    fn spawn_tracked(&self, task: BoxFuture<'static, ()>) -> Option<AbortHandle>;
+
+    /// The channel the kit registered under `channel_id`, live.
+    fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>>;
+
+    /// Publishes a framework event to the kit's subscribers.
+    fn publish(&self, event: FrameworkEvent);
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
@@ -361,19 +483,32 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
             .unwrap_or_default()
     }
 
-    fn spawn(&self, task: BoxFuture<'static, ()>) -> bool {
-        self.upgrade()
-            .is_some_and(|inner| inner.tasks.spawn(task).is_some())
+    fn spawn_tracked(&self, task: BoxFuture<'static, ()>) -> Option<AbortHandle> {
+        let inner = self.upgrade()?;
+        inner.tasks.spawn(task).map(|task| task.abort_handle())
+    }
+
+    fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>> {
+        self.upgrade()?.channel(channel_id)
+    }
+
+    fn publish(&self, event: FrameworkEvent) {
+        if let Some(inner) = self.upgrade() {
+            inner.publish(event);
+        }
     }
 }
 
 /// The host of the turn the intelligence channel `channel_id` takes in
-/// `context`'s room, for the kit `inner`.
-pub(crate) fn host<S: ConversationStore>(
-    inner: &Arc<Inner<S>>,
+/// `context`'s room, on the kit's turn executor: its verbs reach the owner
+/// through `link`, its response `response_depth` deep.
+pub(crate) fn host(
+    kit: Arc<dyn TurnKit>,
     channel_id: ChannelId,
     channel_type: ChannelType,
     context: RoomContext,
+    link: Arc<HostLink>,
+    response_depth: u32,
 ) -> TurnHost {
     TurnHost {
         shared: Arc::new(Shared {
@@ -381,8 +516,11 @@ pub(crate) fn host<S: ConversationStore>(
             channel_id,
             channel_type,
             context,
-            kit: Arc::new(Arc::downgrade(inner)),
+            kit,
             stream: Mutex::new(None),
+            link,
+            response_depth,
+            calls: Mutex::new(Calls::default()),
         }),
     }
 }

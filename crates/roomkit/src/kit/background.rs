@@ -58,7 +58,19 @@ impl<S: ConversationStore> RoomKit<S> {
     /// ```
     ///
     /// Called again, it returns once the work the first call ended is over.
+    ///
+    /// The turns running are cut first (RFC §10.6.8: the kit closing
+    /// cancels their cascades): each crosses its turn backend as `cancel`,
+    /// its executor cuts the tool calls it runs, reported `cancelled` to the
+    /// kit's observers, and the reader of a stream stores what it read, the
+    /// text it was handed marked `cancelled` and each call it opened ended
+    /// `cancelled`. The shutdown waits for that within twice the turns'
+    /// cancel bound, 10 seconds by default; with no turn running, it waits
+    /// for nothing. Then the turn backend takes no more turns.
     pub async fn shutdown(&self) {
+        self.inner.tasks.close();
+        self.inner.turns.cut_all().await;
         self.inner.tasks.shut_down().await;
+        self.inner.turns.close();
     }
 }

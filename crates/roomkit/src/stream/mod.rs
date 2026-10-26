@@ -7,7 +7,9 @@
 //! text as it is written, each tool call's start and end, the turn's end.
 //! The kit reads it once the event's delivery set is over, and stores each
 //! row as it ends (a text segment, a call's start, a call's end), the
-//! record of the turn on its last message.
+//! record of the turn on its last message. The stream is advanced on the
+//! kit's turn executor, its items crossing the turn backend as frames, a
+//! window of them at a time, as the kit's reader pulls them (RFC §10.6.4).
 //!
 //! The kit's reader is a transport that declares
 //! [`supports_streaming_delivery`](crate::ChannelDeclaration::supports_streaming_delivery):
@@ -35,7 +37,7 @@ use futures_core::Stream;
 use roomkit_core::model::{ChannelId, EventId, Metadata, RoomEvent, ToolCallContent};
 use tokio::sync::{mpsc, oneshot};
 
-pub(crate) use self::reader::{KeptStream, read};
+pub(crate) use self::reader::{KeptStream, Stops, read};
 use crate::channel::ChannelError;
 
 /// One item of a turn's response, as an intelligence channel writes it (RFC
@@ -72,6 +74,14 @@ pub enum StreamItem {
     /// index: the text segment the deltas before it join to, a call's start
     /// or end.
     Row(Box<RoomEvent>),
+}
+
+/// The next item of a turn's response, as its executor reads it; `None` at
+/// its end.
+pub(crate) async fn next_item(
+    stream: &mut ResponseStream,
+) -> Option<Result<ResponseItem, ChannelError>> {
+    std::future::poll_fn(|context| stream.as_mut().poll_next(context)).await
 }
 
 /// What a pull of a [`DeliveryStream`] is answered with: the next item, an

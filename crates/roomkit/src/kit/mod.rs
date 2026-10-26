@@ -56,6 +56,7 @@ use crate::router::{DefaultRouter, DynRouter, InboundRoomRouter};
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Tasks;
 use crate::tools::ToolHandler;
+use crate::turns::{TurnTimeouts, Turns};
 
 /// How many framework events a slow subscriber may fall behind before it
 /// misses some.
@@ -124,6 +125,8 @@ pub(crate) struct Inner<S> {
     /// the one it started with.
     environment: RwLock<Arc<dyn Environment + Send + Sync>>,
     events: broadcast::Sender<FrameworkEvent>,
+    /// The turn backend every intelligence turn runs through (RFC §10.6).
+    pub(crate) turns: Arc<Turns>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -164,6 +167,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 tasks: Arc::default(),
                 environment: RwLock::new(Arc::new(SystemEnvironment)),
                 events,
+                turns: Arc::default(),
             }),
         }
     }
@@ -174,6 +178,18 @@ impl<S: ConversationStore> RoomKit<S> {
     /// read this one.
     pub fn set_environment(&self, environment: impl Environment + Send + Sync + 'static) {
         *write(&self.inner.environment) = Arc::new(environment);
+    }
+
+    /// Sets the bounds both sides of a turn keep (RFC §10.6.8): every
+    /// intelligence turn runs through the kit's turn backend, in memory,
+    /// between the kit, which commits and broadcasts, and its own turn
+    /// executor, which runs the channel's turn. The RFC's defaults unless
+    /// set: 10 seconds to accept a turn, a heartbeat each way every 2
+    /// seconds, 10 seconds of silence before a side is taken for lost, 5
+    /// seconds for a cancelled turn to end. A turn already submitted keeps
+    /// the bounds it started with.
+    pub fn set_turn_timeouts(&self, timeouts: TurnTimeouts) {
+        self.inner.turns.set_timeouts(timeouts);
     }
 
     /// Sets the chain-depth limit (RFC §8.3), 5 by default.
@@ -363,7 +379,7 @@ impl<S> Inner<S> {
     ///
     /// Returns [`KitError::ShutDown`] once [`RoomKit::shutdown`] was called.
     pub(crate) fn open(&self) -> Result<(), KitError> {
-        if self.tasks.is_shut_down() {
+        if self.tasks.is_closing() {
             return Err(KitError::ShutDown);
         }
         Ok(())

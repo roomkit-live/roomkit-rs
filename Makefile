@@ -7,7 +7,7 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture
+.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture
 
 all: conformance-check fmt-check clippy test doc deny check-core-deps examples
 
@@ -126,3 +126,35 @@ sqlite-fixture:
 	echo "$$commit" > $(SQLITE_FIXTURES)/ROOMKIT_COMMIT && \
 	sha256sum $(SQLITE_FIXTURES)/python-v12.db | cut -c1-64 > $(SQLITE_FIXTURES)/FIXTURE_SHA256 && \
 	echo "sqlite fixture written by roomkit $$commit"
+
+# The turn backend's cross-read fixture (step 4, milestone 7): the messages
+# the Python implementation's in-memory backend carries for one turn, a
+# streamed answer whose tool sends an event through its turn, which
+# crates/roomkit/src/turns/tests/cross_read.rs parses and rewrites with
+# nothing lost; and the other way, Python parsing the messages this crate
+# carries for the same turn (rust-case1.jsonl, which
+# crates/roomkit/tests/turns/tap.rs writes with ROOMKIT_WRITE_TURNS_FIXTURE=1
+# and otherwise checks). It is written by tests/fixtures/turns/make_fixture.py
+# with the interpreter of a roomkit checkout (ROOMKIT_DIR), whose commit, on
+# roomkit's origin/main, is recorded in tests/fixtures/turns/ROOMKIT_COMMIT,
+# and the file's fingerprint in tests/fixtures/turns/FIXTURE_SHA256, which
+# the test checks; tests/fixtures/turns/read_rust.py then reads
+# rust-case1.jsonl with Python's own models and fails on any message they
+# refuse.
+TURNS_FIXTURES := crates/roomkit/tests/fixtures/turns
+
+turns-fixture:
+	@commit=$$(git -C "$(ROOMKIT_DIR)" rev-parse --verify HEAD) && \
+	if ! git -C "$(ROOMKIT_DIR)" diff --quiet HEAD -- src; then \
+		echo "roomkit at $(ROOMKIT_DIR) has changes under src/: write the fixture from a commit"; exit 1; \
+	fi && \
+	if ! git -C "$(ROOMKIT_DIR)" merge-base --is-ancestor "$$commit" origin/main; then \
+		echo "roomkit $$commit is not on origin/main: push it and fetch first"; exit 1; \
+	fi && \
+	PYTHONDONTWRITEBYTECODE=1 "$(ROOMKIT_DIR)/.venv/bin/python" -I \
+		$(TURNS_FIXTURES)/make_fixture.py $(TURNS_FIXTURES)/python-case1.jsonl && \
+	echo "$$commit" > $(TURNS_FIXTURES)/ROOMKIT_COMMIT && \
+	sha256sum $(TURNS_FIXTURES)/python-case1.jsonl | cut -c1-64 > $(TURNS_FIXTURES)/FIXTURE_SHA256 && \
+	echo "turns fixture written by roomkit $$commit" && \
+	PYTHONDONTWRITEBYTECODE=1 "$(ROOMKIT_DIR)/.venv/bin/python" -I \
+		$(TURNS_FIXTURES)/read_rust.py $(TURNS_FIXTURES)/rust-case1.jsonl
