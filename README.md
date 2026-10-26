@@ -12,9 +12,10 @@ for conversations between humans, AI agents and programs.
 > processing timeout, direct injection and the reentrant lock. Step 4,
 > under way, brings a first usable version: an AI agent on an
 > OpenAI-compatible endpoint (`roomkit-openai`), a SQLite store
-> (`roomkit-sqlite`), and a server example that puts them together. Tools,
-> streamed responses, the turn backend, skills and MCP come next, then the
-> tag `v0.1.0` ([the plan](docs/steps/step-04.md)). The API will change.
+> (`roomkit-sqlite`), and a server example that puts them together, with
+> tools and streamed responses. The turn backend, skills and MCP come next,
+> then the tag `v0.1.0` ([the plan](docs/steps/step-04.md)). The API will
+> change.
 
 ## Why a Rust implementation
 

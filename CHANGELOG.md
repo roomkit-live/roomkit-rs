@@ -71,14 +71,25 @@ as it stands.
   and they register through the typed registrations below.
   `transcript::Message` gains `tool_calls` and `tool_call_id`, and `Role`
   gains `Tool`.
-- **An AI agent's turn draws one reentry pass, before it runs** (RFC
-  §8.3): a channel whose turn is one stream
-  (`ChannelDeclaration::answers_as_stream`, which `AiAgent` sets) draws one
-  pass when a response's delivery asks it for a turn, and does not run past
-  the cascade's budget, its answer stored `BLOCKED` `reentry_loop_cap`; its
-  rows re-enter without drawing more, so a long turn's answer is
-  delivered. A buffered channel still draws one pass per event. A
-  tool-call row asks no agent.
+- **Breaking: an AI agent's turn is a stream** (step 4, milestone 6, RFC
+  §6.1, §12.2 steps 13s and 14s). Within a kit, `AiAgent`'s turn answers
+  with its loop as a stream, which the kit reads once the event's delivery
+  set is over: each row is stored as it ends, through `BEFORE_BROADCAST`
+  once, and delivered to the other targets while the turn goes on; nothing
+  of the loop runs but as it is read. A chained stream, one a response's
+  delivery asked for, draws one reentry pass as it is read, and past the
+  cascade's budget is closed unread, nothing generated, its answer stored
+  `BLOCKED` `reentry_loop_cap` (RFC §8.3); the trigger's own draws none, a
+  buffered channel one pass per event, and a tool-call row asks no agent.
+  `ChannelDeclaration::answers_as_stream`, which milestone 5 added for
+  this, is gone. The turn's record, when no row carried it, is written on
+  its last message once the turn is over, `ON_EVENT_UPDATED` firing; an
+  event a tool sends is stored after its round's text and its call's
+  start. A provider's error keeps the text it produced and fails the turn,
+  its `ON_ERROR` category `streaming`. Outside a kit, `AiAgent::on_event`
+  returns the rows buffered, as before. `OpenAiAgent` streams each
+  completion (`stream`, `stream_options.include_usage`), so its requests'
+  body changes.
 - **A tool-call row reaches only the transports that take one**: a
   channel declares it (`ChannelDeclaration::receives_tool_calls`, true by
   default for `websocket` and `webhook`), so an SMS or a chat transport is
@@ -86,6 +97,27 @@ as it stands.
 
 ### Added
 
+- **Streamed responses** (step 4, milestone 6, RFC §6.1, §12.2 steps 13s
+  and 14s). A transport that declares
+  `ChannelDeclaration::supports_streaming_delivery` reads an agent's answer
+  as it is written, through `Channel::deliver_stream`: a `DeliveryStream`
+  of `StreamItem`s, the text deltas, then each row once the store holds it,
+  with its id and index (`DeliveryStream::next`); it is never delivered
+  those rows again, and it is handed no row it may not read. The default
+  reads the stream to its end, then delivers each row through `deliver()`.
+  One such target per response, the first the rows reach; every other
+  target receives the rows only. The reader sets the pace: one that stops,
+  or a caller that leaves, leaves the text it was handed stored marked
+  `cancelled`, the turn recording `cancelled`; a call running is let
+  finish, one announced and not running closed `failed`. An intelligence
+  channel answers with a stream through `TurnHost::respond_with_stream`,
+  a `ResponseStream` of `ResponseItem`s. `OpenAiAgent` reads each
+  completion's server-sent events over reqwest, with no SSE crate, the
+  calls' fragments folded by index, bounded per line (1 MiB), per event
+  (1 MiB) and per answer (4 MiB). `ScriptedRound::writing`, `in_pieces`
+  and `failing` script a model's deltas and a failure mid-answer. The
+  example `streamed_answer` and `server_agent`'s `&stream=1` connections
+  show it.
 - **Tools** (step 4, milestone 5, RFC §6.4, §9.3, §21). The `roomkit-ai`
   crate: `AiAgent`, the AI channel over any `AiProvider` (one call, a
   request in, the generation's text, calls and done event out), whose turn
