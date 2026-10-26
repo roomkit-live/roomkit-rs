@@ -1,6 +1,6 @@
 //! Why a file could not be opened, and what a store operation meets.
 
-use roomkit::StoreError;
+use roomkit::{StoreError, StoreFailure};
 use thiserror::Error;
 
 /// Why [`SqliteStore::open`](crate::SqliteStore::open) refused or failed a
@@ -34,12 +34,21 @@ pub enum OpenError {
     /// The file's directory, missing, could not be created.
     #[error("the file's directory could not be created")]
     Directory(#[source] std::io::Error),
-    /// The database failed.
+    /// The database failed: its cause is SQLite's error, which a caller
+    /// reads through the source chain, so that the SQLite library's version
+    /// is no part of this crate's API.
     #[error("the database failed")]
-    Database(#[from] rusqlite::Error),
+    Database(#[source] StoreFailure),
     /// The thread that opens the file stopped before it was done.
     #[error("the store's thread stopped")]
     Stopped(#[from] tokio::task::JoinError),
+}
+
+impl OpenError {
+    /// The database failed with `error`.
+    pub(crate) fn database(error: rusqlite::Error) -> Self {
+        Self::Database(StoreFailure::new(error))
+    }
 }
 
 /// What an operation meets: the store's refusal, or a failure, which the

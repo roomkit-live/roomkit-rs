@@ -26,7 +26,7 @@ impl Database {
             if let Some(directory) = path.parent() {
                 std::fs::create_dir_all(directory).map_err(OpenError::Directory)?;
             }
-            let mut connection = Connection::open(path)?;
+            let mut connection = Connection::open(path).map_err(OpenError::database)?;
             schema::prepare(&mut connection)?;
             Ok::<_, OpenError>(connection)
         })

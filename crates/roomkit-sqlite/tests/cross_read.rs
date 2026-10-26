@@ -587,6 +587,23 @@ async fn a_file_of_another_schema_version_is_refused() {
     assert_eq!(refused, [(true, true), (true, true)]);
 }
 
+/// A file that is no database fails with SQLite's error as the cause, read
+/// through the source chain: the SQLite library's type is no part of the
+/// error's API.
+#[tokio::test]
+async fn a_file_that_is_no_database_fails_with_sqlite_s_error_as_its_cause() {
+    let file = TempFile::new("not-a-database");
+    std::fs::write(file.path(), [b'x'; 4096]).unwrap();
+    let opened = SqliteStore::open(file.path()).await.map(drop);
+    let cause = match &opened {
+        Err(error @ OpenError::Database(_)) => std::error::Error::source(error)
+            .and_then(|cause| cause.downcast_ref::<rusqlite::Error>())
+            .and_then(rusqlite::Error::sqlite_error_code),
+        _ => None,
+    };
+    assert_eq!(cause, Some(rusqlite::ErrorCode::NotADatabase));
+}
+
 /// RFC §10.3: an edit holds a version of the text its target said. A
 /// delete roomkit-rs commits marks the target's edits deleted, as the
 /// Python implementation's store does and its histories read, so a Python

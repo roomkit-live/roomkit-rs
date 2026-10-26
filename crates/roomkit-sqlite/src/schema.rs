@@ -50,11 +50,15 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// every open, and refuses a file of another version. Then sets the
 /// write-ahead log's mode.
 pub(crate) fn prepare(connection: &mut Connection) -> Result<(), OpenError> {
-    connection.busy_timeout(BUSY_TIMEOUT)?;
-    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    connection
+        .busy_timeout(BUSY_TIMEOUT)
+        .map_err(OpenError::database)?;
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(OpenError::database)?;
     match version {
-        0 => create(connection)?,
-        SCHEMA_VERSION => repair(connection)?,
+        0 => create(connection).map_err(OpenError::database)?,
+        SCHEMA_VERSION => repair(connection).map_err(OpenError::database)?,
         newer if newer > SCHEMA_VERSION => {
             return Err(OpenError::NewerSchema {
                 found: newer,
@@ -68,13 +72,17 @@ pub(crate) fn prepare(connection: &mut Connection) -> Result<(), OpenError> {
             });
         }
     }
+    write_ahead(connection).map_err(OpenError::database)
+}
+
+/// Sets the write-ahead log's mode, with the synchronous level it allows.
+fn write_ahead(connection: &Connection) -> rusqlite::Result<()> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
-    connection.pragma_update(None, "synchronous", "NORMAL")?;
-    Ok(())
+    connection.pragma_update(None, "synchronous", "NORMAL")
 }
 
 /// Creates the schema and stamps its version, in one transaction.
-fn create(connection: &mut Connection) -> Result<(), OpenError> {
+fn create(connection: &mut Connection) -> rusqlite::Result<()> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(SCHEMA)?;
     transaction.execute_batch(RESPONDS_TO_INDEX)?;
@@ -86,7 +94,7 @@ fn create(connection: &mut Connection) -> Result<(), OpenError> {
 
 /// Adds what a file at this version lacks, never its version: every
 /// statement is idempotent.
-fn repair(connection: &mut Connection) -> Result<(), OpenError> {
+fn repair(connection: &mut Connection) -> rusqlite::Result<()> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(SCHEMA)?;
     transaction.execute_batch(RESPONDS_TO_INDEX)?;
