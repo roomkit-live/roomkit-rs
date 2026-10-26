@@ -271,16 +271,20 @@ as it stands.
   name, a second such sender of the channel `@channel (2)`, speakers being
   counted by who they come from, and the turn's notes say how speakers are
   named. An instruction is the input, marked as the application's; one
-  that stands alone reads no history. A copy of the runtime's marks in a
-  participant's text is replaced, read in any case, spacing or look-alike
-  letters, one that runs over consecutive messages included, and so is a
-  mark's opening after any opening punctuation (`[`, `【`, `〔`, `(`…). The
-  marks are the Python implementation's.
+  that stands alone reads no history and counts no one taking part. A copy
+  of the runtime's marks in a participant's text is replaced, its letters
+  read as the Python implementation's pattern reads them (any case, NFKC,
+  confusables, a capital `I` for an `l`) and as a name's reading does, in
+  any spacing, one that runs over consecutive messages included, and so is
+  a mark's opening after any opening punctuation (`[`, `【`, `〔`, `(`…).
+  The marks are the Python implementation's. `Role` and `Message` are
+  `#[non_exhaustive]`; a message is built with `Message::new`.
 - **The OpenAI agent** (`roomkit-openai`, §6.4, step 4 milestone 1):
   `OpenAiAgent`, an intelligence channel whose turn is one Chat Completions
   call to an OpenAI-compatible endpoint, not streamed and with no tool,
   sending its system prompt and the turn's conversation and answering with
-  the completion's text. `OpenAiConfig` names the base URL, the API key
+  the completion's text. `OpenAiConfig` names the base URL (with no query
+  or fragment, refused with `OpenAiError::BaseUrl`), the API key
   (an empty one sends no `Authorization`; `Debug` never prints it), the
   model, the system prompt, how many messages a turn sends at most (all
   those among the 50 events the kit's context holds, by default)
