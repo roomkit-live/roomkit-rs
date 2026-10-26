@@ -2360,8 +2360,10 @@ async fn commit_event_keeps_the_delivery_results_it_brings() {
         .delivery_results
         .insert("sms".to_owned(), "failed".into());
     kit.commit_event(&room_id(), record).await.unwrap();
-    let mut updates = EventUpdates::default();
-    updates.content = Some(EventContent::text("Snapshot, corrected"));
+    let updates = EventUpdates {
+        content: Some(EventContent::text("Snapshot, corrected")),
+        ..EventUpdates::default()
+    };
     let corrected = kit
         .update_event(&room_id(), &"snap_1".parse().unwrap(), updates)
         .await

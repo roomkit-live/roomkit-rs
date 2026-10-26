@@ -188,8 +188,10 @@ pub(crate) fn set_private_state(
     key: &str,
     value: Option<Metadata>,
 ) -> Result<(), Failure> {
-    let mut updates = RoomUpdates::default();
-    updates.private_state = [(key.to_owned(), value)].into();
+    let updates = RoomUpdates {
+        private_state: [(key.to_owned(), value)].into(),
+        ..RoomUpdates::default()
+    };
     match update(connection, room_id, updates) {
         Ok(_) | Err(Failure::Refused(StoreError::RoomNotFound(_))) => Ok(()),
         Err(failure) => Err(failure),

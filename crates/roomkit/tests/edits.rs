@@ -413,8 +413,10 @@ mod a_direct_call {
     async fn update_rewrites_the_event_without_a_marker_and_fires_on_event_updated() {
         let room = room().await;
         let mut updated = observed(&room.kit, HookTrigger::OnEventUpdated);
-        let mut update = EventUpdates::default();
-        update.content = Some(EventContent::text("I need 6000$"));
+        let update = EventUpdates {
+            content: Some(EventContent::text("I need 6000$")),
+            ..EventUpdates::default()
+        };
         let returned = room
             .kit
             .update_event(&room_id(), &EventId::new("evt_1").unwrap(), update)

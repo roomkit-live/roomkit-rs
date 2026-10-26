@@ -1081,9 +1081,10 @@ mod a_direct_update {
     use pretty_assertions::assert_eq;
 
     fn rewrite(text: &str) -> EventUpdates {
-        let mut updates = EventUpdates::default();
-        updates.content = Some(EventContent::text(text));
-        updates
+        EventUpdates {
+            content: Some(EventContent::text(text)),
+            ..EventUpdates::default()
+        }
     }
 
     /// RFC §10.3: the trigger fires once the lock is released, with the
@@ -1130,8 +1131,10 @@ mod a_direct_update {
         sim.timeline[0]
             .metadata
             .insert("crm".to_owned(), json!("c_1"));
-        let mut update = EventUpdates::default();
-        update.metadata = Some([("tag".to_owned(), json!("vip"))].into_iter().collect());
+        let update = EventUpdates {
+            metadata: Some([("tag".to_owned(), json!("vip"))].into_iter().collect()),
+            ..EventUpdates::default()
+        };
         sim.update_event("evt_1", update).unwrap();
         assert_eq!(
             serde_json::Value::Object(stored(&sim, "evt_1").metadata.clone()),

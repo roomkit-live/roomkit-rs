@@ -654,8 +654,10 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
                 } else {
                     let mut metadata = event.metadata.clone();
                     metadata.insert("n".to_owned(), len(&ran).into());
-                    let mut updates = EventUpdates::default();
-                    updates.metadata = Some(metadata);
+                    let updates = EventUpdates {
+                        metadata: Some(metadata),
+                        ..EventUpdates::default()
+                    };
                     kit.update_event(&room_id(), &event.id, updates)
                         .await
                         .map(|_| ())
@@ -678,8 +680,10 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
         } else {
             let mut metadata = first.metadata.clone();
             metadata.insert("n".to_owned(), 0.into());
-            let mut updates = EventUpdates::default();
-            updates.metadata = Some(metadata);
+            let updates = EventUpdates {
+                metadata: Some(metadata),
+                ..EventUpdates::default()
+            };
             kit.update_event(&room_id(), &first.id, updates)
                 .await
                 .unwrap();
@@ -727,8 +731,10 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
                 for n in 0..30 {
                     let mut metadata = roomkit::model::Metadata::new();
                     metadata.insert("n".to_owned(), n.into());
-                    let mut updates = EventUpdates::default();
-                    updates.metadata = Some(metadata);
+                    let updates = EventUpdates {
+                        metadata: Some(metadata),
+                        ..EventUpdates::default()
+                    };
                     kit.update_event(&room_id(), &spare, updates).await.unwrap();
                 }
                 let one_more = if deleting {
@@ -736,8 +742,10 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
                         .await
                         .map(|_| ())
                 } else {
-                    let mut updates = EventUpdates::default();
-                    updates.content = Some(EventContent::text("changed"));
+                    let updates = EventUpdates {
+                        content: Some(EventContent::text("changed")),
+                        ..EventUpdates::default()
+                    };
                     kit.update_event(&room_id(), &event.id, updates)
                         .await
                         .map(|_| ())
@@ -818,8 +826,10 @@ async fn update_sixty_times(kit: &RoomKit, target: &EventId, failures: &Kept<Kit
     for n in 0..60 {
         let mut metadata = roomkit::model::Metadata::new();
         metadata.insert("n".to_owned(), n.into());
-        let mut updates = EventUpdates::default();
-        updates.metadata = Some(metadata);
+        let updates = EventUpdates {
+            metadata: Some(metadata),
+            ..EventUpdates::default()
+        };
         if let Err(error) = kit.update_event(&room_id(), target, updates).await {
             push(failures, error);
             return;
@@ -909,8 +919,10 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
             if event.source.channel_id == channel("a") {
                 let mut metadata = roomkit::model::Metadata::new();
                 metadata.insert("by".to_owned(), event.id.as_str().into());
-                let mut updates = EventUpdates::default();
-                updates.metadata = Some(metadata);
+                let updates = EventUpdates {
+                    metadata: Some(metadata),
+                    ..EventUpdates::default()
+                };
                 kit.update_event(&room_id(), &target, updates).await?;
             }
             Ok(HookResult::allow())
@@ -997,8 +1009,10 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
                     for n in 0..15 {
                         let mut metadata = roomkit::model::Metadata::new();
                         metadata.insert("n".to_owned(), n.into());
-                        let mut updates = EventUpdates::default();
-                        updates.metadata = Some(metadata);
+                        let updates = EventUpdates {
+                            metadata: Some(metadata),
+                            ..EventUpdates::default()
+                        };
                         if let Err(error) = kit.update_event(&room_id(), &target, updates).await {
                             push(&failures, error);
                         }

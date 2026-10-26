@@ -474,8 +474,10 @@ async fn what_python_reads_beside_the_timeline_is_kept_right() {
     let committed = derived(file.path());
     let mut deleted = event.metadata.clone();
     deleted.insert("deleted".to_owned(), true.into());
-    let mut marking = EventUpdates::default();
-    marking.metadata = Some(deleted);
+    let marking = EventUpdates {
+        metadata: Some(deleted),
+        ..EventUpdates::default()
+    };
     kit.store().update_event(&event.id, marking).await.unwrap();
     let marked = derived(file.path());
     kit.store()

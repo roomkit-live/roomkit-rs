@@ -17,8 +17,13 @@ use super::{
 /// room lock (a channel's metadata update) never loses the counters of an
 /// event committed meanwhile. A field of type `Option<Option<_>>` is written
 /// when it is `Some`, to the value it holds, `None` included.
+///
+/// It is not `#[non_exhaustive]`, on purpose: a store reads every field,
+/// so a new field is a breaking change on purpose. A store that
+/// destructures it fails to compile until it reads the new field, rather
+/// than silently reading too wide (a field narrowing a read to an
+/// organization, say).
 #[derive(Clone, Debug, Default, PartialEq)]
-#[non_exhaustive]
 pub struct RoomUpdates {
     /// The room's status.
     pub status: Option<RoomStatus>,
@@ -115,8 +120,13 @@ impl RoomUpdates {
 /// accepted edit writes its target's content and metadata with it, and a
 /// delete its metadata (RFC §10.3); a host's direct `update_event` writes
 /// what it names (RFC §10.3 "Direct mutation").
+///
+/// It is not `#[non_exhaustive]`, on purpose: a store reads every field,
+/// so a new field is a breaking change on purpose. A store that
+/// destructures it fails to compile until it reads the new field, rather
+/// than silently reading too wide (a field narrowing a read to an
+/// organization, say).
 #[derive(Clone, Debug, Default, PartialEq)]
-#[non_exhaustive]
 pub struct EventUpdates {
     /// The event's new content.
     pub content: Option<EventContent>,
@@ -154,8 +164,13 @@ impl EventUpdates {
 /// field fall back to its default: `access`, `visibility` and `muted` change
 /// only when the update names them. Recording a routed sender is one such
 /// write (RFC §10.1 step 2, gap G-061).
+///
+/// It is not `#[non_exhaustive]`, on purpose: a store reads every field,
+/// so a new field is a breaking change on purpose. A store that
+/// destructures it fails to compile until it reads the new field, rather
+/// than silently reading too wide (a field narrowing a read to an
+/// organization, say).
 #[derive(Clone, Debug, Default, PartialEq)]
-#[non_exhaustive]
 pub struct BindingUpdate {
     /// The binding's correspondent (RFC §10.4), written when `Some`, to the
     /// value it holds, `None` included.

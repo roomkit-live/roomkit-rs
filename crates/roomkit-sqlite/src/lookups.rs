@@ -58,8 +58,10 @@ fn admitted(
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
     })?;
     // The filter's timers, read on the room itself (RFC §5.1).
-    let mut timers = RoomFilter::default();
-    timers.timers_armed = filter.timers_armed;
+    let timers = RoomFilter {
+        timers_armed: filter.timers_armed,
+        ..RoomFilter::default()
+    };
     let mut rooms = Vec::new();
     for row in rows {
         let (data, delivered_index) = row?;

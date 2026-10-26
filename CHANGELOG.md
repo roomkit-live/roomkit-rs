@@ -39,27 +39,29 @@ as it stands.
   library's version is no part of the crate's API; SQLite's error is its
   source.
 - **Breaking: the types that will grow are `#[non_exhaustive]`** (step 4,
-  milestone 4), so that a member added later breaks no caller: the
-  options and updates (`RoomOptions`, `BindingOptions`, `RoomUpdates`,
-  `EventUpdates`, `BindingUpdate`, `RoomFilter`, `EventFilter`,
-  `HookSpec`, `HookFilter`), a channel's declaration (`ChannelDeclaration`,
-  `ChannelCapabilities`, `RateLimit`, `RetryPolicy`), every content struct
-  and `EventContent`, `HookTrigger` and `FrameworkEvent`; the errors
-  already were. Build one from its `Default` or its constructor, then set
-  fields: `let mut options = BindingOptions::default(); options.group =
-  true;` for `BindingOptions { group: true, ..Default::default() }`. The
-  contents gain the constructors this needs, each taking the members the
-  RFC requires (`MediaContent::new(url, mime_type)`,
-  `EditContent::new(target, new_content)`, `DeleteContent::new(target)`,
-  ...), and so does `RetryPolicy`; an edit's `edit_source` (null by
-  default) and a delete's `delete_type` (`SENDER` by default) are set with
-  `with_edit_source` and `with_delete_type`. A `match` on `EventContent`, `HookTrigger` or
-  `FrameworkEvent` outside the core needs a wildcard arm. Each variant of
-  `FrameworkEvent` is non-exhaustive too, so that a member RFC §8.2 adds
-  to a row breaks no subscriber: a pattern on one names the members it
-  reads and ends with `..`, and a driver or a test builds one with its
-  constructor (`FrameworkEvent::room_paused(room_id, reason)`, one per
-  variant, named after the RFC's event).
+  milestone 4), so that a member added later breaks no caller: the options
+  (`RoomOptions`, `BindingOptions`, `HookSpec`, `HookFilter`), a channel's
+  declaration (`ChannelDeclaration`, `ChannelCapabilities`, `RateLimit`,
+  `RetryPolicy`), every content struct and `EventContent`, `HookTrigger`
+  and `FrameworkEvent`; the errors already were. Build one from its
+  `Default` or its constructor, then set fields: `let mut options =
+  BindingOptions::default(); options.group = true;` for `BindingOptions {
+  group: true, ..Default::default() }`. The store's inputs (`RoomUpdates`,
+  `EventUpdates`, `BindingUpdate`, `RoomFilter`, `EventFilter`) are not
+  marked, on purpose: a store reads every field, so a new field is a
+  breaking change. The contents gain the constructors this needs, each
+  taking the members the RFC requires (`MediaContent::new(url,
+  mime_type)`, `EditContent::new(target, new_content)`,
+  `DeleteContent::new(target)`, ...), and so does `RetryPolicy`; an edit's
+  `edit_source` (null by default) and a delete's `delete_type` (`SENDER`
+  by default) are set with `with_edit_source` and `with_delete_type`. A
+  `match` on `EventContent`, `HookTrigger` or `FrameworkEvent` outside the
+  core needs a wildcard arm. Each variant of `FrameworkEvent` is
+  non-exhaustive too, so that a member RFC §8.2 adds to a row breaks no
+  subscriber: a pattern on one names the members it reads and ends with
+  `..`, and a driver or a test builds one with its constructor
+  (`FrameworkEvent::room_paused(room_id, reason)`, one per variant, named
+  after the RFC's event).
 
 ### Added
 

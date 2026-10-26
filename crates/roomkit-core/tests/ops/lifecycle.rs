@@ -569,11 +569,13 @@ mod update_binding {
         sim.room.timers.last_activity_at = Some(after_start(0));
         let mut metadata = serde_json::Map::new();
         metadata.insert("tier".to_owned(), serde_json::json!("gold"));
-        let mut changes = BindingUpdate::default();
-        changes.muted = Some(true);
-        changes.access = Some(Access::ReadOnly);
-        changes.visibility = Some(Visibility::Transport);
-        changes.metadata = metadata;
+        let changes = BindingUpdate {
+            muted: Some(true),
+            access: Some(Access::ReadOnly),
+            visibility: Some(Visibility::Transport),
+            metadata,
+            ..BindingUpdate::default()
+        };
         update(&mut sim, changes).unwrap();
         let records: Vec<(EventType, String, Visibility)> = sim
             .timeline

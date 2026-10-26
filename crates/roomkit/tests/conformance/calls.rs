@@ -172,10 +172,11 @@ async fn lifecycle_call(
     Ok(match name {
         "update_event" => {
             let (room, event): (RoomId, EventId) = (room_id(spec)?, field(spec, "event_id")?);
-            let mut updates = EventUpdates::default();
-            updates.content = optional::<EventContent>(spec, "content")?;
-            updates.source = optional::<EventSource>(spec, "source")?;
-            updates.metadata = optional::<Metadata>(spec, "metadata")?;
+            let updates = EventUpdates {
+                content: optional::<EventContent>(spec, "content")?,
+                source: optional::<EventSource>(spec, "source")?,
+                metadata: optional::<Metadata>(spec, "metadata")?,
+            };
             let outcome = on_door!(run, spec, |door| door.update_event(&room, &event, updates));
             finish(run, name, outcome, dump)
         }
@@ -202,11 +203,10 @@ async fn lifecycle_call(
             let update = match name {
                 "mute" => BindingUpdate::mute(),
                 "unmute" => BindingUpdate::unmute(),
-                "set_access" => {
-                    let mut update = BindingUpdate::default();
-                    update.access = Some(field::<Access>(spec, "access")?);
-                    update
-                }
+                "set_access" => BindingUpdate {
+                    access: Some(field::<Access>(spec, "access")?),
+                    ..BindingUpdate::default()
+                },
                 _ => BindingUpdate::visibility(field::<Visibility>(spec, "visibility")?),
             };
             let outcome = on_door!(run, spec, |door| door

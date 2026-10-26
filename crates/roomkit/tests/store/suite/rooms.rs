@@ -91,8 +91,10 @@ async fn the_delivery_cursor_advances_by_compare_and_set_only() {
 async fn a_room_update_writes_only_the_fields_it_names() {
     let store = with_room().await;
     store.commit(event(0), counters(0), None).await.unwrap();
-    let mut updates = RoomUpdates::default();
-    updates.status = Some(RoomStatus::Paused);
+    let updates = RoomUpdates {
+        status: Some(RoomStatus::Paused),
+        ..RoomUpdates::default()
+    };
     let room = store.update_room(&room_id(), updates).await.unwrap();
     assert_eq!((room.status, room.event_count), (RoomStatus::Paused, 1));
 }
@@ -111,8 +113,10 @@ async fn a_commit_writes_the_room_updates_it_carries() {
     let store = with_room().await;
     let mut resumed = counters(0);
     resumed.room.status = Some(RoomStatus::Active);
-    let mut paused = RoomUpdates::default();
-    paused.status = Some(RoomStatus::Paused);
+    let paused = RoomUpdates {
+        status: Some(RoomStatus::Paused),
+        ..RoomUpdates::default()
+    };
     store.update_room(&room_id(), paused).await.unwrap();
     store.commit(event(0), resumed, None).await.unwrap();
     let room = store.get_room(&room_id()).await.unwrap().unwrap();
@@ -130,10 +134,12 @@ async fn a_room_s_private_state_is_kept_apart() {
     let Value::Object(value) = json!({ "version": 3, "names": {} }) else {
         unreachable!()
     };
-    let mut copied = RoomUpdates::default();
-    copied.metadata = [("author_register".to_owned(), json!("a copy"))]
-        .into_iter()
-        .collect();
+    let copied = RoomUpdates {
+        metadata: [("author_register".to_owned(), json!("a copy"))]
+            .into_iter()
+            .collect(),
+        ..RoomUpdates::default()
+    };
     store.update_room(&room, copied).await.unwrap();
     store
         .set_private_state(&room, "author_register", Some(value.clone()))
@@ -183,8 +189,10 @@ async fn listing_rooms_with_timers_armed_skips_the_others() {
         ..RoomTimers::default()
     };
     store.create_room(timed).await.unwrap();
-    let mut filter = RoomFilter::default();
-    filter.timers_armed = true;
+    let filter = RoomFilter {
+        timers_armed: true,
+        ..RoomFilter::default()
+    };
     let listed = store.list_rooms(&filter).await.unwrap();
     assert_eq!(
         listed
@@ -229,9 +237,11 @@ async fn listing_rooms_by_organization_and_status_skips_the_others() {
         room.status = status;
         store.create_room(room).await.unwrap();
     }
-    let mut filter = RoomFilter::default();
-    filter.organization_id = Some("bank".to_owned());
-    filter.status = Some(RoomStatus::Active);
+    let filter = RoomFilter {
+        organization_id: Some("bank".to_owned()),
+        status: Some(RoomStatus::Active),
+        ..RoomFilter::default()
+    };
     let listed = store.list_rooms(&filter).await.unwrap();
     assert_eq!(
         listed

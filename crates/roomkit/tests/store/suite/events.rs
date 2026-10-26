@@ -18,8 +18,10 @@ use crate::Store;
 
 /// The update an edit of `evt_0` writes, its text `text`.
 fn edited(text: &str) -> TargetUpdate {
-    let mut updates = EventUpdates::default();
-    updates.content = Some(EventContent::text(text));
+    let updates = EventUpdates {
+        content: Some(EventContent::text(text)),
+        ..EventUpdates::default()
+    };
     TargetUpdate {
         event_id: event_id("evt_0"),
         updates,
@@ -319,8 +321,9 @@ async fn a_filtered_count_leaves_refused_events_out_as_a_timeline_read_does() {
         .commit(event_stored(2, EventStatus::Blocked), counters(2), None)
         .await
         .unwrap();
-    let mut with_blocked = EventFilter::default();
-    with_blocked.include_blocked = true;
+    let with_blocked = EventFilter {
+        include_blocked: true,
+    };
     let counts = (
         store.get_event_count(&room_id(), None).await,
         store
@@ -531,8 +534,10 @@ async fn a_delete_s_commit_marks_its_target_s_edits_deleted() {
     let mut delete = event(4);
     delete.event_type = EventType::Delete;
     delete.content = EventContent::Delete(DeleteContent::new(event_id("evt_0")));
-    let mut updates = EventUpdates::default();
-    updates.metadata = Some([("deleted".to_owned(), json!(true))].into_iter().collect());
+    let updates = EventUpdates {
+        metadata: Some([("deleted".to_owned(), json!(true))].into_iter().collect()),
+        ..EventUpdates::default()
+    };
     let deleted = TargetUpdate {
         event_id: event_id("evt_0"),
         updates,
