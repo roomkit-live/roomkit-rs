@@ -481,9 +481,7 @@ impl Commit {
         timeline: Option<&[RoomEvent]>,
         counters: &mut RoomCounters,
     ) -> Result<(), NeedsTimeline> {
-        let (record, register) = authors::with_author((*self.record).clone(), context, timeline)?;
-        *self.record = record;
-        if let Some(register) = register {
+        if let Some(register) = authors::with_author(&mut self.record, context, timeline)? {
             counters
                 .room
                 .private_state

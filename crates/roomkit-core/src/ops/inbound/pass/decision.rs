@@ -321,12 +321,12 @@ impl CommitPass {
         timeline: Option<&[RoomEvent]>,
     ) -> State {
         let Unrecorded {
-            event,
+            mut event,
             plan,
             context,
             written,
         } = unrecorded;
-        if let Ok((event, register)) = authors::with_author(event.clone(), &context, timeline) {
+        if let Ok(register) = authors::with_author(&mut event, &context, timeline) {
             let delivered = commit::delivered(cx, event, plan, context, written, register);
             return self.committing(cx, delivered);
         }

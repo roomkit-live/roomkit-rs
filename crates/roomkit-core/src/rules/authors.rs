@@ -409,37 +409,38 @@ fn rebuilt(context: &RoomContext, timeline: &[RoomEvent]) -> AuthorRegister {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NeedsTimeline;
 
-/// `event`, about to be committed to the room of `context`, with the
-/// record of its author (RFC §10.1 step 12), and the register to write in
-/// the commit's transaction when it changed. A record the event came with
-/// is dropped, the runtime's alone; a `BLOCKED` record and an event that
-/// names no sender take none. A room with no register has it rebuilt from
-/// its timeline: the context's window when it holds the whole timeline,
-/// else `timeline`, which the caller reads when this answers
-/// [`NeedsTimeline`]. A register the room's metadata still holds is merged
-/// into the store's.
+/// Records on `event`, about to be committed to the room of `context`,
+/// the record of its author (RFC §10.1 step 12), and returns the register
+/// to write in the commit's transaction when it changed. A record the
+/// event came with is dropped, the runtime's alone; a `BLOCKED` record and
+/// an event that names no sender take none. A room with no register has it
+/// rebuilt from its timeline: the context's window when it holds the whole
+/// timeline, else `timeline`, which the caller reads when this answers
+/// [`NeedsTimeline`], and the event is recorded again then. A register the
+/// room's metadata still holds is merged into the store's. The event is
+/// written in place: a commit copies it no more than it did.
 ///
 /// # Errors
 ///
 /// Returns [`NeedsTimeline`] when the room's whole timeline is needed and
 /// `timeline` is `None`.
 pub(crate) fn with_author(
-    mut event: RoomEvent,
+    event: &mut RoomEvent,
     context: &RoomContext,
     timeline: Option<&[RoomEvent]>,
-) -> Result<(RoomEvent, Option<Metadata>), NeedsTimeline> {
+) -> Result<Option<Metadata>, NeedsTimeline> {
     event.metadata.remove(AUTHOR);
     let named = event.source.participant_id.is_some()
         || event.metadata.get(SENDER_NAME).is_some_and(truthy);
     if !named || event.status == EventStatus::Blocked {
-        return Ok((event, None));
+        return Ok(None);
     }
     let (held, moved) = held_register(context);
     let mut register = match held {
         Some(register) => register,
         None => rebuilt(context, history(context, timeline)?),
     };
-    let record = author_record(&event, context, &mut register);
+    let record = author_record(event, context, &mut register);
     let write = (register.changed || moved).then(|| register.written());
     if let Some((name, rank, source)) = record {
         let mut author = Map::new();
@@ -450,7 +451,7 @@ pub(crate) fn with_author(
             .metadata
             .insert(AUTHOR.to_owned(), Value::Object(author));
     }
-    Ok((event, write))
+    Ok(write)
 }
 
 /// The timeline a register is rebuilt from: the context's window when it
@@ -595,8 +596,8 @@ mod tests {
         let mut context = room();
         let mut records = Vec::new();
         for (channel, sender, name) in sent {
-            let (event, written) =
-                with_author(message(channel, sender, *name), &context, None).unwrap();
+            let mut event = message(channel, sender, *name);
+            let written = with_author(&mut event, &context, None).unwrap();
             records.push(event.metadata.get(AUTHOR).cloned());
             if written.is_some() {
                 context.author_register = written;
@@ -664,7 +665,7 @@ mod tests {
         event
             .metadata
             .insert(AUTHOR.to_owned(), json!({ "name": "Admin" }));
-        let (event, _) = with_author(event, &room(), None).unwrap();
+        with_author(&mut event, &room(), None).unwrap();
         assert_eq!(event.metadata.get(AUTHOR), None);
     }
 
@@ -674,7 +675,7 @@ mod tests {
     fn needs_the_timeline_of_a_room_whose_window_does_not_hold_it() {
         let mut context = room();
         context.room.event_count = 3;
-        let needs = with_author(message("sms", "+15550001", Some("Alice")), &context, None);
-        assert_eq!(needs.map(|_| ()), Err(NeedsTimeline));
+        let mut event = message("sms", "+15550001", Some("Alice"));
+        assert_eq!(with_author(&mut event, &context, None), Err(NeedsTimeline));
     }
 }
