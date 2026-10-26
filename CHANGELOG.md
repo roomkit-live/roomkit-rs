@@ -410,7 +410,11 @@ as it stands.
   connections as JSON frames, each send bounded, a client that stops
   reading dropped, reader included; a refused message or a failed turn
   answered with an error frame, a message or a frame over the limit
-  closed with 1009, a frame at its header, a stop with 1001; an `OpenAiAgent` answers each message, and a
+  closed with 1009, a frame at its header, a stop with 1001; the ids a
+  connection names checked (1 to 64 letters, digits, `_` or `-`, a name
+  of 64 characters at most with no control character, else 400), and
+  what a service must add said in its header (TLS, authentication, the
+  `Origin` check, who may create rooms, a rate limit); an `OpenAiAgent` answers each message, and a
   `SqliteStore` keeps the rooms, so that a restarted server goes on with
   each conversation's history. Its checks run offline, against the fake of
   the OpenAI wire and a temporary file: two people in one room, labelled

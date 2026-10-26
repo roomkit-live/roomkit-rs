@@ -21,9 +21,29 @@
 //!   messages. A client that stops reading is dropped, reader included,
 //!   once one send waits 5 seconds; a stop gives the connections and the
 //!   kit 10 seconds.
-//! - The `user` parameter stands in for authentication, and anyone may join
-//!   any conversation: a real server takes the participant from its
-//!   session, never from what the client says, and checks they may join.
+//! - The conversation and the `user` are 1 to 64 letters, digits, `_` or
+//!   `-`, and the name 64 characters at most, none a control character;
+//!   anything else is refused with 400.
+//!
+//! What it leaves out, which a service built from it adds:
+//! - TLS: it serves plain `ws://`, to be put behind a TLS proxy.
+//! - Authentication: `user` is whoever the client says it is; a service
+//!   takes the participant from its session.
+//! - The `Origin` check: none is made, so with a session held in a cookie
+//!   any web page could open a socket as its visitor (cross-site WebSocket
+//!   hijacking). A service checks it in `connect`, given the request's
+//!   `headers: HeaderMap`:
+//!
+//!   ```text
+//!   if headers.get(ORIGIN).is_some_and(|origin| origin != "https://chat.example.com") {
+//!       return StatusCode::FORBIDDEN.into_response();
+//!   }
+//!   ```
+//!
+//! - Who may create and join a room: any client creates one by naming a
+//!   new conversation, and joins any it names.
+//! - A rate limit: nothing bounds how often a client writes, and each
+//!   message costs a model call.
 //!
 //! Its checks run offline, against a fake of the OpenAI wire and a
 //! temporary file: Alice and Bob talk with the agent in one room, the
@@ -76,7 +96,7 @@ use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::{WebSocketStream, tungstenite};
 
-use shared::{Checks, OpenAiEndpoint, Registration, TempDatabase, WebSocketChannel};
+use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Registration, TempDatabase, WebSocketChannel};
 
 const SYSTEM_PROMPT: &str = "You answer the customers of a bakery, in one short sentence.";
 
@@ -90,6 +110,13 @@ const SERVE_DATABASE: &str = "server_agent.db";
 /// provider's error or room's state reaches it.
 const TURN_FAILED: &str = "the agent could not answer";
 const REFUSED: &str = "the room refused the message";
+
+/// The longest conversation id, user id and name a connection may give, in
+/// characters, and what the server answers a connection that names one
+/// wrong.
+const ID_LIMIT: usize = 64;
+const NAMING: &str = "a conversation and a user of 1 to 64 letters, digits, _ or -, and a \
+                      name of 64 characters at most with no control character, are needed";
 
 /// The largest message, and frame, a connection may send, in bytes.
 const MESSAGE_LIMIT: usize = 64 * 1024;
@@ -334,18 +361,16 @@ async fn connect(
     Query(query): Query<HashMap<String, String>>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let (Ok(room_id), Some(Ok(user))) = (
-        RoomId::new(conversation),
-        query.get("user").map(ParticipantId::new),
-    ) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "a conversation and a user are needed",
-        )
-            .into_response();
+    let Some((room_id, user, name)) = named(&conversation, &query) else {
+        return (StatusCode::BAD_REQUEST, NAMING).into_response();
     };
-    if let Err(error) = app.join(&room_id, &user, query.get("name").cloned()).await {
-        println!("  {user} could not join {room_id}: {error}");
+    if let Err(error) = app.join(&room_id, &user, name).await {
+        // What the client named is shown escaped, never as it came.
+        println!(
+            "  {:?} could not join {:?}: {error}",
+            user.as_str(),
+            room_id.as_str()
+        );
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     // Registered before the upgrade is answered, so that no delivery made
@@ -358,6 +383,38 @@ async fn connect(
         .max_frame_size(MESSAGE_LIMIT)
         .max_message_size(MESSAGE_LIMIT)
         .on_upgrade(move |socket| app.converse(socket, connection, room_id, user))
+}
+
+/// The room, the participant and the name a connection to `conversation`
+/// with `query` names, when each is one the server takes: a conversation
+/// and a user of 1 to 64 ASCII letters, digits, `_` or `-`, and a name, if
+/// any, of 64 characters at most, none a control character. An empty name
+/// is none.
+fn named(
+    conversation: &str,
+    query: &HashMap<String, String>,
+) -> Option<(RoomId, ParticipantId, Option<String>)> {
+    let plain = |id: &str| {
+        (1..=ID_LIMIT).contains(&id.len())
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    };
+    let user = query.get("user").filter(|user| plain(user))?;
+    if !plain(conversation) {
+        return None;
+    }
+    let name = query.get("name").filter(|name| !name.is_empty());
+    if name
+        .is_some_and(|name| name.chars().count() > ID_LIMIT || name.chars().any(char::is_control))
+    {
+        return None;
+    }
+    Some((
+        RoomId::new(conversation).ok()?,
+        ParticipantId::new(user.as_str()).ok()?,
+        name.cloned(),
+    ))
 }
 
 impl App {
@@ -485,18 +542,26 @@ impl App {
         );
         let told = match self.kit.process_inbound_in(room_id, message).await {
             Ok(result) if result.blocked => {
-                println!("  {user}'s message was refused: {:?}", result.reason);
+                println!(
+                    "  {:?}'s message was refused: {:?}",
+                    user.as_str(),
+                    result.reason
+                );
                 REFUSED
             }
             Ok(result) => {
                 let Some(error) = result.error else {
                     return;
                 };
-                println!("  the turn on {user}'s message failed: {}", error.message);
+                println!(
+                    "  the turn on {:?}'s message failed: {:?}",
+                    user.as_str(),
+                    error.message
+                );
                 TURN_FAILED
             }
             Err(error) => {
-                println!("  {user}'s message was refused: {error}");
+                println!("  {:?}'s message was refused: {error}", user.as_str());
                 REFUSED
             }
         };
@@ -583,6 +648,7 @@ async fn check() -> Result<ExitCode, Box<dyn Error>> {
     the_conversation_survives_a_restart(&mut checks).await?;
     a_client_stops_reading(&mut checks).await?;
     what_a_client_is_told(&mut checks).await?;
+    what_a_connection_must_name(&mut checks).await?;
     Ok(checks.finish())
 }
 
@@ -749,6 +815,60 @@ async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>
     Ok(())
 }
 
+/// What a connection must name: its conversation and user plainly, its
+/// name without control characters, each within 64 characters. Each
+/// connection here names one thing wrong, and is refused with 400.
+async fn what_a_connection_must_name(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    println!("Connections that name something wrong.");
+    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(REPLIES).await?);
+    let database = TempDatabase::new("server_agent_names");
+    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let long = "a".repeat(65);
+    let mut refused = Vec::new();
+    for (what, path) in [
+        (
+            "a user with a space",
+            "/conversations/bakery?user=al%20ice".to_owned(),
+        ),
+        (
+            "a user with a slash",
+            "/conversations/bakery?user=al%2Fice".to_owned(),
+        ),
+        ("no user", "/conversations/bakery".to_owned()),
+        (
+            "a conversation of 65 characters",
+            format!("/conversations/{long}?user=alice"),
+        ),
+        (
+            "a conversation with a dot",
+            "/conversations/bak.ery?user=alice".to_owned(),
+        ),
+        (
+            "a name with a bell",
+            "/conversations/bakery?user=alice&name=Al%07ice".to_owned(),
+        ),
+        (
+            "a name with a line break",
+            "/conversations/bakery?user=alice&name=Al%0Aice".to_owned(),
+        ),
+        (
+            "a name of 65 characters",
+            format!("/conversations/bakery?user=alice&name={long}"),
+        ),
+    ] {
+        let status = Client::refused(server.address, &path).await?;
+        println!("  {what}: {status:?}");
+        refused.push(status);
+    }
+    tokio::time::timeout(STOP_PATIENCE, server.stop()).await??;
+    checks.expect(
+        "a conversation or user other than 1 to 64 letters, digits, _ or -, or a name over \
+         64 characters or with a control character, is refused with 400",
+        refused.iter().all(|status| *status == Some(400)),
+    );
+    Ok(())
+}
+
 /// An endpoint where nothing listens: a port the system gave and took
 /// back.
 async fn unreachable_model() -> Result<OpenAiEndpoint, Box<dyn Error>> {
@@ -859,6 +979,17 @@ impl Client {
         println!("{} says {text:?}", self.name);
         self.socket.send(tungstenite::Message::text(text)).await?;
         Ok(())
+    }
+
+    /// The HTTP status the server at `address` refuses the upgrade to
+    /// `path` with, `None` when it accepts it.
+    async fn refused(address: SocketAddr, path: &str) -> Result<Option<u16>, Box<dyn Error>> {
+        let stream = TcpStream::connect(address).await?;
+        match tokio_tungstenite::client_async(format!("ws://{address}{path}"), stream).await {
+            Ok(_accepted) => Ok(None),
+            Err(tungstenite::Error::Http(response)) => Ok(Some(response.status().as_u16())),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Sends `text` without printing it: a large one.
