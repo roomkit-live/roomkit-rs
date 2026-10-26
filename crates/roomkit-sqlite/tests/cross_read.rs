@@ -22,7 +22,7 @@ use roomkit::model::{
     IdentityId, InboundMessage, RoomId, RoomUpdates, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, RoomFilter, RoomKit};
+use roomkit::{ConversationStore, RoomFilter, RoomKit, SequentialEnvironment};
 use roomkit_sqlite::{OpenError, SqliteStore};
 use rusqlite::Connection;
 use serde_json::Value;
@@ -59,6 +59,21 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(text, "{byte:02x}");
         text
     })
+}
+
+/// A kit on the copy `file`, its clock fixed at the last instant the
+/// fixture's `room-full` was written: its timers, armed when Python wrote
+/// it, never fall due under a test, whenever the test runs (RFC §5.1).
+async fn fixture_kit(file: &TempFile) -> RoomKit<SqliteStore> {
+    let store = SqliteStore::open(file.path()).await.unwrap();
+    let room = store.get_room(&room("room-full")).await.unwrap().unwrap();
+    let written = room
+        .timers
+        .last_activity_at
+        .map_or(room.updated_at, |activity| activity.max(room.updated_at));
+    let kit = RoomKit::with_store(store);
+    kit.set_environment(SequentialEnvironment::new(written));
+    kit
 }
 
 /// The fixture is the one `make sqlite-fixture` wrote, at a roomkit commit.
@@ -384,7 +399,7 @@ async fn every_record_python_wrote_reads() {
 #[tokio::test]
 async fn a_channel_python_detached_stays_detached() {
     let file = copy();
-    let kit = RoomKit::with_store(SqliteStore::open(file.path()).await.unwrap());
+    let kit = fixture_kit(&file).await;
     for id in ["ws-gone", "ws-user"] {
         kit.register_channel(RecordingTransport::new(channel(id), ChannelType::WEBSOCKET))
             .unwrap();
@@ -422,7 +437,7 @@ async fn a_channel_python_detached_stays_detached() {
 #[tokio::test]
 async fn what_python_reads_beside_the_timeline_is_kept_right() {
     let file = copy();
-    let kit = RoomKit::with_store(SqliteStore::open(file.path()).await.unwrap());
+    let kit = fixture_kit(&file).await;
     kit.register_channel(RecordingTransport::new(
         channel("ws-user"),
         ChannelType::WEBSOCKET,
@@ -579,7 +594,7 @@ async fn a_file_of_another_schema_version_is_refused() {
 #[tokio::test]
 async fn a_delete_marks_its_target_s_edits_as_python_reads_them() {
     let file = copy();
-    let kit = RoomKit::with_store(SqliteStore::open(file.path()).await.unwrap());
+    let kit = fixture_kit(&file).await;
     kit.register_channel(RecordingTransport::new(
         channel("ws-user"),
         ChannelType::WEBSOCKET,
