@@ -26,7 +26,12 @@
 //!   examples.
 //! - [`transcript`]: the conversation an agent's turn hands its model, each
 //!   message in its author's role and labelled by its speaker as RFC §6.4
-//!   requires of an AI channel.
+//!   requires of an AI channel, and the tool rounds within a turn.
+//! - [`current_turn`] and [`TurnHost`]: the intelligence turn the current
+//!   task runs within, which writes to its room and runs the kit's tool
+//!   hooks ([`RoomKit::before_tool_use`], [`RoomKit::on_tool_call`],
+//!   [`RoomKit::observe_tool_calls`], RFC §9.3) on each call its tool loop
+//!   makes.
 //!
 //! The core's model is re-exported whole as [`model`]. Of its operations
 //! and rules, only what a caller names is: the results and errors of the
@@ -51,6 +56,8 @@ mod router;
 pub mod store;
 mod tasks;
 pub mod testing;
+mod tools;
+mod turn;
 
 pub use roomkit_core::model;
 pub use roomkit_core::ops::{
@@ -83,6 +90,8 @@ pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
 pub use self::store::{
     ConversationStore, EventFilter, InMemoryStore, RoomFilter, StoreError, StoreFailure,
 };
+pub use self::tools::{ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict};
+pub use self::turn::{ToolGate, TurnHost, current_turn};
 
 /// The README's code, compiled and run as doctests, so that the first room
 /// it shows is one the crate runs.

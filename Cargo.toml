@@ -13,10 +13,14 @@ publish = false
 
 [workspace.dependencies]
 roomkit = { path = "crates/roomkit" }
+roomkit-ai = { path = "crates/roomkit-ai" }
 roomkit-core = { path = "crates/roomkit-core" }
 roomkit-openai = { path = "crates/roomkit-openai" }
 roomkit-sqlite = { path = "crates/roomkit-sqlite" }
 
+# The `Stream` an AI provider's response is read as (step 4, decision 11),
+# with no default features: the trait alone.
+futures-core = { version = "0.3", default-features = false, features = ["std"] }
 jiff = { version = "0.2", default-features = false, features = ["alloc"] }
 # The OpenAI agent's HTTP client (step 4, decision 4): rustls with its ring
 # provider and the webpki roots, so no system TLS library is needed, and no

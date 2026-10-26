@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 roomkit-core.workspace = true
+# A tool call's result as its hooks read it (RFC §9.3), a JSON value.
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -18,7 +20,6 @@ uuid.workspace = true
 [dev-dependencies]
 pretty_assertions.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 sha2.workspace = true
 
 [lints]

@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use roomkit_core::model::{ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId};
+use roomkit_core::model::{
+    ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId,
+};
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Environment, HookAnswer,
     HookRequest, Notice, Outcome, StoreOutcome, StoreRequest,
@@ -19,6 +21,7 @@ use crate::context::{ExecutionContext, HookBody};
 use crate::hooks;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
+use crate::turn;
 
 /// Carries out a request on the store (RFC §14).
 pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest) -> Outcome {
@@ -142,7 +145,17 @@ pub(super) async fn channel<S: ConversationStore>(
             let Some(channel) = inner.channel(&binding.channel_id) else {
                 return unregistered_channel(&binding.channel_id);
             };
-            channel_output(channel.on_event(event, binding, *context).await)
+            if binding.category != ChannelCategory::Intelligence {
+                return channel_output(channel.on_event(event, binding, *context).await);
+            }
+            // A turn: the code it runs reaches it as its host (RFC §21.4).
+            let turn = turn::host(
+                inner,
+                binding.channel_id.clone(),
+                binding.channel_type.clone(),
+                (*context).clone(),
+            );
+            channel_output(turn.scope(channel.on_event(event, binding, *context)).await)
         }
         ChannelRequest::Deliver {
             binding,

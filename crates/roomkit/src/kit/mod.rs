@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use roomkit_core::model::{ChannelId, InboundMessage, RoomEvent, RoomId};
+use roomkit_core::model::{ChannelId, EventSource, InboundMessage, RoomEvent, RoomId};
 use roomkit_core::ops::{
     Entry, Environment, FrameworkEvent, Inbound, InboundResult, InboundTarget, KitConfig,
 };
@@ -55,6 +55,7 @@ use crate::queues::{RoomLanes, RoomTickets};
 use crate::router::{DefaultRouter, DynRouter, InboundRoomRouter};
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Tasks;
+use crate::tools::ToolHandler;
 
 /// How many framework events a slow subscriber may fall behind before it
 /// misses some.
@@ -91,7 +92,7 @@ const PROCESS_INBOUND_IN: &str = "process_inbound_in";
 /// ```
 #[derive(Debug)]
 pub struct RoomKit<S = InMemoryStore> {
-    inner: Arc<Inner<S>>,
+    pub(crate) inner: Arc<Inner<S>>,
 }
 
 impl<S> Clone for RoomKit<S> {
@@ -107,6 +108,8 @@ pub(crate) struct Inner<S> {
     config: RwLock<Arc<KitConfig>>,
     channels: RwLock<HashMap<ChannelId, Arc<dyn DynChannel>>>,
     hooks: RwLock<HashMap<HookId, Arc<dyn HookHandler>>>,
+    /// The handlers of the tool hooks (RFC §9.3), whose payload is no event.
+    tool_hooks: RwLock<HashMap<HookId, ToolHandler>>,
     router: RwLock<Arc<dyn DynRouter<S>>>,
     pub(crate) store: S,
     pub(crate) locks: RoomMutexes,
@@ -151,6 +154,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 config: RwLock::new(Arc::new(KitConfig::new())),
                 channels: RwLock::new(HashMap::new()),
                 hooks: RwLock::new(HashMap::new()),
+                tool_hooks: RwLock::new(HashMap::new()),
                 router: RwLock::new(Arc::new(DefaultRouter)),
                 store,
                 locks: RoomMutexes::default(),
@@ -381,6 +385,25 @@ impl<S> Inner<S> {
 
     pub(crate) fn hook(&self, hook: HookId) -> Option<Arc<dyn HookHandler>> {
         read(&self.hooks).get(&hook).cloned()
+    }
+
+    /// The tool hooks of `trigger` that fire for the calls of an agent of
+    /// `source`: its SYNC chain in chain order, then its observers (RFC
+    /// §9.2, §9.3).
+    pub(crate) fn tool_hooks(
+        &self,
+        trigger: HookTrigger,
+        source: &EventSource,
+    ) -> Vec<(HookSpec, ToolHandler)> {
+        let config = Arc::clone(&read(&self.config));
+        let handlers = read(&self.tool_hooks);
+        let registry = &config.hooks;
+        registry
+            .chain(trigger, source)
+            .into_iter()
+            .chain(registry.observers(trigger, source))
+            .filter_map(|id| Some((registry.get(id)?.clone(), handlers.get(&id)?.clone())))
+            .collect()
     }
 
     pub(crate) fn hook_with_spec(&self, hook: HookId) -> Option<(Arc<dyn HookHandler>, HookSpec)> {

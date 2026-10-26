@@ -67,8 +67,9 @@
 //! tokio hands no task-local to a spawned task. A call that spawns a task
 //! wraps the task's future in [`keep_context`], so that it runs within the
 //! call's context and acts for the call while the call runs, awaited or not
-//! (decision 2 of step 3); a task spawned without it has none, and waits
-//! for the room as any task does. A frame lends its lease on a lock only
+//! (decision 2 of step 3), its turn's host given too
+//! ([`current_turn`](crate::current_turn)); a task spawned without it has
+//! none, and waits for the room as any task does. A frame lends its lease on a lock only
 //! while its call runs, as it stands in an admission order: once a locked
 //! hook is over, a task it left running holds nothing of the lock its run
 //! still holds, and its calls are new arrivals (RFC §9.5.1).
@@ -124,11 +125,14 @@ pub(crate) struct Work {
 }
 
 /// The frames of the calls the current task runs within, the innermost
-/// last, and the body of the ASYNC hook it runs within, outside them all.
+/// last, the body of the ASYNC hook it runs within, outside them all, and
+/// the depth its calls keep whatever runs (`floor`): the depth a tool
+/// call's observers read as the call's trigger fired (RFC §8.3).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExecutionContext {
     frames: Arc<[Frame]>,
     body: Option<HookBody>,
+    floor: Option<u32>,
 }
 
 /// The body of an ASYNC hook a cascade fires once an event's delivery set
@@ -291,7 +295,17 @@ impl ExecutionContext {
         Self {
             frames: frames.into(),
             body: self.body.clone(),
+            floor: self.floor,
         }
+    }
+
+    /// The same context, whose calls are at least `floor` deep for as long
+    /// as it lasts, its frames' turns over or not: the context of a tool
+    /// call's observers, which keep the depth of the turn that made the call
+    /// (RFC §8.3, "The hook calls of a cascade").
+    pub(crate) fn at_least(mut self, floor: u32) -> Self {
+        self.floor = Some(self.floor.map_or(floor, |kept| kept.max(floor)));
+        self
     }
 
     /// The context of a hook's `body`, which runs outside every call.
@@ -299,6 +313,7 @@ impl ExecutionContext {
         Self {
             frames: Arc::default(),
             body: Some(body),
+            floor: None,
         }
     }
 
@@ -353,11 +368,12 @@ impl ExecutionContext {
 
     /// The least chain depth of a call made in this context, into whatever
     /// room: the response depth of the deepest turn it runs within that
-    /// still runs, or the floor of the hook body it runs within while that
-    /// body runs, one deeper than the hook's event, whichever is deeper;
-    /// `None` outside every running turn and body (RFC §10.6: a call a turn
-    /// makes is at least as deep as the turn's response; RFC §8.3; gaps
-    /// G-070, G-087).
+    /// still runs, the floor of the hook body it runs within while that
+    /// body runs, one deeper than the hook's event, or the floor the context
+    /// keeps (a tool call's observers'), whichever is deepest; `None`
+    /// outside every running turn and body, with no floor kept (RFC §10.6: a
+    /// call a turn makes is at least as deep as the turn's response; RFC
+    /// §8.3; gaps G-070, G-087).
     pub(crate) fn turn_depth(&self) -> Option<u32> {
         let turns = self
             .frames
@@ -365,7 +381,7 @@ impl ExecutionContext {
             .filter(|frame| frame.runs())
             .filter_map(|frame| frame.work.response_depth);
         let body = self.running_body().map(|body| body.floor);
-        turns.chain(body).max()
+        turns.chain(body).chain(self.floor).max()
     }
 
     /// What a call into `room_id` made in this context draws, and on which
@@ -481,7 +497,10 @@ pub fn keep_context<F>(future: F) -> impl Future<Output = F::Output> + Send + 's
 where
     F: Future + Send + 'static,
 {
-    CONTEXT.scope(ExecutionContext::current(), future)
+    CONTEXT.scope(
+        ExecutionContext::current(),
+        crate::turn::within_current_turn(future),
+    )
 }
 
 #[cfg(test)]

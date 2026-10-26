@@ -1,0 +1,27 @@
+[package]
+name = "roomkit-ai"
+description = "The provider-neutral AI channel of RoomKit: its tool loop, tools and tool policy, over any model provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+roomkit.workspace = true
+# The `Stream` a provider's response is read as (step 4, decision 11).
+futures-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The bound on each tool call (RFC §21.6).
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time", "test-util"] }
+
+[lints]
+workspace = true

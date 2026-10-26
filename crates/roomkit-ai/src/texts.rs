@@ -1,0 +1,110 @@
+//! What the model reads of a call that did not serve (RFC §6.4, §9.3,
+//! §21.1): one text per cause, the same on every door, as the reference
+//! implementation writes them.
+
+/// `reason` as the model reads a refusal or a failure: `{"error":
+/// "<reason>"}`.
+pub(crate) fn error_envelope(reason: &str) -> String {
+    format!("{{\"error\": {}}}", quoted(reason))
+}
+
+/// A call to a name the turn does not carry (RFC §21.1).
+pub(crate) fn not_declared(name: &str) -> String {
+    error_envelope(&format!("Tool '{name}' is not declared."))
+}
+
+/// A call to a tool the policy denies (RFC §21.1).
+pub(crate) fn not_permitted(name: &str) -> String {
+    error_envelope(&format!(
+        "Tool '{name}' is not permitted by the agent's tool policy."
+    ))
+}
+
+/// A call whose arguments do not fit the tool's schema (RFC §21.1).
+pub(crate) fn invalid_arguments(name: &str, why: &str) -> String {
+    error_envelope(&format!("Invalid arguments for '{name}': {why}"))
+}
+
+/// A call whose arguments a `BEFORE_TOOL_USE` hook left that do not fit the
+/// tool's schema (RFC §21.1).
+pub(crate) fn invalid_rewritten_arguments(name: &str, why: &str) -> String {
+    error_envelope(&format!("Invalid rewritten arguments for '{name}': {why}"))
+}
+
+/// A call whose tool raised an error of `kind` (RFC §9.3).
+pub(crate) fn failed(name: &str, kind: &str) -> String {
+    error_envelope(&format!("Tool '{name}' failed ({kind})"))
+}
+
+/// A call the response cut short over its arguments, which never ran (RFC
+/// §6.4): the model may call again, with less if it ran out of room.
+pub(crate) fn cut(name: &str) -> String {
+    envelope_with_hint(
+        "Tool call cut off",
+        name,
+        "This call was cut off before its arguments were complete, so it did not run. \
+         Call it again if it is still needed, with shorter arguments if the response ran out \
+         of room.",
+    )
+}
+
+/// A call the model wrote with arguments that read as no object, which never
+/// ran (RFC §6.4).
+pub(crate) fn unreadable(name: &str) -> String {
+    envelope_with_hint(
+        "Tool call arguments unreadable",
+        name,
+        "This call's arguments are not a JSON object, so it did not run. Call it again with \
+         arguments that are a valid JSON object matching the tool's parameters.",
+    )
+}
+
+/// `{"error": ..., "tool": ..., "hint": ...}`, in that order.
+fn envelope_with_hint(error: &str, name: &str, hint: &str) -> String {
+    format!(
+        "{{\"error\": {}, \"tool\": {}, \"hint\": {}}}",
+        quoted(error),
+        quoted(name),
+        quoted(hint)
+    )
+}
+
+/// `text` as a JSON string.
+fn quoted(text: &str) -> String {
+    serde_json::Value::String(text.to_owned()).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn each_refusal_reads_its_cause() {
+        assert_eq!(
+            [
+                not_declared("no_such_tool"),
+                not_permitted("admin_wipe"),
+                invalid_arguments("lookup", "missing required argument 'order'"),
+                failed("lookup", "RuntimeError"),
+            ],
+            [
+                r#"{"error": "Tool 'no_such_tool' is not declared."}"#,
+                r#"{"error": "Tool 'admin_wipe' is not permitted by the agent's tool policy."}"#,
+                r#"{"error": "Invalid arguments for 'lookup': missing required argument 'order'"}"#,
+                r#"{"error": "Tool 'lookup' failed (RuntimeError)"}"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cut_call_reads_as_json_with_its_hint() {
+        let text = cut("lookup");
+        let read: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            (read["error"].as_str(), read["tool"].as_str()),
+            (Some("Tool call cut off"), Some("lookup"))
+        );
+    }
+}
