@@ -69,6 +69,9 @@ pub(super) struct SetOutcome {
     pub(super) responses: Vec<Response>,
     /// The intelligence channels not asked at the chain-depth limit.
     pub(super) not_asked: Vec<ChannelBinding>,
+    /// The intelligence channels whose chained stream was not started, past
+    /// the cascade's reentry budget (RFC §8.3).
+    pub(super) capped: Vec<ChannelBinding>,
     pub(super) tasks: Vec<Task>,
     pub(super) observations: Vec<Observation>,
     /// The transports delivered to, with their results.
@@ -273,10 +276,42 @@ impl DeliverySet {
                 event: target.event.clone(),
                 context: target.context.clone(),
             };
+            if !self.admits_turn(cx, index) {
+                continue;
+            }
             let effect = cx.io.issue_drawing_on(request, &self.budget);
             self.calls.insert(effect, (index, Call::OnEvent));
         }
         self.progress(cx)
+    }
+
+    /// Whether the target at `index` is called: always, but for an agent
+    /// whose turn is one stream asked by a response's delivery, a chained
+    /// stream (RFC §8.3), which draws one pass of the cascade's reentry
+    /// budget before it runs. Past the budget the turn is not run, and the
+    /// agent's answer is recorded refused once the set is over.
+    fn admits_turn(&mut self, cx: &Cx<'_>, index: usize) -> bool {
+        let Some(target) = self.targets.get(index) else {
+            return false;
+        };
+        let streams = target.role == Role::Agent
+            && cx
+                .config
+                .channel(&target.binding.channel_id)
+                .is_some_and(|declaration| declaration.answers_as_stream);
+        if self.kind != SetKind::Response || !streams || self.budget.take_pass() {
+            return true;
+        }
+        tracing::warn!(
+            target: "roomkit::core::delivery",
+            room_id = %self.event.room_id,
+            event_id = %self.event.id,
+            channel_id = %target.binding.channel_id,
+            "the cascade's reentry budget is spent: the agent's turn is not run"
+        );
+        self.outcome.capped.push(target.binding.clone());
+        self.outcome.targets = self.outcome.targets.saturating_sub(1);
+        false
     }
 
     /// Takes the driver's answer to one of the set's requests.

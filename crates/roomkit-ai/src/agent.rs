@@ -93,6 +93,10 @@ impl<P: AiProvider> AiAgent<P> {
             ChannelDirection::Bidirectional,
         );
         declaration.provider_name = provider.name().map(str::to_owned);
+        // Its turn is one stream of rows, as RFC §6.4 reads every AI turn:
+        // a turn another event's delivery asks for draws its reentry pass
+        // before it runs (RFC §8.3).
+        declaration.answers_as_stream = true;
         Self {
             declaration,
             provider: Arc::new(provider),

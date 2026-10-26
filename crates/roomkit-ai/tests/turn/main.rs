@@ -324,10 +324,10 @@ async fn a_tool_writes_to_its_room_at_the_turn_s_depth() {
     );
 }
 
-/// RFC §8.3 "Reentry cap": a turn's output is one response, which draws one
-/// of its cascade's passes however many rows it holds, as the reference
-/// implementation's turn is one stream: 6 rounds of 4 calls, 55 rows, and
-/// the answer is delivered (review F1).
+/// RFC §8.3 "Reentry cap": a turn is one stream, read to its end whichever
+/// pass started it, its rows drawing no pass each, as the reference
+/// implementation's turn: 6 rounds of 4 calls, 55 rows, and the answer is
+/// delivered (review F1).
 #[tokio::test]
 async fn a_long_turn_draws_one_pass_and_its_answer_is_delivered() {
     let ids: Vec<Vec<String>> = (0..6)
@@ -355,6 +355,18 @@ async fn a_long_turn_draws_one_pass_and_its_answer_is_delivered() {
         (blocked, room.sms.texts().last().cloned()),
         (0, Some("The final answer.".to_owned()))
     );
+}
+
+/// RFC §8.3 "Reentry cap": a turn is a chained stream when another event's
+/// delivery asks for it, and draws its pass before it runs, so the turns
+/// one message sets off stay within the cascade's budget, 50 passes by
+/// default, beside the two the message itself asks for: what the
+/// reference implementation spends, 52 turns (probe
+/// tasks/probes/step4-m5/light/f1b_cap_probe.py).
+#[tokio::test]
+async fn two_agents_answering_each_other_take_at_most_the_budget_s_turns() {
+    let turns = support::two_agents(5).await;
+    assert!(turns <= 52, "{turns} turns");
 }
 
 /// A messaging transport is not handed the turn's tool-call rows, so that

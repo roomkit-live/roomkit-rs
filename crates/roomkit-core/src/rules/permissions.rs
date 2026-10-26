@@ -283,7 +283,9 @@ pub(crate) fn plan_delivery(
                 delivers: reader.direction.sends(),
             }),
             ChannelCategory::Intelligence => {
-                if !solicits(event, reader, from_agent, policy) {
+                // A tool-call row is an activity record no agent answers,
+                // which gets no record at the limit either (RFC §8.3).
+                if is_tool_call_row(event) || !solicits(event, reader, from_agent, policy) {
                     continue;
                 }
                 if at_limit {
@@ -308,13 +310,18 @@ pub(crate) fn keep_tool_rows_to(
     event: &RoomEvent,
     takes: impl Fn(&ChannelId) -> bool,
 ) {
-    if matches!(
-        event.event_type,
-        EventType::ToolCallStart | EventType::ToolCallEnd
-    ) {
+    if is_tool_call_row(event) {
         plan.transports
             .retain(|target| takes(&target.binding.channel_id));
     }
+}
+
+/// Whether `event` is a tool call's start or end row.
+fn is_tool_call_row(event: &RoomEvent) -> bool {
+    matches!(
+        event.event_type,
+        EventType::ToolCallStart | EventType::ToolCallEnd
+    )
 }
 
 /// The visibility of an event a hook injected for `targets` (RFC §9.4, gap
@@ -1111,6 +1118,26 @@ mod tests {
             assert_eq!(
                 (ids(&plan.agents), ids(&plan.not_asked)),
                 (vec![], vec!["writer"])
+            );
+        }
+
+        /// RFC §8.3: a tool-call row is an activity record no agent
+        /// answers, and gets no record at the limit.
+        #[test]
+        fn a_tool_call_row_asks_no_agent_below_or_at_the_limit() {
+            let bindings = [agent("analyst"), agent("writer"), transport("web")];
+            let mut row = event_from(&bindings[0]);
+            row.event_type = EventType::ToolCallStart;
+            let below = plan(&row, &bindings);
+            row.chain_depth = 4;
+            let at_limit = plan(&row, &bindings);
+            assert_eq!(
+                (
+                    ids(&below.agents),
+                    ids(&at_limit.not_asked),
+                    below.transports.len()
+                ),
+                (vec![], vec![], 1)
             );
         }
 

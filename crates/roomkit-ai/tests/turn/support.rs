@@ -1,17 +1,23 @@
 //! A room with an SMS transport and an AI agent on a scripted model.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use roomkit::model::Metadata;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent,
     InboundMessage, RoomContext, RoomEvent, RoomId,
 };
 use roomkit::testing::RecordingTransport;
+use roomkit::transcript::Role;
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConversationStore, InboundResult, RoomKit,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{
+    AiAgent, AiProvider, AiRequest, Done, ProviderResponse, ProviderToolCall, ResponseStream,
+    ToolDefinition, ToolOutput, Tools,
+};
 use serde_json::json;
 use tokio::sync::watch;
 
@@ -198,4 +204,76 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
     let mut depths = posted.lock().unwrap().clone();
     depths.sort_unstable();
     depths.into_iter().map(|(_, depth)| depth).collect()
+}
+
+/// A model that never runs out: each turn makes `rounds` rounds of a text
+/// and one call, then answers. It counts its turns.
+#[derive(Clone)]
+pub(crate) struct Endless {
+    rounds: usize,
+    pub(crate) turns: Arc<AtomicUsize>,
+}
+
+impl Endless {
+    pub(crate) fn new(rounds: usize) -> Self {
+        Self {
+            rounds,
+            turns: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl AiProvider for Endless {
+    fn generate<'a>(&'a self, request: &'a AiRequest) -> ResponseStream<'a> {
+        // The rounds of calls the turn made so far: its trailing assistant
+        // calls and their results.
+        let done = request
+            .messages
+            .iter()
+            .rev()
+            .take_while(|message| {
+                message.role == Role::Tool
+                    || (message.role == Role::Assistant && !message.tool_calls.is_empty())
+            })
+            .filter(|message| message.role == Role::Assistant)
+            .count();
+        if done == 0 {
+            self.turns.fetch_add(1, Ordering::SeqCst);
+        }
+        let response = if done < self.rounds {
+            let call =
+                ProviderToolCall::new(format!("c{done}"), "lookup_order", r#"{"order": "1"}"#);
+            let finish = Done::new(Some("tool_calls".to_owned()), Metadata::new());
+            ProviderResponse::new(format!("Round {done}."), vec![call], finish)
+        } else {
+            let finish = Done::new(Some("stop".to_owned()), Metadata::new());
+            ProviderResponse::new("Answer.", Vec::new(), finish)
+        };
+        ProviderResponse::into_stream(async move { Ok(response) })
+    }
+}
+
+/// The turns two agents with a tool take, answering each other from one
+/// SMS, each turn `rounds` rounds of a text and a call, then an answer, at
+/// the kit's default limits.
+pub(crate) async fn two_agents(rounds: usize) -> usize {
+    let (alpha, beta) = (Endless::new(rounds), Endless::new(rounds));
+    let kit = RoomKit::new();
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
+        .unwrap();
+    for (id, model) in [("alpha", alpha.clone()), ("beta", beta.clone())] {
+        let agent = AiAgent::new(channel(id), model)
+            .with_tools(served())
+            .unwrap();
+        kit.register_channel(agent).unwrap();
+    }
+    kit.create_room(&room_id()).await.unwrap();
+    for id in ["sms", "alpha", "beta"] {
+        kit.attach(&room_id(), &channel(id)).await.unwrap();
+    }
+    let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Go"));
+    kit.process_inbound_in(&room_id(), message).await.unwrap();
+    kit.idle().await;
+    kit.shutdown().await;
+    alpha.turns.load(Ordering::SeqCst) + beta.turns.load(Ordering::SeqCst)
 }
