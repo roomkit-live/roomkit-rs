@@ -288,8 +288,8 @@ as it stands.
   (an empty one sends no `Authorization`; `Debug` never prints it), the
   model, the system prompt, how many messages a turn sends at most (all
   those among the 50 events the kit's context holds, by default)
-  and the request's timeout (120 seconds); `Debug` shows the base URL's
-  scheme, host and port only. A provider error, a request that fails, an
+  and the request's timeout (120 seconds); `Debug` and `shown_base_url`
+  show the base URL's scheme, host and port only. A provider error, a request that fails, an
   answer longer than 4 MiB or one that is no chat completion fails the turn
   with an `OpenAiError`: `ON_ERROR` fires and the caller reads it on its
   result. A provider error keeps the provider's type, code and message, on

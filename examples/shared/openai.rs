@@ -5,6 +5,7 @@
 use std::error::Error;
 use std::{env, fmt, io};
 
+use roomkit_openai::OpenAiConfig;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -81,16 +82,11 @@ impl OpenAiEndpoint {
         }
     }
 
-    /// The API's root as it may be shown: its scheme, host and port, never
-    /// its user information, path or query, which may carry credentials.
+    /// The API's root as it may be shown: the crate's own redaction
+    /// (`OpenAiConfig::shown_base_url`), its scheme, host and port, never
+    /// its credentials.
     pub fn shown_base_url(&self) -> String {
-        let base_url = self.base_url();
-        let Some((scheme, rest)) = base_url.split_once("://") else {
-            return "(not a URL)".to_owned();
-        };
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-        let host = authority.rsplit('@').next().unwrap_or_default();
-        format!("{scheme}://{host}")
+        OpenAiConfig::new(self.base_url(), "", self.model()).shown_base_url()
     }
 
     /// The fake, when the example runs against it.
@@ -241,5 +237,18 @@ mod tests {
             assert!(!printed.contains(secret), "{secret} in {printed}");
         }
         assert_eq!(endpoint.shown_base_url(), "https://example.com:8443");
+    }
+
+    #[test]
+    fn a_base_url_with_a_mark_in_its_password_shows_none_of_it() {
+        let endpoint = OpenAiEndpoint::Real {
+            base_url: "https://user:pa#ss@example.com/v1".to_owned(),
+            api_key: "sk-secret".to_owned(),
+            model: "gpt-6-luna".to_owned(),
+        };
+        let shown = endpoint.shown_base_url();
+        for secret in ["user", "pa", "ss"] {
+            assert!(!shown.contains(secret), "{secret} in {shown}");
+        }
     }
 }

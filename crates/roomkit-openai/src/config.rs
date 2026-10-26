@@ -50,6 +50,14 @@ impl OpenAiConfig {
         }
     }
 
+    /// The base URL as it may be shown, in a log or on a screen: its
+    /// scheme, host and port, never its user information, path, query or
+    /// fragment, which may carry credentials; `(not a URL)` when it does
+    /// not parse.
+    pub fn shown_base_url(&self) -> String {
+        shown_url(&self.base_url)
+    }
+
     /// The same configuration, with the system prompt every turn opens
     /// with. It stays the same from turn to turn, so a provider that caches
     /// a request's prefix keeps it (RFC §6.4).
@@ -89,7 +97,7 @@ impl fmt::Debug for OpenAiConfig {
             "hidden"
         };
         f.debug_struct("OpenAiConfig")
-            .field("base_url", &shown_url(&self.base_url))
+            .field("base_url", &self.shown_base_url())
             .field("api_key", &api_key)
             .field("model", &self.model)
             .field("system_prompt", &self.system_prompt)
