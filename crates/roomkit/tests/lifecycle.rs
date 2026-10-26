@@ -138,14 +138,8 @@ mod timers {
         assert_eq!(
             reported,
             [
-                FrameworkEvent::RoomPaused {
-                    room_id: room_id(),
-                    reason: TransitionReason::Timer,
-                },
-                FrameworkEvent::RoomClosed {
-                    room_id: room_id(),
-                    reason: Some(TransitionReason::Timer),
-                },
+                FrameworkEvent::room_paused(room_id(), TransitionReason::Timer),
+                FrameworkEvent::room_closed(room_id(), Some(TransitionReason::Timer)),
             ]
         );
     }
@@ -199,10 +193,7 @@ mod timers {
         .await;
         assert_eq!(
             paused,
-            FrameworkEvent::RoomPaused {
-                room_id: room_id(),
-                reason: TransitionReason::Timer,
-            }
+            FrameworkEvent::room_paused(room_id(), TransitionReason::Timer)
         );
     }
 
@@ -289,10 +280,7 @@ mod a_paused_conversation {
             ),
             (
                 vec![RoomStatus::Paused],
-                FrameworkEvent::RoomPaused {
-                    room_id: room_id(),
-                    reason: TransitionReason::Timer,
-                },
+                FrameworkEvent::room_paused(room_id(), TransitionReason::Timer),
                 Some(room_id()),
                 (RoomStatus::Active, None),
                 ["Bonjour", "Still there?"].map(str::to_owned).to_vec()
@@ -379,10 +367,7 @@ mod unregistering {
         kit.unregister_channel(sms.id()).unwrap();
         assert_eq!(
             events.recv().await.unwrap(),
-            FrameworkEvent::ChannelUnregistered {
-                channel_id: channel("sms"),
-                channel_type: ChannelType::SMS,
-            }
+            FrameworkEvent::channel_unregistered(channel("sms"), ChannelType::SMS)
         );
     }
 

@@ -80,22 +80,12 @@ fn process_timeouts(sim: &Sim) -> Vec<&FrameworkEvent> {
 
 /// The event of a timeout that passed before the room lock, in `room`.
 fn before_the_lock(room: Option<RoomId>) -> FrameworkEvent {
-    FrameworkEvent::ProcessTimeout {
-        room_id: room,
-        channel_id: Some(channel("sms")),
-        event_id: None,
-        timeout: 10.0,
-    }
+    FrameworkEvent::process_timeout(room, Some(channel("sms")), None, 10.0)
 }
 
 /// The event of a timeout that passed under the room lock.
 fn under_the_lock(event_id: &str) -> FrameworkEvent {
-    FrameworkEvent::ProcessTimeout {
-        room_id: Some(room_id()),
-        channel_id: None,
-        event_id: Some(event_id.parse().unwrap()),
-        timeout: 10.0,
-    }
+    FrameworkEvent::process_timeout(Some(room_id()), None, Some(event_id.parse().unwrap()), 10.0)
 }
 
 /// The trace from the line starting with `from` on.

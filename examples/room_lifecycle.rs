@@ -213,13 +213,13 @@ async fn by_timers(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn E
     );
     checks.expect(
         "each transition is reported with the reason timer",
-        reported.contains(&FrameworkEvent::RoomPaused {
-            room_id: room.clone(),
-            reason: TransitionReason::Timer,
-        }) && reported.contains(&FrameworkEvent::RoomClosed {
-            room_id: room.clone(),
-            reason: Some(TransitionReason::Timer),
-        }),
+        reported.contains(&FrameworkEvent::room_paused(
+            room.clone(),
+            TransitionReason::Timer,
+        )) && reported.contains(&FrameworkEvent::room_closed(
+            room.clone(),
+            Some(TransitionReason::Timer),
+        )),
     );
     Ok(())
 }

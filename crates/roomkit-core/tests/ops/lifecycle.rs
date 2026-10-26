@@ -166,12 +166,12 @@ mod attach_channel {
             .unwrap();
         assert_eq!(
             sim.framework_events(),
-            [&FrameworkEvent::RoomChannelAttached {
-                room_id: room_id(),
-                channel_id: channel("sms"),
-                access: sms_binding().access,
-                visibility: sms_binding().visibility,
-            }]
+            [&FrameworkEvent::room_channel_attached(
+                room_id(),
+                channel("sms"),
+                sms_binding().access,
+                sms_binding().visibility
+            )]
         );
     }
 
@@ -363,10 +363,10 @@ mod detach_channel {
     fn emits_room_channel_detached() {
         assert_eq!(
             detached().framework_events(),
-            [&FrameworkEvent::RoomChannelDetached {
-                room_id: room_id(),
-                channel_id: channel("sms"),
-            }]
+            [&FrameworkEvent::room_channel_detached(
+                room_id(),
+                channel("sms")
+            )]
         );
     }
 
@@ -789,10 +789,7 @@ mod room_transitions {
         assert_eq!(
             (sim.framework_events(), sim.async_triggers()),
             (
-                vec![&FrameworkEvent::RoomClosed {
-                    room_id: room_id(),
-                    reason: None,
-                }],
+                vec![&FrameworkEvent::room_closed(room_id(), None)],
                 vec![HookTrigger::OnRoomClosed]
             )
         );
@@ -811,7 +808,7 @@ mod room_transitions {
             ),
             (
                 RoomStatus::Archived,
-                vec![&FrameworkEvent::RoomArchived { room_id: room_id() }],
+                vec![&FrameworkEvent::room_archived(room_id())],
                 Vec::new()
             )
         );
@@ -989,10 +986,10 @@ mod check_timers {
         assert_eq!(
             (sim.framework_events(), sim.async_triggers()),
             (
-                vec![&FrameworkEvent::RoomPaused {
-                    room_id: room_id(),
-                    reason: TransitionReason::Timer,
-                }],
+                vec![&FrameworkEvent::room_paused(
+                    room_id(),
+                    TransitionReason::Timer
+                )],
                 vec![HookTrigger::OnRoomPaused]
             )
         );
@@ -1016,10 +1013,10 @@ mod check_timers {
         check(&mut sim);
         assert_eq!(
             sim.framework_events(),
-            [&FrameworkEvent::RoomClosed {
-                room_id: room_id(),
-                reason: Some(TransitionReason::Timer),
-            }]
+            [&FrameworkEvent::room_closed(
+                room_id(),
+                Some(TransitionReason::Timer)
+            )]
         );
     }
 
@@ -1115,17 +1112,14 @@ mod the_status_gate {
             (
                 Some("room_closed"),
                 vec![
-                    &FrameworkEvent::RoomClosed {
-                        room_id: room_id(),
-                        reason: Some(TransitionReason::Timer),
-                    },
-                    &FrameworkEvent::RoomRefusedEvent {
-                        room_id: room_id(),
-                        event_id: "evt_1".parse().unwrap(),
-                        status: RoomStatus::Closed,
-                        operation: RefusedOperation::Inbound,
-                        event_type: EventType::Message,
-                    },
+                    &FrameworkEvent::room_closed(room_id(), Some(TransitionReason::Timer)),
+                    &FrameworkEvent::room_refused_event(
+                        room_id(),
+                        "evt_1".parse().unwrap(),
+                        RoomStatus::Closed,
+                        RefusedOperation::Inbound,
+                        EventType::Message
+                    ),
                 ],
                 // The record of the close alone (gap G-046).
                 1
@@ -1175,13 +1169,13 @@ mod the_status_gate {
     /// A refused pass of the framework's own: the room closed during its
     /// cascade (gap G-043).
     fn refused_as_reentry(event_id: &str) -> FrameworkEvent {
-        FrameworkEvent::RoomRefusedEvent {
-            room_id: room_id(),
-            event_id: event_id.parse().unwrap(),
-            status: RoomStatus::Closed,
-            operation: RefusedOperation::Reentry,
-            event_type: EventType::Message,
-        }
+        FrameworkEvent::room_refused_event(
+            room_id(),
+            event_id.parse().unwrap(),
+            RoomStatus::Closed,
+            RefusedOperation::Reentry,
+            EventType::Message,
+        )
     }
 
     #[test]
@@ -1498,10 +1492,10 @@ mod an_explicit_change_on_a_room_whose_timer_is_due {
             ),
             (
                 Some(after_start(60)),
-                vec![&FrameworkEvent::RoomPaused {
-                    room_id: room_id(),
-                    reason: TransitionReason::Timer,
-                }],
+                vec![&FrameworkEvent::room_paused(
+                    room_id(),
+                    TransitionReason::Timer
+                )],
                 vec![HookTrigger::OnRoomPaused]
             )
         );
@@ -1519,14 +1513,8 @@ mod an_explicit_change_on_a_room_whose_timer_is_due {
             (
                 Some(after_start(90)),
                 vec![
-                    &FrameworkEvent::RoomPaused {
-                        room_id: room_id(),
-                        reason: TransitionReason::Timer,
-                    },
-                    &FrameworkEvent::RoomClosed {
-                        room_id: room_id(),
-                        reason: None,
-                    },
+                    &FrameworkEvent::room_paused(room_id(), TransitionReason::Timer),
+                    &FrameworkEvent::room_closed(room_id(), None),
                 ]
             )
         );
@@ -1550,10 +1538,10 @@ mod an_explicit_change_on_a_room_whose_timer_is_due {
                 RoomStatus::Active,
                 None,
                 Some(after_start(121)),
-                vec![&FrameworkEvent::RoomClosed {
-                    room_id: room_id(),
-                    reason: Some(TransitionReason::Timer),
-                }]
+                vec![&FrameworkEvent::room_closed(
+                    room_id(),
+                    Some(TransitionReason::Timer)
+                )]
             )
         );
     }

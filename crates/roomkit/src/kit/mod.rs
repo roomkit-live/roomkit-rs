@@ -421,12 +421,12 @@ impl<S> Inner<S> {
             ),
             HookOutcome::TimedOut => {
                 tracing::warn!(target: "roomkit::hooks", hook = %spec.name, "an observer hook timed out");
-                self.publish(FrameworkEvent::HookTimeout {
+                self.publish(FrameworkEvent::hook_timeout(
                     room_id,
-                    hook_name: spec.name.clone(),
+                    spec.name.clone(),
                     trigger,
-                    timeout: spec.timeout.as_secs_f64(),
-                });
+                    spec.timeout.as_secs_f64(),
+                ));
             }
         }
     }

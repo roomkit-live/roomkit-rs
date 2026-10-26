@@ -14,11 +14,17 @@ use crate::model::{
 use crate::rules::hook_registry::HookTrigger;
 
 /// A framework event (RFC §8.2), tagged by its RFC name under `event`.
+///
+/// The enumeration and each of its variants are `#[non_exhaustive]`: a row
+/// RFC §8.2 adds, or a member it adds to a row, breaks no subscriber. A
+/// subscriber matches a variant with `..`:
+/// `FrameworkEvent::DeliveryFailed { channel_id, error, .. }`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum FrameworkEvent {
     /// A channel was registered with the kit.
+    #[non_exhaustive]
     ChannelRegistered {
         /// The channel.
         channel_id: ChannelId,
@@ -26,6 +32,7 @@ pub enum FrameworkEvent {
         channel_type: ChannelType,
     },
     /// A channel was unregistered from the kit.
+    #[non_exhaustive]
     ChannelUnregistered {
         /// The channel.
         channel_id: ChannelId,
@@ -33,12 +40,14 @@ pub enum FrameworkEvent {
         channel_type: ChannelType,
     },
     /// A room was created.
+    #[non_exhaustive]
     RoomCreated {
         /// The room.
         room_id: RoomId,
     },
     /// A room's inactivity timer paused it. A pause the integrator asks for
     /// emits nothing (RFC §26.1).
+    #[non_exhaustive]
     RoomPaused {
         /// The room.
         room_id: RoomId,
@@ -46,6 +55,7 @@ pub enum FrameworkEvent {
         reason: TransitionReason,
     },
     /// A room was closed.
+    #[non_exhaustive]
     RoomClosed {
         /// The room.
         room_id: RoomId,
@@ -54,11 +64,13 @@ pub enum FrameworkEvent {
         reason: Option<TransitionReason>,
     },
     /// A room was archived.
+    #[non_exhaustive]
     RoomArchived {
         /// The room.
         room_id: RoomId,
     },
     /// A room whose status refuses new events turned one away (RFC §5.1).
+    #[non_exhaustive]
     RoomRefusedEvent {
         /// The room.
         room_id: RoomId,
@@ -72,6 +84,7 @@ pub enum FrameworkEvent {
         event_type: EventType,
     },
     /// A channel was attached to a room.
+    #[non_exhaustive]
     RoomChannelAttached {
         /// The room.
         room_id: RoomId,
@@ -83,6 +96,7 @@ pub enum FrameworkEvent {
         visibility: Visibility,
     },
     /// A channel was detached from a room.
+    #[non_exhaustive]
     RoomChannelDetached {
         /// The room.
         room_id: RoomId,
@@ -92,6 +106,7 @@ pub enum FrameworkEvent {
     /// `ON_SESSION_STARTED` fired: the inbound pipeline created a room for a
     /// message on a channel other than `VOICE` and `REALTIME_VOICE` (RFC §10.1
     /// step 2). A voice session's start is the voice step's.
+    #[non_exhaustive]
     SessionStarted {
         /// The room.
         room_id: RoomId,
@@ -102,6 +117,7 @@ pub enum FrameworkEvent {
     },
     /// An event that entered through the inbound pipeline finished its
     /// delivery set and its `AFTER_BROADCAST` hooks.
+    #[non_exhaustive]
     EventProcessed {
         /// The room.
         room_id: RoomId,
@@ -109,6 +125,7 @@ pub enum FrameworkEvent {
         event_id: EventId,
     },
     /// An event was blocked by a hook or by a source that cannot write.
+    #[non_exhaustive]
     EventBlocked {
         /// The room.
         room_id: RoomId,
@@ -123,6 +140,7 @@ pub enum FrameworkEvent {
     },
     /// A transport channel's `deliver()` succeeded, for an event that
     /// entered through the inbound pipeline.
+    #[non_exhaustive]
     DeliverySucceeded {
         /// The room.
         room_id: RoomId,
@@ -133,6 +151,7 @@ pub enum FrameworkEvent {
     },
     /// A target's `on_event()` or `deliver()` failed, for an event that
     /// entered through the inbound pipeline.
+    #[non_exhaustive]
     DeliveryFailed {
         /// The room.
         room_id: RoomId,
@@ -144,6 +163,7 @@ pub enum FrameworkEvent {
         error: String,
     },
     /// At least one target of an event failed; the event stays delivered.
+    #[non_exhaustive]
     BroadcastPartialFailure {
         /// The room.
         room_id: RoomId,
@@ -157,6 +177,7 @@ pub enum FrameworkEvent {
         errors: BTreeMap<ChannelId, String>,
     },
     /// A channel was not asked because of the chain-depth limit (RFC §8.3).
+    #[non_exhaustive]
     ChainDepthExceeded {
         /// The room.
         room_id: RoomId,
@@ -169,6 +190,7 @@ pub enum FrameworkEvent {
     },
     /// A SYNC `BEFORE_BROADCAST` hook failed at an event's commit gate: it
     /// raised, timed out or returned an unusable result.
+    #[non_exhaustive]
     HookError {
         /// The room.
         room_id: RoomId,
@@ -183,6 +205,7 @@ pub enum FrameworkEvent {
     /// nothing of its event was written. It names the message's channel
     /// when the timeout passed before the room lock, the event when it
     /// passed under it (gap G-068).
+    #[non_exhaustive]
     ProcessTimeout {
         /// The room; `None` when the timeout passed before the message had
         /// one, while it was routed (gap G-068).
@@ -196,6 +219,7 @@ pub enum FrameworkEvent {
         timeout: f64,
     },
     /// A hook ran past its timeout.
+    #[non_exhaustive]
     HookTimeout {
         /// The room.
         room_id: RoomId,
@@ -206,6 +230,215 @@ pub enum FrameworkEvent {
         /// The timeout, in seconds.
         timeout: f64,
     },
+}
+
+impl FrameworkEvent {
+    /// A [`ChannelRegistered`](Self::ChannelRegistered) event, `channel_registered` (RFC §8.2).
+    pub fn channel_registered(channel_id: ChannelId, channel_type: ChannelType) -> Self {
+        Self::ChannelRegistered {
+            channel_id,
+            channel_type,
+        }
+    }
+
+    /// A [`ChannelUnregistered`](Self::ChannelUnregistered) event, `channel_unregistered` (RFC §8.2).
+    pub fn channel_unregistered(channel_id: ChannelId, channel_type: ChannelType) -> Self {
+        Self::ChannelUnregistered {
+            channel_id,
+            channel_type,
+        }
+    }
+
+    /// A [`RoomCreated`](Self::RoomCreated) event, `room_created` (RFC §8.2).
+    pub fn room_created(room_id: RoomId) -> Self {
+        Self::RoomCreated { room_id }
+    }
+
+    /// A [`RoomPaused`](Self::RoomPaused) event, `room_paused` (RFC §8.2).
+    pub fn room_paused(room_id: RoomId, reason: TransitionReason) -> Self {
+        Self::RoomPaused { room_id, reason }
+    }
+
+    /// A [`RoomClosed`](Self::RoomClosed) event, `room_closed` (RFC §8.2).
+    pub fn room_closed(room_id: RoomId, reason: Option<TransitionReason>) -> Self {
+        Self::RoomClosed { room_id, reason }
+    }
+
+    /// A [`RoomArchived`](Self::RoomArchived) event, `room_archived` (RFC §8.2).
+    pub fn room_archived(room_id: RoomId) -> Self {
+        Self::RoomArchived { room_id }
+    }
+
+    /// A [`RoomRefusedEvent`](Self::RoomRefusedEvent) event, `room_refused_event` (RFC §8.2).
+    pub fn room_refused_event(
+        room_id: RoomId,
+        event_id: EventId,
+        status: RoomStatus,
+        operation: RefusedOperation,
+        event_type: EventType,
+    ) -> Self {
+        Self::RoomRefusedEvent {
+            room_id,
+            event_id,
+            status,
+            operation,
+            event_type,
+        }
+    }
+
+    /// A [`RoomChannelAttached`](Self::RoomChannelAttached) event, `room_channel_attached` (RFC §8.2).
+    pub fn room_channel_attached(
+        room_id: RoomId,
+        channel_id: ChannelId,
+        access: Access,
+        visibility: Visibility,
+    ) -> Self {
+        Self::RoomChannelAttached {
+            room_id,
+            channel_id,
+            access,
+            visibility,
+        }
+    }
+
+    /// A [`RoomChannelDetached`](Self::RoomChannelDetached) event, `room_channel_detached` (RFC §8.2).
+    pub fn room_channel_detached(room_id: RoomId, channel_id: ChannelId) -> Self {
+        Self::RoomChannelDetached {
+            room_id,
+            channel_id,
+        }
+    }
+
+    /// A [`SessionStarted`](Self::SessionStarted) event, `session_started` (RFC §8.2).
+    pub fn session_started(
+        room_id: RoomId,
+        channel_id: ChannelId,
+        channel_type: ChannelType,
+    ) -> Self {
+        Self::SessionStarted {
+            room_id,
+            channel_id,
+            channel_type,
+        }
+    }
+
+    /// A [`EventProcessed`](Self::EventProcessed) event, `event_processed` (RFC §8.2).
+    pub fn event_processed(room_id: RoomId, event_id: EventId) -> Self {
+        Self::EventProcessed { room_id, event_id }
+    }
+
+    /// A [`EventBlocked`](Self::EventBlocked) event, `event_blocked` (RFC §8.2).
+    pub fn event_blocked(
+        room_id: RoomId,
+        event_id: EventId,
+        channel_id: ChannelId,
+        reason: Option<String>,
+        blocked_by: String,
+    ) -> Self {
+        Self::EventBlocked {
+            room_id,
+            event_id,
+            channel_id,
+            reason,
+            blocked_by,
+        }
+    }
+
+    /// A [`DeliverySucceeded`](Self::DeliverySucceeded) event, `delivery_succeeded` (RFC §8.2).
+    pub fn delivery_succeeded(room_id: RoomId, event_id: EventId, channel_id: ChannelId) -> Self {
+        Self::DeliverySucceeded {
+            room_id,
+            event_id,
+            channel_id,
+        }
+    }
+
+    /// A [`DeliveryFailed`](Self::DeliveryFailed) event, `delivery_failed` (RFC §8.2).
+    pub fn delivery_failed(
+        room_id: RoomId,
+        event_id: EventId,
+        channel_id: ChannelId,
+        error: String,
+    ) -> Self {
+        Self::DeliveryFailed {
+            room_id,
+            event_id,
+            channel_id,
+            error,
+        }
+    }
+
+    /// A [`BroadcastPartialFailure`](Self::BroadcastPartialFailure) event, `broadcast_partial_failure` (RFC §8.2).
+    pub fn broadcast_partial_failure(
+        room_id: RoomId,
+        event_id: EventId,
+        failed: usize,
+        total: usize,
+        errors: BTreeMap<ChannelId, String>,
+    ) -> Self {
+        Self::BroadcastPartialFailure {
+            room_id,
+            event_id,
+            failed,
+            total,
+            errors,
+        }
+    }
+
+    /// A [`ChainDepthExceeded`](Self::ChainDepthExceeded) event, `chain_depth_exceeded` (RFC §8.2).
+    pub fn chain_depth_exceeded(
+        room_id: RoomId,
+        event_id: EventId,
+        channel_id: ChannelId,
+        data: ChainDepthData,
+    ) -> Self {
+        Self::ChainDepthExceeded {
+            room_id,
+            event_id,
+            channel_id,
+            data,
+        }
+    }
+
+    /// A [`HookError`](Self::HookError) event, `hook_error` (RFC §8.2).
+    pub fn hook_error(room_id: RoomId, event_id: EventId, hook: String, error: String) -> Self {
+        Self::HookError {
+            room_id,
+            event_id,
+            hook,
+            error,
+        }
+    }
+
+    /// A [`ProcessTimeout`](Self::ProcessTimeout) event, `process_timeout` (RFC §8.2).
+    pub fn process_timeout(
+        room_id: Option<RoomId>,
+        channel_id: Option<ChannelId>,
+        event_id: Option<EventId>,
+        timeout: f64,
+    ) -> Self {
+        Self::ProcessTimeout {
+            room_id,
+            channel_id,
+            event_id,
+            timeout,
+        }
+    }
+
+    /// A [`HookTimeout`](Self::HookTimeout) event, `hook_timeout` (RFC §8.2).
+    pub fn hook_timeout(
+        room_id: RoomId,
+        hook_name: String,
+        trigger: HookTrigger,
+        timeout: f64,
+    ) -> Self {
+        Self::HookTimeout {
+            room_id,
+            hook_name,
+            trigger,
+            timeout,
+        }
+    }
 }
 
 /// What made a room transition on its own (RFC §8.2 `room_paused`,

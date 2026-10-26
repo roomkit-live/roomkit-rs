@@ -416,10 +416,7 @@ async fn registering_a_channel_is_announced_to_subscribers() {
         .unwrap();
     assert_eq!(
         events.recv().await.unwrap(),
-        FrameworkEvent::ChannelRegistered {
-            channel_id: channel("sms"),
-            channel_type: ChannelType::SMS,
-        }
+        FrameworkEvent::channel_registered(channel("sms"), ChannelType::SMS)
     );
 }
 

@@ -304,13 +304,13 @@ mod an_off_lock_block {
             (
                 Some("room_closed"),
                 0,
-                vec![&FrameworkEvent::RoomRefusedEvent {
-                    room_id: room_id(),
-                    event_id: "evt_1".parse().unwrap(),
-                    status: RoomStatus::Closed,
-                    operation: RefusedOperation::Inbound,
-                    event_type: EventType::Message,
-                }]
+                vec![&FrameworkEvent::room_refused_event(
+                    room_id(),
+                    "evt_1".parse().unwrap(),
+                    RoomStatus::Closed,
+                    RefusedOperation::Inbound,
+                    EventType::Message
+                )]
             )
         );
     }

@@ -22,10 +22,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// already.
     pub fn register_channel(&self, channel: impl Channel) -> Result<(), KitError> {
         let declaration = Channel::declaration(&channel);
-        let registered = FrameworkEvent::ChannelRegistered {
-            channel_id: declaration.channel_id.clone(),
-            channel_type: declaration.channel_type.clone(),
-        };
+        let registered = FrameworkEvent::channel_registered(
+            declaration.channel_id.clone(),
+            declaration.channel_type.clone(),
+        );
         let channel_id = declaration.channel_id.clone();
         let channel: Arc<dyn DynChannel> = Arc::new(channel);
         self.inner.try_change_config(|config| {
@@ -60,10 +60,10 @@ impl<S: ConversationStore> RoomKit<S> {
             write(&self.inner.channels).remove(channel_id);
             Ok::<_, KitError>(declaration)
         })?;
-        self.inner.publish(FrameworkEvent::ChannelUnregistered {
-            channel_id: declaration.channel_id,
-            channel_type: declaration.channel_type,
-        });
+        self.inner.publish(FrameworkEvent::channel_unregistered(
+            declaration.channel_id,
+            declaration.channel_type,
+        ));
         Ok(())
     }
 

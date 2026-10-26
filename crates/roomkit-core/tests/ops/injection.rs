@@ -472,13 +472,13 @@ mod a_refusal_before_the_commit {
             ),
             (
                 (refused("room_closed"), 0),
-                vec![&FrameworkEvent::RoomRefusedEvent {
-                    room_id: room_id(),
-                    event_id: "evt_1".parse().unwrap(),
-                    status: RoomStatus::Closed,
-                    operation: RefusedOperation::Inbound,
-                    event_type: EventType::Message,
-                }]
+                vec![&FrameworkEvent::room_refused_event(
+                    room_id(),
+                    "evt_1".parse().unwrap(),
+                    RoomStatus::Closed,
+                    RefusedOperation::Inbound,
+                    EventType::Message
+                )]
             )
         );
     }
@@ -1159,13 +1159,13 @@ mod an_entry_adopted_under_the_lock {
                 true,
                 Some("room_closed".to_owned()),
                 0,
-                vec![&FrameworkEvent::RoomRefusedEvent {
-                    room_id: room_id(),
-                    event_id: "evt_1".parse().unwrap(),
-                    status: RoomStatus::Closed,
-                    operation: RefusedOperation::Inbound,
-                    event_type: EventType::Message,
-                }]
+                vec![&FrameworkEvent::room_refused_event(
+                    room_id(),
+                    "evt_1".parse().unwrap(),
+                    RoomStatus::Closed,
+                    RefusedOperation::Inbound,
+                    EventType::Message
+                )]
             )
         );
     }

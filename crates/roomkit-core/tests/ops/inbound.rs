@@ -168,15 +168,12 @@ mod an_allowed_message {
         assert_eq!(
             sim.framework_events(),
             [
-                &FrameworkEvent::DeliverySucceeded {
-                    room_id: room_id(),
-                    event_id: "evt_1".parse().unwrap(),
-                    channel_id: channel("ws"),
-                },
-                &FrameworkEvent::EventProcessed {
-                    room_id: room_id(),
-                    event_id: "evt_1".parse().unwrap(),
-                },
+                &FrameworkEvent::delivery_succeeded(
+                    room_id(),
+                    "evt_1".parse().unwrap(),
+                    channel("ws")
+                ),
+                &FrameworkEvent::event_processed(room_id(), "evt_1".parse().unwrap()),
             ]
         );
     }
@@ -369,13 +366,13 @@ mod a_blocked_message {
             .unwrap();
         assert_eq!(
             sim.framework_events().first(),
-            Some(&&FrameworkEvent::EventBlocked {
-                room_id: room_id(),
-                event_id: "evt_1".parse().unwrap(),
-                channel_id: channel("sms"),
-                reason: Some("SIN detected".to_owned()),
-                blocked_by: "sensitivity_scanner".to_owned(),
-            })
+            Some(&&FrameworkEvent::event_blocked(
+                room_id(),
+                "evt_1".parse().unwrap(),
+                channel("sms"),
+                Some("SIN detected".to_owned()),
+                "sensitivity_scanner".to_owned()
+            ))
         );
     }
 
@@ -599,13 +596,13 @@ mod an_injected_event_s_pass {
             (sim.timeline_lines(), sim.framework_events().last().copied()),
             (
                 vec!["#0 sms delivered \"hello\"".to_owned()],
-                Some(&FrameworkEvent::RoomRefusedEvent {
-                    room_id: room_id(),
-                    event_id: "evt_2".parse().unwrap(),
-                    status: RoomStatus::Closed,
-                    operation: RefusedOperation::Reentry,
-                    event_type: EventType::Message,
-                })
+                Some(&FrameworkEvent::room_refused_event(
+                    room_id(),
+                    "evt_2".parse().unwrap(),
+                    RoomStatus::Closed,
+                    RefusedOperation::Reentry,
+                    EventType::Message
+                ))
             )
         );
     }
@@ -1105,13 +1102,13 @@ mod a_closed_room {
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             sim.framework_events(),
-            [&FrameworkEvent::RoomRefusedEvent {
-                room_id: room_id(),
-                event_id: "evt_1".parse().unwrap(),
-                status: RoomStatus::Closed,
-                operation: RefusedOperation::Inbound,
-                event_type: EventType::Message,
-            }]
+            [&FrameworkEvent::room_refused_event(
+                room_id(),
+                "evt_1".parse().unwrap(),
+                RoomStatus::Closed,
+                RefusedOperation::Inbound,
+                EventType::Message
+            )]
         );
     }
 }
@@ -1389,12 +1386,12 @@ mod an_unusable_hook {
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert!(
             sim.framework_events()
-                .contains(&&FrameworkEvent::HookError {
-                    room_id: room_id(),
-                    event_id: "evt_1".parse().unwrap(),
-                    hook: "broken_logger".to_owned(),
-                    error: "boom".to_owned(),
-                })
+                .contains(&&FrameworkEvent::hook_error(
+                    room_id(),
+                    "evt_1".parse().unwrap(),
+                    "broken_logger".to_owned(),
+                    "boom".to_owned()
+                ))
         );
     }
 

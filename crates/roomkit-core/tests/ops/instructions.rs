@@ -258,13 +258,13 @@ mod a_refused_instruction {
         sim.send(instruction()).unwrap();
         assert_eq!(
             sim.framework_events(),
-            [&FrameworkEvent::RoomRefusedEvent {
-                room_id: room_id(),
-                event_id: EventId::new("evt_2").unwrap(),
-                status: RoomStatus::Closed,
-                operation: RefusedOperation::Inbound,
-                event_type: EventType::Instruction,
-            }]
+            [&FrameworkEvent::room_refused_event(
+                room_id(),
+                EventId::new("evt_2").unwrap(),
+                RoomStatus::Closed,
+                RefusedOperation::Inbound,
+                EventType::Instruction
+            )]
         );
     }
 }

@@ -188,11 +188,7 @@ mod a_missing_room {
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             sim.framework_events()[2],
-            &FrameworkEvent::SessionStarted {
-                room_id: room_id(),
-                channel_id: channel("sms"),
-                channel_type: ChannelType::SMS,
-            }
+            &FrameworkEvent::session_started(room_id(), channel("sms"), ChannelType::SMS)
         );
     }
 
@@ -711,12 +707,12 @@ mod a_recipient {
         sim.send(Sim::message("ws", "Hello")).unwrap();
         assert_eq!(
             sim.framework_events()[0],
-            &FrameworkEvent::DeliveryFailed {
-                room_id: room_id(),
-                event_id: "evt_1".parse().unwrap(),
-                channel_id: channel("sms"),
-                error: "no_recipient".to_owned(),
-            }
+            &FrameworkEvent::delivery_failed(
+                room_id(),
+                "evt_1".parse().unwrap(),
+                channel("sms"),
+                "no_recipient".to_owned()
+            )
         );
     }
 
