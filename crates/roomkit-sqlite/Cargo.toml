@@ -19,6 +19,9 @@ tokio.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+# The conformance runner's scripted agent, which the suite includes from
+# roomkit.
+roomkit-ai.workspace = true
 # The fixture's fingerprint (tests/cross_read.rs).
 sha2.workspace = true
 # The conformance runner's, which the suite includes from roomkit.

@@ -18,6 +18,7 @@ use roomkit::{
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::agents;
 use crate::errors::{error_of, named};
 use crate::run::Run;
 use crate::scripted::{ScriptedChannel, hook_handler};
@@ -372,6 +373,10 @@ pub(crate) fn register_channel(
     };
     let registered = if channel["type"] == "host" {
         run.kit().register_channel(HostChannel::with_id(id))
+    } else if channel.get("model").is_some() {
+        let (agent, model) = agents::scripted_agent(channel)?;
+        crate::run::lock(&run.models).insert(id.to_string(), model);
+        run.kit().register_channel(agent)
     } else {
         run.kit()
             .register_channel(ScriptedChannel::new(channel, run)?)
@@ -388,6 +393,9 @@ pub(crate) fn register_hook(
 ) -> Result<Result<(), KitError>, Unreadable> {
     let trigger: HookTrigger = field(hook, "trigger")?;
     let execution: HookExecution = optional(hook, "execution")?.unwrap_or(HookExecution::Sync);
+    if trigger.is_tool_trigger() {
+        return agents::register_tool_hook(run, hook, trigger, execution);
+    }
     let name = hook["name"].as_str().unwrap_or_default();
     let mut spec = HookSpec::new(name, trigger, execution);
     spec.priority = optional(hook, "priority")?.unwrap_or_default();

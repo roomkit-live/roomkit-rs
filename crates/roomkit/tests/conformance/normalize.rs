@@ -46,6 +46,7 @@ pub(crate) struct Observed {
     pub(crate) tasks: BTreeMap<String, Vec<Value>>,
     pub(crate) steps: Vec<Value>,
     pub(crate) actions: BTreeMap<String, Vec<Value>>,
+    pub(crate) models: BTreeMap<String, Vec<Value>>,
 }
 
 impl Observed {

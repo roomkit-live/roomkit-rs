@@ -31,7 +31,26 @@ const CHANNEL: &[&str] = &[
     "parse",
     "on_event",
     "deliver",
+    "model",
+    "tools",
+    "tool_policy",
+    "max_tool_rounds",
 ];
+const MODEL: &[&str] = &["rounds"];
+const MODEL_ROUND: &[&str] = &["text", "calls", "finish_reason", "usage"];
+const MODEL_CALL: &[&str] = &["id", "name", "arguments", "cut"];
+const TOOL: &[&str] = &[
+    "name",
+    "description",
+    "parameters",
+    "returns",
+    "raises",
+    "fails",
+    "refuses",
+    "hangs",
+];
+const RAISES: &[&str] = &["kind", "message"];
+const POLICY: &[&str] = &["allow", "deny"];
 const ROOM: &[&str] = &[
     "id",
     "organization_id",
@@ -99,6 +118,7 @@ const EXPECT: &[&str] = &[
     "tasks",
     "actions",
     "lifecycle",
+    "models",
 ];
 const NEW_ROOM: &[&str] = &["id", "organization_id", "metadata", "timers"];
 const STEPS: &[(&str, &[&str])] = &[
@@ -238,6 +258,36 @@ fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
             self::reaction(reaction, &format!("{path}.{kind}[{index}]"), found);
         }
     }
+    let model = &channel["model"];
+    optional(model, MODEL, &format!("{path}.model"), found);
+    for (index, round) in items(&model["rounds"]) {
+        let round_path = format!("{path}.model.rounds[{index}]");
+        members(round, MODEL_ROUND, &round_path, found);
+        for (position, call) in items(&round["calls"]) {
+            members(
+                call,
+                MODEL_CALL,
+                &format!("{round_path}.calls[{position}]"),
+                found,
+            );
+        }
+    }
+    for (index, tool) in items(&channel["tools"]) {
+        let tool_path = format!("{path}.tools[{index}]");
+        members(tool, TOOL, &tool_path, found);
+        optional(
+            &tool["raises"],
+            RAISES,
+            &format!("{tool_path}.raises"),
+            found,
+        );
+    }
+    optional(
+        &channel["tool_policy"],
+        POLICY,
+        &format!("{path}.tool_policy"),
+        found,
+    );
 }
 
 fn hook(hook: &Value, path: &str, found: &mut Vec<String>) {

@@ -19,6 +19,9 @@ uuid.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+# The conformance runner's scripted agent (roomkit-specs conformance/README.md,
+# "Scripted agents"): roomkit-ai's AI channel over a scripted model.
+roomkit-ai.workspace = true
 serde.workspace = true
 sha2.workspace = true
 

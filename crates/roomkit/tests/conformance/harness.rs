@@ -154,6 +154,10 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
     }
     let mut observed = std::mem::take(&mut *lock(&run.observed));
     observed.steps = step_outcomes;
+    observed.models = lock(&run.models)
+        .iter()
+        .map(|(channel, model)| (channel.clone(), crate::agents::requests(model)))
+        .collect();
     for ((room_key, timeline), room) in timelines.into_iter().zip(&rooms) {
         observed.timelines.insert(room_key.clone(), timeline);
         observed.rooms.insert(

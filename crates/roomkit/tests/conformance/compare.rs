@@ -39,6 +39,7 @@ pub(crate) fn compare(run: &Run, scenario: &Value, observed: &Observed) -> Vec<S
     comparison.hooks();
     comparison.channel_calls();
     comparison.side_effects();
+    comparison.models();
     comparison.found
 }
 
@@ -167,6 +168,23 @@ impl Comparison<'_> {
                     self.check(expected, Some(&Value::Array(events)), &path);
                 }
             }
+        }
+    }
+
+    fn models(&mut self) {
+        let expect = self.expect;
+        for (channel, expected) in expect["models"].as_object().into_iter().flatten() {
+            let requests = self
+                .observed
+                .models
+                .get(channel)
+                .cloned()
+                .unwrap_or_default();
+            self.check(
+                expected,
+                Some(&Value::Array(requests)),
+                &format!("models.{channel}"),
+            );
         }
     }
 

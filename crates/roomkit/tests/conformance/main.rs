@@ -16,6 +16,7 @@
               missing member and never panics; its own lists are indexed within their length"
 )]
 
+mod agents;
 mod calls;
 mod compare;
 mod errors;

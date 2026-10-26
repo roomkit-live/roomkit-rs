@@ -2,7 +2,7 @@
 //! calls the steps and the scripted actions make into it, their references
 //! resolved (roomkit-specs `conformance/README.md`, "Steps", "Calls").
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use roomkit::model::{ChannelId, RoomEvent, RoomId};
 use roomkit::{ConversationStore, FrameworkEvent};
+use roomkit_ai::testing::ScriptedProvider;
 use serde_json::{Map, Value, json};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -98,6 +99,8 @@ pub(crate) struct Run {
     pub(crate) problems: Mutex<Vec<String>>,
     events: Mutex<broadcast::Receiver<FrameworkEvent>>,
     pub(crate) background: Mutex<HashMap<String, JoinHandle<Value>>>,
+    /// The scripted agents' models, by channel.
+    pub(crate) models: Mutex<BTreeMap<String, ScriptedProvider>>,
 }
 
 impl Run {
@@ -122,6 +125,7 @@ impl Run {
             problems: Mutex::default(),
             events: Mutex::new(events),
             background: Mutex::default(),
+            models: Mutex::default(),
         }
     }
 
@@ -165,6 +169,33 @@ impl Run {
             "trigger": trigger,
             "room_id": room_id,
             "event": serde_json::to_value(payload).unwrap_or_default(),
+        });
+        let mut observed = lock(&self.observed);
+        observed
+            .hooks
+            .entry(name.to_owned())
+            .or_default()
+            .push(call);
+        observed.hook_order.push(name.to_owned());
+    }
+
+    /// Records a call of the hook `name` on a tool trigger, whose payload
+    /// is the tool call `tool_call` (README, "Expectations").
+    pub(crate) fn record_tool_hook(
+        &self,
+        name: &str,
+        trigger: &str,
+        room_id: &str,
+        tool_call: &Value,
+    ) {
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
+        }
+        let call = json!({
+            "trigger": trigger,
+            "room_id": room_id,
+            "event": null,
+            "tool_call": tool_call,
         });
         let mut observed = lock(&self.observed);
         observed
