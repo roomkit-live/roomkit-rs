@@ -77,6 +77,9 @@ pub(super) enum Waited<'kit> {
     Place((RoomId, EventId), Place<'kit>, bool),
     /// The ticket comes back whether its turn came or not.
     Turn(RoomId, Ticket<'kit>, bool),
+    /// A hold carried out at once, answered once the room's delivery cursor
+    /// caught up with the turns it ended (gap G-091).
+    Answered(Outcome),
 }
 
 /// What a hold comes to.
@@ -278,6 +281,7 @@ impl<'kit> Held<'kit> {
                     Outcome::DeadlinePassed
                 }
             }
+            Waited::Answered(outcome) => outcome,
         }
     }
 }

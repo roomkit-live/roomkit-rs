@@ -33,6 +33,7 @@
 
 mod channel;
 mod context;
+mod cursors;
 mod driver;
 mod environment;
 mod error;

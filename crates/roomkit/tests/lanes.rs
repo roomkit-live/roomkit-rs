@@ -476,6 +476,66 @@ async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_e
     );
 }
 
+/// RFC §13.5 "Delivery lanes across processes", §5.1, gap G-091: the
+/// room's delivery cursor follows its lane, one index at a time, as the
+/// Python implementation's does: the attaches' lifecycle records once
+/// committed; a message only once its set has run, not while it delivers;
+/// a mute's record, a message stored `BLOCKED`, and the next message each
+/// in turn. It reads the room's latest index once its sets have run.
+#[tokio::test]
+async fn the_delivery_cursor_follows_the_lane() {
+    let kit = RoomKit::new();
+    let slow = Gated::new();
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+        .unwrap();
+    kit.register_channel(slow.clone()).unwrap();
+    kit.before_broadcast("no_spam", |event, _| {
+        let spam = text_of(&event.content) == "spam";
+        ready(Ok(if spam {
+            HookResult::block("spam")
+        } else {
+            HookResult::allow()
+        }))
+    })
+    .unwrap();
+    let room = room_id();
+    let store = kit.store();
+    kit.create_room(&room).await.unwrap();
+    let mut cursors = vec![store.get_delivered_index(&room).await.unwrap()];
+    kit.attach(&room, &channel("sms")).await.unwrap();
+    kit.attach(&room, &channel("slow")).await.unwrap();
+    cursors.push(store.get_delivered_index(&room).await.unwrap());
+    let delivering = async {
+        slow.delivering.notified().await;
+        let during = store.get_delivered_index(&room).await.unwrap();
+        slow.go.notify_one();
+        during
+    };
+    let (sent, during) = tokio::join!(
+        kit.process_inbound_in(&room, message("sms", "+15551234567", "one")),
+        delivering
+    );
+    sent.unwrap();
+    cursors.push(during);
+    cursors.push(store.get_delivered_index(&room).await.unwrap());
+    kit.mute(&room, &channel("slow")).await.unwrap();
+    cursors.push(store.get_delivered_index(&room).await.unwrap());
+    for text in ["spam", "two"] {
+        kit.process_inbound_in(&room, message("sms", "+15551234567", text))
+            .await
+            .unwrap();
+        cursors.push(store.get_delivered_index(&room).await.unwrap());
+    }
+    let latest = kit
+        .store()
+        .get_room(&room)
+        .await
+        .unwrap()
+        .unwrap()
+        .latest_index;
+    assert_eq!((cursors, latest), (vec![-1, 1, 1, 2, 3, 4, 5], Some(5)));
+}
+
 /// The caller gives up while a `BEFORE_BROADCAST` hook runs, under the
 /// room's lock.
 #[tokio::test]

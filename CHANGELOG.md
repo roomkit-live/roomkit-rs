@@ -271,7 +271,10 @@ as it stands.
   `advance_delivered_index`, a compare-and-set from the index before, or
   from any lower value when forced, as Python's stores answer them; a
   room's update and an event's commit leave the cursor as stored. The
-  tokio runtime does not move it yet.
+  tokio runtime's lane moves it at each index delivered, as Python's does:
+  an event's index once its set has run, an index with no delivery set (a
+  record stored `BLOCKED`, a lifecycle record) once committed, one index at
+  a time.
 - **Organizations** (§17.2, decision 2 of step 2b, gap G-077): every room
   operation acts for an organization or for none.
   `RoomKit::for_organization(organization_id)` returns an `OrganizationKit`

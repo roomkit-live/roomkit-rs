@@ -5,7 +5,10 @@
 //! completed as soon as it is answered: the driver polls the operation
 //! between completions. A release, a place in a room's lane and a ticket
 //! are carried out at once; a lock, a place's turn or a ticket's turn is a
-//! wait the driver polls itself (`holds`); a call on the store, a channel,
+//! wait the driver polls itself (`holds`). A place left and a lock let go
+//! that end the turn of an index the run committed are answered once the
+//! room's delivery cursor caught up (`indexes`, `crate::cursors`, gap
+//! G-091). A call on the store, a channel,
 //! a hook or the router is a task (`calls`), run within its execution
 //! context, so that code it runs may take the lock the operation holds on
 //! its behalf again, or call into the room under its lock or in its
@@ -29,6 +32,7 @@
 mod calls;
 mod holds;
 mod inbound;
+mod indexes;
 
 use std::collections::HashMap;
 use std::future::poll_fn;
@@ -37,7 +41,8 @@ use std::task::Poll;
 
 use roomkit_core::model::{ErrorRecord, RoomId, Timestamp};
 use roomkit_core::ops::{
-    Effect, EffectId, EntryId, Environment, HoldRequest, Next, Operation, Outcome, Request, Settled,
+    Effect, EffectId, EntryId, Environment, HoldRequest, Next, Operation, Outcome, Request,
+    Settled, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{self, AbortHandle, JoinError, JoinSet};
@@ -46,6 +51,7 @@ use tokio::time::Instant;
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::inbound::Caller;
 pub(crate) use self::inbound::run_inbound;
+use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::KitError;
 use crate::kit::Inner;
@@ -136,6 +142,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         call,
         context: ExecutionContext::current(),
         held: Held::new(Arc::clone(&shared), leases),
+        indexes: Indexes::default(),
         shared,
         adoptions,
         effect_of_task: HashMap::new(),
@@ -167,6 +174,8 @@ struct Driver<'kit, S> {
     /// The execution context the run is made in.
     context: ExecutionContext,
     held: Held<'kit>,
+    /// The indexes the run commits, until their turn is over.
+    indexes: Indexes,
     shared: Arc<RunShared>,
     /// The calls into the room its work hands the run.
     adoptions: mpsc::UnboundedReceiver<Adoption>,
@@ -336,6 +345,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         } = effect;
         let deadline = deadline.and_then(|deadline| self.clocks.instant_of(deadline));
         let inner = Arc::clone(self.inner);
+        if let Request::Store(StoreRequest::Commit { event, .. }) = &request {
+            self.indexes.committing(id, event);
+        }
         match request {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) => self.spawn(id, work, deadline, async move {
@@ -370,8 +382,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             lanes: &self.inner.lanes,
             tickets: &self.inner.tickets,
         };
+        let over = self.turns_over(&request);
         match self.held.hold(rooms, &self.context, id, request, deadline) {
-            Hold::Now(outcome) => Some((id, outcome)),
+            Hold::Now(outcome) => self.after_the_cursor(id, outcome, over),
             Hold::Refused(room_id) => {
                 tracing::warn!(
                     target: "roomkit::driver",
@@ -388,6 +401,52 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 None
             }
         }
+    }
+
+    /// The room and the indexes whose turn `request` ends (gap G-091): a
+    /// set's once it leaves its place, those the run committed and placed
+    /// nowhere once it lets the room's lock go.
+    fn turns_over(&mut self, request: &HoldRequest) -> Option<(RoomId, Vec<u64>)> {
+        let (room_id, over) = match request {
+            HoldRequest::EnterLane { room_id, event_id } => {
+                self.indexes.entered(room_id, event_id);
+                return None;
+            }
+            HoldRequest::LeaveLane { room_id, event_id } => (
+                room_id,
+                self.indexes.left(room_id, event_id).into_iter().collect(),
+            ),
+            HoldRequest::ReleaseLock { room_id } => (room_id, self.indexes.released(room_id)),
+            HoldRequest::AcquireLock { .. }
+            | HoldRequest::AwaitLane { .. }
+            | HoldRequest::TakeTicket { .. }
+            | HoldRequest::AwaitTicket { .. }
+            | HoldRequest::ReleaseTicket { .. } => return None,
+        };
+        (!over.is_empty()).then(|| (room_id.clone(), over))
+    }
+
+    /// Answers a hold carried out at once, `outcome`, once the room's
+    /// delivery cursor caught up with the turns it ended, `over`: the run
+    /// waits for the cursor's writes, the room's lane and lock going on
+    /// meanwhile (RFC §13.5, gap G-091).
+    fn after_the_cursor(
+        &mut self,
+        id: EffectId,
+        outcome: Outcome,
+        over: Option<(RoomId, Vec<u64>)>,
+    ) -> Option<(EffectId, Outcome)> {
+        let Some((room_id, indexes)) = over else {
+            return Some((id, outcome));
+        };
+        let inner: &'kit Arc<Inner<S>> = self.inner;
+        inner.cursors.over(&room_id, indexes);
+        let caught_up = async move {
+            inner.cursors.catch_up(&inner.store, &room_id).await;
+            (id, Waited::Answered(outcome))
+        };
+        self.waits.push((id, Box::pin(caught_up)));
+        None
     }
 
     /// Runs `call`, the call of `effect`, as a task within its execution
@@ -474,6 +533,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let effect = self.effect_of_task.remove(&task)?;
         self.call_of_effect.remove(&effect);
         self.shared.answered(effect);
+        self.indexes.answered(effect, &outcome);
         Some((effect, outcome))
     }
 

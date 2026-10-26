@@ -42,6 +42,7 @@ use self::scope::Scope;
 pub use self::timers::TimerSweeper;
 use crate::channel::DynChannel;
 use crate::context;
+use crate::cursors::RoomCursors;
 use crate::driver;
 use crate::environment::SystemEnvironment;
 use crate::error::KitError;
@@ -106,6 +107,9 @@ pub(crate) struct Inner<S> {
     pub(crate) locks: RoomMutexes,
     pub(crate) lanes: RoomLanes,
     pub(crate) tickets: RoomTickets,
+    /// The indexes whose turn in their room's lane is over, waiting for the
+    /// room's delivery cursor (gap G-091).
+    pub(crate) cursors: RoomCursors,
     /// The tasks the kit runs in the background: observers, inbound runs.
     pub(crate) tasks: Arc<Tasks>,
     /// The environment the runs started from now on read: each run keeps
@@ -147,6 +151,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 locks: RoomMutexes::default(),
                 lanes: RoomLanes::default(),
                 tickets: RoomTickets::default(),
+                cursors: RoomCursors::default(),
                 tasks: Arc::default(),
                 environment: RwLock::new(Arc::new(SystemEnvironment)),
                 events,
