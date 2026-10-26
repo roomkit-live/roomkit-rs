@@ -7,7 +7,8 @@
 //! - A connection to `/conversations/{conversation}?user=alice&name=Alice`
 //!   is the participant `alice`, named Alice, of the room whose id is the
 //!   conversation's (RFC §5.5). A new conversation's room is created with
-//!   the agent and the `websocket` channel attached.
+//!   the agent and the `websocket` channel attached, whole even when the
+//!   client leaves meanwhile.
 //! - Each text frame it sends is a message from `alice` into that room,
 //!   through the inbound pipeline (RFC §10.1). A message the room refuses,
 //!   or whose turn fails, gets `{"error": "..."}` back, a reason of the
@@ -86,7 +87,7 @@ use roomkit::model::{
     BindingOptions, ChannelId, EventContent, EventType, InboundMessage, Participant, ParticipantId,
     Post, RoomEvent, RoomId,
 };
-use roomkit::{ConversationStore, Environment, RoomKit, SystemEnvironment, text_of};
+use roomkit::{ConversationStore, Environment, HookTrigger, RoomKit, SystemEnvironment, text_of};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use roomkit_sqlite::SqliteStore;
 use serde_json::{Value, json};
@@ -149,6 +150,9 @@ const KITCHEN: &str = "kitchen";
 const DAVE_LATE: &str = "Sorry, I was away. Is there any rye left?";
 const LARGE_POST: usize = 60 * 1024;
 const POSTS_AT_MOST: usize = 400;
+
+/// The conversation a client leaves while its join makes the room.
+const PORCH: &str = "porch";
 
 /// The conversation where the model is unreachable, and how long a client
 /// there waits to be told.
@@ -227,8 +231,8 @@ struct App {
     patience: Patience,
 }
 
-/// How many connections the server runs: each one's task counts itself
-/// while it runs, so that a stop sees the last one end.
+/// How many connections the server runs, each counted from its upgrade
+/// request to its end, so that a stop sees the last one end.
 #[derive(Clone)]
 struct Live(Arc<watch::Sender<usize>>);
 
@@ -366,10 +370,18 @@ async fn connect(
     Query(query): Query<HashMap<String, String>>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
+    let counted = app.live.enter();
     let Some((room_id, user, name)) = named(&conversation, &query) else {
         return (StatusCode::BAD_REQUEST, NAMING).into_response();
     };
-    if let Err(error) = app.join(&room_id, &user, name).await {
+    // A task of its own: a client that leaves drops this handler and what
+    // it awaits, which must not leave a new room half made, without its
+    // agent or its binding.
+    let joining = tokio::spawn({
+        let (app, room_id, user) = (app.clone(), room_id.clone(), user.clone());
+        async move { app.join(&room_id, &user, name).await }
+    });
+    if let Err(error) = joining.await.map_err(Into::into).and_then(|joined| joined) {
         // What the client named is shown escaped, never as it came.
         println!(
             "  {:?} could not join {:?}: {error}",
@@ -387,7 +399,7 @@ async fn connect(
     upgrade
         .max_frame_size(MESSAGE_LIMIT)
         .max_message_size(MESSAGE_LIMIT)
-        .on_upgrade(move |socket| app.converse(socket, connection, room_id, user))
+        .on_upgrade(move |socket| app.converse(socket, counted, connection, room_id, user))
 }
 
 /// The room, the participant and the name a connection to `conversation`
@@ -470,11 +482,11 @@ impl App {
     async fn converse(
         self,
         socket: WebSocket,
+        _counted: Counted,
         (registration, frames): (Registration, mpsc::Receiver<String>),
         room_id: RoomId,
         user: ParticipantId,
     ) {
-        let _counted = self.live.enter();
         let (outgoing, incoming) = socket.split();
         let patience = self.patience.send;
         let mut writer = pin!(write(outgoing, frames, patience));
@@ -654,6 +666,7 @@ async fn check() -> Result<ExitCode, Box<dyn Error>> {
     a_client_stops_reading(&mut checks).await?;
     what_a_client_is_told(&mut checks).await?;
     what_a_connection_must_name(&mut checks).await?;
+    a_client_leaves_while_it_joins(&mut checks).await?;
     Ok(checks.finish())
 }
 
@@ -892,6 +905,59 @@ async fn what_a_connection_must_name(checks: &mut Checks) -> Result<(), Box<dyn 
     Ok(())
 }
 
+/// Ivan opens the first connection to the porch's conversation and leaves
+/// while his join makes its room, which a hook of the check's holds until
+/// the server dropped his request. Judy then joins the same conversation,
+/// and the agent answers her: the room was made whole.
+async fn a_client_leaves_while_it_joins(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    println!("Ivan leaves while his join makes the porch's room.");
+    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(REPLIES).await?);
+    let database = TempDatabase::new("server_agent_porch");
+    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let (created, mut creating) = mpsc::channel(1);
+    let (release, released) = watch::channel(false);
+    server
+        .kit
+        .observe("hold_the_porch", HookTrigger::OnRoomCreated, move |_, _| {
+            let (created, mut released) = (created.clone(), released.clone());
+            async move {
+                // The check waits for one, and the release outlives the hook.
+                let _told = created.send(()).await;
+                let _released = released.wait_for(|go| *go).await;
+            }
+        })?;
+    let mut ivan = TcpStream::connect(server.address).await?;
+    let request =
+        Client::upgrade_request(server.address, &format!("/conversations/{PORCH}?user=ivan"));
+    ivan.write_all(request.as_bytes()).await?;
+    let held = tokio::time::timeout(STOP_PATIENCE, creating.recv())
+        .await
+        .is_ok();
+    drop(ivan);
+    let dropped = tokio::time::timeout(STOP_PATIENCE, server.live.down_to(0))
+        .await
+        .is_ok();
+    println!("  the room's making held: {held}; Ivan's request dropped: {dropped}");
+    release.send_replace(true);
+    let mut judy = Client::connect(server.address, PORCH, "judy", "Judy").await?;
+    judy.say("Is the porch open?").await?;
+    let answer = judy.next_frame(TOLD_PATIENCE).await;
+    println!("  Judy receives {answer:?}");
+    judy.close().await;
+    tokio::time::timeout(STOP_PATIENCE, server.stop()).await??;
+    checks.expect(
+        "a client that leaves while its join makes a new room leaves it whole: the next \
+         one is answered",
+        held && dropped
+            && answer
+                .as_ref()
+                .and_then(|frame| frame.get("type"))
+                .and_then(Value::as_str)
+                == Some("message"),
+    );
+    Ok(())
+}
+
 /// An endpoint where nothing listens: a port the system gave and took
 /// back.
 async fn unreachable_model() -> Result<OpenAiEndpoint, Box<dyn Error>> {
@@ -1013,6 +1079,16 @@ impl Client {
             Err(tungstenite::Error::Http(response)) => Ok(Some(response.status().as_u16())),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// The HTTP request that asks the server at `address` to upgrade
+    /// `path` to a WebSocket, as a client writes it.
+    fn upgrade_request(address: SocketAddr, path: &str) -> String {
+        format!(
+            "GET {path} HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\n\
+             Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\n\r\n"
+        )
     }
 
     /// Sends `text` without printing it: a large one.

@@ -405,7 +405,8 @@ as it stands.
 - **The server example** (`server_agent`, step 4 milestone 3): an axum
   server where each WebSocket connection to
   `/conversations/{conversation}?user=...&name=...` is a participant of the
-  conversation's room, written through the store, each text frame a
+  conversation's room, written through the store, a new room made whole
+  even when its first client leaves meanwhile, each text frame a
   message run into the room, and the room's deliveries sent on each of its
   connections as JSON frames, each send bounded, a client that stops
   reading dropped, reader included; a refused message or a failed turn
