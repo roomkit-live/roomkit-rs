@@ -29,6 +29,7 @@ mod post;
 mod room;
 mod side_effects;
 mod time;
+mod tool_call;
 mod updates;
 mod visibility;
 
@@ -66,6 +67,7 @@ pub use post::Post;
 pub use room::{AgentResponsePolicy, Room, RoomStatus, RoomTimers};
 pub use side_effects::{Confidence, Observation, Task, TaskStatus};
 pub use time::Timestamp;
+pub use tool_call::ToolCall;
 pub use updates::{BindingUpdate, EventUpdates, RoomUpdates};
 pub use visibility::{ChannelSet, Visibility};
 

@@ -8,7 +8,8 @@ use super::{Message, Role, conversation};
 use crate::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventContent,
     EventDirection, EventId, EventSource, EventStatus, EventType, Participant, ParticipantId,
-    ParticipantRole, Room, RoomContext, RoomEvent, RoomId, Timestamp,
+    ParticipantRole, Room, RoomContext, RoomEvent, RoomId, Timestamp, ToolCallContent,
+    ToolCallStatus,
 };
 use crate::rules::authors::with_author;
 
@@ -139,17 +140,11 @@ impl Timeline {
 }
 
 fn user(text: &str) -> Message {
-    Message {
-        role: Role::User,
-        text: text.to_owned(),
-    }
+    Message::new(Role::User, text)
 }
 
 fn assistant(text: &str) -> Message {
-    Message {
-        role: Role::Assistant,
-        text: text.to_owned(),
-    }
+    Message::new(Role::Assistant, text)
 }
 
 fn with_notes(input: &str) -> Message {
@@ -168,6 +163,35 @@ fn a_one_to_one_conversation_reads_as_it_was_written() {
             user("Hi"),
             assistant("Hello Alice"),
             user("Alice: Bob said yes")
+        ]
+    );
+}
+
+/// RFC §6.4: a later turn reads what each round said, never its calls.
+#[test]
+fn the_history_replays_no_tool_call() {
+    let mut room = Timeline::new();
+    room.says("sms", "+15550001", Some("Alice"), "Where is order 42?");
+    room.answers("Let me check.");
+    for (event_type, status) in [
+        (EventType::ToolCallStart, ToolCallStatus::Pending),
+        (EventType::ToolCallEnd, ToolCallStatus::Completed),
+    ] {
+        let mut row = room.event(event_type, AGENT, None, None, "");
+        let mut call = ToolCallContent::new("lookup_order", "call_1");
+        call.status = status;
+        row.content = EventContent::ToolCall(call);
+        room.commit(row);
+    }
+    room.answers("Order 42 shipped.");
+    let event = room.says("sms", "+15550001", Some("Alice"), "Thanks");
+    assert_eq!(
+        room.read(&event, 50),
+        vec![
+            user("Where is order 42?"),
+            assistant("Let me check."),
+            assistant("Order 42 shipped."),
+            user("Thanks")
         ]
     );
 }

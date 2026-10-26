@@ -19,6 +19,12 @@
 //!
 //! Only what §6.4 requires of every AI channel is built: no note of who
 //! takes part, no memory, no tool notes, no images, no cut answers.
+//!
+//! Within a turn, the tool loop extends the conversation with its rounds
+//! (RFC §6.4, Appendix A.9 `ai_message_parts`): the assistant's message that
+//! made calls ([`Message::assistant_calls`]), then a tool message per result
+//! ([`Message::tool_result`]). The history replays none: a later turn reads
+//! what each round said, never its calls.
 
 mod marks;
 mod speakers;
@@ -33,23 +39,27 @@ use super::authors::Authors;
 use super::edits::is_deleted;
 use super::instructions::is_standalone;
 use super::transcoding::text_of;
-use crate::model::{ChannelId, EventStatus, EventType, RoomContext, RoomEvent};
+use crate::model::{ChannelId, EventStatus, EventType, RoomContext, RoomEvent, ToolCall};
 
-/// Whose a message of the conversation is, as a model's chat reads it.
-/// More roles come with tools; a reader handles the ones it knows.
+/// Whose a message of the conversation is, as a model's chat reads it; a
+/// reader handles the ones it knows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Role {
     /// Someone other than the channel: a participant, another channel, or
     /// the application through an instruction.
     User,
-    /// The channel itself: what it answered on earlier turns.
+    /// The channel itself: what it answered on earlier turns, and, within a
+    /// turn, the calls a round made.
     Assistant,
+    /// A tool's result, within the turn whose round called it.
+    Tool,
 }
 
 /// One message of the conversation a turn reads. Its fields are read as
-/// they are; parts of other kinds (images, tool calls) come later, so a
-/// message is built with [`Message::new`].
+/// they are; parts of other kinds (images) come later, so a message is
+/// built with [`Message::new`], [`Message::assistant_calls`] or
+/// [`Message::tool_result`].
 ///
 /// ```
 /// use roomkit_core::rules::transcript::{Message, Role};
@@ -64,6 +74,11 @@ pub struct Message {
     pub role: Role,
     /// What the model reads of it.
     pub text: String,
+    /// The calls an assistant's message makes, in the order its round made
+    /// them; none on any other.
+    pub tool_calls: Vec<ToolCall>,
+    /// The call a tool's result answers; `None` on any other message.
+    pub tool_call_id: Option<String>,
 }
 
 impl Message {
@@ -72,6 +87,36 @@ impl Message {
         Self {
             role,
             text: text.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
+    }
+
+    /// The assistant's message of a round that said `text`, empty when it
+    /// said nothing, and made `calls` (RFC §6.4).
+    ///
+    /// ```
+    /// use roomkit_core::model::{Metadata, ToolCall};
+    /// use roomkit_core::rules::transcript::{Message, Role};
+    ///
+    /// let call = ToolCall::new("call_1", "lookup_order", Metadata::new());
+    /// let round = Message::assistant_calls("Let me check.", vec![call]);
+    /// let result = Message::tool_result("call_1", "shipped");
+    /// assert_eq!((round.role, result.role), (Role::Assistant, Role::Tool));
+    /// assert_eq!(result.tool_call_id.as_deref(), Some("call_1"));
+    /// ```
+    pub fn assistant_calls(text: impl Into<String>, calls: Vec<ToolCall>) -> Self {
+        Self {
+            tool_calls: calls,
+            ..Self::new(Role::Assistant, text)
+        }
+    }
+
+    /// The result of the call `call_id`, as the model reads it.
+    pub fn tool_result(call_id: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: Some(call_id.into()),
+            ..Self::new(Role::Tool, text)
         }
     }
 }
@@ -238,10 +283,7 @@ fn rendered(turns: Vec<Turn>, labelled: bool) -> Vec<Message> {
                 }
                 (_, false) => turn.text,
             };
-            Message {
-                role: turn.role,
-                text,
-            }
+            Message::new(turn.role, text)
         })
         .collect();
     if labelled {
@@ -251,10 +293,7 @@ fn rendered(turns: Vec<Turn>, labelled: bool) -> Vec<Message> {
                 input.text.push_str("\n\n");
                 input.text.push_str(&notes);
             }
-            Some(_) | None => messages.push(Message {
-                role: Role::User,
-                text: notes,
-            }),
+            Some(_) | None => messages.push(Message::new(Role::User, notes)),
         }
     }
     messages

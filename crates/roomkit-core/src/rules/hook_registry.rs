@@ -18,8 +18,13 @@ use crate::rules::permissions::WriteRefusal;
 /// When a hook fires (RFC §9.2).
 ///
 /// The triggers the implemented operations fire (the Level 0 ones of RFC
-/// §26.1 among them), and the three that fail closed (RFC §9.3), which the
-/// voice and AI steps fire. The list grows with each step.
+/// §26.1 among them), the three that fail closed (RFC §9.3), which the
+/// voice and AI steps fire, and `ON_TOOL_CALL`. The list grows with each
+/// step.
+///
+/// The tool triggers' payload is a tool call, no event: their hooks register
+/// through [`HookRegistry::register_tool_hook`], never
+/// [`HookRegistry::register`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -62,6 +67,10 @@ pub enum HookTrigger {
     BeforeTts,
     /// Before a tool executes; can block or override the call.
     BeforeToolUse,
+    /// A tool call's outcome, once per call: its SYNC hooks may replace or
+    /// withhold a served call's result, its ASYNC hooks observe every call
+    /// (RFC §9.3).
+    OnToolCall,
 }
 
 impl HookTrigger {
@@ -72,7 +81,8 @@ impl HookTrigger {
             Self::BeforeBroadcast
             | Self::OnTranscription
             | Self::BeforeTts
-            | Self::BeforeToolUse => HookExecution::Sync,
+            | Self::BeforeToolUse
+            | Self::OnToolCall => HookExecution::Sync,
             Self::AfterBroadcast
             | Self::OnEventUpdated
             | Self::OnEventDeleted
@@ -94,7 +104,8 @@ impl HookTrigger {
     pub fn fails_closed(self) -> bool {
         match self {
             Self::OnTranscription | Self::BeforeTts | Self::BeforeToolUse => true,
-            Self::BeforeBroadcast
+            Self::OnToolCall
+            | Self::BeforeBroadcast
             | Self::AfterBroadcast
             | Self::OnEventUpdated
             | Self::OnEventDeleted
@@ -109,6 +120,12 @@ impl HookTrigger {
             | Self::OnError
             | Self::OnTaskCreated => false,
         }
+    }
+
+    /// Whether the trigger's payload is a tool call rather than an event
+    /// (RFC §9.3): `BEFORE_TOOL_USE` and `ON_TOOL_CALL`.
+    pub fn is_tool_trigger(self) -> bool {
+        matches!(self, Self::BeforeToolUse | Self::OnToolCall)
     }
 }
 
@@ -232,6 +249,20 @@ pub enum RegistrationError {
         /// The refused hook.
         hook: String,
     },
+    /// A hook on a tool trigger registered as an event's hook, or a hook on
+    /// another trigger as a tool hook: a tool trigger's payload is a tool
+    /// call, no event (RFC §9.3).
+    #[error("hook {hook:?}: {trigger:?} {}", if .trigger.is_tool_trigger() {
+        "takes a tool call, not an event: register it as a tool hook"
+    } else {
+        "takes an event, not a tool call"
+    })]
+    PayloadMismatch {
+        /// The refused hook.
+        hook: String,
+        /// Its trigger.
+        trigger: HookTrigger,
+    },
     /// A hook that needs the lock would run before one that does not.
     #[error(
         "hook {locked:?} needs the room lock but is ordered before {off_lock:?}, which runs off it"
@@ -264,6 +295,28 @@ impl HookRegistry {
     /// Returns [`RegistrationError`] when the registration breaks a rule of
     /// RFC §9.1; nothing is registered then.
     pub fn register(&mut self, spec: HookSpec) -> Result<HookId, RegistrationError> {
+        if spec.trigger.is_tool_trigger() {
+            return Err(payload_mismatch(spec));
+        }
+        self.add(spec)
+    }
+
+    /// Registers `spec`, a hook on a tool trigger, whose payload is a tool
+    /// call (RFC §9.3), returning the id the driver keeps its handler under.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistrationError::PayloadMismatch`] for a trigger that is
+    /// no tool trigger, and any other [`RegistrationError`] a registration
+    /// breaking a rule of RFC §9.1 gets; nothing is registered then.
+    pub fn register_tool_hook(&mut self, spec: HookSpec) -> Result<HookId, RegistrationError> {
+        if !spec.trigger.is_tool_trigger() {
+            return Err(payload_mismatch(spec));
+        }
+        self.add(spec)
+    }
+
+    fn add(&mut self, spec: HookSpec) -> Result<HookId, RegistrationError> {
         check_alone(&spec)?;
         if self.hooks.iter().any(|(_, hook)| hook.name == spec.name) {
             return Err(RegistrationError::DuplicateName { name: spec.name });
@@ -382,6 +435,15 @@ impl HookRegistry {
             }
         }
         Ok(())
+    }
+}
+
+/// The refusal of `spec`, registered with the payload its trigger does not
+/// take.
+fn payload_mismatch(spec: HookSpec) -> RegistrationError {
+    RegistrationError::PayloadMismatch {
+        hook: spec.name,
+        trigger: spec.trigger,
     }
 }
 
@@ -699,6 +761,64 @@ mod tests {
             scan.filter.channel_ids = Some([ChannelId::new("email").unwrap()].into());
             registry.register(scan).unwrap();
             assert_eq!(registry.off_lock_checks(&sms_source()), []);
+        }
+    }
+
+    /// RFC §9.3: a tool trigger's payload is a tool call, no event.
+    mod tool_hooks {
+        use pretty_assertions::assert_eq;
+
+        use super::*;
+
+        #[test]
+        fn a_tool_trigger_s_hook_is_refused_as_an_event_s() {
+            let mut registry = HookRegistry::new();
+            for trigger in [HookTrigger::BeforeToolUse, HookTrigger::OnToolCall] {
+                let spec = HookSpec::new("approve", trigger, HookExecution::Sync);
+                assert_eq!(
+                    registry.register(spec),
+                    Err(RegistrationError::PayloadMismatch {
+                        hook: "approve".to_owned(),
+                        trigger
+                    })
+                );
+            }
+        }
+
+        #[test]
+        fn an_event_trigger_s_hook_is_refused_as_a_tool_hook() {
+            let mut registry = HookRegistry::new();
+            assert!(matches!(
+                registry.register_tool_hook(sync_hook("moderation", 0)),
+                Err(RegistrationError::PayloadMismatch { .. })
+            ));
+        }
+
+        #[test]
+        fn tool_hooks_run_in_priority_order_and_their_observers_apart() {
+            let mut registry = HookRegistry::new();
+            let gate = |name: &str, priority| HookSpec {
+                priority,
+                ..HookSpec::new(name, HookTrigger::BeforeToolUse, HookExecution::Sync)
+            };
+            registry.register_tool_hook(gate("approve", 5)).unwrap();
+            registry.register_tool_hook(gate("audit_args", 1)).unwrap();
+            registry
+                .register_tool_hook(HookSpec::new(
+                    "audit",
+                    HookTrigger::OnToolCall,
+                    HookExecution::Async,
+                ))
+                .unwrap();
+            let chain = registry.chain(HookTrigger::BeforeToolUse, &sms_source());
+            let observers = registry.observers(HookTrigger::OnToolCall, &sms_source());
+            assert_eq!(
+                (names(&registry, &chain), names(&registry, &observers)),
+                (
+                    vec!["audit_args".to_owned(), "approve".to_owned()],
+                    vec!["audit".to_owned()]
+                )
+            );
         }
     }
 }
