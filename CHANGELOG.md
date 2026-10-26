@@ -62,11 +62,47 @@ as it stands.
   `..`, and a driver or a test builds one with its constructor
   (`FrameworkEvent::room_paused(room_id, reason)`, one per variant, named
   after the RFC's event).
+- **Breaking: `OpenAiAgent` is `roomkit-ai`'s AI channel** over the Chat
+  Completions wire (step 4, milestone 5): a turn is one tool loop, its
+  rows returned at its end, each round's text a message of its own; its
+  constructor and configuration are unchanged. A hook on `BEFORE_TOOL_USE`
+  or the new `ON_TOOL_CALL` is refused by `RoomKit::hook()`
+  (`RegistrationError::PayloadMismatch`): their payload is a tool call,
+  and they register through the typed registrations below.
+  `transcript::Message` gains `tool_calls` and `tool_call_id`, and `Role`
+  gains `Tool`.
 
 ### Added
 
-- **Repository.** The `roomkit-core`, `roomkit` and `roomkit-openai`
-  crates and the `roomkit-examples` package; workspace lints; the gates `make all`, `make
+- **Tools** (step 4, milestone 5, RFC §6.4, §9.3, §21). The `roomkit-ai`
+  crate: `AiAgent`, the AI channel over any `AiProvider` (one call, a
+  request in, the generation's text, calls and done event out), whose turn
+  runs one tool loop: 50 rounds and 30 seconds per call by default
+  (`with_max_rounds`, `with_tool_timeout`), a round's calls run
+  concurrently, each through its gate in RFC §21.1's order (a call cut
+  short, a tool the turn does not carry, the `ToolPolicy`, the arguments'
+  schema, then `BEFORE_TOOL_USE`) with the reference implementation's
+  texts. The room keeps a round's text as a MESSAGE, a `TOOL_CALL_START` per
+  call, then the `TOOL_CALL_END` rows in call order; the last MESSAGE
+  carries `loop_end_reason` and `ai_usage`; a later turn replays no call. A
+  tool that raises reads as `Tool 'x' failed (<kind>)`, its message for the
+  observers alone. `Toolset` serves many tools behind one call, and `Tools`
+  holds the host's closures; `arguments::<T>()` reads a call's arguments,
+  refusing them as `Invalid arguments` when they do not fit;
+  `testing::ScriptedProvider` answers from a script. `OpenAiAgent` gains
+  `with_tools`, `with_tool_policy`, `with_max_rounds` and
+  `with_tool_timeout`, and declares the tools on the wire. The kit gains
+  `before_tool_use`, `on_tool_call` and `observe_tool_calls` (with
+  `ToolHookSpec`, `ToolCallEvent`, `ToolUse`, `ToolVerdict`), and
+  `roomkit::current_turn()` gives the turn's `TurnHost`, which writes to
+  the room at the turn's depth and runs those hooks. A call's observers
+  run as tasks of its turn, and what they send is at least as deep as the
+  turn was, once it is over too (RFC §8.3). `HookTrigger::OnToolCall` and
+  `model::ToolCall` are new. The examples `agent_tools`, and
+  `server_agent`'s order lookup, show them.
+
+- **Repository.** The `roomkit-core`, `roomkit`, `roomkit-ai` and
+  `roomkit-openai` crates and the `roomkit-examples` package; workspace lints; the gates `make all`, `make
   examples` and `make msrv`; CI for commit messages, formatting, lints,
   tests, documentation, the examples, the core's dependencies, the minimum
   Rust version, the dependency policy, and a weekly check against the
