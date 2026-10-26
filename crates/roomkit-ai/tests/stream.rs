@@ -15,7 +15,7 @@ use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     DirectEvent, EventContent, EventType, HookResult, InboundMessage, RoomContext, RoomEvent,
-    RoomId, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    RoomId, ToolCallContent, ToolCallOutcome, ToolCallStatus, Visibility,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -788,6 +788,72 @@ async fn a_streaming_target_that_takes_no_tool_row_is_handed_none() {
     assert_eq!(room.ws.delivered(), [3]);
     assert_eq!(room.rows().await.len(), 4);
     room.kit.shutdown().await;
+}
+
+/// A row a streaming channel may not read is never handed to it (review of
+/// step 4 milestone 6, security): a `BEFORE_BROADCAST` hook that narrows a
+/// segment's visibility away from it leaves the row to the channels it
+/// names, and the channel is handed nothing more of the response in the
+/// stream, its later rows delivered as their plans say; a row a hook
+/// blocks is handed to nobody, and the stream goes on. The deltas before
+/// the hook were shown, as RFC §6.4 accepts. (roomkit hands the narrowed
+/// row to the streaming channel:
+/// tasks/probes/step4-m6/withheld/py_withheld_probe.out.)
+#[tokio::test]
+async fn a_row_the_streaming_target_may_not_read_is_never_handed_to_it() {
+    for narrowed in [true, false] {
+        let rounds = vec![
+            ScriptedRound::calling("", [("call_1", "lookup_order", "{}")])
+                .in_pieces(["Secret ", "part."]),
+            ScriptedRound::writing(["Public ", "part."]),
+        ];
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (room, _model) =
+            Room::new(rounds, lookup(runs, None), Streaming::new(Stop::Never)).await;
+        let spec = HookSpec::new("judge", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+        room.kit
+            .hook(spec, move |mut event, _context| async move {
+                if roomkit::text_of(&event.content) != "Secret part." {
+                    return Ok(HookResult::allow());
+                }
+                if !narrowed {
+                    return Ok(HookResult::block("secret"));
+                }
+                event.visibility = Visibility::channels([channel("web")]).unwrap();
+                Ok(HookResult::modify(event))
+            })
+            .unwrap();
+        room.says("Tell me.").await;
+        let mut read = vec![
+            Read::Text("Secret ".to_owned()),
+            Read::Text("part.".to_owned()),
+        ];
+        // Past a narrowed row, the rest reaches the channel as its plan
+        // says, through deliver(); past a blocked one, the stream goes on.
+        let delivered: Vec<u64> = if narrowed {
+            vec![3, 5, 6, 7]
+        } else {
+            read.extend([
+                Read::Row(
+                    EventType::ToolCallStart,
+                    "[Tool call: lookup_order]".to_owned(),
+                    5,
+                ),
+                Read::Row(
+                    EventType::ToolCallEnd,
+                    "[Tool call: lookup_order]".to_owned(),
+                    6,
+                ),
+                Read::Text("Public ".to_owned()),
+                Read::Text("part.".to_owned()),
+                Read::Row(EventType::Message, "Public part.".to_owned(), 7),
+            ]);
+            vec![3]
+        };
+        assert_eq!(room.ws.read(), read, "narrowed: {narrowed}");
+        assert_eq!(room.ws.delivered(), delivered, "narrowed: {narrowed}");
+        room.kit.shutdown().await;
+    }
 }
 
 /// A channel that says it streams and keeps the default `deliver_stream`

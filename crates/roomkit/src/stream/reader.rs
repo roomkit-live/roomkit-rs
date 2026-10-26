@@ -31,7 +31,7 @@ use roomkit_core::model::{
     ChannelBinding, ChannelOutput, ErrorRecord, EventDirection, EventId, EventSource, EventType,
     EventUpdates, Metadata, RoomEvent, RoomId,
 };
-use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, StreamTarget};
+use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_WITHHELD, StreamTarget};
 use tokio::sync::{mpsc, oneshot};
 
 use super::segments::Segments;
@@ -79,7 +79,9 @@ enum Reads {
     Nobody,
     /// The streaming target, the tool-call rows too when `tool_rows`.
     Target { tool_rows: bool },
-    /// The target failed: the rows written since reach every target.
+    /// The target failed, or may not read a row of the response: it reads
+    /// nothing more in the stream, the rows written since reaching every
+    /// target their plans name.
     Lost,
 }
 
@@ -263,9 +265,11 @@ impl Producer {
                 }
                 self.over = Some(Over::End);
             }
-            Some(Ok(ResponseItem::Text(delta))) => {
-                self.ready.push_back(Ok(StreamItem::Text(delta)));
-            }
+            // The target reads the text as it comes; nobody else does.
+            Some(Ok(ResponseItem::Text(delta))) => match self.reads {
+                Reads::Target { .. } => self.ready.push_back(Ok(StreamItem::Text(delta))),
+                Reads::Nobody | Reads::Lost => self.segments.text(&delta),
+            },
             Some(Ok(ResponseItem::ToolStart(start))) => {
                 let rows = self.segments.start(start);
                 self.commit_all(rows).await;
@@ -425,11 +429,16 @@ impl Producer {
             event: Box::new(row),
             streamed,
         };
-        let Some(stored) = stored(context::adopt_by_own_run(entry).await) else {
+        let Some((stored, withheld)) = stored(context::adopt_by_own_run(entry).await) else {
             return;
         };
         self.segments.stored(&stored);
-        if streamed {
+        if withheld {
+            // The target may not read the row: it reads nothing more of the
+            // response in the stream, the rest delivered as each row's plan
+            // says.
+            self.reads = Reads::Lost;
+        } else if streamed {
             self.ready.push_back(Ok(StreamItem::Row(Box::new(stored))));
         }
     }
@@ -462,14 +471,18 @@ async fn write_record<S: ConversationStore>(
     }
 }
 
-/// The row the store holds, from a row's settled entry: none when it was
-/// refused or stored blocked, which its reader is never handed.
-fn stored(adopting: Adopting) -> Option<RoomEvent> {
+/// The row the store holds, from a row's settled entry, and whether the
+/// target may not read it ([`ROW_WITHHELD`]): none when it was refused or
+/// stored blocked, which no reader is handed.
+fn stored(adopting: Adopting) -> Option<(RoomEvent, bool)> {
     let Adopting::Settled(result) = adopting else {
         return None;
     };
     match *result {
-        Ok(result) if !result.blocked => result.event,
+        Ok(result) if !result.blocked => {
+            let withheld = result.reason.as_deref() == Some(ROW_WITHHELD);
+            Some((result.event?, withheld))
+        }
         Ok(_) | Err(_) => None,
     }
 }

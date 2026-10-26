@@ -100,6 +100,13 @@ pub struct Effect {
 /// `delivery_failed` with this error (gap G-048).
 pub const CHANNEL_NOT_REGISTERED: &str = "channel_not_registered";
 
+/// The reason a stream's row ([`Entry::Row`]) is settled with, the row
+/// committed and delivered, when the stream's target may not read it: its
+/// visibility, as its hooks left it, or the target's binding, as the room
+/// holds it, keeps the row from the target, which is handed it neither in
+/// the stream nor through `deliver()`.
+pub const ROW_WITHHELD: &str = "row_withheld";
+
 /// The error type a turn the operation cut is answered with, by the
 /// operation itself ([`Operation::cancel_turns`]): no failure, nothing of it
 /// reported.

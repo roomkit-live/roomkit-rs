@@ -19,6 +19,7 @@ use super::record::{RecordPass, RecordReport, RecordResult};
 use super::stream::{self, StreamJob};
 use super::{InboundError, InboundResult, Machine, instructions, report, stamp};
 use crate::model::{ChannelCategory, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId};
+use crate::ops::protocol::ROW_WITHHELD;
 use crate::ops::{Abort, Cx};
 use crate::rules::chain_depth;
 
@@ -125,13 +126,26 @@ impl Machine {
     /// commit, and it joins the cascade as a response, its delivery skipping
     /// the stream's target when that target read it in the stream (RFC
     /// §12.2 step 14s).
+    ///
+    /// A row the target may not read, its visibility as its hooks left it
+    /// or the target's binding keeping it from the target, is settled
+    /// [`ROW_WITHHELD`]: its reader is never handed it (review of step 4
+    /// milestone 6).
     fn on_row(&mut self, cx: &mut Cx<'_>, mut report: PassReport, note: &RowNote) {
-        cx.io.settle(note.entry, Ok(entry_result(&report.result)));
+        let mut result = entry_result(&report.result);
         if let (PassResult::Delivered { plan, .. }, Some(skips)) = (&mut report.result, &note.skips)
         {
+            let reaches = plan
+                .transports
+                .iter()
+                .any(|target| &target.binding.channel_id == skips && target.delivers);
+            if !reaches {
+                result.reason = Some(ROW_WITHHELD.to_owned());
+            }
             plan.transports
                 .retain(|target| &target.binding.channel_id != skips);
         }
+        cx.io.settle(note.entry, Ok(result));
         let origin = PassOrigin::Response {
             answers_within: None,
         };

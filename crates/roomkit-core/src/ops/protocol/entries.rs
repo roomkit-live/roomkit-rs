@@ -68,7 +68,10 @@ pub enum Entry {
     /// 13s). Its origin is the [`ChannelRequest::ReadStream`](super::ChannelRequest::ReadStream)
     /// effect reading the stream; the operation commits it as a response to
     /// the event the stream answers, and settles it with the stored row at
-    /// its commit, before its reader is handed it.
+    /// its commit, before its reader is handed it: delivered, refused or
+    /// stored `BLOCKED` as any response, and delivered with the reason
+    /// [`ROW_WITHHELD`](super::ROW_WITHHELD) when the stream's target may
+    /// not read it, which its reader is then never handed.
     Row {
         /// The room the stream answers in.
         room_id: RoomId,
