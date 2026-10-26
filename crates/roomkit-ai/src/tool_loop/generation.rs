@@ -1,7 +1,7 @@
 //! One generation, read from its provider's stream, and what the loop reads
 //! of its calls (RFC §6.4 "What a provider hands the loop for a call").
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use roomkit::model::{Metadata, ToolCall};
 use serde_json::Value;
@@ -24,6 +24,11 @@ const OUT_OF_ROOM: [&str; 4] = [
 /// The endings that can stop a call mid-arguments: out of room, a content
 /// filter, a refusal, a generation error.
 const CUTTING: [&str; 3] = ["error", "content_filter", "refusal"];
+
+/// The most calls one generation's round runs: far above a model's
+/// legitimate fan-out, far below a looping one's, which can fill its whole
+/// output with calls (roomkit's `_MAX_TOOL_CALLS_PER_ROUND`).
+const MAX_CALLS_PER_ROUND: usize = 32;
 
 /// A generation, read whole: its text, its calls, how it ended.
 #[derive(Debug)]
@@ -86,18 +91,22 @@ impl Generation {
 }
 
 /// The calls of a response that ended for `finish_reason`, as the loop reads
-/// them: each with an id no other carries (`call_<round>_<n>` for one the
-/// provider gave empty or twice), its arguments a mapping, and, for one that
-/// never runs, why.
+/// them: the first [`MAX_CALLS_PER_ROUND`], each with an id no other carries
+/// (`call_<round>_<n>` for one the provider gave empty or twice), its
+/// arguments a mapping, and, for one that never runs, why. The calls past
+/// the bound are dropped before the round's assistant message is written,
+/// so that no call reaches the model without its result, and logged.
 fn read_calls(
     calls: Vec<ProviderToolCall>,
     finish_reason: Option<&str>,
     round: u32,
 ) -> Vec<Called> {
     let last = calls.len().checked_sub(1);
+    log_dropped(&calls);
     let mut ids = HashSet::new();
     calls
         .into_iter()
+        .take(MAX_CALLS_PER_ROUND)
         .enumerate()
         .map(|(position, raw)| {
             let id = if raw.id.is_empty() || !ids.insert(raw.id.clone()) {
@@ -120,6 +129,26 @@ fn read_calls(
             }
         })
         .collect()
+}
+
+/// Logs the calls of a round past [`MAX_CALLS_PER_ROUND`], which never run:
+/// how many, and the tools they named.
+fn log_dropped(calls: &[ProviderToolCall]) {
+    let Some(dropped) = calls
+        .get(MAX_CALLS_PER_ROUND..)
+        .filter(|rest| !rest.is_empty())
+    else {
+        return;
+    };
+    let tools: BTreeSet<&str> = dropped.iter().map(|call| call.name.as_str()).collect();
+    tracing::warn!(
+        target: "roomkit::ai",
+        requested = calls.len(),
+        kept = MAX_CALLS_PER_ROUND,
+        dropped = dropped.len(),
+        tools = ?tools,
+        "a round asked more tool calls than it runs, the rest dropped: the model is looping"
+    );
 }
 
 /// `raw`, a call's argument text, as a mapping, and whether it read: none

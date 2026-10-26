@@ -238,6 +238,51 @@ async fn a_round_s_calls_run_together() {
     );
 }
 
+/// A round runs at most 32 of the calls its generation made, the first
+/// ones, as roomkit's `_MAX_TOOL_CALLS_PER_ROUND`: the rest never run, are
+/// not stored, and the model reads neither them nor results for them
+/// (review of step 4 milestone 6: one completion asked 5,000).
+#[tokio::test]
+async fn a_round_runs_its_first_thirty_two_calls_only() {
+    let ids: Vec<String> = (0..40).map(|n| format!("c{n}")).collect();
+    let calls = ids
+        .iter()
+        .map(|id| (id.as_str(), "lookup_order", r#"{"order": "42"}"#));
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", calls),
+        ScriptedRound::answering("All shipped."),
+    ]);
+    let room = Room::new(model.clone(), served()).await;
+    room.says("Where are my orders?").await;
+    let ended: Vec<String> = room
+        .timeline()
+        .await
+        .iter()
+        .filter(|event| event.event_type == EventType::ToolCallEnd)
+        .filter_map(|event| {
+            let EventContent::ToolCall(row) = &event.content else {
+                return None;
+            };
+            Some(row.tool_id.clone())
+        })
+        .collect();
+    let asked = model
+        .requests()
+        .get(1)
+        .and_then(|request| {
+            request
+                .messages
+                .iter()
+                .find(|message| !message.tool_calls.is_empty())
+                .map(|message| message.tool_calls.len())
+        })
+        .unwrap();
+    assert_eq!(
+        (ended, asked, tool_results(&model)[1].len()),
+        (ids[..32].to_vec(), 32, 32)
+    );
+}
+
 /// RFC §6.4 "A turn cut short": the provider failing after a round keeps
 /// the rounds, records the turn's end `error`, and reports the error.
 #[tokio::test]

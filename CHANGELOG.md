@@ -71,6 +71,11 @@ as it stands.
   and they register through the typed registrations below.
   `transcript::Message` gains `tool_calls` and `tool_call_id`, and `Role`
   gains `Tool`.
+- **A round runs at most 32 tool calls** (step 4, milestone 6, review). An
+  AI agent's round runs the first 32 calls its generation made, as the
+  Python implementation does; the rest never run, are not stored, are left
+  out of the assistant message the model reads next, and are logged at
+  `warn` with the tools they named. One completion could make thousands.
 - **Breaking: an AI agent's turn is a stream** (step 4, milestone 6, RFC
   §6.1, §12.2 steps 13s and 14s). Within a kit, `AiAgent`'s turn answers
   with its loop as a stream, which the kit reads once the event's delivery
