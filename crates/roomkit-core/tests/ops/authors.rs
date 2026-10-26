@@ -123,6 +123,30 @@ fn a_register_the_metadata_holds_is_merged_into_the_store_s() {
     );
 }
 
+/// RFC §10.1 step 12, the review of step 3 milestone 2: a copy of the
+/// register the room's metadata holds, identical to the store's, leaves
+/// the metadata at the room's next named turn, one that changes no rank,
+/// as the Python implementation moves it for a store that keeps the
+/// register apart.
+#[test]
+fn an_identical_copy_the_metadata_holds_leaves_it() {
+    let mut sim = Sim::new();
+    sim.transport("sms");
+    let held = register(&json!({ ALICE: format!("{SENDER}:1") }));
+    sim.author_register = Some(held.clone());
+    sim.room
+        .metadata
+        .insert("author_register".to_owned(), Value::Object(held));
+    sim.send(named("Alice")).unwrap();
+    assert_eq!(
+        (
+            last_record(&sim),
+            sim.room.metadata.contains_key("author_register")
+        ),
+        (Some(author("Alice", 1, SENDER)), false)
+    );
+}
+
 /// RFC §10.1 step 12: a room with no register has it rebuilt from its
 /// timeline, read whole under the lock before the commit when the
 /// context's window does not hold it: an earlier author with no record

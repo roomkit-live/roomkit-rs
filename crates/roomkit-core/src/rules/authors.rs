@@ -469,9 +469,12 @@ fn history<'a>(
 }
 
 /// The register the room holds, and whether its metadata holds one to move
-/// to the store: a room stored before the store kept it apart. The store's
-/// takes every rank the metadata's gave. A store that keeps it in the
-/// metadata hands the same register twice, which moves nothing.
+/// to the store: a room stored before the store kept it apart, or a copy a
+/// process from before wrote there since. The store's takes every rank the
+/// metadata's gave. A copy is moved even when it is the store's own: a
+/// store that keeps the register apart then drops it from the metadata, as
+/// the Python implementation's does; one that keeps it in the metadata,
+/// which hands the same register twice, writes it back unchanged.
 fn held_register(context: &RoomContext) -> (Option<AuthorRegister>, bool) {
     let held = context
         .author_register
@@ -483,7 +486,6 @@ fn held_register(context: &RoomContext) -> (Option<AuthorRegister>, bool) {
     let legacy = legacy.as_object().and_then(AuthorRegister::stored);
     match (held, legacy) {
         (None, legacy) => (legacy, true),
-        (Some(held), Some(legacy)) if held == legacy => (Some(held), false),
         (Some(mut held), Some(legacy)) => {
             held.merge(&legacy);
             (Some(held), true)
