@@ -124,7 +124,10 @@ as it stands.
   `BEFORE_BROADCAST` run as observers once the chain allowed the event, on
   the payload its SYNC hooks left (§9.2, found by the shared conformance
   suite's `hooks/an-async-hook-on-a-sync-trigger-observes`, step 3
-  milestone 2); they never ran.
+  milestone 2); they never ran. Each body is the cascade's work while it
+  runs: a call it makes into the room draws one of the cascade's hook
+  calls and is refused past the cap, as an `AFTER_BROADCAST` body's is, so
+  an observer that posts on every event stops (§9.5.1, gap G-087).
 - **Deadlines and callers that leave.** The kit's `process_timeout` bounds
   a call from its start to its decision, routing, the parse, the off-lock
   hooks, the ticket, the lock and the locked section, never the commit and

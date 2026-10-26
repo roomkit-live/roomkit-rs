@@ -208,8 +208,10 @@ pub(super) async fn route<S: ConversationStore>(
 /// the background, as tasks the kit tracks, logging what they raise (RFC
 /// §9.3). A background observer runs outside every call's execution
 /// context: it runs after the fact, and nothing awaits it as its own. The
-/// body of one a cascade fires once an event's delivery set has run, or a
-/// direct change fires, is that work while it runs (a [`HookBody`]): its
+/// body of one a cascade fires once an event's delivery set has run, of an
+/// ASYNC hook of `BEFORE_BROADCAST` observing the event its chain allowed,
+/// or of one a direct change fires, is that work while it runs (a
+/// [`HookBody`]): its
 /// calls into the room draw on the work's hook calls, at least one deeper
 /// than its event (RFC §8.3, §9.5.1, §10.1 step 16, gap G-087). Once the
 /// kit is shut down, none runs.

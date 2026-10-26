@@ -1,6 +1,8 @@
 //! The body of an ASYNC hook a cascade fires once an event's delivery set
 //! has run (`AFTER_BROADCAST`, a change's `ON_EVENT_UPDATED` and
-//! `ON_EVENT_DELETED`) is that cascade's work while it runs (RFC §8.3, §9.5.1,
+//! `ON_EVENT_DELETED`), and of an ASYNC hook of `BEFORE_BROADCAST`, which
+//! observes the event its chain allowed, is that cascade's work while it
+//! runs (RFC §8.3, §9.2, §9.5.1,
 //! §10.1 step 16, §10.3, RMK-954): a call it makes into the room draws one
 //! of the cascade's hook calls, a counter kept apart from its passes; a
 //! direct change it makes draws one too, refused past them; a call it makes
@@ -143,6 +145,36 @@ async fn a_hook_posting_after_every_event_stops_at_the_cap() {
     let posted: Kept<Option<String>> = kept();
     let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
     kit.observe("notice", HookTrigger::AfterBroadcast, move |event, _| {
+        let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
+        async move {
+            if event.event_type == EventType::Message && len(&posted) <= 2 * BUDGET {
+                let notice = Post::new(EventContent::text(format!("Noted {}.", len(&posted))));
+                let event = kit.post(&room_id(), notice).await.unwrap();
+                push(&posted, event.blocked_by);
+            }
+        }
+    })
+    .unwrap();
+    kit.process_inbound_in(&room_id(), message("hi"))
+        .await
+        .unwrap();
+    kit.idle().await;
+    let mut expected = vec![None; BUDGET];
+    expected.push(Some("reentry_loop_cap".to_owned()));
+    assert_eq!(taken(&posted), expected);
+}
+
+/// RFC §9.2, §9.5.1, decided for step 3 milestone 2: an ASYNC hook of a
+/// SYNC trigger, `BEFORE_BROADCAST`, observes the event its chain allowed
+/// as the cascade's work: its own post fires it again, and it stops at the
+/// cap of its cascade's hook calls, as an `AFTER_BROADCAST` body does. It
+/// posted without end (11,364 events in 2 s, the review's probe).
+#[tokio::test]
+async fn an_observer_of_before_broadcast_posting_on_every_event_stops_at_the_cap() {
+    let kit = room(1).await;
+    let posted: Kept<Option<String>> = kept();
+    let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
+    kit.observe("notice", HookTrigger::BeforeBroadcast, move |event, _| {
         let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
         async move {
             if event.event_type == EventType::Message && len(&posted) <= 2 * BUDGET {

@@ -136,6 +136,12 @@ impl Io {
         self.work = Some(budget.clone());
     }
 
+    /// The budget of the cascade the sections being advanced work for, as
+    /// [`Io::work_for`] lent it.
+    pub(crate) fn work(&self) -> Option<&ReentryBudget> {
+        self.work.as_ref()
+    }
+
     /// The budget `request`, made under a lock when `locked`, carries
     /// unless it names its own: the cascade's its section works for, for
     /// a request that runs the integrator's code under a lock or in an

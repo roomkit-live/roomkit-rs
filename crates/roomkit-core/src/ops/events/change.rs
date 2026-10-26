@@ -116,7 +116,7 @@ impl DirectWork {
         payload: &RoomEvent,
         context: &RoomContext,
     ) {
-        cx.fire_after_delivery(trigger, payload, context, self.draw.budget(), self.floor);
+        cx.fire_as_cascade_work(trigger, payload, context, self.draw.budget(), self.floor);
     }
 }
 

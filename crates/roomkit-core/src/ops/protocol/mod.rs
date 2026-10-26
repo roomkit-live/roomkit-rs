@@ -175,8 +175,10 @@ pub enum Notice {
         /// The room's context, whole.
         context: Box<RoomContext>,
         /// For the hooks a cascade fires once an event's delivery set has
-        /// run, and a direct change's: the work each body is while it runs
-        /// (RFC §8.3, §9.5.1, §10.1 step 16, §10.3); `None` for any other.
+        /// run, a direct change's, and the ASYNC hooks of a SYNC trigger,
+        /// which observe the event its chain allowed: the work each body is
+        /// while it runs (RFC §8.3, §9.2, §9.5.1, §10.1 step 16, §10.3);
+        /// `None` for any other.
         after_delivery: Option<AfterDelivery>,
     },
 }
@@ -184,7 +186,9 @@ pub enum Notice {
 /// The work the body of an ASYNC hook is while it runs, when a cascade
 /// fires it once an event's delivery set has run (RFC §10.1 step 16's
 /// `AFTER_BROADCAST` hooks, a change's `ON_EVENT_UPDATED` and
-/// `ON_EVENT_DELETED` hooks, §10.3), or a direct change does (gap G-087).
+/// `ON_EVENT_DELETED` hooks, §10.3), or a direct change does (gap G-087),
+/// and when it is an ASYNC hook of a SYNC trigger, `BEFORE_BROADCAST`, which
+/// observes the event its chain allowed (RFC §9.2).
 ///
 /// While the body runs, a call it makes into the room is a new arrival
 /// that draws one of `budget`'s hook calls as it starts, its cascade on

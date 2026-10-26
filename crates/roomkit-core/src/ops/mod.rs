@@ -107,10 +107,13 @@ impl Cx<'_> {
     /// whose budget is `budget` while they run (RFC §8.3, §9.5.1, §10.1
     /// step 16, §10.3, gap G-087): what they call into the room draws on
     /// its hook calls, at least `floor` deep, one deeper than `payload`
-    /// when the caller names no deeper floor.
+    /// when the caller names no deeper floor. The hooks a cascade fires
+    /// once an event's delivery set has run are such work, and so are the
+    /// ASYNC hooks of a SYNC trigger, which observe the event its chain
+    /// allowed.
     ///
     /// [`fire_observers`]: Self::fire_observers
-    pub(crate) fn fire_after_delivery(
+    pub(crate) fn fire_as_cascade_work(
         &mut self,
         trigger: HookTrigger,
         payload: &RoomEvent,

@@ -68,7 +68,7 @@ pub(super) fn after_broadcast(
     context: &RoomContext,
     budget: &ReentryBudget,
 ) {
-    cx.fire_after_delivery(HookTrigger::AfterBroadcast, event, context, budget, 0);
+    cx.fire_as_cascade_work(HookTrigger::AfterBroadcast, event, context, budget, 0);
 }
 
 /// Fires the mutation trigger of an edit or a delete committed as `change`,
@@ -90,7 +90,7 @@ pub(super) fn target_changed(
     } else {
         HookTrigger::OnEventUpdated
     };
-    cx.fire_after_delivery(trigger, target, context, budget, 0);
+    cx.fire_as_cascade_work(trigger, target, context, budget, 0);
 }
 
 /// Fires the `ON_TASK_CREATED` observers of each stored task (RFC §9.2),
