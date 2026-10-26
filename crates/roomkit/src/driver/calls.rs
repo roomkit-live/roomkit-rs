@@ -190,7 +190,8 @@ pub(super) async fn channel<S: ConversationStore>(
             target,
         } => {
             let kept = shared.take_stream(turn);
-            Box::pin(stream::read(inner, kept, responder, *answers, target)).await
+            let stop = shared.stop_signal(effect);
+            Box::pin(stream::read(inner, kept, stop, responder, *answers, target)).await
         }
     }
 }
@@ -256,6 +257,8 @@ pub(super) async fn route<S: ConversationStore>(
 pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notice) {
     match notice {
         Notice::FrameworkEvent(event) => inner.publish(event),
+        // The run's own: the driver stops its read (`Driver::notice`).
+        Notice::StopReading { .. } => {}
         Notice::AsyncHooks {
             trigger,
             hooks,

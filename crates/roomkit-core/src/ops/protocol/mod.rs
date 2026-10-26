@@ -188,6 +188,16 @@ pub enum Notice {
         /// `None` for any other.
         after_delivery: Option<AfterDelivery>,
     },
+    /// Stop reading the stream the [`ChannelRequest::ReadStream`] effect
+    /// `effect` reads, its turn cut from outside (RFC §10.1 "Explicit
+    /// delivery cancellation", §12.2 step 13s): its reader is stopped as one
+    /// that stopped reading, the text it was handed and the ends of the
+    /// calls it opened handed back as rows, the text marked `cancelled`;
+    /// the effect is then answered as any read that ended.
+    StopReading {
+        /// The read to stop.
+        effect: EffectId,
+    },
 }
 
 /// The work the body of an ASYNC hook is while it runs, when a cascade

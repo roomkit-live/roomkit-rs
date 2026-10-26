@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::RoomId;
 use roomkit_core::ops::EffectId;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use super::adoption::Adoption;
 use crate::stream::KeptStream;
@@ -45,6 +45,8 @@ pub(crate) struct RunShared {
     /// The streams the run's turns answered with, by their turn's effect,
     /// until they are read (RFC §6.1 `response_stream`).
     streams: Mutex<HashMap<EffectId, KeptStream>>,
+    /// The signal each read of a stream is stopped with, by its effect.
+    stops: Mutex<HashMap<EffectId, watch::Sender<bool>>>,
 }
 
 /// A claim on one tenure of a room's lock, which code run under that lock
@@ -65,6 +67,7 @@ impl RunShared {
             adoptions,
             tenures: AtomicU64::new(0),
             streams: Mutex::new(HashMap::new()),
+            stops: Mutex::new(HashMap::new()),
         });
         (shared, received)
     }
@@ -122,6 +125,10 @@ impl RunShared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+        self.stops
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
 
     /// Keeps the stream the turn of `effect` answered with, until it is read.
@@ -130,6 +137,27 @@ impl RunShared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(effect, stream);
+    }
+
+    /// The signal the read of `effect` is stopped with: `true` once the
+    /// operation stops it (RFC §12.2 step 13s).
+    pub(crate) fn stop_signal(&self, effect: EffectId) -> watch::Receiver<bool> {
+        self.stops
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(effect)
+            .or_insert_with(|| watch::Sender::new(false))
+            .subscribe()
+    }
+
+    /// Stops the read of `effect`, now or as it starts.
+    pub(crate) fn stop_reading(&self, effect: EffectId) {
+        self.stops
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(effect)
+            .or_insert_with(|| watch::Sender::new(false))
+            .send_replace(true);
     }
 
     /// The stream the turn of `effect` answered with, taken to be read.

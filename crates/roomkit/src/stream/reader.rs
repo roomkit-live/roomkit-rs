@@ -30,7 +30,7 @@ use roomkit_core::model::{
     EventUpdates, Metadata, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_WITHHELD, StreamTarget};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use super::segments::Segments;
 use super::{DeliveryStream, Pulled, ResponseItem, ResponseStream, StreamItem};
@@ -99,6 +99,7 @@ enum Over {
 pub(crate) async fn read<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     kept: Option<KeptStream>,
+    stop: watch::Receiver<bool>,
     responder: ChannelBinding,
     answers: RoomEvent,
     target: Option<StreamTarget>,
@@ -146,7 +147,7 @@ pub(crate) async fn read<S: ConversationStore>(
         let _signalled = done.send(());
         read
     };
-    let (read, ()) = tokio::join!(reader, producer.serve(pulled, reader_done));
+    let (read, ()) = tokio::join!(reader, producer.serve(pulled, reader_done, stop));
     let output = producer.finish(read).await;
     if let Some((event_id, metadata)) = producer.segments.owed_record() {
         write_record(inner, &producer.room_id, &event_id, metadata).await;
@@ -182,30 +183,41 @@ struct Producer {
 }
 
 impl Producer {
-    /// Answers the reader's pulls, until it stops or is handed the end.
+    /// Answers the reader's pulls, until it stops or is handed the end, or
+    /// `stop` stops the read, the turn cut from outside: the reader then
+    /// reads the stream's end, and the response is settled as a stopped
+    /// one's (RFC §12.2 step 13s).
     async fn serve(
         &mut self,
         mut pulls: mpsc::UnboundedReceiver<oneshot::Sender<Pulled>>,
         mut reader_done: oneshot::Receiver<()>,
+        mut stop: watch::Receiver<bool>,
     ) {
         loop {
             let pull = tokio::select! {
                 biased;
                 _ = &mut reader_done => return,
+                _ = stop.wait_for(|stopped| *stopped) => return,
                 pull = pulls.recv() => match pull {
                     Some(pull) => pull,
                     None => return,
                 },
             };
-            if !self.answer(pull).await {
+            if !self.answer(pull, &mut stop).await {
                 return;
             }
         }
     }
 
     /// Answers one pull: the next item, the response read further when
-    /// none is ready; whether the reader goes on.
-    async fn answer(&mut self, pull: oneshot::Sender<Pulled>) -> bool {
+    /// none is ready; whether the reader goes on. A read `stop` stops while
+    /// the response is read is abandoned, a running call cut with it, as a
+    /// turn cancelled from outside is (RFC §12.2 step 13s).
+    async fn answer(
+        &mut self,
+        pull: oneshot::Sender<Pulled>,
+        stop: &mut watch::Receiver<bool>,
+    ) -> bool {
         loop {
             if let Some(item) = self.ready.pop_front() {
                 return self.hand(pull, Some(item));
@@ -213,7 +225,11 @@ impl Producer {
             if self.over.is_some() {
                 return self.hand(pull, None);
             }
-            let read = self.pull_turn().await;
+            let read = tokio::select! {
+                biased;
+                _ = stop.wait_for(|stopped| *stopped) => return false,
+                read = self.pull_turn() => read,
+            };
             if pull.is_closed() {
                 // The reader stopped while the read was in flight.
                 self.in_flight = Some(read);

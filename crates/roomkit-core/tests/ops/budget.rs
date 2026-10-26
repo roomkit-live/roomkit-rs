@@ -314,7 +314,7 @@ mod a_hook_s_body {
                         .as_ref()
                         .map(|AfterDelivery { floor, .. }| *floor),
                 )),
-                Notice::FrameworkEvent(_) => None,
+                Notice::FrameworkEvent(_) | Notice::StopReading { .. } => None,
             })
             .collect();
         assert_eq!(works, [(HookTrigger::AfterBroadcast, Some(3))]);

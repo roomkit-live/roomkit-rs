@@ -41,7 +41,7 @@ use std::task::Poll;
 
 use roomkit_core::model::{ErrorRecord, RoomId, Timestamp};
 use roomkit_core::ops::{
-    Effect, EffectId, EntryId, Environment, HoldRequest, Next, Operation, Outcome, Request,
+    Effect, EffectId, EntryId, Environment, HoldRequest, Next, Notice, Operation, Outcome, Request,
     Settled, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -222,7 +222,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         loop {
             let step = operation.poll(&*self.environment);
             for notice in step.notices {
-                calls::perform(self.inner, notice);
+                self.notice(notice);
             }
             for settled in step.settled {
                 self.answer(settled);
@@ -289,6 +289,17 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 }
                 // The operation waits for effects that were never issued.
                 None => return Err(KitError::Stalled),
+            }
+        }
+    }
+
+    /// Performs `notice`: a read the operation stops is the run's own, any
+    /// other the kit's.
+    fn notice(&self, notice: Notice) {
+        match notice {
+            Notice::StopReading { effect } => self.shared.stop_reading(effect),
+            notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
+                calls::perform(self.inner, notice);
             }
         }
     }

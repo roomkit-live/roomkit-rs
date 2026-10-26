@@ -927,7 +927,7 @@ impl Sim {
             .iter()
             .filter_map(|notice| match notice {
                 Notice::FrameworkEvent(event) => Some(event),
-                Notice::AsyncHooks { .. } => None,
+                Notice::AsyncHooks { .. } | Notice::StopReading { .. } => None,
             })
             .collect()
     }
@@ -946,7 +946,7 @@ impl Sim {
             .iter()
             .filter_map(|notice| match notice {
                 Notice::AsyncHooks { trigger, .. } => Some(*trigger),
-                Notice::FrameworkEvent(_) => None,
+                Notice::FrameworkEvent(_) | Notice::StopReading { .. } => None,
             })
             .collect()
     }
@@ -957,7 +957,7 @@ impl Sim {
             .iter()
             .filter_map(|notice| match notice {
                 Notice::AsyncHooks { event, .. } => Some(&**event),
-                Notice::FrameworkEvent(_) => None,
+                Notice::FrameworkEvent(_) | Notice::StopReading { .. } => None,
             })
             .collect()
     }
@@ -968,7 +968,7 @@ impl Sim {
             .iter()
             .filter_map(|notice| match notice {
                 Notice::AsyncHooks { context, .. } => Some(&**context),
-                Notice::FrameworkEvent(_) => None,
+                Notice::FrameworkEvent(_) | Notice::StopReading { .. } => None,
             })
             .collect()
     }
@@ -1870,6 +1870,7 @@ fn journal_line(notice: &Notice) -> String {
     match notice {
         Notice::FrameworkEvent(event) => format!("emit {}", event_name(event)),
         Notice::AsyncHooks { trigger, .. } => format!("fire {}", trigger_name(*trigger)),
+        Notice::StopReading { effect } => format!("stop reading {effect:?}"),
     }
 }
 

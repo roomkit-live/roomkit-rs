@@ -38,13 +38,13 @@ use super::stream::{self, PendingRow, Read, StreamEnd, StreamJob, StreamRead};
 use super::{Machine, Stage};
 use crate::model::{ChannelBinding, Metadata, RoomEvent, RoomId};
 use crate::ops::io::Io;
-use crate::ops::protocol::{EffectId, Entry, EntryId, Outcome};
+use crate::ops::protocol::{EffectId, Entry, EntryId, Notice, Outcome};
 use crate::ops::{Cx, Progress, RefusedOperation};
 use crate::rules::chain_depth::{self, Draw, ReentryBudget};
 use crate::rules::hook_chain::HookChain;
 
-/// Why a row its cascade cut is not committed.
-const TURN_CUT_REASON: &str = "turn_cut";
+/// Why a row of a cascade that stopped is not committed.
+const STOPPED_REASON: &str = "cascade_stopped";
 
 /// Whose cascade a pass or a delivery set belongs to: the call's own, or
 /// the cascade of an entry the operation adopted (gap G-070), whose caller
@@ -209,46 +209,36 @@ impl Cascade {
     /// on, which the driver cuts and never answers.
     pub(super) fn cut_turns(&mut self, io: &mut Io) -> Vec<EffectId> {
         self.turns_cut = true;
-        let cut_rows: Vec<EntryId> = self
-            .passes
-            .iter()
-            .filter_map(|job| match job {
-                Job::Row(pass, note) if pass.lineage() == Lineage::Call => Some(note.entry),
-                Job::Pass(..) | Job::Record(..) | Job::Row(..) => None,
-            })
-            .collect();
         self.passes.retain(|job| match job {
-            Job::Pass(pass, _) | Job::Row(pass, _) => {
-                !(pass.is_response() && pass.lineage() == Lineage::Call)
-            }
-            Job::Record(..) => true,
+            Job::Pass(pass, _) => !(pass.is_response() && pass.lineage() == Lineage::Call),
+            // The rows of the stream being read are what its reader was
+            // handed: they are stored, as its text is (RFC §12.2 step 13s).
+            Job::Record(..) | Job::Row(..) => true,
         });
-        for entry in cut_rows {
-            io.settle(entry, Ok(stream::row_refused(TURN_CUT_REASON)));
-        }
         for delivery in &mut self.sets {
             if delivery.set.lineage() == Lineage::Call {
                 delivery.set.cut();
             }
         }
         self.streams.retain(|job| job.lineage != Lineage::Call);
-        let mut cut = match self.delivery.as_mut() {
-            Some(delivery) if delivery.set.lineage() == Lineage::Call => {
-                let turns = delivery.set.cut();
-                io.cut(&turns)
-            }
-            Some(_) | None => Vec::new(),
-        };
-        // The stream being read is a turn of the cascade: its reader is cut.
+        // The stream being read is a turn of the cascade: its reader is
+        // stopped, the text it was handed stored marked cancelled (RFC
+        // §12.2 step 13s), and the read answered as any.
         if let Some(reading) = self
             .stream
             .as_ref()
             .filter(|read| read.lineage() == Lineage::Call)
             .and_then(StreamRead::reading)
         {
-            cut.extend(io.cut(&[reading]));
+            io.notify(Notice::StopReading { effect: reading });
         }
-        cut
+        match self.delivery.as_mut() {
+            Some(delivery) if delivery.set.lineage() == Lineage::Call => {
+                let turns = delivery.set.cut();
+                io.cut(&turns)
+            }
+            Some(_) | None => Vec::new(),
+        }
     }
 
     /// Whether the cascade has nothing queued nor running, no stream to
@@ -435,7 +425,9 @@ impl Machine {
 impl Machine {
     /// Starts the passes of the rows a stream's reader handed back, each at
     /// the head of the passes; a row of a stream no longer read, or of a
-    /// cascade that stopped or whose turns are cut, is refused at once.
+    /// cascade that stopped, is refused at once. The rows of a stream whose
+    /// turns are cut are stored: its reader was handed them (RFC §12.2
+    /// step 13s), and their sets ask no agent.
     fn start_rows(&mut self, cx: &mut Cx<'_>) {
         for row in std::mem::take(&mut self.cascade.rows) {
             let Some(read) = self
@@ -448,10 +440,9 @@ impl Machine {
                     .settle(row.entry, Ok(stream::row_refused("stream_over")));
                 continue;
             };
-            let cut = self.cascade.turns_cut && read.lineage() == Lineage::Call;
-            if self.cascade.stopping || cut {
+            if self.cascade.stopping {
                 cx.io
-                    .settle(row.entry, Ok(stream::row_refused(TURN_CUT_REASON)));
+                    .settle(row.entry, Ok(stream::row_refused(STOPPED_REASON)));
                 continue;
             }
             let (pass, skips) = read.row_pass(cx, *row.event, row.streamed);

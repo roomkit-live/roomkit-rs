@@ -852,6 +852,123 @@ async fn a_row_the_streaming_target_may_not_read_is_never_handed_to_it() {
     }
 }
 
+/// A provider whose one generation hands the events a test sends it, as it
+/// sends them.
+#[derive(Clone, Default)]
+struct Controlled {
+    events: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<ProviderEvent>>>>,
+    dropped: Arc<AtomicUsize>,
+}
+
+/// The events a test hands a [`Controlled`] generation.
+struct Fed {
+    events: tokio::sync::mpsc::UnboundedReceiver<ProviderEvent>,
+    dropped: Arc<AtomicUsize>,
+}
+
+impl Drop for Fed {
+    fn drop(&mut self) {
+        self.dropped.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl Stream for Fed {
+    type Item = Result<ProviderEvent, roomkit_ai::ProviderError>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.get_mut()
+            .events
+            .poll_recv(context)
+            .map(|event| event.map(Ok))
+    }
+}
+
+impl AiProvider for Controlled {
+    fn generate<'a>(&'a self, _request: &'a AiRequest) -> ResponseStream<'a> {
+        let events = self.events.lock().unwrap().take();
+        let (_spare, empty) = tokio::sync::mpsc::unbounded_channel();
+        Box::pin(Fed {
+            events: events.unwrap_or(empty),
+            dropped: Arc::clone(&self.dropped),
+        })
+    }
+}
+
+/// RFC §10.1 "Explicit delivery cancellation", §12.2 step 13s: a caller
+/// that stops waiting once its message is decided cuts its turns; the
+/// stream being read is stopped as a reader that stopped, the text its
+/// reader was handed stored marked cancelled, the turn recording
+/// `cancelled`, and the model's stream is dropped. A server whose client
+/// leaves mid-answer drops its call so.
+#[tokio::test]
+async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled() {
+    let (feed, events) = tokio::sync::mpsc::unbounded_channel();
+    let model = Controlled::default();
+    *model.events.lock().unwrap() = Some(events);
+    let dropped = Arc::clone(&model.dropped);
+    let agent = AiAgent::new(channel("agent"), model);
+    let kit = RoomKit::new();
+    let ws = Streaming::new(Stop::Never);
+    kit.register_channel(RecordingTransport::new(
+        channel("web"),
+        ChannelType::WEBHOOK,
+    ))
+    .unwrap();
+    kit.register_channel(ws.clone()).unwrap();
+    kit.register_channel(agent).unwrap();
+    kit.create_room(&room_id()).await.unwrap();
+    for id in ["web", "ws", "agent"] {
+        kit.attach(&room_id(), &channel(id)).await.unwrap();
+    }
+    let message = InboundMessage::new(channel("web"), "alice", EventContent::text("Hi"));
+    let calling = kit.clone();
+    let caller = tokio::spawn(async move { calling.process_inbound_in(&room_id(), message).await });
+    for piece in ["The ", "answer "] {
+        feed.send(ProviderEvent::Text(piece.to_owned())).unwrap();
+    }
+    let read_both = async {
+        while ws.read().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), read_both)
+        .await
+        .unwrap();
+    // The caller leaves: its call's turns are cut.
+    caller.abort();
+    let _gone = caller.await;
+    tokio::time::timeout(Duration::from_secs(5), kit.idle())
+        .await
+        .unwrap();
+    let answer = kit
+        .store()
+        .list_events(&room_id(), true)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|event| event.source.channel_id == channel("agent"))
+        .unwrap();
+    assert_eq!(
+        (
+            roomkit::text_of(&answer.content),
+            answer.metadata.get("cancelled").cloned(),
+            answer.metadata.get("loop_end_reason").cloned(),
+            dropped.load(Ordering::SeqCst),
+        ),
+        (
+            "The answer ".to_owned(),
+            Some(json!(true)),
+            Some(json!("cancelled")),
+            1
+        )
+    );
+    drop(feed);
+    kit.shutdown().await;
+}
+
 /// A channel that says it streams and keeps the default `deliver_stream`
 /// is delivered each row once the stream is over, through `deliver()`
 /// (RFC §6.1, step 4 decision 9).
