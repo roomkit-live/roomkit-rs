@@ -368,3 +368,40 @@ fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
         trace: rest.trace,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use roomkit_core::model::{
+        ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource, EventType,
+        RoomEvent, RoomId, Timestamp,
+    };
+
+    use super::*;
+
+    /// RFC §10.6.3: a request is checked against its bound before it is
+    /// parsed.
+    #[test]
+    fn a_request_past_its_bound_is_refused_before_it_is_parsed() {
+        let at: Timestamp = "2026-10-26T12:00:00Z".parse().unwrap();
+        let source = EventSource::new(
+            ChannelId::new("sms").unwrap(),
+            ChannelType::SMS,
+            EventDirection::Inbound,
+        );
+        let event = RoomEvent::new(
+            EventId::new("evt_1").unwrap(),
+            RoomId::new("room_1").unwrap(),
+            EventType::Message,
+            source,
+            EventContent::text("Hi"),
+            at,
+        );
+        let carried = CarriedRequest {
+            rest: " ".repeat(MAX_MESSAGE_BYTES + 1),
+            event,
+            history: Vec::new(),
+        };
+        let refused = parse(carried).unwrap_err();
+        assert!(refused.contains("past the bound"), "{refused}");
+    }
+}

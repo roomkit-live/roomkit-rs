@@ -8,6 +8,7 @@ use pretty_assertions::assert_eq;
 use tokio::time::Instant;
 
 use super::support::{Timed, Waiting, fault, kit_with, of_type, says};
+use crate::turns::TurnTimeouts;
 use crate::turns::observe::{Carried, Fate};
 
 const UNSENT: Fate = Fate {
@@ -184,6 +185,57 @@ async fn a_turn_whose_work_panics_fails_at_once() {
         (
             Some(("Panic".to_owned(), "the turn's work panicked".to_owned())),
             true
+        )
+    );
+}
+
+/// RFC §10.6.8: an executor that never says it took the turn, its
+/// `accepted` and its beats lost, fails the turn at `accept_timeout`, here
+/// 4 seconds, before `heartbeat_timeout` would; the executor it was handed
+/// to is lost, not missing (`executor_lost`).
+#[tokio::test(start_paused = true)]
+async fn a_turn_never_accepted_fails_at_the_accept_timeout() {
+    let agent = Waiting::new(Duration::from_secs(60));
+    let kit = kit_with(agent.clone()).await;
+    kit.set_turn_timeouts(TurnTimeouts::new().with_accept(Duration::from_secs(4)));
+    kit.inner
+        .turns
+        .set_fault(std::sync::Arc::new(|carried, raw: &str| {
+            let silenced = raw.contains(of_type("accepted")) || raw.contains(of_type("heartbeat"));
+            if carried == Carried::Frame && silenced {
+                UNSENT
+            } else {
+                Fate::default()
+            }
+        }));
+    let started = Instant::now();
+    let result = says(&kit, "Hi").await.unwrap();
+    let failed_after = started.elapsed();
+    assert_eq!(
+        (
+            failure(&result),
+            (Duration::from_secs(4)..Duration::from_secs(7)).contains(&failed_after)
+        ),
+        (
+            Some(("TurnLinkError".to_owned(), "executor_lost".to_owned())),
+            true
+        )
+    );
+}
+
+/// RFC §10.6.8 `backend_closed`: once the kit's turn backend closed, a turn
+/// is refused at once, its reason its own, not a lost executor's.
+#[tokio::test(start_paused = true)]
+async fn a_turn_on_a_closed_backend_fails_backend_closed() {
+    let agent = Waiting::new(Duration::from_secs(1));
+    let kit = kit_with(agent.clone()).await;
+    kit.inner.turns.close();
+    let result = says(&kit, "Hi").await.unwrap();
+    assert_eq!(
+        (failure(&result), agent.ends()),
+        (
+            Some(("TurnLinkError".to_owned(), "backend_closed".to_owned())),
+            Vec::new()
         )
     );
 }

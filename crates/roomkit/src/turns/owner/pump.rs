@@ -125,7 +125,8 @@ impl Pump {
                     &executor_id,
                 );
             }
-            Frame::Heartbeat => {}
+            // A beat says an executor runs the turn, as `accepted` does.
+            Frame::Heartbeat => self.accepted = true,
             Frame::Output { output, streams } => self.hand(Main::Output(output, streams)),
             Frame::Item { item } => return self.item(seq, item),
             Frame::ToolArgs { start, arguments } => {
@@ -242,15 +243,19 @@ impl Pump {
         }
     }
 
-    /// The executor fell silent: the turn fails, the executor told, best
-    /// effort (RFC §10.6.8).
+    /// The executor fell silent, or never said it took the turn within the
+    /// accept bound: the turn fails `executor_lost`, an executor having
+    /// been handed it (the kit's own always is: `no_executor` is for a turn
+    /// no executor could take), and the executor is told, best effort (RFC
+    /// §10.6.8).
     fn lost(&self) -> Ending {
-        let reason = if self.accepted {
-            "executor_lost"
-        } else {
-            "no_executor"
-        };
-        tracing::warn!(target: "roomkit::turns", turn = %self.state.turn.turn_id, reason, "a turn's executor fell silent");
+        let reason = "executor_lost";
+        tracing::warn!(
+            target: "roomkit::turns",
+            turn = %self.state.turn.turn_id,
+            accepted = self.accepted,
+            "a turn's executor fell silent"
+        );
         drop(self.state.turn.controls.put(&Control::Cancel {
             reason: reason.to_owned(),
         }));

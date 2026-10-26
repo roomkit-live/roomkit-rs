@@ -83,3 +83,48 @@ async fn a_verb_after_its_turn_is_refused_once_a_later_turn_was_sent() {
         vec![Err("PermissionError".to_owned())]
     );
 }
+
+/// How many of the events a turn's tool sends through its turn are
+/// stored, at which depths, and how many of them `BLOCKED` by the
+/// cascade's budget.
+async fn sends_through_the_turn(sends: usize) -> (usize, Vec<u32>, usize) {
+    let kit = kit(move |_call, _context| async move {
+        let turn = current_turn().unwrap();
+        for index in 0..sends {
+            let note = DirectEvent::new(channel("ai"), EventContent::text(format!("Note {index}")));
+            turn.send_event(note)
+                .await
+                .map_err(|error| roomkit_ai::ToolError::raised(&error))?;
+        }
+        Ok(ToolOutput::Text("42".to_owned()))
+    })
+    .await;
+    asks(&kit, "What is it?").await;
+    kit.idle().await;
+    let notes: Vec<roomkit::model::RoomEvent> =
+        roomkit::ConversationStore::list_events(kit.store(), &crate::support::room(), false)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|event| roomkit::text_of(&event.content).starts_with("Note "))
+            .collect();
+    let capped = notes
+        .iter()
+        .filter(|event| event.blocked_by.as_deref() == Some("reentry_loop_cap"))
+        .count();
+    let mut depths: Vec<u32> = notes.iter().map(|event| event.chain_depth).collect();
+    depths.dedup();
+    (notes.len(), depths, capped)
+}
+
+/// RFC §8.3 "Reentry cap", §10.6.5: what a tool sends through its turn
+/// crosses as `host_call`, and the owner runs it as its own code would: at
+/// the turn's response depth, drawing one pass of the cascade that delivers
+/// the turn's trigger, so that of sixty sends from one turn the fifty its
+/// passes allow are stored, the last ten refused with nothing stored, as
+/// before the backend (probe tasks/probes/step4-m7/baseline_probe.rs,
+/// probe 3: 50 notes, depths [1], none stored refused).
+#[tokio::test(start_paused = true)]
+async fn a_tool_s_sends_through_its_turn_keep_its_depth_and_draw_its_passes() {
+    assert_eq!(sends_through_the_turn(60).await, (50, vec![1], 0));
+}
