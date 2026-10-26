@@ -129,8 +129,8 @@ fn deleted_events(timeline: &[RoomEvent]) -> BTreeSet<&EventId> {
 
 /// `event` as a reader is handed it: whole, unless it was deleted or is an
 /// edit of an event that was (gap G-062). What was said is then withheld: a
-/// deleted event's content, or an edit's new content, becomes an empty
-/// text, and the provider's original payload, which holds the text, is left
+/// deleted event's content, or an edit's new content, the edit marked
+/// deleted itself or not, becomes an empty text, and the provider's original payload, which holds the text, is left
 /// out (`source.raw_payload`). The rest stays: the id, index, type, source
 /// with the provider's message id, thread, metadata with `metadata.deleted`,
 /// and the provider's structured data (`channel_data`), so the reader tells
@@ -138,12 +138,15 @@ fn deleted_events(timeline: &[RoomEvent]) -> BTreeSet<&EventId> {
 /// event the reader holds, and a channel deletes it natively.
 fn withheld(event: &RoomEvent, deleted: &BTreeSet<&EventId>) -> RoomEvent {
     let mut handed = event.clone();
-    if deleted.contains(&event.id) {
-        handed.content = EventContent::text("");
-    } else if let EventContent::Edit(edit) = &mut handed.content
-        && deleted.contains(&edit.target_event_id)
+    let marked = deleted.contains(&event.id);
+    if let EventContent::Edit(edit) = &mut handed.content
+        && (marked || deleted.contains(&edit.target_event_id))
     {
+        // An edit keeps its form, marked deleted with its target or not:
+        // what it said is its new content.
         *edit.new_content = EventContent::text("");
+    } else if marked {
+        handed.content = EventContent::text("");
     } else {
         return handed;
     }
@@ -741,6 +744,24 @@ mod tests {
                 .insert("Body".to_owned(), json!("I need 50000$"));
             let handed = history(vec![deleted(), edited]).remove(1);
             assert_eq!(handed.source.raw_payload, Metadata::new());
+        }
+
+        /// An edit the store marked deleted with its target, as both
+        /// implementations' stores do, keeps its edit form, its new
+        /// content withheld, whether or not the window holds the target.
+        #[test]
+        fn an_edit_marked_deleted_keeps_its_form_with_its_new_content_withheld() {
+            let mut marked = edit("evt_2", "I need 50000$");
+            marked.metadata.insert("deleted".to_owned(), json!(true));
+            let handed = [
+                history(vec![marked.clone()]),
+                history(vec![deleted(), marked]),
+            ]
+            .map(|mut history| history.pop().unwrap().content);
+            assert_eq!(
+                handed,
+                [edit("evt_2", "").content, edit("evt_2", "").content]
+            );
         }
 
         /// The target lies before the window; the delete in it tells.
