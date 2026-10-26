@@ -41,9 +41,12 @@ pub type ConnectionId = u64;
 ///
 /// The channel streams (RFC §6.1 `deliver_stream`): an agent's answer comes
 /// as it is written. A connection that asked to stream receives each piece
-/// of text as `{"room_id": "...", "type": "delta", "from": "assistant",
-/// "text": "..."}`, then the row the pieces join to, as the store holds it,
-/// with its id and index; every other connection receives the rows only.
+/// of text as `{"room_id": "...", "type": "delta", "stream_id": "...",
+/// "from": "assistant", "text": "..."}`, then the row the pieces join to, as
+/// the store holds it, with its id, its index and the same `stream_id`;
+/// every other connection receives the rows only. The `stream_id`,
+/// `<agent>:<id of the event it answers>`, tells apart two answers that
+/// stream at once into one room, to two people or to a tool's event.
 /// The text is shown before `BEFORE_BROADCAST` judges the row it ends in,
 /// so a room whose hooks rewrite answers keeps its connections from
 /// streaming. The answer stops, the text sent so far stored marked
@@ -222,6 +225,7 @@ impl Channel for WebSocketChannel {
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         let room_id = binding.room_id;
+        let stream_id = format!("{}:{}", stream.responder(), stream.answers());
         let watched = self.watched(&room_id);
         let mut left = self.left.subscribe();
         loop {
@@ -239,6 +243,7 @@ impl Channel for WebSocketChannel {
                     let frame = json!({
                         "room_id": room_id,
                         "type": "delta",
+                        "stream_id": stream_id,
                         "from": stream.responder(),
                         "text": text,
                     });
@@ -246,7 +251,10 @@ impl Channel for WebSocketChannel {
                         connection.streams
                     });
                 }
-                Some(Ok(StreamItem::Row(row))) => self.send(&room_id, &frame_of(&row), |_| true),
+                Some(Ok(StreamItem::Row(row))) => {
+                    let frame = fields_of(&row, Some(&stream_id));
+                    self.send(&room_id, &Value::Object(frame).to_string(), |_| true);
+                }
                 Some(Ok(_)) => {}
                 // The answer failed: what was written went out already.
                 Some(Err(failure)) => return Err(failure),
@@ -258,6 +266,12 @@ impl Channel for WebSocketChannel {
 
 /// The frame of `event`.
 fn frame_of(event: &RoomEvent) -> String {
+    Value::Object(fields_of(event, None)).to_string()
+}
+
+/// The fields of `event`'s frame, with the stream it ends, `stream_id`,
+/// when a stream hands it.
+fn fields_of(event: &RoomEvent, stream_id: Option<&str>) -> Map<String, Value> {
     let mut frame = Map::new();
     let fields = json!({
         "room_id": event.room_id,
@@ -268,6 +282,9 @@ fn frame_of(event: &RoomEvent) -> String {
         "text": text_of(&event.content),
     });
     frame.extend(fields.as_object().cloned().unwrap_or_default());
+    if let Some(stream_id) = stream_id {
+        frame.insert("stream_id".to_owned(), json!(stream_id));
+    }
     if let EventContent::ToolCall(call) = &event.content {
         let tool = json!({
             "name": call.tool_name,
@@ -280,5 +297,5 @@ fn frame_of(event: &RoomEvent) -> String {
     if let Some(ended) = event.metadata.get("loop_end_reason") {
         frame.insert("ended".to_owned(), ended.clone());
     }
-    Value::Object(frame).to_string()
+    frame
 }

@@ -30,9 +30,11 @@
 //!   stop gives the connections and the kit 10 seconds.
 //! - The agent's answer streams (RFC §6.1, §12.2 steps 13s and 14s): a
 //!   connection opened with `&stream=1` receives its text as the model
-//!   writes it, `{"type": "delta", "text": "..."}` frames, then each row as
-//!   the store holds it, the deltas joining to the row's text; any other
-//!   connection receives the rows only. Once every client of the room has
+//!   writes it, `{"type": "delta", "stream_id": "...", "text": "..."}`
+//!   frames, then each row as the store holds it, the deltas joining to the
+//!   row's text, which carries the same `stream_id`: two answers streaming
+//!   at once into the room are told apart by it. Any other connection
+//!   receives the rows only. Once every client of the room has
 //!   left, the answer stops: the text sent so far is stored marked
 //!   `cancelled`, and nothing more is generated. The deltas are shown
 //!   before `BEFORE_BROADCAST` judges the row they end in (RFC §6.4): a
@@ -995,6 +997,19 @@ async fn a_client_reads_the_answer_as_it_is_written(
             .iter()
             .find(|event| Some(&json!(event.id)) == row.get("id"))
     });
+    // The answer's stream is named by the agent and the message it answers.
+    let asked = timeline
+        .iter()
+        .find(|event| text_of(&event.content) == ERIN_ASKS)
+        .map(|event| json!(format!("assistant:{}", event.id)));
+    checks.expect(
+        "a client that streams receives the answer's pieces, then its row, all naming one \
+         stream, the agent's answer to Erin's message",
+        asked.is_some()
+            && read
+                .iter()
+                .all(|frame| frame.get("stream_id") == asked.as_ref()),
+    );
     checks.expect(
         "a client that streams receives the answer's pieces, then its row with its id and \
          index, the pieces joining to the row's text",
