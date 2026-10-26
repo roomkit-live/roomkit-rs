@@ -113,7 +113,7 @@ mod tests {
         let mut binding = ChannelBinding::new(
             ChannelId::new("ai").unwrap(),
             RoomId::new("room_1").unwrap(),
-            ChannelType::Ai,
+            ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
             Timestamp::UNIX_EPOCH,

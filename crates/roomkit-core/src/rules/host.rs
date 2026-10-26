@@ -1,6 +1,8 @@
 //! The host's own voice (RFC §10.5): who a post may speak as.
 
-use crate::model::{ChannelCategory, ChannelId, ChannelType, Participant, ParticipantId};
+use crate::model::{
+    ChannelCategory, ChannelDirection, ChannelId, ChannelType, Participant, ParticipantId,
+};
 
 /// Whom a post's `participant_id` names, as a turn's sender is read (RFC
 /// §5.5): an id names its participant only on the channels the room
@@ -53,8 +55,23 @@ pub fn speaker(
 /// Whether a channel of `channel_type` would be bound as `category` against
 /// RFC §6.2 and §10.5: a host channel is bound as a transport only. The
 /// attach of the lifecycle and a post's first attach both refuse it.
-pub fn host_as_intelligence(channel_type: ChannelType, category: ChannelCategory) -> bool {
-    channel_type == ChannelType::Host && category == ChannelCategory::Intelligence
+pub fn host_as_intelligence(channel_type: &ChannelType, category: ChannelCategory) -> bool {
+    channel_type == &ChannelType::HOST && category == ChannelCategory::Intelligence
+}
+
+/// Whether a channel declared of `channel_type`, as `category` and
+/// `direction`, claims a type reserved for what it does not do: `system`,
+/// the framework's own records', which no channel may claim, and `host`,
+/// which only a host channel may, a transport whose direction is `INBOUND`
+/// (RFC §6.2, §10.5, Appendix A.14.1). Its registration is refused.
+pub fn claims_reserved_type(
+    channel_type: &ChannelType,
+    category: ChannelCategory,
+    direction: ChannelDirection,
+) -> bool {
+    channel_type == &ChannelType::SYSTEM
+        || (channel_type == &ChannelType::HOST
+            && (category != ChannelCategory::Transport || direction != ChannelDirection::Inbound))
 }
 
 #[cfg(test)]

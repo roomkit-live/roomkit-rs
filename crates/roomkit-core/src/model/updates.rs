@@ -244,7 +244,7 @@ mod tests {
         let mut binding = ChannelBinding::new(
             ChannelId::new("ws_observer").unwrap(),
             RoomId::new("room_1").unwrap(),
-            ChannelType::Websocket,
+            ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
             Timestamp::UNIX_EPOCH,
@@ -318,7 +318,7 @@ mod tests {
             EventType::Message,
             EventSource::new(
                 ChannelId::new("wa").unwrap(),
-                ChannelType::Whatsapp,
+                ChannelType::WHATSAPP,
                 EventDirection::Inbound,
             ),
             EventContent::text("I need 5000$"),

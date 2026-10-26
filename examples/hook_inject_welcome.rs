@@ -30,7 +30,7 @@ use shared::{Checks, Log};
 fn welcome(event: &RoomEvent, newcomer: &ChannelId) -> InjectedEvent {
     let source = EventSource::new(
         ChannelId::system(),
-        ChannelType::System,
+        ChannelType::SYSTEM,
         EventDirection::Outbound,
     );
     let content = EventContent::System(SystemContent {
@@ -102,8 +102,8 @@ fn welcomes(transport: &RecordingTransport) -> Vec<String> {
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let alice = RecordingTransport::new(ChannelId::new("ws_alice")?, ChannelType::Websocket);
-    let bob = RecordingTransport::new(ChannelId::new("ws_bob")?, ChannelType::Websocket);
+    let alice = RecordingTransport::new(ChannelId::new("ws_alice")?, ChannelType::WEBSOCKET);
+    let bob = RecordingTransport::new(ChannelId::new("ws_bob")?, ChannelType::WEBSOCKET);
     kit.register_channel(alice.clone())?;
     kit.register_channel(bob.clone())?;
     let (attached, welcomed) = (Log::new(), Log::new());

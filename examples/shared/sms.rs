@@ -27,7 +27,7 @@ impl SmsNumber {
         Self {
             declaration: ChannelDeclaration::new(
                 channel_id,
-                ChannelType::Sms,
+                ChannelType::SMS,
                 ChannelCategory::Transport,
                 ChannelDirection::Bidirectional,
             ),

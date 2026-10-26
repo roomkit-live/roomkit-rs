@@ -59,7 +59,7 @@ impl Channel for Reader {
             capabilities: edits_natively(),
             ..ChannelDeclaration::new(
                 channel("ai"),
-                ChannelType::Ai,
+                ChannelType::AI,
                 ChannelCategory::Intelligence,
                 ChannelDirection::Bidirectional,
             )
@@ -133,10 +133,10 @@ async fn room() -> Fixture {
     kit.set_environment(Setup(SequentialEnvironment::new(
         Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
     )));
-    let wa = RecordingTransport::new(channel("wa"), ChannelType::Whatsapp);
-    let ws = RecordingTransport::new(channel("ws"), ChannelType::Websocket)
+    let wa = RecordingTransport::new(channel("wa"), ChannelType::WHATSAPP);
+    let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET)
         .with_capabilities(edits_natively());
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let agent = Reader::default();
     kit.register_channel(wa).unwrap();
     kit.register_channel(ws.clone()).unwrap();
@@ -517,7 +517,7 @@ mod a_direct_call {
             EventType::Message,
             EventSource::new(
                 channel("ws"),
-                ChannelType::Websocket,
+                ChannelType::WEBSOCKET,
                 EventDirection::Inbound,
             ),
             EventContent::text("Snapshot"),

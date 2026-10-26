@@ -63,9 +63,9 @@ impl Conversation {
     /// WebSocket is registered, not attached yet.
     async fn open() -> Result<Self, Box<dyn Error>> {
         let kit = shared::kit();
-        let customer = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::Sms);
+        let customer = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
         let advisor =
-            RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::Websocket);
+            RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::WEBSOCKET);
         let agent = ChannelId::new("ai_support")?;
         kit.register_channel(customer.clone())?;
         kit.register_channel(advisor.clone())?;

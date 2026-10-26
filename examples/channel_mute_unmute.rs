@@ -85,8 +85,8 @@ fn muted_answers(timeline: &[RoomEvent], assistant: &ChannelId) -> Vec<String> {
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let customer = RecordingTransport::new(ChannelId::new("ws_customer")?, ChannelType::Websocket);
-    let agent = RecordingTransport::new(ChannelId::new("ws_agent")?, ChannelType::Websocket);
+    let customer = RecordingTransport::new(ChannelId::new("ws_customer")?, ChannelType::WEBSOCKET);
+    let agent = RecordingTransport::new(ChannelId::new("ws_agent")?, ChannelType::WEBSOCKET);
     let assistant = ScriptedAgent::new(ChannelId::new("assistant")?, SCRIPT);
     kit.register_channel(customer.clone())?;
     kit.register_channel(agent.clone())?;

@@ -44,7 +44,7 @@ impl Team {
     async fn open() -> Result<Self, Box<dyn Error>> {
         let clock = Clock::new();
         let kit = clock.kit();
-        let ws = RecordingTransport::new(ChannelId::new("ws")?, ChannelType::Websocket);
+        let ws = RecordingTransport::new(ChannelId::new("ws")?, ChannelType::WEBSOCKET);
         kit.register_channel(ws.clone())?;
         let rosters = Log::new();
         let read = rosters.clone();

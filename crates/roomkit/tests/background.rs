@@ -41,7 +41,7 @@ fn message(text: &str) -> InboundMessage {
 /// A kit with an SMS transport attached to `room_1`.
 async fn room() -> RoomKit {
     let kit = RoomKit::new();
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.create_room(&room_id()).await.unwrap();
     kit.attach(&room_id(), &channel("sms")).await.unwrap();
@@ -79,7 +79,7 @@ impl Gated {
         Self {
             declaration: ChannelDeclaration::new(
                 channel("slow"),
-                ChannelType::Websocket,
+                ChannelType::WEBSOCKET,
                 ChannelCategory::Transport,
                 ChannelDirection::Bidirectional,
             ),
@@ -240,7 +240,7 @@ async fn a_call_made_after_the_shutdown_is_refused() {
     let registered = kit
         .register_channel(RecordingTransport::new(
             channel("ws"),
-            ChannelType::Websocket,
+            ChannelType::WEBSOCKET,
         ))
         .is_ok();
     assert_eq!(

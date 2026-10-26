@@ -117,12 +117,12 @@ fn resolve(
         .channel(&message.channel_id)
         .cloned()
         .ok_or_else(|| InboundError::UnknownChannel(message.channel_id.clone()))?;
-    if channel.channel_type == ChannelType::Host {
+    if channel.channel_type == ChannelType::HOST {
         return Err(InboundError::InboundOnHostChannel(channel.channel_id));
     }
     message.sender_id = addresses::normalize(
         &message.sender_id,
-        channel.addressing(),
+        channel.addressing,
         channel.country_code.as_ref(),
     );
     Ok((channel, message))
@@ -196,7 +196,7 @@ impl Arrival {
         bound: Bound,
     ) -> Self {
         let address = routing::routing_address(
-            channel.addressing(),
+            channel.addressing,
             &message.sender_id,
             &message.metadata,
             channel.chat_key.as_deref(),
@@ -333,7 +333,7 @@ impl Arrival {
             return self.route(cx);
         };
         let request = StoreRequest::ResolveIdentity {
-            channel_type: self.channel.channel_type,
+            channel_type: self.channel.channel_type.clone(),
             address,
             organization_id: self.organization_id.clone(),
         };
@@ -359,7 +359,7 @@ impl Arrival {
         self.routes = self.routes.saturating_add(1);
         let query = RouteQuery {
             channel_id: self.message.channel_id.clone(),
-            channel_type: self.channel.channel_type,
+            channel_type: self.channel.channel_type.clone(),
             sender_id: self.message.sender_id.clone(),
             metadata: self.message.metadata.clone(),
             organization_id: self.organization_id.clone(),

@@ -453,7 +453,7 @@ impl ConversationStore for InMemoryStore {
     ) -> Result<Option<Identity>, StoreError> {
         Ok(self
             .identities()
-            .resolve(channel_type, address, organization_id))
+            .resolve(&channel_type, address, organization_id))
     }
 
     async fn link_address(
@@ -475,7 +475,7 @@ impl ConversationStore for InMemoryStore {
         organization_id: Option<&str>,
     ) -> Result<(), StoreError> {
         self.identities()
-            .unlink(identity_id, channel_type, address, organization_id)
+            .unlink(identity_id, &channel_type, address, organization_id)
     }
 
     async fn get_event_by_idempotency_key(
@@ -651,7 +651,7 @@ mod tests {
             EventType::Message,
             EventSource::new(
                 ChannelId::new("sms").unwrap(),
-                ChannelType::Sms,
+                ChannelType::SMS,
                 EventDirection::Inbound,
             ),
             EventContent::text("hi"),
@@ -860,7 +860,7 @@ mod tests {
         let binding = ChannelBinding::new(
             ChannelId::new("sms").unwrap(),
             room_id(),
-            ChannelType::Sms,
+            ChannelType::SMS,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
             Timestamp::UNIX_EPOCH,
@@ -988,7 +988,7 @@ mod tests {
         let mut binding = ChannelBinding::new(
             ChannelId::new("sms").unwrap(),
             room_id,
-            ChannelType::Sms,
+            ChannelType::SMS,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
             Timestamp::UNIX_EPOCH,
@@ -1183,7 +1183,7 @@ mod tests {
                 let mut binding = ChannelBinding::new(
                     sms(),
                     room_id,
-                    ChannelType::Sms,
+                    ChannelType::SMS,
                     ChannelCategory::Transport,
                     ChannelDirection::Bidirectional,
                     created,

@@ -12,6 +12,7 @@ use crate::model::{
 use crate::rules::addresses::{self, AddressForm, Addressing, CountryCode};
 use crate::rules::chain_depth::DEFAULT_MAX_CHAIN_DEPTH;
 use crate::rules::hook_registry::HookRegistry;
+use crate::rules::host;
 
 /// How many of a room's latest events a context holds by default.
 pub const DEFAULT_CONTEXT_WINDOW: usize = 50;
@@ -22,7 +23,8 @@ pub const DEFAULT_CONTEXT_WINDOW: usize = 50;
 pub struct ChannelDeclaration {
     /// The channel's id.
     pub channel_id: ChannelId,
-    /// Its type.
+    /// Its type, an open name (RFC §6.2): what it means for the channel is
+    /// the rest of the declaration.
     pub channel_type: ChannelType,
     /// What it does.
     pub category: ChannelCategory,
@@ -32,6 +34,10 @@ pub struct ChannelDeclaration {
     pub capabilities: ChannelCapabilities,
     /// The provider or backend behind it, for event attribution (RFC §5.2).
     pub provider_name: Option<String>,
+    /// How its senders are addressed (RFC §5.7, gap G-051): its type's
+    /// default ([`Addressing::of`]), as written for a name the RFC does not
+    /// list, unless the channel sets another.
+    pub addressing: Addressing,
     /// The binding metadata key it delivers to (RFC §5.7, Appendix A):
     /// `phone_number`, `email_address`, ... A transport delivery whose
     /// binding holds no recipient under it is refused before any send (RFC
@@ -53,9 +59,12 @@ pub struct ChannelDeclaration {
 
 impl ChannelDeclaration {
     /// A channel of `channel_type` with the RFC's defaults: the default
-    /// capabilities, no provider name, no country code, and the recipient
-    /// key and chat key of its type ([`addresses::recipient_key`],
-    /// [`addresses::chat_key`], gaps G-051 and G-057).
+    /// capabilities, no provider name, no country code, and the addressing,
+    /// recipient key and chat key of its type ([`Addressing::of`],
+    /// [`addresses::recipient_key`], [`addresses::chat_key`], gaps G-051 and
+    /// G-057), which a name the RFC does not list has none of: its senders
+    /// are addressed as written, with no recipient and no chat key, unless
+    /// the channel sets them.
     pub fn new(
         channel_id: ChannelId,
         channel_type: ChannelType,
@@ -64,14 +73,15 @@ impl ChannelDeclaration {
     ) -> Self {
         Self {
             channel_id,
+            addressing: Addressing::of(&channel_type),
+            recipient_key: addresses::recipient_key(&channel_type).map(str::to_owned),
+            chat_key: addresses::chat_key(&channel_type).map(str::to_owned),
             channel_type,
             category,
             direction,
             capabilities: ChannelCapabilities::default(),
             provider_name: None,
-            recipient_key: addresses::recipient_key(channel_type).map(str::to_owned),
             country_code: None,
-            chat_key: addresses::chat_key(channel_type).map(str::to_owned),
         }
     }
 
@@ -82,7 +92,7 @@ impl ChannelDeclaration {
     pub fn host(channel_id: ChannelId) -> Self {
         let declaration = Self::new(
             channel_id,
-            ChannelType::Host,
+            ChannelType::HOST,
             ChannelCategory::Transport,
             ChannelDirection::Inbound,
         );
@@ -96,17 +106,11 @@ impl ChannelDeclaration {
         }
     }
 
-    /// How its senders are addressed, which their type decides (RFC §5.7,
-    /// gap G-051).
-    pub fn addressing(&self) -> Addressing {
-        Addressing::of(self.channel_type)
-    }
-
     /// The form its bindings' and participants' addresses are compared in
     /// (RFC §5.7).
     pub fn form(&self) -> AddressForm {
         AddressForm {
-            addressing: self.addressing(),
+            addressing: self.addressing,
             country_code: self.country_code.clone(),
             recipient_key: self.recipient_key.clone(),
         }
@@ -119,7 +123,7 @@ impl ChannelDeclaration {
         let mut binding = ChannelBinding::new(
             self.channel_id.clone(),
             room_id,
-            self.channel_type,
+            self.channel_type.clone(),
             self.category,
             self.direction,
             attached_at,
@@ -139,6 +143,15 @@ pub enum ConfigError {
     /// No channel is registered under the id.
     #[error("no channel {0} is registered")]
     UnknownChannel(ChannelId),
+    /// The channel claims a type reserved for what it does not do: `system`,
+    /// or `host` for a channel other than a host channel (RFC §6.2, §10.5).
+    #[error("channel {channel_id} claims the reserved type {channel_type}")]
+    ReservedChannelType {
+        /// The channel.
+        channel_id: ChannelId,
+        /// The type it claims.
+        channel_type: ChannelType,
+    },
 }
 
 /// A kit's configuration: what the operations read and never change.
@@ -173,10 +186,23 @@ impl KitConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError::DuplicateChannel`] when the id is taken.
+    /// Returns [`ConfigError::DuplicateChannel`] when the id is taken, and
+    /// [`ConfigError::ReservedChannelType`] for a channel claiming `system`,
+    /// or `host` without being a host channel, a transport whose direction is
+    /// `INBOUND` (RFC §6.2, §10.5).
     pub fn register_channel(&mut self, declaration: ChannelDeclaration) -> Result<(), ConfigError> {
         if self.channels.contains_key(&declaration.channel_id) {
             return Err(ConfigError::DuplicateChannel(declaration.channel_id));
+        }
+        if host::claims_reserved_type(
+            &declaration.channel_type,
+            declaration.category,
+            declaration.direction,
+        ) {
+            return Err(ConfigError::ReservedChannelType {
+                channel_id: declaration.channel_id,
+                channel_type: declaration.channel_type,
+            });
         }
         self.channels
             .insert(declaration.channel_id.clone(), declaration);

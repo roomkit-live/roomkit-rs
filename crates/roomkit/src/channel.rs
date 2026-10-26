@@ -72,7 +72,7 @@ pub struct EventDraft {
 ///
 /// let mut declaration = ChannelDeclaration::new(
 ///     ChannelId::new("sms")?,
-///     ChannelType::Sms,
+///     ChannelType::SMS,
 ///     ChannelCategory::Transport,
 ///     ChannelDirection::Bidirectional,
 /// );

@@ -42,7 +42,7 @@ fn kit_without_rooms() -> (RoomKit, RecordingTransport) {
     kit.set_environment(SequentialEnvironment::new(
         Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
     ));
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
         .unwrap();
@@ -285,7 +285,7 @@ impl Sms {
         Self {
             declaration: ChannelDeclaration::new(
                 channel("sms"),
-                ChannelType::Sms,
+                ChannelType::SMS,
                 ChannelCategory::Transport,
                 ChannelDirection::Bidirectional,
             ),

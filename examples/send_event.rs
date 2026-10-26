@@ -58,7 +58,7 @@ impl Agent {
     ) -> Self {
         let declaration = ChannelDeclaration::new(
             channel_id,
-            ChannelType::Ai,
+            ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         );
@@ -74,7 +74,7 @@ impl Agent {
     fn answer(&self, event: &RoomEvent) -> RoomEvent {
         let source = EventSource::new(
             self.declaration.channel_id.clone(),
-            ChannelType::Ai,
+            ChannelType::AI,
             EventDirection::Outbound,
         );
         // The pipeline gives the answer its own id, room and depth.
@@ -126,9 +126,9 @@ impl Channel for Agent {
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let customer = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::Sms);
-    let console = RecordingTransport::new(ChannelId::new("console")?, ChannelType::Websocket);
-    let crm = RecordingTransport::new(ChannelId::new("crm")?, ChannelType::Websocket);
+    let customer = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
+    let console = RecordingTransport::new(ChannelId::new("console")?, ChannelType::WEBSOCKET);
+    let crm = RecordingTransport::new(ChannelId::new("crm")?, ChannelType::WEBSOCKET);
     let notes = Log::new();
     let agent = Agent::new(ChannelId::new("agent")?, &kit, &customer, &notes);
     let agent_id = agent.declaration.channel_id.clone();

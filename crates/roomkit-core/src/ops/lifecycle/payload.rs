@@ -140,7 +140,7 @@ impl LifecyclePayload {
         if let Some(channel_id) = &self.channel_id {
             data.insert(CHANNEL_ID.to_owned(), channel_id.as_str().into());
         }
-        if let Some(channel_type) = self.channel_type {
+        if let Some(channel_type) = &self.channel_type {
             data.insert(CHANNEL_TYPE.to_owned(), to_value(channel_type));
         }
         if let Some(reason) = self.reason {
@@ -203,7 +203,7 @@ mod tests {
             EventType::System,
             EventSource::new(
                 ChannelId::new(source).unwrap(),
-                ChannelType::System,
+                ChannelType::SYSTEM,
                 EventDirection::Outbound,
             ),
             EventContent::System(content),
@@ -226,7 +226,7 @@ mod tests {
             change: LifecycleChange::SessionStarted,
             room_id: room_id(),
             channel_id: Some(ChannelId::new("sms").unwrap()),
-            channel_type: Some(ChannelType::Sms),
+            channel_type: Some(ChannelType::SMS),
             reason: None,
         }
     }

@@ -119,7 +119,7 @@ impl EchoAgent {
     pub fn new(channel_id: ChannelId, reply: impl Into<String>) -> Self {
         let declaration = ChannelDeclaration::new(
             channel_id,
-            ChannelType::Ai,
+            ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         );
@@ -154,7 +154,7 @@ impl EchoAgent {
         };
         let source = EventSource::new(
             self.declaration.channel_id.clone(),
-            ChannelType::Ai,
+            ChannelType::AI,
             EventDirection::Outbound,
         );
         // The pipeline gives every response a fresh id, its room and its

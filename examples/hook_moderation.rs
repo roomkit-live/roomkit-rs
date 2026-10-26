@@ -106,8 +106,8 @@ fn moderate(kit: &RoomKit, ran: &Log<String>) -> Result<(), Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let user = RecordingTransport::new(ChannelId::new("ws_user")?, ChannelType::Websocket);
-    let agent = RecordingTransport::new(ChannelId::new("ws_agent")?, ChannelType::Websocket);
+    let user = RecordingTransport::new(ChannelId::new("ws_user")?, ChannelType::WEBSOCKET);
+    let agent = RecordingTransport::new(ChannelId::new("ws_agent")?, ChannelType::WEBSOCKET);
     kit.register_channel(user.clone())?;
     kit.register_channel(agent.clone())?;
     let ran = Log::new();

@@ -52,7 +52,7 @@ fn refusal(binding: &ChannelBinding) -> Option<LifecycleError> {
     if binding.visibility == Visibility::Internal {
         return Some(LifecycleError::InternalVisibility);
     }
-    host::host_as_intelligence(binding.channel_type, binding.category)
+    host::host_as_intelligence(&binding.channel_type, binding.category)
         .then(|| LifecycleError::HostAsIntelligence(binding.channel_id.clone()))
 }
 

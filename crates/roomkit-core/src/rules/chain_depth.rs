@@ -44,7 +44,7 @@ pub fn not_asked_record(
 ) -> RoomEvent {
     let source = EventSource::new(
         agent.channel_id.clone(),
-        agent.channel_type,
+        agent.channel_type.clone(),
         EventDirection::Outbound,
     );
     let mut record = RoomEvent::new(
@@ -230,7 +230,7 @@ mod tests {
             EventType::Message,
             EventSource::new(
                 ChannelId::new("analyst").unwrap(),
-                ChannelType::Ai,
+                ChannelType::AI,
                 EventDirection::Outbound,
             ),
             EventContent::text("Good report."),
@@ -244,7 +244,7 @@ mod tests {
         ChannelBinding::new(
             ChannelId::new("writer").unwrap(),
             RoomId::new("room_1").unwrap(),
-            ChannelType::Ai,
+            ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
             Timestamp::UNIX_EPOCH,

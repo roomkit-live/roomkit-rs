@@ -53,7 +53,7 @@ async fn checked_room() -> RoomKit {
     let kit = RoomKit::new();
     kit.register_channel(RecordingTransport::new(
         ChannelId::new("sms").unwrap(),
-        ChannelType::Sms,
+        ChannelType::SMS,
     ))
     .unwrap();
     kit.create_room(&room_id()).await.unwrap();
@@ -194,7 +194,7 @@ async fn a_call_releases_its_ticket_once_its_event_is_committed() {
     kit.register_channel(Paused {
         declaration: ChannelDeclaration::new(
             ChannelId::new("ws").unwrap(),
-            ChannelType::Websocket,
+            ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
         ),

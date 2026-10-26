@@ -395,8 +395,8 @@ mod tests {
 
     fn binding(id: &str, category: ChannelCategory) -> ChannelBinding {
         let channel_type = match category {
-            ChannelCategory::Transport => ChannelType::Websocket,
-            ChannelCategory::Intelligence => ChannelType::Ai,
+            ChannelCategory::Transport => ChannelType::WEBSOCKET,
+            ChannelCategory::Intelligence => ChannelType::AI,
         };
         ChannelBinding::new(
             channel(id),
@@ -423,7 +423,7 @@ mod tests {
             EventType::Message,
             EventSource::new(
                 source.channel_id.clone(),
-                source.channel_type,
+                source.channel_type.clone(),
                 EventDirection::Inbound,
             ),
             EventContent::text("hello"),

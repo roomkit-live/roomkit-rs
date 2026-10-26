@@ -28,7 +28,7 @@ pub fn default_inbound_event(
 ) -> RoomEvent {
     let mut source = EventSource::new(
         message.channel_id.clone(),
-        channel.channel_type,
+        channel.channel_type.clone(),
         EventDirection::Inbound,
     );
     source.provider.clone_from(&channel.provider_name);
@@ -76,7 +76,7 @@ pub(crate) fn stamp_trigger(
     event.idempotency_key.clone_from(&message.idempotency_key);
     event.responds_to = None;
     event.source.channel_id = message.channel_id.clone();
-    event.source.channel_type = channel.channel_type;
+    event.source.channel_type = channel.channel_type.clone();
     event.source.direction = EventDirection::Inbound;
     if event.source.provider.is_none() {
         event.source.provider.clone_from(&channel.provider_name);
@@ -106,7 +106,7 @@ pub(crate) fn stamp_direct(
     } else {
         EventDirection::Inbound
     };
-    let mut source = EventSource::new(direct.channel_id, channel.channel_type, direction);
+    let mut source = EventSource::new(direct.channel_id, channel.channel_type.clone(), direction);
     source.provider.clone_from(&channel.provider_name);
     source.participant_id = direct.participant_id;
     let mut event = RoomEvent::new(id, room_id, direct.event_type, source, direct.content, now);
@@ -146,7 +146,7 @@ pub(crate) fn stamp_response(
     id: EventId,
 ) -> RoomEvent {
     if response.source.channel_id == responder.channel_id {
-        response.source.channel_type = responder.channel_type;
+        response.source.channel_type = responder.channel_type.clone();
         response.source.direction = EventDirection::Outbound;
         // A verification is a received sender's (RFC §5.2, §11.7), and a
         // response is no message received (RFC §8.5).
@@ -162,7 +162,7 @@ pub(crate) fn stamp_response(
         );
         response.source = EventSource::new(
             responder.channel_id.clone(),
-            responder.channel_type,
+            responder.channel_type.clone(),
             EventDirection::Outbound,
         );
     }
@@ -359,7 +359,7 @@ pub(crate) fn error_event(
 ) -> RoomEvent {
     let source = EventSource::new(
         channel.channel_id.clone(),
-        channel.channel_type,
+        channel.channel_type.clone(),
         EventDirection::Outbound,
     );
     let mut event = RoomEvent::new(
@@ -411,7 +411,7 @@ mod tests {
             provider_name: Some("TwilioSMS".to_owned()),
             ..ChannelDeclaration::new(
                 ChannelId::new("sms").unwrap(),
-                ChannelType::Sms,
+                ChannelType::SMS,
                 ChannelCategory::Transport,
                 ChannelDirection::Bidirectional,
             )
@@ -422,7 +422,7 @@ mod tests {
         ChannelBinding::new(
             ChannelId::new("ai").unwrap(),
             RoomId::new("room_1").unwrap(),
-            ChannelType::Ai,
+            ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
             Timestamp::UNIX_EPOCH,
@@ -616,7 +616,7 @@ mod tests {
             stamped.source,
             EventSource::new(
                 ChannelId::new("ai").unwrap(),
-                ChannelType::Ai,
+                ChannelType::AI,
                 EventDirection::Outbound
             )
         );
@@ -631,7 +631,7 @@ mod tests {
         response.source.channel_id = ChannelId::new("ai").unwrap();
         let stamped = stamp_response(response.clone(), &ai(), &trigger(), fresh());
         let expected = EventSource {
-            channel_type: ChannelType::Ai,
+            channel_type: ChannelType::AI,
             direction: EventDirection::Outbound,
             verification: None,
             ..response.source

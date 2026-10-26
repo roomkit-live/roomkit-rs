@@ -82,7 +82,7 @@ impl Bank {
         store.create_identity(identity).await?;
         for number in numbers {
             store
-                .link_address(&identity_id, ChannelType::Sms, number, Some(BANK))
+                .link_address(&identity_id, ChannelType::SMS, number, Some(BANK))
                 .await?;
         }
         Ok(identity_id)
@@ -165,10 +165,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let jeans_room = bank.room_naming(&jean, "jean_room").await?;
     let maries_room = bank.room_of(&marie, "marie_room").await?;
     let found = store
-        .resolve_identity(ChannelType::Sms, JEAN, Some(BANK))
+        .resolve_identity(ChannelType::SMS, JEAN, Some(BANK))
         .await?;
     let elsewhere = store
-        .resolve_identity(ChannelType::Sms, JEAN, Some("clinic"))
+        .resolve_identity(ChannelType::SMS, JEAN, Some("clinic"))
         .await?;
     checks.expect(
         "an address resolves to its identity within the organization, and to none outside it",
@@ -189,7 +189,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
 
     let taken = store
-        .link_address(&jean, ChannelType::Sms, MARIE, Some(BANK))
+        .link_address(&jean, ChannelType::SMS, MARIE, Some(BANK))
         .await;
     checks.expect(
         "an address belongs to one identity of the organization: Marie's number cannot be Jean's",
@@ -198,10 +198,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     println!("Jean gives his work phone to Marie: the bank unlinks it from him, links it to her.");
     store
-        .unlink_address(&jean, ChannelType::Sms, JEAN_WORK, Some(BANK))
+        .unlink_address(&jean, ChannelType::SMS, JEAN_WORK, Some(BANK))
         .await?;
     store
-        .link_address(&marie, ChannelType::Sms, JEAN_WORK, Some(BANK))
+        .link_address(&marie, ChannelType::SMS, JEAN_WORK, Some(BANK))
         .await?;
     let landed = bank.text_from(BANK, JEAN_WORK).await?;
     checks.expect(

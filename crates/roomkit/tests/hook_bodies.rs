@@ -68,7 +68,7 @@ fn taken<T>(kept: &Kept<T>) -> Vec<T> {
 async fn room(max_chain_depth: u32) -> RoomKit {
     let kit = RoomKit::new();
     kit.set_max_chain_depth(max_chain_depth);
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.create_room(&room_id()).await.unwrap();
     kit.attach(&room_id(), &channel("sms")).await.unwrap();
@@ -109,7 +109,7 @@ impl Channel for Answering {
     fn declaration(&self) -> ChannelDeclaration {
         ChannelDeclaration::new(
             self.id.clone(),
-            ChannelType::Ai,
+            ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         )
@@ -129,7 +129,7 @@ impl Channel for Answering {
             event.id.clone(),
             event.room_id.clone(),
             EventType::Message,
-            EventSource::new(self.id.clone(), ChannelType::Ai, EventDirection::Outbound),
+            EventSource::new(self.id.clone(), ChannelType::AI, EventDirection::Outbound),
             EventContent::text("Answer."),
             event.created_at,
         );
@@ -205,7 +205,7 @@ async fn an_observer_of_before_broadcast_s_call_returns_with_its_delivery_result
     let kit = room(5).await;
     kit.register_channel(RecordingTransport::new(
         channel("ws"),
-        ChannelType::Websocket,
+        ChannelType::WEBSOCKET,
     ))
     .unwrap();
     kit.attach(&room_id(), &channel("ws")).await.unwrap();
@@ -803,7 +803,7 @@ impl Channel for Updating {
             recipient_key: None,
             ..ChannelDeclaration::new(
                 channel("calling"),
-                ChannelType::Websocket,
+                ChannelType::WEBSOCKET,
                 ChannelCategory::Transport,
                 ChannelDirection::Bidirectional,
             )

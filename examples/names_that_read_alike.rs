@@ -25,8 +25,8 @@ use shared::Checks;
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::Sms);
-    let web = RecordingTransport::new(ChannelId::new("web")?, ChannelType::Websocket);
+    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
+    let web = RecordingTransport::new(ChannelId::new("web")?, ChannelType::WEBSOCKET);
     kit.register_channel(sms.clone())?;
     kit.register_channel(web.clone())?;
     let room = RoomId::new("room_1")?;

@@ -213,7 +213,7 @@ impl ConversationStore for GatedStore {
         counters: RoomCounters,
         target: Option<TargetUpdate>,
     ) -> Result<(), StoreError> {
-        let records = event.source.channel_type == ChannelType::System;
+        let records = event.source.channel_type == ChannelType::SYSTEM;
         if !records && !self.started.swap(true, Ordering::SeqCst) {
             self.committing.notify_one();
             self.go.notified().await;
@@ -284,8 +284,8 @@ impl ConversationStore for GatedStore {
 /// attached to `room_1`.
 async fn gated_room() -> (RoomKit<GatedStore>, RecordingTransport) {
     let kit = RoomKit::with_store(GatedStore::default());
-    let ws = RecordingTransport::new(channel("ws"), ChannelType::Websocket);
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.register_channel(ws.clone()).unwrap();
     kit.create_room(&room_id()).await.unwrap();
@@ -313,7 +313,7 @@ async fn delivered_and_processed(
     events: &mut broadcast::Receiver<FrameworkEvent>,
 ) -> (Vec<(EventStatus, String)>, bool) {
     let mut timeline = kit.store().list_events(&room_id(), true).await.unwrap();
-    timeline.retain(|event| event.source.channel_type != ChannelType::System);
+    timeline.retain(|event| event.source.channel_type != ChannelType::SYSTEM);
     let mut processed = Vec::new();
     while let Ok(event) = events.try_recv() {
         if let FrameworkEvent::EventProcessed { event_id, .. } = event {

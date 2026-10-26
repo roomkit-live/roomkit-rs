@@ -39,7 +39,7 @@ async fn room_of(owner: Option<&str>) -> (RoomKit, Arc<SequentialEnvironment>) {
     ));
     let kit = RoomKit::new();
     kit.set_environment(Arc::clone(&clock));
-    for (id, channel_type) in [("sms", ChannelType::Sms), ("ws", ChannelType::Websocket)] {
+    for (id, channel_type) in [("sms", ChannelType::SMS), ("ws", ChannelType::WEBSOCKET)] {
         kit.register_channel(RecordingTransport::new(channel(id), channel_type))
             .unwrap();
     }
@@ -62,7 +62,7 @@ async fn room_of(owner: Option<&str>) -> (RoomKit, Arc<SequentialEnvironment>) {
 fn record(text: &str) -> RoomEvent {
     let source = EventSource::new(
         channel("ws"),
-        ChannelType::Websocket,
+        ChannelType::WEBSOCKET,
         EventDirection::Inbound,
     );
     RoomEvent::new(

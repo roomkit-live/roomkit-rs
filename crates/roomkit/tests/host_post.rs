@@ -21,9 +21,9 @@ use roomkit::model::{
 };
 use roomkit::store::{RoomCounters, TargetUpdate};
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, EventFilter, FrameworkEvent,
-    HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore, InboundError, KitError,
-    LifecycleError, RoomFilter, RoomKit, StoreError, text_of,
+    Channel, ChannelDeclaration, ChannelError, ConfigError, ConversationStore, EventFilter,
+    FrameworkEvent, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore, InboundError,
+    KitError, LifecycleError, RoomFilter, RoomKit, StoreError, text_of,
 };
 use tokio::sync::Notify;
 
@@ -61,7 +61,7 @@ impl Channel for Sms {
     fn declaration(&self) -> ChannelDeclaration {
         ChannelDeclaration::new(
             channel("sms"),
-            ChannelType::Sms,
+            ChannelType::SMS,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
         )
@@ -117,7 +117,7 @@ impl Channel for Agent {
     fn declaration(&self) -> ChannelDeclaration {
         ChannelDeclaration::new(
             self.id.clone(),
-            ChannelType::Ai,
+            ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         )
@@ -137,7 +137,7 @@ impl Channel for Agent {
             event.id.clone(),
             event.room_id.clone(),
             EventType::Message,
-            EventSource::new(self.id.clone(), ChannelType::Ai, EventDirection::Outbound),
+            EventSource::new(self.id.clone(), ChannelType::AI, EventDirection::Outbound),
             text(self.reply),
             event.created_at,
         );
@@ -289,7 +289,7 @@ async fn a_post_texts_the_correspondent_and_solicits_no_agent() {
             (
                 vec![(CUSTOMER.to_owned(), "Your order shipped.".to_owned())],
                 0,
-                (ChannelType::Host, EventDirection::Inbound),
+                (ChannelType::HOST, EventDirection::Inbound),
                 Some("shipping-notice".into()),
                 7,
                 true
@@ -519,7 +519,6 @@ enum Setup {
     TakeTheHostId,
     CustomerOnSms,
     AnAgent,
-    AnIntelligentHost,
 }
 
 async fn set_up(kit: &RoomKit, setup: Setup) {
@@ -557,9 +556,6 @@ async fn set_up(kit: &RoomKit, setup: Setup) {
             acme.attach(&room_id(), &channel("assistant"))
                 .await
                 .unwrap();
-        }
-        Setup::AnIntelligentHost => {
-            kit.register_channel(IntelligentHost).unwrap();
         }
     }
 }
@@ -660,12 +656,6 @@ fn refusals() -> Vec<(&'static str, Setup, Arguments, KitError)> {
                 *organization = Some("other");
             },
             not_found(),
-        ),
-        (
-            "a host channel declared an intelligence channel",
-            Setup::AnIntelligentHost,
-            |_, _| {},
-            KitError::Inbound(InboundError::HostAsIntelligence(channel("host"))),
         ),
     ]
 }
@@ -792,66 +782,75 @@ async fn a_message_on_the_host_channel_is_refused_before_anything_is_written() {
     );
 }
 
-/// A host channel that declares itself an intelligence channel.
-struct IntelligentHost;
+/// A channel of type `channel_type`, as `category` and `direction`.
+struct Claiming(ChannelType, ChannelCategory, ChannelDirection);
 
-impl Channel for IntelligentHost {
+impl Channel for Claiming {
     fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration::new(
-            channel("host"),
-            ChannelType::Host,
-            ChannelCategory::Intelligence,
-            ChannelDirection::Inbound,
-        )
+        ChannelDeclaration::new(channel("claiming"), self.0.clone(), self.1, self.2)
     }
+}
+
+/// RFC §6.2, §10.5: `system` is the framework's own records' type, which
+/// no channel claims, and `host` a host channel's, a transport whose
+/// direction is `INBOUND`: a channel claiming either otherwise is refused
+/// at its registration, and a host channel is registered.
+#[tokio::test]
+async fn a_channel_claiming_a_reserved_type_is_refused() {
+    use ChannelCategory::{Intelligence, Transport};
+    use ChannelDirection::{Bidirectional, Inbound};
+    let kit = RoomKit::new();
+    let claims = [
+        Claiming(ChannelType::HOST, Intelligence, Inbound),
+        Claiming(ChannelType::HOST, Transport, Bidirectional),
+        Claiming(ChannelType::SYSTEM, Transport, Inbound),
+    ];
+    let refused: Vec<Result<(), KitError>> = claims
+        .into_iter()
+        .map(|claim| kit.register_channel(claim))
+        .collect();
+    let reserved = |channel_type: ChannelType| {
+        Err(KitError::Config(ConfigError::ReservedChannelType {
+            channel_id: channel("claiming"),
+            channel_type,
+        }))
+    };
+    assert_eq!(
+        (
+            refused,
+            kit.register_channel(HostChannel::with_id(channel("desk")))
+        ),
+        (
+            vec![
+                reserved(ChannelType::HOST),
+                reserved(ChannelType::HOST),
+                reserved(ChannelType::SYSTEM)
+            ],
+            Ok(())
+        )
+    );
 }
 
 /// RFC §6.2, §10.5: the host's words never come from an intelligence
 /// channel: a host channel attached as one, by the category the attach
-/// names or the one the channel declares, is refused, nothing bound.
+/// names, is refused, nothing bound.
 #[tokio::test]
 async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
-    let mut refused = Vec::new();
-    // By a post's first attach, from a host channel declared intelligence.
     let kit = RoomKit::new();
     sms_room(&kit, None, RoomOptions::default()).await;
-    kit.register_channel(IntelligentHost).unwrap();
-    let posted = kit.post(&room_id(), Post::new(text("Notice."))).await;
-    let by_post = (posted.err(), binding_of(&kit, "host").await.is_none());
-    for declared in [false, true] {
-        let kit = RoomKit::new();
-        sms_room(&kit, None, RoomOptions::default()).await;
-        let options = if declared {
-            kit.register_channel(IntelligentHost).unwrap();
-            BindingOptions::default()
-        } else {
-            kit.register_channel(HostChannel::new()).unwrap();
-            BindingOptions {
-                category: Some(ChannelCategory::Intelligence),
-                ..BindingOptions::default()
-            }
-        };
-        let attached = kit.attach_with(&room_id(), &channel("host"), options).await;
-        refused.push((attached.err(), binding_of(&kit, "host").await.is_none()));
-    }
-    let refusal = || {
+    kit.register_channel(HostChannel::new()).unwrap();
+    let options = BindingOptions {
+        category: Some(ChannelCategory::Intelligence),
+        ..BindingOptions::default()
+    };
+    let attached = kit.attach_with(&room_id(), &channel("host"), options).await;
+    assert_eq!(
+        (attached.err(), binding_of(&kit, "host").await.is_none()),
         (
             Some(KitError::Lifecycle(LifecycleError::HostAsIntelligence(
-                channel("host"),
+                channel("host")
             ))),
-            true,
-        )
-    };
-    assert_eq!(
-        (by_post, refused),
-        (
-            (
-                Some(KitError::Inbound(InboundError::HostAsIntelligence(
-                    channel("host")
-                ))),
-                true
-            ),
-            vec![refusal(), refusal()]
+            true
         )
     );
 }

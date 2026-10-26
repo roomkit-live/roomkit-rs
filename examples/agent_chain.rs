@@ -21,7 +21,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
     let mut events = kit.subscribe();
 
-    let human = RecordingTransport::new(ChannelId::new("ws")?, ChannelType::Websocket);
+    let human = RecordingTransport::new(ChannelId::new("ws")?, ChannelType::WEBSOCKET);
     let analyst = EchoAgent::new(ChannelId::new("analyst")?, "Key findings: revenue is up.");
     let writer = EchoAgent::new(
         ChannelId::new("writer")?,

@@ -27,7 +27,7 @@ fn message_from(channel_id: &str, sender: &str, text: &str) -> InboundMessage {
 /// A store with no room, an SMS channel and an agent no room binds.
 fn no_room_yet() -> Sim {
     let mut sim = Sim::without_rooms();
-    sim.unbound_transport("sms", ChannelType::Sms);
+    sim.unbound_transport("sms", ChannelType::SMS);
     sim.unbound_agent("ai", "Bonjour Jean!");
     sim
 }
@@ -191,7 +191,7 @@ mod a_missing_room {
             &FrameworkEvent::SessionStarted {
                 room_id: room_id(),
                 channel_id: channel("sms"),
-                channel_type: ChannelType::Sms,
+                channel_type: ChannelType::SMS,
             }
         );
     }
@@ -200,7 +200,7 @@ mod a_missing_room {
     #[test]
     fn starts_no_session_for_a_voice_channel() {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("phone", ChannelType::Voice);
+        sim.unbound_transport("phone", ChannelType::VOICE);
         sim.observer("audit", HookTrigger::OnSessionStarted);
         sim.send(Sim::message("phone", "Allo")).unwrap();
         assert_eq!(
@@ -217,7 +217,7 @@ mod a_missing_room {
     #[test]
     fn starts_no_session_for_a_realtime_voice_channel() {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("live", ChannelType::RealtimeVoice);
+        sim.unbound_transport("live", ChannelType::REALTIME_VOICE);
         sim.send(Sim::message("live", "Allo")).unwrap();
         assert!(
             !sim.framework_event_names()
@@ -231,7 +231,7 @@ mod a_missing_room {
     #[test]
     fn names_the_chat_as_correspondent_and_recipient_on_a_chat_channel() {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("telegram", ChannelType::Telegram);
+        sim.unbound_transport("telegram", ChannelType::TELEGRAM);
         let mut message = message_from("telegram", "4242", "Hi");
         message
             .metadata
@@ -253,7 +253,7 @@ mod a_missing_room {
     #[test]
     fn names_neither_correspondent_nor_recipient_for_a_chat_message_without_its_chat() {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("telegram", ChannelType::Telegram);
+        sim.unbound_transport("telegram", ChannelType::TELEGRAM);
         sim.send(message_from("telegram", "4242", "Hi")).unwrap();
         let binding = binding_of(&sim, "telegram").unwrap();
         assert_eq!(
@@ -350,7 +350,7 @@ mod a_missing_room {
     #[test]
     fn is_created_beside_the_rooms_that_exist() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.send_to("room_2", None, Sim::message("sms", "Bonjour"))
             .unwrap();
         let created: Vec<String> = sim
@@ -451,7 +451,7 @@ mod an_existing_room {
 
     fn with_unbound_sms() -> Sim {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim
     }
 
@@ -536,7 +536,7 @@ mod an_existing_room {
     #[test]
     fn never_replaces_a_binding() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         let binding = sim.attach("sms");
         binding.visibility = Visibility::None;
         binding
@@ -582,7 +582,7 @@ mod the_sender {
 
     #[test]
     fn of_a_phone_channel_reaches_the_channel_in_e164() {
-        let mut sim = on(ChannelType::Whatsapp);
+        let mut sim = on(ChannelType::WHATSAPP);
         sim.send(message_from("inbox", "whatsapp:+1 (555) 000-0001", "Hi"))
             .unwrap();
         assert_eq!(sim.parsed_messages[0].sender_id, "+15550000001");
@@ -590,7 +590,7 @@ mod the_sender {
 
     #[test]
     fn is_named_on_the_event_s_source_in_the_channel_s_form() {
-        let mut sim = on(ChannelType::Sms);
+        let mut sim = on(ChannelType::SMS);
         let result = sim
             .send(message_from("inbox", "+1 555 000 0001", "Hi"))
             .unwrap();
@@ -607,7 +607,7 @@ mod the_sender {
     /// kept as written.
     #[test]
     fn without_a_plus_is_kept_as_written_where_its_channel_declares_no_country_code() {
-        let mut sim = on(ChannelType::Sms);
+        let mut sim = on(ChannelType::SMS);
         sim.send(message_from("inbox", "15550000001", "Hi"))
             .unwrap();
         assert_eq!(sim.parsed_messages[0].sender_id, "15550000001");
@@ -615,7 +615,7 @@ mod the_sender {
 
     #[test]
     fn keeps_the_provider_s_spelling_in_the_raw_payload() {
-        let mut sim = on(ChannelType::Sms);
+        let mut sim = on(ChannelType::SMS);
         let mut message = message_from("inbox", "whatsapp:+15550000001", "Hi");
         message
             .raw_payload
@@ -634,7 +634,7 @@ mod the_sender {
             country_code: Some(CountryCode::new("33").unwrap()),
             ..ChannelDeclaration::new(
                 channel("inbox"),
-                ChannelType::Sms,
+                ChannelType::SMS,
                 ChannelCategory::Transport,
                 ChannelDirection::Bidirectional,
             )
@@ -647,7 +647,7 @@ mod the_sender {
     #[test]
     fn of_an_email_channel_loses_its_display_name_and_its_case() {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("mail", ChannelType::Email);
+        sim.unbound_transport("mail", ChannelType::EMAIL);
         sim.send(message_from("mail", "Alice <Alice@Example.com>", "Hello"))
             .unwrap();
         let binding = binding_of(&sim, "mail").unwrap();
@@ -662,7 +662,7 @@ mod the_sender {
 
     #[test]
     fn of_another_channel_is_kept_as_written() {
-        let mut sim = on(ChannelType::Websocket);
+        let mut sim = on(ChannelType::WEBSOCKET);
         sim.send(message_from("inbox", "+1 (555) 000-0001", "Hi"))
             .unwrap();
         assert_eq!(sim.parsed_messages[0].sender_id, "+1 (555) 000-0001");
@@ -680,7 +680,7 @@ mod a_recipient {
     fn sms_without_recipient() -> Sim {
         let mut sim = Sim::new();
         sim.transport("ws");
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.attach("sms");
         sim
     }
@@ -737,7 +737,7 @@ mod a_recipient {
     #[test]
     fn is_not_named_by_an_existing_room_s_attach_so_the_answer_is_refused() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.echo_agent("ai", "Bonjour Jean!");
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
@@ -763,7 +763,7 @@ mod a_recipient {
     #[test]
     fn named_by_the_integrator_s_binding_receives_the_answer() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.attach("sms")
             .metadata
             .insert("phone_number".to_owned(), json!("+15551234567"));
@@ -776,7 +776,7 @@ mod a_recipient {
     fn is_not_needed_by_a_channel_that_delivers_to_its_own_destination() {
         let mut sim = Sim::new();
         sim.transport("sms");
-        sim.unbound_transport("hook", ChannelType::Webhook);
+        sim.unbound_transport("hook", ChannelType::WEBHOOK);
         sim.attach("hook");
         sim.send(Sim::message("sms", "Hello")).unwrap();
         assert_eq!(sim.traced("deliver"), ["deliver hook <- evt_1"]);
@@ -873,7 +873,7 @@ mod the_lane {
     #[test]
     fn is_never_entered_when_step_2_s_attach_cannot_take_the_room_lock() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.failing_effect = Some("lock room_1");
         let sent = sim.send(Sim::message("sms", "Bonjour"));
         assert_eq!(
@@ -910,7 +910,7 @@ mod the_lane {
     #[test]
     fn is_the_named_room_s_own() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.send_to("room_2", None, Sim::message("sms", "Bonjour"))
             .unwrap();
         assert_eq!(

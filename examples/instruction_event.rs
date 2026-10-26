@@ -56,8 +56,8 @@ fn instruction(
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let app = RecordingTransport::new(ChannelId::new("app")?, ChannelType::Websocket);
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::Sms);
+    let app = RecordingTransport::new(ChannelId::new("app")?, ChannelType::WEBSOCKET);
+    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
     let advisor = ScriptedAgent::new(ChannelId::new("advisor")?, ADVISOR);
     let notetaker = ScriptedAgent::new(ChannelId::new("notetaker")?, &[]);
     kit.register_channel(app.clone())?;

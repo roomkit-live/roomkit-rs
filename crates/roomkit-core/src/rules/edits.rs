@@ -236,7 +236,7 @@ fn check_target<'target>(
 /// A `SYSTEM` change from a channel comes from a SYSTEM channel (RFC §10.3
 /// validation rule 4).
 fn check_system_channel(event: &RoomEvent) -> Result<(), EditRefusal> {
-    if event.source.channel_type == ChannelType::System {
+    if event.source.channel_type == ChannelType::SYSTEM {
         Ok(())
     } else {
         Err(EditRefusal::NotAuthorized)
@@ -404,7 +404,7 @@ mod tests {
     fn message_from(sender: Option<&str>) -> RoomEvent {
         let mut source = EventSource::new(
             channel("wa"),
-            ChannelType::Whatsapp,
+            ChannelType::WHATSAPP,
             EventDirection::Inbound,
         );
         source.participant_id = sender.map(participant_id);
@@ -807,7 +807,7 @@ mod tests {
         fn an_agent_may_edit_its_own_response() {
             let mut response = target();
             response.source =
-                EventSource::new(channel("ai"), ChannelType::Ai, EventDirection::Outbound);
+                EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
             let mut edit = edit_from(ALICE);
             edit.source = response.source.clone();
             assert_eq!(
@@ -824,7 +824,7 @@ mod tests {
             jean.connected_via.push(channel("ai"));
             let mut edit = edit_from(ALICE);
             edit.source =
-                EventSource::new(channel("ai"), ChannelType::Ai, EventDirection::Outbound);
+                EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
             edit.source.participant_id = Some(participant_id(ALICE));
             assert_eq!(
                 checked(&edit, Some(&target()), Origin::Channel, &[jean]),
@@ -836,7 +836,7 @@ mod tests {
         fn an_agent_may_not_edit_another_channel_s_message() {
             let mut edit = edit_from(ALICE);
             edit.source =
-                EventSource::new(channel("ai"), ChannelType::Ai, EventDirection::Outbound);
+                EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
             assert_eq!(by_channel(&edit), Err(EditRefusal::NotOriginalAuthor));
         }
 
@@ -844,7 +844,7 @@ mod tests {
         fn a_sender_may_not_edit_an_agent_s_response() {
             let mut response = target();
             response.source =
-                EventSource::new(channel("ai"), ChannelType::Ai, EventDirection::Outbound);
+                EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
             assert_eq!(
                 checked(&edit_from(ALICE), Some(&response), Origin::Channel, &[]),
                 Err(EditRefusal::NotOriginalAuthor)
@@ -934,7 +934,7 @@ mod tests {
             marie.connected_via.push(channel("wa"));
             let mut delete = delete_from(BOB, DeleteType::Admin);
             delete.source =
-                EventSource::new(channel("ai"), ChannelType::Ai, EventDirection::Outbound);
+                EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
             delete.source.participant_id = Some(participant_id(BOB));
             assert_eq!(
                 checked(&delete, Some(&target()), Origin::Channel, &[marie]),
@@ -966,7 +966,7 @@ mod tests {
             let mut event = change(event_type, content, None);
             event.source = EventSource::new(
                 ChannelId::system(),
-                ChannelType::System,
+                ChannelType::SYSTEM,
                 EventDirection::Inbound,
             );
             event

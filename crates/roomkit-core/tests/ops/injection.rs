@@ -301,7 +301,7 @@ mod an_injected_event {
     #[test]
     fn from_an_unbound_channel_is_refused_with_nothing_written() {
         let mut sim = room();
-        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
         let event = DirectEvent::new(channel("api"), EventContent::text("Order shipped"));
         let refused = sim.inject("room_1", event);
         assert_eq!(
@@ -320,7 +320,7 @@ mod an_injected_event {
     #[test]
     fn from_an_unbound_channel_runs_no_hook() {
         let mut sim = room();
-        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
         sim.before_broadcast(
             "audit",
             Box::new(|_| HookOutcome::Returned(HookResult::allow())),
@@ -335,7 +335,7 @@ mod an_injected_event {
     #[test]
     fn from_an_unbound_channel_runs_no_off_lock_check() {
         let mut sim = room();
-        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
         sim.off_lock_check(
             "scanner",
             Box::new(|_| HookOutcome::Returned(HookResult::allow())),
@@ -841,7 +841,7 @@ mod an_entry_adopted_under_the_lock {
     fn refused_by_its_room_draws_nothing_on_its_caller_s_budget() {
         let mut sim = room();
         sim.config.max_chain_depth = 1;
-        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
         sim.reentrant_hook(
             "notifier",
             true,
@@ -1196,7 +1196,7 @@ mod an_entry_adopted_under_the_lock {
     #[test]
     fn from_an_unbound_channel_is_refused_to_its_caller() {
         let mut sim = room();
-        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
         let entry = Entry::Direct {
             room_id: room_id(),
             organization_id: None,
@@ -1224,7 +1224,7 @@ mod an_entry_adopted_under_the_lock {
     fn past_the_reentry_budget_from_an_unbound_channel_stores_nothing() {
         let mut sim = room();
         sim.config.max_chain_depth = 0;
-        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
         let entry = Entry::Direct {
             room_id: room_id(),
             organization_id: None,
@@ -1323,7 +1323,7 @@ mod an_entry_adopted_under_the_lock {
         for (organization, channel_id) in [(Some("clinic"), "ws"), (None, "api")] {
             let mut sim = room();
             sim.room.organization_id = Some("bank".to_owned());
-            sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+            sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
             let mut held = console_keyed("evt_0", "alert_1");
             held.source.channel_id = channel(channel_id);
             sim.seed(held);
@@ -1591,7 +1591,7 @@ mod an_arrival_from_a_delivery {
         let mut sim = room();
         sim.config.max_chain_depth = 2;
         sim.echo_agent("ai", "unused");
-        sim.unbound_transport("api", roomkit_core::model::ChannelType::Webhook);
+        sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
         sim.reentrant_channel(
             "ai",
             Reentry {

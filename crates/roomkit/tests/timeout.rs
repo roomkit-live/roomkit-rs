@@ -59,7 +59,7 @@ fn message(text: &str) -> InboundMessage {
 /// `process_timeout`.
 async fn room() -> RoomKit {
     let kit = RoomKit::new();
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.create_room(&room_id()).await.unwrap();
     kit.attach(&room_id(), &channel("sms")).await.unwrap();
@@ -129,7 +129,7 @@ fn process_timeouts(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<(bo
 /// The room's timeline but its lifecycle records (gap G-046).
 async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
     let mut timeline = kit.store().list_events(&room_id(), true).await.unwrap();
-    timeline.retain(|event| event.source.channel_type != ChannelType::System);
+    timeline.retain(|event| event.source.channel_type != ChannelType::SYSTEM);
     timeline
 }
 
@@ -243,7 +243,7 @@ impl Slow {
         Self {
             declaration: ChannelDeclaration::new(
                 channel("slow"),
-                ChannelType::Websocket,
+                ChannelType::WEBSOCKET,
                 ChannelCategory::Transport,
                 ChannelDirection::Bidirectional,
             ),

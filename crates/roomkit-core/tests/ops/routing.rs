@@ -32,7 +32,7 @@ fn message_from(channel_id: &str, sender: &str, text: &str) -> InboundMessage {
 /// returns.
 fn routed_to_room_1() -> Sim {
     let mut sim = Sim::new();
-    sim.unbound_transport("sms", ChannelType::Sms);
+    sim.unbound_transport("sms", ChannelType::SMS);
     sim.attach("sms");
     sim.routes_to(Some("room_1"));
     sim
@@ -42,7 +42,7 @@ fn routed_to_room_1() -> Sim {
 /// router finds no room.
 fn no_room_yet() -> Sim {
     let mut sim = Sim::without_rooms();
-    sim.unbound_transport("sms", ChannelType::Sms);
+    sim.unbound_transport("sms", ChannelType::SMS);
     sim.unbound_agent("ai", "Bonjour!");
     sim
 }
@@ -211,7 +211,7 @@ mod a_routed_sender {
     #[test]
     fn in_a_room_the_channel_is_not_bound_to_is_attached_naming_them() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.routes_to(Some("room_1"));
         sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
@@ -258,7 +258,7 @@ mod a_routed_sender {
         jean.identity_id = Some(IdentityId::new("id_jean").unwrap());
         sim.participants.push(jean);
         let mut identity = Identity::new(IdentityId::new("id_jean").unwrap(), None);
-        identity.link(ChannelType::Sms, SENDER);
+        identity.link(ChannelType::SMS, SENDER);
         sim.identities.push(identity);
         sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
@@ -280,7 +280,7 @@ mod a_routed_sender {
     #[test]
     fn with_no_address_reads_no_identity_and_is_not_recorded() {
         let mut sim = Sim::new();
-        sim.unbound_transport("telegram", ChannelType::Telegram);
+        sim.unbound_transport("telegram", ChannelType::TELEGRAM);
         sim.attach("telegram");
         sim.routes_to(Some("room_1"));
         sim.route(None, message_from("telegram", "4242", "Hi"))
@@ -624,7 +624,7 @@ mod a_routed_room_paused_by_its_lock {
     /// router returns.
     fn routed_to_the_sender_s_room() -> Sim {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.attach("sms").participant_id = Some(ParticipantId::new(SENDER).unwrap());
         sim.routes_to(Some("room_1"));
         sim
@@ -738,7 +738,7 @@ mod a_routed_room_paused_by_its_lock {
     #[test]
     fn bound_as_a_group_takes_the_message_and_is_resumed() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.attach("sms").group = true;
         sim.routes_to(Some("room_1"));
         let mut sim = paused(sim);
@@ -923,7 +923,7 @@ mod the_router_s_query {
             IdentityId::new(id).unwrap(),
             organization.map(str::to_owned),
         );
-        identity.link(ChannelType::Sms, SENDER);
+        identity.link(ChannelType::SMS, SENDER);
         identity
     }
 
@@ -937,14 +937,14 @@ mod the_router_s_query {
         assert_eq!(
             (
                 query.channel_id.as_str(),
-                query.channel_type,
+                query.channel_type.clone(),
                 query.sender_id.as_str(),
                 query.sender.address.as_deref(),
                 query.sender.identity_id.as_ref().map(IdentityId::as_str)
             ),
             (
                 "sms",
-                ChannelType::Sms,
+                ChannelType::SMS,
                 SENDER,
                 Some(SENDER),
                 Some("id_jean")
@@ -1047,7 +1047,7 @@ mod a_chat_message {
 
     fn telegram_without_rooms() -> Sim {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("telegram", ChannelType::Telegram);
+        sim.unbound_transport("telegram", ChannelType::TELEGRAM);
         sim.unbound_agent("ai", "Hello!");
         sim
     }
@@ -1109,7 +1109,7 @@ mod a_chat_message {
     #[test]
     fn of_a_teams_conversation_is_routed_by_it() {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("teams", ChannelType::Teams);
+        sim.unbound_transport("teams", ChannelType::TEAMS);
         let mut message = message_from("teams", "29:alice", "Hi");
         message
             .metadata
@@ -1126,7 +1126,7 @@ mod a_chat_message {
     #[test]
     fn of_a_whatsapp_personal_group_is_routed_by_its_group() {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("whatsapp", ChannelType::WhatsappPersonal);
+        sim.unbound_transport("whatsapp", ChannelType::WHATSAPP_PERSONAL);
         let mut message = message_from("whatsapp", SENDER, "Hi");
         message
             .metadata
@@ -1141,7 +1141,7 @@ mod a_chat_message {
     #[test]
     fn records_its_chat_on_a_room_opened_naming_no_one() {
         let mut sim = Sim::new();
-        sim.unbound_transport("telegram", ChannelType::Telegram);
+        sim.unbound_transport("telegram", ChannelType::TELEGRAM);
         sim.attach("telegram");
         sim.routes_to(Some("room_1"));
         sim.route(None, in_the_chat()).unwrap();

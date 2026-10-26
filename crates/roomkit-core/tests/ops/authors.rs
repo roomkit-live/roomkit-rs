@@ -161,7 +161,7 @@ fn a_room_with_no_register_has_it_rebuilt_from_its_whole_timeline() {
         ("old_2", "+15550009", "Alice"),
     ] {
         let mut source =
-            EventSource::new(channel("sms"), ChannelType::Sms, EventDirection::Inbound);
+            EventSource::new(channel("sms"), ChannelType::SMS, EventDirection::Inbound);
         source.participant_id = Some(ParticipantId::new(sender).unwrap());
         let mut earlier = RoomEvent::new(
             id.parse().unwrap(),
@@ -223,7 +223,7 @@ fn a_blocked_message_takes_no_author_and_loses_the_one_it_came_with() {
 fn a_record_committed_outside_the_pipeline_carries_its_author() {
     let mut sim = Sim::new();
     sim.transport("sms");
-    let mut source = EventSource::new(channel("sms"), ChannelType::Sms, EventDirection::Inbound);
+    let mut source = EventSource::new(channel("sms"), ChannelType::SMS, EventDirection::Inbound);
     source.participant_id = Some(ParticipantId::new("+15551234567").unwrap());
     let mut record = RoomEvent::new(
         "rec_1".parse().unwrap(),

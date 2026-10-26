@@ -62,7 +62,7 @@ fn channel(id: &str) -> ChannelId {
 }
 
 fn full_event() -> RoomEvent {
-    let mut source = EventSource::new(channel("sms"), ChannelType::Sms, EventDirection::Inbound);
+    let mut source = EventSource::new(channel("sms"), ChannelType::SMS, EventDirection::Inbound);
     source.participant_id = Some(ParticipantId::new("p_jean").unwrap());
     source.verification = Some(VerificationStatus::Unverified);
     source.external_id = Some("ext_9".to_owned());
@@ -224,7 +224,7 @@ fn channel_binding() {
     let mut binding = ChannelBinding::new(
         channel("ws_advisor"),
         room_id(),
-        ChannelType::Websocket,
+        ChannelType::WEBSOCKET,
         ChannelCategory::Transport,
         ChannelDirection::Bidirectional,
         at("2026-10-22T14:00:00Z"),
@@ -330,8 +330,8 @@ fn participant() {
 fn identity() {
     let mut identity = Identity::new("id_jean".parse().unwrap(), Some("bank".to_owned()));
     identity.display_name = Some("Jean Tremblay".to_owned());
-    identity.link(ChannelType::Sms, "+15551234567");
-    identity.link(ChannelType::Email, "jean@example.com");
+    identity.link(ChannelType::SMS, "+15551234567");
+    identity.link(ChannelType::EMAIL, "jean@example.com");
     identity.external_id = Some("crm_42".to_owned());
 
     assert_json_form(

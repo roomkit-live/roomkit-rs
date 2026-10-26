@@ -26,7 +26,7 @@ impl Identities {
         let organization = identity.organization_id.as_deref();
         for (channel_type, addresses) in &identity.channel_addresses {
             for address in addresses {
-                self.check_free(organization, *channel_type, address, &identity.id)?;
+                self.check_free(organization, channel_type, address, &identity.id)?;
             }
         }
         self.by_id.insert(identity.id.clone(), identity);
@@ -42,7 +42,7 @@ impl Identities {
     /// `channel_type`.
     pub(super) fn resolve(
         &self,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
         organization: Option<&str>,
     ) -> Option<Identity> {
@@ -58,7 +58,7 @@ impl Identities {
         organization: Option<&str>,
     ) -> Result<(), StoreError> {
         self.check_in(identity_id, organization)?;
-        self.check_free(organization, channel_type, address, identity_id)?;
+        self.check_free(organization, &channel_type, address, identity_id)?;
         if let Some(identity) = self.by_id.get_mut(identity_id) {
             identity.link(channel_type, address);
         }
@@ -69,7 +69,7 @@ impl Identities {
     pub(super) fn unlink(
         &mut self,
         identity_id: &IdentityId,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
         organization: Option<&str>,
     ) -> Result<(), StoreError> {
@@ -102,13 +102,13 @@ impl Identities {
     fn check_free(
         &self,
         organization: Option<&str>,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
         owner: &IdentityId,
     ) -> Result<(), StoreError> {
         match self.holder(organization, channel_type, address) {
             Some(holder) if &holder.id != owner => Err(StoreError::AddressLinked {
-                channel_type,
+                channel_type: channel_type.clone(),
                 address: address.to_owned(),
                 identity_id: holder.id.clone(),
             }),
@@ -120,7 +120,7 @@ impl Identities {
     fn holder(
         &self,
         organization: Option<&str>,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
     ) -> Option<&Identity> {
         self.by_id.values().find(|identity| {
@@ -143,12 +143,12 @@ mod tests {
             IdentityId::new(id).unwrap(),
             organization.map(str::to_owned),
         );
-        identity.link(ChannelType::Sms, ALICE);
+        identity.link(ChannelType::SMS, ALICE);
         identity
     }
 
     fn resolved(book: &Identities, organization: Option<&str>) -> Option<String> {
-        book.resolve(ChannelType::Sms, ALICE, organization)
+        book.resolve(&ChannelType::SMS, ALICE, organization)
             .map(|identity| identity.id.to_string())
     }
 
@@ -181,7 +181,7 @@ mod tests {
     fn an_address_on_another_channel_type_does_not_resolve() {
         let mut book = Identities::default();
         book.create(identity("id_alice", None)).unwrap();
-        assert_eq!(book.resolve(ChannelType::Whatsapp, ALICE, None), None);
+        assert_eq!(book.resolve(&ChannelType::WHATSAPP, ALICE, None), None);
     }
 
     /// RFC §14.1: the same address may belong to a different identity in
@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(
             book.create(identity("id_two", Some("bank"))),
             Err(StoreError::AddressLinked {
-                channel_type: ChannelType::Sms,
+                channel_type: ChannelType::SMS,
                 address: ALICE.to_owned(),
                 identity_id: IdentityId::new("id_one").unwrap(),
             })
@@ -217,7 +217,7 @@ mod tests {
         let mut book = Identities::default();
         let id = IdentityId::new("id_jean").unwrap();
         book.create(Identity::new(id.clone(), None)).unwrap();
-        book.link(&id, ChannelType::Sms, ALICE, None).unwrap();
+        book.link(&id, ChannelType::SMS, ALICE, None).unwrap();
         assert_eq!(resolved(&book, None), Some("id_jean".to_owned()));
     }
 
@@ -228,7 +228,7 @@ mod tests {
         book.create(Identity::new(id.clone(), Some("bank".to_owned())))
             .unwrap();
         assert_eq!(
-            book.link(&id, ChannelType::Sms, ALICE, Some("clinic")),
+            book.link(&id, ChannelType::SMS, ALICE, Some("clinic")),
             Err(StoreError::IdentityNotFound(id))
         );
     }
@@ -241,8 +241,8 @@ mod tests {
         let one = IdentityId::new("id_one").unwrap();
         let two = IdentityId::new("id_two").unwrap();
         book.create(Identity::new(two.clone(), None)).unwrap();
-        book.unlink(&one, ChannelType::Sms, ALICE, None).unwrap();
-        book.link(&two, ChannelType::Sms, ALICE, None).unwrap();
+        book.unlink(&one, &ChannelType::SMS, ALICE, None).unwrap();
+        book.link(&two, ChannelType::SMS, ALICE, None).unwrap();
         assert_eq!(resolved(&book, None), Some("id_two".to_owned()));
     }
 
@@ -251,7 +251,7 @@ mod tests {
         let mut book = Identities::default();
         book.create(identity("id_one", None)).unwrap();
         let one = IdentityId::new("id_one").unwrap();
-        book.unlink(&one, ChannelType::Sms, ALICE, None).unwrap();
+        book.unlink(&one, &ChannelType::SMS, ALICE, None).unwrap();
         assert_eq!(resolved(&book, None), None);
     }
 
@@ -260,7 +260,7 @@ mod tests {
         let mut book = Identities::default();
         book.create(identity("id_one", None)).unwrap();
         let one = IdentityId::new("id_one").unwrap();
-        book.unlink(&one, ChannelType::Whatsapp, ALICE, None)
+        book.unlink(&one, &ChannelType::WHATSAPP, ALICE, None)
             .unwrap();
         assert_eq!(resolved(&book, None), Some("id_one".to_owned()));
     }
@@ -271,7 +271,7 @@ mod tests {
         book.create(identity("id_bank", Some("bank"))).unwrap();
         let bank = IdentityId::new("id_bank").unwrap();
         assert_eq!(
-            book.unlink(&bank, ChannelType::Sms, ALICE, Some("clinic")),
+            book.unlink(&bank, &ChannelType::SMS, ALICE, Some("clinic")),
             Err(StoreError::IdentityNotFound(bank))
         );
     }
@@ -281,7 +281,7 @@ mod tests {
         let mut book = Identities::default();
         let ghost = IdentityId::new("id_ghost").unwrap();
         assert_eq!(
-            book.unlink(&ghost, ChannelType::Sms, ALICE, None),
+            book.unlink(&ghost, &ChannelType::SMS, ALICE, None),
             Err(StoreError::IdentityNotFound(ghost))
         );
     }
@@ -293,7 +293,7 @@ mod tests {
         let two = IdentityId::new("id_two").unwrap();
         book.create(Identity::new(two.clone(), None)).unwrap();
         assert!(matches!(
-            book.link(&two, ChannelType::Sms, ALICE, None),
+            book.link(&two, ChannelType::SMS, ALICE, None),
             Err(StoreError::AddressLinked { .. })
         ));
     }

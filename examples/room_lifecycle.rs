@@ -43,9 +43,9 @@ impl Helpdesk {
     fn new() -> Result<Self, Box<dyn Error>> {
         let clock = Clock::new();
         let kit = clock.kit();
-        let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::Sms);
+        let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
         let advisor =
-            RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::Websocket);
+            RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::WEBSOCKET);
         kit.register_channel(sms.clone())?;
         kit.register_channel(advisor.clone())?;
         Ok(Self {

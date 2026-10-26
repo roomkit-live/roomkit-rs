@@ -381,7 +381,7 @@ fn rebuilt(context: &RoomContext, timeline: &[RoomEvent]) -> AuthorRegister {
     let salt = context.room.id.as_str();
     let mut unrecorded = Vec::new();
     for event in timeline {
-        if event.status == EventStatus::Blocked || event.source.channel_type == ChannelType::System
+        if event.status == EventStatus::Blocked || event.source.channel_type == ChannelType::SYSTEM
         {
             continue;
         }
@@ -504,7 +504,7 @@ fn author_record(
     context: &RoomContext,
     register: &mut AuthorRegister,
 ) -> Option<(String, u32, String)> {
-    if event.source.channel_type == ChannelType::System {
+    if event.source.channel_type == ChannelType::SYSTEM {
         return None;
     }
     let people = People::new(&context.participants);
@@ -641,9 +641,9 @@ mod tests {
     /// A message from `sender` on `channel`, named `name` when given.
     fn message(channel: &str, sender: &str, name: Option<&str>) -> RoomEvent {
         let channel_type = if channel == "sms" {
-            ChannelType::Sms
+            ChannelType::SMS
         } else {
-            ChannelType::Websocket
+            ChannelType::WEBSOCKET
         };
         let mut source = EventSource::new(
             ChannelId::new(channel).unwrap(),

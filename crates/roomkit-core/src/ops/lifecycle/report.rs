@@ -28,7 +28,7 @@ pub(crate) enum Reported<'change> {
     /// (RFC §10.1 step 2).
     SessionStarted {
         channel_id: &'change ChannelId,
-        channel_type: ChannelType,
+        channel_type: &'change ChannelType,
     },
 }
 
@@ -61,7 +61,7 @@ impl Reported<'_> {
             } => Some(FrameworkEvent::SessionStarted {
                 room_id,
                 channel_id: channel_id.clone(),
-                channel_type,
+                channel_type: channel_type.clone(),
             }),
         }
     }
@@ -114,7 +114,7 @@ impl Reported<'_> {
     /// The type of the channel a session started on.
     fn channel_type(self) -> Option<ChannelType> {
         match self {
-            Self::SessionStarted { channel_type, .. } => Some(channel_type),
+            Self::SessionStarted { channel_type, .. } => Some(channel_type.clone()),
             Self::RoomCreated
             | Self::RoomPaused(_)
             | Self::RoomClosed(_)
@@ -242,7 +242,7 @@ fn observers(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) -> 
 fn payload(cx: &mut Cx<'_>, reported: Reported<'_>, room_id: &RoomId) -> RoomEvent {
     let source = EventSource::new(
         ChannelId::system(),
-        ChannelType::System,
+        ChannelType::SYSTEM,
         EventDirection::Outbound,
     );
     let lifecycle = LifecyclePayload {

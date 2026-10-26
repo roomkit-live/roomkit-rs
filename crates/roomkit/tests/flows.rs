@@ -44,7 +44,7 @@ async fn sms_and_agent() -> (RoomKit, RecordingTransport) {
     kit.set_environment(SequentialEnvironment::new(
         Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
     ));
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let agent = EchoAgent::new(channel("ai"), "You said: ").quoting();
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(agent.clone()).unwrap();
@@ -267,7 +267,7 @@ async fn a_closed_room_refuses_the_next_message() {
 #[tokio::test]
 async fn a_message_on_an_unregistered_channel_is_refused() {
     let (kit, _sms) = sms_and_agent().await;
-    let stranger = RecordingTransport::new(channel("telegram"), ChannelType::Telegram);
+    let stranger = RecordingTransport::new(channel("telegram"), ChannelType::TELEGRAM);
     let refused = kit
         .process_inbound_in(&room_id(), message(&stranger, "Hi"))
         .await;
@@ -332,7 +332,7 @@ async fn an_inbound_event_is_committed_under_an_id_of_the_pipeline() {
     kit.register_channel(ProviderIds {
         declaration: ChannelDeclaration::new(
             channel("whatsapp"),
-            ChannelType::Whatsapp,
+            ChannelType::WHATSAPP,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
         ),
@@ -361,7 +361,7 @@ async fn a_channel_that_panics_fails_its_delivery_and_the_kit_goes_on() {
     kit.register_channel(Panicking {
         declaration: ChannelDeclaration::new(
             channel("broken"),
-            ChannelType::Webhook,
+            ChannelType::WEBHOOK,
             ChannelCategory::Transport,
             ChannelDirection::Outbound,
         ),
@@ -385,7 +385,7 @@ async fn a_channel_that_panics_fails_its_delivery_and_the_kit_goes_on() {
 #[tokio::test]
 async fn a_muted_agent_is_asked_and_its_answer_stored_blocked() {
     let kit = RoomKit::new();
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let agent = EchoAgent::new(channel("ai"), "muted answer");
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(agent.clone()).unwrap();
@@ -416,13 +416,13 @@ async fn a_muted_agent_is_asked_and_its_answer_stored_blocked() {
 async fn registering_a_channel_is_announced_to_subscribers() {
     let kit = RoomKit::new();
     let mut events = kit.subscribe();
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     assert_eq!(
         events.recv().await.unwrap(),
         FrameworkEvent::ChannelRegistered {
             channel_id: channel("sms"),
-            channel_type: ChannelType::Sms,
+            channel_type: ChannelType::SMS,
         }
     );
 }
@@ -430,7 +430,7 @@ async fn registering_a_channel_is_announced_to_subscribers() {
 #[tokio::test]
 async fn registering_a_channel_twice_is_refused() {
     let kit = RoomKit::new();
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
     assert!(matches!(
         kit.register_channel(sms),
@@ -443,7 +443,7 @@ async fn a_kit_is_shared_by_its_clones() {
     let (kit, sms) = sms_and_agent().await;
     let clone = kit.clone();
     let task = tokio::spawn(async move {
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         clone
             .process_inbound_in(&room_id(), message(&sms, "from a task"))
             .await

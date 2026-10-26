@@ -19,7 +19,7 @@ use shared::Checks;
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
 
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::Sms);
+    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
     let agent = EchoAgent::new(ChannelId::new("ai")?, "Bonjour Jean! You said: ").quoting();
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent.clone())?;

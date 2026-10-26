@@ -89,33 +89,17 @@ pub enum Addressing {
 }
 
 impl Addressing {
-    /// How a channel of `channel_type` is addressed (gap G-051): SMS, MMS,
-    /// RCS, WhatsApp, WhatsApp Personal and VOICE by phone number, EMAIL by
-    /// email address, Telegram and Teams by chat, any other type by an id as
-    /// written.
-    pub fn of(channel_type: ChannelType) -> Self {
-        match channel_type {
-            ChannelType::Sms
-            | ChannelType::Mms
-            | ChannelType::Rcs
-            | ChannelType::Whatsapp
-            | ChannelType::WhatsappPersonal
-            | ChannelType::Voice => Self::PhoneNumber,
-            ChannelType::Email => Self::EmailAddress,
-            ChannelType::Telegram | ChannelType::Teams => Self::Chat,
-            ChannelType::Websocket
-            | ChannelType::Messenger
-            | ChannelType::Webhook
-            | ChannelType::RealtimeVoice
-            | ChannelType::AudioVideo
-            | ChannelType::RealtimeAudioVideo
-            | ChannelType::Video
-            | ChannelType::Conference
-            | ChannelType::Cli
-            | ChannelType::Push
-            | ChannelType::Host
-            | ChannelType::Ai
-            | ChannelType::System => Self::AsWritten,
+    /// How a channel of `channel_type` is addressed by default (gap G-051):
+    /// SMS, MMS, RCS, WhatsApp, WhatsApp Personal and VOICE by phone number,
+    /// EMAIL by email address, Telegram and Teams by chat, any other name by
+    /// an id as written. A channel's declaration takes it, and may set
+    /// another (`ChannelDeclaration::addressing`).
+    pub fn of(channel_type: &ChannelType) -> Self {
+        match channel_type.as_str() {
+            "sms" | "mms" | "rcs" | "whatsapp" | "whatsapp_personal" | "voice" => Self::PhoneNumber,
+            "email" => Self::EmailAddress,
+            "telegram" | "teams" => Self::Chat,
+            _ => Self::AsWritten,
         }
     }
 
@@ -344,31 +328,16 @@ pub fn email_address(address: &str) -> String {
 /// `facebook_user_id` for Messenger, `teams_conversation_id` for Teams and
 /// `telegram_chat_id` for Telegram. `None` for a channel that delivers to a
 /// destination of its own, a WebSocket's connections, a webhook's URL, a
-/// voice session, which needs no recipient (RFC §10.2 step 3d).
-pub fn recipient_key(channel_type: ChannelType) -> Option<&'static str> {
-    match channel_type {
-        ChannelType::Sms
-        | ChannelType::Mms
-        | ChannelType::Rcs
-        | ChannelType::Whatsapp
-        | ChannelType::WhatsappPersonal => Some(PHONE_NUMBER),
-        ChannelType::Email => Some(EMAIL_ADDRESS),
-        ChannelType::Messenger => Some(FACEBOOK_USER_ID),
-        ChannelType::Teams => Some(TEAMS_CONVERSATION_ID),
-        ChannelType::Telegram => Some(TELEGRAM_CHAT_ID),
-        ChannelType::Websocket
-        | ChannelType::Webhook
-        | ChannelType::Voice
-        | ChannelType::RealtimeVoice
-        | ChannelType::AudioVideo
-        | ChannelType::RealtimeAudioVideo
-        | ChannelType::Video
-        | ChannelType::Conference
-        | ChannelType::Cli
-        | ChannelType::Push
-        | ChannelType::Host
-        | ChannelType::Ai
-        | ChannelType::System => None,
+/// voice session, which needs no recipient (RFC §10.2 step 3d), and for any
+/// name not listed: a channel's declaration sets its own.
+pub fn recipient_key(channel_type: &ChannelType) -> Option<&'static str> {
+    match channel_type.as_str() {
+        "sms" | "mms" | "rcs" | "whatsapp" | "whatsapp_personal" => Some(PHONE_NUMBER),
+        "email" => Some(EMAIL_ADDRESS),
+        "messenger" => Some(FACEBOOK_USER_ID),
+        "teams" => Some(TEAMS_CONVERSATION_ID),
+        "telegram" => Some(TELEGRAM_CHAT_ID),
+        _ => None,
     }
 }
 
@@ -377,31 +346,14 @@ pub fn recipient_key(channel_type: ChannelType) -> Option<&'static str> {
 /// G-057): `chat_id` for Telegram, `conversation_id` for Teams, and
 /// `group_jid` for WhatsApp Personal, whose group messages are their
 /// group's and private messages their sender's. `None` for every other
-/// type, whose messages are routed by their sender.
-pub fn chat_key(channel_type: ChannelType) -> Option<&'static str> {
-    match channel_type {
-        ChannelType::Telegram => Some(TELEGRAM_CHAT),
-        ChannelType::Teams => Some(TEAMS_CONVERSATION),
-        ChannelType::WhatsappPersonal => Some(WHATSAPP_GROUP),
-        ChannelType::Sms
-        | ChannelType::Mms
-        | ChannelType::Rcs
-        | ChannelType::Email
-        | ChannelType::Whatsapp
-        | ChannelType::Websocket
-        | ChannelType::Messenger
-        | ChannelType::Webhook
-        | ChannelType::Voice
-        | ChannelType::RealtimeVoice
-        | ChannelType::AudioVideo
-        | ChannelType::RealtimeAudioVideo
-        | ChannelType::Video
-        | ChannelType::Conference
-        | ChannelType::Cli
-        | ChannelType::Push
-        | ChannelType::Host
-        | ChannelType::Ai
-        | ChannelType::System => None,
+/// name, whose messages are routed by their sender, unless a channel's
+/// declaration sets a key.
+pub fn chat_key(channel_type: &ChannelType) -> Option<&'static str> {
+    match channel_type.as_str() {
+        "telegram" => Some(TELEGRAM_CHAT),
+        "teams" => Some(TEAMS_CONVERSATION),
+        "whatsapp_personal" => Some(WHATSAPP_GROUP),
+        _ => None,
     }
 }
 
@@ -608,27 +560,30 @@ mod tests {
     #[test]
     fn phone_channels_are_addressed_by_phone_number() {
         let types = [
-            ChannelType::Sms,
-            ChannelType::Mms,
-            ChannelType::Rcs,
-            ChannelType::Whatsapp,
-            ChannelType::WhatsappPersonal,
-            ChannelType::Voice,
+            ChannelType::SMS,
+            ChannelType::MMS,
+            ChannelType::RCS,
+            ChannelType::WHATSAPP,
+            ChannelType::WHATSAPP_PERSONAL,
+            ChannelType::VOICE,
         ];
-        assert_eq!(types.map(Addressing::of), [Addressing::PhoneNumber; 6]);
+        assert_eq!(
+            types.each_ref().map(Addressing::of),
+            [Addressing::PhoneNumber; 6]
+        );
     }
 
     #[test]
     fn a_websocket_is_addressed_by_ids_as_written() {
         assert_eq!(
-            Addressing::of(ChannelType::Websocket),
+            Addressing::of(&ChannelType::WEBSOCKET),
             Addressing::AsWritten
         );
     }
 
     #[test]
     fn a_chat_channel_does_not_reply_to_its_sender() {
-        assert!(!Addressing::of(ChannelType::Telegram).replies_to_sender());
+        assert!(!Addressing::of(&ChannelType::TELEGRAM).replies_to_sender());
     }
 
     #[test]
@@ -647,7 +602,7 @@ mod tests {
     #[test]
     fn a_telegram_channel_delivers_to_its_telegram_chat_id() {
         assert_eq!(
-            recipient_key(ChannelType::Telegram),
+            recipient_key(&ChannelType::TELEGRAM),
             Some("telegram_chat_id")
         );
     }
@@ -655,12 +610,13 @@ mod tests {
     #[test]
     fn the_appendix_a_channels_name_their_recipient_key() {
         let keys = [
-            ChannelType::Sms,
-            ChannelType::Email,
-            ChannelType::Messenger,
-            ChannelType::Teams,
-            ChannelType::Rcs,
+            ChannelType::SMS,
+            ChannelType::EMAIL,
+            ChannelType::MESSENGER,
+            ChannelType::TEAMS,
+            ChannelType::RCS,
         ]
+        .each_ref()
         .map(recipient_key);
         assert_eq!(
             keys,
@@ -680,9 +636,9 @@ mod tests {
     fn a_host_channel_is_addressed_as_written_with_no_recipient_nor_chat() {
         assert_eq!(
             (
-                Addressing::of(ChannelType::Host),
-                recipient_key(ChannelType::Host),
-                chat_key(ChannelType::Host)
+                Addressing::of(&ChannelType::HOST),
+                recipient_key(&ChannelType::HOST),
+                chat_key(&ChannelType::HOST)
             ),
             (Addressing::AsWritten, None, None)
         );
@@ -691,7 +647,9 @@ mod tests {
     #[test]
     fn a_websocket_and_a_webhook_need_no_recipient() {
         assert_eq!(
-            [ChannelType::Websocket, ChannelType::Webhook].map(recipient_key),
+            [ChannelType::WEBSOCKET, ChannelType::WEBHOOK]
+                .each_ref()
+                .map(recipient_key),
             [None, None]
         );
     }
@@ -700,7 +658,7 @@ mod tests {
         let mut binding = ChannelBinding::new(
             ChannelId::new("sms").unwrap(),
             RoomId::new("room_1").unwrap(),
-            ChannelType::Sms,
+            ChannelType::SMS,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
             Timestamp::UNIX_EPOCH,
@@ -836,7 +794,9 @@ mod tests {
     #[test]
     fn a_chat_channel_carries_its_chat_under_its_chat_key() {
         assert_eq!(
-            [ChannelType::Telegram, ChannelType::Teams, ChannelType::Sms].map(chat_key),
+            [ChannelType::TELEGRAM, ChannelType::TEAMS, ChannelType::SMS]
+                .each_ref()
+                .map(chat_key),
             [Some("chat_id"), Some("conversation_id"), None]
         );
     }
@@ -845,7 +805,7 @@ mod tests {
     /// group under `group_jid`.
     #[test]
     fn a_whatsapp_personal_group_message_carries_its_group_under_group_jid() {
-        assert_eq!(chat_key(ChannelType::WhatsappPersonal), Some("group_jid"));
+        assert_eq!(chat_key(&ChannelType::WHATSAPP_PERSONAL), Some("group_jid"));
     }
 
     /// Properties of the form a channel writes its addresses in.

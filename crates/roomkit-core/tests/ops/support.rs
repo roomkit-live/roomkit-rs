@@ -393,7 +393,7 @@ impl Sim {
     pub(crate) fn transport(&mut self, id: &str) -> &mut ChannelBinding {
         self.bind(
             id,
-            ChannelType::Websocket,
+            ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
             Box::new(|_, _| Ok(ChannelOutput::default())),
         )
@@ -403,7 +403,7 @@ impl Sim {
     pub(crate) fn transport_with(&mut self, id: &str, on_event: OnEvent) -> &mut ChannelBinding {
         self.bind(
             id,
-            ChannelType::Websocket,
+            ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
             on_event,
         )
@@ -411,7 +411,7 @@ impl Sim {
 
     /// An agent bound read-write, answering with `on_event`.
     pub(crate) fn agent(&mut self, id: &str, on_event: OnEvent) -> &mut ChannelBinding {
-        self.bind(id, ChannelType::Ai, ChannelCategory::Intelligence, on_event)
+        self.bind(id, ChannelType::AI, ChannelCategory::Intelligence, on_event)
     }
 
     /// An agent that answers every event it is asked with `reply`.
@@ -450,7 +450,7 @@ impl Sim {
             capabilities: text_only(),
             ..ChannelDeclaration::new(
                 channel(id),
-                ChannelType::Ai,
+                ChannelType::AI,
                 ChannelCategory::Intelligence,
                 ChannelDirection::Bidirectional,
             )
@@ -1090,7 +1090,7 @@ impl Sim {
                 channel_type,
                 address,
                 ..
-            }) => format!("resolve_identity {} {address}", type_name(*channel_type)),
+            }) => format!("resolve_identity {} {address}", type_name(channel_type)),
             Request::Route { query } => format!("route {} {}", query.channel_id, query.sender_id),
             Request::Channel(ChannelRequest::HandleInbound { channel_id, .. }) => {
                 format!("handle_inbound {channel_id}")
@@ -1173,7 +1173,7 @@ impl Sim {
                 channel_type,
                 address,
                 organization_id,
-            }) => self.resolve_identity(channel_type, &address, organization_id.as_deref()),
+            }) => self.resolve_identity(&channel_type, &address, organization_id.as_deref()),
             Request::Route { query } => self.execute_route(*query),
             Request::Store(StoreRequest::GetEvent { event_id }) => self.get_event(&event_id),
             Request::Store(StoreRequest::UpdateEvent { event_id, updates }) => {
@@ -1227,7 +1227,7 @@ impl Sim {
     /// `channel_type`, if any.
     fn resolve_identity(
         &mut self,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
         organization: Option<&str>,
     ) -> Outcome {
@@ -1842,12 +1842,8 @@ fn store_room(request: &StoreRequest) -> &RoomId {
 }
 
 /// A channel type's RFC name, read from its JSON form.
-fn type_name(channel_type: ChannelType) -> String {
-    serde_json::to_value(channel_type)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_owned()
+fn type_name(channel_type: &ChannelType) -> String {
+    channel_type.as_str().to_owned()
 }
 
 /// A channel's answer as the driver completes its call with it.
@@ -1920,7 +1916,7 @@ pub(crate) fn response(channel_id: &str, event: &RoomEvent, text: &str) -> RoomE
         EventType::Message,
         EventSource::new(
             channel(channel_id),
-            ChannelType::Ai,
+            ChannelType::AI,
             EventDirection::Outbound,
         ),
         EventContent::text(text),
@@ -1936,7 +1932,7 @@ pub(crate) fn notice_event(id: &str, text: &str) -> RoomEvent {
         EventType::Message,
         EventSource::new(
             channel("system"),
-            ChannelType::System,
+            ChannelType::SYSTEM,
             EventDirection::Outbound,
         ),
         EventContent::text(text),

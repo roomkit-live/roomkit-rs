@@ -48,7 +48,7 @@ fn message(from: &str, sender: &str, text: &str) -> InboundMessage {
 /// A kit with an SMS transport and an echo agent, both attached to `room_1`.
 async fn room_with_agent() -> RoomKit {
     let kit = RoomKit::new();
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
         .unwrap();
@@ -104,7 +104,7 @@ fn event_names(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<String> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
     let kit = RoomKit::new();
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.observe("welcome", HookTrigger::OnRoomCreated, |_, _| {
         tokio::time::sleep(Duration::from_millis(50))
@@ -158,7 +158,7 @@ impl Panicking {
         Self {
             declaration: ChannelDeclaration::new(
                 channel("broken"),
-                ChannelType::Websocket,
+                ChannelType::WEBSOCKET,
                 ChannelCategory::Transport,
                 ChannelDirection::Bidirectional,
             ),
@@ -238,7 +238,7 @@ impl Gated {
         Self {
             declaration: ChannelDeclaration::new(
                 channel("slow"),
-                ChannelType::Websocket,
+                ChannelType::WEBSOCKET,
                 ChannelCategory::Transport,
                 ChannelDirection::Bidirectional,
             ),
@@ -355,7 +355,7 @@ impl SlowAgent {
         Self {
             declaration: ChannelDeclaration::new(
                 channel("ai"),
-                ChannelType::Ai,
+                ChannelType::AI,
                 ChannelCategory::Intelligence,
                 ChannelDirection::Bidirectional,
             ),
@@ -401,7 +401,7 @@ impl Channel for SlowAgent {
             agent.go.notified().await;
             unfinished.answered = true;
             agent.log.lock().unwrap().push("answered");
-            let source = EventSource::new(channel("ai"), ChannelType::Ai, EventDirection::Outbound);
+            let source = EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
             let answer = RoomEvent::new(
                 event.id.clone(),
                 event.room_id.clone(),
@@ -425,9 +425,9 @@ impl Channel for SlowAgent {
 #[tokio::test]
 async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_event() {
     let kit = RoomKit::new();
-    let ws = RecordingTransport::new(channel("ws"), ChannelType::Websocket);
+    let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
     let agent = SlowAgent::new();
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.register_channel(ws.clone()).unwrap();
     kit.register_channel(agent.clone()).unwrap();
@@ -486,7 +486,7 @@ async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_e
 async fn the_delivery_cursor_follows_the_lane() {
     let kit = RoomKit::new();
     let slow = Gated::new();
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.register_channel(slow.clone()).unwrap();
     kit.before_broadcast("no_spam", |event, _| {

@@ -1,95 +1,136 @@
 //! What a channel is and what it supports (RFC §4.2, §5.8, §6.2, §13.3).
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
+use std::fmt;
+use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
-use super::Metadata;
+use super::{Metadata, ModelError};
 
-/// The kind of a channel (RFC §6.2).
+/// The kind of a channel (RFC §6.2): an open name, written as a plain
+/// string (`sms`, `teams`).
 ///
-/// The RFC expects this list to grow; adding a value is a minor-version
-/// change before 1.0.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelType {
-    /// Short Message Service.
-    Sms,
-    /// Multimedia Message Service.
-    Mms,
-    /// Rich Communication Services.
-    Rcs,
-    /// Electronic mail.
-    Email,
-    /// WhatsApp Business Cloud API.
-    Whatsapp,
-    /// WhatsApp Web multidevice protocol.
-    WhatsappPersonal,
-    /// WebSocket real-time connection.
-    Websocket,
-    /// Facebook Messenger.
-    Messenger,
-    /// Microsoft Teams.
-    Teams,
-    /// Generic HTTP webhook.
-    Webhook,
-    /// Voice channel (STT/TTS pipeline).
-    Voice,
-    /// Speech-to-speech API.
-    RealtimeVoice,
-    /// Combined voice and video channel (STT/TTS pipeline and video).
-    AudioVideo,
-    /// Combined speech-to-speech and video channel.
-    RealtimeAudioVideo,
-    /// Video-only channel.
-    Video,
-    /// Multi-party SFU conference.
-    Conference,
-    /// Telegram Bot API.
-    Telegram,
-    /// Command-line interface, for development and testing.
-    Cli,
-    /// Push notification channel.
-    Push,
-    /// The host application's own voice in a room: a transport, `INBOUND`,
-    /// never delivered to (RFC §6.2, §10.5, Appendix A.14.1).
-    Host,
-    /// AI or LLM agent.
-    Ai,
-    /// Framework-generated events.
-    System,
-}
+/// The RFC lists the types it knows, and the Python implementation writes
+/// more (`discord`, `buzz`); any other name is a type too, so a record that
+/// names one is read and written back as it is. What a type means for its
+/// channels, how their senders are addressed and what they do, is the
+/// channel's declaration (`ops::ChannelDeclaration`), which takes the
+/// well-known names' defaults. The well-known names are the associated
+/// constants. Two are reserved: [`HOST`](Self::HOST), which only a host
+/// channel's declaration may claim, and [`SYSTEM`](Self::SYSTEM), the
+/// framework's own records', which no channel may claim.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ChannelType(Cow<'static, str>);
 
 impl ChannelType {
-    /// The category the RFC table gives this type, `None` for [`System`]
-    /// which has none (RFC §6.2).
+    /// Short Message Service.
+    pub const SMS: Self = Self(Cow::Borrowed("sms"));
+    /// Multimedia Message Service.
+    pub const MMS: Self = Self(Cow::Borrowed("mms"));
+    /// Rich Communication Services.
+    pub const RCS: Self = Self(Cow::Borrowed("rcs"));
+    /// Electronic mail.
+    pub const EMAIL: Self = Self(Cow::Borrowed("email"));
+    /// WhatsApp Business Cloud API.
+    pub const WHATSAPP: Self = Self(Cow::Borrowed("whatsapp"));
+    /// WhatsApp Web multidevice protocol.
+    pub const WHATSAPP_PERSONAL: Self = Self(Cow::Borrowed("whatsapp_personal"));
+    /// WebSocket real-time connection.
+    pub const WEBSOCKET: Self = Self(Cow::Borrowed("websocket"));
+    /// Facebook Messenger.
+    pub const MESSENGER: Self = Self(Cow::Borrowed("messenger"));
+    /// Microsoft Teams.
+    pub const TEAMS: Self = Self(Cow::Borrowed("teams"));
+    /// Discord bot, a name the Python implementation writes and the RFC
+    /// does not list.
+    pub const DISCORD: Self = Self(Cow::Borrowed("discord"));
+    /// Buzz (Nostr relay), a name the Python implementation writes and
+    /// the RFC does not list.
+    pub const BUZZ: Self = Self(Cow::Borrowed("buzz"));
+    /// Generic HTTP webhook.
+    pub const WEBHOOK: Self = Self(Cow::Borrowed("webhook"));
+    /// Voice channel (STT/TTS pipeline).
+    pub const VOICE: Self = Self(Cow::Borrowed("voice"));
+    /// Speech-to-speech API.
+    pub const REALTIME_VOICE: Self = Self(Cow::Borrowed("realtime_voice"));
+    /// Combined voice and video channel (STT/TTS pipeline and video).
+    pub const AUDIO_VIDEO: Self = Self(Cow::Borrowed("audio_video"));
+    /// Combined speech-to-speech and video channel.
+    pub const REALTIME_AUDIO_VIDEO: Self = Self(Cow::Borrowed("realtime_audio_video"));
+    /// Video-only channel.
+    pub const VIDEO: Self = Self(Cow::Borrowed("video"));
+    /// Multi-party SFU conference.
+    pub const CONFERENCE: Self = Self(Cow::Borrowed("conference"));
+    /// Telegram Bot API.
+    pub const TELEGRAM: Self = Self(Cow::Borrowed("telegram"));
+    /// Command-line interface, for development and testing.
+    pub const CLI: Self = Self(Cow::Borrowed("cli"));
+    /// Push notification channel.
+    pub const PUSH: Self = Self(Cow::Borrowed("push"));
+    /// The host application's own voice in a room: a transport, `INBOUND`,
+    /// never delivered to (RFC §6.2, §10.5, Appendix A.14.1). Reserved: only
+    /// a host channel's declaration may claim it.
+    pub const HOST: Self = Self(Cow::Borrowed("host"));
+    /// AI or LLM agent.
+    pub const AI: Self = Self(Cow::Borrowed("ai"));
+    /// The framework's own records. Reserved: no channel may claim it.
+    pub const SYSTEM: Self = Self(Cow::Borrowed("system"));
+
+    /// The type named `name`.
     ///
-    /// [`System`]: ChannelType::System
-    pub fn category(self) -> Option<ChannelCategory> {
-        match self {
-            Self::Sms
-            | Self::Mms
-            | Self::Rcs
-            | Self::Email
-            | Self::Whatsapp
-            | Self::WhatsappPersonal
-            | Self::Websocket
-            | Self::Messenger
-            | Self::Teams
-            | Self::Webhook
-            | Self::Voice
-            | Self::RealtimeVoice
-            | Self::AudioVideo
-            | Self::RealtimeAudioVideo
-            | Self::Video
-            | Self::Conference
-            | Self::Telegram
-            | Self::Cli
-            | Self::Push
-            | Self::Host => Some(ChannelCategory::Transport),
-            Self::Ai => Some(ChannelCategory::Intelligence),
-            Self::System => None,
+    /// # Errors
+    ///
+    /// Returns [`ModelError::EmptyIdentifier`] for an empty name.
+    pub fn new(name: impl Into<String>) -> Result<Self, ModelError> {
+        let name = name.into();
+        if name.is_empty() {
+            return Err(ModelError::EmptyIdentifier {
+                kind: "channel type",
+            });
         }
+        Ok(Self(Cow::Owned(name)))
+    }
+
+    /// The name, as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Serialize for ChannelType {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl TryFrom<String> for ChannelType {
+    type Error = ModelError;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::new(name)
+    }
+}
+
+impl FromStr for ChannelType {
+    type Err = ModelError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::new(name)
+    }
+}
+
+impl fmt::Display for ChannelType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.pad(&self.0)
+    }
+}
+
+impl AsRef<str> for ChannelType {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 
@@ -292,38 +333,37 @@ mod tests {
 
     use super::*;
 
+    /// A type is an open name (docs/rfc-gaps.md, "Found by step 4's shared
+    /// SQLite file"): a well-known one, one the Python implementation writes
+    /// that the RFC does not list, and one no implementation knows are read
+    /// and written back as they are.
     #[test]
-    fn a_channel_type_serializes_in_snake_case() {
+    fn any_name_reads_and_writes_back_as_it_is() {
+        let names = ["whatsapp_personal", "discord", "buzz", "slack"];
+        let written: Vec<serde_json::Value> = names
+            .iter()
+            .map(|name| {
+                let read: ChannelType = serde_json::from_value(json!(name)).unwrap();
+                serde_json::to_value(read).unwrap()
+            })
+            .collect();
+        assert_eq!(written, names.map(|name| json!(name)));
+    }
+
+    #[test]
+    fn a_well_known_name_is_its_constant() {
         assert_eq!(
-            serde_json::to_value(ChannelType::WhatsappPersonal).unwrap(),
-            json!("whatsapp_personal")
+            "whatsapp_personal".parse::<ChannelType>(),
+            Ok(ChannelType::WHATSAPP_PERSONAL)
         );
     }
 
     #[test]
-    fn the_ai_type_is_an_intelligence_channel() {
+    fn an_empty_name_is_refused() {
         assert_eq!(
-            ChannelType::Ai.category(),
-            Some(ChannelCategory::Intelligence)
+            serde_json::from_value::<ChannelType>(json!("")).is_err(),
+            true
         );
-    }
-
-    /// RFC §6.2: HOST, the host's own voice, is a transport, written
-    /// `host`.
-    #[test]
-    fn the_host_type_is_a_transport_written_host() {
-        assert_eq!(
-            (
-                ChannelType::Host.category(),
-                serde_json::to_value(ChannelType::Host).unwrap()
-            ),
-            (Some(ChannelCategory::Transport), json!("host"))
-        );
-    }
-
-    #[test]
-    fn the_system_type_has_no_category() {
-        assert_eq!(ChannelType::System.category(), None);
     }
 
     #[test]

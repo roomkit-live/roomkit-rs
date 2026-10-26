@@ -33,7 +33,7 @@ fn sms_binding() -> ChannelBinding {
     ChannelBinding::new(
         channel("sms"),
         room_id(),
-        ChannelType::Sms,
+        ChannelType::SMS,
         ChannelCategory::Transport,
         ChannelDirection::Bidirectional,
         Timestamp::UNIX_EPOCH,
@@ -282,7 +282,7 @@ mod attach_channel {
         let binding = ChannelBinding::new(
             channel("host"),
             room_id(),
-            ChannelType::Host,
+            ChannelType::HOST,
             ChannelCategory::Intelligence,
             ChannelDirection::Inbound,
             Timestamp::UNIX_EPOCH,

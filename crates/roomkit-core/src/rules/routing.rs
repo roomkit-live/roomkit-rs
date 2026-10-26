@@ -765,7 +765,7 @@ mod tests {
     fn query_on(channel_id: &str, sender: &str) -> RouteQuery {
         RouteQuery {
             channel_id: channel(channel_id),
-            channel_type: ChannelType::Sms,
+            channel_type: ChannelType::SMS,
             sender_id: sender.to_owned(),
             metadata: Metadata::new(),
             organization_id: None,
@@ -799,7 +799,7 @@ mod tests {
         ChannelBinding::new(
             channel(channel_id),
             room_id.clone(),
-            ChannelType::Sms,
+            ChannelType::SMS,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
             Timestamp::UNIX_EPOCH,
@@ -1309,7 +1309,7 @@ mod tests {
         fn event(channel_id: &str, author: Option<&str>, status: EventStatus) -> RoomEvent {
             let mut source = EventSource::new(
                 channel(channel_id),
-                ChannelType::Sms,
+                ChannelType::SMS,
                 EventDirection::Inbound,
             );
             source.participant_id = author.map(|author| ParticipantId::new(author).unwrap());

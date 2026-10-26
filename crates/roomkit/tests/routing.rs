@@ -19,9 +19,9 @@ use roomkit::model::{
 };
 use roomkit::testing::EchoAgent;
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, DefaultRouter, HookTrigger,
-    InMemoryStore, InboundError, InboundRoomRouter, KitError, RoomFilter, RoomKit, RouteQuery,
-    RouterError, SequentialEnvironment, text_of,
+    Addressing, Channel, ChannelDeclaration, ChannelError, ConversationStore, DefaultRouter,
+    HookTrigger, InMemoryStore, InboundError, InboundRoomRouter, KitError, RoomFilter, RoomKit,
+    RouteQuery, RouterError, SequentialEnvironment, text_of,
 };
 use tokio::sync::{Barrier, Notify};
 
@@ -99,7 +99,7 @@ fn kit_with_agent() -> (RoomKit, Provider) {
     kit.set_environment(SequentialEnvironment::new(
         Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
     ));
-    let sms = Provider::new("sms", ChannelType::Sms);
+    let sms = Provider::new("sms", ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
         .unwrap();
@@ -143,7 +143,7 @@ async fn texts(kit: &RoomKit, room_id: &RoomId) -> Vec<String> {
         .await
         .unwrap()
         .iter()
-        .filter(|event| event.source.channel_type != ChannelType::System)
+        .filter(|event| event.source.channel_type != ChannelType::SYSTEM)
         .map(|event| text_of(&event.content))
         .collect()
 }
@@ -228,7 +228,7 @@ async fn a_member_is_found_by_an_address_linked_to_their_identity() {
     kit.store()
         .link_address(
             &IdentityId::new("id_jean").unwrap(),
-            ChannelType::Sms,
+            ChannelType::SMS,
             ALICE,
             None,
         )
@@ -269,15 +269,15 @@ async fn an_address_moved_to_another_identity_routes_to_its_new_person() {
     );
     let store = kit.store();
     store
-        .link_address(&jean, ChannelType::Sms, ALICE, None)
+        .link_address(&jean, ChannelType::SMS, ALICE, None)
         .await
         .unwrap();
     store
-        .unlink_address(&jean, ChannelType::Sms, ALICE, None)
+        .unlink_address(&jean, ChannelType::SMS, ALICE, None)
         .await
         .unwrap();
     store
-        .link_address(&marie, ChannelType::Sms, ALICE, None)
+        .link_address(&marie, ChannelType::SMS, ALICE, None)
         .await
         .unwrap();
     assert_eq!(routed(&kit, message(ALICE, "Bonjour")).await, maries);
@@ -502,44 +502,67 @@ async fn a_failing_router_fails_the_message_with_nothing_written() {
     );
 }
 
+/// A channel of a type the RFC does not list, `slack`, whose declaration
+/// addresses it by chat, as Teams is: its chat under `channel`, delivered to
+/// `slack_channel_id`.
+fn slack() -> Provider {
+    let mut slack = Provider::new("slack", ChannelType::new("slack").unwrap());
+    slack.declaration.addressing = Addressing::Chat;
+    slack.declaration.chat_key = Some("channel".to_owned());
+    slack.declaration.recipient_key = Some("slack_channel_id".to_owned());
+    slack
+}
+
 /// RFC §5.7: on a chat channel the chat is the conversation. A room opened
 /// for a chat message answers in the chat, and the chat's next message,
-/// whoever writes it, lands in the same room.
+/// whoever writes it, lands in the same room: on Telegram, which the RFC
+/// addresses by chat, and on a channel whose declaration does (docs/rfc-gaps.md,
+/// "Found by step 4's shared SQLite file").
 #[tokio::test]
 async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
-    let kit = RoomKit::new();
-    let telegram = Provider::new("telegram", ChannelType::Telegram);
-    kit.register_channel(telegram.clone()).unwrap();
-    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
+    let mut answered = Vec::new();
+    for (chat_channel, chat_key) in [
+        (Provider::new("telegram", ChannelType::TELEGRAM), "chat_id"),
+        (slack(), "channel"),
+    ] {
+        let kit = RoomKit::new();
+        let channel_id = chat_channel.declaration.channel_id.clone();
+        kit.register_channel(chat_channel.clone()).unwrap();
+        kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
+            .unwrap();
+        let attaching = kit.clone();
+        kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
+            let kit = attaching.clone();
+            async move {
+                kit.attach(&event.room_id, &channel("ai")).await.unwrap();
+            }
+        })
         .unwrap();
-    let attaching = kit.clone();
-    kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
-        let kit = attaching.clone();
-        async move {
-            kit.attach(&event.room_id, &channel("ai")).await.unwrap();
-        }
-    })
-    .unwrap();
-    let in_the_chat = |author: &str, text: &str| {
-        let mut message =
-            InboundMessage::new(channel("telegram"), author, EventContent::text(text));
-        message
-            .metadata
-            .insert("chat_id".to_owned(), (-100_777).into());
-        message
-    };
-    let first = routed(&kit, in_the_chat("4242", "Hi")).await;
-    let second = routed(&kit, in_the_chat("4343", "Hello")).await;
-    assert_eq!(
-        (first == second, telegram.sent()),
-        (
-            true,
-            vec![
-                ("-100777".to_owned(), "You said: Hi".to_owned()),
-                ("-100777".to_owned(), "You said: Hello".to_owned()),
-            ]
-        )
+        let in_the_chat = |author: &str, text: &str| {
+            let mut message =
+                InboundMessage::new(channel_id.clone(), author, EventContent::text(text));
+            message
+                .metadata
+                .insert(chat_key.to_owned(), (-100_777).into());
+            message
+        };
+        let first = routed(&kit, in_the_chat("4242", "Hi")).await;
+        let second = routed(&kit, in_the_chat("4343", "Hello")).await;
+        // Without its chat, a message names no conversation: not its
+        // author's, whose replies go to the chat.
+        let unchatted = InboundMessage::new(channel_id.clone(), "4242", EventContent::text("Hey"));
+        let third = routed(&kit, unchatted).await;
+        answered.push((first == second, first == third, chat_channel.sent()));
+    }
+    let in_the_chat = (
+        true,
+        false,
+        vec![
+            ("-100777".to_owned(), "You said: Hi".to_owned()),
+            ("-100777".to_owned(), "You said: Hello".to_owned()),
+        ],
     );
+    assert_eq!(answered, [in_the_chat.clone(), in_the_chat]);
 }
 
 /// RFC §5.7: an integer names the address its digits write. A room the
@@ -551,7 +574,7 @@ async fn a_room_the_host_opened_for_a_chat_id_is_the_chat_s() {
     let mut landed = Vec::new();
     for held in [7.into(), "7".into()] {
         let kit = RoomKit::new();
-        let telegram = Provider::new("tg", ChannelType::Telegram);
+        let telegram = Provider::new("tg", ChannelType::TELEGRAM);
         kit.register_channel(telegram.clone()).unwrap();
         kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
             .unwrap();

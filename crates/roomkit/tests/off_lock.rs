@@ -55,7 +55,7 @@ fn before_broadcast(name: &str, needs_lock: bool) -> HookSpec {
 /// A kit with an SMS transport attached to `room_1`.
 async fn room() -> RoomKit {
     let kit = RoomKit::new();
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.create_room(&room_id()).await.unwrap();
     kit.attach(&room_id(), &channel("sms")).await.unwrap();
@@ -153,7 +153,7 @@ async fn texts(kit: &RoomKit) -> Vec<String> {
         .await
         .unwrap()
         .iter()
-        .filter(|event| event.source.channel_type != ChannelType::System)
+        .filter(|event| event.source.channel_type != ChannelType::SYSTEM)
         .map(|event| text_of(&event.content))
         .collect()
 }
@@ -236,7 +236,7 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
     let kit = room().await;
     kit.register_channel(RecordingTransport::new(
         channel("ws"),
-        ChannelType::Websocket,
+        ChannelType::WEBSOCKET,
     ))
     .unwrap();
     kit.attach(&room_id(), &channel("ws")).await.unwrap();
@@ -381,7 +381,7 @@ fn notice(text: &str, now: Timestamp) -> RoomEvent {
         EventType::Message,
         EventSource::new(
             channel("system"),
-            ChannelType::System,
+            ChannelType::SYSTEM,
             EventDirection::Outbound,
         ),
         EventContent::text(text),
@@ -407,8 +407,8 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
     let kit = RoomKit::new();
     let now = Timestamp::from_unix_millis(1_792_677_780_000).unwrap();
     kit.set_environment(SequentialEnvironment::new(now));
-    let customer = RecordingTransport::new(channel("sms_customer"), ChannelType::Sms);
-    let advisor = RecordingTransport::new(channel("ws_advisor"), ChannelType::Websocket);
+    let customer = RecordingTransport::new(channel("sms_customer"), ChannelType::SMS);
+    let advisor = RecordingTransport::new(channel("ws_advisor"), ChannelType::WEBSOCKET);
     kit.register_channel(customer.clone()).unwrap();
     kit.register_channel(advisor.clone()).unwrap();
     let to_customer = notice("Message blocked. Do not send your SIN by SMS.", now);

@@ -245,7 +245,7 @@ mod tests {
         context.bindings.push(ChannelBinding::new(
             sms(),
             context.room.id.clone(),
-            ChannelType::Sms,
+            ChannelType::SMS,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
             Timestamp::UNIX_EPOCH,

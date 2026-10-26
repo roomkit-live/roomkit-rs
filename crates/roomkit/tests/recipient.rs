@@ -81,7 +81,7 @@ impl Channel for Sms {
     fn declaration(&self) -> ChannelDeclaration {
         ChannelDeclaration::new(
             channel("sms"),
-            ChannelType::Sms,
+            ChannelType::SMS,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
         )

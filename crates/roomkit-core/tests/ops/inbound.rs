@@ -8,8 +8,9 @@ use roomkit_core::model::{
     Visibility,
 };
 use roomkit_core::ops::{
-    FrameworkEvent, HoldOutcome, Inbound, InboundError, InboundTarget, KitConfig, Next, Operation,
-    Outcome, ProtocolError, RefusedOperation, SequentialEnvironment, StoreOutcome,
+    ChannelDeclaration, FrameworkEvent, HoldOutcome, Inbound, InboundError, InboundTarget,
+    KitConfig, Next, Operation, Outcome, ProtocolError, RefusedOperation, SequentialEnvironment,
+    StoreOutcome,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
@@ -480,7 +481,7 @@ mod an_injected_event {
         let mut from_sms = notice_event("inj_1", "Echo");
         from_sms.source = roomkit_core::model::EventSource::new(
             channel("sms"),
-            roomkit_core::model::ChannelType::Sms,
+            roomkit_core::model::ChannelType::SMS,
             roomkit_core::model::EventDirection::Outbound,
         );
         let mut sim = injecting_room(from_sms, "sms");
@@ -2062,7 +2063,7 @@ mod a_refused_operation {
     #[test]
     fn a_message_on_a_host_channel_is_refused_before_any_effect() {
         let mut sim = room();
-        sim.unbound_transport("host", roomkit_core::model::ChannelType::Host);
+        sim.declare(ChannelDeclaration::host(channel("host")));
         let named = sim.send(Sim::message("host", "Bonjour"));
         let routed = sim.route(None, Sim::message("host", "Bonjour"));
         let refused = || Err(InboundError::InboundOnHostChannel(channel("host")));

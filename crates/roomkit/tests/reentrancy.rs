@@ -95,7 +95,7 @@ impl Scripted {
         Self {
             declaration: ChannelDeclaration::new(
                 channel(id),
-                ChannelType::Ai,
+                ChannelType::AI,
                 ChannelCategory::Intelligence,
                 ChannelDirection::Bidirectional,
             ),
@@ -109,7 +109,7 @@ impl Scripted {
     fn transport(id: &str, deliver: Call) -> Self {
         let declaration = ChannelDeclaration::new(
             channel(id),
-            ChannelType::Websocket,
+            ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
         );
@@ -190,12 +190,12 @@ impl Channel for Scripted {
 /// G-046).
 async fn room() -> (RoomKit, RecordingTransport) {
     let kit = RoomKit::new();
-    let audit = RecordingTransport::new(channel("audit"), ChannelType::Websocket);
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::Sms))
+    let audit = RecordingTransport::new(channel("audit"), ChannelType::WEBSOCKET);
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.register_channel(RecordingTransport::new(
         channel("ws"),
-        ChannelType::Websocket,
+        ChannelType::WEBSOCKET,
     ))
     .unwrap();
     kit.register_channel(audit.clone()).unwrap();
@@ -1970,7 +1970,7 @@ async fn a_turn_s_calls_draw_on_the_reentry_budget_of_the_cascade_that_delivers(
                     *last_call.lock().unwrap() = Some((injected.status, injected.blocked_by));
                 }
                 let source =
-                    EventSource::new(channel("ai"), ChannelType::Ai, EventDirection::Outbound);
+                    EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
                 let reply = RoomEvent::new(
                     "ai_reply".parse().unwrap(),
                     room_id(),
@@ -2275,7 +2275,7 @@ mod send_event {
 fn console_record(id: &str, text: &str) -> RoomEvent {
     let source = EventSource::new(
         channel("ws"),
-        ChannelType::Websocket,
+        ChannelType::WEBSOCKET,
         EventDirection::Inbound,
     );
     RoomEvent::new(

@@ -50,7 +50,7 @@ impl Assistant {
     fn new(channel_id: ChannelId) -> Self {
         let declaration = ChannelDeclaration::new(
             channel_id,
-            ChannelType::Ai,
+            ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         );
@@ -60,7 +60,7 @@ impl Assistant {
     fn answer(&self, question: &RoomEvent) -> RoomEvent {
         let source = EventSource::new(
             self.declaration.channel_id.clone(),
-            ChannelType::Ai,
+            ChannelType::AI,
             EventDirection::Outbound,
         );
         let text = format!("Answer to {:?}", text_of(&question.content));
@@ -128,9 +128,9 @@ async fn writes(
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let call = RecordingTransport::new(ChannelId::new("call")?, ChannelType::Voice);
-    let screen = RecordingTransport::new(ChannelId::new("screen")?, ChannelType::Websocket);
-    let supervisor = RecordingTransport::new(ChannelId::new("supervisor")?, ChannelType::Websocket);
+    let call = RecordingTransport::new(ChannelId::new("call")?, ChannelType::VOICE);
+    let screen = RecordingTransport::new(ChannelId::new("screen")?, ChannelType::WEBSOCKET);
+    let supervisor = RecordingTransport::new(ChannelId::new("supervisor")?, ChannelType::WEBSOCKET);
     let assistant = ChannelId::new("assistant")?;
     kit.register_channel(call.clone())?;
     kit.register_channel(screen.clone())?;

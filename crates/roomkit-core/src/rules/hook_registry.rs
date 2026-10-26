@@ -426,7 +426,7 @@ mod tests {
     fn sms_source() -> EventSource {
         EventSource::new(
             ChannelId::new("sms").unwrap(),
-            ChannelType::Sms,
+            ChannelType::SMS,
             EventDirection::Inbound,
         )
     }

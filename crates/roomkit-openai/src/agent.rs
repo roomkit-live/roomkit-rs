@@ -56,7 +56,7 @@ impl OpenAiAgent {
             .map_err(OpenAiError::client)?;
         let declaration = ChannelDeclaration::new(
             channel_id,
-            ChannelType::Ai,
+            ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         );
@@ -106,7 +106,7 @@ impl OpenAiAgent {
 
     /// The agent's response to `event`, saying `text`.
     fn response(&self, event: &RoomEvent, text: String) -> RoomEvent {
-        let source = EventSource::new(self.id().clone(), ChannelType::Ai, EventDirection::Outbound);
+        let source = EventSource::new(self.id().clone(), ChannelType::AI, EventDirection::Outbound);
         // The pipeline gives the response its own id and depth, and makes it
         // answer the event that asked: the id written here is a placeholder.
         RoomEvent::new(

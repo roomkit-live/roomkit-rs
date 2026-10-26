@@ -49,16 +49,16 @@ impl Identity {
 
     /// Whether the identity uses `address` on channels of `channel_type`,
     /// compared as written.
-    pub fn uses(&self, channel_type: ChannelType, address: &str) -> bool {
+    pub fn uses(&self, channel_type: &ChannelType, address: &str) -> bool {
         self.channel_addresses
-            .get(&channel_type)
+            .get(channel_type)
             .is_some_and(|addresses| addresses.iter().any(|linked| linked == address))
     }
 
     /// Links `address` on channels of `channel_type` to the identity; an
     /// address linked already is kept once.
     pub fn link(&mut self, channel_type: ChannelType, address: &str) {
-        if self.uses(channel_type, address) {
+        if self.uses(&channel_type, address) {
             return;
         }
         self.channel_addresses
@@ -70,13 +70,13 @@ impl Identity {
     /// Removes `address` on channels of `channel_type` from the identity;
     /// an address it does not use changes nothing. A channel type left
     /// with no address is dropped.
-    pub fn unlink(&mut self, channel_type: ChannelType, address: &str) {
-        let Some(addresses) = self.channel_addresses.get_mut(&channel_type) else {
+    pub fn unlink(&mut self, channel_type: &ChannelType, address: &str) {
+        let Some(addresses) = self.channel_addresses.get_mut(channel_type) else {
             return;
         };
         addresses.retain(|linked| linked != address);
         if addresses.is_empty() {
-            self.channel_addresses.remove(&channel_type);
+            self.channel_addresses.remove(channel_type);
         }
     }
 }
@@ -95,11 +95,11 @@ mod tests {
     #[test]
     fn a_linked_address_is_used_on_its_channel_type_only() {
         let mut identity = jean();
-        identity.link(ChannelType::Sms, "+15551234567");
+        identity.link(ChannelType::SMS, "+15551234567");
         assert_eq!(
             (
-                identity.uses(ChannelType::Sms, "+15551234567"),
-                identity.uses(ChannelType::Whatsapp, "+15551234567")
+                identity.uses(&ChannelType::SMS, "+15551234567"),
+                identity.uses(&ChannelType::WHATSAPP, "+15551234567")
             ),
             (true, false)
         );
@@ -108,8 +108,8 @@ mod tests {
     #[test]
     fn an_address_linked_twice_is_kept_once() {
         let mut identity = jean();
-        identity.link(ChannelType::Sms, "+15551234567");
-        identity.link(ChannelType::Sms, "+15551234567");
+        identity.link(ChannelType::SMS, "+15551234567");
+        identity.link(ChannelType::SMS, "+15551234567");
         assert_eq!(
             serde_json::to_value(&identity.channel_addresses).unwrap(),
             json!({ "sms": ["+15551234567"] })
@@ -119,9 +119,9 @@ mod tests {
     #[test]
     fn an_unlinked_address_leaves_the_other_addresses_of_its_type() {
         let mut identity = jean();
-        identity.link(ChannelType::Sms, "+15551234567");
-        identity.link(ChannelType::Sms, "+15557654321");
-        identity.unlink(ChannelType::Sms, "+15551234567");
+        identity.link(ChannelType::SMS, "+15551234567");
+        identity.link(ChannelType::SMS, "+15557654321");
+        identity.unlink(&ChannelType::SMS, "+15551234567");
         assert_eq!(
             serde_json::to_value(&identity.channel_addresses).unwrap(),
             json!({ "sms": ["+15557654321"] })
@@ -131,8 +131,8 @@ mod tests {
     #[test]
     fn a_channel_type_left_with_no_address_is_dropped() {
         let mut identity = jean();
-        identity.link(ChannelType::Sms, "+15551234567");
-        identity.unlink(ChannelType::Sms, "+15551234567");
+        identity.link(ChannelType::SMS, "+15551234567");
+        identity.unlink(&ChannelType::SMS, "+15551234567");
         assert_eq!(
             serde_json::to_value(&identity.channel_addresses).unwrap(),
             json!({})

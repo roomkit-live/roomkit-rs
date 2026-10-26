@@ -442,10 +442,10 @@ impl NamedRoom {
             Ok(recorded) => recorded.into_context(),
             Err(error) => return Progress::Done(Named::Failed(change_failure(error))),
         };
-        if created && starts_session(self.channel.channel_type) {
+        if created && starts_session(&self.channel.channel_type) {
             let started = Reported::SessionStarted {
                 channel_id: &self.channel.channel_id,
-                channel_type: self.channel.channel_type,
+                channel_type: &self.channel.channel_type,
             };
             report::report(cx, started, &context);
         }
@@ -456,11 +456,8 @@ impl NamedRoom {
 /// Whether the creation of a room for a message on a channel of
 /// `channel_type` starts a session (RFC §10.1 step 2, §26.1): every channel
 /// but `VOICE` and `REALTIME_VOICE`, whose sessions start with their media.
-fn starts_session(channel_type: ChannelType) -> bool {
-    !matches!(
-        channel_type,
-        ChannelType::Voice | ChannelType::RealtimeVoice
-    )
+fn starts_session(channel_type: &ChannelType) -> bool {
+    channel_type != &ChannelType::VOICE && channel_type != &ChannelType::REALTIME_VOICE
 }
 
 /// What a failed attach or record fails the message with; neither ever

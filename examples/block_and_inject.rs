@@ -40,7 +40,7 @@ fn notice(text: &str, now: Timestamp) -> Result<RoomEvent, Box<dyn Error>> {
         EventType::Message,
         EventSource::new(
             ChannelId::new("system")?,
-            ChannelType::System,
+            ChannelType::SYSTEM,
             EventDirection::Outbound,
         ),
         EventContent::text(text),
@@ -54,8 +54,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = clock.kit();
     let now = clock.now();
 
-    let customer = RecordingTransport::new(ChannelId::new("sms_customer")?, ChannelType::Sms);
-    let advisor = RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::Websocket);
+    let customer = RecordingTransport::new(ChannelId::new("sms_customer")?, ChannelType::SMS);
+    let advisor = RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::WEBSOCKET);
     kit.register_channel(customer.clone())?;
     kit.register_channel(advisor.clone())?;
 
@@ -114,7 +114,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "the message is stored blocked by the scanner, for audit",
         timeline
             .iter()
-            .find(|event| event.source.channel_type == ChannelType::Sms)
+            .find(|event| event.source.channel_type == ChannelType::SMS)
             .is_some_and(|event| {
                 event.status == EventStatus::Blocked
                     && event.blocked_by.as_deref() == Some("sensitivity_scanner")

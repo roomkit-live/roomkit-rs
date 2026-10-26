@@ -65,8 +65,8 @@ impl Room {
         kit.set_environment(SequentialEnvironment::new(
             Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
         ));
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
-        let web = RecordingTransport::new(channel("web"), ChannelType::Websocket);
+        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+        let web = RecordingTransport::new(channel("web"), ChannelType::WEBSOCKET);
         let config = adjust(
             OpenAiConfig::new(fake.base_url(), api_key, "fake-model")
                 .with_system_prompt(SYSTEM_PROMPT),
@@ -287,7 +287,7 @@ async fn an_unreachable_endpoint_fails_the_turn_without_naming_its_url() {
     let address = closed.local_addr().unwrap();
     drop(closed);
     let kit = RoomKit::new();
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let config = OpenAiConfig::new(format!("http://{address}/v1"), API_KEY, "m");
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(OpenAiAgent::new(channel("assistant"), config).unwrap())

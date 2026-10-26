@@ -63,7 +63,7 @@ fn recorded_in_room_2(sim: &Sim) -> Option<ParticipantId> {
 /// before this one takes the lock, and `room_2`, which binds nothing yet.
 fn room_1_taken_meanwhile() -> Sim {
     let mut sim = Sim::new();
-    sim.unbound_transport("sms", ChannelType::Sms);
+    sim.unbound_transport("sms", ChannelType::SMS);
     sim.attach("sms");
     sim.recorded_meanwhile = Some((
         room_id(),
@@ -137,7 +137,7 @@ mod a_routed_message {
     #[test]
     fn past_the_budget_in_the_delivering_room_keeps_the_sender_s_record() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.attach("sms");
         sim.routes_to(Some("room_1"));
         let spent = budget_of(0);
@@ -167,7 +167,7 @@ mod a_routed_message {
     #[test]
     fn charged_for_a_room_is_not_charged_again_once_re_routed() {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.attach("sms");
         sim.created_meanwhile = Some(Room::new(room_id(), after_start(0)));
         sim.recorded_meanwhile = Some((
@@ -202,7 +202,7 @@ mod a_room_created_meanwhile {
     #[test]
     fn keeps_the_charge_and_leaves_the_cascade_a_budget_of_its_own() {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.created_meanwhile = Some(Room::new(room_id(), after_start(0)));
         sim.before_broadcast(
             "notify",

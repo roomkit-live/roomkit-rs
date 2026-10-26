@@ -24,7 +24,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let declaration = Channel::declaration(&channel);
         let registered = FrameworkEvent::ChannelRegistered {
             channel_id: declaration.channel_id.clone(),
-            channel_type: declaration.channel_type,
+            channel_type: declaration.channel_type.clone(),
         };
         let channel_id = declaration.channel_id.clone();
         let channel: Arc<dyn DynChannel> = Arc::new(channel);

@@ -67,7 +67,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
     let sms = SmsNumber::new(ChannelId::new("sms")?);
     let agent = EchoAgent::new(ChannelId::new("ai")?, "Thanks, we are on it.");
-    let team = RecordingTransport::new(ChannelId::new("team_sms")?, ChannelType::Sms);
+    let team = RecordingTransport::new(ChannelId::new("team_sms")?, ChannelType::SMS);
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent.clone())?;
     kit.register_channel(team.clone())?;

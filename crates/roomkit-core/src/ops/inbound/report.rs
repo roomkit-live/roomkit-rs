@@ -107,7 +107,7 @@ pub(super) fn tasks_created(cx: &mut Cx<'_>, tasks: &[Task], context: &RoomConte
 fn task_payload(cx: &mut Cx<'_>, task: &Task) -> RoomEvent {
     let source = EventSource::new(
         ChannelId::system(),
-        ChannelType::System,
+        ChannelType::SYSTEM,
         EventDirection::Outbound,
     );
     let mut data = Metadata::new();

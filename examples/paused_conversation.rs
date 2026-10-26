@@ -92,7 +92,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let clock = Clock::new();
     let kit = clock.kit();
     let sms = SmsNumber::new(ChannelId::new("sms")?);
-    let team = RecordingTransport::new(ChannelId::new("team_sms")?, ChannelType::Sms);
+    let team = RecordingTransport::new(ChannelId::new("team_sms")?, ChannelType::SMS);
     let agent = EchoAgent::new(ChannelId::new("ai")?, "You said: ").quoting();
     kit.register_channel(sms.clone())?;
     kit.register_channel(team.clone())?;

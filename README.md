@@ -37,7 +37,7 @@ use roomkit::testing::{EchoAgent, RecordingTransport};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kit = RoomKit::new();
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::Sms);
+    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
     let agent = EchoAgent::new(ChannelId::new("ai")?, "You said: ").quoting();
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent.clone())?;

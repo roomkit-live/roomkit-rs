@@ -62,7 +62,7 @@ impl Clock {
 async fn timed_room(clock: &Clock) -> (RoomKit, RecordingTransport) {
     let kit = RoomKit::new();
     kit.set_environment(Arc::clone(&clock.0));
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
     let timers = RoomOptions {
         inactive_after_seconds: Some(60),
@@ -247,7 +247,7 @@ mod a_paused_conversation {
     /// The timed room, with a websocket attached beside its SMS transport.
     async fn with_websocket(clock: &Clock) -> (RoomKit, RecordingTransport, RecordingTransport) {
         let (kit, sms) = timed_room(clock).await;
-        let ws = RecordingTransport::new(channel("ws"), ChannelType::Websocket);
+        let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
         kit.register_channel(ws.clone()).unwrap();
         kit.attach(&room_id(), ws.id()).await.unwrap();
         (kit, sms, ws)
@@ -371,8 +371,8 @@ mod unregistering {
 
     async fn room_with_sms_and_ws() -> (RoomKit, RecordingTransport, RecordingTransport) {
         let kit = RoomKit::new();
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
-        let ws = RecordingTransport::new(channel("ws"), ChannelType::Websocket);
+        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+        let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(ws.clone()).unwrap();
         kit.create_room(&room_id()).await.unwrap();
@@ -390,7 +390,7 @@ mod unregistering {
             events.recv().await.unwrap(),
             FrameworkEvent::ChannelUnregistered {
                 channel_id: channel("sms"),
-                channel_type: ChannelType::Sms,
+                channel_type: ChannelType::SMS,
             }
         );
     }
@@ -559,7 +559,7 @@ mod unregistering {
     async fn frees_the_id_for_another_channel() {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         kit.unregister_channel(sms.id()).unwrap();
-        let replacement = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+        let replacement = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         kit.register_channel(replacement.clone()).unwrap();
         kit.process_inbound_in(&room_id(), message(&replacement, "Back"))
             .await
@@ -575,7 +575,7 @@ mod unregistering {
             .await
             .unwrap()
             .iter()
-            .filter(|event| event.source.channel_type != ChannelType::System)
+            .filter(|event| event.source.channel_type != ChannelType::SYSTEM)
             .map(|event| roomkit::text_of(&event.content))
             .collect()
     }
@@ -592,7 +592,7 @@ impl Tagger {
         Self {
             declaration: ChannelDeclaration::new(
                 channel("crm"),
-                ChannelType::Webhook,
+                ChannelType::WEBHOOK,
                 ChannelCategory::Transport,
                 ChannelDirection::Inbound,
             ),
@@ -660,7 +660,7 @@ mod metadata_updates {
 
     async fn tagged_room() -> roomkit::model::Room {
         let kit = RoomKit::new();
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(Tagger::new()).unwrap();
         kit.create_room(&room_id()).await.unwrap();
@@ -718,7 +718,7 @@ mod bindings {
 
     async fn sms_and_agent() -> (RoomKit, RecordingTransport, EchoAgent) {
         let kit = RoomKit::new();
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         let agent = EchoAgent::new(channel("ai"), "Hello back");
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(agent.clone()).unwrap();

@@ -28,9 +28,9 @@ impl Timeline {
             Timestamp::UNIX_EPOCH,
         ));
         for (channel, channel_type, category) in [
-            ("sms", ChannelType::Sms, ChannelCategory::Transport),
-            ("web", ChannelType::Websocket, ChannelCategory::Transport),
-            (AGENT, ChannelType::Ai, ChannelCategory::Intelligence),
+            ("sms", ChannelType::SMS, ChannelCategory::Transport),
+            ("web", ChannelType::WEBSOCKET, ChannelCategory::Transport),
+            (AGENT, ChannelType::AI, ChannelCategory::Intelligence),
         ] {
             context.bindings.push(ChannelBinding::new(
                 ChannelId::new(channel).unwrap(),
@@ -56,9 +56,9 @@ impl Timeline {
     ) -> RoomEvent {
         self.count += 1;
         let channel_type = match channel {
-            "sms" => ChannelType::Sms,
-            "web" => ChannelType::Websocket,
-            _ => ChannelType::Ai,
+            "sms" => ChannelType::SMS,
+            "web" => ChannelType::WEBSOCKET,
+            _ => ChannelType::AI,
         };
         let mut source = EventSource::new(
             ChannelId::new(channel).unwrap(),

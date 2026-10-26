@@ -696,11 +696,11 @@ mod tests {
         let channel = ChannelId::new("ai").unwrap();
         let declaration = ChannelDeclaration::new(
             channel.clone(),
-            ChannelType::Ai,
+            ChannelType::AI,
             category,
             ChannelDirection::Bidirectional,
         );
-        let source = EventSource::new(channel, ChannelType::Ai, EventDirection::Inbound);
+        let source = EventSource::new(channel, ChannelType::AI, EventDirection::Inbound);
         let mut event = RoomEvent::new(
             "evt_1".parse().unwrap(),
             room_id(),

@@ -32,7 +32,7 @@ pub(crate) fn commit(
     let room = &mut context.room;
     let source = EventSource::new(
         ChannelId::system(),
-        ChannelType::System,
+        ChannelType::SYSTEM,
         EventDirection::Inbound,
     );
     let mut event = RoomEvent::new(

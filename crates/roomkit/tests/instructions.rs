@@ -26,8 +26,8 @@ async fn room() -> (RoomKit, RecordingTransport, RecordingTransport) {
     kit.set_environment(SequentialEnvironment::new(
         Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
     ));
-    let app = RecordingTransport::new(channel("app"), ChannelType::Websocket);
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::Sms);
+    let app = RecordingTransport::new(channel("app"), ChannelType::WEBSOCKET);
+    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let agent = EchoAgent::new(channel("ai"), "Hello, I am the assistant.");
     kit.register_channel(app.clone()).unwrap();
     kit.register_channel(sms.clone()).unwrap();
@@ -50,7 +50,7 @@ fn instruction(text: &str) -> InboundMessage {
 /// The room's timeline but the attaches' lifecycle records (gap G-046).
 async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
     let mut timeline = kit.store().list_events(&room_id(), true).await.unwrap();
-    timeline.retain(|event| event.source.channel_type != ChannelType::System);
+    timeline.retain(|event| event.source.channel_type != ChannelType::SYSTEM);
     timeline
 }
 

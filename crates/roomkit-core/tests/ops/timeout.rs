@@ -261,7 +261,7 @@ mod expiring_during {
     #[test]
     fn routing_s_wait_for_the_lock_records_no_sender() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.attach("sms");
         sim.routes_to(Some("room_1"));
         sim.config.process_timeout = Some(TIMEOUT);
@@ -287,7 +287,7 @@ mod expiring_during {
     #[test]
     fn the_router_names_no_room() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.config.process_timeout = Some(TIMEOUT);
         slow(&mut sim, "route sms");
         let result = sim.route(None, bonjour()).unwrap();
@@ -411,7 +411,7 @@ mod expiring_during {
     #[test]
     fn the_identity_read_names_no_room() {
         let mut sim = Sim::new();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.config.process_timeout = Some(TIMEOUT);
         slow(&mut sim, "resolve_identity");
         let result = sim.route(None, bonjour()).unwrap();
@@ -456,7 +456,7 @@ mod a_timed_out_call {
     #[test]
     fn leaves_the_room_step_2_created_attached() {
         let mut sim = Sim::without_rooms();
-        sim.unbound_transport("sms", ChannelType::Sms);
+        sim.unbound_transport("sms", ChannelType::SMS);
         sim.config.process_timeout = Some(TIMEOUT);
         slow(&mut sim, "lock room_1");
         let result = sim.send(bonjour()).unwrap();

@@ -86,7 +86,7 @@ pub(super) struct Speaker {
 /// room addresses it (`@sms1`) when its author has no name; `None` for the
 /// runtime's system events.
 pub(super) fn speaker(event: &RoomEvent, authors: &mut Authors<'_>) -> Option<Speaker> {
-    if event.source.channel_type == ChannelType::System {
+    if event.source.channel_type == ChannelType::SYSTEM {
         return None;
     }
     let source = authors.source(event);

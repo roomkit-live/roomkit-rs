@@ -283,7 +283,7 @@ mod tests {
             EventType::Message,
             EventSource::new(
                 ChannelId::new("system").unwrap(),
-                ChannelType::System,
+                ChannelType::SYSTEM,
                 EventDirection::Outbound,
             ),
             EventContent::text("notice"),

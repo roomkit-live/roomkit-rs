@@ -75,11 +75,11 @@ impl Conversation {
     async fn open() -> Result<Self, Box<dyn Error>> {
         let kit = shared::kit();
         let customer =
-            RecordingTransport::new(ChannelId::new("wa_customer")?, ChannelType::Whatsapp);
+            RecordingTransport::new(ChannelId::new("wa_customer")?, ChannelType::WHATSAPP);
         let advisor =
-            RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::Websocket)
+            RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::WEBSOCKET)
                 .with_capabilities(edits_natively());
-        let sms = RecordingTransport::new(ChannelId::new("sms_copy")?, ChannelType::Sms);
+        let sms = RecordingTransport::new(ChannelId::new("sms_copy")?, ChannelType::SMS);
         let agent =
             ScriptedAgent::new(ChannelId::new("ai")?, &[]).with_capabilities(edits_natively());
         kit.register_channel(customer.clone())?;

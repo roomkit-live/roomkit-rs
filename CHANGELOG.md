@@ -10,6 +10,21 @@ publishes a release.
 Nothing is published yet: this section lists what the first release brings,
 as it stands.
 
+### Changed
+
+- **Breaking: `ChannelType` is an open name.** It was an enum; it is now a
+  string newtype with the well-known names as constants
+  (`ChannelType::SMS`, `ChannelType::TEAMS`, ..., `DISCORD` and `BUZZ`,
+  which the Python implementation writes), serialized as the plain name,
+  so any name a shared store holds is read and written back. Write
+  `ChannelType::SMS` for `ChannelType::Sms`, and compare instead of
+  matching. How a channel's senders are addressed is its declaration's
+  (`ChannelDeclaration::addressing`, the type's default unless the channel
+  sets another; any other name is addressed as written), and the type's
+  `category()` is gone: a declaration names its category. A channel
+  claiming `system`, or `host` without being a host channel, is refused at
+  registration (`ConfigError::ReservedChannelType`).
+
 ### Added
 
 - **Repository.** The `roomkit-core`, `roomkit` and `roomkit-openai`
@@ -165,7 +180,7 @@ as it stands.
   (§10.3, gaps G-063, G-064).
 - **The host's own voice** (§10.5, Appendix A.14.1, gap G-085):
   `RoomKit::post` and `OrganizationKit::post` write a `Post` to a room's
-  people in the host's name, from a host channel (`ChannelType::Host`,
+  people in the host's name, from a host channel (`ChannelType::HOST`,
   `HostChannel`, a transport, `INBOUND`, every media type), the one the post
   names or the kit's own, registered on first use under `HOST_CHANNEL_ID`
   (`host`). A post is a direct injection that addresses no agent unless it

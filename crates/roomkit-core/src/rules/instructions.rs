@@ -281,7 +281,7 @@ mod tests {
             EventType::Instruction,
             EventSource::new(
                 channel("app"),
-                ChannelType::Websocket,
+                ChannelType::WEBSOCKET,
                 EventDirection::Inbound,
             ),
             EventContent::text(text),

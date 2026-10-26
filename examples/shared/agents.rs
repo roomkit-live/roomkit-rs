@@ -42,7 +42,7 @@ impl ScriptedAgent {
     pub fn new(channel_id: ChannelId, script: Script) -> Self {
         let declaration = ChannelDeclaration::new(
             channel_id,
-            ChannelType::Ai,
+            ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         );
@@ -88,7 +88,7 @@ impl ScriptedAgent {
         let (_, reply) = self.script.iter().find(|(line, _)| *line == read)?;
         let source = EventSource::new(
             self.declaration.channel_id.clone(),
-            ChannelType::Ai,
+            ChannelType::AI,
             EventDirection::Outbound,
         );
         // The pipeline gives the response its own id, room and depth, and

@@ -217,10 +217,10 @@ pub(super) fn admit_post(
         None => own_host_channel(cx.config),
     };
     let channel_id = channel.channel_id.clone();
-    if channel.channel_type != ChannelType::Host {
+    if channel.channel_type != ChannelType::HOST {
         return Err(InboundError::NotAHostChannel(channel_id));
     }
-    if host::host_as_intelligence(channel.channel_type, channel.category) {
+    if host::host_as_intelligence(&channel.channel_type, channel.category) {
         return Err(InboundError::HostAsIntelligence(channel_id));
     }
     let binding = channel.binding(room_id.clone(), cx.env.now());
