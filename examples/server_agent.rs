@@ -131,8 +131,13 @@ const ALICE_AGAIN: &str = "Are the loaves still warm?";
 const REPLIES: &[&str] = &[
     "Yes, we have sourdough until noon.",
     "Yes Bob, two loaves will be ready at 5.",
+    "Yes Carol, flour comes in 1 kg bags.",
     "They came out of the oven an hour ago, Alice.",
 ];
+
+/// Another conversation on the first server, and what Carol asks in it.
+const PANTRY: &str = "pantry";
+const CAROL_ASKS: &str = "Do you sell flour?";
 
 /// Where the checks' servers listen: a free port of the loopback.
 const ANY_PORT: &str = "127.0.0.1:0";
@@ -658,13 +663,18 @@ async fn the_conversation_survives_a_restart(checks: &mut Checks) -> Result<(), 
     let endpoint = OpenAiEndpoint::from_env(REPLIES).await?;
     println!("The agent calls {}.", endpoint.shown_base_url());
     let database = TempDatabase::new("server_agent");
-    let [first, second] = two_people_talk(database.path(), &endpoint).await?;
+    let ([first, second], pantry) = two_people_talk(database.path(), &endpoint).await?;
     println!("The server restarts on the same file.");
     let third = alice_goes_on(database.path(), &endpoint).await?;
     let timeline = timeline_in(database.path(), CONVERSATION).await?;
     shared::print_timeline(&timeline);
     let said = messages_of(&timeline);
-    let answers = [&first[0], &second[0], &third];
+    let carol = pantry
+        .as_ref()
+        .and_then(|frame| frame.get("text"))
+        .and_then(Value::as_str);
+    let carol = carol.map(str::to_owned);
+    let answers = [&first[0], &second[0], &carol, &third];
 
     checks.expect(
         "the agent answers each message, and its answer reaches both people's sockets",
@@ -676,10 +686,16 @@ async fn the_conversation_survives_a_restart(checks: &mut Checks) -> Result<(), 
         "after the restart, the conversation goes on: Alice's next message is answered",
         third.is_some(),
     );
+    checks.expect(
+        "a room's deliveries reach its own connections only: Carol's first frame, in \
+         another room, is her own answer",
+        pantry.as_ref().and_then(|frame| frame.get("room_id")) == Some(&Value::from(PANTRY))
+            && carol.is_some(),
+    );
     // Each question, then the answer the sockets received.
     let conversation: Vec<Option<&str>> = [ALICE_ASKS, BOB_ASKS, ALICE_AGAIN]
         .into_iter()
-        .zip(answers)
+        .zip([&first[0], &second[0], &third])
         .flat_map(|(asked, answer)| [Some(asked), answer.as_deref()])
         .collect();
     checks.expect(
@@ -692,24 +708,31 @@ async fn the_conversation_survives_a_restart(checks: &mut Checks) -> Result<(), 
     Ok(())
 }
 
-/// The first server: Alice and Bob join the conversation, Alice asks, then
-/// Bob. For each question, the answer each socket received, Alice's then
-/// Bob's.
+/// The first server: Alice and Bob join the conversation, and Carol
+/// another one; Alice asks, then Bob, then Carol. For each of Alice's and
+/// Bob's questions, the answer each socket received, Alice's then Bob's;
+/// and the first frame Carol's socket received, after both.
 async fn two_people_talk(
     database: &Path,
     endpoint: &OpenAiEndpoint,
-) -> Result<[[Option<String>; 2]; 2], Box<dyn Error>> {
+) -> Result<([[Option<String>; 2]; 2], Option<Value>), Box<dyn Error>> {
     let server = Server::start(database, endpoint, ANY_PORT.parse()?, CHECKING).await?;
     let mut alice = Client::connect(server.address, CONVERSATION, "alice", "Alice").await?;
     let mut bob = Client::connect(server.address, CONVERSATION, "bob", "Bob").await?;
+    let mut carol = Client::connect(server.address, PANTRY, "carol", "Carol").await?;
     alice.say(ALICE_ASKS).await?;
     let first = [alice.answer().await, bob.answer().await];
     bob.say(BOB_ASKS).await?;
     let second = [alice.answer().await, bob.answer().await];
-    alice.close().await;
-    bob.close().await;
+    // Had the bakery's answers reached her, they would come first.
+    carol.say(CAROL_ASKS).await?;
+    let pantry = carol.next_frame(ANSWER_PATIENCE).await;
+    println!("  Carol receives {pantry:?}");
+    for client in [alice, bob, carol] {
+        client.close().await;
+    }
     server.stop().await?;
-    Ok([first, second])
+    Ok(([first, second], pantry))
 }
 
 /// The second server, on the same file: Alice comes back and asks again.
@@ -903,7 +926,7 @@ fn messages_of(timeline: &[RoomEvent]) -> Vec<String> {
 /// answers the sockets received from it.
 fn check_the_model_s_turns(checks: &mut Checks, requests: &[Value], answers: &[&Option<String>]) {
     println!("The agent's turn after the restart sent:");
-    for message in requests.get(2).map(messages).unwrap_or_default() {
+    for message in requests.get(3).map(messages).unwrap_or_default() {
         println!("  {message}");
     }
     checks.expect(
@@ -924,7 +947,7 @@ fn check_the_model_s_turns(checks: &mut Checks, requests: &[Value], answers: &[&
     checks.expect(
         "the turn after the restart reads the conversation from the file, each person \
          labelled as before",
-        requests.get(2).is_some_and(goes_on),
+        requests.get(3).is_some_and(goes_on),
     );
 }
 
