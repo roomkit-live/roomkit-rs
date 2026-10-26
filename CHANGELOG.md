@@ -71,6 +71,13 @@ as it stands.
   and they register through the typed registrations below.
   `transcript::Message` gains `tool_calls` and `tool_call_id`, and `Role`
   gains `Tool`.
+- **A channel's output is one draw on the reentry budget** (RFC §8.3),
+  whatever number of events it returns: it drew one pass per event, which
+  stored a long turn's answer `reentry_loop_cap`.
+- **A tool-call row reaches only the transports that take one**: a
+  channel declares it (`ChannelDeclaration::receives_tool_calls`, true by
+  default for `websocket` and `webhook`), so an SMS or a chat transport is
+  never handed one, and its delivery never sends `[Tool call: x]`.
 
 ### Added
 
@@ -91,7 +98,8 @@ as it stands.
   refusing them as `Invalid arguments` when they do not fit;
   `testing::ScriptedProvider` answers from a script. `OpenAiAgent` gains
   `with_tools`, `with_tool_policy`, `with_max_rounds` and
-  `with_tool_timeout`, and declares the tools on the wire. The kit gains
+  `with_tool_timeout`, and declares the tools on the wire; a completion's
+  members written `null` read as absent. The kit gains
   `before_tool_use`, `on_tool_call` and `observe_tool_calls` (with
   `ToolHookSpec`, `ToolCallEvent`, `ToolUse`, `ToolVerdict`), and
   `roomkit::current_turn()` gives the turn's `TurnHost`, which writes to
