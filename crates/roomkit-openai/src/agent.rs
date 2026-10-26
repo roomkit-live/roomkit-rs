@@ -7,12 +7,11 @@ use std::time::Duration;
 
 use roomkit::model::{ChannelBinding, ChannelId, ChannelOutput, RoomContext, RoomEvent};
 use roomkit::{Channel, ChannelDeclaration, ChannelError};
-use roomkit_ai::{
-    AiAgent, AiError, AiProvider, AiRequest, ProviderResponse, ResponseStream, ToolPolicy, Toolset,
-};
+use roomkit_ai::{AiAgent, AiError, AiProvider, AiRequest, ResponseStream, ToolPolicy, Toolset};
 
 use crate::config::OpenAiConfig;
 use crate::error::OpenAiError;
+use crate::stream;
 use crate::wire::{self, CompletionRequest};
 
 /// The path a completion is asked at, after the base URL.
@@ -20,7 +19,7 @@ const COMPLETIONS_PATH: &str = "/chat/completions";
 
 /// The longest answer a generation reads, in bytes: far more than a
 /// completion's text and calls take.
-const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
+pub(crate) const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 
 /// An AI agent channel answering through an OpenAI-compatible Chat
 /// Completions endpoint (RFC §6.4): `roomkit-ai`'s [`AiAgent`] over its
@@ -34,7 +33,11 @@ const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 /// each round's text a message of its own, each call its two rows (see
 /// [`AiAgent`]). It answers a message or an instruction, never its own
 /// events; a turn with no text answers nothing. A completion that fails
-/// returns an [`OpenAiError`]; an answer longer than 4 MiB fails it too.
+/// returns an [`OpenAiError`]; an answer longer than 4 MiB fails it too, and
+/// so does a streamed one sending a line or an event longer than 1 MiB.
+/// Each completion is streamed (`stream`, with `stream_options.include_usage`),
+/// its text reaching the room's streaming channel as it is written; an
+/// endpoint that answers a whole completion is read whole.
 /// Cloning it shares its HTTP client and its tools.
 #[derive(Clone)]
 pub struct OpenAiAgent {
@@ -132,7 +135,9 @@ impl fmt::Debug for OpenAiAgent {
 }
 
 /// The provider of an OpenAI-compatible endpoint: one generation is one
-/// Chat Completions call, not streamed.
+/// Chat Completions call, streamed (server-sent events), its text handed to
+/// the loop as it arrives; an endpoint that answers a whole completion
+/// instead is read whole.
 pub(crate) struct OpenAiProvider {
     config: Arc<OpenAiConfig>,
     endpoint: reqwest::Url,
@@ -157,8 +162,14 @@ impl OpenAiProvider {
         })
     }
 
-    /// The completion answering `request`.
-    async fn complete(&self, request: &AiRequest) -> Result<ProviderResponse, OpenAiError> {
+    /// The API key, which no error repeats.
+    pub(crate) fn secret(&self) -> &str {
+        &self.config.api_key
+    }
+
+    /// The answer to `request`, once its head says it succeeded: an error
+    /// answer's body is read, bounded, into its error.
+    pub(crate) async fn ask(&self, request: &AiRequest) -> Result<reqwest::Response, OpenAiError> {
         let body = CompletionRequest::new(&self.config.model, request);
         let mut call = self.client.post(self.endpoint.clone()).json(&body);
         if !self.config.api_key.is_empty() {
@@ -166,11 +177,11 @@ impl OpenAiProvider {
         }
         let response = call.send().await.map_err(OpenAiError::request)?;
         let status = response.status();
-        let body = read_body(response).await?;
         if !status.is_success() {
+            let body = read_body(response).await?;
             return Err(wire::status_error(status, &body, &self.config.api_key));
         }
-        wire::response(&body, &self.config.api_key)
+        Ok(response)
     }
 }
 
@@ -180,14 +191,14 @@ impl AiProvider for OpenAiProvider {
     }
 
     fn generate<'a>(&'a self, request: &'a AiRequest) -> ResponseStream<'a> {
-        ProviderResponse::into_stream(async move { Ok(self.complete(request).await?) })
+        stream::answer(self, request)
     }
 }
 
 /// The body of `response`, refused past [`ANSWER_LIMIT`]: as its head
 /// declares it, then as it arrives, so that an endpoint that streams
 /// without end fails the turn instead of filling the memory.
-async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, OpenAiError> {
+pub(crate) async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, OpenAiError> {
     let too_long = OpenAiError::AnswerTooLong {
         limit: ANSWER_LIMIT,
     };

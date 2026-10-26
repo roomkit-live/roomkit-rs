@@ -5,16 +5,20 @@
 //! [`OpenAiAgent`] is an intelligence channel (RFC §6.4), `roomkit-ai`'s
 //! [`AiAgent`](roomkit_ai::AiAgent) over the Chat Completions wire: each
 //! event the room hands it is a turn, one tool loop whose generations are
-//! completions, not streamed. The turn sends the agent's system prompt,
+//! streamed completions (server-sent events, `stream_options.include_usage`),
+//! the text reaching a streaming channel of the room as it is written. The
+//! turn sends the agent's system prompt,
 //! then the room's recent messages as the conversation RFC §6.4 requires
 //! ([`roomkit::transcript`]): each in the role of whoever wrote it, labelled
 //! by its speaker once several speak, an instruction marked as the
 //! application's. It declares the tools the agent serves
 //! ([`OpenAiAgent::with_tools`]), runs the calls the model makes and sends
-//! their results back, and the turn's rows re-enter the room as the agent's
-//! response: each round's text, each call's start and end. A provider error
-//! before any round fails the turn: the room keeps the event, `ON_ERROR`
-//! fires, and the caller reads the error on its result.
+//! their results back, and the room stores each row of the turn as it
+//! ends: each round's text, each call's start and end. A provider error
+//! fails the turn, the text it produced kept: the room keeps the event,
+//! `ON_ERROR` fires, and the caller reads the error on its result. A
+//! stream is bounded: a line or an event over 1 MiB, or an answer over 4
+//! MiB, fails the turn.
 //!
 //! ```
 //! use roomkit::RoomKit;
@@ -33,6 +37,8 @@
 mod agent;
 mod config;
 mod error;
+mod sse;
+mod stream;
 mod wire;
 
 pub use self::agent::OpenAiAgent;

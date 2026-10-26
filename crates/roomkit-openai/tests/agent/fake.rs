@@ -2,6 +2,7 @@
 //! that answers each request with the next scripted reply, the last one
 //! again once they are spent, and keeps what it was sent.
 
+use std::fmt::Write;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::{Value, json};
@@ -17,6 +18,10 @@ pub(crate) struct Reply {
     length: Length,
     location: Option<String>,
     silent: bool,
+    /// The answer's content type.
+    content_type: &'static str,
+    /// What a body streamed past its own repeats, until the client stops.
+    fill: Vec<u8>,
 }
 
 /// The length an answer's head declares.
@@ -51,6 +56,35 @@ impl Reply {
             length: Length::Body,
             location: None,
             silent: false,
+            content_type: "application/json",
+            fill: b" ".to_vec(),
+        }
+    }
+
+    /// A streamed completion (server-sent events): one event per chunk of
+    /// `chunks`, each a JSON chunk, then `[DONE]`.
+    pub(crate) fn events(chunks: &[Value]) -> Self {
+        let mut body = String::new();
+        for chunk in chunks {
+            writeln!(body, "data: {chunk}\n").unwrap();
+        }
+        body.push_str("data: [DONE]\n\n");
+        Self {
+            body,
+            content_type: "text/event-stream",
+            ..Self::completion("")
+        }
+    }
+
+    /// A streamed answer that sends `fill` again and again, `bytes` bytes
+    /// of it, or until the client stops reading.
+    pub(crate) fn endless(fill: &str, bytes: usize) -> Self {
+        Self {
+            body: String::new(),
+            length: Length::Streamed(bytes),
+            content_type: "text/event-stream",
+            fill: fill.as_bytes().to_vec(),
+            ..Self::completion("")
         }
     }
 
@@ -90,6 +124,8 @@ impl Reply {
             length: Length::Body,
             location: None,
             silent: false,
+            content_type: "application/json",
+            fill: b" ".to_vec(),
         }
     }
 
@@ -256,13 +292,14 @@ async fn answer(stream: &mut TcpStream, reply: &Reply) {
         Length::Streamed(_) => String::new(),
     };
     let head = format!(
-        "HTTP/1.1 {} Fake\r\nContent-Type: application/json\r\n{length}{location}Connection: close\r\n\r\n",
-        reply.status
+        "HTTP/1.1 {} Fake\r\nContent-Type: {}\r\n{length}{location}Connection: close\r\n\r\n",
+        reply.status, reply.content_type
     );
     let mut sent = stream.write_all(head.as_bytes()).await.is_ok()
         && stream.write_all(reply.body.as_bytes()).await.is_ok();
     if let Length::Streamed(bytes) = reply.length {
-        let chunk = vec![b' '; 64 * 1024];
+        let whole = (64 * 1024 / reply.fill.len().max(1)).max(1) * reply.fill.len();
+        let chunk: Vec<u8> = reply.fill.iter().copied().cycle().take(whole).collect();
         let mut left = bytes;
         while sent && left > 0 {
             let size = left.min(chunk.len());

@@ -61,6 +61,26 @@ pub enum OpenAiError {
         /// What the answer lacks.
         reason: String,
     },
+    /// A streamed answer sent a line longer than a turn reads: a server that
+    /// never ends its line is cut there.
+    #[error("the provider's stream sent a line longer than {limit} bytes")]
+    StreamLineTooLong {
+        /// How many bytes a line may hold.
+        limit: usize,
+    },
+    /// A streamed answer sent an event longer than a turn reads.
+    #[error("the provider's stream sent an event longer than {limit} bytes")]
+    StreamEventTooLong {
+        /// How many bytes an event's data may hold.
+        limit: usize,
+    },
+    /// A streamed answer reported the provider's error mid-stream.
+    #[error("the provider's stream failed: {message}")]
+    StreamFailed {
+        /// The provider's message: on one line, within 500 characters, the
+        /// API key removed.
+        message: String,
+    },
 }
 
 impl OpenAiError {

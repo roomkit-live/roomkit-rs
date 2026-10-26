@@ -12,6 +12,8 @@ publish.workspace = true
 roomkit.workspace = true
 # The provider-neutral AI channel and its tool loop (step 4, decision 6).
 roomkit-ai.workspace = true
+# The `Stream` a streamed completion is read as (step 4, decision 11).
+futures-core.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -182,6 +182,8 @@ async fn a_turn_posts_the_system_prompt_and_the_conversation_to_chat_completions
                 { "role": "system", "content": SYSTEM_PROMPT },
                 { "role": "user", "content": "Are you open on Sunday?" },
             ],
+            "stream": true,
+            "stream_options": { "include_usage": true },
         })
     );
 }
@@ -336,7 +338,8 @@ async fn a_provider_error_fails_the_turn_and_fires_on_error() {
     );
     let on_error = next(&mut reported).await;
     assert_eq!(text_of(&on_error.content), message);
-    assert_eq!(on_error.metadata["error_category"], "generation");
+    // The turn's response failed as it was read (RFC §12.2 step 13s).
+    assert_eq!(on_error.metadata["error_category"], "streaming");
 }
 
 #[tokio::test]
@@ -452,5 +455,124 @@ async fn a_completion_past_the_timeout_fails_the_turn() {
         error.message.starts_with("the completion request failed: ")
             && error.message.contains("timed out"),
         "{error:?}"
+    );
+}
+
+/// One chunk of a streamed completion, its first choice's `delta`.
+fn chunk(delta: &Value) -> Value {
+    json!({ "object": "chat.completion.chunk", "choices": [{ "index": 0, "delta": delta }] })
+}
+
+/// The last chunks of a streamed completion: its end, then its usage
+/// (`stream_options.include_usage`).
+fn ending(finish_reason: &str, prompt: u64, completion: u64) -> [Value; 2] {
+    [
+        json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }] }),
+        json!({ "choices": [], "usage": { "prompt_tokens": prompt, "completion_tokens": completion } }),
+    ]
+}
+
+/// RFC §6.4: a streamed completion's text deltas join to the agent's
+/// answer, and the usage its last chunk carries is the turn's record.
+#[tokio::test]
+async fn a_streamed_completion_s_deltas_join_to_the_answer_and_its_usage_is_recorded() {
+    let mut chunks = vec![
+        chunk(&json!({ "role": "assistant", "content": "We open " })),
+        chunk(&json!({ "content": "at nine." })),
+    ];
+    chunks.extend(ending("stop", 30, 6));
+    let room = Room::new(vec![Reply::events(&chunks)], API_KEY).await;
+    let result = room.says(&room.sms, "+15550001", "Alice", "When?").await;
+    assert_eq!(result.error, None);
+    let answer = room.timeline().await.pop().unwrap();
+    assert_eq!(
+        (
+            text_of(&answer.content),
+            answer.metadata.get("ai_usage").cloned()
+        ),
+        (
+            "We open at nine.".to_owned(),
+            Some(json!({ "input_tokens": 30, "output_tokens": 6 }))
+        )
+    );
+    assert_eq!(room.sms.texts(), ["We open at nine."]);
+}
+
+/// RFC §6.4 "What a provider hands the loop for a call": a streamed call's
+/// fragments are folded by their index into one call, which runs, its
+/// result going back in the next completion.
+#[tokio::test]
+async fn a_streamed_call_s_fragments_fold_into_the_call_that_runs() {
+    let mut first = vec![
+        chunk(
+            &json!({ "tool_calls": [{ "index": 0, "id": "call_7", "type": "function",
+            "function": { "name": "lookup_order", "arguments": "" } }] }),
+        ),
+        chunk(
+            &json!({ "tool_calls": [{ "index": 0, "function": { "arguments": "{\"order\"" } }] }),
+        ),
+        chunk(&json!({ "tool_calls": [{ "index": 0, "function": { "arguments": ": \"42\"}" } }] })),
+    ];
+    first.extend(ending("tool_calls", 20, 5));
+    let mut second = vec![chunk(&json!({ "content": "Shipped." }))];
+    second.extend(ending("stop", 40, 2));
+    let lookup = ToolDefinition::new(
+        "lookup_order",
+        "Find an order",
+        json!({ "type": "object", "properties": { "order": { "type": "string" } } }),
+    );
+    let tools = Tools::new().tool(lookup, |call, _context| async move {
+        Ok(ToolOutput::Json(
+            json!({ "order": call.arguments["order"] }),
+        ))
+    });
+    let room = Room::serving(vec![Reply::events(&first), Reply::events(&second)], tools).await;
+    room.says(&room.sms, "+15550001", "Alice", "Where is 42?")
+        .await;
+    let results: Vec<Value> = messages(&room.fake, 1)
+        .into_iter()
+        .filter(|message| message["role"] == "tool")
+        .collect();
+    assert_eq!(
+        results,
+        [json!({ "role": "tool", "content": "{\"order\":\"42\"}", "tool_call_id": "call_7" })]
+    );
+}
+
+/// Security: a stream whose line never ends is cut at the line's bound, 1
+/// MiB, the turn failing, rather than growing the memory without end.
+#[tokio::test]
+async fn a_stream_that_never_ends_a_line_is_cut_at_the_line_s_bound() {
+    let room = Room::new(vec![Reply::endless("x", TOO_LONG)], API_KEY).await;
+    let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
+    assert_eq!(
+        result.error.unwrap().message,
+        "the provider's stream sent a line longer than 1048576 bytes"
+    );
+}
+
+/// Security: a stream whose events never stop is cut at the answer's
+/// bound, 4 MiB, the turn failing.
+#[tokio::test]
+async fn a_stream_of_endless_events_is_cut_at_the_answer_s_bound() {
+    let event = format!("data: {}\n\n", chunk(&json!({ "content": "" })));
+    let room = Room::new(vec![Reply::endless(&event, TOO_LONG)], API_KEY).await;
+    let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
+    assert_eq!(
+        result.error.unwrap().message,
+        "the provider's answer is longer than 4194304 bytes"
+    );
+}
+
+/// Security: a stream whose one event never ends, data line after data
+/// line, is cut at the event's bound, 1 MiB.
+#[tokio::test]
+async fn a_stream_whose_event_never_ends_is_cut_at_the_event_s_bound() {
+    let line = format!("data: {}\n", "x".repeat(1000));
+    let room = Room::new(vec![Reply::endless(&line, TOO_LONG)], API_KEY).await;
+    let result = room.says(&room.sms, "+15550001", "Alice", "Hi").await;
+    assert_eq!(
+        result.error.unwrap().message,
+        "the provider's stream sent an event longer than 1048576 bytes"
     );
 }

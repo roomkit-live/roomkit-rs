@@ -16,15 +16,24 @@ const MESSAGE_LIMIT: usize = 500;
 /// The longest error type or code an error keeps, in characters.
 const NAME_LIMIT: usize = 64;
 
-/// A Chat Completions request: one completion, not streamed, declaring the
-/// round's tools when it has any, and neither `tool_choice` nor
-/// `parallel_tool_calls`.
+/// A Chat Completions request: one completion, streamed as server-sent
+/// events with its usage in the last chunk (`stream_options.include_usage`),
+/// declaring the round's tools when it has any, and neither `tool_choice`
+/// nor `parallel_tool_calls`.
 #[derive(Debug, Serialize)]
 pub(crate) struct CompletionRequest<'a> {
     model: &'a str,
     messages: Vec<WireMessage<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<WireTool<'a>>,
+    stream: bool,
+    stream_options: StreamOptions,
+}
+
+/// What a streamed completion sends beside its deltas.
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 /// One message of a request.
@@ -104,6 +113,10 @@ impl<'a> CompletionRequest<'a> {
             model,
             messages,
             tools,
+            stream: true,
+            stream_options: StreamOptions {
+                include_usage: true,
+            },
         }
     }
 }
@@ -264,6 +277,151 @@ pub(crate) fn response(body: &[u8], secret: &str) -> Result<ProviderResponse, Op
         calls,
         Done::new(choice.finish_reason, usage),
     ))
+}
+
+/// One chunk of a streamed completion, as far as a turn reads it: its first
+/// choice's delta and end, and, in the last chunk, the completion's usage.
+#[derive(Debug, Deserialize)]
+struct Chunk {
+    #[serde(default, deserialize_with = "nullable")]
+    choices: Vec<ChunkChoice>,
+    #[serde(default)]
+    usage: Option<Usage>,
+    /// What a server that fails mid-stream sends instead.
+    #[serde(default)]
+    error: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChunkChoice {
+    #[serde(default, deserialize_with = "nullable")]
+    index: u64,
+    #[serde(default)]
+    delta: Option<Delta>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+/// What one chunk adds to the answer.
+#[derive(Debug, Deserialize)]
+struct Delta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    tool_calls: Vec<DeltaCall>,
+}
+
+/// A fragment of a call, which the call's `index` names across chunks.
+#[derive(Debug, Deserialize)]
+struct DeltaCall {
+    #[serde(default, deserialize_with = "nullable")]
+    index: u64,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<DeltaFunction>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeltaFunction {
+    #[serde(default)]
+    name: Option<String>,
+    /// A fragment of the arguments' JSON text; some servers send an object.
+    #[serde(default)]
+    arguments: Value,
+}
+
+/// A call as its fragments built it so far.
+#[derive(Debug, Default)]
+struct Folded {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+/// A streamed completion, folded as its chunks come: the calls' fragments
+/// by their index, why it stopped, what it used (RFC §6.4 "What a provider
+/// hands the loop for a call").
+#[derive(Debug, Default)]
+pub(crate) struct Folding {
+    calls: std::collections::BTreeMap<u64, Folded>,
+    finish_reason: Option<String>,
+    usage: Metadata,
+}
+
+impl Folding {
+    /// Takes the chunk `data`: the text it adds, if any.
+    ///
+    /// # Errors
+    ///
+    /// [`OpenAiError::Malformed`] when `data` is no chunk,
+    /// [`OpenAiError::StreamFailed`] when it reports the provider's error,
+    /// each without `secret`, the API key.
+    pub(crate) fn take(&mut self, data: &str, secret: &str) -> Result<Option<String>, OpenAiError> {
+        let chunk: Chunk = serde_json::from_str(data).map_err(|error| OpenAiError::Malformed {
+            reason: cleaned(&error.to_string(), secret, MESSAGE_LIMIT),
+        })?;
+        if let Some(error) = chunk.error.filter(|error| !error.is_null()) {
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .map_or_else(|| error.to_string(), str::to_owned);
+            return Err(OpenAiError::StreamFailed {
+                message: cleaned(&message, secret, MESSAGE_LIMIT),
+            });
+        }
+        if let Some(usage) = chunk.usage {
+            self.usage = usage_of(usage);
+        }
+        let mut text = String::new();
+        for choice in chunk.choices.into_iter().filter(|choice| choice.index == 0) {
+            if let Some(reason) = choice.finish_reason {
+                self.finish_reason = Some(reason);
+            }
+            let Some(delta) = choice.delta else {
+                continue;
+            };
+            text.push_str(delta.content.as_deref().unwrap_or_default());
+            for call in delta.tool_calls {
+                self.fold(call);
+            }
+        }
+        Ok(Some(text).filter(|text| !text.is_empty()))
+    }
+
+    /// Adds a call's fragment to the call its index names: its id and name
+    /// once given, its arguments' text appended.
+    fn fold(&mut self, fragment: DeltaCall) {
+        let folded = self.calls.entry(fragment.index).or_default();
+        if let Some(id) = fragment.id.filter(|id| !id.is_empty()) {
+            folded.id = id;
+        }
+        let Some(function) = fragment.function else {
+            return;
+        };
+        if let Some(name) = function.name.filter(|name| !name.is_empty()) {
+            folded.name = name;
+        }
+        match function.arguments {
+            Value::String(text) => folded.arguments.push_str(&text),
+            Value::Null => {}
+            other @ (Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
+                folded.arguments.push_str(&other.to_string());
+            }
+        }
+    }
+
+    /// The completion once its stream is over: its calls in their index's
+    /// order, each with its argument text, which the loop reads, and how it
+    /// ended.
+    pub(crate) fn finish(self) -> (Vec<ProviderToolCall>, Done) {
+        let calls = self
+            .calls
+            .into_values()
+            .map(|call| ProviderToolCall::new(call.id, call.name, call.arguments))
+            .collect();
+        (calls, Done::new(self.finish_reason, self.usage))
+    }
 }
 
 /// A completion's usage as the turn's record counts it.
@@ -433,6 +591,58 @@ mod tests {
             "usage": null}"#;
         let read = response(body, "sk-1").unwrap();
         assert_eq!((read.text.as_str(), read.calls.len()), ("Hi", 0));
+    }
+
+    /// RFC §6.4: a streamed call's fragments are folded by their index,
+    /// its id and name kept from the first that gives them, its arguments'
+    /// text joined; the usage comes in the last chunk.
+    #[test]
+    fn a_streamed_completion_s_call_fragments_fold_by_index() {
+        let mut folding = Folding::default();
+        let chunks = [
+            r#"{"choices": [{"index": 0, "delta": {"role": "assistant", "content": "Let me "}}]}"#,
+            r#"{"choices": [{"index": 0, "delta": {"content": "check."}}]}"#,
+            r#"{"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 1, "id": "call_b",
+                "function": {"name": "notify", "arguments": ""}}]}}]}"#,
+            r#"{"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_a",
+                "function": {"name": "lookup", "arguments": "{\"or"}}]}}]}"#,
+            r#"{"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0,
+                "function": {"arguments": "der\": \"42\"}"}}]}}]}"#,
+            r#"{"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}"#,
+            r#"{"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 4}}"#,
+        ];
+        let text: Vec<String> = chunks
+            .iter()
+            .filter_map(|chunk| folding.take(chunk, "sk-1").unwrap())
+            .collect();
+        let (calls, done) = folding.finish();
+        assert_eq!(text, ["Let me ", "check."]);
+        assert_eq!(
+            calls,
+            [
+                ProviderToolCall::new("call_a", "lookup", r#"{"order": "42"}"#),
+                ProviderToolCall::new("call_b", "notify", ""),
+            ]
+        );
+        assert_eq!(
+            (done.finish_reason.as_deref(), Value::Object(done.usage)),
+            (
+                Some("tool_calls"),
+                serde_json::json!({ "input_tokens": 9, "output_tokens": 4 })
+            )
+        );
+    }
+
+    #[test]
+    fn a_chunk_reporting_an_error_fails_without_the_key() {
+        let mut folding = Folding::default();
+        let failed = folding.take(r#"{"error": {"message": "overloaded, key sk-1"}}"#, "sk-1");
+        assert_eq!(
+            failed,
+            Err(OpenAiError::StreamFailed {
+                message: "overloaded, key [removed]".to_owned()
+            })
+        );
     }
 
     #[test]
