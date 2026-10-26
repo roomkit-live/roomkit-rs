@@ -837,7 +837,7 @@ mod metadata_updates {
                     .insert("tier".to_owned(), json!("gold"));
                 output
                     .metadata_updates
-                    .insert("roomkit:detached".to_owned(), json!({ "sms": "now" }));
+                    .insert("roomkit:detached_channels".to_owned(), json!(["sms"]));
                 Ok(output)
             }),
         );
@@ -876,7 +876,7 @@ mod metadata_updates {
     fn never_write_a_reserved_key() {
         let mut sim = tagging_room();
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
-        assert_eq!(sim.room.metadata.get("roomkit:detached"), None);
+        assert_eq!(sim.room.metadata.get("roomkit:detached_channels"), None);
     }
 
     #[test]

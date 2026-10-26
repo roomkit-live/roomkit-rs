@@ -12,11 +12,18 @@
 //! room has, and never to a room whose status refuses the message anyway
 //! (gap G-053).
 //!
-//! The record maps each revoked channel to the instant it was detached:
+//! The record is the list of the revoked channels' ids, in the form the
+//! Python implementation writes, so that a room either implementation
+//! detached a channel from refuses it to both (gap G-049):
 //!
 //! ```json
-//! { "roomkit:detached": { "sms": "2026-10-22T14:03:00Z" } }
+//! { "roomkit:detached_channels": ["sms"] }
 //! ```
+//!
+//! A room may still hold the record roomkit-rs wrote before, a map of each
+//! revoked channel to the instant it was detached, under
+//! `roomkit:detached`: its channels are revoked too, and the next write of
+//! the room's revocations folds them into the list.
 
 use serde_json::Value;
 
@@ -26,8 +33,14 @@ use crate::model::{ChannelId, Metadata, Room, RoomContext, RoomUpdates, Timestam
 /// G-049).
 pub const RESERVED_PREFIX: &str = "roomkit:";
 
-/// The room metadata key holding the room's revocations.
-pub const REVOCATIONS_KEY: &str = "roomkit:detached";
+/// The room metadata key holding the room's revocations: the list of the
+/// revoked channels' ids.
+pub const REVOCATIONS_KEY: &str = "roomkit:detached_channels";
+
+/// The key of the record roomkit-rs kept before, a map of each revoked
+/// channel to the instant it was detached; read, and folded into
+/// [`REVOCATIONS_KEY`] by the next write.
+pub const FORMER_REVOCATIONS_KEY: &str = "roomkit:detached";
 
 /// Whether a room metadata key belongs to the implementation's namespace,
 /// which integrator writes refuse (RFC §10.6.5).
@@ -46,7 +59,7 @@ pub fn reserved_key(metadata: &Metadata) -> Option<&str> {
 /// Whether `channel` was detached from the room and not explicitly attached
 /// since.
 pub fn revoked(room: &Room, channel: &ChannelId) -> bool {
-    revocations(room).contains_key(channel.as_str())
+    revocations(room).iter().any(|item| names(item, channel))
 }
 
 /// Whether the framework may attach `channel` to the room on its own, for a
@@ -62,15 +75,10 @@ pub fn may_attach_automatically(context: &RoomContext, channel: &ChannelId) -> b
 /// room's other revocations.
 pub fn revoke(room: &Room, channel: &ChannelId, at: Timestamp) -> RoomUpdates {
     let mut revocations = revocations(room);
-    revocations.insert(channel.to_string(), Value::String(at.to_string()));
-    let mut updates = RoomUpdates {
-        updated_at: Some(at),
-        ..RoomUpdates::default()
-    };
-    updates
-        .metadata
-        .insert(REVOCATIONS_KEY.to_owned(), Value::Object(revocations));
-    updates
+    if !revocations.iter().any(|item| names(item, channel)) {
+        revocations.push(Value::String(channel.to_string()));
+    }
+    written(room, revocations, at)
 }
 
 /// The write that clears `channel`'s revocation as of `at`, for an explicit
@@ -78,7 +86,34 @@ pub fn revoke(room: &Room, channel: &ChannelId, at: Timestamp) -> RoomUpdates {
 /// holds no revocation.
 pub fn clear_revocation(room: &Room, channel: &ChannelId, at: Timestamp) -> Option<RoomUpdates> {
     let mut revocations = revocations(room);
-    revocations.remove(channel.as_str())?;
+    let before = revocations.len();
+    revocations.retain(|item| !names(item, channel));
+    (revocations.len() < before).then(|| written(room, revocations, at))
+}
+
+/// The room's revocations: the list, then the channels of the former record
+/// the list does not name. A record of another shape holds none.
+fn revocations(room: &Room) -> Vec<Value> {
+    let mut revocations = match room.metadata.get(REVOCATIONS_KEY) {
+        Some(Value::Array(list)) => list.clone(),
+        Some(_) | None => Vec::new(),
+    };
+    if let Some(Value::Object(former)) = room.metadata.get(FORMER_REVOCATIONS_KEY) {
+        for channel in former.keys() {
+            if !revocations
+                .iter()
+                .any(|item| item.as_str() == Some(channel))
+            {
+                revocations.push(Value::String(channel.clone()));
+            }
+        }
+    }
+    revocations
+}
+
+/// The write of `revocations` as of `at`: the list, or no record once it is
+/// empty, and never the former record.
+fn written(room: &Room, revocations: Vec<Value>, at: Timestamp) -> RoomUpdates {
     let mut updates = RoomUpdates {
         updated_at: Some(at),
         ..RoomUpdates::default()
@@ -88,17 +123,19 @@ pub fn clear_revocation(room: &Room, channel: &ChannelId, at: Timestamp) -> Opti
     } else {
         updates
             .metadata
-            .insert(REVOCATIONS_KEY.to_owned(), Value::Object(revocations));
+            .insert(REVOCATIONS_KEY.to_owned(), Value::Array(revocations));
     }
-    Some(updates)
+    if room.metadata.contains_key(FORMER_REVOCATIONS_KEY) {
+        updates
+            .removed_metadata
+            .push(FORMER_REVOCATIONS_KEY.to_owned());
+    }
+    updates
 }
 
-/// The room's revocations; a record of another shape holds none.
-fn revocations(room: &Room) -> Metadata {
-    match room.metadata.get(REVOCATIONS_KEY) {
-        Some(Value::Object(revocations)) => revocations.clone(),
-        Some(_) | None => Metadata::new(),
-    }
+/// Whether an item of the list names `channel`.
+fn names(item: &Value, channel: &ChannelId) -> bool {
+    item.as_str() == Some(channel.as_str())
 }
 
 #[cfg(test)]
@@ -127,12 +164,65 @@ mod tests {
         room
     }
 
+    /// A room the Python implementation detached a channel from, as its
+    /// store holds it (gap G-049).
     #[test]
-    fn a_revocation_names_the_channel_and_its_instant() {
+    fn a_channel_python_detached_is_revoked() {
+        let mut room = room();
+        room.metadata
+            .insert("roomkit:detached_channels".to_owned(), json!(["sms"]));
+        assert!(revoked(&room, &sms()));
+    }
+
+    #[test]
+    fn a_revocation_lists_the_channel_as_python_does() {
         assert_eq!(
-            revoked_room().metadata.get(REVOCATIONS_KEY),
-            Some(&json!({ "sms": "2026-10-22T14:03:00Z" }))
+            revoked_room().metadata.get("roomkit:detached_channels"),
+            Some(&json!(["sms"]))
         );
+    }
+
+    /// The record roomkit-rs wrote before gap G-049 followed Python's form.
+    fn formerly_revoked_room() -> Room {
+        let mut room = room();
+        room.metadata.insert(
+            "roomkit:detached".to_owned(),
+            json!({ "sms": "2026-10-22T14:03:00Z" }),
+        );
+        room
+    }
+
+    #[test]
+    fn a_channel_of_the_former_record_is_revoked() {
+        assert!(revoked(&formerly_revoked_room(), &sms()));
+    }
+
+    #[test]
+    fn the_next_revocation_folds_the_former_record_into_the_list() {
+        let mut room = formerly_revoked_room();
+        revoke(&room, &ChannelId::new("ws").unwrap(), at()).apply(&mut room);
+        assert_eq!(
+            room.metadata,
+            [("roomkit:detached_channels".to_owned(), json!(["sms", "ws"]))]
+                .into_iter()
+                .collect::<Metadata>()
+        );
+    }
+
+    #[test]
+    fn clearing_the_former_record_s_last_channel_removes_both_records() {
+        let mut room = formerly_revoked_room();
+        clear_revocation(&room, &sms(), at())
+            .unwrap()
+            .apply(&mut room);
+        assert_eq!(room.metadata, Metadata::new());
+    }
+
+    #[test]
+    fn revoking_a_revoked_channel_lists_it_once() {
+        let mut room = revoked_room();
+        revoke(&room, &sms(), at()).apply(&mut room);
+        assert_eq!(room.metadata.get(REVOCATIONS_KEY), Some(&json!(["sms"])));
     }
 
     #[test]
@@ -193,11 +283,11 @@ mod tests {
     fn a_key_of_the_reserved_namespace_is_refused() {
         let metadata: Metadata = [
             ("crm".to_owned(), json!("c_1")),
-            ("roomkit:detached".to_owned(), json!({})),
+            ("roomkit:detached_channels".to_owned(), json!([])),
         ]
         .into_iter()
         .collect();
-        assert_eq!(reserved_key(&metadata), Some("roomkit:detached"));
+        assert_eq!(reserved_key(&metadata), Some("roomkit:detached_channels"));
     }
 
     #[test]

@@ -611,15 +611,13 @@ impl Channel for Tagger {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let mut revoked = Metadata::new();
-        revoked.insert("sms".to_owned(), "now".into());
         let mut output = ChannelOutput::default();
         output
             .metadata_updates
             .insert("crm_contact".to_owned(), "c_42".into());
         output
             .metadata_updates
-            .insert("roomkit:detached".to_owned(), revoked.into());
+            .insert("roomkit:detached_channels".to_owned(), vec!["sms"].into());
         ready(Ok(output))
     }
 }
@@ -687,7 +685,7 @@ mod metadata_updates {
     #[tokio::test]
     async fn a_reserved_key_is_refused() {
         let room = tagged_room().await;
-        assert!(!room.metadata.contains_key("roomkit:detached"));
+        assert!(!room.metadata.contains_key("roomkit:detached_channels"));
     }
 
     #[tokio::test]
@@ -698,8 +696,8 @@ mod metadata_updates {
                 &room_id(),
                 RoomOptions {
                     metadata: Metadata::from_iter([(
-                        "roomkit:detached".to_owned(),
-                        Metadata::new().into(),
+                        "roomkit:detached_channels".to_owned(),
+                        Vec::<String>::new().into(),
                     )]),
                     ..RoomOptions::default()
                 },
@@ -708,7 +706,7 @@ mod metadata_updates {
         assert_eq!(
             refused,
             Err(KitError::Lifecycle(LifecycleError::ReservedMetadataKey(
-                "roomkit:detached".to_owned()
+                "roomkit:detached_channels".to_owned()
             )))
         );
     }

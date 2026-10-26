@@ -121,7 +121,7 @@ mod create_room {
         let mut room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
         room.metadata.insert(
             attachment::REVOCATIONS_KEY.to_owned(),
-            serde_json::json!({}),
+            serde_json::json!([]),
         );
         let created = sim.run(CreateRoom::new(sim.shared_config(), room));
         assert_eq!(
@@ -347,10 +347,10 @@ mod detach_channel {
     }
 
     #[test]
-    fn keeps_the_revocation_in_the_room_with_its_instant() {
+    fn keeps_the_revocation_in_the_room_as_python_does() {
         assert_eq!(
-            detached().room.metadata.get(attachment::REVOCATIONS_KEY),
-            Some(&serde_json::json!({ "sms": "2026-10-22T14:03:00Z" }))
+            detached().room.metadata.get("roomkit:detached_channels"),
+            Some(&serde_json::json!(["sms"]))
         );
     }
 

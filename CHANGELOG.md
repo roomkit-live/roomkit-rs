@@ -49,7 +49,9 @@ as it stands.
   how a chain of SYNC outcomes decides (§9.1–9.4); the lifecycle's
   transitions, which refuse a status they neither leave from nor lead to
   (gap G-074); the timer transitions due at an instant (gap G-045); a
-  detach's revocation and the `roomkit:` metadata namespace (gaps G-049,
+  detach's revocation, kept as the Python implementation keeps it, the
+  list `roomkit:detached_channels`, the former `roomkit:detached` map read
+  and folded into it, and the `roomkit:` metadata namespace (gaps G-049,
   G-053); an address in its channel's form, a phone number in E.164 by the
   rules of gap G-052 and an email address lower-case, how each channel
   type is addressed, its recipient and chat keys, and what a recipient or
