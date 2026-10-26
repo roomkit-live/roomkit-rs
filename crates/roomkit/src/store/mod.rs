@@ -153,6 +153,35 @@ pub trait ConversationStore: Send + Sync + 'static {
         }
     }
 
+    /// The room's delivery cursor, `-1` for a room the store does not hold
+    /// or whose delivery sets never ran (RFC §14.1 `get_delivered_index`,
+    /// §13.5). This default reads the whole room: a store that can read the
+    /// cursor alone should override it.
+    fn get_delivered_index(
+        &self,
+        room_id: &RoomId,
+    ) -> impl Future<Output = Result<i64, StoreError>> + Send {
+        async move {
+            let room = self.get_room(room_id).await?;
+            Ok(room.map_or(-1, |room| room.delivered_index))
+        }
+    }
+
+    /// Advances the room's delivery cursor to `index`, a compare-and-set
+    /// (RFC §14.1 `advance_delivered_index`, §13.5): it moves only from
+    /// `index - 1`, the room's strict delivery order, or, when `force`,
+    /// from any lower value, as a lane skipping a gap does. Whether the
+    /// cursor moved: never for a room the store does not hold, nor past a
+    /// cursor at `index` or beyond. The write is atomic, and nothing else
+    /// moves the cursor: [`update_room`](Self::update_room) cannot, and a
+    /// commit leaves it.
+    fn advance_delivered_index(
+        &self,
+        room_id: &RoomId,
+        index: u64,
+        force: bool,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
     /// The room `room_id`, if it exists.
     fn get_room(
         &self,

@@ -62,6 +62,17 @@ impl ConversationStore for GatedStore {
         self.store.get_room(room_id).await
     }
 
+    async fn advance_delivered_index(
+        &self,
+        room_id: &RoomId,
+        index: u64,
+        force: bool,
+    ) -> Result<bool, StoreError> {
+        self.store
+            .advance_delivered_index(room_id, index, force)
+            .await
+    }
+
     async fn list_rooms(&self, filter: &RoomFilter) -> Result<Vec<Room>, StoreError> {
         self.store.list_rooms(filter).await
     }

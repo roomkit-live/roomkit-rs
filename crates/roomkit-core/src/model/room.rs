@@ -1,6 +1,7 @@
 //! Rooms and their lifecycle (RFC §4.1, §5.1, §19.3.1).
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{Metadata, RoomId, Timestamp};
 
@@ -96,6 +97,31 @@ pub struct Room {
     /// G-012).
     #[serde(default)]
     pub latest_index: Option<u64>,
+    /// The room's delivery cursor: the highest index whose delivery set has
+    /// run, `-1` before any (RFC §5.1, §13.5 "Delivery lanes
+    /// across processes"). The store manages it: only its
+    /// `advance_delivered_index` moves it, and a room's update or an
+    /// event's commit leaves it as stored. A value below `-1` is refused.
+    #[serde(default = "no_delivery", deserialize_with = "delivery_cursor")]
+    pub delivered_index: i64,
+}
+
+/// A room's delivery cursor before any delivery set ran (RFC §5.1).
+const NO_DELIVERY: i64 = -1;
+
+fn no_delivery() -> i64 {
+    NO_DELIVERY
+}
+
+/// Reads a delivery cursor, refusing one below `-1`.
+fn delivery_cursor<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    let cursor = i64::deserialize(deserializer)?;
+    if cursor < NO_DELIVERY {
+        return Err(D::Error::custom(format!(
+            "delivered_index {cursor} is below {NO_DELIVERY}"
+        )));
+    }
+    Ok(cursor)
 }
 
 impl Room {
@@ -114,6 +140,7 @@ impl Room {
             metadata: Metadata::new(),
             event_count: 0,
             latest_index: None,
+            delivered_index: NO_DELIVERY,
         }
     }
 }
@@ -146,6 +173,27 @@ mod tests {
         assert_eq!(
             (room.status, room.event_count, room.latest_index),
             (RoomStatus::Active, 0, None)
+        );
+    }
+
+    /// RFC §5.1: a room stored without a delivery cursor reads `-1`, as the
+    /// Python implementation's does; a cursor below `-1` is refused.
+    #[test]
+    fn a_missing_delivery_cursor_reads_none_ran_and_one_below_is_refused() {
+        let room = |cursor: Option<i64>| {
+            let mut room = json!({
+                "id": "room_1",
+                "created_at": "1970-01-01T00:00:00Z",
+                "updated_at": "1970-01-01T00:00:00Z",
+            });
+            if let Some(cursor) = cursor {
+                room["delivered_index"] = cursor.into();
+            }
+            serde_json::from_value::<Room>(room)
+        };
+        assert_eq!(
+            (room(None).unwrap().delivered_index, room(Some(-2)).is_err()),
+            (-1, true)
         );
     }
 

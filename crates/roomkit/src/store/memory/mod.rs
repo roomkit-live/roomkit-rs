@@ -140,6 +140,19 @@ fn taken_key(events: &[RoomEvent], event: &RoomEvent) -> Option<StoreError> {
     })
 }
 
+/// Moves the delivery `cursor` to `index` from `index - 1`, or from any
+/// lower value when `force` (RFC §13.5); whether it moved.
+fn advance(cursor: &mut i64, index: u64, force: bool) -> bool {
+    let Ok(index) = i64::try_from(index) else {
+        return false;
+    };
+    let moves = *cursor < index && (force || *cursor == index - 1);
+    if moves {
+        *cursor = index;
+    }
+    moves
+}
+
 impl InMemoryStore {
     /// An empty store.
     pub fn new() -> Self {
@@ -254,6 +267,26 @@ impl ConversationStore for InMemoryStore {
             record.update(updates);
         }
         Ok(())
+    }
+
+    async fn get_delivered_index(&self, room_id: &RoomId) -> Result<i64, StoreError> {
+        Ok(self
+            .rooms()
+            .get(room_id)
+            .map_or(-1, |record| record.room.delivered_index))
+    }
+
+    async fn advance_delivered_index(
+        &self,
+        room_id: &RoomId,
+        index: u64,
+        force: bool,
+    ) -> Result<bool, StoreError> {
+        let mut rooms = self.rooms();
+        let Some(record) = rooms.get_mut(room_id) else {
+            return Ok(false);
+        };
+        Ok(advance(&mut record.room.delivered_index, index, force))
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
@@ -665,6 +698,55 @@ mod tests {
             .unwrap();
         let room = store.get_room(&room_id()).await.unwrap().unwrap();
         assert_eq!((room.event_count, room.latest_index), (1, Some(0)));
+    }
+
+    /// RFC §14.1 `advance_delivered_index`, §13.5, as the Python
+    /// implementation's stores answer it: a compare-and-set from the index
+    /// before, from any lower value when forced, never backwards, nothing
+    /// for a room the store does not hold; a commit and a room's update
+    /// leave the cursor as stored.
+    #[tokio::test]
+    async fn the_delivery_cursor_advances_by_compare_and_set_only() {
+        let store = store_with_room().await;
+        let room = room_id();
+        let missing = RoomId::new("room_9").unwrap();
+        let start = store.get_delivered_index(&room).await.unwrap();
+        let mut moves = Vec::new();
+        for (index, force) in [(0, false), (0, false), (2, false), (2, true), (1, true)] {
+            moves.push(
+                store
+                    .advance_delivered_index(&room, index, force)
+                    .await
+                    .unwrap(),
+            );
+        }
+        store
+            .commit(event(0, EventStatus::Delivered), counters(0), None)
+            .await
+            .unwrap();
+        store
+            .update_room(&room, RoomUpdates::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                start,
+                moves,
+                store.get_delivered_index(&room).await.unwrap(),
+                store
+                    .get_room(&room)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .delivered_index,
+                store.get_delivered_index(&missing).await.unwrap(),
+                store
+                    .advance_delivered_index(&missing, 0, true)
+                    .await
+                    .unwrap()
+            ),
+            (-1, vec![true, false, false, true, false], 2, 2, -1, false)
+        );
     }
 
     #[tokio::test]

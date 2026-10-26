@@ -193,6 +193,7 @@ fn room() {
     room.metadata = metadata(json!({ "crm": "c_1" }));
     room.event_count = 5;
     room.latest_index = Some(4);
+    room.delivered_index = 3;
 
     assert_json_form(
         &room,
@@ -213,6 +214,7 @@ fn room() {
             "metadata": { "crm": "c_1" },
             "event_count": 5,
             "latest_index": 4,
+            "delivered_index": 3,
         }),
     );
 }

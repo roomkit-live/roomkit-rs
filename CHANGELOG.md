@@ -258,6 +258,14 @@ as it stands.
   `set_private_state`, whose defaults keep the value in the room's
   metadata; `InMemoryStore` keeps it apart. What reads alike is read over
   Unicode tables generated from roomkit (`scripts/build-unicode-tables.py`).
+- **The delivery cursor** (§5.1, §13.5, §14.1, gap G-091, step 3
+  milestone 2): `Room::delivered_index`, the highest index whose delivery
+  set has run, `-1` before any, crosses as the Python implementation
+  writes it. The store gains `get_delivered_index` and
+  `advance_delivered_index`, a compare-and-set from the index before, or
+  from any lower value when forced, as Python's stores answer them; a
+  room's update and an event's commit leave the cursor as stored. The
+  tokio runtime does not move it yet.
 - **Organizations** (§17.2, decision 2 of step 2b, gap G-077): every room
   operation acts for an organization or for none.
   `RoomKit::for_organization(organization_id)` returns an `OrganizationKit`
