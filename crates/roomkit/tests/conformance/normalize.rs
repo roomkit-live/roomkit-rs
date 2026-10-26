@@ -1,11 +1,12 @@
 //! What a run produced, normalized as the suite compares it: roomkit-specs
 //! `conformance/README.md`, "Normalization". A room the run created is
-//! `$r1`, `$r2`... in the order of its `room_created`; an event of a
-//! timeline is `<room>#<rank>`, its rank among the room's events once the
-//! lifecycle records (RFC §5.1, which an implementation MAY write) are left
-//! out, and its `index` is that rank; any other event id is `$e1`, `$e2`...
-//! by first appearance; a timestamp is `@1`, `@2`... by its order among the
-//! run's instants.
+//! `$r1`, `$r2`... in the order of its `room_created`; an index is read
+//! without the lifecycle records (RFC §5.1, which an implementation MAY
+//! write) at or below it, an event's `index` and a room's `event_count`,
+//! `latest_index` and `delivered_index` alike; an event of a timeline is
+//! `<room>#<index>`; any other event id is `$e1`, `$e2`... by first
+//! appearance; a timestamp is `@1`, `@2`... by its order among the run's
+//! instants.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -62,7 +63,7 @@ impl Observed {
 pub(crate) struct Normalizer {
     rooms: HashMap<String, String>,
     events: HashMap<String, String>,
-    kept: HashMap<String, Vec<u64>>,
+    lifecycle: HashMap<String, Vec<i64>>,
     others: HashMap<String, String>,
     instants: Vec<String>,
 }
@@ -78,25 +79,24 @@ impl Normalizer {
             rooms.insert(room.clone(), format!("$r{}", position + 1));
         }
         let mut events = HashMap::new();
-        let mut kept = HashMap::new();
+        let mut lifecycle = HashMap::new();
         for (room_id, timeline) in &observed.timelines {
             let alias = rooms
                 .get(room_id)
                 .cloned()
                 .unwrap_or_else(|| room_id.clone());
-            let held: Vec<&Value> = timeline
+            let records: Vec<i64> = timeline
                 .iter()
-                .filter(|e| !is_lifecycle_record(e))
+                .filter(|event| is_lifecycle_record(event))
+                .filter_map(|event| event["index"].as_i64())
                 .collect();
-            kept.insert(
-                room_id.clone(),
-                held.iter().filter_map(|e| e["index"].as_u64()).collect(),
-            );
-            for (rank, event) in held.iter().enumerate() {
-                if let Some(id) = event["id"].as_str() {
-                    events.insert(id.to_owned(), format!("{alias}#{rank}"));
+            for event in timeline.iter().filter(|event| !is_lifecycle_record(event)) {
+                if let (Some(id), Some(raw)) = (event["id"].as_str(), event["index"].as_i64()) {
+                    let index = without_records(&records, raw);
+                    events.insert(id.to_owned(), format!("{alias}#{index}"));
                 }
             }
+            lifecycle.insert(room_id.clone(), records);
         }
         let mut instants: Vec<String> = Vec::new();
         collect_instants(&observed_values(observed), &mut instants);
@@ -105,7 +105,7 @@ impl Normalizer {
         let mut normalizer = Self {
             rooms,
             events,
-            kept,
+            lifecycle,
             others: HashMap::new(),
             instants,
         };
@@ -124,10 +124,40 @@ impl Normalizer {
             .unwrap_or_else(|| room_id.to_owned())
     }
 
-    fn rank(&self, room_id: &str, index: u64) -> u64 {
-        match self.kept.get(room_id) {
-            None => index,
-            Some(kept) => kept.partition_point(|held| *held < index) as u64,
+    /// `raw` without the room's lifecycle records at or below it.
+    fn index(&self, room_id: &str, raw: i64) -> i64 {
+        without_records(self.lifecycle.get(room_id).map_or(&[], Vec::as_slice), raw)
+    }
+
+    /// A count of indexes given out, without the lifecycle records'.
+    fn count(&self, room_id: &str, raw: i64) -> i64 {
+        let records = self.lifecycle.get(room_id).map_or(&[][..], Vec::as_slice);
+        raw - i64::try_from(records.partition_point(|record| *record < raw)).unwrap_or(0)
+    }
+
+    /// The normalized value of `object`'s member `key`, when it holds an
+    /// index of its room: an event's `index`, a room's counters.
+    fn index_member(&self, object: &Map<String, Value>, key: &str, raw: i64) -> Option<Value> {
+        let room_of = |member: &str| object.get(member).and_then(Value::as_str);
+        if key == "index" && object.contains_key("source") {
+            return room_of("room_id").map(|room| Value::from(self.index(room, raw)));
+        }
+        if !(object.contains_key("event_count") && object.contains_key("status")) {
+            return None;
+        }
+        let room = room_of("id")?;
+        match key {
+            "event_count" => Some(Value::from(self.count(room, raw))),
+            "latest_index" => {
+                let index = self.index(room, raw);
+                Some(if index >= 0 {
+                    Value::from(index)
+                } else {
+                    Value::Null
+                })
+            }
+            "delivered_index" => Some(Value::from(self.index(room, raw).max(-1))),
+            _ => None,
         }
     }
 
@@ -151,16 +181,14 @@ impl Normalizer {
     }
 
     fn object(&mut self, object: &Map<String, Value>) -> Value {
-        let event_room = object
-            .get("room_id")
-            .and_then(Value::as_str)
-            .filter(|_| object.contains_key("source") && object.contains_key("index"))
-            .map(str::to_owned);
         let mut result = Map::new();
         for (key, item) in object {
-            let normalized = match (&event_room, key.as_str(), item.as_u64()) {
-                (Some(room_id), "index", Some(index)) => Value::from(self.rank(room_id, index)),
-                _ => self.value_under(item, Some(key)),
+            let index = item
+                .as_i64()
+                .and_then(|raw| self.index_member(object, key, raw));
+            let normalized = match index {
+                Some(index) => index,
+                None => self.value_under(item, Some(key)),
             };
             result.insert(key.clone(), normalized);
         }
@@ -190,6 +218,12 @@ impl Normalizer {
         }
         text.to_owned()
     }
+}
+
+/// `raw` without the lifecycle records (`records`, in index order) at or
+/// below it.
+pub(crate) fn without_records(records: &[i64], raw: i64) -> i64 {
+    raw - i64::try_from(records.partition_point(|record| *record <= raw)).unwrap_or(0)
 }
 
 fn observed_values(observed: &Observed) -> Value {

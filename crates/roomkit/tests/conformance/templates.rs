@@ -28,6 +28,12 @@ pub(crate) fn complete_event(template: &Value, room_id: &str, source: &Value) ->
     event
 }
 
+pub(crate) fn complete_participant(template: &Value, room_id: &str) -> Value {
+    let mut participant = json!({ "room_id": room_id, "joined_at": now() });
+    merge(&mut participant, template);
+    participant
+}
+
 pub(crate) fn complete_task(template: &Value, room_id: &str) -> Value {
     let mut task = json!({ "id": fresh_id(), "room_id": room_id, "created_at": now() });
     merge(&mut task, template);

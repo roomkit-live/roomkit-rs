@@ -22,6 +22,7 @@ pub(crate) fn compare(run: &Run, scenario: &Value, observed: &Observed) -> Vec<S
         ));
     }
     found.extend(lifecycle_never_delivered(observed));
+    found.extend(indexes_increase(observed));
     let rooms = observed
         .timelines
         .keys()
@@ -92,6 +93,26 @@ impl Comparison<'_> {
             for (channel, expected) in channels.as_object().into_iter().flatten() {
                 let binding = held.and_then(|held| held.get(channel));
                 self.check(expected, binding, &format!("bindings.{alias}.{channel}"));
+            }
+        }
+        for (alias, expected) in expect["lifecycle"].as_object().into_iter().flatten() {
+            let records: Vec<Value> = self
+                .observed
+                .timelines
+                .get(&self.room_of(alias))
+                .into_iter()
+                .flatten()
+                .filter(|event| is_lifecycle_record(event))
+                .cloned()
+                .collect();
+            // An implementation that writes no lifecycle record passes (RFC
+            // §5.1).
+            if !records.is_empty() {
+                self.check(
+                    expected,
+                    Some(&Value::Array(records)),
+                    &format!("lifecycle.{alias}"),
+                );
             }
         }
         let events = framework_events(
@@ -282,6 +303,21 @@ fn outcome_mismatches(
         }
         None => Vec::new(),
     }
+}
+
+/// A room's indexes are given out once each (RFC §8.1).
+fn indexes_increase(observed: &Observed) -> Vec<String> {
+    let mut found = Vec::new();
+    for (room, events) in &observed.timelines {
+        let indexes: Vec<Option<u64>> =
+            events.iter().map(|event| event["index"].as_u64()).collect();
+        if indexes.windows(2).any(|pair| pair[1] <= pair[0]) {
+            found.push(format!(
+                "timeline.{room}: an index is held twice: {indexes:?}"
+            ));
+        }
+    }
+    found
 }
 
 /// A lifecycle record (RFC §5.1) is never delivered, nor handed to a turn.

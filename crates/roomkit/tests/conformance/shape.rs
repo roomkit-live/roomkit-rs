@@ -1,0 +1,341 @@
+//! The members a scenario may hold, so the runner never ignores one it does
+//! not know. roomkit-specs `conformance/scenario.schema.json` is the
+//! scenario's grammar; this is its skeleton, checked before a run: a member
+//! the runner would not read (a misspelled expectation, a step of no known
+//! kind) fails the scenario rather than pass unread. Records in the RFC's
+//! serialized form (messages, contents, templates, capabilities) are the
+//! implementation's to read, and open here.
+
+use serde_json::Value;
+
+const TOP: &[&str] = &[
+    "$schema",
+    "id",
+    "title",
+    "rules",
+    "reentrancy",
+    "notes",
+    "setup",
+    "steps",
+    "expect",
+];
+const SETUP: &[&str] = &["kit", "channels", "rooms", "hooks"];
+const KIT: &[&str] = &["max_chain_depth", "process_timeout_ms"];
+const CHANNEL: &[&str] = &[
+    "id",
+    "type",
+    "category",
+    "direction",
+    "capabilities",
+    "recipient_key",
+    "parse",
+    "on_event",
+    "deliver",
+];
+const ROOM: &[&str] = &[
+    "id",
+    "organization_id",
+    "metadata",
+    "timers",
+    "bindings",
+    "participants",
+    "status",
+];
+const BINDING: &[&str] = &[
+    "channel_id",
+    "category",
+    "access",
+    "muted",
+    "visibility",
+    "metadata",
+    "participant_id",
+];
+const HOOK: &[&str] = &[
+    "name",
+    "trigger",
+    "execution",
+    "priority",
+    "timeout_ms",
+    "channel_types",
+    "channel_ids",
+    "directions",
+    "fail_closed",
+    "needs_lock",
+    "reactions",
+];
+const REACTION: &[&str] = &[
+    "when", "repeat", "gate", "do", "fail", "respond", "output", "result",
+];
+const WHEN: &[&str] = &[
+    "room_id",
+    "text",
+    "type",
+    "source_channel_id",
+    "chain_depth",
+];
+const OUTPUT: &[&str] = &["tasks", "observations", "metadata_updates"];
+const RESULT: &[&str] = &[
+    "action",
+    "event",
+    "reason",
+    "injected_events",
+    "tasks",
+    "observations",
+    "metadata",
+];
+const INJECTED: &[&str] = &["event", "target_channel_ids"];
+const OUTCOME: &[&str] = &["result", "error"];
+const ERROR: &[&str] = &["name", "reason"];
+const EXPECT: &[&str] = &[
+    "timeline",
+    "rooms",
+    "bindings",
+    "framework_events",
+    "hooks",
+    "hook_order",
+    "deliveries",
+    "turns",
+    "observations",
+    "tasks",
+    "actions",
+    "lifecycle",
+];
+const NEW_ROOM: &[&str] = &["id", "organization_id", "metadata", "timers"];
+const STEPS: &[(&str, &[&str])] = &[
+    ("await", &["await", "expect"]),
+    ("concurrent", &["concurrent"]),
+    ("wait_for", &["wait_for"]),
+    ("open", &["open"]),
+    ("idle", &["idle"]),
+];
+
+/// Each call's arguments, beside `call` and `organization_id`.
+fn arguments(call: &str) -> Option<&'static [&'static str]> {
+    Some(match call {
+        "process_inbound" => &["message", "room_id"],
+        "send_event" => &[
+            "room_id",
+            "channel_id",
+            "content",
+            "event_type",
+            "participant_id",
+            "visibility",
+            "response_visibility",
+            "addressed_to",
+            "parent_event_id",
+            "idempotency_key",
+            "metadata",
+            "chain_depth",
+            "standalone",
+        ],
+        "post" => &[
+            "room_id",
+            "content",
+            "participant_id",
+            "addressed_to",
+            "metadata",
+            "channel_id",
+            "idempotency_key",
+            "chain_depth",
+        ],
+        "commit_event" => &["room_id", "event"],
+        "update_event" => &["room_id", "event_id", "content", "source", "metadata"],
+        "delete_event" => &["room_id", "event_id", "cascade_replies"],
+        "create_room" => &["room"],
+        "attach_channel" => &[
+            "room_id",
+            "channel_id",
+            "category",
+            "access",
+            "visibility",
+            "muted",
+            "metadata",
+            "participant_id",
+        ],
+        "detach_channel" | "mute" | "unmute" => &["room_id", "channel_id"],
+        "set_access" => &["room_id", "channel_id", "access"],
+        "set_visibility" => &["room_id", "channel_id", "visibility"],
+        "close_room" | "archive_room" | "check_timers" => &["room_id"],
+        "register_channel" => &["channel"],
+        "unregister_channel" => &["channel_id"],
+        "register_hook" => &["hook"],
+        _ => return None,
+    })
+}
+
+/// Every member of `scenario` the runner does not know, as `path: member`.
+pub(crate) fn unknown_members(scenario: &Value) -> Vec<String> {
+    let mut found = Vec::new();
+    members(scenario, TOP, "$", &mut found);
+    let setup = &scenario["setup"];
+    optional(setup, SETUP, "setup", &mut found);
+    optional(&setup["kit"], KIT, "setup.kit", &mut found);
+    for (position, channel) in items(&setup["channels"]) {
+        self::channel(channel, &format!("setup.channels[{position}]"), &mut found);
+    }
+    for (position, room) in items(&setup["rooms"]) {
+        let path = format!("setup.rooms[{position}]");
+        members(room, ROOM, &path, &mut found);
+        for (index, binding) in items(&room["bindings"]) {
+            members(
+                binding,
+                BINDING,
+                &format!("{path}.bindings[{index}]"),
+                &mut found,
+            );
+        }
+    }
+    for (position, hook) in items(&setup["hooks"]) {
+        self::hook(hook, &format!("setup.hooks[{position}]"), &mut found);
+    }
+    for (position, step) in items(&scenario["steps"]) {
+        self::step(step, &format!("steps[{position}]"), &mut found);
+    }
+    let expect = &scenario["expect"];
+    optional(expect, EXPECT, "expect", &mut found);
+    for (label, outcomes) in expect["actions"].as_object().into_iter().flatten() {
+        let listed = outcomes.get("$unordered").unwrap_or(outcomes);
+        for (index, outcome) in items(listed) {
+            self::outcome(
+                outcome,
+                &format!("expect.actions.{label}[{index}]"),
+                &mut found,
+            );
+        }
+    }
+    found
+}
+
+fn items(value: &Value) -> impl Iterator<Item = (usize, &Value)> {
+    value.as_array().into_iter().flatten().enumerate()
+}
+
+/// The members of `value`, an object, that `known` does not list.
+fn members(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
+    let Some(object) = value.as_object() else {
+        found.push(format!("{path}: not an object"));
+        return;
+    };
+    found.extend(
+        object
+            .keys()
+            .filter(|member| !known.contains(&member.as_str()))
+            .map(|member| format!("{path}: {member}")),
+    );
+}
+
+/// As [`members`], for a member the scenario may leave out.
+fn optional(value: &Value, known: &[&str], path: &str, found: &mut Vec<String>) {
+    if !value.is_null() {
+        members(value, known, path, found);
+    }
+}
+
+fn channel(channel: &Value, path: &str, found: &mut Vec<String>) {
+    members(channel, CHANNEL, path, found);
+    for kind in ["parse", "on_event", "deliver"] {
+        for (index, reaction) in items(&channel[kind]) {
+            self::reaction(reaction, &format!("{path}.{kind}[{index}]"), found);
+        }
+    }
+}
+
+fn hook(hook: &Value, path: &str, found: &mut Vec<String>) {
+    members(hook, HOOK, path, found);
+    for (index, reaction) in items(&hook["reactions"]) {
+        self::reaction(reaction, &format!("{path}.reactions[{index}]"), found);
+    }
+}
+
+fn reaction(reaction: &Value, path: &str, found: &mut Vec<String>) {
+    members(reaction, REACTION, path, found);
+    optional(&reaction["when"], WHEN, &format!("{path}.when"), found);
+    optional(
+        &reaction["output"],
+        OUTPUT,
+        &format!("{path}.output"),
+        found,
+    );
+    let result = &reaction["result"];
+    optional(result, RESULT, &format!("{path}.result"), found);
+    for (index, item) in items(&result["injected_events"]) {
+        members(
+            item,
+            INJECTED,
+            &format!("{path}.result.injected_events[{index}]"),
+            found,
+        );
+    }
+    for (index, action) in items(&reaction["do"]) {
+        call(
+            action,
+            &["as", "expect"],
+            &format!("{path}.do[{index}]"),
+            found,
+        );
+    }
+}
+
+fn step(step: &Value, path: &str, found: &mut Vec<String>) {
+    if step.get("call").is_some() {
+        call(step, &["as", "background", "expect"], path, found);
+        return;
+    }
+    let kinds: Vec<&(&str, &[&str])> = STEPS
+        .iter()
+        .filter(|(kind, _)| step.get(*kind).is_some())
+        .collect();
+    let [(kind, known)] = kinds.as_slice() else {
+        let keys: Vec<&String> = step
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(key, _)| key)
+            .collect();
+        found.push(format!("{path}: a step of no known kind: {keys:?}"));
+        return;
+    };
+    members(step, known, path, found);
+    if *kind == "await" && step.get("expect").is_some() {
+        outcome(&step["expect"], &format!("{path}.expect"), found);
+    }
+    for (index, concurrent) in items(&step["concurrent"]) {
+        call(
+            concurrent,
+            &["as", "expect"],
+            &format!("{path}.concurrent[{index}]"),
+            found,
+        );
+    }
+}
+
+fn call(call: &Value, extra: &[&str], path: &str, found: &mut Vec<String>) {
+    let name = call["call"].as_str().unwrap_or_default();
+    let Some(arguments) = arguments(name) else {
+        found.push(format!("{path}: no call {name:?}"));
+        return;
+    };
+    let known: Vec<&str> = arguments
+        .iter()
+        .chain(extra)
+        .chain(&["call", "organization_id"])
+        .copied()
+        .collect();
+    members(call, &known, path, found);
+    if call.get("expect").is_some() {
+        outcome(&call["expect"], &format!("{path}.expect"), found);
+    }
+    match name {
+        "create_room" => members(&call["room"], NEW_ROOM, &format!("{path}.room"), found),
+        "register_channel" => channel(&call["channel"], &format!("{path}.channel"), found),
+        "register_hook" => hook(&call["hook"], &format!("{path}.hook"), found),
+        _ => {}
+    }
+}
+
+fn outcome(outcome: &Value, path: &str, found: &mut Vec<String>) {
+    members(outcome, OUTCOME, path, found);
+    if outcome["error"].is_object() {
+        members(&outcome["error"], ERROR, &format!("{path}.error"), found);
+    }
+}

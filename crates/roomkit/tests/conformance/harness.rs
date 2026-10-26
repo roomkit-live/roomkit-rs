@@ -63,6 +63,9 @@ async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
         for binding in room["bindings"].as_array().into_iter().flatten() {
             calls::attach_binding(run, room, binding).await?;
         }
+        for participant in room["participants"].as_array().into_iter().flatten() {
+            calls::add_participant(run, room, participant).await?;
+        }
         let status = room["status"].as_str();
         let id = RoomId::new(room["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
         if matches!(status, Some("closed" | "archived")) {

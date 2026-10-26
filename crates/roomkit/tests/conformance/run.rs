@@ -316,13 +316,12 @@ impl Run {
             {
                 return id.clone();
             }
-            if let Some((room, rank)) = text.rsplit_once('#')
-                && let Ok(rank) = rank.parse::<usize>()
+            if let Some((room, index)) = text.rsplit_once('#')
+                && let Ok(index) = index.parse::<i64>()
             {
                 let room = self.reference(room, scope).await;
-                let kept = self.kept_timeline(&room).await;
-                if let Some(id) = kept.get(rank).and_then(|event| event["id"].as_str()) {
-                    return id.to_owned();
+                if let Some(id) = self.event_at(&room, index).await {
+                    return id;
                 }
             }
             text.to_owned()
@@ -346,10 +345,18 @@ impl Run {
         events
     }
 
-    async fn kept_timeline(&self, room: &str) -> Vec<Value> {
-        let mut events = self.timeline(room).await;
-        events.retain(|event| !is_lifecycle_record(event));
-        events
+    /// The id of the room's event at `index`, read without lifecycle
+    /// records.
+    async fn event_at(&self, room: &str, index: i64) -> Option<String> {
+        let mut records = 0;
+        for event in self.timeline(room).await {
+            if is_lifecycle_record(&event) {
+                records += 1;
+            } else if event["index"].as_i64().map(|raw| raw - records) == Some(index) {
+                return event["id"].as_str().map(str::to_owned);
+            }
+        }
+        None
     }
 
     pub(crate) async fn idle(&self) {

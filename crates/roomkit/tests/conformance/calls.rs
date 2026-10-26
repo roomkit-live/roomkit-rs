@@ -10,7 +10,7 @@ use std::time::Duration;
 use roomkit::model::{
     Access, BindingOptions, BindingUpdate, ChannelCategory, ChannelId, ChannelType, DirectEvent,
     EventContent, EventDirection, EventId, EventSource, EventType, EventUpdates, InboundMessage,
-    Metadata, ParticipantId, Post, RoomEvent, RoomId, RoomOptions, Visibility,
+    Metadata, Participant, ParticipantId, Post, RoomEvent, RoomId, RoomOptions, Visibility,
 };
 use roomkit::{
     ConversationStore, HookExecution, HookFilter, HookSpec, HookTrigger, HostChannel,
@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use crate::errors::{error_of, named};
 use crate::run::Run;
 use crate::scripted::{ScriptedChannel, hook_handler};
-use crate::templates::{complete_event, system_source};
+use crate::templates::{complete_event, complete_participant, system_source};
 
 /// Why a call could not even be made: a scenario the runner cannot read.
 pub(crate) type Unreadable = String;
@@ -346,6 +346,23 @@ pub(crate) async fn attach_binding(
     outcome
         .map(drop)
         .map_err(|error| format!("attach {channel}: {error}"))
+}
+
+/// Seeds a participant record (RFC §5.5) of the setup, as the store keeps
+/// it.
+pub(crate) async fn add_participant(
+    run: &std::sync::Arc<Run>,
+    room: &Value,
+    participant: &Value,
+) -> Result<(), String> {
+    let room_id = room["id"].as_str().unwrap_or_default();
+    let record: Participant = serde_json::from_value(complete_participant(participant, room_id))
+        .map_err(|error| format!("participant: {error}"))?;
+    run.kit()
+        .store()
+        .create_participant(record)
+        .await
+        .map_err(|error| format!("participant: {error}"))
 }
 
 /// Registers the channel a scenario describes. An id the RFC's grammar
