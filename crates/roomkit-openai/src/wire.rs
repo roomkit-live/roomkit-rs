@@ -56,8 +56,10 @@ impl<'a> CompletionRequest<'a> {
 /// The wire's name of `role`.
 fn role(role: Role) -> &'static str {
     match role {
-        Role::User => "user",
         Role::Assistant => "assistant",
+        // A role this agent does not know yet reads as a user's: never as
+        // the model's own words, nor as the system's.
+        Role::User | _ => "user",
     }
 }
 

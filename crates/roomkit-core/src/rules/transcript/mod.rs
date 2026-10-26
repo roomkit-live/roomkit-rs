@@ -36,7 +36,9 @@ use super::transcoding::text_of;
 use crate::model::{ChannelId, EventStatus, EventType, RoomContext, RoomEvent};
 
 /// Whose a message of the conversation is, as a model's chat reads it.
+/// More roles come with tools; a reader handles the ones it knows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Role {
     /// Someone other than the channel: a participant, another channel, or
     /// the application through an instruction.
@@ -45,13 +47,33 @@ pub enum Role {
     Assistant,
 }
 
-/// One message of the conversation a turn reads.
+/// One message of the conversation a turn reads. Its fields are read as
+/// they are; parts of other kinds (images, tool calls) come later, so a
+/// message is built with [`Message::new`].
+///
+/// ```
+/// use roomkit_core::rules::transcript::{Message, Role};
+///
+/// let message = Message::new(Role::User, "Hi");
+/// assert_eq!((message.role, message.text.as_str()), (Role::User, "Hi"));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Message {
     /// Whose message it is.
     pub role: Role,
     /// What the model reads of it.
     pub text: String,
+}
+
+impl Message {
+    /// A message of `role` saying `text`.
+    pub fn new(role: Role, text: impl Into<String>) -> Self {
+        Self {
+            role,
+            text: text.into(),
+        }
+    }
 }
 
 /// The conversation the turn of the channel `channel_id` on `event` reads
