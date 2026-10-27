@@ -285,7 +285,10 @@ A service depends on `roomkit` and on the crates it needs beside it,
   channel may know of a context's events (§7.5 rule 8): its own accepted
   ones and those their visibility admits, deleted content withheld, none
   for a channel the room does not bind; a page set as the context's
-  `recent_events` is what a reconnecting client is sent.
+  `recent_events` is what a reconnecting client is sent; and
+  `roomkit::visibility_allows(visibility, target_binding)`, Python's,
+  whether an event of a visibility reaches a binding's channel. A cursor
+  past every index bounds the page in both stores.
 - **Organizations** (§17.2, gap G-077): every room operation acts for an
   organization or for none. `RoomKit::for_organization(organization_id)`
   returns an `OrganizationKit` whose calls are the kit's, made for the

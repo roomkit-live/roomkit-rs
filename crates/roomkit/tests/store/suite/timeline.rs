@@ -120,6 +120,26 @@ async fn each_window_is_read_in_ascending_index_order() {
     }
 }
 
+/// A cursor as high as an index can be bounds the page as any other: no
+/// index is above it, and every one below.
+#[tokio::test]
+async fn a_cursor_past_every_index_bounds_the_page() {
+    let store = with_events((0..6).map(event).collect()).await;
+    let after = EventQuery {
+        after_index: Some(u64::MAX),
+        ..EventQuery::default()
+    };
+    let before = EventQuery {
+        before_index: Some(u64::MAX),
+        limit: 2,
+        ..EventQuery::default()
+    };
+    assert_eq!(
+        (page(&store, after).await, page(&store, before).await),
+        (vec![], vec![4, 5])
+    );
+}
+
 /// RFC §14.1: `after_index` and `before_index` exclude each other.
 #[tokio::test]
 async fn both_cursors_are_refused() {

@@ -111,7 +111,7 @@ use shared::bakery::{ORDER_42, SYSTEM_PROMPT};
 use shared::server::{
     AgentServer, CHECKING, MESSAGE_LIMIT, Patience, SERVING, STOPPED, TURN_FAILED,
 };
-use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, TempDatabase};
+use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, TempDatabase, every_row};
 
 /// Where `--serve` listens unless told another address, and the file it
 /// keeps its rooms in.
@@ -1155,16 +1155,4 @@ fn goes_on(request: &Value) -> bool {
         && ANSWERS.get(1).is_some_and(|reply| answered(second, reply))
         && is_labelled(again, "Alice", ALICE_AGAIN)
         && replays_no_call
-}
-
-/// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
-        limit: u64::MAX,
-        event_filter: Some(roomkit::EventFilter {
-            include_blocked: true,
-            ..roomkit::EventFilter::default()
-        }),
-        ..roomkit::EventQuery::default()
-    }
 }

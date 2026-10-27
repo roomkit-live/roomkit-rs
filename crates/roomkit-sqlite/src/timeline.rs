@@ -161,11 +161,14 @@ fn page_query(room_id: &RoomId, query: &EventQuery) -> Result<(String, Vec<Value
     } = query;
     let mut criteria = criteria(room_id, event_filter.as_ref(), visibility_filter.as_ref())?;
     let cursor = after_index.is_some() || before_index.is_some();
+    // A cursor past SQLite's integers bounds the page as it bounds an
+    // in-memory store's: no index is above it, and every index below.
     if let Some(after) = after_index {
-        criteria.and("idx > ?", [Value::Integer(records::integer(*after)?)]);
+        let after = i64::try_from(*after).unwrap_or(i64::MAX);
+        criteria.and("idx > ?", [Value::Integer(after)]);
     }
-    if let Some(before) = before_index {
-        criteria.and("idx < ?", [Value::Integer(records::integer(*before)?)]);
+    if let Some(before) = before_index.and_then(|before| i64::try_from(before).ok()) {
+        criteria.and("idx < ?", [Value::Integer(before)]);
     }
     let from_newest = before_index.is_some() || (!cursor && *newest_first);
     let skipped = if cursor { 0 } else { *offset };

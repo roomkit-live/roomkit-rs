@@ -85,7 +85,7 @@ pub use roomkit_core::rules::lifecycle::Transition;
 pub use roomkit_core::rules::routing::{RouteQuery, Sender as RouteSender};
 pub use roomkit_core::rules::transcoding::text_of;
 pub use roomkit_core::rules::transcript;
-pub use roomkit_core::rules::visible_events;
+pub use roomkit_core::rules::{visibility_allows, visible_events};
 
 pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::context::keep_context;

@@ -106,15 +106,21 @@ pub(crate) fn context_for(reader: &ChannelBinding, whole: &RoomContext) -> RoomC
     }
 }
 
+/// Whether an event of `visibility` reaches the channel `target_binding`
+/// binds (RFC §7.3), the Python implementation's `visibility_allows`:
+/// [`Visibility::admits`] for the binding's channel and category.
+pub fn visibility_allows(visibility: &Visibility, target_binding: &ChannelBinding) -> bool {
+    visibility.admits(&target_binding.channel_id, target_binding.category)
+}
+
 /// `context.recent_events` as the channel `channel_id` may know them (RFC
 /// §7.5 rule 8), the Python implementation's `visible_events`: what a
 /// caller rebuilding a channel's history by itself hands it, a timeline
 /// page set as the context's `recent_events` among them.
 ///
 /// The channel keeps its own accepted events, and another source's whose
-/// visibility admits it (`visibility_allows` in the Python implementation,
-/// [`Visibility::admits`] here), the visibility stamped at the event's
-/// commit. An event stored `BLOCKED` reaches nobody, its own source
+/// visibility reaches it ([`visibility_allows`]), the visibility stamped at
+/// the event's commit. An event stored `BLOCKED` reaches nobody, its own source
 /// included. A deleted event, and an edit of one, stay with their content
 /// withheld (RFC §10.3, gap G-062). A channel the context binds no binding
 /// to is handed none.
@@ -136,8 +142,7 @@ pub fn visible_events(context: &RoomContext, channel_id: &ChannelId) -> Vec<Room
         .iter()
         .filter(|event| event.status != EventStatus::Blocked)
         .filter(|event| {
-            &event.source.channel_id == channel_id
-                || event.visibility.admits(&reader.channel_id, reader.category)
+            &event.source.channel_id == channel_id || visibility_allows(&event.visibility, reader)
         })
         .map(|event| withheld(event, &deleted))
         .collect()
@@ -938,6 +943,22 @@ mod tests {
             assert_eq!(
                 visible_events(&context(vec![transport("sms")], page()), &channel("ws")),
                 Vec::<RoomEvent>::new()
+            );
+        }
+
+        /// The Python implementation's `visibility_allows` reads the
+        /// binding's channel and category; `admits` answers for them.
+        #[test]
+        fn a_visibility_reaches_a_binding_by_its_channel_and_category() {
+            let listed = Visibility::channels([channel("ws")]).unwrap();
+            assert_eq!(
+                [
+                    visibility_allows(&Visibility::Transport, &transport("ws")),
+                    visibility_allows(&Visibility::Transport, &agent("ai")),
+                    visibility_allows(&listed, &transport("ws")),
+                    visibility_allows(&listed, &transport("sms")),
+                ],
+                [true, false, true, false]
             );
         }
 

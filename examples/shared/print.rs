@@ -48,8 +48,9 @@ pub fn print_timeline(events: &[RoomEvent]) {
     }
 }
 
-/// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
+/// Every row of a room's timeline, the refused ones included: the read of
+/// [`timeline`], for a store read without a kit.
+pub fn every_row() -> roomkit::EventQuery {
     roomkit::EventQuery {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
