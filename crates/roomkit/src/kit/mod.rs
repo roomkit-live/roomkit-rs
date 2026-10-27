@@ -35,13 +35,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock, Weak};
 
 use roomkit_core::model::{ChannelId, EventSource, InboundMessage, RoomEvent, RoomId};
-use roomkit_core::ops::{
-    Entry, Environment, FrameworkEvent, Inbound, InboundResult, InboundTarget, KitConfig,
-};
+use roomkit_core::ops::{Entry, Environment, FrameworkEvent, Inbound, InboundTarget, KitConfig};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookTrigger};
 use tokio::sync::broadcast;
 
+use self::inject::Entered;
 pub use self::options::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
     CloseRoomOptions, CommitEventOptions, CreateRoomOptions, DeleteEventOptions,
@@ -60,6 +59,7 @@ use crate::driver;
 use crate::environment::SystemEnvironment;
 use crate::error::KitError;
 use crate::hooks::HookHandler;
+use crate::inbound::{DeliveryHandle, InboundResult};
 use crate::locks::RoomMutexes;
 use crate::queues::{RoomLanes, RoomTickets};
 use crate::registered::{Registered, RegisteredChannel};
@@ -268,6 +268,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// The kit's `process_timeout` bounds the call up to its decision (see
     /// [`RoomKitOptions::process_timeout`]).
     ///
+    /// With `defer_delivery`, the call returns at its decision, its blocking
+    /// decisions made, and its result's [`delivery`](InboundResult::delivery)
+    /// waits for the rest: the event's delivery set and the passes it
+    /// spawns, in the room's lane (RFC §10.1 step 18, detached completion).
+    ///
     /// Dropped before it returns, by a `tokio::time::timeout` for instance,
     /// the call goes on, detached. Decided, its event is delivered and its
     /// cascade runs. Before its decision it expires as one past its
@@ -291,9 +296,17 @@ impl<S: ConversationStore> RoomKit<S> {
     ) -> Result<InboundResult, KitError> {
         let ProcessInboundOptions {
             room_id,
+            defer_delivery,
             organization_id,
         } = options;
-        let Some(room_id) = room_id else {
+        let entered = if let Some(room_id) = room_id {
+            let entry = Entry::Message {
+                room_id,
+                organization_id,
+                message: Box::new(message),
+            };
+            self.enter(entry, PROCESS_INBOUND, defer_delivery).await?
+        } else {
             context::as_deep_as_its_turn(&mut message.chain_depth);
             let routed = Inbound::new(
                 self.config(),
@@ -301,14 +314,19 @@ impl<S: ConversationStore> RoomKit<S> {
                 organization_id,
                 message,
             );
-            return Ok(driver::run_inbound(&self.inner, PROCESS_INBOUND, None, routed).await??);
+            let ran =
+                driver::run_inbound(&self.inner, PROCESS_INBOUND, None, routed, defer_delivery)
+                    .await;
+            Entered {
+                result: ran.output??,
+                run: ran.delivery,
+            }
         };
-        let entry = Entry::Message {
-            room_id,
-            organization_id,
-            message: Box::new(message),
-        };
-        self.enter(entry, PROCESS_INBOUND).await
+        let delivery = defer_delivery.then(|| {
+            let tasks = Arc::clone(&self.inner.tasks);
+            DeliveryHandle::new(entered.result.clone(), entered.run, tasks)
+        });
+        Ok(InboundResult::of(entered.result, delivery))
     }
 
     fn config(&self) -> Arc<KitConfig> {

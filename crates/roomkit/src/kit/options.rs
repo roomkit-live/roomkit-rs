@@ -277,6 +277,12 @@ pub struct ProcessInboundOptions {
     /// The room the message goes into; `None`, the room the kit's router
     /// finds for it (RFC §10.4).
     pub room_id: Option<RoomId>,
+    /// Return at the commit instead of once the event's delivery set ran
+    /// (RFC §10.1 step 18, detached completion): the blocking decisions, a
+    /// hook's refusal among them, are still made before the call returns,
+    /// and the result's [`delivery`](crate::InboundResult::delivery) waits
+    /// for the rest, its delivery results included. `false` by default.
+    pub defer_delivery: bool,
     /// Python `organization_id=None`: the organization the call acts for
     /// (RFC §17.2): a room it creates belongs to it.
     pub organization_id: Option<String>,

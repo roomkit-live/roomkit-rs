@@ -54,6 +54,7 @@ mod environment;
 mod error;
 mod hooks;
 mod host;
+mod inbound;
 mod kit;
 mod locks;
 mod queues;
@@ -89,8 +90,8 @@ pub mod model {
 }
 pub use roomkit_core::ops::{
     CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, ConfigError, FrameworkEvent,
-    InboundError, InboundResult, LifecycleChange, LifecycleError, LifecyclePayload, MutationError,
-    ProtocolError, RefusedOperation, TransitionReason, default_inbound_event,
+    InboundError, LifecycleChange, LifecycleError, LifecyclePayload, MutationError, ProtocolError,
+    RefusedOperation, TransitionReason, default_inbound_event,
 };
 pub use roomkit_core::rules::addresses::{
     AddressForm, Addressing, CountryCode, InvalidCountryCode,
@@ -110,6 +111,7 @@ pub use self::context::keep_context;
 pub use self::error::KitError;
 pub use self::hooks::{HookError, HookFuture, HookHandler, HookReturn};
 pub use self::host::HostChannel;
+pub use self::inbound::{DeliveryHandle, InboundResult};
 pub use self::kit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
     CloseRoomOptions, CommitEventOptions, CreateRoomOptions, DeleteEventOptions,

@@ -146,6 +146,7 @@ async fn a_room_created_for_an_organization_belongs_to_it() {
     let options = ProcessInboundOptions {
         room_id: Some(room_id()),
         organization_id: Some("bank".to_owned()),
+        ..ProcessInboundOptions::default()
     };
     kit.process_inbound(message(&sms, "Bonjour"), options)
         .await
@@ -168,6 +169,7 @@ async fn a_room_of_another_organization_is_not_found_with_nothing_written() {
     let clinic = ProcessInboundOptions {
         room_id: Some(room_id()),
         organization_id: Some("clinic".to_owned()),
+        ..ProcessInboundOptions::default()
     };
     let refused = kit.process_inbound(message(&sms, "Bonjour"), clinic).await;
     assert_eq!(

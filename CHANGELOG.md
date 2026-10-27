@@ -44,6 +44,11 @@ kit, its construction and its calls).
   `check_all_timers` (for `check_timers`) and the five transitions.
   `process_inbound(message, ProcessInboundOptions)` is one call: a
   `room_id` runs the message into that room, as `process_inbound_in` did.
+- `ProcessInboundOptions { defer_delivery: true, .. }` returns at the
+  commit, its blocking decisions made (RFC §10.1 step 18, detached
+  completion): the result's `delivery`, a `DeliveryHandle`, has `done()`
+  and `wait()`, which reports the call as one that waited would have.
+  `InboundResult` is now `roomkit`'s, converted from the core's.
 - Every call takes the organization it acts for in its options,
   `organization_id`; `for_organization` and `OrganizationKit` go. A room of
   another organization reads as not found, as Python reads it: `None` from

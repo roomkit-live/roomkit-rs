@@ -19,7 +19,7 @@ const UNSENT: Fate = Fate {
 
 /// The error type and the reason heading the message of `result`'s turn
 /// error.
-fn failure(result: &roomkit_core::ops::InboundResult) -> Option<(String, String)> {
+fn failure(result: &crate::InboundResult) -> Option<(String, String)> {
     let error = result.error.as_ref()?;
     let reason = error
         .message

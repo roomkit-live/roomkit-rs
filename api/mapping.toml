@@ -323,6 +323,16 @@ params = ["session"]
 reason = "not in 0.x: voice and video"
 
 [[missing]]
+python = "roomkit.DeliveryHandle"
+members = ["cancel"]
+reason = "decision 7: not in 0.x, Rust has no delivery cancellation (RMK-860 is Python's)"
+
+[[missing]]
+python = "roomkit.DeliveryHandle"
+members = ["__init__"]
+reason = "not ported: plumbing; only the framework builds it, from the call's cascade and its consumer task"
+
+[[missing]]
 python = "roomkit.InboundResult"
 members = ["report_cascade"]
 reason = "not ported: plumbing (lot 2)"
@@ -509,21 +519,9 @@ reason = "not in 0.x: retries, reasoning effort and response schemas of OpenAICo
 
 [[pending]]
 lot = 1
-python = "roomkit.InboundResult.__init__"
-params = ["delivery"]
-reason = "decision 7: defer_delivery and the DeliveryHandle InboundResult.delivery carries"
-
-[[pending]]
-lot = 1
 python = "roomkit.RoomKit"
 members = ["close"]
 reason = "decision 15: run_timers / TimerSweeper leave the public API, idle becomes a hidden test seam, shutdown becomes a draining close"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.process_inbound"
-params = ["defer_delivery"]
-reason = "decision 7: defer_delivery and the DeliveryHandle InboundResult.delivery carries"
 
 [[pending]]
 lot = 1

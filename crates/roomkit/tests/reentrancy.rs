@@ -618,6 +618,20 @@ async fn agent_injects() {
 /// delivery result, and its delivery follows in the lane.
 #[tokio::test]
 async fn process_inbound_from_a_channel_into_its_own_room_returns_at_its_commit() {
+    into_its_own_room_from_its_delivery(false).await;
+}
+
+/// RFC §10.1 step 18: deferred, the same call's handle waited for there
+/// returns the result at once, unwaited, as the call that waits returns:
+/// its delivery could only wait for that wait.
+#[tokio::test]
+async fn a_deferred_wait_from_a_delivery_into_its_own_room_returns_unwaited() {
+    into_its_own_room_from_its_delivery(true).await;
+}
+
+/// A channel's delivery of `hello` calls into its own room, deferring the
+/// call's delivery and waiting its handle when `defer`.
+async fn into_its_own_room_from_its_delivery(defer: bool) {
     let (kit, audit) = room().await;
     let seen = Arc::new(Mutex::new(None));
     let (bot_kit, bot_seen) = (kit.clone(), Arc::clone(&seen));
@@ -627,8 +641,14 @@ async fn process_inbound_from_a_channel_into_its_own_room_returns_at_its_commit(
             let (kit, seen) = (bot_kit.clone(), Arc::clone(&bot_seen));
             Box::pin(async move {
                 if text_of(&event.content) == "hello" {
-                    let follow_up = message("follow-up");
-                    let result = kit.process_inbound(follow_up, in_room(room_id())).await?;
+                    let options = ProcessInboundOptions {
+                        defer_delivery: defer,
+                        ..in_room(room_id())
+                    };
+                    let mut result = kit.process_inbound(message("follow-up"), options).await?;
+                    if let Some(delivery) = result.delivery.take() {
+                        result = delivery.wait().await?;
+                    }
                     *seen.lock().unwrap() = Some((
                         result.event.map(|event| event.index),
                         result.delivery_results.len(),

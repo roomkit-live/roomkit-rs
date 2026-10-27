@@ -18,8 +18,8 @@ use roomkit_core::model::{
     EventContent, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{
-    ChannelDeclaration, EffectId, Environment, FrameworkEvent, InboundResult, Next, Operation,
-    Outcome, ProtocolError, Step,
+    ChannelDeclaration, EffectId, Environment, FrameworkEvent, Next, Operation, Outcome,
+    ProtocolError, Step,
 };
 use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
 use tokio::sync::Notify;
@@ -27,6 +27,7 @@ use tokio::sync::Notify;
 use super::{
     AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
+use crate::InboundResult;
 use crate::channel::{Channel, ChannelError};
 use crate::driver;
 use crate::error::KitError;

@@ -12,10 +12,11 @@ use roomkit_core::model::{
     EventContent, EventDirection, EventSource, EventType, InboundMessage, Metadata, RoomContext,
     RoomEvent, RoomId,
 };
-use roomkit_core::ops::{ChannelDeclaration, InboundResult};
+use roomkit_core::ops::ChannelDeclaration;
 use serde_json::Value;
 use tokio::time::Instant;
 
+use crate::InboundResult;
 use crate::stream::{DeliveryStream, ResponseItem};
 use crate::testing::RecordingTransport;
 use crate::turns::observe::{Carried, Fate};

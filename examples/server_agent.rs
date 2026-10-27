@@ -12,11 +12,13 @@
 //!   the agent and the `websocket` channel attached, whole even when the
 //!   client leaves meanwhile.
 //! - Each text frame it sends is a message from `alice` into that room,
-//!   through the inbound pipeline (RFC §10.1). A message the room refuses,
-//!   or whose turn fails or is ended by a stop, gets `{"error": "..."}`
-//!   back, a reason of the server's own. A message or a frame over 64 KiB closes the connection
-//!   with 1009, a frame at its header, and a stop closes them all with
-//!   1001.
+//!   through the inbound pipeline (RFC §10.1), its delivery deferred
+//!   (`defer_delivery`, RFC §10.1 step 18): the call returns at the
+//!   commit, and the connection reads on while the agent answers. A
+//!   message the room refuses, or whose turn fails or is ended by a stop,
+//!   gets `{"error": "..."}` back, a reason of the server's own. A message
+//!   or a frame over 64 KiB closes the connection with 1009, a frame at its
+//!   header, and a stop closes them all with 1001.
 //! - The agent serves a tool, `lookup_order`, which finds an order by its
 //!   number (RFC §6.4, §21): a turn that calls it stores the round's text,
 //!   the call's start and end rows, then the answer, which carries the
@@ -166,6 +168,9 @@ const POSTS_AT_MOST: usize = 400;
 /// The conversation where a stop comes during a turn.
 const GARDEN: &str = "garden";
 
+/// The conversation a client closes during a turn.
+const ORCHARD: &str = "orchard";
+
 /// The conversation a client leaves while its join makes the room.
 const PORCH: &str = "porch";
 
@@ -244,6 +249,7 @@ async fn check() -> Result<ExitCode, Box<dyn Error>> {
     what_a_connection_must_name(&mut checks).await?;
     a_client_leaves_while_it_joins(&mut checks).await?;
     a_stop_during_a_turn(&mut checks).await?;
+    a_close_during_a_turn(&mut checks).await?;
     Ok(checks.finish())
 }
 
@@ -808,6 +814,32 @@ async fn a_stop_during_a_turn(checks: &mut Checks) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
+/// Lee asks while the model never answers, then closes the connection:
+/// the server reads on while the agent answers, its message's delivery
+/// deferred, so the close is answered at once, not once the turn ends.
+async fn a_close_during_a_turn(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    println!("Lee closes the connection while the model has not answered.");
+    let (endpoint, silent) = silent_model().await?;
+    let database = TempDatabase::new("server_agent_orchard");
+    let brief = Patience {
+        grace: Duration::from_millis(200),
+        ..CHECKING
+    };
+    let server = AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, brief).await?;
+    let mut lee = Client::connect(server.address(), ORCHARD, "lee", "Lee").await?;
+    lee.say("Are the apples ripe?").await?;
+    let _asked = tokio::time::timeout(STOP_PATIENCE, silent.accept()).await??;
+    let answered = lee.close_answered(TOLD_PATIENCE).await;
+    // The turn, which never ends, outlives the grace.
+    let _outlived = tokio::time::timeout(STOP_PATIENCE, server.stop()).await;
+    checks.expect(
+        "a client that closes during a turn has its close answered at once: the server \
+         reads on while the agent answers",
+        answered,
+    );
+    Ok(())
+}
+
 /// An endpoint that takes connections and never answers, open while the
 /// listener it returns is held.
 async fn silent_model() -> Result<(OpenAiEndpoint, TcpListener), Box<dyn Error>> {
@@ -1099,6 +1131,22 @@ impl Client {
     /// dropped, with no close handshake.
     fn leave(self) {
         drop(self.socket);
+    }
+
+    /// Closes the connection, and tells whether the server answered the
+    /// close within `patience`.
+    async fn close_answered(mut self, patience: Duration) -> bool {
+        let _closing = self.socket.close(None).await;
+        let answered = async {
+            while let Some(Ok(received)) = self.socket.next().await {
+                if received.is_close() {
+                    break;
+                }
+            }
+        };
+        let answered = tokio::time::timeout(patience, answered).await.is_ok();
+        println!("  {}'s close is answered: {answered}", self.name);
+        answered
     }
 
     /// Closes the connection, and waits for the server to close its side.

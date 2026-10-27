@@ -34,7 +34,7 @@ use std::task::{Context, Poll};
 use roomkit_core::model::RoomId;
 use roomkit_core::ops::{Decided, Inbound, InboundError, InboundResult};
 use tokio::sync::oneshot;
-use tokio::task::JoinError;
+use tokio::task::{JoinError, JoinHandle};
 
 use super::Leases;
 use crate::context::ExecutionContext;
@@ -46,14 +46,29 @@ use crate::store::ConversationStore;
 /// kit's call failed.
 pub(crate) type InboundOutput = Result<Result<InboundResult, InboundError>, KitError>;
 
+/// What an inbound call's run gave its caller: its output, and, for a call
+/// answered at its decision because it deferred its delivery, the run going
+/// on, which the call's [`DeliveryHandle`](crate::DeliveryHandle) waits for.
+#[derive(Debug)]
+pub(crate) struct Ran {
+    /// The call's output: at its end, or at its decision.
+    pub(crate) output: InboundOutput,
+    /// The run of a call deferred at its decision; `None` once it ended.
+    pub(crate) delivery: Option<JoinHandle<InboundOutput>>,
+}
+
 /// The caller of an inbound call's run, as the run sees it: where the
 /// call's decision goes, whether the call is decided, and whether its
 /// caller still waits (decision 1 of step 2b).
 #[derive(Debug)]
 pub(super) struct Caller {
     /// Where the call's answer goes at its decision, when the caller's
-    /// context detaches from the call's room; `None` once it went.
+    /// context detaches from the call's room or the call defers its
+    /// delivery; `None` once it went.
     answer: Option<oneshot::Sender<InboundOutput>>,
+    /// Whether the call returns at its decision whatever its context: its
+    /// delivery deferred (RFC §10.1 step 18, `defer_delivery`).
+    defer: bool,
     /// Whether the call is decided (`Step::decided`).
     decided: bool,
     /// Whether the run saw that its caller stopped waiting.
@@ -76,10 +91,11 @@ enum Departure {
 
 impl Caller {
     /// The caller answered on `answer` at the decision, when its context
-    /// detaches from the call's room.
-    fn new(answer: oneshot::Sender<InboundOutput>) -> Self {
+    /// detaches from the call's room or `defer` is set.
+    fn new(answer: oneshot::Sender<InboundOutput>, defer: bool) -> Self {
         Self {
             answer: Some(answer),
+            defer,
             decided: false,
             gone: false,
             departure: Departure::Unseen,
@@ -97,10 +113,11 @@ impl Caller {
         refused: Option<&RoomId>,
     ) {
         self.decided = true;
-        let detaches = decided
-            .room_id
-            .as_ref()
-            .is_some_and(|room_id| context.detaches(room_id));
+        let detaches = self.defer
+            || decided
+                .room_id
+                .as_ref()
+                .is_some_and(|room_id| context.detaches(room_id));
         if !detaches {
             return;
         }
@@ -205,7 +222,8 @@ impl Caller {
 /// there, and a message that creates a room; one into another existing room
 /// has a budget of its own (gap G-070). A caller that
 /// stops waiting detaches the run, which expires its call when it is not
-/// decided yet (gap G-076).
+/// decided yet (gap G-076). A call that `defer`s its delivery is answered at
+/// its decision, its run going on, handed back in [`Ran::delivery`].
 ///
 /// # Errors
 ///
@@ -219,8 +237,15 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     call: &'static str,
     room_id: Option<&RoomId>,
     inbound: Inbound,
-) -> InboundOutput {
-    inner.open()?;
+    defer: bool,
+) -> Ran {
+    let ran = |output| Ran {
+        output,
+        delivery: None,
+    };
+    if let Err(error) = inner.open() {
+        return ran(Err(error));
+    }
     let context = ExecutionContext::current();
     let inbound = match room_id.and_then(|room_id| context.budget(room_id)) {
         // Into the room a running delivery delivers in.
@@ -235,7 +260,7 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     let (answer, decided) = oneshot::channel();
     let kit = Arc::clone(inner);
     let run = async move {
-        let mut caller = Caller::new(answer);
+        let mut caller = Caller::new(answer, defer);
         let environment = kit.environment();
         let output = super::drive(
             &kit,
@@ -252,19 +277,22 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     // The kit tracks the run. Dropped, the handle detaches it: the run
     // itself stops when its caller is gone before the call's decision.
     let Some(mut task) = inner.tasks.spawn(context.scope(run)) else {
-        return Err(KitError::ShutDown);
+        return ran(Err(KitError::ShutDown));
     };
     tokio::select! {
         biased;
-        joined = &mut task => ended(joined, inner.tasks.is_closing()),
-        Ok(answer) = decided => answer,
+        joined = &mut task => ran(ended(joined, inner.tasks.is_closing())),
+        Ok(answer) = decided => Ran {
+            output: answer,
+            delivery: defer.then_some(task),
+        },
     }
 }
 
 /// The output of a run's task that ended, cancelled by the kit's shutdown
 /// when `shut_down`, by the runtime otherwise. A run that ended once the
 /// shutdown began, its turns cut by it (RFC §10.6.8), was ended by it too.
-fn ended(joined: Result<InboundOutput, JoinError>, shut_down: bool) -> InboundOutput {
+pub(crate) fn ended(joined: Result<InboundOutput, JoinError>, shut_down: bool) -> InboundOutput {
     match joined {
         Ok(_ended) if shut_down => Err(KitError::ShutDown),
         Ok(output) => output,

@@ -50,7 +50,7 @@ use tokio::time::Instant;
 
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::inbound::Caller;
-pub(crate) use self::inbound::run_inbound;
+pub(crate) use self::inbound::{InboundOutput, ended, run_inbound};
 use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::KitError;

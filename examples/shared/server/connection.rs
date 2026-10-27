@@ -9,10 +9,10 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_
 use axum::extract::{self, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::stream::{FuturesUnordered, SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use roomkit::model::{EventContent, InboundMessage, ParticipantId, RoomId};
-use roomkit::{KitError, ProcessInboundOptions};
+use roomkit::{DeliveryHandle, InboundResult, KitError, ProcessInboundOptions};
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite;
@@ -29,6 +29,10 @@ pub const TURN_FAILED: &str = "the agent could not answer";
 pub const REFUSED: &str = "the room refused the message";
 /// See [`TURN_FAILED`].
 pub const STOPPED: &str = "the server stopped before the answer";
+
+/// What a message came to: refused or decided at once, or once its
+/// delivery ran.
+type Told = Result<InboundResult, KitError>;
 
 /// The longest conversation id, user id and name a connection may give, in
 /// characters, and what the server answers a connection that names one
@@ -172,7 +176,9 @@ impl App {
 
     /// Reads `user`'s messages on `incoming` into `room_id`, until the
     /// client closes the connection, breaks it or sends a message over the
-    /// limit, or the server stops.
+    /// limit, or the server stops. Each message's delivery runs on while the
+    /// next is read; a stop waits for them, to tell each client whose answer
+    /// it cut.
     async fn read(
         &self,
         mut incoming: SplitStream<WebSocket>,
@@ -181,81 +187,108 @@ impl App {
         user: &ParticipantId,
     ) -> Ending {
         let mut stopping = self.stopping.clone();
-        loop {
+        let mut answering = FuturesUnordered::new();
+        let ending = loop {
             let received = tokio::select! {
                 received = incoming.next() => received,
-                _ = stopping.wait_for(|stop| *stop) => return Ending::Stopping,
+                Some(outcome) = answering.next() => {
+                    tell(registration, user, outcome);
+                    continue;
+                }
+                _ = stopping.wait_for(|stop| *stop) => break Ending::Stopping,
             };
             match received {
                 Some(Ok(Message::Text(text))) => {
-                    self.say(registration, room_id, user, text.as_str()).await;
+                    let said = self.say(registration, room_id, user, text.as_str()).await;
+                    answering.extend(said.map(DeliveryHandle::wait));
                 }
                 Some(Ok(Message::Binary(_) | Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Close(_))) => return Ending::Closed,
-                Some(Err(error)) => return Ending::of(error),
-                None => return Ending::Broken,
+                Some(Ok(Message::Close(_))) => break Ending::Closed,
+                Some(Err(error)) => break Ending::of(error),
+                None => break Ending::Broken,
+            }
+        };
+        // A client gone is told nothing; its deliveries run on, unwatched.
+        if matches!(ending, Ending::Stopping) {
+            while let Some(outcome) = answering.next().await {
+                tell(registration, user, outcome);
             }
         }
+        ending
     }
 
-    /// `user`'s message `text`, into the room `room_id`. A message the room
-    /// refused, or whose turn failed, gets an error frame on the
-    /// connection, `{"error": "..."}`, its reason one of the server's own.
+    /// `user`'s message `text`, into the room `room_id`, its delivery
+    /// deferred: the call returns at the commit, so that the connection
+    /// reads on while the agent answers. A message the room refused is told
+    /// at once; the handle returned waits for the rest.
     async fn say(
         &self,
         registration: &Registration,
         room_id: &RoomId,
         user: &ParticipantId,
         text: &str,
-    ) {
+    ) -> Option<DeliveryHandle> {
         let message = InboundMessage::new(
             self.websocket.id().clone(),
             user.as_str(),
             EventContent::text(text),
         );
-        let told = match self
-            .kit
-            .process_inbound(
-                message,
-                ProcessInboundOptions {
-                    room_id: Some(room_id.clone()),
-                    ..Default::default()
-                },
-            )
-            .await
-        {
-            Ok(result) if result.blocked => {
-                println!(
-                    "  {:?}'s message was refused: {:?}",
-                    user.as_str(),
-                    result.reason
-                );
-                REFUSED
-            }
-            Ok(result) => {
-                let Some(error) = result.error else {
-                    return;
-                };
-                println!(
-                    "  the turn on {:?}'s message failed: {:?}",
-                    user.as_str(),
-                    error.message
-                );
-                TURN_FAILED
-            }
-            // Stored, its turn ended by the kit's shutdown past the grace.
-            Err(KitError::ShutDown) => {
-                println!("  the server stopped before {:?}'s answer", user.as_str());
-                STOPPED
-            }
-            Err(error) => {
-                println!("  {:?}'s message was refused: {error}", user.as_str());
-                REFUSED
-            }
+        let options = ProcessInboundOptions {
+            room_id: Some(room_id.clone()),
+            defer_delivery: true,
+            ..ProcessInboundOptions::default()
         };
-        // A connection that cannot take it now is not waited for.
-        let _told = registration.send(json!({ "error": told }).to_string());
+        match self.kit.process_inbound(message, options).await {
+            Ok(InboundResult {
+                blocked: false,
+                delivery: Some(delivery),
+                ..
+            }) => Some(delivery),
+            outcome => {
+                tell(registration, user, outcome);
+                None
+            }
+        }
     }
+}
+
+/// Tells `user`, on `registration`, what became of their message when the
+/// room refused it, its turn failed, or the server stopped before the
+/// answer: an error frame, `{"error": "..."}`, its reason one of the
+/// server's own.
+fn tell(registration: &Registration, user: &ParticipantId, outcome: Told) {
+    let told = match outcome {
+        Ok(result) if result.blocked => {
+            println!(
+                "  {:?}'s message was refused: {:?}",
+                user.as_str(),
+                result.reason
+            );
+            REFUSED
+        }
+        Ok(result) => {
+            let Some(error) = result.error else {
+                return;
+            };
+            println!(
+                "  the turn on {:?}'s message failed: {:?}",
+                user.as_str(),
+                error.message
+            );
+            TURN_FAILED
+        }
+        // Stored, its turn ended by the kit's shutdown past the grace.
+        Err(KitError::ShutDown) => {
+            println!("  the server stopped before {:?}'s answer", user.as_str());
+            STOPPED
+        }
+        Err(error) => {
+            println!("  {:?}'s message was refused: {error}", user.as_str());
+            REFUSED
+        }
+    };
+    // A connection that cannot take it now is not waited for.
+    let _told = registration.send(json!({ "error": told }).to_string());
 }
 
 /// Sends each frame of `frames` on `outgoing` until the queue ends, then

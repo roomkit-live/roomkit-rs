@@ -5,11 +5,12 @@
 
 use roomkit_core::model::{ChannelId, DirectEvent, EventContent, RoomEvent, RoomId};
 use roomkit_core::ops::{CommitRecord, Entry, Inbound, InboundResult, InboundTarget};
+use tokio::task::JoinHandle;
 
 use super::RoomKit;
 use super::options::{CommitEventOptions, SendEventOptions};
 use crate::context::{self, Adopting};
-use crate::driver;
+use crate::driver::{self, InboundOutput};
 use crate::error::KitError;
 use crate::store::ConversationStore;
 
@@ -93,8 +94,8 @@ impl<S: ConversationStore> RoomKit<S> {
             organization_id,
             event: Box::new(event),
         };
-        let result = self.enter(entry, SEND_EVENT).await?;
-        result.event.ok_or(KitError::NoEvent)
+        let entered = self.enter(entry, SEND_EVENT, false).await?;
+        entered.result.event.ok_or(KitError::NoEvent)
     }
 
     /// Commits `event` to the room `room_id` outside the pipeline (RFC
@@ -146,7 +147,8 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         mut entry: Entry,
         call: &'static str,
-    ) -> Result<InboundResult, KitError> {
+        defer: bool,
+    ) -> Result<Entered, KitError> {
         let chain_depth = match &mut entry {
             Entry::Message { message, .. } => &mut message.chain_depth,
             Entry::Direct { event, .. } => &mut event.chain_depth,
@@ -157,7 +159,7 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner.open()?;
         let room_id = entry.room_id().clone();
         let entry = match context::adopt(entry).await {
-            Adopting::Settled(result) => return Ok((*result)?),
+            Adopting::Settled(result) => return Ok(Entered::settled((*result)?)),
             // A run the kit's shutdown ended abandons the calls it adopted:
             // their callers are told the kit is shut down.
             Adopting::Abandoned => {
@@ -167,7 +169,17 @@ impl<S: ConversationStore> RoomKit<S> {
             Adopting::Apart(entry) => entry,
         };
         let room_id = entry.room_id().clone();
-        let operation = match entry {
+        let operation = self.operation(entry)?;
+        let ran = driver::run_inbound(&self.inner, call, Some(&room_id), operation, defer).await;
+        Ok(Entered {
+            result: ran.output??,
+            run: ran.delivery,
+        })
+    }
+
+    /// The operation that runs `entry`, a call run apart.
+    fn operation(&self, entry: Entry) -> Result<Inbound, KitError> {
+        Ok(match entry {
             Entry::Message {
                 room_id,
                 organization_id,
@@ -191,8 +203,22 @@ impl<S: ConversationStore> RoomKit<S> {
             // A stream's row goes to the run that reads the stream, never
             // through a kit's call: one here is a defect of this crate.
             Entry::Row { .. } => return Err(KitError::Stalled),
-        };
-        Ok(driver::run_inbound(&self.inner, call, Some(&room_id), operation).await??)
+        })
+    }
+}
+
+/// What a call into a named room comes to: its result, and the run of a
+/// call deferred at its decision, going on.
+#[derive(Debug)]
+pub(super) struct Entered {
+    pub(super) result: InboundResult,
+    pub(super) run: Option<JoinHandle<InboundOutput>>,
+}
+
+impl Entered {
+    /// The result of a call that ended, adopted or run to its end.
+    fn settled(result: InboundResult) -> Self {
+        Self { result, run: None }
     }
 }
 

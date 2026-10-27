@@ -295,6 +295,7 @@ async fn event_calls(
     let inbound = ProcessInboundOptions {
         room_id: Some(room.clone()),
         organization_id: Some(clinic()),
+        ..ProcessInboundOptions::default()
     };
     let update = UpdateEventOptions {
         content: Some(EventContent::text("Changed")),
@@ -428,6 +429,7 @@ async fn a_replay_is_never_handed_to_another_organization() {
     let options = ProcessInboundOptions {
         room_id: Some(room_id()),
         organization_id: Some("bank".to_owned()),
+        ..ProcessInboundOptions::default()
     };
     kit.process_inbound(hi(), options).await.unwrap();
     assert_eq!(

@@ -110,6 +110,7 @@ pub(crate) async fn call(
             let options = ProcessInboundOptions {
                 room_id: optional(spec, "room_id")?,
                 organization_id: organization_id(spec),
+                ..ProcessInboundOptions::default()
             };
             let outcome = run.kit().process_inbound(message, options).await;
             let id = outcome
