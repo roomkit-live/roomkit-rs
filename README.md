@@ -4,26 +4,25 @@ A Rust implementation of [RoomKit](https://github.com/roomkit-live/roomkit), the
 multi-channel conversation framework: rooms, channels, hooks and permissions
 for conversations between humans, AI agents and programs.
 
-> **Status: pre-alpha.** Step 1 is done: the text path of the RFC's inbound
-> and broadcast pipelines, with hooks, permissions, transcoding and the
-> chain-depth limit, on a tokio runtime and an in-memory store. Step 2 is
-> done: the rest of Level 0, from the room lifecycle and its timers,
-> routing, edits and deletes and instructions to off-lock checks, the
-> processing timeout, direct injection and the reentrant lock. Step 4,
-> under way, brings a first usable version: an AI agent on an
-> OpenAI-compatible endpoint (`roomkit-openai`), a SQLite store
-> (`roomkit-sqlite`), and a server example that puts them together, with
-> tools and streamed responses. The turn backend, skills and MCP come next,
-> then the tag `v0.1.0` ([the plan](docs/steps/step-04.md)). The API will
-> change.
+> **Status: 0.1.0, a first usable version.** roomkit-rs holds Level 0 of
+> the RFC with nothing left out: the inbound and broadcast pipelines with
+> hooks, permissions, transcoding and the chain-depth limit, the room
+> lifecycle and its timers, routing, edits and deletes, instructions,
+> direct injection, the reentrant lock and the turn backend, on a tokio
+> runtime. Beside it, an AI agent with tools, streamed answers, skills and
+> MCP servers over stdio (`roomkit-ai`), on an OpenAI-compatible endpoint
+> (`roomkit-openai`), and a SQLite store on the Python implementation's
+> schema (`roomkit-sqlite`). The API will change before 1.0
+> ([the roadmap](docs/roadmap.md)).
 
 ## Why a Rust implementation
 
 The Python implementation is the reference. This one exists for two reasons:
 
 - **Embedding.** Its core performs no I/O and depends on no async runtime, so
-  one core can run inside a Rust service, a desktop application, Python, and
-  later mobile and WebAssembly hosts.
+  one core can run inside a Rust service or a desktop application, and later
+  mobile and WebAssembly hosts. Behind the Python API it reaches CPU parity
+  at best, and that step was stopped ([step 3](docs/steps/step-03.md)).
 - **Testing the specification.** It is written from the
   [RoomKit RFC](https://github.com/roomkit-live/roomkit-specs), not ported from
   the Python code. Every place where the RFC does not say enough is recorded in
@@ -48,6 +47,34 @@ websocat 'ws://127.0.0.1:8080/conversations/bakery?user=alice&name=Alice'
 Its WebSocket channel is the example's own, a `Channel` in
 [`examples/shared/websocket.rs`](examples/shared/websocket.rs) for a
 service to copy and adapt; axum is a dependency of the examples only.
+
+### In a service
+
+Nothing is published to crates.io: a service takes the crates from this
+repository at its tag, as git dependencies, with Rust 1.92 or later.
+
+```toml
+[dependencies]
+roomkit = { git = "https://github.com/roomkit-live/roomkit-rs", tag = "v0.1.0" }
+roomkit-ai = { git = "https://github.com/roomkit-live/roomkit-rs", tag = "v0.1.0" }
+roomkit-openai = { git = "https://github.com/roomkit-live/roomkit-rs", tag = "v0.1.0" }
+roomkit-sqlite = { git = "https://github.com/roomkit-live/roomkit-rs", tag = "v0.1.0" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+`roomkit-mcp` comes the same way, for an MCP server's tools. The
+repository is private, so Cargo fetches it with your GitHub access: over
+HTTPS through git's credential helper, or over SSH with a key your
+`ssh-agent` holds (`git = "ssh://git@github.com/roomkit-live/roomkit-rs.git"`).
+When Cargo's own git client cannot authenticate,
+`CARGO_NET_GIT_FETCH_WITH_CLI=true`, or `net.git-fetch-with-cli = true` in
+`.cargo/config.toml`, has it run the `git` command with your configuration.
+
+`server_agent` shows what the service writes: the store opened with
+`SqliteStore::open(path)` and handed to `RoomKit::with_store`, an
+`OpenAiAgent` registered on the kit with its `OpenAiConfig`, and a
+transport channel of its own whose messages it runs into their rooms. The
+documentation of each crate shows its own setup, compiled as a doctest.
 
 ### A first room
 
@@ -148,6 +175,7 @@ The pipeline:
 - `response_visibility`: who sees what, by the event's visibility and its binding's, and where a message's answers go.
 - `send_event`: direct injection, from the host and from an agent's turn.
 - `host_post`: the host writes to a room's people in its own name, from its host channel, attached on first use.
+- `names_that_read_alike`: senders whose names read alike, in case or in Unicode's confusables, each message committed with its author's name, rank and source.
 
 Routing and identities:
 
@@ -158,6 +186,10 @@ Routing and identities:
 Agents:
 
 - `openai_agent`: an AI agent answers through an OpenAI-compatible endpoint, reading the conversation labelled by speaker; a local fake of the OpenAI wire stands in unless `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODEL` are set.
+- `agent_tools`: five tool calls in one round, one served, one the tool policy refuses, one an approval hook blocks, one that fails, one cut at its bound.
+- `streamed_answer`: an answer read as it is written by a streaming channel beside a buffered one, a tool call between two segments, a reader that stops.
+- `agent_skills`: skills from `examples/skills/`, a strict discovery, an activation, a reference read, the paths that are refused, and the activation read again after a restart.
+- `mcp_tools`: an MCP server's tools over stdio, a served call, an `isError` call, a tool the policy denies, the server's instructions, and connections that fail and leave no process.
 
 A server:
 
@@ -179,6 +211,11 @@ A server:
 - [RMK-949](docs/steps/rmk-949.md): the code aligned with the RFC commits
   after RMK-941, the host's own voice and an ASYNC hook's budget among
   them, done.
+- [Step 3](docs/steps/step-03.md): the Rust core behind the Python API,
+  stopped after milestone 2.
+- [Step 4](docs/steps/step-04.md): a first usable version, an agent on a
+  server, persisted, done: 0.1.0.
+- [Changelog](CHANGELOG.md): what 0.1.0 holds.
 - [RFC gaps](docs/rfc-gaps.md): what the specification leaves open, and the
   decisions taken here.
 
