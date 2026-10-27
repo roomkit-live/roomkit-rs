@@ -11,4 +11,17 @@ pub enum AiError {
         /// The name.
         name: String,
     },
+    /// A label the host gives an MCP server is no identifier: letters,
+    /// digits, `_`, `.` and `-`, 64 at most (RFC §21.2).
+    #[error("the MCP server label {label:?} is not an identifier")]
+    ServerLabel {
+        /// The label.
+        label: String,
+    },
+    /// The host names an MCP server's instructions twice under one label.
+    #[error("the MCP server {label:?} is given twice")]
+    DuplicateServer {
+        /// The label.
+        label: String,
+    },
 }

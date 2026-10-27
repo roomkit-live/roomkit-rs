@@ -99,6 +99,31 @@ async fn the_manifest_follows_the_system_prompt_and_both_tools_are_declared() {
     );
 }
 
+/// RFC §21.2: the instructions of an MCP server sit after the agent's own
+/// prompt and before the skills' preamble.
+#[tokio::test]
+async fn a_server_s_instructions_sit_before_the_skills_preamble() {
+    let tree = TempDir::new();
+    let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
+    let room = Room::new(model.clone(), skills(&tree), |agent| {
+        agent
+            .with_server_instructions("orders", Some("Call lookup_order first."))
+            .unwrap()
+    })
+    .await;
+    room.says("Hello").await;
+    let prompt = model.requests().remove(0).system_prompt.unwrap();
+    let positions = [
+        prompt.find("Base."),
+        prompt.find("## MCP server: orders\n<server_instructions>\nCall lookup_order first."),
+        prompt.find(PREAMBLE),
+    ];
+    assert!(
+        positions.iter().all(Option::is_some) && positions.is_sorted(),
+        "{prompt}"
+    );
+}
+
 /// RFC §24.4: an activation answers the skill's body; once served, the
 /// skill is active in the room, and a repeat, in the same turn or the
 /// next, answers that its instructions are in force, which ride the next

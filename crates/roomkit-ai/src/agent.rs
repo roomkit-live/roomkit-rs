@@ -18,6 +18,7 @@ use serde_json::Value;
 use crate::error::AiError;
 use crate::provider::AiProvider;
 use crate::rows;
+use crate::server_instructions::ServerInstructions;
 use crate::skills::SkillRegistry;
 use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::tool_loop::{Bounds, Loop};
@@ -70,9 +71,15 @@ const STANDALONE: &str = "standalone";
 /// its calls. Called outside a kit, the turn returns the same rows at its
 /// end, buffered.
 ///
-/// With skills ([`with_skills`](Self::with_skills)), each turn's system
-/// prompt lists them, and carries the instructions of those active in the
-/// room (RFC §24.4).
+/// With the instructions of MCP servers
+/// ([`with_server_instructions`](Self::with_server_instructions)), each
+/// turn's system prompt carries them after the agent's own, each in a block
+/// it cannot close (RFC §21.2, §6.4). With skills
+/// ([`with_skills`](Self::with_skills)), it then lists them, and carries the
+/// instructions of those active in the room (RFC §24.4).
+///
+/// The kit's shutdown closes the agent ([`Channel::close`]), which closes
+/// its toolsets: an MCP server's process stops.
 ///
 /// It answers a message or an instruction, never its own events, and takes
 /// no inbound message. Cloning it shares its provider, its tools and its
@@ -84,6 +91,7 @@ pub struct AiAgent<P> {
     policy: ToolPolicy,
     bounds: Bounds,
     system_prompt: Option<String>,
+    server_instructions: ServerInstructions,
     history: usize,
     skills: Option<Arc<SkillTools>>,
 }
@@ -97,6 +105,7 @@ impl<P> Clone for AiAgent<P> {
             policy: self.policy.clone(),
             bounds: self.bounds.clone(),
             system_prompt: self.system_prompt.clone(),
+            server_instructions: self.server_instructions.clone(),
             history: self.history,
             skills: self.skills.clone(),
         }
@@ -125,6 +134,7 @@ impl<P: AiProvider> AiAgent<P> {
                 tool_timeout: Some(DEFAULT_TOOL_TIMEOUT),
             },
             system_prompt: None,
+            server_instructions: ServerInstructions::default(),
             history: DEFAULT_HISTORY,
             skills: None,
         }
@@ -142,11 +152,54 @@ impl<P: AiProvider> AiAgent<P> {
 
     /// The same agent, opening every turn with `prompt`. It stays the same
     /// from turn to turn, so a provider that caches a request's prefix
-    /// keeps it (RFC §6.4); the skills follow it.
+    /// keeps it (RFC §6.4); the MCP servers' instructions and the skills
+    /// follow it.
     #[must_use]
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = Some(prompt.into()).filter(|prompt| !prompt.is_empty());
         self
+    }
+
+    /// The same agent, its system prompt carrying, after the agent's own
+    /// and before the skills, the instructions `instructions` an MCP server
+    /// published, under `label`, the host's name for that server (RFC
+    /// §21.2): letters, digits, `_`, `.` and `-`, 64 at most, never the
+    /// name the server gives itself. They are text from outside (RFC
+    /// §6.4): trimmed, cut at 8192 characters with a warning naming the
+    /// server, and set apart in a `<server_instructions>` block they
+    /// cannot close, under a line naming the label; the blocks sit under a
+    /// heading saying that they are their servers' content, which does not
+    /// outrank the system's or the user's instructions and grants no
+    /// permission. The same on every turn, they stay in the prefix a
+    /// provider caches.
+    ///
+    /// `None` or a blank text adds nothing, so a server that published no
+    /// instructions is named the same way:
+    ///
+    /// ```
+    /// use roomkit::model::ChannelId;
+    /// use roomkit_ai::AiAgent;
+    /// use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+    ///
+    /// let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
+    /// let agent = AiAgent::new(ChannelId::new("assistant")?, model)
+    ///     .with_server_instructions("orders", Some("Call lookup_order first."))?
+    ///     .with_server_instructions("calendar", None)?;
+    /// # let _ = agent;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AiError::ServerLabel`] when `label` is no identifier, and
+    /// [`AiError::DuplicateServer`] when it was given already.
+    pub fn with_server_instructions(
+        mut self,
+        label: &str,
+        instructions: Option<&str>,
+    ) -> Result<Self, AiError> {
+        self.server_instructions.add(label, instructions)?;
+        Ok(self)
     }
 
     /// The same agent, sending at most the room's latest `messages`
@@ -245,10 +298,14 @@ impl<P: AiProvider> AiAgent<P> {
     }
 
     /// The system prompt of a turn in `context`'s room: the agent's own,
-    /// then what its skills add (RFC §6.4, §24.4).
+    /// then the MCP servers' instructions (RFC §21.2), then what its skills
+    /// add (RFC §6.4, §24.4).
     fn turn_system_prompt(&self, context: &RoomContext, stands_alone: bool) -> Option<String> {
+        let prompt = self
+            .server_instructions
+            .after(self.system_prompt.as_deref());
         let Some(skills) = &self.skills else {
-            return self.system_prompt.clone();
+            return prompt;
         };
         let turn = SkillTurn {
             room: &context.room.id,
@@ -256,7 +313,7 @@ impl<P: AiProvider> AiAgent<P> {
             history: &context.recent_events,
             stands_alone,
         };
-        Some(skills.system_prompt(self.system_prompt.as_deref(), turn))
+        Some(skills.system_prompt(prompt.as_deref(), turn))
     }
 
     /// The source of the agent's rows.
@@ -315,6 +372,13 @@ impl<P: AiProvider> Channel for AiAgent<P> {
             Some(turn) => Ok(turn.respond_with_stream(rows::response(items))),
             None => Ok(rows::collect(self.source(), &event, items).await?),
         }
+    }
+
+    /// Closes the agent's toolsets, one after the other, in the order it
+    /// took them ([`Toolset::close`]): an MCP server's process stops. A
+    /// clone of the agent shares them.
+    async fn close(&self) {
+        self.toolbox.close().await;
     }
 }
 

@@ -32,8 +32,10 @@ pub(crate) const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 /// Each turn sends the configuration's system prompt, then the conversation
 /// the room hands the agent ([`roomkit::transcript::conversation`]), and
 /// declares the tools the agent serves ([`with_tools`](Self::with_tools))
-/// that its policy permits; with skills ([`with_skills`](Self::with_skills)),
-/// the system prompt lists them after the configuration's. A completion's calls run, their results go back
+/// that its policy permits; the instructions of MCP servers
+/// ([`with_server_instructions`](Self::with_server_instructions)), then the
+/// skills ([`with_skills`](Self::with_skills)), follow the configuration's
+/// prompt. A completion's calls run, their results go back
 /// in the next completion, and the turn answers with what the model said,
 /// each round's text a message of its own, each call its two rows (see
 /// [`AiAgent`]). It answers a message or an instruction, never its own
@@ -100,6 +102,25 @@ impl OpenAiAgent {
         })
     }
 
+    /// The same agent, its system prompt carrying the instructions
+    /// `instructions` an MCP server published, under `label`, the host's
+    /// name for that server (RFC §21.2), after the configuration's prompt
+    /// and before the skills (see [`AiAgent::with_server_instructions`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AiError::ServerLabel`] when `label` is no identifier, and
+    /// [`AiError::DuplicateServer`] when it was given already.
+    pub fn with_server_instructions(
+        self,
+        label: &str,
+        instructions: Option<&str>,
+    ) -> Result<Self, AiError> {
+        Ok(Self {
+            agent: self.agent.with_server_instructions(label, instructions)?,
+        })
+    }
+
     /// The same agent, calling only the tools `policy` permits (RFC
     /// §21.1).
     #[must_use]
@@ -151,6 +172,12 @@ impl Channel for OpenAiAgent {
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         self.agent.on_event(event, binding, context).await
+    }
+
+    /// Closes the agent's toolsets, as [`AiAgent`] does: an MCP server's
+    /// process stops.
+    async fn close(&self) {
+        self.agent.close().await;
     }
 }
 

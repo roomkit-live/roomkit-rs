@@ -118,6 +118,14 @@ impl Toolbox {
         Some((tool, Arc::clone(toolset)))
     }
 
+    /// Closes each toolset, one after the other, in the order the agent
+    /// took them.
+    pub(crate) async fn close(&self) {
+        for toolset in &self.toolsets {
+            toolset.close().await;
+        }
+    }
+
     /// Tells the toolset serving `call`'s tool how the call ended, once its
     /// hooks ran.
     pub(crate) fn settled(&self, call: &ToolCall, outcome: ToolCallOutcome, context: &ToolContext) {

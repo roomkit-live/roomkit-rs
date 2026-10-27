@@ -240,6 +240,16 @@ pub trait Toolset: Send + Sync + 'static {
         call: ToolCall,
         context: ToolContext,
     ) -> impl Future<Output = Result<ToolOutput, ToolError>> + Send;
+
+    /// Releases what the toolset holds, an MCP server's process say: the
+    /// agent serving it calls it when its kit shuts down
+    /// ([`Channel::close`](roomkit::Channel::close)), and a clone of the
+    /// agent shares its toolsets. It must not wait without bound.
+    ///
+    /// The default releases nothing.
+    fn close(&self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 }
 
 /// A boxed, sendable future.
@@ -258,6 +268,11 @@ pub(crate) trait DynToolset: Send + Sync {
     /// then, once nothing can withhold the result any more (RFC §24.4: an
     /// activation counts once its call is served).
     fn settled(&self, _call: &ToolCall, _outcome: ToolCallOutcome, _context: &ToolContext) {}
+
+    /// Releases what the toolset holds ([`Toolset::close`]).
+    fn close(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
 }
 
 impl<T: Toolset> DynToolset for T {
@@ -267,6 +282,10 @@ impl<T: Toolset> DynToolset for T {
         context: ToolContext,
     ) -> BoxFuture<'_, Result<ToolOutput, ToolError>> {
         Box::pin(Toolset::call(self, call, context))
+    }
+
+    fn close(&self) -> BoxFuture<'_, ()> {
+        Box::pin(Toolset::close(self))
     }
 }
 

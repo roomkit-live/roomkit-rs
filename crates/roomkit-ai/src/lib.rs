@@ -14,6 +14,10 @@
 //! - [`SkillRegistry`]: the skills of the host's directories (RFC §24),
 //!   which the agent lists in its system prompt and the model activates
 //!   ([`AiAgent::with_skills`]).
+//! - The instructions an MCP server publishes, which the system prompt
+//!   carries under the host's label for the server, in a block they cannot
+//!   close ([`AiAgent::with_server_instructions`], RFC §21.2); the server's
+//!   tools are a [`Toolset`] (`roomkit-mcp`).
 //!
 //! A call runs through its gate (RFC §21.1), then the kit's tool hooks
 //! (RFC §9.3), which the agent reaches through its turn
@@ -49,6 +53,7 @@ mod agent;
 mod error;
 mod provider;
 mod rows;
+mod server_instructions;
 mod skills;
 mod stream;
 pub mod testing;
