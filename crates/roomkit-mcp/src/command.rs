@@ -50,7 +50,9 @@ const INHERITED: &[&str] = &[
 /// `USER` of the host's environment (on Windows, the variables a program
 /// needs to run), and the variables given with [`env`](Self::env); its
 /// standard error is read as it writes, each line logged at debug level
-/// under the target `roomkit::mcp`, so that it never fills a pipe.
+/// under the target `roomkit::mcp`, so that it never fills a pipe, and its
+/// last 20 lines, 4 KiB at most, end the error of a connection that fails
+/// its handshake or its listing.
 ///
 /// On Unix the server leads a process group of its own, which is stopped
 /// whole, so that what it starts (the real server, behind `npx` or `uvx`)
@@ -148,11 +150,18 @@ impl McpCommand {
         self
     }
 
-    /// Starts the server and connects to it ([`McpServer::connect`]).
+    /// Starts the server, runs the MCP handshake and lists its tools, within
+    /// the connect bound ([`connect_timeout`](Self::connect_timeout), 60
+    /// seconds by default).
     ///
     /// # Errors
     ///
-    /// As [`McpServer::connect`].
+    /// Returns [`McpError::Command`] or [`McpError::Spawn`] when no process
+    /// could be started, and [`McpError::Handshake`], [`McpError::Listing`]
+    /// or [`McpError::Timeout`] when the connection failed part-way: the
+    /// process is then stopped and waited for before the error is returned
+    /// (RFC §21.2). A handshake's or a listing's error ends with the last
+    /// lines the server wrote on its standard error, when it wrote any.
     pub async fn connect(self) -> Result<McpServer, McpError> {
         McpServer::connect(self).await
     }

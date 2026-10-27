@@ -261,6 +261,48 @@ async fn a_server_that_exits_at_once_fails_the_handshake_and_is_waited_for() {
     );
 }
 
+/// What a server wrote on its standard error before it failed its
+/// handshake ends the error, its last 20 lines, their control characters
+/// replaced: why it failed (a missing package, a traceback).
+#[tokio::test]
+async fn a_failed_handshake_s_error_ends_with_the_server_s_last_stderr_lines() {
+    let refused = fake("stderr-exit").connect().await.err();
+    let Some(McpError::Handshake { message, .. }) = &refused else {
+        panic!("{refused:?}");
+    };
+    let (_, stderr) = message
+        .split_once("; its standard error ended with:\n")
+        .unwrap();
+    let mut expected: Vec<String> = (6..=24).map(|n| format!("line {n}")).collect();
+    expected.push("\u{fffd}[31mModuleNotFoundError\u{fffd}[0m: No module named 'mcp'".to_owned());
+    assert_eq!(stderr.lines().collect::<Vec<_>>(), expected);
+}
+
+/// The standard error a failed connection's error keeps takes 4 KiB at
+/// most, each line cut, the last lines kept.
+#[tokio::test]
+async fn the_stderr_a_failed_connection_s_error_keeps_takes_4_kib_at_most() {
+    let refused = fake("stderr-exit-long").connect().await.err();
+    let Some(McpError::Handshake { message, .. }) = &refused else {
+        panic!("{refused:?}");
+    };
+    let (_, stderr) = message
+        .split_once("; its standard error ended with:\n")
+        .unwrap();
+    let lines: Vec<&str> = stderr.lines().collect();
+    let firsts: Vec<char> = lines
+        .iter()
+        .filter_map(|line| line.chars().next())
+        .collect();
+    let bytes: usize = lines.iter().map(|line| line.len()).sum();
+    assert!(
+        firsts == ['5', '6', '7', '8']
+            && bytes <= 4096
+            && lines.iter().all(|line| line.ends_with('…')),
+        "{firsts:?} {bytes}"
+    );
+}
+
 /// RFC §21.2: a listing the server fails stops it before the error.
 #[tokio::test]
 async fn a_listing_that_fails_stops_the_server_before_the_error() {

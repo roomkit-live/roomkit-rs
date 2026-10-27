@@ -16,7 +16,7 @@ use tokio::sync::{Mutex, OnceCell};
 use crate::command::McpCommand;
 use crate::error::McpError;
 use crate::listing;
-use crate::process::ServerProcess;
+use crate::process::{ServerProcess, Started, Stderr};
 use crate::results;
 use crate::texts::bounded_message;
 
@@ -33,7 +33,7 @@ const CALL_FAILED: &str = "McpError";
 /// An MCP server started over stdio and connected (RFC §21.2), serving its
 /// tools to an agent as a [`Toolset`], under their bare names.
 ///
-/// [`connect`](Self::connect) starts the command's process, runs the MCP
+/// [`McpCommand::connect`] starts the command's process, runs the MCP
 /// handshake and lists the server's tools once, following the listing's
 /// cursor; no call lists them again. A connection that fails part-way
 /// stops the process and waits for it before the error is returned. What
@@ -92,20 +92,16 @@ struct Connection {
 
 impl McpServer {
     /// Starts `command`'s server, runs the MCP handshake and lists its
-    /// tools, within the command's connect bound (60 seconds by default).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`McpError::Command`] or [`McpError::Spawn`] when no process
-    /// could be started, and [`McpError::Handshake`], [`McpError::Listing`]
-    /// or [`McpError::Timeout`] when the connection failed part-way: the
-    /// process is then stopped and waited for before the error is returned
-    /// (RFC §21.2).
-    pub async fn connect(command: McpCommand) -> Result<Self, McpError> {
+    /// tools, within the command's connect bound ([`McpCommand::connect`]).
+    pub(crate) async fn connect(command: McpCommand) -> Result<Self, McpError> {
         let program = command.program();
-        let started = ServerProcess::start(&command)?;
-        let process = started.process;
-        let connecting = handshake(started.stdout, started.stdin, &program);
+        let Started {
+            process,
+            stdin,
+            stdout,
+            stderr,
+        } = ServerProcess::start(&command)?;
+        let connecting = handshake(stdout, stdin, &program);
         let connected = match tokio::time::timeout(command.connect_timeout, connecting).await {
             Ok(connected) => connected,
             Err(_elapsed) => Err(McpError::Timeout {
@@ -115,10 +111,7 @@ impl McpServer {
         };
         let (service, tools) = match connected {
             Ok(connected) => connected,
-            Err(error) => {
-                process.kill().await;
-                return Err(error);
-            }
+            Err(error) => return Err(failed(error, process, stderr).await),
         };
         let instructions = service
             .peer_info()
@@ -184,6 +177,36 @@ impl McpServer {
             })
             .await;
     }
+}
+
+/// Stops the server of a connection that failed with `error`, and returns
+/// the error once its process is waited for (RFC §21.2), the last lines it
+/// wrote on its standard error added to a handshake's or a listing's
+/// message: what a server that fails to start says of why.
+async fn failed(error: McpError, process: ServerProcess, stderr: Stderr) -> McpError {
+    process.kill().await;
+    match error {
+        McpError::Handshake { program, message } => McpError::Handshake {
+            program,
+            message: with_stderr(message, &stderr.last_lines().await),
+        },
+        McpError::Listing { program, message } => McpError::Listing {
+            program,
+            message: with_stderr(message, &stderr.last_lines().await),
+        },
+        error @ (McpError::Command { .. } | McpError::Spawn { .. } | McpError::Timeout { .. }) => {
+            error
+        }
+    }
+}
+
+/// `message`, then the server's last lines of standard error, `stderr`,
+/// when it wrote any.
+fn with_stderr(message: String, stderr: &str) -> String {
+    if stderr.is_empty() {
+        return message;
+    }
+    format!("{message}; its standard error ended with:\n{stderr}")
 }
 
 /// The MCP handshake over the server's output and input, then the listing

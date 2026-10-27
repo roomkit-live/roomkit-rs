@@ -2,6 +2,8 @@
 //! watched so that it is waited for the moment it exits, stopped at its
 //! close, killed when anything else ends it (RFC §21.2).
 
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -18,11 +20,70 @@ use crate::texts::bounded_message;
 /// bytes: the rest of the line is read and dropped.
 const STDERR_LINE_LIMIT: usize = 4096;
 
-/// A started server: its process, and the two pipes the protocol runs on.
+/// How many of the last lines of a server's standard error a failed
+/// connection's error keeps: what a server that fails to start says of why
+/// (a missing package, a traceback).
+const STDERR_TAIL_LINES: usize = 20;
+
+/// The most bytes those lines take, each line cut at the bound of a log
+/// line's message, well under this.
+const STDERR_TAIL_BYTES: usize = 4096;
+
+/// How long a failed connection waits, once the server is stopped, for
+/// the rest of its standard error: only a process that left the server's
+/// group still holds the pipe open then.
+const STDERR_DRAIN: Duration = Duration::from_secs(1);
+
+/// A started server: its process, the two pipes the protocol runs on, and
+/// what it writes on its standard error.
 pub(crate) struct Started {
     pub(crate) process: ServerProcess,
     pub(crate) stdin: ChildStdin,
     pub(crate) stdout: ChildStdout,
+    pub(crate) stderr: Stderr,
+}
+
+/// The reading of a server's standard error, and the last lines it read.
+pub(crate) struct Stderr {
+    tail: Arc<Mutex<Tail>>,
+    reader: JoinHandle<()>,
+}
+
+impl Stderr {
+    /// The last lines the server wrote on its standard error, one per line,
+    /// within [`STDERR_TAIL_LINES`] and [`STDERR_TAIL_BYTES`]; empty when it
+    /// wrote none. Called once the server is stopped, it waits for the pipe
+    /// to close, within [`STDERR_DRAIN`], so that what the server wrote
+    /// before it exited is read.
+    pub(crate) async fn last_lines(self) -> String {
+        let _read_to_end = tokio::time::timeout(STDERR_DRAIN, self.reader).await;
+        let tail = self.tail.lock().unwrap_or_else(PoisonError::into_inner);
+        tail.lines
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// The last lines of a standard error, the oldest dropped first.
+#[derive(Debug, Default)]
+struct Tail {
+    lines: VecDeque<String>,
+    bytes: usize,
+}
+
+impl Tail {
+    fn push(&mut self, line: String) {
+        self.bytes += line.len();
+        self.lines.push_back(line);
+        while self.lines.len() > STDERR_TAIL_LINES || self.bytes > STDERR_TAIL_BYTES {
+            let Some(oldest) = self.lines.pop_front() else {
+                break;
+            };
+            self.bytes -= oldest.len();
+        }
+    }
 }
 
 /// How the watcher of a process is asked to end it.
@@ -76,7 +137,8 @@ impl ServerProcess {
                 message: "the server's standard streams are not piped".to_owned(),
             });
         };
-        tokio::spawn(read_stderr(stderr, program));
+        let tail = Arc::new(Mutex::new(Tail::default()));
+        let reader = tokio::spawn(read_stderr(stderr, program, Arc::clone(&tail)));
         let (stop, stopped) = oneshot::channel();
         let watcher = tokio::spawn(watch(child, pid, command.close_grace, stopped));
         Ok(Started {
@@ -87,6 +149,7 @@ impl ServerProcess {
             },
             stdin,
             stdout,
+            stderr: Stderr { tail, reader },
         })
     }
 
@@ -141,8 +204,9 @@ async fn watch(
 }
 
 /// Reads a server's standard error to its end, so that it never fills the
-/// pipe and blocks the server: each line, bounded, logged at debug level.
-async fn read_stderr(stderr: ChildStderr, program: String) {
+/// pipe and blocks the server: each line, bounded, logged at debug level
+/// and kept in `tail`.
+async fn read_stderr(stderr: ChildStderr, program: String, tail: Arc<Mutex<Tail>>) {
     let mut reader = BufReader::new(stderr);
     let mut line: Vec<u8> = Vec::new();
     loop {
@@ -153,7 +217,7 @@ async fn read_stderr(stderr: ChildStderr, program: String) {
         let read = available.len();
         for &byte in available {
             if byte == b'\n' {
-                log_line(&program, &line);
+                take_line(&program, &line, &tail);
                 line.clear();
             } else if line.len() < STDERR_LINE_LIMIT {
                 line.push(byte);
@@ -162,15 +226,33 @@ async fn read_stderr(stderr: ChildStderr, program: String) {
         reader.consume(read);
     }
     if !line.is_empty() {
-        log_line(&program, &line);
+        take_line(&program, &line, &tail);
     }
 }
 
-fn log_line(program: &str, line: &[u8]) {
+/// Logs one line of a server's standard error and keeps it in `tail`:
+/// bounded, its control characters replaced, so that what the server
+/// writes cannot move a terminal's cursor or forge a log line.
+fn take_line(program: &str, line: &[u8], tail: &Mutex<Tail>) {
+    let text: String = bounded_message(String::from_utf8_lossy(line).trim_end_matches('\r'))
+        .chars()
+        .map(|c| {
+            if c.is_control() && c != '\t' {
+                char::REPLACEMENT_CHARACTER
+            } else {
+                c
+            }
+        })
+        .collect();
     tracing::debug!(
         target: "roomkit::mcp",
         server = program,
-        line = %bounded_message(&String::from_utf8_lossy(line)),
+        line = %text,
         "an MCP server's standard error"
     );
+    if !text.trim().is_empty() {
+        tail.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(text);
+    }
 }

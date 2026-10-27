@@ -12,6 +12,8 @@
 //! starts the server in `<mode>` as its child, its id written to
 //! `--child-pid-file`, and waits for it); `--stubborn-pid-file` starts a
 //! child that ignores `SIGTERM` first, `stderr-flood` (`normal`, after 4 MiB of standard error),
+//! `stderr-exit` (24 lines of standard error and a colored one, then exits
+//! failing), `stderr-exit-long` (8 lines of 1,501 characters, then exits failing),
 //! `listing-error`, `pages:<n>`, `same-cursor`, `endless`, `endless-same`,
 //! `empty-page`, `many`, `names`, `skill-names`.
 //!
@@ -54,6 +56,19 @@ fn main() -> ExitCode {
     }
     match options.mode.as_str() {
         "exit" => return ExitCode::SUCCESS,
+        "stderr-exit" => {
+            let colored = "\u{1b}[31mModuleNotFoundError\u{1b}[0m: No module named 'mcp'";
+            write_stderr(
+                (1..=24)
+                    .map(|n| format!("line {n}"))
+                    .chain([colored.to_owned()]),
+            );
+            return ExitCode::FAILURE;
+        }
+        "stderr-exit-long" => {
+            write_stderr((1..=8).map(|n| format!("{n}{}", "x".repeat(1500))));
+            return ExitCode::FAILURE;
+        }
         "stderr-flood" => {
             let line = "x".repeat(1023) + "\n";
             let mut stderr = io::stderr().lock();
@@ -72,6 +87,16 @@ fn main() -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Writes `lines` on the standard error, one per line.
+fn write_stderr(lines: impl Iterator<Item = String>) {
+    let mut stderr = io::stderr().lock();
+    for line in lines {
+        if writeln!(stderr, "{line}").is_err() {
+            return;
+        }
+    }
 }
 
 /// The mode and the options, the process's id written where asked.

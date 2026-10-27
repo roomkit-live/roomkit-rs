@@ -32,7 +32,9 @@ pub enum McpError {
     Handshake {
         /// The program.
         program: String,
-        /// What failed, bounded.
+        /// What failed, bounded, then the last lines the server wrote on
+        /// its standard error, when it wrote any: 20 lines and 4 KiB at
+        /// most, their control characters replaced.
         message: String,
     },
     /// The server's `tools/list` failed.
@@ -40,7 +42,8 @@ pub enum McpError {
     Listing {
         /// The program.
         program: String,
-        /// What failed, bounded.
+        /// What failed, bounded, then the last lines the server wrote on
+        /// its standard error, as [`Handshake`](Self::Handshake)'s.
         message: String,
     },
     /// The handshake and the listing did not end within the command's
