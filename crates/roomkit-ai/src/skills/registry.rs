@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::error::SkillError;
-use super::files::{self, ReadFailure, SKILL_FILE_MAX};
+use super::files::{self, OpenFailure, ReadFailure, SKILL_FILE_MAX};
 use super::frontmatter::{self, Fields};
 use super::texts::{escaped, quoted_name};
 
@@ -281,19 +281,25 @@ fn load(directory: &Path) -> Result<Skill, SkillError> {
 }
 
 /// The text of the `SKILL.md` of `directory`, a regular file inside it once
-/// its links are followed, at most 256 KiB of UTF-8.
+/// its links are followed, at most 256 KiB of UTF-8, read through the
+/// handle checked once it is open ([`files::open_inside`]).
 fn skill_file(directory: &Path, label: &str) -> Result<String, SkillError> {
     let failed = |reason: String| SkillError::parse(label, reason);
     let found = files::find_skill_file(directory)
         .map_err(|error| failed(format!("Unable to read SKILL.md: {error}")))?
         .ok_or_else(|| failed("No SKILL.md found".to_owned()))?;
-    let resolved = found
-        .canonicalize()
-        .map_err(|error| failed(format!("Unable to read SKILL.md: {error}")))?;
-    if !files::is_below(&resolved, directory) {
-        return Err(failed("SKILL.md escapes its skill directory".to_owned()));
-    }
-    files::read_bounded(&resolved, SKILL_FILE_MAX).map_err(|failure| {
+    let file = files::open_inside(&found, |target| files::is_below(target, directory)).map_err(
+        |failure| {
+            failed(match failure {
+                OpenFailure::Missing => "No SKILL.md found".to_owned(),
+                OpenFailure::Escapes => "SKILL.md escapes its skill directory".to_owned(),
+                OpenFailure::NotAFile => "SKILL.md is not a regular file".to_owned(),
+                OpenFailure::Changed => "SKILL.md changed while it was read".to_owned(),
+                OpenFailure::Failed(error) => format!("Unable to read SKILL.md: {error}"),
+            })
+        },
+    )?;
+    files::read_bounded(file, SKILL_FILE_MAX).map_err(|failure| {
         failed(match failure {
             ReadFailure::TooLarge => format!("SKILL.md is past {SKILL_FILE_MAX} bytes"),
             ReadFailure::NotText => "SKILL.md is not UTF-8 text".to_owned(),

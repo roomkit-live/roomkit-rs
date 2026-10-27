@@ -327,6 +327,48 @@ mod linked_directories {
         );
     }
 
+    /// RFC §24.6: a `SKILL.md` swapped for a link out between the check
+    /// and the read is never read out of its directory.
+    #[test]
+    fn a_skill_file_swapped_for_a_link_out_while_it_is_read_is_never_read_out() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let root = TempDir::new();
+        let skill = root.skill("race", "swap-skill", "Inside");
+        let outside = root.file("outside/SKILL.md", &skill_md("swap-skill", "Outside", ""));
+        let stop = Arc::new(AtomicBool::new(false));
+        let flipper = {
+            let (stop, skill) = (Arc::clone(&stop), skill.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    std::fs::write(skill.join(".file"), skill_md("swap-skill", "Inside", ""))
+                        .unwrap();
+                    std::fs::rename(skill.join(".file"), skill.join("SKILL.md")).unwrap();
+                    let _absent = std::fs::remove_file(skill.join(".link"));
+                    link(&outside, &skill.join(".link"));
+                    std::fs::rename(skill.join(".link"), skill.join("SKILL.md")).unwrap();
+                }
+            })
+        };
+        let (mut inside, mut out) = (0, 0);
+        for _ in 0..3_000 {
+            let mut skills = SkillRegistry::new();
+            match skills
+                .register(&skill)
+                .map(|skill| skill.description().to_owned())
+            {
+                Ok(description) if description == "Outside" => out += 1,
+                Ok(_) => inside += 1,
+                Err(_) => {}
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        flipper.join().unwrap();
+        assert_eq!(out, 0, "{out} registrations read the file outside");
+        assert!(inside > 0);
+    }
+
     #[test]
     fn a_skill_file_linked_out_of_its_directory_is_refused() {
         let root = TempDir::new();

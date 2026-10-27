@@ -7,9 +7,13 @@
 //! character outside ASCII passes, so none that normalizes onto a
 //! separator does), then the directory and the file are resolved with
 //! their links followed, and each must still be inside the one above it.
-//! These are blocking calls: an agent runs them off its turn's task.
+//! A file is opened once it is checked, then checked again through its
+//! handle: the path, resolved anew, must still be inside and name the very
+//! file the handle holds, so a file swapped for a link between the check
+//! and the read is never read. These are blocking calls: an agent runs
+//! them off its turn's task.
 
-use std::fs::{self, File};
+use std::fs::{self, File, Metadata};
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
@@ -40,13 +44,98 @@ pub(crate) enum ReadFailure {
     Io(io::Error),
 }
 
-/// The text of the file at `path`, read up to `limit` bytes.
+/// Why a path was not opened as the regular file it resolves to.
+#[derive(Debug)]
+pub(crate) enum OpenFailure {
+    /// It resolves to nothing.
+    Missing,
+    /// It resolves where it may not.
+    Escapes,
+    /// It resolves to no regular file.
+    NotAFile,
+    /// Once opened, it resolves elsewhere or names another file: it
+    /// changed while it was opened.
+    Changed,
+    /// It could not be resolved or opened.
+    Failed(io::Error),
+}
+
+/// The regular file `path` resolves to, open, when `inside` takes where it
+/// resolves. The path is resolved with its links followed and checked,
+/// then the file is opened, then the path is resolved again: it must
+/// resolve to the same place, still inside, and name the very file the
+/// handle holds (its device and inode, on Unix). A file swapped for a link
+/// out between the check and the open is so never handed over. A FIFO
+/// found there is refused before the open, which it would block.
+pub(crate) fn open_inside(
+    path: &Path,
+    inside: impl Fn(&Path) -> bool,
+) -> Result<File, OpenFailure> {
+    let resolved = resolve(path)?;
+    if !inside(&resolved) {
+        return Err(OpenFailure::Escapes);
+    }
+    if !fs::metadata(&resolved).map_err(failure)?.is_file() {
+        return Err(OpenFailure::NotAFile);
+    }
+    let file = File::open(&resolved).map_err(failure)?;
+    let opened = file.metadata().map_err(failure)?;
+    if !opened.is_file() {
+        return Err(OpenFailure::NotAFile);
+    }
+    if !still_names(path, &resolved, &opened, &inside) {
+        return Err(OpenFailure::Changed);
+    }
+    Ok(file)
+}
+
+/// Whether `path`, resolved anew, still resolves to `resolved`, inside,
+/// and names the file `opened` describes.
+fn still_names(
+    path: &Path,
+    resolved: &Path,
+    opened: &Metadata,
+    inside: impl Fn(&Path) -> bool,
+) -> bool {
+    resolve(path).is_ok_and(|again| again == resolved && inside(&again) && names(&again, opened))
+}
+
+/// `path`, resolved with its links followed.
+fn resolve(path: &Path) -> Result<PathBuf, OpenFailure> {
+    path.canonicalize().map_err(failure)
+}
+
+/// What an error of the disk is to an open: a path that resolves to
+/// nothing, or a failure.
+fn failure(error: io::Error) -> OpenFailure {
+    if error.kind() == io::ErrorKind::NotFound {
+        OpenFailure::Missing
+    } else {
+        OpenFailure::Failed(error)
+    }
+}
+
+/// Whether `path` names the file `opened` describes: the same device and
+/// inode.
+#[cfg(unix)]
+fn names(path: &Path, opened: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    fs::metadata(path).is_ok_and(|now| (now.dev(), now.ino()) == (opened.dev(), opened.ino()))
+}
+
+/// Whether `path` names the file `opened` describes: a regular file still,
+/// the platform giving no inode to compare.
+#[cfg(not(unix))]
+fn names(path: &Path, opened: &Metadata) -> bool {
+    fs::metadata(path).is_ok_and(|now| now.is_file() && now.len() == opened.len())
+}
+
+/// The text `file` holds, read up to `limit` bytes.
 ///
 /// # Errors
 ///
 /// Returns why it could not be read whole within the bound.
-pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<String, ReadFailure> {
-    let file = File::open(path).map_err(ReadFailure::Io)?;
+pub(crate) fn read_bounded(file: File, limit: u64) -> Result<String, ReadFailure> {
     let mut bytes = Vec::new();
     file.take(limit + 1)
         .read_to_end(&mut bytes)
@@ -104,19 +193,21 @@ pub(crate) fn read_reference(skill: &Path, name: &str) -> Result<String, String>
             return Err("Invalid reference directory: cannot be resolved".to_owned());
         }
     };
-    let target = match directory.join(name).canonicalize() {
-        Ok(target) => target,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(not_found(name)),
-        Err(_unresolved) => return Err(invalid(name, " cannot be resolved")),
+    let opened = open_inside(&directory.join(name), |target| target.starts_with(&directory))
+        // `references/` must still be where it was, inside the skill.
+        .and_then(|file| match references_of(skill) {
+            Ok(again) if again == directory => Ok(file),
+            Ok(_) | Err(_) => Err(OpenFailure::Changed),
+        });
+    let file = match opened {
+        Ok(file) => file,
+        Err(OpenFailure::Missing | OpenFailure::NotAFile) => return Err(not_found(name)),
+        // Resolved, links followed: a link out is caught here.
+        Err(OpenFailure::Escapes) => return Err(invalid(name, &format!(" escapes {REFERENCES}/"))),
+        Err(OpenFailure::Changed) => return Err(invalid(name, " changed while it was read")),
+        Err(OpenFailure::Failed(_)) => return Err(invalid(name, " cannot be resolved")),
     };
-    // Resolved, links followed: a link out is caught here.
-    if target != directory && !target.starts_with(&directory) {
-        return Err(invalid(name, &format!(" escapes {REFERENCES}/")));
-    }
-    if !target.is_file() {
-        return Err(not_found(name));
-    }
-    read_bounded(&target, REFERENCE_MAX).map_err(|failure| match failure {
+    read_bounded(file, REFERENCE_MAX).map_err(|failure| match failure {
         ReadFailure::TooLarge => {
             format!("Reference too large: {name} (past {REFERENCE_MAX} bytes)")
         }
@@ -232,6 +323,89 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    /// A directory of its own under the system's temporary one, removed
+    /// with what it holds when dropped.
+    struct Tree(PathBuf);
+
+    impl Tree {
+        fn new(name: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("roomkit-files-{name}-{}", std::process::id()));
+            let _absent = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            Self(path.canonicalize().unwrap())
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _gone = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// How many reads a race test makes: some tenths of a second.
+    const READS: usize = 10_000;
+
+    /// RFC §24.6: a file opened, then replaced under its name by another,
+    /// is no longer the file its path names, and is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_replaced_once_open_is_not_the_one_its_path_names() {
+        let tree = Tree::new("replaced");
+        let path = tree.0.join("a.md");
+        fs::write(&path, "first").unwrap();
+        let resolved = path.canonicalize().unwrap();
+        let opened = File::open(&resolved).unwrap().metadata().unwrap();
+        let inside = |target: &Path| target.starts_with(&tree.0);
+        assert!(still_names(&path, &resolved, &opened, inside));
+        fs::write(tree.0.join("b.md"), "second").unwrap();
+        fs::rename(tree.0.join("b.md"), &path).unwrap();
+        assert!(!still_names(&path, &resolved, &opened, inside));
+    }
+
+    /// RFC §24.6: a reference swapped for a link out between the check and
+    /// the read is never read out of `references/`.
+    #[cfg(unix)]
+    #[test]
+    fn a_reference_swapped_for_a_link_out_while_it_is_read_is_never_read_out() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let tree = Tree::new("swap");
+        let skill = tree.0.join("skill");
+        let references = skill.join(REFERENCES);
+        fs::create_dir_all(&references).unwrap();
+        fs::write(references.join("a.md"), "INSIDE").unwrap();
+        fs::create_dir_all(tree.0.join("outside")).unwrap();
+        let secret = tree.0.join("outside/secret.md");
+        fs::write(&secret, "SECRET").unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flipper = {
+            let (stop, references) = (Arc::clone(&stop), references.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    fs::write(references.join(".file"), "INSIDE").unwrap();
+                    fs::rename(references.join(".file"), references.join("a.md")).unwrap();
+                    let _absent = fs::remove_file(references.join(".link"));
+                    std::os::unix::fs::symlink(&secret, references.join(".link")).unwrap();
+                    fs::rename(references.join(".link"), references.join("a.md")).unwrap();
+                }
+            })
+        };
+        let (mut inside, mut out) = (0, 0);
+        for _ in 0..READS {
+            match read_reference(&skill, "a.md").as_deref() {
+                Ok("SECRET") => out += 1,
+                Ok(_) => inside += 1,
+                Err(_) => {}
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        flipper.join().unwrap();
+        assert_eq!(out, 0, "{out} reads out of {READS} read the file outside");
+        assert!(inside > 0);
+    }
 
     /// RFC §24.6: each name a read refuses before it touches the disk, in
     /// the reference implementation's words.
