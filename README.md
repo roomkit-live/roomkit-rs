@@ -204,7 +204,7 @@ Agents:
 A server:
 
 - `server_agent`: the quickstart's service, an agent over WebSocket with its rooms in SQLite; its checks restart the server on the same file, and `--serve` keeps it up.
-- `web_chat`: the same service with a page to chat with the agent in a browser, plain HTML, CSS and JavaScript compiled into the binary, answers read as they are written; a socket from another origin is refused, and `--serve` keeps it up.
+- `web_chat`: the same service with a page to chat with the agent in a browser, plain HTML, CSS and JavaScript compiled into the binary, answers read as they are written, the conversation's past sent as a page opens (`get_timeline`, `visible_events`); a socket from another origin is refused, and `--serve` keeps it up.
 
 ## Documentation
 

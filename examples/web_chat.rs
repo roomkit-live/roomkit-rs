@@ -13,12 +13,26 @@
 //! - The page asks for a name and a conversation, `bakery` by default. The
 //!   participant's id is the name in lowercase letters, digits, `_` and
 //!   `-`, or a random one when nothing of the name is left.
+//! - A connection is sent its conversation's past as it opens, as an
+//!   integrator of the Python implementation reads it: once the connection
+//!   is registered, so that nothing committed meanwhile is missed, the
+//!   newest 50 events (`get_timeline` with `newest_first`), of which the
+//!   `websocket` channel's view (`visible_events`, RFC §7.5 rule 8). The
+//!   page is cut before the view is taken, as in the Python
+//!   implementation, so it may hold fewer than 50.
 //! - The frames it reads:
+//!   - `{"type": "history", "room_id", "events": [...]}`, first: the past,
+//!     oldest first, each event framed as a delivery frames it, with its
+//!     participant's `name`; a message whose `participant_id` is the
+//!     person's own is shown as theirs, and an event the page shows
+//!     already, which a delivery made meanwhile brought too, is shown once,
+//!     told by its `index`;
 //!   - `{"type": "delta", "stream_id", "from", "text"}`, a piece of the
 //!     agent's answer: it grows a bubble of its own for each `stream_id`;
-//!   - `{"type": "message", "id", "index", "from", "text", "stream_id",
-//!     "ended"}`, a message as the store holds it: it takes the place of
-//!     its stream's bubble, and each row is set at its `index`;
+//!   - `{"type": "message", "id", "index", "from", "participant_id",
+//!     "text", "stream_id", "ended"}`, a message as the store holds it: it
+//!     takes the place of its stream's bubble, and each row is set at its
+//!     `index`;
 //!   - `{"type": "tool_call_start" | "tool_call_end", "tool": {"name",
 //!     "id", "status", "result"}}`, a call: one line, `lookup_order…`, then
 //!     its result or its failure;
@@ -28,8 +42,10 @@
 //!   message to every channel but its source (RFC §10.2 step 2), and every
 //!   person of the page is on the one `websocket` channel, so no message of
 //!   theirs comes back, nor another person's. Two people in one
-//!   conversation each see their own messages and the agent's answers to
-//!   both.
+//!   conversation each see, live, their own messages and the agent's
+//!   answers to both; the past a page is sent as it opens holds the other
+//!   person's messages as well, which live delivery does not bring yet
+//!   (RMK-992).
 //! - An answer's leading and trailing whitespace is trimmed where it is
 //!   shown; the store keeps the text as the model wrote it.
 //! - The state of the connection is shown, and the message field is
@@ -62,16 +78,18 @@
 //!   and its `Host` alike, so a service also refuses a `Host` that is not
 //!   one of its own names.
 //! - Rate limits, on messages and on connections.
-//! - The conversation's past: a page shows what is said once it joined,
-//!   not what was said before, nor edits, deletions or the room's other
-//!   events.
+//! - More of the past: a page is sent the newest 50 events, and reads no
+//!   earlier page (`before_index` would); nor does it show edits,
+//!   deletions or the room's other events.
 //!
 //! Its checks run offline, against the fake of the OpenAI wire and a
 //! temporary file: the page and its files are served with their types and
-//! headers, a socket from another origin or from none is refused, and a
-//! socket from the page's own reads an answer as it is written, the
-//! lookup's call between its two rounds. `node --check` reads the page's
-//! script when `node` is on the PATH; that check is skipped otherwise.
+//! headers, a socket from another origin or from none is refused, a socket
+//! from the page's own reads an answer as it is written, the lookup's call
+//! between its two rounds, and a second page that joins then is sent that
+//! conversation's past, the first page's message included, in order, each
+//! event once. `node --check` reads the page's script when `node` is on the
+//! PATH; that check is skipped otherwise.
 //!
 //! With `--serve`, it stays up on 127.0.0.1:8080, or the address given
 //! after the flag, its rooms in `web_chat.db`, until Ctrl+C: open the URL
@@ -112,7 +130,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest};
 
 use shared::bakery::ORDER_42;
-use shared::server::{AgentServer, CHECKING, SERVING};
+use shared::server::{AgentServer, CHECKING, SERVING, Site};
 use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, TempDatabase};
 
 /// The page, its script and its style, compiled in from `web_chat/`.
@@ -134,6 +152,13 @@ const CSS: &str = "text/css; charset=utf-8";
 
 /// What a socket from another origin is told.
 const FOREIGN: &str = "a conversation opens from this server's own page only";
+
+/// What the server serves around the agent's socket: the page, and the
+/// newest 50 events of its conversation to each connection as it opens.
+const SITE: Site = Site {
+    routes: site,
+    history: 50,
+};
 
 /// Where `--serve` listens unless told another address, and the file it
 /// keeps its rooms in.
@@ -234,7 +259,7 @@ async fn serve(address: &str) -> Result<(), Box<dyn Error>> {
     let endpoint = OpenAiEndpoint::from_env(&script()).await?;
     let database = Path::new(SERVE_DATABASE);
     let address = address.parse()?;
-    let server = AgentServer::start_with(database, &endpoint, address, SERVING, site).await?;
+    let server = AgentServer::start_with(database, &endpoint, address, SERVING, SITE).await?;
     println!("The agent calls {}.", endpoint.shown_base_url());
     println!(
         "Open http://{}/ to chat, the rooms in {SERVE_DATABASE}. Ctrl+C stops.",
@@ -252,10 +277,11 @@ async fn check() -> Result<ExitCode, Box<dyn Error>> {
     let database = TempDatabase::new("web_chat");
     let address = ANY_PORT.parse()?;
     let server =
-        AgentServer::start_with(database.path(), &endpoint, address, CHECKING, site).await?;
+        AgentServer::start_with(database.path(), &endpoint, address, CHECKING, SITE).await?;
     the_page_is_served(&mut checks, server.address()).await?;
     another_origin_is_refused(&mut checks, server.address()).await?;
-    the_page_reads_an_answer_as_it_is_written(&mut checks, server.address()).await?;
+    let read = the_page_reads_an_answer_as_it_is_written(&mut checks, server.address()).await?;
+    another_page_reads_the_conversation_s_past(&mut checks, server.address(), &read).await?;
     tokio::time::timeout(PATIENCE, server.stop()).await??;
     the_script_parses(&mut checks).await?;
     the_page_holds_what_the_script_finds(&mut checks);
@@ -356,7 +382,7 @@ async fn another_origin_is_refused(
 async fn the_page_reads_an_answer_as_it_is_written(
     checks: &mut Checks,
     address: SocketAddr,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<Vec<Value>, Box<dyn Error>> {
     println!("Alice's page joins {CONVERSATION}, reading answers as they are written.");
     let path = format!("/conversations/{CONVERSATION}?user=alice&name=Alice&stream=1");
     let origin = format!("http://{address}");
@@ -367,13 +393,20 @@ async fn the_page_reads_an_answer_as_it_is_written(
     );
     let Ok(mut alice) = opened else {
         checks.expect("a socket from the page's own origin opens", false);
-        return Ok(());
+        return Ok(Vec::new());
     };
+    let history = next_frame(&mut alice).await;
+    checks.expect(
+        "a socket that opens on a new conversation is sent its history, empty",
+        history.as_ref().is_some_and(|frame| {
+            frame["type"] == "history" && frame["events"].as_array().is_some_and(Vec::is_empty)
+        }),
+    );
     println!("Alice says {ASKS:?}");
     alice.send(tungstenite::Message::text(ASKS)).await?;
     let frames = turn(&mut alice).await;
     let _closed = alice.close(None).await;
-    print_frames(&frames);
+    print_frames("Alice", &frames);
 
     let rows: Vec<&Value> = frames
         .iter()
@@ -406,7 +439,66 @@ async fn the_page_reads_an_answer_as_it_is_written(
                 && row.pointer("/tool/result") == Some(&Value::from(ORDER_42))
         }),
     );
+    Ok(frames)
+}
+
+/// Bob's page joins the conversation once Alice's turn ended: its socket's
+/// first frame is the conversation's past, Alice's message, which never
+/// reached her socket, then every row she read, each once, in index order.
+async fn another_page_reads_the_conversation_s_past(
+    checks: &mut Checks,
+    address: SocketAddr,
+    alice_read: &[Value],
+) -> Result<(), Box<dyn Error>> {
+    println!("Bob's page joins {CONVERSATION} after Alice's turn.");
+    let path = format!("/conversations/{CONVERSATION}?user=bob&name=Bob&stream=1");
+    let Ok(mut bob) = open(address, &path, Some(&format!("http://{address}"))).await? else {
+        checks.expect("Bob's socket opens", false);
+        return Ok(());
+    };
+    let history = next_frame(&mut bob).await.unwrap_or_default();
+    let _closed = bob.close(None).await;
+    let past = history
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    print_frames("Bob", &past);
+    // The message the stream answers is Alice's, named in its stream id.
+    let asked = alice_read
+        .first()
+        .and_then(|frame| frame["stream_id"].as_str())
+        .and_then(|stream| stream.strip_prefix("assistant:"));
+    let rows = alice_read.iter().filter(|frame| frame["type"] != "delta");
+    let expected: Vec<Option<&str>> = asked
+        .into_iter()
+        .chain(rows.filter_map(|row| row["id"].as_str()))
+        .map(Some)
+        .collect();
+    let first = past.first();
+    checks.expect(
+        "a socket that opens on a conversation is sent its past first: the other page's \
+         message, with its participant and name, then the rows that page read, in index \
+         order, each once",
+        history.get("type") == Some(&Value::from("history"))
+            && past.iter().map(|event| event["id"].as_str()).eq(expected)
+            && indexes_rise(&past)
+            && first.is_some_and(|event| {
+                event["participant_id"] == "alice"
+                    && event["name"] == "Alice"
+                    && event["text"] == ASKS
+            }),
+    );
     Ok(())
+}
+
+/// Whether the indexes of `events` rise, each event after the one before.
+fn indexes_rise(events: &[Value]) -> bool {
+    let indexes: Vec<Option<u64>> = events.iter().map(|event| event["index"].as_u64()).collect();
+    indexes.iter().all(Option::is_some)
+        && indexes
+            .windows(2)
+            .all(|pair| matches!(pair, [a, b] if a < b))
 }
 
 /// For each message row of `frames`, the text its pieces join to and the
@@ -425,8 +517,9 @@ fn rounds(frames: &[Value]) -> Vec<(String, String)> {
     rounds
 }
 
-/// Prints `frames`, each run of pieces as the text it joins to.
-fn print_frames(frames: &[Value]) {
+/// Prints the frames `who` read, each run of pieces as the text it joins
+/// to.
+fn print_frames(who: &str, frames: &[Value]) {
     let mut pieces: Vec<&str> = Vec::new();
     for frame in frames {
         let text = frame["text"].as_str().unwrap_or_default();
@@ -436,7 +529,7 @@ fn print_frames(frames: &[Value]) {
         }
         if !pieces.is_empty() {
             println!(
-                "  Alice reads {} pieces: {:?}",
+                "  {who} reads {} pieces: {:?}",
                 pieces.len(),
                 pieces.concat()
             );
@@ -447,7 +540,7 @@ fn print_frames(frames: &[Value]) {
             .and_then(Value::as_str)
             .map_or_else(|| format!("{text:?}"), str::to_owned);
         println!(
-            "  Alice reads #{} {} {shown}",
+            "  {who} reads #{} {} {shown}",
             frame["index"], frame["type"]
         );
     }
@@ -570,6 +663,22 @@ async fn open(
         Err(tungstenite::Error::Http(response)) => Ok(Err(response.status().as_u16())),
         Err(error) => Err(error.into()),
     }
+}
+
+/// The next JSON frame on `socket`, if one comes in time.
+async fn next_frame(socket: &mut WebSocketStream<TcpStream>) -> Option<Value> {
+    let next = async {
+        while let Some(Ok(received)) = socket.next().await {
+            if let tungstenite::Message::Text(frame) = received {
+                return serde_json::from_str(frame.as_str()).ok();
+            }
+        }
+        None
+    };
+    tokio::time::timeout(ANSWER_PATIENCE, next)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// The frames of the next turn on `socket`, up to the message that ends it

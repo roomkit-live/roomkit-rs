@@ -7,6 +7,7 @@
 //! receives.
 
 mod connection;
+mod history;
 
 use std::error::Error;
 use std::io;
@@ -62,6 +63,25 @@ pub const CHECKING: Patience = Patience {
     grace: Duration::from_secs(2),
 };
 
+/// What a server example serves around the agent's socket.
+#[derive(Clone, Copy, Debug)]
+pub struct Site {
+    /// The routes it makes of the WebSocket endpoint's: a page served
+    /// beside it, or a layer in front of it.
+    pub routes: fn(Router) -> Router,
+    /// How many of the conversation's newest events a connection is sent
+    /// as it opens, in one `history` frame; none with 0.
+    pub history: u64,
+}
+
+impl Site {
+    /// The WebSocket endpoint alone, with no history: `server_agent`'s.
+    pub const SOCKET_ONLY: Self = Self {
+        routes: |conversations| conversations,
+        history: 0,
+    };
+}
+
 /// A running server: its address, its kit over the SQLite file, and what
 /// stops it.
 #[derive(Debug)]
@@ -86,6 +106,8 @@ struct App {
     stopping: watch::Receiver<bool>,
     live: Live,
     patience: Patience,
+    /// How many past events a connection is sent as it opens.
+    history: u64,
 }
 
 /// How many connections the server runs, each counted from its upgrade
@@ -135,14 +157,10 @@ impl AgentServer {
         address: SocketAddr,
         patience: Patience,
     ) -> Result<Self, Box<dyn Error>> {
-        Self::start_with(database, endpoint, address, patience, |conversations| {
-            conversations
-        })
-        .await
+        Self::start_with(database, endpoint, address, patience, Site::SOCKET_ONLY).await
     }
 
-    /// The same server, its routes the ones `site` makes of the WebSocket
-    /// endpoint's: a page served beside it, or a layer in front of it.
+    /// The same server, serving `site` around its socket.
     ///
     /// # Errors
     ///
@@ -153,7 +171,7 @@ impl AgentServer {
         endpoint: &OpenAiEndpoint,
         address: SocketAddr,
         patience: Patience,
-        site: impl FnOnce(Router) -> Router,
+        site: Site,
     ) -> Result<Self, Box<dyn Error>> {
         let kit = RoomKit::with_store(SqliteStore::open(database).await?);
         let websocket = WebSocketChannel::new(ChannelId::new("websocket")?);
@@ -175,13 +193,14 @@ impl AgentServer {
             stopping: stopping.clone(),
             live: live.clone(),
             patience,
+            history: site.history,
         };
         let conversations = Router::new()
             .route(CONVERSATIONS, get(connection::connect))
             .with_state(app);
         let listener = TcpListener::bind(address).await?;
         let address = listener.local_addr()?;
-        let serving = tokio::spawn(listen(listener, site(conversations), stopping));
+        let serving = tokio::spawn(listen(listener, (site.routes)(conversations), stopping));
         Ok(Self {
             address,
             kit,

@@ -689,7 +689,8 @@ A service depends on `roomkit` and on the crates it needs beside it,
   `OPENAI_API_KEY` and `OPENAI_MODEL` name an endpoint, `agent_tools`,
   `streamed_answer`, `agent_skills`, `mcp_tools`), and two servers
   (`server_agent`, and `web_chat`, which serves a page to chat with its
-  agent in a browser).
+  agent in a browser, each page sent its conversation's past as it opens,
+  read with `get_timeline` and `visible_events`).
 - **The server example** (`server_agent`), the README's quickstart: an axum
   server where each WebSocket connection to
   `/conversations/{conversation}?user=...&name=...` is a participant of the

@@ -33,8 +33,10 @@ pub type ConnectionId = u64;
 /// connections.
 ///
 /// The frame of an event: `{"room_id": "...", "id": "...", "index": 3,
-/// "type": "message", "from": "assistant", "text": "..."}`, `from` naming
-/// the channel the event came from. A tool call's row carries the call as
+/// "type": "message", "from": "assistant", "participant_id": "alice",
+/// "text": "..."}`, `from` naming the channel the event came from and
+/// `participant_id` the participant its source names, `null` for none (an
+/// agent's). A tool call's row carries the call as
 /// `tool` (`name`, `id`, `status`, and `result` on its end row), and the
 /// message that ends an agent's turn its end as `ended` (the record's
 /// `loop_end_reason`).
@@ -266,7 +268,13 @@ impl Channel for WebSocketChannel {
 
 /// The frame of `event`.
 fn frame_of(event: &RoomEvent) -> String {
-    Value::Object(fields_of(event, None)).to_string()
+    Value::Object(row_fields(event)).to_string()
+}
+
+/// The fields of `event`'s frame, as a delivery sends it: what a server
+/// sends of a stored event, a past one included.
+pub fn row_fields(event: &RoomEvent) -> Map<String, Value> {
+    fields_of(event, None)
 }
 
 /// The fields of `event`'s frame, with the stream it ends, `stream_id`,
@@ -279,6 +287,7 @@ fn fields_of(event: &RoomEvent, stream_id: Option<&str>) -> Map<String, Value> {
         "index": event.index,
         "type": event.event_type,
         "from": event.source.channel_id,
+        "participant_id": event.source.participant_id,
         "text": text_of(&event.content),
     });
     frame.extend(fields.as_object().cloned().unwrap_or_default());

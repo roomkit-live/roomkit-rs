@@ -21,13 +21,15 @@ const page = {
   send: byId("send"),
 };
 
-// The connection, and what the page keeps of the conversation it shows:
-// the answer growing for each stream, the line of each tool call, and the
-// line that says an answer is on its way.
+// The connection, who the person is in it, and what the page keeps of the
+// conversation it shows: the index of each stored event shown, the answer
+// growing for each stream, the line of each tool call, and the line that
+// says an answer is on its way.
 let socket = null;
 let leaving = false;
-let shown = null;
+let user = null;
 let guest = null;
+const indexes = new Set();
 const streams = new Map();
 const calls = new Map();
 const waiting = Object.assign(document.createElement("li"), {
@@ -54,16 +56,15 @@ show("closed", "Not connected");
 
 // Opens the socket of the conversation the form names, as the participant
 // its name makes, reading the agent's answers as they are written.
+// The conversation starts over: its history comes first on the socket.
 function connect() {
   const name = page.name.value.trim();
   const conversation = page.conversation.value.trim();
-  const user = userOf(name);
-  if (conversation !== shown) {
-    page.messages.replaceChildren();
-    streams.clear();
-    calls.clear();
-    shown = conversation;
-  }
+  user = userOf(name);
+  page.messages.replaceChildren();
+  indexes.clear();
+  streams.clear();
+  calls.clear();
   const query = new URLSearchParams({ user, stream: "1" });
   if (name) query.set("name", name);
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
@@ -106,7 +107,7 @@ function say() {
   socket.send(text);
   page.text.value = "";
   keepingTheEnd(() => {
-    page.messages.append(line("message mine", page.name.value.trim() || "You", text.trim()));
+    page.messages.append(line("message mine", ownName(), text.trim()));
     page.messages.append(waiting);
   });
 }
@@ -127,6 +128,9 @@ function received(data) {
       return;
     }
     switch (frame.type) {
+      case "history":
+        history(frame.events);
+        break;
       case "delta":
         grow(frame);
         break;
@@ -144,6 +148,16 @@ function received(data) {
   });
 }
 
+// The conversation's past, oldest first, as the server sent it when the
+// socket opened: each stored event the page does not show yet, a message of
+// the person's own shown as theirs.
+function history(events) {
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event.type === "message") message(event);
+    else if (event.type === "tool_call_start" || event.type === "tool_call_end") call(event, false);
+  }
+}
+
 // A piece of an answer: it grows the bubble of its stream, made at the end
 // of the conversation by its first piece.
 function grow(frame) {
@@ -158,19 +172,26 @@ function grow(frame) {
 }
 
 // A message as the store holds it: it takes the place of its stream's
-// bubble, at its index.
+// bubble, at its index, once: one the history and a delivery both bring is
+// shown once.
 function message(frame) {
   const live = streams.get(frame.stream_id);
   streams.delete(frame.stream_id);
-  const item = live ? live.item : line("message theirs", String(frame.from), "");
+  if (indexes.has(frame.index)) {
+    live?.item.remove();
+    return;
+  }
+  const own = frame.participant_id != null && frame.participant_id === user;
+  const who = own ? ownName() : String(frame.name ?? frame.participant_id ?? frame.from);
+  const item = live ? live.item : line(own ? "message mine" : "message theirs", who, "");
   item.classList.remove("streaming");
   setText(item, String(frame.text ?? ""));
   place(item, frame.index);
 }
 
 // A tool call's row: one line per call, made by its start, and its end's
-// result or failure written over it.
-function call(frame) {
+// result or failure written over it; a live end says the answer is coming.
+function call(frame, live = true) {
   end(frame.stream_id);
   const tool = frame.tool ?? {};
   const name = String(tool.name ?? "a tool");
@@ -188,7 +209,7 @@ function call(frame) {
   item.classList.toggle("failed", tool.status !== "completed");
   item.textContent = tool.status === "completed" ? `${name}: ${result}` : `${name} failed: ${result}`;
   // The model reads the result before it answers.
-  page.messages.append(waiting);
+  if (live) page.messages.append(waiting);
 }
 
 // Ends the bubble of a stream whose row is not a message: kept as it was
@@ -204,6 +225,7 @@ function end(streamId) {
 // Puts an item of the conversation at its index: before the first item with
 // a higher one, else where it is, or at the end when it is new.
 function place(item, index) {
+  indexes.add(index);
   item.dataset.index = String(index);
   for (const other of page.messages.children) {
     if (other !== item && Number(other.dataset.index) > index) {
@@ -212,6 +234,11 @@ function place(item, index) {
     }
   }
   if (!item.isConnected) page.messages.append(item);
+}
+
+// How the person's own messages are labelled.
+function ownName() {
+  return page.name.value.trim() || "You";
 }
 
 // A message's item: who wrote it, and its text.

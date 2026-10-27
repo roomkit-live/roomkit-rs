@@ -73,6 +73,20 @@ pub(super) async fn connect(
     // once the client is connected misses it; an upgrade that fails drops
     // the registration with the callback.
     let connection = app.websocket.register_connection(room_id.clone(), streams);
+    // Read once it is registered: an event committed meanwhile reaches it
+    // live, in its history, or both, which a client tells apart by index.
+    if app.history > 0 {
+        match app.history_frame(&room_id).await {
+            Ok(frame) => {
+                // A queue just made has room for it.
+                let _queued = connection.0.send(frame);
+            }
+            Err(error) => println!(
+                "  {:?}'s history could not be read: {error}",
+                room_id.as_str()
+            ),
+        }
+    }
     // The frame's limit too: a frame is refused at its header, before the
     // library reads its body, up to 16 MiB by default.
     upgrade
