@@ -16,6 +16,8 @@
 //! - [`WebSocketChannel`]: a WebSocket transport, its connections each
 //!   following a room;
 //! - [`TempDatabase`]: a database file the example leaves nothing of;
+//! - [`mcp`]: a shop's MCP server over stdio, which the MCP example runs
+//!   as its own process, and what is left of the processes it started;
 //! - [`Checks`]: the checks that make an example verify what it shows, and
 //!   its exit code.
 
@@ -25,6 +27,7 @@ mod agents;
 mod checks;
 mod clock;
 mod files;
+pub mod mcp;
 mod observe;
 mod openai;
 mod print;

@@ -30,6 +30,8 @@ tokio = { workspace = true, features = ["net", "io-util"] }
 [dev-dependencies]
 axum.workspace = true
 futures-util.workspace = true
+# The MCP example's (mcp_tools.rs), which starts itself as its MCP server.
+roomkit-mcp.workspace = true
 roomkit-sqlite.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 tokio-tungstenite.workspace = true
@@ -144,6 +146,10 @@ path = "agent_tools.rs"
 [[example]]
 name = "agent_skills"
 path = "agent_skills.rs"
+
+[[example]]
+name = "mcp_tools"
+path = "mcp_tools.rs"
 
 # A server: an agent over WebSocket, kept in SQLite.
 
