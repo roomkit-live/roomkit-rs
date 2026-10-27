@@ -80,17 +80,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Crates
 
-- `roomkit-core`: the sans-IO core, the RFC's model, rules and pipeline
-  operations, with no I/O and no async runtime.
-- `roomkit`: the runtime on tokio, `RoomKit`, the `Channel`,
-  `ConversationStore` and `InboundRoomRouter` traits, the in-memory store.
-- `roomkit-openai`: `OpenAiAgent`, an AI agent channel answering through
-  an OpenAI-compatible Chat Completions endpoint.
+A service depends on `roomkit` and on the crates it needs beside it:
+
+- `roomkit`: the runtime on tokio: `RoomKit`, the `Channel`,
+  `ConversationStore` and `InboundRoomRouter` traits, the hooks and the
+  typed tool hooks, streamed delivery, the in-memory turn backend, the
+  in-memory store, and the test channels of `roomkit::testing`. It
+  re-exports the core's model whole as `roomkit::model`.
+- `roomkit-ai`: `AiAgent`, the AI channel over any `AiProvider`: the tool
+  loop, `Toolset`, `Tools` and `ToolPolicy`, streamed answers, skills from
+  the host's directories, an MCP server's instructions, and a scripted
+  provider for tests.
+- `roomkit-openai`: `OpenAiAgent`, `roomkit-ai`'s AI channel over an
+  OpenAI-compatible Chat Completions endpoint.
 - `roomkit-sqlite`: `SqliteStore`, a store in one SQLite file, on the Python
   implementation's schema: either implementation reads the other's file,
   as long as its channel types are ones Python lists. A type of your own
   (`ChannelType::new("slack")`) makes its room unreadable to Python until
   Python opens its type (RMK-986).
+- `roomkit-mcp`: `McpCommand` and `McpServer`, the tools of an MCP server
+  started over stdio, served to an AI agent as a `Toolset`.
+
+`roomkit-core` is the sans-IO core: the RFC's model, rules and pipeline
+operations, with no I/O and no async runtime. It is no service's API: what
+`roomkit` does not re-export of it, the effect protocol and the rules the
+driver and the stores call, may change in any 0.x release.
 
 ## Examples
 

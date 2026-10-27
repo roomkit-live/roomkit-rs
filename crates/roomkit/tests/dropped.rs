@@ -16,10 +16,10 @@ use roomkit::model::{
     EventUpdates, Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId,
     Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
 };
-use roomkit::store::{RoomCounters, TargetUpdate};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    ConversationStore, EventFilter, FrameworkEvent, InMemoryStore, RoomFilter, RoomKit, StoreError,
+    ConversationStore, EventFilter, FrameworkEvent, InMemoryStore, RoomCounters, RoomFilter,
+    RoomKit, StoreError, TargetUpdate,
 };
 use tokio::sync::{Notify, broadcast};
 

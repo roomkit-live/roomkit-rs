@@ -5,8 +5,7 @@
 use std::collections::BTreeSet;
 
 use roomkit::model::{ChannelId, EventId, EventStatus, EventUpdates, RoomEvent, RoomId};
-use roomkit::store::{RoomCounters, TargetUpdate};
-use roomkit::{EventFilter, StoreError};
+use roomkit::{EventFilter, RoomCounters, StoreError, TargetUpdate};
 use roomkit_core::rules::edits::{self, Mutation};
 use roomkit_core::rules::idempotency;
 use rusqlite::{Connection, OptionalExtension, params};

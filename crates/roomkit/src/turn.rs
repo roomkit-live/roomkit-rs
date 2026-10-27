@@ -105,6 +105,10 @@ impl std::fmt::Debug for TurnHost {
 }
 
 /// What the gate decided on a call before it runs (RFC §9.3, §21.1).
+///
+/// For roomkit-ai's tool loop, which reads it from
+/// `TurnHost::before_tool_use`.
+#[doc(hidden)]
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ToolGate {
@@ -197,6 +201,10 @@ impl TurnHost {
     /// refuses the call with its reason; a hook that raises or runs past its
     /// timeout refuses it with the fixed refusal, the trigger failing closed,
     /// its name and error going to the observers alone.
+    ///
+    /// For roomkit-ai's tool loop, which calls it once per call: a tool or
+    /// a channel that calls it too runs the hooks twice.
+    #[doc(hidden)]
     pub async fn before_tool_use(&self, call: &ToolCall) -> ToolGate {
         let mut arguments = call.arguments.clone();
         for (spec, handler) in self.hooks(HookTrigger::BeforeToolUse) {
@@ -259,6 +267,10 @@ impl TurnHost {
     /// `blocked`. A hook that raises or runs past its timeout is skipped. A
     /// call that was not served is returned as it is: a firing that cannot
     /// serve it reaches the observers only.
+    ///
+    /// For roomkit-ai's tool loop, which calls it once per call: a tool or
+    /// a channel that calls it too runs the hooks twice.
+    #[doc(hidden)]
     pub async fn on_tool_call(&self, mut event: ToolCallEvent) -> ToolCallEvent {
         if event.outcome != Some(ToolCallOutcome::Served) {
             return event;
@@ -276,7 +288,7 @@ impl TurnHost {
                 Ok(Ok(ToolVerdict::Keep)) => {}
                 Ok(Ok(ToolVerdict::Replace(result))) => event.result = result,
                 Ok(Ok(ToolVerdict::Block(reason))) => {
-                    let withheld = Value::String(error_envelope(&reason));
+                    let withheld = Value::String(withheld(reason));
                     return event.ended(ToolCallOutcome::Blocked, withheld);
                 }
                 Ok(Err(error)) => skipped(&spec, &error.to_string()),
@@ -295,6 +307,10 @@ impl TurnHost {
     /// draws nothing, and what they send is at least as deep as the turn
     /// was now, once the turn is over too (RFC §8.3, "The hook calls of a
     /// cascade").
+    ///
+    /// For roomkit-ai's tool loop, which calls it once per call: a tool or
+    /// a channel that calls it too runs the hooks twice.
+    #[doc(hidden)]
     pub fn report_tool_call(&self, event: &ToolCallEvent) {
         {
             let mut calls = self.calls();
@@ -382,6 +398,14 @@ impl TurnHost {
             call,
         )
     }
+}
+
+/// What the model reads of a result a hook withheld: its reason in an
+/// error's envelope, or `{"error": "blocked"}` when it gave none or a blank
+/// one, as the reference implementation writes it (RFC §9.3).
+fn withheld(reason: Option<String>) -> String {
+    let reason = reason.filter(|reason| !reason.trim().is_empty());
+    error_envelope(reason.as_deref().unwrap_or("blocked"))
 }
 
 /// A call refused by a hook's block: its reason as the model reads it, or

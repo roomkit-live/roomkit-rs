@@ -6,8 +6,7 @@ use roomkit::model::{
     ChannelId, DeleteContent, EventContent, EventStatus, EventType, EventUpdates, Room, RoomEvent,
     RoomId, Timestamp,
 };
-use roomkit::store::TargetUpdate;
-use roomkit::{ConversationStore, EventFilter, StoreError};
+use roomkit::{ConversationStore, EventFilter, StoreError, TargetUpdate};
 use serde_json::json;
 
 use super::{

@@ -114,7 +114,7 @@ async fn a_sync_on_tool_call_hook_replaces_then_withholds_a_result() {
             let second = event.call.id == "c2";
             async move {
                 Ok(if second {
-                    ToolVerdict::Block("Withheld by policy".to_owned())
+                    ToolVerdict::block("Withheld by policy")
                 } else {
                     ToolVerdict::Replace(json!({ "order": "1", "status": "[redacted]" }))
                 })
@@ -146,6 +146,29 @@ async fn a_sync_on_tool_call_hook_replaces_then_withholds_a_result() {
             ],
             2
         )
+    );
+}
+
+/// RFC §9.3: a result withheld with no reason, or a blank one, reads
+/// `{"error": "blocked"}`, as the reference implementation writes it.
+#[tokio::test]
+async fn a_result_withheld_without_a_reason_reads_blocked() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "lookup_order", r#"{"order": "1"}"#)]),
+        ScriptedRound::calling("", [("c2", "lookup_order", r#"{"order": "2"}"#)]),
+        ScriptedRound::answering("Done."),
+    ]);
+    let room = Room::new(model.clone(), served()).await;
+    room.kit
+        .on_tool_call("withhold", |event, _context| {
+            let reason = (event.call.id == "c2").then(|| "  ".to_owned());
+            async move { Ok(ToolVerdict::Block(reason)) }
+        })
+        .unwrap();
+    room.says("Orders 1 and 2?").await;
+    assert_eq!(
+        tool_results(&model)[2],
+        [r#"{"error": "blocked"}"#, r#"{"error": "blocked"}"#]
     );
 }
 

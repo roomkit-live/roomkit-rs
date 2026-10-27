@@ -287,9 +287,7 @@ impl ToolHook {
     ) -> HookOutcome<ToolVerdict> {
         let result = self.react(&event, &context).await?;
         Ok(match result["action"].as_str() {
-            Some("block") => {
-                ToolVerdict::Block(result["reason"].as_str().unwrap_or_default().to_owned())
-            }
+            Some("block") => ToolVerdict::Block(result["reason"].as_str().map(str::to_owned)),
             Some("modify") => match result["event"].get("result") {
                 Some(replaced) => ToolVerdict::Replace(replaced.clone()),
                 None => return Err("a modify of a tool call patches its result".into()),

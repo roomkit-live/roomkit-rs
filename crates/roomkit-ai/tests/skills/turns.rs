@@ -266,7 +266,7 @@ async fn an_activation_withheld_by_a_hook_is_not_recorded() {
             let first = !withheld.swap(true, std::sync::atomic::Ordering::SeqCst);
             async move {
                 Ok(if first {
-                    ToolVerdict::Block("withheld by the host".to_owned())
+                    ToolVerdict::block("withheld by the host")
                 } else {
                     ToolVerdict::Keep
                 })

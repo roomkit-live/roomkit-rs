@@ -21,7 +21,8 @@
 //!   reaching its rooms only (RFC §17.2); the kit itself acts for none.
 //! - [`InboundRoomRouter`]: a routing strategy; [`DefaultRouter`] is the
 //!   RFC's.
-//! - [`store`]: where rooms live, in memory by default.
+//! - [`ConversationStore`]: where rooms and their timelines live (RFC §14),
+//!   [`InMemoryStore`] by default.
 //! - [`testing`]: a recording transport and an echo agent, for tests and
 //!   examples.
 //! - [`transcript`]: the conversation an agent's turn hands its model, each
@@ -41,10 +42,9 @@
 //! The core's model is re-exported whole as [`model`]. Of its operations
 //! and rules, only what a caller names is: the results and errors of the
 //! kit's calls, the framework events, what a channel declares and how it
-//! writes its addresses, the routing query a router answers and the default
-//! strategy's decision ([`default_route`]), the environment, and the rules
-//! that read an event; the protocol the driver speaks with the core stays
-//! the core's.
+//! writes its addresses, the routing query a router answers, what a store's
+//! commit writes, the environment, and the rules that read an event; the
+//! protocol the driver speaks with the core stays the core's.
 
 mod channel;
 mod context;
@@ -58,7 +58,7 @@ mod kit;
 mod locks;
 mod queues;
 mod router;
-pub mod store;
+mod store;
 mod stream;
 mod tasks;
 pub mod testing;
@@ -82,7 +82,7 @@ pub use roomkit_core::rules::hook_registry::{
 };
 pub use roomkit_core::rules::instructions::turn_context;
 pub use roomkit_core::rules::lifecycle::Transition;
-pub use roomkit_core::rules::routing::{Candidate, RouteQuery, Sender, route as default_route};
+pub use roomkit_core::rules::routing::{RouteQuery, Sender as RouteSender};
 pub use roomkit_core::rules::transcoding::text_of;
 pub use roomkit_core::rules::transcript;
 
@@ -95,7 +95,8 @@ pub use self::host::HostChannel;
 pub use self::kit::{OrganizationKit, RoomKit, TimerSweeper, WeakRoomKit};
 pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
 pub use self::store::{
-    ConversationStore, EventFilter, InMemoryStore, RoomFilter, StoreError, StoreFailure,
+    ConversationStore, EventFilter, InMemoryStore, RoomCounters, RoomFilter, StoreError,
+    StoreFailure, TargetUpdate,
 };
 pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem};
 pub use self::tools::{ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict};

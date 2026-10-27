@@ -17,6 +17,16 @@
 //!   the inbound pipeline and direct injection, the room lifecycle, the
 //!   host's direct changes of stored events and records committed outside
 //!   the pipeline.
+//!
+//! # Not a service's API
+//!
+//! A service depends on `roomkit`, the runtime, and on the crates beside
+//! it (`roomkit-ai`, `roomkit-openai`, `roomkit-sqlite`, `roomkit-mcp`),
+//! never on this crate: `roomkit` re-exports the [`model`] whole and, of the
+//! rules and operations, what a service names. The rest of this crate, the
+//! effect protocol ([`ops::Operation`], [`ops::Effect`], ...) and the rules
+//! the driver and the stores call, serves them, and may change in any 0.x
+//! release.
 
 pub mod model;
 pub mod ops;

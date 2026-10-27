@@ -193,6 +193,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// seconds for a cancelled turn to end. A turn already submitted keeps
     /// the bounds it started with.
     pub fn set_turn_timeouts(&self, timeouts: TurnTimeouts) {
+        // The cancel bound is read as it is set: a field set directly is
+        // kept to a millisecond too, as `with_cancel` keeps it.
+        let timeouts = timeouts.with_cancel(timeouts.cancel);
         self.inner.turns.set_timeouts(timeouts);
     }
 

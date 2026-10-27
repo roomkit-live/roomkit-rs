@@ -126,8 +126,16 @@ pub enum ToolVerdict {
     /// value as its JSON; the next hook reads it too.
     Replace(Value),
     /// The result is withheld: the call fails, `blocked`, and the model
-    /// reads the reason as `{"error": "<reason>"}`.
-    Block(String),
+    /// reads the reason, the hook's own words, as `{"error": "<reason>"}`;
+    /// with none, or a blank one, `{"error": "blocked"}`.
+    Block(Option<String>),
+}
+
+impl ToolVerdict {
+    /// Withholds the result, the model reading `reason`.
+    pub fn block(reason: impl Into<String>) -> Self {
+        Self::Block(Some(reason.into()))
+    }
 }
 
 /// How a tool hook registers: its name, unique among the kit's hooks, its

@@ -101,10 +101,10 @@ impl<S: ConversationStore, R: InboundRoomRouter<S>> DynRouter<S> for R {
 /// It reads every ACTIVE and PAUSED room of the caller's organization the
 /// channel reaches, with its bindings and participants, and what the room
 /// has heard on the channel when it is the one room bound to it step 3
-/// considers ([`candidates`](Self::candidates)); [`default_route`](crate::default_route)
-/// decides on what it read, comparing addresses in the channel's form, so a
-/// strategy wrapping the default reads the same rooms and decides as it
-/// does. A message is routed in a number of store reads that grows with the
+/// considers, then decides on what it read, comparing addresses in the
+/// channel's form. A strategy wrapping the default calls its
+/// [`route`](InboundRoomRouter::route) for the rooms it does not decide
+/// itself. A message is routed in a number of store reads that grows with the
 /// rooms its channel reaches. A room step 3 refuses because its binding
 /// holds a value under the recipient key that is not a recipient is logged
 /// as a warning naming the binding and the value's type (RFC §5.7).
@@ -155,7 +155,7 @@ impl DefaultRouter {
     /// # Errors
     ///
     /// Returns the store's error when a read fails.
-    pub async fn candidates<S: ConversationStore>(
+    pub(crate) async fn candidates<S: ConversationStore>(
         store: &S,
         query: &RouteQuery,
     ) -> Result<Vec<Candidate>, StoreError> {

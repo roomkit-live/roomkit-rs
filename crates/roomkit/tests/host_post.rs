@@ -19,11 +19,10 @@ use roomkit::model::{
     IdentityId, InboundMessage, Observation, Participant, ParticipantId, Post, Room, RoomContext,
     RoomEvent, RoomId, RoomOptions, RoomUpdates, Task, Timestamp,
 };
-use roomkit::store::{RoomCounters, TargetUpdate};
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConfigError, ConversationStore, EventFilter,
     FrameworkEvent, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore, InboundError,
-    KitError, LifecycleError, RoomFilter, RoomKit, StoreError, text_of,
+    KitError, LifecycleError, RoomCounters, RoomFilter, RoomKit, StoreError, TargetUpdate, text_of,
 };
 use tokio::sync::Notify;
 

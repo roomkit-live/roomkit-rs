@@ -194,6 +194,9 @@ impl Channel for EchoAgent {
 /// a turn cross, never to build on. A request is written whole for the
 /// tap, its events included, which the in-memory backend hands over as
 /// they are (RFC §10.6.1).
+///
+/// It keeps every message, unbounded: set it for a test, not for a kit's
+/// life.
 #[derive(Clone, Debug, Default)]
 pub struct TurnTap {
     messages: Arc<Mutex<Vec<TappedMessage>>>,

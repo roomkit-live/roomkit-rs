@@ -7,8 +7,7 @@ use roomkit::model::{
     Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
     Task,
 };
-use roomkit::store::{RoomCounters, TargetUpdate};
-use roomkit::{ConversationStore, EventFilter, RoomFilter, StoreError};
+use roomkit::{ConversationStore, EventFilter, RoomCounters, RoomFilter, StoreError, TargetUpdate};
 
 use crate::connection::Database;
 use crate::error::OpenError;

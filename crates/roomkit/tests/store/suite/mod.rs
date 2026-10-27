@@ -12,13 +12,12 @@ mod members;
 mod rooms;
 mod routing;
 
-use roomkit::ConversationStore;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EditContent,
     EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, ParticipantId,
     Room, RoomEvent, RoomId, RoomUpdates, Timestamp,
 };
-use roomkit::store::RoomCounters;
+use roomkit::{ConversationStore, RoomCounters};
 
 use crate::Store;
 
