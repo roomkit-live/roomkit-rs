@@ -995,6 +995,36 @@ members = ["channels", "admits", "intersect"]
 reason = "decision 16: a helper public in Rust and private in Python is hidden"
 
 [[pending]]
+lot = 2
+python = "roomkit.DeliveryError"
+members = ["__init__"]
+reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
+
+[[pending]]
+lot = 2
+python = "roomkit.DeliveryResult"
+members = ["__init__"]
+reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
+
+[[pending]]
+lot = 2
+python = "roomkit.HookResult"
+members = ["__init__"]
+reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
+
+[[pending]]
+lot = 2
+python = "roomkit.InjectedEvent"
+members = ["__init__"]
+reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
+
+[[pending]]
+lot = 2
+python = "roomkit.ProviderResult"
+members = ["__init__"]
+reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
+
+[[pending]]
 lot = 3
 python = "roomkit.FrameworkEvent"
 members = ["__init__"]

@@ -284,6 +284,26 @@ class Members(unittest.TestCase):
         )
         self.assertEqual(found(report), [])
 
+    def test_a_model_python_fills_and_rust_builds_by_literal_alone(self) -> None:
+        report = run(
+            [
+                struct("roomkit::model::ProviderResult", fields=[("success", "bool"), ("error", "Option<String>")]),
+                struct("roomkit::model::RoomTimers", fields=[("inactive_after_seconds", "Option<u64>")], impls=["Default"]),
+                struct("roomkit::model::RateLimit", fields=[("max_per_second", "Option<f64>")]),
+                struct("roomkit::model::Pair", fields=[("left", "u8"), ("right", "u8")]),
+            ],
+            {
+                "roomkit.ProviderResult": {"__init__": ["def", "*", "success", "error=None"]},
+                "roomkit.RoomTimers": {"__init__": ["def", "*", "inactive_after_seconds=None"]},
+                "roomkit.models.RateLimit": {"__init__": ["def", "*", "max_per_second=None"]},
+                "roomkit.Pair": {"__init__": ["def", "*", "left", "right"]},
+            },
+        )
+        self.assertEqual(
+            found(report),
+            [("python", "roomkit.ProviderResult.__init__"), ("python", "roomkit.models.RateLimit.__init__")],
+        )
+
     def test_variants_and_associated_constants_are_enum_members(self) -> None:
         report = run(
             [

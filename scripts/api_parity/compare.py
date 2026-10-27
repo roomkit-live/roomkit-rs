@@ -209,6 +209,8 @@ class Comparison:
             self._model_fields(cls, init, renames)
             if new is not None:
                 self._model_new(cls, init, new)
+            else:
+                self._model_without_new(cls, init, "Default" in item.get("impls", []))
         elif new is not None:
             path = f"{cls.path}::{new['name']}"
             self._params(path, new, f"{cls.python}.__init__", init, (cls.path, cls.python), renames)
@@ -235,6 +237,19 @@ class Comparison:
         for name, field_ in cls.fields.items():
             if not any(self._same(param.name, renames.get(name, name), field_["type"]) for param in params):
                 self._find("rust", f"{cls.path}::{name}", "no Python parameter", cls.path, cls.python)
+
+    def _model_without_new(self, cls: _Class, init: list, default: bool) -> None:
+        """A model Rust builds by struct literal alone cannot take Python's
+        defaults: `new(<required fields>)` sets them, or `Default` when
+        Python requires nothing (convention 4)."""
+        params = python_signature(init)
+        defaulted = [param.name for param in params if not param.required]
+        required = [param.name for param in params if param.required]
+        if not defaulted or (default and not required):
+            return
+        by = f"new({', '.join(required)})" if required else "new or Default"
+        detail = f"Python defaults {', '.join(defaulted)}: no Rust {by} sets them"
+        self._find("python", f"{cls.python}.__init__", detail, cls.path, cls.python)
 
     def _model_new(self, cls: _Class, init: list, new: dict) -> None:
         params = python_signature(init)
