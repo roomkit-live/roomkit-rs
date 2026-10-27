@@ -156,10 +156,16 @@ as it stands.
   that says `isError` is a failed call whose words the model reads. What a
   server sends is bounded: a message at 4 MiB, the listing at 1,000 pages
   and 512 tools, a name at 128 characters, a description at 4,096, a
-  schema at 32 KiB, a result at 100,000 characters. The process stops at
-  `close()` (its input closed, 2 seconds of grace by default, then a kill),
-  when the kit of the agent serving its tools shuts down, and when its last
-  handle is dropped; one that exits on its own is waited for at once.
+  schema at 32 KiB, a result at 100,000 characters. On Unix the server
+  leads a process group of its own, so that what it starts (the real
+  server behind `npx` or `uvx`) stops with it, as the reference
+  implementation's SDK stops it: at `close()` its input is closed, 2
+  seconds of grace by default, then `SIGTERM` to the group and `SIGKILL`
+  after the grace again; the same when the kit of the agent serving its
+  tools shuts down, when its last handle is dropped and at a failed
+  connection; one that exits on its own is waited for at once, its group
+  ended. In its own group the server no longer receives a terminal's
+  Ctrl+C, which a host that shuts its kit down on Ctrl+C covers.
   `AiAgent::with_server_instructions` and
   `OpenAiAgent::with_server_instructions` carry what a server published
   (`McpServer::instructions`) in every system prompt, after the agent's
