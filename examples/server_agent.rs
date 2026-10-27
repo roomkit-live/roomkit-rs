@@ -3,6 +3,7 @@
 //! through the `websocket` channel, an agent answering each message through
 //! an OpenAI-compatible endpoint (RFC §6.4), and the rooms in a SQLite file
 //! (RFC §14), so that a restarted server goes on with each conversation.
+//! The server is the examples' own, in `shared/server.rs`.
 //!
 //! - A connection to `/conversations/{conversation}?user=alice&name=Alice`
 //!   is the participant `alice`, named Alice, of the room whose id is the
@@ -87,70 +88,33 @@
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
 
-use std::collections::HashMap;
+use std::env;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::pin::pin;
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::time::Duration;
-use std::{env, io};
 
-use axum::Router;
-use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
-use axum::extract::{self, Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use roomkit::model::{
-    BindingOptions, ChannelId, EventContent, EventType, InboundMessage, Participant, ParticipantId,
-    Post, RoomEvent, RoomId,
-};
-use roomkit::{
-    ConversationStore, Environment, HookTrigger, KitError, RoomKit, SystemEnvironment, text_of,
-};
-use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, Tools};
-use roomkit_openai::{OpenAiAgent, OpenAiConfig};
+use roomkit::model::{EventContent, EventType, Post, RoomEvent, RoomId};
+use roomkit::{ConversationStore, HookTrigger, text_of};
 use roomkit_sqlite::SqliteStore;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
-use tokio::sync::{Mutex, mpsc, watch};
-use tokio::task::JoinHandle;
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::{WebSocketStream, tungstenite};
 
-use shared::{
-    Checks, FakeOpenAi, OpenAiEndpoint, Registration, Reply, TempDatabase, WebSocketChannel,
+use shared::bakery::{ORDER_42, SYSTEM_PROMPT};
+use shared::server::{
+    AgentServer, CHECKING, MESSAGE_LIMIT, Patience, SERVING, STOPPED, TURN_FAILED,
 };
-
-const SYSTEM_PROMPT: &str = "You answer the customers of a bakery, in one short sentence.";
+use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, TempDatabase};
 
 /// Where `--serve` listens unless told another address, and the file it
 /// keeps its rooms in.
 const SERVE_ADDRESS: &str = "127.0.0.1:8080";
 const SERVE_DATABASE: &str = "server_agent.db";
-
-/// What a client is told when the agent's turn on its message failed,
-/// when the room refused its message, and when the server stopped before
-/// the answer: none says more, so that no provider's error or room's state
-/// reaches it.
-const TURN_FAILED: &str = "the agent could not answer";
-const REFUSED: &str = "the room refused the message";
-const STOPPED: &str = "the server stopped before the answer";
-
-/// The longest conversation id, user id and name a connection may give, in
-/// characters, and what the server answers a connection that names one
-/// wrong.
-const ID_LIMIT: usize = 64;
-const NAMING: &str = "a conversation and a user of 1 to 64 letters, digits, _ or -, and a \
-                      name of 64 characters at most with no control character, are needed";
-
-/// The largest message, and frame, a connection may send, in bytes.
-const MESSAGE_LIMIT: usize = 64 * 1024;
 
 /// The conversation of the checks, and what is said in it.
 const CONVERSATION: &str = "bakery";
@@ -181,9 +145,6 @@ fn script() -> Vec<Reply> {
     script.insert(1, lookup);
     script
 }
-
-/// The order the lookup finds.
-const ORDER_42: &str = r#"{"items":"two loaves","order":"42","pickup":"5 pm","status":"ready"}"#;
 
 /// Another conversation on the first server, and what Carol asks in it.
 const PANTRY: &str = "pantry";
@@ -249,496 +210,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     check().await
 }
 
-/// A running server: its address, its kit over the SQLite file, and what
-/// stops it.
-struct Server {
-    address: SocketAddr,
-    kit: RoomKit<SqliteStore>,
-    stop: watch::Sender<bool>,
-    serving: JoinHandle<io::Result<()>>,
-    websocket: WebSocketChannel,
-    live: Live,
-    patience: Patience,
-}
-
-/// How long the server waits on a client and on its own work.
-#[derive(Clone, Copy, Debug)]
-struct Patience {
-    /// How long one frame's send may take before its client is taken for
-    /// gone: one that stopped reading (the Python implementation's
-    /// `send_timeout`, 5 seconds by default).
-    send: Duration,
-    /// How long a stop waits for the connections and the kit's work to
-    /// end.
-    grace: Duration,
-}
-
-/// The server's patience when it serves; the checks' is shorter, so that
-/// they run in milliseconds.
-const SERVING: Patience = Patience {
-    send: Duration::from_secs(5),
-    grace: Duration::from_secs(10),
-};
-const CHECKING: Patience = Patience {
-    send: Duration::from_millis(100),
-    grace: Duration::from_secs(2),
-};
-
-/// What each request and connection of the server works with.
-#[derive(Clone)]
-struct App {
-    kit: RoomKit<SqliteStore>,
-    websocket: WebSocketChannel,
-    agent: ChannelId,
-    /// One join at a time, so that a conversation's room is created once.
-    joining: Arc<Mutex<()>>,
-    stopping: watch::Receiver<bool>,
-    live: Live,
-    patience: Patience,
-}
-
-/// How many connections the server runs, each counted from its upgrade
-/// request to its end, so that a stop sees the last one end.
-#[derive(Clone)]
-struct Live(Arc<watch::Sender<usize>>);
-
-/// One connection counted, until it is dropped.
-struct Counted(Live);
-
-impl Live {
-    fn new() -> Self {
-        Self(Arc::new(watch::Sender::new(0)))
-    }
-
-    /// Counts one more connection while the guard it returns is held.
-    fn enter(&self) -> Counted {
-        self.0.send_modify(|count| *count += 1);
-        Counted(self.clone())
-    }
-
-    /// Waits until `count` connections or fewer run.
-    async fn down_to(&self, count: usize) {
-        let mut counted = self.0.subscribe();
-        // The sender is this counter's own: it outlives the wait.
-        let _reached = counted.wait_for(|live| *live <= count).await;
-    }
-}
-
-impl Drop for Counted {
-    fn drop(&mut self) {
-        self.0.0.send_modify(|count| *count -= 1);
-    }
-}
-
-impl Server {
-    /// A server on `address` keeping its rooms in the file `database`, its
-    /// agent calling `endpoint`, waiting on its clients with `patience`.
-    async fn start(
-        database: &Path,
-        endpoint: &OpenAiEndpoint,
-        address: SocketAddr,
-        patience: Patience,
-    ) -> Result<Self, Box<dyn Error>> {
-        let kit = RoomKit::with_store(SqliteStore::open(database).await?);
-        let websocket = WebSocketChannel::new(ChannelId::new("websocket")?);
-        let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
-            .with_system_prompt(SYSTEM_PROMPT)
-            .with_history(20);
-        let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?.with_tools(orders())?;
-        let agent_id = agent.id().clone();
-        kit.register_channel(websocket.clone())?;
-        kit.register_channel(agent)?;
-
-        let (stop, stopping) = watch::channel(false);
-        let live = Live::new();
-        let app = App {
-            kit: kit.clone(),
-            websocket: websocket.clone(),
-            agent: agent_id,
-            joining: Arc::default(),
-            stopping: stopping.clone(),
-            live: live.clone(),
-            patience,
-        };
-        let listener = TcpListener::bind(address).await?;
-        let address = listener.local_addr()?;
-        let serving = tokio::spawn(listen(listener, app, stopping));
-        Ok(Self {
-            address,
-            kit,
-            stop,
-            serving,
-            websocket,
-            live,
-            patience,
-        })
-    }
-
-    /// Stops the server: it accepts no more connections and closes the
-    /// ones open. Their work and the kit's get the grace of its patience to
-    /// end; the kit is then shut down (`RoomKit::shutdown`), which ends
-    /// what still runs, and the file is closed once the last connection
-    /// let go of it.
-    ///
-    /// # Errors
-    ///
-    /// Returns the server's error, or the grace running out.
-    async fn stop(self) -> Result<(), Box<dyn Error>> {
-        let Self {
-            kit,
-            stop,
-            mut serving,
-            live,
-            patience,
-            ..
-        } = self;
-        stop.send_replace(true);
-        let ended = async {
-            let served = (&mut serving).await;
-            live.down_to(0).await;
-            kit.idle().await;
-            served
-        };
-        let ended = tokio::time::timeout(patience.grace, ended).await;
-        kit.shutdown().await;
-        let Ok(served) = ended else {
-            serving.abort();
-            return Err("the server's work outlived its grace".into());
-        };
-        Ok(served??)
-    }
-}
-
-/// The bakery's tools: `lookup_order`, finding an order by its number (RFC
-/// §6.4, §21.4). A number it does not know is refused with words the model
-/// reads.
-fn orders() -> Tools {
-    #[derive(Deserialize)]
-    struct Lookup {
-        order: String,
-    }
-    let lookup = ToolDefinition::new(
-        "lookup_order",
-        "Find a customer's order by its number: what it holds, its status and its pickup time.",
-        json!({
-            "type": "object",
-            "properties": { "order": { "type": "string", "description": "The order's number" } },
-            "required": ["order"],
-        }),
-    );
-    Tools::new().tool(lookup, |call, _context| async move {
-        let Lookup { order } = roomkit_ai::arguments(&call)?;
-        if order != "42" {
-            return Err(ToolError::refused(format!("There is no order {order}.")));
-        }
-        let found: Value = serde_json::from_str(ORDER_42).map_err(|e| ToolError::raised(&e))?;
-        Ok(ToolOutput::Json(found))
-    })
-}
-
-/// Serves `app` on `listener` until `stopping` says to stop, then waits for
-/// the requests under way.
-async fn listen(
-    listener: TcpListener,
-    app: App,
-    mut stopping: watch::Receiver<bool>,
-) -> io::Result<()> {
-    let router = Router::new()
-        .route("/conversations/{conversation}", get(connect))
-        .with_state(app);
-    let stop = async move {
-        // A sender dropped stops the server as well.
-        let _stopped = stopping.wait_for(|stop| *stop).await;
-    };
-    axum::serve(listener, router)
-        .with_graceful_shutdown(stop)
-        .await
-}
-
-/// A connection asking to join a conversation: the conversation's id names
-/// its room, the `user` parameter its participant, `name` their name.
-async fn connect(
-    State(app): State<App>,
-    extract::Path(conversation): extract::Path<String>,
-    Query(query): Query<HashMap<String, String>>,
-    upgrade: WebSocketUpgrade,
-) -> Response {
-    let counted = app.live.enter();
-    let Some((room_id, user, name)) = named(&conversation, &query) else {
-        return (StatusCode::BAD_REQUEST, NAMING).into_response();
-    };
-    let streams = query.get("stream").is_some_and(|stream| stream == "1");
-    // A task of its own: a client that leaves drops this handler and what
-    // it awaits, which must not leave a new room half made, without its
-    // agent or its binding.
-    let joining = tokio::spawn({
-        let (app, room_id, user) = (app.clone(), room_id.clone(), user.clone());
-        async move { app.join(&room_id, &user, name).await }
-    });
-    if let Err(error) = joining.await.map_err(Into::into).and_then(|joined| joined) {
-        // What the client named is shown escaped, never as it came.
-        println!(
-            "  {:?} could not join {:?}: {error}",
-            user.as_str(),
-            room_id.as_str()
-        );
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-    // Registered before the upgrade is answered, so that no delivery made
-    // once the client is connected misses it; an upgrade that fails drops
-    // the registration with the callback.
-    let connection = app.websocket.register_connection(room_id.clone(), streams);
-    // The frame's limit too: a frame is refused at its header, before the
-    // library reads its body, up to 16 MiB by default.
-    upgrade
-        .max_frame_size(MESSAGE_LIMIT)
-        .max_message_size(MESSAGE_LIMIT)
-        .on_upgrade(move |socket| app.converse(socket, counted, connection, room_id, user))
-}
-
-/// The room, the participant and the name a connection to `conversation`
-/// with `query` names, when each is one the server takes: a conversation
-/// and a user of 1 to 64 ASCII letters, digits, `_` or `-`, and a name, if
-/// any, of 64 characters at most, none a control character. An empty name
-/// is none.
-fn named(
-    conversation: &str,
-    query: &HashMap<String, String>,
-) -> Option<(RoomId, ParticipantId, Option<String>)> {
-    let plain = |id: &str| {
-        (1..=ID_LIMIT).contains(&id.len())
-            && id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-    };
-    let user = query.get("user").filter(|user| plain(user))?;
-    if !plain(conversation) {
-        return None;
-    }
-    let name = query.get("name").filter(|name| !name.is_empty());
-    if name
-        .is_some_and(|name| name.chars().count() > ID_LIMIT || name.chars().any(char::is_control))
-    {
-        return None;
-    }
-    Some((
-        RoomId::new(conversation).ok()?,
-        ParticipantId::new(user.as_str()).ok()?,
-        name.cloned(),
-    ))
-}
-
-impl App {
-    /// Makes `user` a participant of the room `room_id`, named `name`,
-    /// creating the room with the agent and the `websocket` channel
-    /// attached when it is new. A participant is written through the store
-    /// (RFC §14.1); one the room has already is kept as it is.
-    async fn join(
-        &self,
-        room_id: &RoomId,
-        user: &ParticipantId,
-        name: Option<String>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let _one_at_a_time = self.joining.lock().await;
-        let store = self.kit.store();
-        if store.get_room(room_id).await?.is_none() {
-            self.kit.create_room(room_id).await?;
-            self.kit.attach(room_id, &self.agent).await?;
-            // Several people share the channel's conversation (RFC §10.4).
-            let mut group = BindingOptions::default();
-            group.group = true;
-            self.kit
-                .attach_with(room_id, self.websocket.id(), group)
-                .await?;
-        }
-        if store.get_participant(room_id, user).await?.is_none() {
-            let mut person = Participant::new(
-                user.clone(),
-                room_id.clone(),
-                self.websocket.id().clone(),
-                SystemEnvironment.now(),
-            );
-            person.display_name = name;
-            store.create_participant(person).await?;
-        }
-        Ok(())
-    }
-
-    /// Runs a connection of `user` in `room_id`: each text frame it sends is
-    /// their message, and the room's deliveries go out on it, until it
-    /// closes or the server stops.
-    ///
-    /// A connection whose writer stops, its client gone or not reading,
-    /// ends at once, reader included: what it would send then never enters
-    /// the room.
-    async fn converse(
-        self,
-        socket: WebSocket,
-        _counted: Counted,
-        (registration, frames): (Registration, mpsc::Receiver<String>),
-        room_id: RoomId,
-        user: ParticipantId,
-    ) {
-        let (outgoing, incoming) = socket.split();
-        let patience = self.patience.send;
-        let mut writer = pin!(write(outgoing, frames, patience));
-        let ending = tokio::select! {
-            _ = &mut writer => return,
-            ending = self.read(incoming, &registration, &room_id, &user) => ending,
-        };
-        drop(registration);
-        // What was queued goes out, then the close that answers the ending.
-        let Some(mut outgoing) = writer.await else {
-            return;
-        };
-        // A socket gone meanwhile has nothing more to close.
-        let _closed = match ending {
-            Ending::Broken => return,
-            Ending::Closed => tokio::time::timeout(patience, outgoing.close()).await,
-            Ending::Stopping => {
-                let close = close_frame(close_code::AWAY, "the server is stopping");
-                tokio::time::timeout(patience, outgoing.send(close)).await
-            }
-            Ending::TooLarge => {
-                let close = close_frame(close_code::SIZE, "the message is too large");
-                tokio::time::timeout(patience, outgoing.send(close)).await
-            }
-        };
-    }
-
-    /// Reads `user`'s messages on `incoming` into `room_id`, until the
-    /// client closes the connection, breaks it or sends a message over the
-    /// limit, or the server stops.
-    async fn read(
-        &self,
-        mut incoming: SplitStream<WebSocket>,
-        registration: &Registration,
-        room_id: &RoomId,
-        user: &ParticipantId,
-    ) -> Ending {
-        let mut stopping = self.stopping.clone();
-        loop {
-            let received = tokio::select! {
-                received = incoming.next() => received,
-                _ = stopping.wait_for(|stop| *stop) => return Ending::Stopping,
-            };
-            match received {
-                Some(Ok(Message::Text(text))) => {
-                    self.say(registration, room_id, user, text.as_str()).await;
-                }
-                Some(Ok(Message::Binary(_) | Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Close(_))) => return Ending::Closed,
-                Some(Err(error)) => return Ending::of(error),
-                None => return Ending::Broken,
-            }
-        }
-    }
-
-    /// `user`'s message `text`, into the room `room_id`. A message the room
-    /// refused, or whose turn failed, gets an error frame on the
-    /// connection, `{"error": "..."}`, its reason one of the server's own.
-    async fn say(
-        &self,
-        registration: &Registration,
-        room_id: &RoomId,
-        user: &ParticipantId,
-        text: &str,
-    ) {
-        let message = InboundMessage::new(
-            self.websocket.id().clone(),
-            user.as_str(),
-            EventContent::text(text),
-        );
-        let told = match self.kit.process_inbound_in(room_id, message).await {
-            Ok(result) if result.blocked => {
-                println!(
-                    "  {:?}'s message was refused: {:?}",
-                    user.as_str(),
-                    result.reason
-                );
-                REFUSED
-            }
-            Ok(result) => {
-                let Some(error) = result.error else {
-                    return;
-                };
-                println!(
-                    "  the turn on {:?}'s message failed: {:?}",
-                    user.as_str(),
-                    error.message
-                );
-                TURN_FAILED
-            }
-            // Stored, its turn ended by the kit's shutdown past the grace.
-            Err(KitError::ShutDown) => {
-                println!("  the server stopped before {:?}'s answer", user.as_str());
-                STOPPED
-            }
-            Err(error) => {
-                println!("  {:?}'s message was refused: {error}", user.as_str());
-                REFUSED
-            }
-        };
-        // A connection that cannot take it now is not waited for.
-        let _told = registration.send(json!({ "error": told }).to_string());
-    }
-}
-
-/// Sends each frame of `frames` on `outgoing` until the queue ends, then
-/// hands the socket back for its close. Each send gets `patience`: one that
-/// takes longer, a client that stopped reading, or that fails ends it at
-/// once, with no socket to close.
-async fn write(
-    mut outgoing: SplitSink<WebSocket, Message>,
-    mut frames: mpsc::Receiver<String>,
-    patience: Duration,
-) -> Option<SplitSink<WebSocket, Message>> {
-    while let Some(frame) = frames.recv().await {
-        let sent = tokio::time::timeout(patience, outgoing.send(Message::Text(frame.into()))).await;
-        if !matches!(sent, Ok(Ok(()))) {
-            return None;
-        }
-    }
-    Some(outgoing)
-}
-
-/// How a connection's reading ended, which decides how it is closed.
-#[derive(Clone, Copy, Debug)]
-enum Ending {
-    /// The client closed it: its close is answered.
-    Closed,
-    /// The server stops: closed with 1001, going away.
-    Stopping,
-    /// The client sent a message over the limit: closed with 1009, too
-    /// large.
-    TooLarge,
-    /// The connection broke: nothing more is sent.
-    Broken,
-}
-
-impl Ending {
-    /// The ending a read's `error` makes: too large for a message over the
-    /// limit, broken for any other.
-    fn of(error: axum::Error) -> Self {
-        match error.into_inner().downcast::<tungstenite::Error>() {
-            Ok(error) if matches!(*error, tungstenite::Error::Capacity(_)) => Self::TooLarge,
-            Ok(_) | Err(_) => Self::Broken,
-        }
-    }
-}
-
-/// A close frame of `code`, saying `reason`.
-fn close_frame(code: u16, reason: &'static str) -> Message {
-    Message::Close(Some(CloseFrame {
-        code,
-        reason: reason.into(),
-    }))
-}
-
 /// `--serve`: the server on `address`, until Ctrl+C.
 async fn serve(address: &str) -> Result<(), Box<dyn Error>> {
     let endpoint = OpenAiEndpoint::from_env(&script()).await?;
-    let server = Server::start(
+    let server = AgentServer::start(
         Path::new(SERVE_DATABASE),
         &endpoint,
         address.parse()?,
@@ -749,7 +224,7 @@ async fn serve(address: &str) -> Result<(), Box<dyn Error>> {
     println!(
         "Serving ws://{}/conversations/{{conversation}}?user=...&name=..., \
          the rooms in {SERVE_DATABASE}. Ctrl+C stops.",
-        server.address
+        server.address()
     );
     tokio::signal::ctrl_c().await?;
     server.stop().await
@@ -921,10 +396,10 @@ async fn two_people_talk(
     database: &Path,
     endpoint: &OpenAiEndpoint,
 ) -> Result<(Talked, Option<Value>), Box<dyn Error>> {
-    let server = Server::start(database, endpoint, ANY_PORT.parse()?, CHECKING).await?;
-    let mut alice = Client::connect(server.address, CONVERSATION, "alice", "Alice").await?;
-    let mut bob = Client::connect(server.address, CONVERSATION, "bob", "Bob").await?;
-    let mut carol = Client::connect(server.address, PANTRY, "carol", "Carol").await?;
+    let server = AgentServer::start(database, endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let mut alice = Client::connect(server.address(), CONVERSATION, "alice", "Alice").await?;
+    let mut bob = Client::connect(server.address(), CONVERSATION, "bob", "Bob").await?;
+    let mut carol = Client::connect(server.address(), PANTRY, "carol", "Carol").await?;
     alice.say(ALICE_ASKS).await?;
     let first = [alice.answer().await, bob.answer().await];
     bob.say(BOB_ASKS).await?;
@@ -956,8 +431,8 @@ async fn alice_goes_on(
     database: &Path,
     endpoint: &OpenAiEndpoint,
 ) -> Result<Option<String>, Box<dyn Error>> {
-    let server = Server::start(database, endpoint, ANY_PORT.parse()?, CHECKING).await?;
-    let mut alice = Client::connect(server.address, CONVERSATION, "alice", "Alice").await?;
+    let server = AgentServer::start(database, endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let mut alice = Client::connect(server.address(), CONVERSATION, "alice", "Alice").await?;
     alice.say(ALICE_AGAIN).await?;
     let answer = alice.answer().await;
     alice.close().await;
@@ -975,9 +450,10 @@ async fn a_client_reads_the_answer_as_it_is_written(
     println!("Erin reads the answer as it is written; Finn reads its rows.");
     let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(&[RYE]).await?);
     let database = TempDatabase::new("server_agent_studio");
-    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
-    let mut erin = Client::connect_streaming(server.address, STUDIO, "erin", "Erin").await?;
-    let mut finn = Client::connect(server.address, STUDIO, "finn", "Finn").await?;
+    let server =
+        AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let mut erin = Client::connect_streaming(server.address(), STUDIO, "erin", "Erin").await?;
+    let mut finn = Client::connect(server.address(), STUDIO, "finn", "Finn").await?;
     erin.say(ERIN_ASKS).await?;
     let read = erin.turn().await;
     let finn_read = finn.turn().await;
@@ -1051,8 +527,9 @@ async fn a_client_leaves_mid_answer(checks: &mut Checks) -> Result<(), Box<dyn E
     let slow = Reply::from(TERRACE_OPENS).pausing(WORD_PAUSE);
     let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(&[slow]).await?);
     let database = TempDatabase::new("server_agent_terrace");
-    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
-    let mut gina = Client::connect_streaming(server.address, TERRACE, "gina", "Gina").await?;
+    let server =
+        AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let mut gina = Client::connect_streaming(server.address(), TERRACE, "gina", "Gina").await?;
     gina.say(GINA_ASKS).await?;
     let mut read = String::new();
     for _ in 0..GINA_READS {
@@ -1067,7 +544,7 @@ async fn a_client_leaves_mid_answer(checks: &mut Checks) -> Result<(), Box<dyn E
     }
     println!("  Gina read {read:?}, and leaves");
     gina.leave();
-    tokio::time::timeout(STOP_PATIENCE, server.kit.idle()).await?;
+    tokio::time::timeout(STOP_PATIENCE, server.kit().idle()).await?;
     server.stop().await?;
     let timeline = timeline_in(database.path(), TERRACE).await?;
     let answer = timeline
@@ -1098,19 +575,21 @@ async fn a_client_stops_reading(checks: &mut Checks) -> Result<(), Box<dyn Error
     println!("Dave stops reading while the host posts large menus to the kitchen.");
     let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(ANSWERS).await?);
     let database = TempDatabase::new("server_agent_kitchen");
-    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
-    let mut dave = Client::connect_reading_little(server.address, KITCHEN, "dave", "Dave").await?;
+    let server =
+        AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let mut dave =
+        Client::connect_reading_little(server.address(), KITCHEN, "dave", "Dave").await?;
     let room = RoomId::new(KITCHEN)?;
     let menu = format!("Today's menu{}", ".".repeat(LARGE_POST));
     let mut posts = 0;
-    while server.websocket.connections() > 0 && posts < POSTS_AT_MOST {
+    while server.websocket().connections() > 0 && posts < POSTS_AT_MOST {
         server
-            .kit
+            .kit()
             .post(&room, Post::new(EventContent::text(menu.as_str())))
             .await?;
         posts += 1;
     }
-    let dropped = tokio::time::timeout(STOP_PATIENCE, server.live.down_to(0))
+    let dropped = tokio::time::timeout(STOP_PATIENCE, server.connections_down_to(0))
         .await
         .is_ok();
     println!("  after {posts} menus, Dave's connection ended: {dropped}");
@@ -1140,16 +619,17 @@ async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>
     println!("The model is unreachable.");
     let endpoint = unreachable_model().await?;
     let database = TempDatabase::new("server_agent_cellar");
-    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
-    let mut frank = Client::connect(server.address, CELLAR, "frank", "Frank").await?;
+    let server =
+        AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let mut frank = Client::connect(server.address(), CELLAR, "frank", "Frank").await?;
     frank.say("Is anyone there?").await?;
     let told = frank.next_frame(TOLD_PATIENCE).await;
     println!("  Frank receives {told:?}");
-    let mut grace = Client::connect(server.address, CELLAR, "grace", "Grace").await?;
+    let mut grace = Client::connect(server.address(), CELLAR, "grace", "Grace").await?;
     println!("Grace sends a message one byte over the limit.");
     grace.send("a".repeat(MESSAGE_LIMIT + 1)).await?;
     let too_large = grace.close_code(TOLD_PATIENCE).await;
-    let mut henry = Client::connect(server.address, CELLAR, "henry", "Henry").await?;
+    let mut henry = Client::connect(server.address(), CELLAR, "henry", "Henry").await?;
     println!("Henry announces a frame of {ANNOUNCED} bytes and sends its first KiB.");
     henry.announce(ANNOUNCED).await?;
     let refused_at_header = henry.close_code(TOLD_PATIENCE).await;
@@ -1185,7 +665,8 @@ async fn what_a_connection_must_name(checks: &mut Checks) -> Result<(), Box<dyn 
     println!("Connections that name something wrong.");
     let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(ANSWERS).await?);
     let database = TempDatabase::new("server_agent_names");
-    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let server =
+        AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
     let long = "a".repeat(65);
     let mut refused = Vec::new();
     for (what, path) in [
@@ -1219,7 +700,7 @@ async fn what_a_connection_must_name(checks: &mut Checks) -> Result<(), Box<dyn 
             format!("/conversations/bakery?user=alice&name={long}"),
         ),
     ] {
-        let status = Client::refused(server.address, &path).await?;
+        let status = Client::refused(server.address(), &path).await?;
         println!("  {what}: {status:?}");
         refused.push(status);
     }
@@ -1240,11 +721,12 @@ async fn a_client_leaves_while_it_joins(checks: &mut Checks) -> Result<(), Box<d
     println!("Ivan leaves while his join makes the porch's room.");
     let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(ANSWERS).await?);
     let database = TempDatabase::new("server_agent_porch");
-    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
+    let server =
+        AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
     let (created, mut creating) = mpsc::channel(1);
     let (release, released) = watch::channel(false);
     server
-        .kit
+        .kit()
         .observe("hold_the_porch", HookTrigger::OnRoomCreated, move |_, _| {
             let (created, mut released) = (created.clone(), released.clone());
             async move {
@@ -1253,20 +735,22 @@ async fn a_client_leaves_while_it_joins(checks: &mut Checks) -> Result<(), Box<d
                 let _released = released.wait_for(|go| *go).await;
             }
         })?;
-    let mut ivan = TcpStream::connect(server.address).await?;
-    let request =
-        Client::upgrade_request(server.address, &format!("/conversations/{PORCH}?user=ivan"));
+    let mut ivan = TcpStream::connect(server.address()).await?;
+    let request = Client::upgrade_request(
+        server.address(),
+        &format!("/conversations/{PORCH}?user=ivan"),
+    );
     ivan.write_all(request.as_bytes()).await?;
     let held = tokio::time::timeout(STOP_PATIENCE, creating.recv())
         .await
         .is_ok();
     drop(ivan);
-    let dropped = tokio::time::timeout(STOP_PATIENCE, server.live.down_to(0))
+    let dropped = tokio::time::timeout(STOP_PATIENCE, server.connections_down_to(0))
         .await
         .is_ok();
     println!("  the room's making held: {held}; Ivan's request dropped: {dropped}");
     release.send_replace(true);
-    let mut judy = Client::connect(server.address, PORCH, "judy", "Judy").await?;
+    let mut judy = Client::connect(server.address(), PORCH, "judy", "Judy").await?;
     judy.say("Is the porch open?").await?;
     let answer = judy.next_frame(TOLD_PATIENCE).await;
     println!("  Judy receives {answer:?}");
@@ -1296,8 +780,8 @@ async fn a_stop_during_a_turn(checks: &mut Checks) -> Result<(), Box<dyn Error>>
         grace: Duration::from_millis(200),
         ..CHECKING
     };
-    let server = Server::start(database.path(), &endpoint, ANY_PORT.parse()?, brief).await?;
-    let mut kim = Client::connect(server.address, GARDEN, "kim", "Kim").await?;
+    let server = AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, brief).await?;
+    let mut kim = Client::connect(server.address(), GARDEN, "kim", "Kim").await?;
     kim.say("Are the tables outside free?").await?;
     // Once the turn's request reached the model, which never answers.
     let _asked = tokio::time::timeout(STOP_PATIENCE, silent.accept()).await??;

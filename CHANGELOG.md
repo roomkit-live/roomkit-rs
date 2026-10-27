@@ -691,8 +691,8 @@ A service depends on `roomkit` and on the crates it needs beside it,
   file whose next turn reads the earlier ones and replays no call.
   `--serve [ADDRESS]` keeps it up for a person to chat with. Its WebSocket
   channel is the example's (`examples/shared/websocket.rs`), not a crate;
-  `axum`, `tokio-tungstenite` and `futures-util` are development
-  dependencies of the examples only.
+  `axum`, `tokio-tungstenite` and `futures-util` are dependencies of the
+  examples only.
 
 #### Repository
 

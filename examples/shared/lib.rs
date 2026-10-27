@@ -15,6 +15,9 @@
 //!   wire, and what the fake answers, texts or calls;
 //! - [`WebSocketChannel`]: a WebSocket transport, its connections each
 //!   following a room;
+//! - [`server`] and [`bakery`]: the bakery's agent, its prompt and its
+//!   `lookup_order` tool, served over WebSocket with its rooms in SQLite,
+//!   which the server example runs;
 //! - [`TempDatabase`]: a database file the example leaves nothing of;
 //! - [`mcp`]: a shop's MCP server over stdio, which the MCP example runs
 //!   as its own process, and what is left of the processes it started;
@@ -24,6 +27,7 @@
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
 
 mod agents;
+pub mod bakery;
 mod checks;
 mod clock;
 mod files;
@@ -31,6 +35,7 @@ pub mod mcp;
 mod observe;
 mod openai;
 mod print;
+pub mod server;
 mod sms;
 mod websocket;
 

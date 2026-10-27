@@ -22,19 +22,22 @@ serde.workspace = true
 serde_json.workspace = true
 # The fake of the OpenAI wire (shared/openai.rs) is a local HTTP server.
 tokio = { workspace = true, features = ["net", "io-util"] }
-
-# The server example's (server_agent.rs), which the shared library does not
-# use: its store, its WebSocket server and the client its checks connect
-# with, and the signal that stops it when it serves. The skills example
-# (agent_skills.rs) restarts on the same store.
-[dev-dependencies]
+# The server example's server (shared/server.rs): its WebSocket server,
+# the socket's two directions and the error of a message over its limit,
+# and its store, on which the skills example (agent_skills.rs) restarts as
+# well. The server example's checks connect with tokio-tungstenite's
+# client.
 axum.workspace = true
 futures-util.workspace = true
+roomkit-sqlite.workspace = true
+tokio-tungstenite.workspace = true
+
+# What the shared library does not use: the signal that stops the server
+# example when it serves.
+[dev-dependencies]
 # The MCP example's (mcp_tools.rs), which starts itself as its MCP server.
 roomkit-mcp.workspace = true
-roomkit-sqlite.workspace = true
 tokio = { workspace = true, features = ["signal"] }
-tokio-tungstenite.workspace = true
 
 [lints]
 workspace = true
