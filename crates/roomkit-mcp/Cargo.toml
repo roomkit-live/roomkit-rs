@@ -1,0 +1,40 @@
+[package]
+name = "roomkit-mcp"
+description = "The tools of MCP servers, started over stdio, for a RoomKit AI agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+roomkit.workspace = true
+# The Toolset an MCP server is served as (step 4, decision 7).
+roomkit-ai.workspace = true
+# MCP's client (step 4, decisions 11 and 12): the protocol over the
+# server's stdin and stdout, read through its bounded line reader. The
+# process is started here, so that it is released before a failed
+# connection reports.
+rmcp.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The server's process, its pipes, and the bounds on connecting and closing.
+tokio = { workspace = true, features = ["process", "io-util", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+
+# A stand-in MCP server the tests start over stdio, one misbehaviour per
+# mode (fixtures/fake_server.rs). A dependent never builds it.
+[[bin]]
+name = "fake-mcp-server"
+path = "fixtures/fake_server.rs"
+test = false
+doc = false
+bench = false
+
+[lints]
+workspace = true

@@ -1,0 +1,232 @@
+//! The server's process (RFC §21.2): started without a shell, with the
+//! host's environment withheld; stopped at its close, at the kit's
+//! shutdown and when its last handle is dropped; released before a failed
+//! connection reports; never blocked by its standard error. A process gone
+//! from `/proc` was waited for: no zombie is left.
+
+use std::time::Duration;
+
+use tokio::time::Instant;
+
+use pretty_assertions::assert_eq;
+use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+use roomkit_ai::{ToolContext, ToolError, ToolOutput, Toolset};
+use roomkit_mcp::{McpCommand, McpError};
+
+use super::support::{GRACE, PidFile, Room, agent, channel, exists, fake, gone_within, room_id};
+
+fn echo(text: &str) -> roomkit::model::ToolCall {
+    let arguments = serde_json::json!({ "text": text });
+    roomkit::model::ToolCall::new("call_1", "echo", arguments.as_object().cloned().unwrap())
+}
+
+fn context() -> ToolContext {
+    ToolContext::new(room_id(), channel("assistant"))
+}
+
+/// RFC §21.2: the server stops when its connection closes, and the close
+/// returns once it was waited for.
+#[tokio::test]
+async fn close_stops_the_server_and_waits_for_it() {
+    let pid_file = PidFile::new();
+    let server = pid_file.on(fake("normal")).connect().await.unwrap();
+    let pid = pid_file.pid();
+    let running = (exists(pid), server.process_id());
+    server.close().await;
+    assert_eq!(
+        (running, exists(pid), server.process_id()),
+        ((true, Some(pid)), false, None)
+    );
+}
+
+/// A server that stays once its input closes is killed past the grace.
+#[tokio::test]
+async fn a_server_that_stays_once_its_input_closes_is_killed_after_the_grace() {
+    let pid_file = PidFile::new();
+    let server = pid_file.on(fake("deaf")).connect().await.unwrap();
+    let pid = pid_file.pid();
+    let started = Instant::now();
+    let closed = tokio::time::timeout(Duration::from_secs(5), server.close()).await;
+    let took = started.elapsed();
+    assert!(closed.is_ok() && !exists(pid) && took >= GRACE, "{took:?}");
+}
+
+/// The server stops when the last handle on it is dropped: killed at once,
+/// then reaped by the runtime.
+#[tokio::test]
+async fn dropping_the_last_handle_kills_the_server() {
+    let pid_file = PidFile::new();
+    let server = pid_file.on(fake("deaf")).connect().await.unwrap();
+    let pid = pid_file.pid();
+    let clone = server.clone();
+    drop(server);
+    let after_one = exists(pid);
+    drop(clone);
+    let gone = gone_within(pid, Duration::from_secs(5)).await;
+    assert_eq!((after_one, gone), (true, true));
+}
+
+/// A server that exits while its connection is open is waited for at
+/// once: no zombie stays until the connection closes. The call it was
+/// serving fails.
+#[tokio::test]
+async fn a_server_that_exits_is_waited_for_at_once() {
+    let pid_file = PidFile::new();
+    let server = pid_file.on(fake("normal")).connect().await.unwrap();
+    let pid = pid_file.pid();
+    let mut call = echo("");
+    call.name = "crash".to_owned();
+    let failed = server.call(call, context()).await;
+    let reaped = gone_within(pid, Duration::from_secs(5)).await;
+    assert!(
+        matches!(&failed, Err(ToolError::Raised { kind, .. }) if kind == "McpError") && reaped,
+        "{failed:?}"
+    );
+    server.close().await;
+}
+
+/// The kit's shutdown closes the agent serving the server's tools, which
+/// stops the server.
+#[tokio::test]
+async fn the_kit_s_shutdown_stops_the_server_of_its_agent() {
+    let pid_file = PidFile::new();
+    let server = pid_file.on(fake("normal")).connect().await.unwrap();
+    let pid = pid_file.pid();
+    let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
+    let room = Room::with(agent(&model).with_tools(server).unwrap()).await;
+    room.says("Hello").await;
+    let running = exists(pid);
+    room.kit.shutdown().await;
+    assert_eq!((running, exists(pid)), (true, false));
+}
+
+/// RFC §21.2: a command that names no program fails to start, and no
+/// process runs.
+#[tokio::test]
+async fn a_missing_command_fails_to_start() {
+    let refused = McpCommand::new("/nonexistent/roomkit-mcp-server")
+        .connect()
+        .await
+        .err();
+    assert!(
+        matches!(&refused, Some(McpError::Spawn { program, source })
+            if program == "/nonexistent/roomkit-mcp-server"
+                && source.kind() == std::io::ErrorKind::NotFound),
+        "{refused:?}"
+    );
+}
+
+/// RFC §21.2: a server that never answers the handshake is cut at the
+/// connect bound, and its process is waited for before the error.
+#[tokio::test]
+async fn a_server_that_never_answers_the_handshake_is_stopped_before_the_error() {
+    let pid_file = PidFile::new();
+    let command = pid_file
+        .on(fake("silent"))
+        .connect_timeout(Duration::from_millis(100));
+    let refused = command.connect().await.err();
+    assert!(
+        matches!(refused, Some(McpError::Timeout { after, .. }) if after == Duration::from_millis(100))
+            && !exists(pid_file.pid())
+    );
+}
+
+/// RFC §21.2: a server that exits before it answers fails the handshake,
+/// and is waited for before the error.
+#[tokio::test]
+async fn a_server_that_exits_at_once_fails_the_handshake_and_is_waited_for() {
+    let pid_file = PidFile::new();
+    let refused = pid_file.on(fake("exit")).connect().await.err();
+    assert!(
+        matches!(refused, Some(McpError::Handshake { .. })) && !exists(pid_file.pid()),
+        "{refused:?}"
+    );
+}
+
+/// RFC §21.2: a listing the server fails stops it before the error.
+#[tokio::test]
+async fn a_listing_that_fails_stops_the_server_before_the_error() {
+    let pid_file = PidFile::new();
+    let refused = pid_file.on(fake("listing-error")).connect().await.err();
+    assert!(
+        matches!(&refused, Some(McpError::Listing { message, .. }) if message.contains("tools/list"))
+            && !exists(pid_file.pid()),
+        "{refused:?}"
+    );
+}
+
+/// The server's standard error is read as it writes: 4 MiB of it, far
+/// over a pipe's buffer, never blocks the server.
+#[tokio::test]
+async fn a_server_flooding_its_standard_error_is_not_blocked() {
+    let server = fake("stderr-flood").connect().await.unwrap();
+    let answer = server.call(echo("still here"), context()).await;
+    server.close().await;
+    assert_eq!(answer, Ok(ToolOutput::Text("still here".to_owned())));
+}
+
+/// A command that cannot start a process is refused before anything runs.
+#[tokio::test]
+async fn a_command_that_cannot_start_a_process_is_refused() {
+    let refused = [
+        McpCommand::new("").connect().await.err(),
+        fake("normal").env("A=B", "1").connect().await.err(),
+        fake("normal").env("", "1").connect().await.err(),
+        fake("normal").env("KEY", "a\0b").connect().await.err(),
+        fake("normal").arg("a\0b").connect().await.err(),
+    ];
+    assert!(
+        refused
+            .iter()
+            .all(|error| matches!(error, Some(McpError::Command { .. }))),
+        "{refused:?}"
+    );
+}
+
+/// The server inherits only the named variables of the host's
+/// environment, and those the command gives: the host's own (a model's
+/// key) are not the server's.
+#[tokio::test]
+async fn the_server_inherits_only_the_named_variables_and_its_own() {
+    let server = fake("normal")
+        .env("ROOMKIT_FAKE", "1")
+        .connect()
+        .await
+        .unwrap();
+    let mut call = echo("");
+    call.name = "env".to_owned();
+    let answer = server.call(call, context()).await.unwrap();
+    server.close().await;
+    let ToolOutput::Text(names) = answer else {
+        panic!("{answer:?}");
+    };
+    let allowed = [
+        "HOME",
+        "LOGNAME",
+        "PATH",
+        "SHELL",
+        "TERM",
+        "USER",
+        "ROOMKIT_FAKE",
+    ];
+    assert!(
+        names.split(' ').all(|name| allowed.contains(&name)) && names.contains("ROOMKIT_FAKE"),
+        "{names}"
+    );
+}
+
+/// RFC §21.2: the arguments are a list, never read by a shell: one holding
+/// a shell's syntax reaches the server as written.
+#[tokio::test]
+async fn an_argument_reaches_the_server_as_written() {
+    let written = "$(touch /tmp/roomkit-mcp-shell); `id` | cat > x; echo *";
+    let server = fake("normal")
+        .arg("--instructions")
+        .arg(written)
+        .connect()
+        .await
+        .unwrap();
+    let instructions = server.instructions().map(str::to_owned);
+    server.close().await;
+    assert_eq!(instructions.as_deref(), Some(written));
+}
