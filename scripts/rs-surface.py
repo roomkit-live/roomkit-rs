@@ -74,6 +74,8 @@ _SUMMARY = re.compile(r"<summary[^>]*>.*?</summary>", re.S)
 _ATTRIBUTE = re.compile(r'<div class="code-attribute">(.*?)</div>', re.S)
 _COMMENT = re.compile(r'<span class="comment">.*?</span>', re.S)
 _SECTION_HEADER = re.compile(r'<h2 id="([^"]+)" class="[^"]*\bsection-header\b[^"]*">')
+# Any tag holding a structural header's class, whatever its attributes' order.
+_ANY_SECTION_HEADER = re.compile(r"<h2\b[^>]*\bclass\s*=\s*[\"'][^\"']*\bsection-header\b")
 _SELF = re.compile(r"^(?:&(?:'\w+\s+)?(?:mut\s+)?|mut\s+)?self(?:\s*:.*)?$", re.S)
 _FN_HEAD = re.compile(
     r"^(?P<quals>(?:(?:pub(?:\([^)]*\))?|const|async|unsafe|extern\s+\"[^\"]*\")\s+)*)"
@@ -180,6 +182,13 @@ def _parameters(inside: str, header: str) -> tuple[str | None, list[dict]]:
     return receiver, params
 
 
+def anchors(fragment: str, prefix: str) -> int:
+    """How many tags carry an id matching the pattern `prefix`, whatever
+    their attributes' order or quotes: what a block of the page holds,
+    against which what the reader read is counted."""
+    return len(re.findall(rf"<\w+\b[^>]*?\bid\s*=\s*[\"']{prefix}", fragment))
+
+
 def _page(doc: Path, crate: str, href: str) -> str:
     path = doc / crate / href
     try:
@@ -200,7 +209,11 @@ def read_items(doc: Path, crate: str) -> list[tuple[str, str, str]]:
     where = f"{crate}/all.html"
     page = _main_content(_page(doc, crate, "all.html"), where)
     found: list[tuple[str, str, str]] = []
-    for section in re.finditer(r'<h3 id="([^"]+)">[^<]*</h3>(?:<ul class="all-items">(.*?)</ul>)?', page, re.S):
+    sections = list(re.finditer(r'<h3 id="([^"]+)">[^<]*</h3>(?:<ul class="all-items">(.*?)</ul>)?', page, re.S))
+    headings = len(re.findall(r"<h3\b", page))
+    if headings != len(sections):
+        raise SurfaceError(f"{where}: {headings} headings, of which {len(sections)} read")
+    for section in sections:
         if section.group(1) not in KINDS:
             raise SurfaceError(f"{where}: a section of items it does not know: {section.group(1)}")
         entries = re.findall(r"<li>(.*?)</li>", section.group(2) or "", re.S)
@@ -217,6 +230,9 @@ def read_items(doc: Path, crate: str) -> list[tuple[str, str, str]]:
 def _sections(body: str, where: str) -> dict[str, str]:
     """Each structural section of an item's page, by its id."""
     heads = list(_SECTION_HEADER.finditer(body))
+    written = len(_ANY_SECTION_HEADER.findall(body))
+    if written != len(heads):
+        raise SurfaceError(f"{where}: {written} section headers, of which {len(heads)} read")
     found = {}
     for index, head in enumerate(heads):
         name = head.group(1)
@@ -258,7 +274,7 @@ def _code_entries(fragment: str, prefix: str, classes: str) -> list[dict]:
 
 def _fields(sections: dict[str, str], decl: str, where: str) -> list[dict]:
     fields = _code_entries(sections.get("fields", ""), "structfield.", "structfield section-header")
-    spans = len(re.findall(r'<span id="structfield\.', sections.get("fields", "")))
+    spans = anchors(sections.get("fields", ""), r"structfield\.")
     named = sum(1 for entry in split_top(_body(decl, "{"), ",") if entry.startswith("pub "))
     tuple_ = sum(1 for entry in split_top(_body(decl, "("), ",") if entry.startswith("pub ")) if "{" not in decl else 0
     if not (len(fields) == spans == named + tuple_):
@@ -274,8 +290,12 @@ def _variants(sections: dict[str, str], decl: str, where: str) -> list[dict]:
     variants = []
     for match in re.finditer(r'<section id="variant\.([^"]+)" class="variant">.*?<h3 class="code-header">(.*?)</h3>', block, re.S):
         name = match.group(1)
-        variants.append({"name": name, "decl": text(match.group(2)), "fields": _code_entries(block, f"variant.{name}.field.", "section-header")})
-    sections_count = len(re.findall(r'<section id="variant\.', block))
+        fields = _code_entries(block, f"variant.{name}.field.", "section-header")
+        written = anchors(block, rf"variant\.{re.escape(name)}\.field\.")
+        if written != len(fields):
+            raise SurfaceError(f"{where}: variant {name}: {written} fields, of which {len(fields)} read")
+        variants.append({"name": name, "decl": text(match.group(2)), "fields": fields})
+    sections_count = anchors(block, r"variant\.[^.\"']+[\"']")
     listed = len(split_top(_body(decl, "{"), ","))
     if not (len(variants) == sections_count == listed):
         raise SurfaceError(
@@ -311,9 +331,9 @@ def _members(block: str, where: str) -> tuple[list[dict], list[dict], list[dict]
             if not re.fullmatch(rf"type\s+{re.escape(name)}\b.*", header):
                 raise SurfaceError(f"{where}: {anchor}: not a type: {header!r}")
             types.append({"name": name})
-    unread = len(re.findall(r'<section id="(?:method|tymethod)\.[^"]+">', block))
-    if unread:
-        raise SurfaceError(f"{where}: {unread} method entries it cannot read")
+    written = anchors(block, r"(?:method|tymethod|associatedconstant|associatedtype)\.")
+    if written != len(entries):
+        raise SurfaceError(f"{where}: {written} member entries, of which {len(entries)} read")
     return methods, constants, types
 
 
@@ -344,10 +364,15 @@ def _trait_members(sections: dict[str, str], decl: str, where: str) -> dict:
     return {"required": required, "provided": provided, "types": types, "constants": constants}
 
 
-def _impls(sections: dict[str, str]) -> list[str]:
+def _impls(sections: dict[str, str], where: str) -> list[str]:
     """The traits an item implements itself, auto and blanket ones left out."""
+    block = sections.get("trait-implementations", "")
+    headers = re.findall(r'<section id="impl-[^"]+" class="impl">.*?<h3 class="code-header">(.*?)</h3>', block, re.S)
+    written = anchors(block, r"impl-")
+    if written != len(headers):
+        raise SurfaceError(f"{where}: {written} implementation entries, of which {len(headers)} read")
     found = []
-    for header in re.findall(r'<section id="impl-[^"]+" class="impl">.*?<h3 class="code-header">(.*?)</h3>', sections.get("trait-implementations", ""), re.S):
+    for header in headers:
         line = text(header).removeprefix("unsafe ").removeprefix("impl")
         if line.startswith("<"):
             line = line[_closing(line, 0) :]
@@ -374,7 +399,7 @@ def read_item(doc: Path, crate: str, kind: str, name: str, href: str) -> dict:
         item.update(_declared(kind, decl, item["decl"], where))
         return item
     methods, constants, _ = _members(sections.get("implementations", ""), where)
-    item.update(methods=methods, constants=constants, impls=_impls(sections))
+    item.update(methods=methods, constants=constants, impls=_impls(sections, where))
     if kind == "struct":
         item["fields"] = _fields(sections, decl, where)
     elif kind == "enum":

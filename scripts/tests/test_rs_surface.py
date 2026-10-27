@@ -240,7 +240,7 @@ class FailsClosed(unittest.TestCase):
 
     def test_a_method_entry_it_cannot_read(self) -> None:
         self._edit("trait.Store.html", '<section id="method.close" class="method">', '<section id="method.close">')
-        self._refused("trait.Store.html", "cannot read")
+        self._refused("trait.Store.html", "member entries")
 
     def test_a_method_header_it_cannot_parse(self) -> None:
         self._edit("struct.Kit.html", 'pub fn <a href="#method.store"', 'pub fun <a href="#method.store"')
@@ -253,6 +253,74 @@ class FailsClosed(unittest.TestCase):
             '<h5 class="code-header">pub fn <a href="#method.new"',
         )
         self._refused("struct.Kit.html", "method.new")
+
+    def _refused_after(self, cases: dict, *fragments: str) -> None:
+        for label, (page, old, new) in cases.items():
+            with self.subTest(label):
+                shutil.rmtree(self.doc / "fixture")
+                shutil.copytree(FIXTURES / "fixture", self.doc / "fixture")
+                self._edit(page, old, new)
+                self._refused(page, *fragments)
+
+    def test_a_member_entry_written_another_way(self) -> None:
+        method = '<section id="method.store" class="method">'
+        constant = '<section id="associatedconstant.SMS" class="associatedconstant">'
+        self._refused_after(
+            {
+                "its attributes swapped": ("struct.Kit.html", method, '<section class="method" id="method.store">'),
+                "another attribute": ("struct.Kit.html", method, '<section id="method.store" data-x="1" class="method">'),
+                "single quotes": ("struct.Kit.html", method, "<section id='method.store' class='method'>"),
+                "a constant's attributes swapped": (
+                    "model/struct.Code.html",
+                    constant,
+                    '<section class="associatedconstant" id="associatedconstant.SMS">',
+                ),
+            },
+            "member entries",
+        )
+
+    def test_a_heading_of_the_list_it_cannot_read(self) -> None:
+        self._refused_after(
+            {"a heading with a class": ("all.html", '<h3 id="enums">', '<h3 id="enums" class="section-header">')},
+            "headings",
+        )
+
+    def test_a_variant_field_it_cannot_read(self) -> None:
+        self._refused_after(
+            {
+                "a field re-classed": (
+                    "enum.Shape.html",
+                    'id="variant.Refused.field.reason" class="section-header"',
+                    'id="variant.Refused.field.reason" class="section-header field"',
+                )
+            },
+            "Refused",
+            "fields",
+        )
+
+    def test_an_implementation_entry_written_another_way(self) -> None:
+        self._refused_after(
+            {
+                "its attributes swapped": (
+                    "struct.Kit.html",
+                    '<section id="impl-Default-for-Kit" class="impl">',
+                    '<section class="impl" id="impl-Default-for-Kit">',
+                )
+            },
+            "implementation entries",
+        )
+
+    def test_a_section_header_written_another_way(self) -> None:
+        self._refused_after(
+            {
+                "its attributes swapped": (
+                    "struct.Kit.html",
+                    '<h2 id="implementations" class="section-header">',
+                    '<h2 class="section-header" id="implementations">',
+                )
+            },
+            "section headers",
+        )
 
     def test_a_reexport_rustdoc_did_not_inline(self) -> None:
         self._edit(
