@@ -16,6 +16,9 @@
 //!   the room (rule 7).
 //! - A copy of one of the runtime's marks in a text it did not write is
 //!   replaced before the runtime places its own.
+//! - Text from outside that a channel sets apart in a block of its own, as
+//!   the instructions an MCP server publishes, is framed by [`fence`], so
+//!   that it cannot close its block.
 //!
 //! Only what §6.4 requires of every AI channel is built: no note of who
 //! takes part, no memory, no tool notes, no images, no cut answers.
@@ -26,11 +29,13 @@
 //! ([`Message::tool_result`]). The history replays none: a later turn reads
 //! what each round said, never its calls.
 
+mod fence;
 mod marks;
 mod speakers;
 #[cfg(test)]
 mod tests;
 
+pub use self::fence::fence;
 use self::marks::{INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies};
 use self::speakers::{
     Speaker, labelled_lines, labels_turns, people_taking_part, speaker, tell_apart,
