@@ -401,8 +401,10 @@ impl TurnHost {
 }
 
 /// What the model reads of a result a hook withheld: its reason in an
-/// error's envelope, or `{"error": "blocked"}` when it gave none or a blank
-/// one, as the reference implementation writes it (RFC §9.3).
+/// error's envelope, or `{"error": "blocked"}` when it gave none, as the
+/// reference implementation writes it (RFC §9.3). A blank reason reads as
+/// none, as a blank `ToolUse::Block` reason does; the reference
+/// implementation keeps it as written (docs/rfc-gaps.md).
 fn withheld(reason: Option<String>) -> String {
     let reason = reason.filter(|reason| !reason.trim().is_empty());
     error_envelope(reason.as_deref().unwrap_or("blocked"))

@@ -96,6 +96,10 @@ impl EventFilter {
 /// A conversation store (RFC §14.1): the operations the pipeline and the kit
 /// use. Implement the methods with `async fn`.
 ///
+/// The store is authoritative: the core keeps no room state between
+/// operations and reads what it decides on through the store, so a store
+/// shared by several processes stays correct (docs/architecture.md).
+///
 /// The room metadata keys under `roomkit:` belong to the implementation
 /// (RFC §10.6.5): the framework writes them through [`update_room`], and
 /// host code that writes the store directly must leave them alone.

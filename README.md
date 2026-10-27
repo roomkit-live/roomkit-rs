@@ -9,11 +9,12 @@ for conversations between humans, AI agents and programs.
 > hooks, permissions, transcoding and the chain-depth limit, the room
 > lifecycle and its timers, routing, edits and deletes, instructions,
 > direct injection, the reentrant lock and the turn backend, on a tokio
-> runtime. Beside it, an AI agent with tools, streamed answers, skills and
-> MCP servers over stdio (`roomkit-ai`), on an OpenAI-compatible endpoint
-> (`roomkit-openai`), and a SQLite store on the Python implementation's
-> schema (`roomkit-sqlite`). The API will change before 1.0
-> ([the roadmap](docs/roadmap.md)).
+> runtime; where it differs from the Python implementation is recorded in
+> [docs/rfc-gaps.md](docs/rfc-gaps.md). Beside it, an AI agent with tools,
+> streamed answers, skills and MCP servers over stdio (`roomkit-ai`,
+> `roomkit-mcp`), on an OpenAI-compatible endpoint (`roomkit-openai`), and
+> a SQLite store on the Python implementation's schema (`roomkit-sqlite`).
+> The API will change before 1.0 ([the roadmap](docs/roadmap.md)).
 
 ## Why a Rust implementation
 
@@ -65,8 +66,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 `roomkit-mcp` comes the same way, for an MCP server's tools. The
 repository is private, so Cargo fetches it with your GitHub access: over
 HTTPS through git's credential helper, or over SSH with a key your
-`ssh-agent` holds (`git = "ssh://git@github.com/roomkit-live/roomkit-rs.git"`).
-When Cargo's own git client cannot authenticate,
+`ssh-agent` holds (`git = "ssh://git@github.com/roomkit-live/roomkit-rs.git"`),
+the same URL on every line: two URLs are two sources, and every crate is
+then built twice, its types two types. When Cargo's own git client cannot
+authenticate,
 `CARGO_NET_GIT_FETCH_WITH_CLI=true`, or `net.git-fetch-with-cli = true` in
 `.cargo/config.toml`, has it run the `git` command with your configuration.
 
@@ -121,17 +124,24 @@ A service depends on `roomkit` and on the crates it needs beside it:
 - `roomkit-openai`: `OpenAiAgent`, `roomkit-ai`'s AI channel over an
   OpenAI-compatible Chat Completions endpoint.
 - `roomkit-sqlite`: `SqliteStore`, a store in one SQLite file, on the Python
-  implementation's schema: either implementation reads the other's file,
-  as long as its channel types are ones Python lists. A type of your own
-  (`ChannelType::new("slack")`) makes its room unreadable to Python until
-  Python opens its type (RMK-986).
+  implementation's schema, for one process at a time: either
+  implementation reads a file the other wrote, as long as its channel
+  types are ones Python lists, but the two never share a file live. A type
+  of your own (`ChannelType::new("slack")`) makes its room unreadable to
+  Python until Python opens its type (RMK-986).
 - `roomkit-mcp`: `McpCommand` and `McpServer`, the tools of an MCP server
   started over stdio, served to an AI agent as a `Toolset`.
 
 `roomkit-core` is the sans-IO core: the RFC's model, rules and pipeline
 operations, with no I/O and no async runtime. It is no service's API: what
 `roomkit` does not re-export of it, the effect protocol and the rules the
-driver and the stores call, may change in any 0.x release.
+driver and the stores call, may change in any 0.x release. A
+`ConversationStore` of your own, written from scratch rather than over
+`InMemoryStore` or `SqliteStore`, needs some of those rules, which
+`roomkit` does not re-export yet: an edit's change of its target
+(`rules::edits`), the idempotency keys (`rules::idempotency`) and the
+routing lookups' order (`rules::routing::recency`), taken from
+`roomkit-core` with that caveat, as `roomkit-sqlite` takes them.
 
 ## Examples
 

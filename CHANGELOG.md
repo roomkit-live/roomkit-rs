@@ -306,8 +306,10 @@ A service depends on `roomkit` and on the crates it needs beside it,
   `on_tool_call` is SYNC on a served call, each hook reading the result as
   the one before left it: it may keep it, replace it, or withhold it
   (`ToolVerdict::block(reason)`), which fails the call `blocked`, the model
-  reading `{"error": "<reason>"}`, or `{"error": "blocked"}` with no reason
-  or a blank one, as the Python implementation writes it.
+  reading `{"error": "<reason>"}`, or `{"error": "blocked"}` with no reason,
+  as the Python implementation writes it, or with a blank one, as a blank
+  `ToolUse::Block` reason reads the fixed refusal (Python keeps a blank
+  reason as written).
   `observe_tool_calls` is ASYNC and sees every call once, a refused one
   included, as tasks of the call's turn, what they send at least as deep as
   the turn was, once it is over too (§8.3). Each takes a `ToolHookSpec`
@@ -517,9 +519,13 @@ A service depends on `roomkit` and on the crates it needs beside it,
   handshake and lists the server's tools once, following the cursor, within
   60 seconds by default (`connect_timeout`); a connection that fails
   part-way kills the process and waits for it before the error (`McpError`)
-  is returned, a failed handshake's or listing's message ending with the
-  last 20 lines the server wrote on its standard error (4 KiB at most, its
-  control characters replaced): a missing package, a traceback. An
+  is returned, with the last 20 lines the server wrote on its standard error
+  (4 KiB at most), which end a failed handshake's or listing's message and
+  are a timeout's `stderr`: a missing package, a traceback, an image being
+  pulled. What a server's words make up in an error or a log line is
+  bounded, its control characters, line separators and bidi controls
+  replaced and each line break indented, so that it cannot drive a terminal
+  or forge a log line. An
   `McpServer` is a `Toolset`: an agent serves its tools under their bare
   names, its tool policy and its bound per call applying as to any tool. A
   call answers the result's text, a note for what is not text, and a result
@@ -704,3 +710,6 @@ A service depends on `roomkit` and on the crates it needs beside it,
   `make test` runs through the turn backend, on the in-memory store and on
   SQLite, with a scripted model and scripted tools for the `tools/` and
   `streaming/` areas.
+
+[Unreleased]: https://github.com/roomkit-live/roomkit-rs/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/roomkit-live/roomkit-rs/releases/tag/v0.1.0

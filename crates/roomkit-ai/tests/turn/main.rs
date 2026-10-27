@@ -149,8 +149,10 @@ async fn a_sync_on_tool_call_hook_replaces_then_withholds_a_result() {
     );
 }
 
-/// RFC §9.3: a result withheld with no reason, or a blank one, reads
-/// `{"error": "blocked"}`, as the reference implementation writes it.
+/// RFC §9.3: a result withheld with no reason reads `{"error": "blocked"}`,
+/// as the reference implementation writes it, and so does one withheld
+/// with a blank reason, as a blank `ToolUse::Block` reason reads the fixed
+/// refusal (the reference implementation keeps it as written).
 #[tokio::test]
 async fn a_result_withheld_without_a_reason_reads_blocked() {
     let model = ScriptedProvider::new([
