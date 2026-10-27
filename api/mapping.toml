@@ -35,3 +35,1977 @@ roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skill
 roomkit_openai = ["roomkit.providers.openai"]
 roomkit_mcp = ["roomkit.tools"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
+
+# The architecture table's exceptions, approved with the plan on 2026-10-27.
+
+[[exception]]
+python = "roomkit.ChannelOutput.__init__"
+params = ["response_stream"]
+approved = "2026-10-27"
+reason = "the core's ChannelOutput is serialized; a live stream is not"
+
+[[exception]]
+python = "roomkit.TurnHost"
+members = ["__init__"]
+approved = "2026-10-27"
+reason = "only the framework builds it"
+
+[[exception]]
+rust = "roomkit::HookError"
+approved = "2026-10-27"
+reason = "a handler type of its own, or a boxed future (decision 18)"
+
+[[exception]]
+rust = "roomkit::HookFuture"
+approved = "2026-10-27"
+reason = "a handler type of its own, or a boxed future (decision 18)"
+
+[[exception]]
+rust = "roomkit::HookHandler"
+approved = "2026-10-27"
+reason = "a handler type of its own, or a boxed future (decision 18)"
+
+[[exception]]
+rust = "roomkit::HookReturn"
+approved = "2026-10-27"
+reason = "a handler type of its own, or a boxed future (decision 18)"
+
+[[exception]]
+rust = "roomkit::RoomKit"
+members = ["hook_handler"]
+approved = "2026-10-27"
+reason = "a handler type of its own, or a boxed future (decision 18)"
+
+[[exception]]
+rust = "roomkit::RoomKit"
+members = ["downgrade"]
+approved = "2026-10-27"
+reason = "an Arc cycle: a hook holding the kit; Python has a garbage collector (decision 18)"
+
+[[exception]]
+rust = "roomkit::StoreFailure"
+approved = "2026-10-27"
+reason = "a variant carries a foreign error, the cause kept"
+
+[[exception]]
+rust = "roomkit::TurnHost"
+members = ["respond_with_stream"]
+approved = "2026-10-27"
+reason = "the core's ChannelOutput is serialized; a live stream is not"
+
+[[exception]]
+rust = "roomkit::WeakRoomKit"
+approved = "2026-10-27"
+reason = "an Arc cycle: a hook holding the kit; Python has a garbage collector (decision 18)"
+
+[[exception]]
+rust = "roomkit::default_inbound_event"
+approved = "2026-10-27"
+reason = "an override cannot call a trait's default body (convention 8)"
+
+[[exception]]
+rust = "roomkit::keep_context"
+approved = "2026-10-27"
+reason = "tokio does not carry task-locals into a spawned task (decision 18)"
+
+[[exception]]
+rust = "roomkit::model::ErrorRecord"
+approved = "2026-10-27"
+reason = "a serialized model holds no live error"
+
+[[exception]]
+rust = "roomkit::testing::Delivery"
+approved = "2026-10-27"
+until = "the Python release that adds roomkit.testing"
+reason = "Python first (decision 17): roomkit.testing is a Python item; 22 and 6 examples use them"
+
+[[exception]]
+rust = "roomkit::testing::EchoAgent"
+approved = "2026-10-27"
+until = "the Python release that adds roomkit.testing"
+reason = "Python first (decision 17): roomkit.testing is a Python item; 22 and 6 examples use them"
+
+[[exception]]
+rust = "roomkit::testing::RecordingTransport"
+approved = "2026-10-27"
+until = "the Python release that adds roomkit.testing"
+reason = "Python first (decision 17): roomkit.testing is a Python item; 22 and 6 examples use them"
+
+[[exception]]
+rust = "roomkit_ai::ProviderStream"
+approved = "2026-10-27"
+reason = "a trait method returns a nameable stream type (decision 18)"
+
+[[exception]]
+rust = "roomkit_mcp::McpError"
+approved = "2026-10-27"
+reason = "the error type a Result needs for the exceptions the MCP SDK raises"
+
+# Python names of classes in scope that Rust lacks: not in 0.x (rule 5).
+
+[[missing]]
+python = "roomkit.Channel"
+members = [
+    "active_turns", "channel_call", "connect_session", "disconnect_session",
+    "emit_trace", "on_room_attached", "on_room_detached", "on_room_event",
+    "on_trace", "resolve_trace_room", "restore_room_state", "room_state",
+    "serializes_room_turns", "trace_enabled", "update_binding",
+]
+reason = "not in 0.x: identity resolution, active turns, tracing, sessions, room callbacks, channel calls, room state, serialized turns (lot 4's list)"
+
+[[missing]]
+python = "roomkit.ChannelDeclaration.__init__"
+params = ["identity", "thinks_while_listening", "takes_owner_tools", "serializes_room_turns"]
+reason = "not in 0.x: agent identity, the thinker, owner-served tools and serialized turns"
+
+[[missing]]
+python = "roomkit.ConversationStore"
+members = [
+    "add_event", "add_event_auto_index", "binding_exists",
+    "claim_voice_delivery", "close", "complete_voice_delivery", "connection",
+    "create_verification_request", "find_latest_room",
+    "find_room_id_by_channel", "get_task", "get_thread_summaries",
+    "get_timeline", "get_unread_count", "get_verification",
+    "get_verification_request", "get_voice_delivery", "list_read_markers",
+    "list_verifications_in_force", "mark_all_read", "mark_read",
+    "put_verification", "record_delivery_results", "room_exists",
+    "update_room_if", "update_task", "update_verification_request",
+    "write_change_target",
+]
+reason = "not in 0.x: lot 4's list (event writes other than commit_event, conditional updates, threads, read markers, task updates, verification, voice deliveries, the connection)"
+
+[[missing]]
+python = "roomkit.HookResult"
+members = ["allow_unverified"]
+reason = "not in 0.x: verification (RFC §11.7)"
+
+[[missing]]
+python = "roomkit.HookTrigger"
+members = [
+    "AFTER_DELIVER", "AFTER_TOOL_ROUND", "AFTER_TTS", "BEFORE_AI_GENERATION",
+    "BEFORE_BRIDGE_AUDIO", "BEFORE_BRIDGE_VIDEO", "BEFORE_DELIVER",
+    "ON_ACTIVE_SPEAKER_CHANGED", "ON_AI_RESPONSE", "ON_AI_THINKING",
+    "ON_BACKCHANNEL", "ON_BARGE_IN", "ON_CONFERENCE_PARTICIPANT_JOINED",
+    "ON_CONFERENCE_PARTICIPANT_LEFT", "ON_CONFERENCE_TRACK_MUTED",
+    "ON_CONFERENCE_TRACK_PUBLISHED", "ON_CONFERENCE_TRACK_UNMUTED",
+    "ON_CONFERENCE_TRACK_UNPUBLISHED", "ON_CONNECTION_QUALITY_CHANGED",
+    "ON_DELIVERY_STATUS", "ON_DISPATCH_DECISION", "ON_DTMF", "ON_FEEDBACK",
+    "ON_HANDOFF", "ON_HANDOFF_REJECTED", "ON_IDENTITY_AMBIGUOUS",
+    "ON_IDENTITY_UNKNOWN", "ON_INPUT_AUDIO_LEVEL", "ON_OUTPUT_AUDIO_LEVEL",
+    "ON_PARTIAL_TRANSCRIPTION", "ON_PARTICIPANT_IDENTIFIED",
+    "ON_PARTICIPANT_JOINED", "ON_PARTICIPANT_LEFT", "ON_PARTICIPANT_UPDATED",
+    "ON_PHASE_TRANSITION", "ON_PLAN_UPDATED", "ON_PROTOCOL_TRACE",
+    "ON_REALTIME_DELEGATION", "ON_REALTIME_TEXT_INJECTED",
+    "ON_RECORDING_STARTED", "ON_RECORDING_STOPPED", "ON_SCREEN_SHARE_STARTED",
+    "ON_SCREEN_SHARE_STOPPED", "ON_SPEAKER_CHANGE", "ON_SPEAK_DECISION",
+    "ON_SPEAK_QUEUE", "ON_SPEECH_END", "ON_SPEECH_START", "ON_STATUS_POSTED",
+    "ON_TASK_COMPLETED", "ON_TASK_DELEGATED", "ON_THOUGHT", "ON_TTS_CANCELLED",
+    "ON_TURN_COMPLETE", "ON_TURN_INCOMPLETE", "ON_USER_INPUT_REQUIRED",
+    "ON_VAD_AUDIO_LEVEL", "ON_VAD_SILENCE", "ON_VERIFICATION_COMPLETED",
+    "ON_VERIFICATION_ENDED", "ON_VERIFICATION_REQUIRED", "ON_VIDEO_DETECTION",
+    "ON_VIDEO_SESSION_ENDED", "ON_VIDEO_SESSION_STARTED",
+    "ON_VIDEO_TRACK_ADDED", "ON_VIDEO_TRACK_REMOVED", "ON_VISION_RESULT",
+]
+reason = "not in 0.x: the 67 hook triggers Rust lacks"
+
+[[missing]]
+python = "roomkit.InboundMessage.__init__"
+params = ["session"]
+reason = "not in 0.x: voice and video"
+
+[[missing]]
+python = "roomkit.InboundResult"
+members = ["report_cascade"]
+reason = "not ported: plumbing (lot 2)"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = [
+    "answer_input", "cancel_task", "claim_room_strategy", "delegate",
+    "install_strategy", "list_tasks", "regenerate_response",
+    "regenerate_target", "reject_input", "room_strategy",
+    "room_strategy_is_current", "setup_background", "setup_task_tools",
+    "start_task", "task_runner", "turn_executor", "uninstall_strategy",
+]
+reason = "not in 0.x: delegation, tasks, orchestration strategies, human input and regeneration"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = [
+    "add_room_hook", "disable_room_hook", "enable_room_hook", "hook_engine",
+    "hooks_for", "remove_room_hook",
+]
+reason = "not in 0.x: hooks per room"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = [
+    "add_member", "check_verifications", "complete_verification",
+    "ensure_participant", "identity_enabled_for", "identity_hook",
+    "identity_resolver", "identity_timeout", "is_member",
+    "record_failed_attempt", "remove_member", "rename_member",
+    "request_verification", "resolve_participant", "revoke_verification",
+    "sender_verification", "verification_of",
+]
+reason = "not in 0.x: identity resolution and verification"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = [
+    "list_read_markers", "mark_all_read", "mark_read", "publish_presence",
+    "publish_reaction", "publish_read_receipt", "publish_tool_call",
+    "publish_typing", "realtime", "subscribe_room", "unsubscribe_room",
+]
+reason = "not in 0.x: read markers and ephemeral events"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = [
+    "add_room_recording_track", "room_recordings", "start_room_recording",
+    "stop_room_recording",
+]
+reason = "not in 0.x: recording"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = [
+    "attach_source", "connect_websocket", "detach_source",
+    "disconnect_websocket", "list_sources", "source_health",
+    "subscribe_websocket", "unsubscribe_websocket",
+]
+reason = "not in 0.x: sources, and the WebSocket and webhook helpers"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = ["channel_call", "channels", "list_channels", "mute_output", "unmute_output"]
+reason = "not in 0.x: the channel registry's reads, output mute and channel calls"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = [
+    "cancel_delivery", "deliver", "delivery_backend", "on_delivery_status",
+    "process_delivery_status", "process_webhook",
+]
+reason = "not in 0.x: the delivery backend, delivery cancellation and status webhooks"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = [
+    "list_observations", "lock_manager", "set_agent_response_policy",
+    "set_room_timers", "status_bus", "submit_feedback", "telemetry",
+    "update_room_metadata",
+]
+reason = "not in 0.x: the kit's other reads and setters, the status bus and telemetry"
+
+[[missing]]
+python = "roomkit.RoomKit"
+members = [
+    "bind_voice_session", "connect_video", "connect_voice", "disconnect_video",
+    "disconnect_voice", "join", "leave", "listen_only", "send_greeting",
+    "speak_queue", "steer", "stt", "synthesize", "talk_again", "transcribe",
+    "tts", "voice",
+]
+reason = "not in 0.x: voice and video"
+
+[[missing]]
+python = "roomkit.RoomKit.__init__"
+params = [
+    "identity_resolver", "identity_channel_types", "lock_manager", "realtime",
+    "identity_timeout", "stt", "tts", "voice", "task_runner",
+    "delivery_strategy", "delivery_backend", "status_bus", "telemetry",
+    "inbound_rate_limit", "orchestration", "persistence_policy",
+    "delivery_gap_timeout", "delivery_claim_lock_manager",
+    "verification_policy", "media_resolver", "attached_media", "turn_backend",
+    "error_classes",
+]
+reason = "not in 0.x: a keyword for a feature Rust lacks (lot 1's list: identity, locks across processes, voice, delivery backends, orchestration, telemetry, the turn backend, the gap skip)"
+
+[[missing]]
+python = "roomkit.RoomKit.create_room"
+params = ["recorders", "orchestration"]
+reason = "not in 0.x: recording and orchestration"
+
+[[missing]]
+python = "roomkit.Skill"
+members = [
+    "has_references", "has_scripts", "list_references", "list_scripts",
+    "read_reference", "resolve_script",
+]
+reason = "not in 0.x: skill gating, references and scripts, skills served by MCP, unavailable and unlisted skills"
+
+[[missing]]
+python = "roomkit.SkillRegistry"
+members = [
+    "add", "add_mcp_server", "closed_tool_names", "copy",
+    "execution_tool_patterns", "gated_tool_names", "get_unavailable_reason",
+    "has_served", "is_served", "listed_names", "load_skill",
+    "mark_unavailable", "mark_unlisted", "origin", "read_file",
+    "unavailable_skills", "unopenable_tool_names",
+]
+reason = "not in 0.x: skill gating, references and scripts, skills served by MCP, unavailable and unlisted skills"
+
+[[missing]]
+python = "roomkit.SkillRegistry.__init__"
+params = ["requires_match"]
+reason = "not in 0.x: requires_match (convention 3: no empty options struct)"
+
+[[missing]]
+python = "roomkit.ToolCallEvent.__init__"
+params = ["session"]
+reason = "not in 0.x: voice and video"
+
+[[missing]]
+python = "roomkit.ToolPolicy"
+members = ["as_filter", "resolve"]
+reason = "not in 0.x: Rust has no roles"
+
+[[missing]]
+python = "roomkit.ToolPolicy.__init__"
+params = ["role_overrides"]
+reason = "not in 0.x: Rust has no roles"
+
+[[missing]]
+python = "roomkit.TurnHost"
+members = [
+    "add_observation", "delegate", "post_status", "room_tasks", "room_vision",
+    "update_room_metadata", "wait_task",
+]
+reason = "not in 0.x: delegation, the status bus, vision and the turn's metadata and observation verbs"
+
+[[missing]]
+python = "roomkit.TurnTimeouts.__init__"
+params = ["input_hold_timeout"]
+reason = "not in 0.x: human input"
+
+[[missing]]
+python = "roomkit.providers.ai.AIProvider"
+members = [
+    "available_models", "catalog_entry", "context_window", "list_models",
+    "supports_deferred_tools", "supports_response_schema",
+    "supports_response_schema_with_tools", "supports_vision",
+]
+reason = "not in 0.x: the model catalogue, vision and response schemas"
+
+[[missing]]
+python = "roomkit.providers.openai.OpenAIConfig.__init__"
+params = [
+    "max_retries", "reasoning_effort", "supports_response_schema",
+    "supports_response_schema_with_tools",
+    "supports_reasoning_effort_with_tools",
+]
+reason = "not in 0.x: retries, reasoning effort and response schemas of OpenAIConfig"
+
+# Known differences, by the lot of step 5 that removes them; lot 6 requires
+# none left. "?": the plan names no lot.
+
+[[pending]]
+lot = 1
+python = "roomkit.InboundResult.__init__"
+params = ["delivery"]
+reason = "decision 7: defer_delivery and the DeliveryHandle InboundResult.delivery carries"
+
+[[pending]]
+lot = 1
+python = "roomkit.InboundRoomRouter.route"
+params = [
+    "channel_id", "channel_type", "participant_id", "channel_data",
+    "organization_id", "identity",
+]
+reason = "lot 4's Routing, landing with lot 1: route(channel_id, channel_type, RouteOptions), DefaultInboundRoomRouter::new(store, options)"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit"
+members = ["close"]
+reason = "decision 15: run_timers / TimerSweeper leave the public API, idle becomes a hidden test seam, shutdown becomes a draining close"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit"
+members = [
+    "attach_channel", "check_all_timers", "check_room_timers",
+    "detach_channel", "get_binding", "get_room", "list_bindings",
+    "list_members", "set_access", "set_visibility", "update_binding_metadata",
+]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.__init__"
+params = [
+    "store", "inbound_router", "max_chain_depth", "agent_response_policy",
+    "process_timeout",
+]
+reason = "decision 2: RoomKit::new(RoomKitOptions) with Python's constructor keywords; the set_* methods go"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.archive_room"
+params = ["organization_id"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.close_room"
+params = ["organization_id"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.commit_event"
+params = ["organization_id"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.create_room"
+params = ["metadata", "organization_id", "timers", "agent_response_policy"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.delete_event"
+params = ["organization_id"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.get_timeline"
+params = [
+    "offset", "limit", "visibility_filter", "after_index", "before_index",
+    "newest_first", "include_blocked", "organization_id",
+]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.mute"
+params = ["organization_id"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.post"
+params = [
+    "content", "participant_id", "addressed_to", "metadata", "channel_id",
+    "organization_id", "idempotency_key", "chain_depth",
+]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.process_inbound"
+params = ["defer_delivery"]
+reason = "decision 7: defer_delivery and the DeliveryHandle InboundResult.delivery carries"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.process_inbound"
+params = ["room_id", "organization_id"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.send_event"
+params = [
+    "channel_id", "content", "event_type", "chain_depth", "participant_id",
+    "metadata", "visibility", "provider", "response_visibility", "created_at",
+    "parent_event_id", "idempotency_key", "addressed_to", "organization_id",
+    "standalone",
+]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.unmute"
+params = ["organization_id"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+python = "roomkit.RoomKit.update_event"
+params = ["content", "source", "metadata", "organization_id"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+rust = "roomkit::DefaultRouter"
+reason = "lot 4's Routing, landing with lot 1: route(channel_id, channel_type, RouteOptions), DefaultInboundRoomRouter::new(store, options)"
+
+[[pending]]
+lot = 1
+rust = "roomkit::Environment"
+reason = "decision 5: Environment and SequentialEnvironment move to roomkit::testing (a table exception), SystemEnvironment becomes crate-private"
+
+[[pending]]
+lot = 1
+rust = "roomkit::InboundRoomRouter::route"
+params = ["store", "query"]
+reason = "lot 4's Routing, landing with lot 1: route(channel_id, channel_type, RouteOptions), DefaultInboundRoomRouter::new(store, options)"
+
+[[pending]]
+lot = 1
+rust = "roomkit::OrganizationKit"
+reason = "decision 6: organization_id in each call's options; for_organization and OrganizationKit go"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RoomKit"
+members = ["idle", "shutdown", "run_timers"]
+reason = "decision 15: run_timers / TimerSweeper leave the public API, idle becomes a hidden test seam, shutdown becomes a draining close"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RoomKit"
+members = [
+    "with_store", "set_environment", "set_turn_timeouts",
+    "set_max_chain_depth", "set_process_timeout", "set_router",
+]
+reason = "decision 2: RoomKit::new(RoomKitOptions) with Python's constructor keywords; the set_* methods go"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RoomKit"
+members = ["for_organization"]
+reason = "decision 6: organization_id in each call's options; for_organization and OrganizationKit go"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RoomKit"
+members = [
+    "create_room_with", "attach", "attach_with", "detach", "update_binding",
+    "check_timers", "process_inbound_in",
+]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RoomKit::create_room"
+params = ["room_id"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RoomKit::delete_event"
+params = ["cascade_replies"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RoomKit::get_timeline"
+params = ["query"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RoomKit::post"
+params = ["post"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RoomKit::send_event"
+params = ["event"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RoomKit::update_event"
+params = ["updates"]
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RouteQuery"
+reason = "lot 4's Routing, landing with lot 1: route(channel_id, channel_type, RouteOptions), DefaultInboundRoomRouter::new(store, options)"
+
+[[pending]]
+lot = 1
+rust = "roomkit::RouteSender"
+reason = "lot 4's Routing, landing with lot 1: route(channel_id, channel_type, RouteOptions), DefaultInboundRoomRouter::new(store, options)"
+
+[[pending]]
+lot = 1
+rust = "roomkit::SequentialEnvironment"
+reason = "decision 5: Environment and SequentialEnvironment move to roomkit::testing (a table exception), SystemEnvironment becomes crate-private"
+
+[[pending]]
+lot = 1
+rust = "roomkit::SystemEnvironment"
+reason = "decision 5: Environment and SequentialEnvironment move to roomkit::testing (a table exception), SystemEnvironment becomes crate-private"
+
+[[pending]]
+lot = 1
+rust = "roomkit::TimelineQuery"
+reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
+
+[[pending]]
+lot = 1
+rust = "roomkit::TimerSweeper"
+reason = "decision 15: run_timers / TimerSweeper leave the public API, idle becomes a hidden test seam, shutdown becomes a draining close"
+
+[[pending]]
+lot = 1
+rust = "roomkit::model::BindingOptions"
+reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
+
+[[pending]]
+lot = 1
+rust = "roomkit::model::BindingUpdate"
+reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
+
+[[pending]]
+lot = 1
+rust = "roomkit::model::DirectEvent"
+reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
+
+[[pending]]
+lot = 1
+rust = "roomkit::model::EventUpdates"
+reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
+
+[[pending]]
+lot = 1
+rust = "roomkit::model::Post"
+reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
+
+[[pending]]
+lot = 1
+rust = "roomkit::model::RoomOptions"
+reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
+
+[[pending]]
+lot = 2
+python = "roomkit.ChannelBinding"
+members = ["can_write", "sends"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+python = "roomkit.ChannelCapabilities.__init__"
+params = [
+    "max_audio_duration_seconds", "supported_audio_formats",
+    "max_video_duration_seconds", "supported_video_formats",
+]
+reason = "lot 2: the model members Python has and Rust lacks are added, those only Rust has go"
+
+[[pending]]
+lot = 2
+python = "roomkit.ChannelOutput"
+members = ["empty"]
+reason = "lot 2: ChannelOutput::empty(), Python's classmethod; respond() goes"
+
+[[pending]]
+lot = 2
+python = "roomkit.DeliveryStatus"
+members = ["__init__"]
+reason = "decision 20: DeliveryStatus is renamed DeliveryResultStatus; Python's DeliveryStatus is the status webhook model"
+
+[[pending]]
+lot = 2
+python = "roomkit.HookResult.__init__"
+params = ["action", "event"]
+reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
+
+[[pending]]
+lot = 2
+python = "roomkit.HookResult.allow"
+params = ["injected"]
+reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
+
+[[pending]]
+lot = 2
+python = "roomkit.HookResult.block"
+params = ["injected", "tasks", "observations"]
+reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
+
+[[pending]]
+lot = 2
+python = "roomkit.HookResult.modify"
+params = ["event", "injected"]
+reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
+
+[[pending]]
+lot = 2
+python = "roomkit.InboundResult.__init__"
+params = ["duplicate", "unavailable_targets", "cancellation_reason", "response_events"]
+reason = "lot 2: InboundResult takes Python's fields: duplicate, unavailable_targets, cancellation_reason, response_events"
+
+[[pending]]
+lot = 2
+python = "roomkit.RoomContext"
+members = ["channels_by_type", "get_binding", "other_channels"]
+reason = "lot 2: RoomContext::get_binding, other_channels and channels_by_type, as Python's"
+
+[[pending]]
+lot = 2
+python = "roomkit.RoomEvent.__init__"
+params = ["type"]
+reason = "lot 2: RoomEvent::new(room_id, source, content), r#type for Python's type (point 7)"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.Identity.__init__"
+params = ["email", "phone", "external_ids"]
+reason = "lot 2: the model members Python has and Rust lacks are added, those only Rust has go"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.RateLimit.__init__"
+params = ["max_per_hour"]
+reason = "lot 2: the model members Python has and Rust lacks are added, those only Rust has go"
+
+[[pending]]
+lot = 2
+rust = "roomkit::ConfigError"
+reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
+
+[[pending]]
+lot = 2
+rust = "roomkit::InboundError"
+reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
+
+[[pending]]
+lot = 2
+rust = "roomkit::KitError"
+reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
+
+[[pending]]
+lot = 2
+rust = "roomkit::LifecycleError"
+reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
+
+[[pending]]
+lot = 2
+rust = "roomkit::MutationError"
+reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
+
+[[pending]]
+lot = 2
+rust = "roomkit::ProtocolError"
+reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
+
+[[pending]]
+lot = 2
+rust = "roomkit::RegistrationError"
+reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Access"
+members = ["reads", "writes"]
+reason = "decision 16: a helper public in Rust and private in Python is hidden"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ChannelBinding::new"
+params = ["category", "direction", "attached_at"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ChannelCapabilities"
+members = ["carries"]
+reason = "decision 16: a helper public in Rust and private in Python is hidden"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ChannelCapabilities"
+members = ["rate_limit"]
+reason = "lot 2: the model members Python has and Rust lacks are added, those only Rust has go"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ChannelDirection"
+members = ["receives", "sends"]
+reason = "decision 16: a helper public in Rust and private in Python is hidden"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ChannelMediaType"
+members = ["all"]
+reason = "decision 16: a helper public in Rust and private in Python is hidden"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ChannelOutput"
+members = ["respond"]
+reason = "lot 2: ChannelOutput::empty(), Python's classmethod; respond() goes"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Consumption"
+reason = "lot 2, point 5: consumption and its types leave the model"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ConsumptionState"
+reason = "lot 2, point 5: consumption and its types leave the model"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::DeleteContent"
+members = ["with_delete_type"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::DeliveryStatus"
+members = ["Sent", "Queued", "Failed"]
+reason = "decision 20: DeliveryStatus is renamed DeliveryResultStatus; Python's DeliveryStatus is the status webhook model"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::EditContent"
+members = ["with_edit_source"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::EventSource::new"
+params = ["direction"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::HookDecision"
+reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::HookResult"
+members = ["decision", "with_reason", "inject", "with_task", "with_observation", "is_block"]
+reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::HookResult::modify"
+params = ["payload"]
+reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Identity"
+members = ["uses", "link", "unlink"]
+reason = "decision 16: a helper public in Rust and private in Python is hidden"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Identity::new"
+params = ["organization_id"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::InjectedEvent"
+members = ["to_channels", "stored_only"]
+reason = "lot 2: InjectedEvent::new(event); to_channels and stored_only go"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ModelError"
+reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Observation::new"
+params = ["created_at"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Participant::new"
+params = ["joined_at"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ParticipantConsumption"
+reason = "lot 2, point 5: consumption and its types leave the model"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RateLimit"
+members = ["burst"]
+reason = "lot 2: the model members Python has and Rust lacks are added, those only Rust has go"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RetryPolicy::new"
+params = ["max_retries", "base_delay_seconds", "max_delay_seconds"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Room::new"
+params = ["now"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RoomContext"
+members = ["binding"]
+reason = "lot 2: RoomContext::get_binding, other_channels and channels_by_type, as Python's"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RoomEvent"
+members = ["consumption"]
+reason = "lot 2, point 5: consumption and its types leave the model"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RoomEvent"
+members = ["event_type"]
+reason = "lot 2: RoomEvent::new(room_id, source, content), r#type for Python's type (point 7)"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RoomEvent::new"
+params = ["id", "event_type", "created_at"]
+reason = "lot 2: RoomEvent::new(room_id, source, content), r#type for Python's type (point 7)"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RoomStatus"
+members = ["accepts_events"]
+reason = "decision 16: a helper public in Rust and private in Python is hidden"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Task::new"
+params = ["created_at"]
+reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ToolCall"
+reason = "lot 2: model::ToolCall leaves the model's public API (lot 3 flattens it, lot 5 names AiToolCall)"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::VideoContent::new"
+params = ["mime_type"]
+reason = "lot 2: VideoContent::new(url), mime_type video/mp4 by default"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Visibility"
+members = ["channels", "admits", "intersect"]
+reason = "decision 16: a helper public in Rust and private in Python is hidden"
+
+[[pending]]
+lot = 3
+python = "roomkit.FrameworkEvent"
+members = ["__init__"]
+reason = "decision 10: kit.on(event_type, handler) and Python's flat FrameworkEvent; subscribe goes"
+
+[[pending]]
+lot = 3
+python = "roomkit.RoomKit"
+members = ["on"]
+reason = "decision 10: kit.on(event_type, handler) and Python's flat FrameworkEvent; subscribe goes"
+
+[[pending]]
+lot = 3
+python = "roomkit.RoomKit.hook"
+params = [
+    "trigger", "execution", "priority", "name", "timeout", "channel_types",
+    "channel_ids", "directions", "event_types", "fail_closed", "needs_lock",
+]
+reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
+
+[[pending]]
+lot = 3
+python = "roomkit.ToolCallEvent.__init__"
+params = [
+    "channel_type", "tool_call_id", "name", "arguments", "timestamp",
+    "is_error", "cancelled", "structured_content", "refused",
+    "refused_but_ran",
+]
+reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
+
+[[pending]]
+lot = 3
+python = "roomkit.TurnHost"
+members = ["open", "reachable"]
+reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
+
+[[pending]]
+lot = 3
+python = "roomkit.TurnHost.send_event"
+params = ["room_id", "channel_id", "content", "options"]
+reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
+
+[[pending]]
+lot = 3
+python = "roomkit.TurnTimeouts"
+members = ["silent_intervals"]
+reason = "lot 3: TurnTimeouts keeps its fields and Default; silent_intervals is public; the with_* builders go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::CHANNEL_NOT_REGISTERED"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::ChainDepthData"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::FrameworkEvent"
+members = [
+    "channel_registered", "channel_unregistered", "room_created",
+    "room_paused", "room_closed", "room_archived", "room_refused_event",
+    "room_channel_attached", "room_channel_detached", "session_started",
+    "event_processed", "event_blocked", "delivery_succeeded",
+    "delivery_failed", "broadcast_partial_failure", "chain_depth_exceeded",
+    "hook_error", "process_timeout", "hook_timeout", "ChannelRegistered",
+    "ChannelUnregistered", "RoomCreated", "RoomPaused", "RoomClosed",
+    "RoomArchived", "RoomRefusedEvent", "RoomChannelAttached",
+    "RoomChannelDetached", "SessionStarted", "EventProcessed", "EventBlocked",
+    "DeliverySucceeded", "DeliveryFailed", "BroadcastPartialFailure",
+    "ChainDepthExceeded", "HookError", "ProcessTimeout", "HookTimeout",
+]
+reason = "decision 10: kit.on(event_type, handler) and Python's flat FrameworkEvent; subscribe goes"
+
+[[pending]]
+lot = 3
+rust = "roomkit::HookFilter"
+reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::HookId"
+reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::HookSpec"
+reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::HookTrigger"
+members = ["execution", "fails_closed", "is_tool_trigger"]
+reason = "decision 16: a helper public in Rust and private in Python is hidden"
+
+[[pending]]
+lot = 3
+rust = "roomkit::LifecycleChange"
+reason = "lot 3: lifecycle hook payloads are Python's; LifecyclePayload and LifecycleChange leave the public API"
+
+[[pending]]
+lot = 3
+rust = "roomkit::LifecyclePayload"
+reason = "lot 3: lifecycle hook payloads are Python's; LifecyclePayload and LifecycleChange leave the public API"
+
+[[pending]]
+lot = 3
+rust = "roomkit::RefusedOperation"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::RoomKit"
+members = ["subscribe"]
+reason = "decision 10: kit.on(event_type, handler) and Python's flat FrameworkEvent; subscribe goes"
+
+[[pending]]
+lot = 3
+rust = "roomkit::RoomKit"
+members = ["before_broadcast", "observe"]
+reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::RoomKit"
+members = ["before_tool_use", "on_tool_call", "observe_tool_calls"]
+reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::RoomKit::hook"
+params = ["spec", "handler"]
+reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::ToolCallEvent"
+members = ["call", "outcome", "ended", "with_error_detail"]
+reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::ToolCallEvent::new"
+params = ["room_id", "call"]
+reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::ToolHookSpec"
+reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::ToolUse"
+reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::ToolVerdict"
+reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::Transition"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::TransitionReason"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::TurnError"
+reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
+
+[[pending]]
+lot = 3
+rust = "roomkit::TurnHost"
+members = ["room_id", "channel_id", "context"]
+reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
+
+[[pending]]
+lot = 3
+rust = "roomkit::TurnHost::send_event"
+params = ["event"]
+reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
+
+[[pending]]
+lot = 3
+rust = "roomkit::TurnTimeouts"
+members = ["with_accept", "with_heartbeat_interval", "with_heartbeat_timeout", "with_cancel"]
+reason = "lot 3: TurnTimeouts keeps its fields and Default; silent_intervals is public; the with_* builders go"
+
+[[pending]]
+lot = 3
+rust = "roomkit::current_turn"
+reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
+
+[[pending]]
+lot = 3
+rust = "roomkit::is_deleted"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::is_edited"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::testing::TappedMessage"
+reason = "decision 17: TurnTap and TappedMessage get #[doc(hidden)]"
+
+[[pending]]
+lot = 3
+rust = "roomkit::testing::TurnTap"
+reason = "decision 17: TurnTap and TappedMessage get #[doc(hidden)]"
+
+[[pending]]
+lot = 3
+rust = "roomkit::text_of"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::transcript::Message"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::transcript::Role"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::transcript::conversation"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::transcript::fence"
+reason = "lot 3: fence moves to roomkit::tools::fence, as Python's roomkit.tools.fence"
+
+[[pending]]
+lot = 3
+rust = "roomkit::turn_context"
+reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 4
+python = "roomkit.Channel"
+members = [
+    "capabilities", "conversation_address", "extract_text", "info",
+    "normalize_address", "provider_name", "recent_events_window",
+    "recipient_address", "recipient_key", "recipient_metadata",
+    "reply_metadata", "supports_streaming_delivery",
+    "supports_streaming_delivery_for",
+]
+reason = "decision 12: the Channel trait carries Python's attribute and method names and defaults"
+
+[[pending]]
+lot = 4
+python = "roomkit.Channel.__init__"
+params = ["channel_id"]
+reason = "decision 12: the Channel trait carries Python's attribute and method names and defaults"
+
+[[pending]]
+lot = 4
+python = "roomkit.Channel.deliver_stream"
+params = ["text_stream", "event"]
+reason = "decision 12: the Channel trait carries Python's attribute and method names and defaults"
+
+[[pending]]
+lot = 4
+python = "roomkit.ChannelDeclaration.__init__"
+params = ["recent_events_window"]
+reason = "decision 12: ChannelDeclaration becomes Python's model; the core's declaration is renamed ChannelConfig and leaves roomkit"
+
+[[pending]]
+lot = 4
+python = "roomkit.ConversationStore"
+members = [
+    "add_binding", "add_observation", "add_participant", "add_task",
+    "check_idempotency", "commit_event", "delete_room",
+    "find_room_ids_by_channel", "find_rooms", "get_binding",
+    "get_conversation", "load_room_context", "patch_room_metadata",
+    "remove_binding", "update_binding",
+]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+python = "roomkit.ConversationStore.find_room_id_by_binding"
+params = ["room_filter", "recipient_key"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+python = "roomkit.ConversationStore.find_room_id_by_participant"
+params = ["room_filter"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+python = "roomkit.ConversationStore.get_event_count"
+params = ["event_filter"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+python = "roomkit.ConversationStore.list_events"
+params = [
+    "offset", "limit", "visibility_filter", "after_index", "before_index",
+    "event_filter", "newest_first",
+]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+python = "roomkit.ConversationStore.list_rooms"
+params = ["offset", "limit"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+python = "roomkit.ConversationStore.list_tasks"
+params = ["status"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+python = "roomkit.ConversationStore.update_event"
+params = ["event"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+python = "roomkit.ConversationStore.update_room"
+params = ["room"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+python = "roomkit.HostChannel.__init__"
+params = ["channel_id"]
+reason = "decision 20: HostChannel::new(HostChannelOptions { channel_id }), provider_name None"
+
+[[pending]]
+lot = 4
+python = "roomkit.RoomFilter"
+members = ["admits"]
+reason = "lot 4: RoomFilter becomes Python's (statuses, admits); EventFilter's validate and matches leave the public API"
+
+[[pending]]
+lot = 4
+python = "roomkit.RoomFilter.__init__"
+params = ["statuses"]
+reason = "lot 4: RoomFilter becomes Python's (statuses, admits); EventFilter's validate and matches leave the public API"
+
+[[pending]]
+lot = 4
+rust = "roomkit::AddressForm"
+reason = "decisions 19, 20: Python's ChannelAddressing and addressing_of; AddressForm and Addressing::of / replies_to_sender go"
+
+[[pending]]
+lot = 4
+rust = "roomkit::Addressing"
+members = ["of", "replies_to_sender"]
+reason = "decisions 19, 20: Python's ChannelAddressing and addressing_of; AddressForm and Addressing::of / replies_to_sender go"
+
+[[pending]]
+lot = 4
+rust = "roomkit::Channel::deliver_stream"
+params = ["stream"]
+reason = "decision 12: the Channel trait carries Python's attribute and method names and defaults"
+
+[[pending]]
+lot = 4
+rust = "roomkit::Channel::handle_inbound"
+params = ["draft"]
+reason = "decision 12: the Channel trait carries Python's attribute and method names and defaults"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ChannelDeclaration"
+members = [
+    "direction", "provider_name", "addressing", "recipient_key",
+    "country_code", "chat_key", "receives_tool_calls",
+    "supports_streaming_delivery", "host", "form", "binding",
+]
+reason = "decision 12: ChannelDeclaration becomes Python's model; the core's declaration is renamed ChannelConfig and leaves roomkit"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ChannelDeclaration::new"
+params = ["channel_type", "category", "direction"]
+reason = "decision 12: ChannelDeclaration becomes Python's model; the core's declaration is renamed ChannelConfig and leaves roomkit"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore"
+members = [
+    "store_binding", "delete_binding", "load_context", "create_participant",
+    "commit", "persist_side_effects",
+]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::advance_delivered_index"
+params = ["force"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::delete_event"
+params = ["cascade_replies"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::find_room_id_by_binding"
+params = ["identity_id", "filter"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::find_room_id_by_participant"
+params = ["identity_id", "filter"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::get_event_count"
+params = ["filter"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::link_address"
+params = ["organization_id"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::list_events"
+params = ["query"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::list_rooms"
+params = ["filter"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::resolve_identity"
+params = ["organization_id"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::unlink_address"
+params = ["organization_id"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::update_event"
+params = ["event_id", "updates"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ConversationStore::update_room"
+params = ["room_id", "updates"]
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::EventDraft"
+reason = "lot 4: handle_inbound(message, context); EventDraft goes"
+
+[[pending]]
+lot = 4
+rust = "roomkit::EventFilter"
+members = ["validate", "matches"]
+reason = "lot 4: RoomFilter becomes Python's (statuses, admits); EventFilter's validate and matches leave the public API"
+
+[[pending]]
+lot = 4
+rust = "roomkit::EventQuery"
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::HostChannel"
+members = ["with_id"]
+reason = "decision 20: HostChannel::new(HostChannelOptions { channel_id }), provider_name None"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ResponseItem"
+reason = "lot 4: ResponseItem::{Text, LoopEnd}, the tool markers hidden; End(Metadata) goes"
+
+[[pending]]
+lot = 4
+rust = "roomkit::RoomCounters"
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::RoomFilter"
+members = ["status", "timers_armed", "channel_id", "matches"]
+reason = "lot 4: RoomFilter becomes Python's (statuses, admits); EventFilter's validate and matches leave the public API"
+
+[[pending]]
+lot = 4
+rust = "roomkit::StoreError"
+reason = "lot 4: StoreError names its variants after Python's classes (lot 2's rule)"
+
+[[pending]]
+lot = 4
+rust = "roomkit::TargetUpdate"
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 4
+rust = "roomkit::model::RoomUpdates"
+reason = "decision 13: the store takes Python's method names, shapes, options and returns"
+
+[[pending]]
+lot = 5
+python = "roomkit.SQLiteStore"
+members = ["__init__"]
+reason = "lot 5: SqliteStore::new(SqliteStoreOptions) opens lazily, close(); OpenError gives way to SqliteSchemaError"
+
+[[pending]]
+lot = 5
+python = "roomkit.Skill"
+members = ["__init__"]
+reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
+
+[[pending]]
+lot = 5
+python = "roomkit.SkillRegistry"
+members = [
+    "all_metadata", "get_metadata", "get_skill", "has_entries", "skill_count",
+    "skill_names",
+]
+reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
+
+[[pending]]
+lot = 5
+python = "roomkit.SkillRegistry.discover"
+params = ["strict"]
+reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
+
+[[pending]]
+lot = 5
+python = "roomkit.SkillRegistry.register"
+params = ["skill_dir"]
+reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
+
+[[pending]]
+lot = 5
+python = "roomkit.ToolPolicy"
+members = ["is_allowed"]
+reason = "lot 5: ToolPolicy { allow, deny } and is_allowed, as Python's"
+
+[[pending]]
+lot = 5
+python = "roomkit.ToolPolicy.__init__"
+params = ["allow", "deny"]
+reason = "lot 5: ToolPolicy { allow, deny } and is_allowed, as Python's"
+
+[[pending]]
+lot = 5
+python = "roomkit.providers.ai.AIProvider"
+members = [
+    "close", "generate_stream", "generate_structured_stream", "model_name",
+    "supports_streaming", "supports_structured_streaming",
+]
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+python = "roomkit.providers.ai.AIProvider.generate"
+params = ["context"]
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+python = "roomkit.providers.openai.OpenAIConfig.__init__"
+params = [
+    "max_tokens", "timeout", "connect_timeout", "include_stream_usage",
+    "use_max_completion_tokens", "supports_custom_temperature",
+    "default_headers", "extra_body",
+]
+reason = "lot 5, point 8: OpenAiAiProvider and Python's OpenAIConfig; OpenAiAgent and OpenAiError leave the public API"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::AiAgent"
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::AiError"
+reason = "lot 5: ToolError, AiError and SkillError keep their variants under the error naming rule (convention 5)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::AiProvider::generate"
+params = ["request"]
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::AiRequest"
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::Done"
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::ProviderError"
+reason = "decision 11: ProviderError takes Python's class"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::ProviderEvent"
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::ProviderResponse"
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::ProviderToolCall"
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::Skill"
+members = ["license", "compatibility"]
+reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::SkillError"
+members = ["Discovery", "Parse", "Validation"]
+reason = "lot 5: ToolError, AiError and SkillError keep their variants under the error naming rule (convention 5)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::SkillRegistry"
+members = ["get", "skills", "len", "is_empty"]
+reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::SkillRegistry::register"
+params = ["directory"]
+reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::ToolContext"
+reason = "decision 11: ToolCallContext, read through current_tool_call() from a task-local"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::ToolDefinition"
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::ToolError"
+reason = "lot 5: ToolError, AiError and SkillError keep their variants under the error naming rule (convention 5)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::ToolOutput"
+reason = "decision 11: AiChannel and Python's provider contract and types (AiContext, AiResponse, AiToolCall, StreamEvent, AiTool, ToolResult)"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::ToolPolicy"
+members = ["allow", "deny", "permits"]
+reason = "lot 5: ToolPolicy { allow, deny } and is_allowed, as Python's"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::Tools"
+reason = "decision 11: tools and tool_handler as in Python; Toolset, Tools and arguments leave the public API"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::Toolset"
+reason = "decision 11: tools and tool_handler as in Python; Toolset, Tools and arguments leave the public API"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::arguments"
+reason = "point 13: arguments::<T>() is hidden"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::testing::ScriptedProvider"
+reason = "decision 17: MockAiProvider at the crate root; ScriptedProvider and ScriptedRound hidden"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::testing::ScriptedRound"
+reason = "decision 17: MockAiProvider at the crate root; ScriptedProvider and ScriptedRound hidden"
+
+[[pending]]
+lot = 5
+rust = "roomkit_mcp::McpCommand"
+reason = "lot 5: McpCommand and McpServer become one McpToolProvider, as Python's MCPToolProvider"
+
+[[pending]]
+lot = 5
+rust = "roomkit_mcp::McpServer"
+reason = "lot 5: McpCommand and McpServer become one McpToolProvider, as Python's MCPToolProvider"
+
+[[pending]]
+lot = 5
+rust = "roomkit_openai::OpenAiAgent"
+reason = "lot 5, point 8: OpenAiAiProvider and Python's OpenAIConfig; OpenAiAgent and OpenAiError leave the public API"
+
+[[pending]]
+lot = 5
+rust = "roomkit_openai::OpenAiConfig"
+members = ["shown_base_url", "with_system_prompt", "with_history", "with_timeout"]
+reason = "lot 5, point 8: OpenAiAiProvider and Python's OpenAIConfig; OpenAiAgent and OpenAiError leave the public API"
+
+[[pending]]
+lot = 5
+rust = "roomkit_openai::OpenAiConfig::new"
+params = ["base_url"]
+reason = "lot 5, point 8: OpenAiAiProvider and Python's OpenAIConfig; OpenAiAgent and OpenAiError leave the public API"
+
+[[pending]]
+lot = 5
+rust = "roomkit_openai::OpenAiError"
+reason = "lot 5, point 8: OpenAiAiProvider and Python's OpenAIConfig; OpenAiAgent and OpenAiError leave the public API"
+
+[[pending]]
+lot = 5
+rust = "roomkit_sqlite::OpenError"
+reason = "lot 5: SqliteStore::new(SqliteStoreOptions) opens lazily, close(); OpenError gives way to SqliteSchemaError"
+
+[[pending]]
+lot = 5
+rust = "roomkit_sqlite::SqliteStore"
+members = ["open"]
+reason = "lot 5: SqliteStore::new(SqliteStoreOptions) opens lazily, close(); OpenError gives way to SqliteSchemaError"
+
+[[pending]]
+lot = "?"
+python = "roomkit.RoomKit"
+members = ["get_channel"]
+reason = "lot 4 speaks of lot 1's get_channel, which lot 1's list of calls does not name"
+
+[[pending]]
+lot = "?"
+python = "roomkit.SQLiteStore"
+members = ["search_events"]
+reason = "Python's SQLiteStore.search_events: the plan names no lot and no reason"
+
+[[pending]]
+lot = "?"
+python = "roomkit.TextContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.ToolCallContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.models.AudioContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.models.CompositeContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.models.DeleteContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.models.EditContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.models.LocationContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.models.MediaContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.models.RichContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.models.SystemContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.models.TemplateContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+python = "roomkit.models.VideoContent.__init__"
+params = ["type"]
+reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::ChannelError"
+reason = "a Result's error for any raised exception: a mapping lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::ConversationStore"
+members = ["delete_participant"]
+reason = "decision 15 / point 1: Rust keeps it and Python gains it (a Python item); no table row says how the report holds it meanwhile"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::CountryCode"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::DeliveryStream"
+reason = "Python's response and delivery streams as named Rust stream types: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::InvalidCountryCode"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::ResponseStream"
+reason = "Python's response and delivery streams as named Rust stream types: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::RoomKit"
+members = ["pause_room", "resume_room", "reopen_room"]
+reason = "decision 15 / point 1: Rust keeps it and Python gains it (a Python item); no table row says how the report holds it meanwhile"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::RouterError"
+reason = "a Result's error for any raised exception: a mapping lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::StreamItem"
+reason = "Python's response and delivery streams as named Rust stream types: a mapping row lot 0's rules do not implement"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::ChannelId"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::ChannelSet"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::ChannelType"
+members = ["new", "as_str"]
+reason = "decision 19: ChannelType stays open, a Python item (RMK-986); its new and as_str have no Python counterpart yet"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::CompositeContent"
+members = ["into_parts"]
+reason = "CompositeContent::into_parts: Rust-only, the plan does not say"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::Confidence"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::EditSource"
+reason = "decision 4: an enum for a Python Literal is a language mapping; lot 0's rules have no rule for it (table, Types and values row 2)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::EventId"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::HOST_CHANNEL_ID"
+reason = "the plan hides it in lot 2 (model) and again in lot 3 (helpers)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::IdentityId"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::Latitude"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::Longitude"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::MAX_COMPOSITE_DEPTH"
+reason = "the plan hides it in lot 2 (model) and again in lot 3 (helpers)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::Metadata"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::ObservationId"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::ParticipantId"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::RichFormat"
+reason = "decision 4: an enum for a Python Literal is a language mapping; lot 0's rules have no rule for it (table, Types and values row 2)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::RoomId"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::TaskId"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::Timestamp"
+reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::ToolCallStatus"
+reason = "decision 4: an enum for a Python Literal is a language mapping; lot 0's rules have no rule for it (table, Types and values row 2)"
+
+[[pending]]
+lot = "?"
+rust = "roomkit::model::Visibility"
+members = ["Channels"]
+reason = "decision 4: Visibility keeps Channels(ChannelSet), a typed variant for Python's str"
+
+[[pending]]
+lot = "?"
+rust = "roomkit_ai::SkillError"
+members = ["ManifestTooLarge"]
+reason = "decision 19: the skills manifest bound stays, a Python item"
+
