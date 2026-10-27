@@ -37,6 +37,9 @@ The rules, which apply with no entry:
   the method's defaulted Python parameters, its fields for theirs; a Python
   parameter without a default is a positional Rust one, and one with a
   default is an option;
+- a struct a caller builds, an options struct or a model, is not
+  `#[non_exhaustive]`, which refuses the struct update standing for Python's
+  keywords outside its crate (convention 9); an enum may be;
 - a type that implements a trait of the surface has the trait's methods: a
   member a Python subclass repeats from the trait's Python class, unchanged,
   is compared on the trait alone;

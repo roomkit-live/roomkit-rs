@@ -18,7 +18,8 @@
 # An entry names a `rust` or a `python` path and some of its `members` or
 # `params` (`roomkit::RoomKit::attach`, `roomkit.RoomKit.attach_channel(category)`),
 # or a whole Rust item, which covers that item's own finding alone ("no Python
-# name") and goes dead once the item maps. A whole Python class is no entry.
+# name", or a struct a caller builds keeping `#[non_exhaustive]`) and goes dead
+# once the item maps and builds. A whole Python class is no entry.
 
 [rules]
 # Rust's casing of an acronym in a type's name (rust-lang RFC 430).
@@ -1267,6 +1268,91 @@ lot = 2
 rust = "roomkit::model::Visibility"
 members = ["Channels"]
 reason = "decision 4: Visibility::Channels(ChannelSet) stands for Python's channel list, read by lot 2's strong-type rule"
+
+[[pending]]
+lot = 2
+rust = "roomkit::ChannelDeclaration"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::ToolCallEvent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::TurnTimeouts"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::AudioContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ChannelCapabilities"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::DeleteContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::EditContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::LocationContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::MediaContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RateLimit"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RetryPolicy"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RichContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::SystemContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::TemplateContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::TextContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ToolCallContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::VideoContent"
+reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
 
 [[pending]]
 lot = 3

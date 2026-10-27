@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from api_parity.mapping import Entry, Mapping, variant_name
 from api_parity.sides import Python, Surface, python_signature
 
+# What a struct a caller builds that keeps `#[non_exhaustive]` is found with.
+NON_EXHAUSTIVE = "#[non_exhaustive]: a caller outside the crate cannot build it by struct update"
 
 @dataclass(frozen=True)
 class Finding:
@@ -95,11 +97,21 @@ class Comparison:
 
     def own_members(self, path: str) -> list[Finding]:
         """An options struct's own methods and constants: its fields stand
-        for Python's parameters, and nothing in Python stands for these."""
+        for Python's parameters, and nothing in Python stands for these. Nor
+        does `#[non_exhaustive]`, which refuses the struct update a caller
+        writes Python's keywords with."""
         item, before = self.surface.items[path], len(self.findings)
         for member in item.get("methods", []) + item.get("constants", []):
             self._find("rust", f"{path}::{member['name']}", "an options struct's own member: no Python member", path, None)
+        self._buildable(item, None)
         return self.findings[before:]
+
+    def _buildable(self, item: dict, python: str | None) -> None:
+        """A struct a caller builds, an options struct or a model, is not
+        `#[non_exhaustive]`: outside its crate that refuses the struct update
+        that stands for Python's keywords (E0639, convention 9)."""
+        if item.get("non_exhaustive"):
+            self._find("rust", item["path"], NON_EXHAUSTIVE, item["path"], python)
 
     def _find(self, side: str, path: str, detail: str, rust_item: str, python_item: str | None) -> None:
         self.findings.append(Finding(side, path, detail, rust_item, python_item))
@@ -214,6 +226,7 @@ class Comparison:
             cls.used.add(new["name"])
         if cls.fields and item["kind"] == "struct":
             cls.used.update(cls.fields)
+            self._buildable(item, cls.python)
             self._model_fields(cls, init, renames)
             if new is not None:
                 self._model_new(cls, init, new)

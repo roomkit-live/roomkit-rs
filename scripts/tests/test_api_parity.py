@@ -39,10 +39,11 @@ RULES = {
 }
 
 
-def struct(path, fields=(), methods=(), constants=(), impls=()):
+def struct(path, fields=(), methods=(), constants=(), impls=(), non_exhaustive=False):
     return {
         "path": path,
         "kind": "struct",
+        "non_exhaustive": non_exhaustive,
         "fields": [{"name": name, "type": type_} for name, type_ in fields],
         "methods": [surface_reader.parse_fn(header) for header in methods],
         "constants": [{"name": name, "type": "X"} for name in constants],
@@ -182,6 +183,31 @@ class Members(unittest.TestCase):
             [("rust", "roomkit::AttachChannelOptions::MAGIC"), ("rust", "roomkit::AttachChannelOptions::with_magic")],
         )
         self.assertEqual(report.items["roomkit::AttachChannelOptions"].status, "options")
+
+    def test_an_options_struct_or_a_model_keeping_non_exhaustive(self) -> None:
+        report = run(
+            [
+                struct(
+                    "roomkit::RoomKit",
+                    methods=["pub async fn mute(&self, room_id: &RoomId, options: MuteOptions)"],
+                ),
+                struct("roomkit::MuteOptions", fields=[("organization_id", "Option<String>")], non_exhaustive=True),
+                struct("roomkit::model::RateLimit", fields=[("max_per_second", "Option<f64>")], non_exhaustive=True),
+                struct("roomkit::model::RetryPolicy", fields=[("max_retries", "u32")], impls=["Default"]),
+                {**enum("roomkit::HookExecution", ["Sync"]), "non_exhaustive": True},
+            ],
+            {
+                "roomkit.RoomKit": {"mute": ["async def", "room_id", "*", "organization_id=None"]},
+                "roomkit.models.RateLimit": {"__init__": ["def", "*", "max_per_second=None"]},
+                "roomkit.models.RetryPolicy": {"__init__": ["def", "*", "max_retries=3"]},
+                "roomkit.HookExecution": {"SYNC": ["member", "'sync'"]},
+            },
+        )
+        found_here = [(f.path, f.detail) for f in report.findings if "non_exhaustive" in f.detail]
+        self.assertEqual(
+            sorted(path for path, _ in found_here), ["roomkit::MuteOptions", "roomkit::model::RateLimit"]
+        )
+        self.assertEqual(report.items["roomkit::MuteOptions"].status, "options")
 
     def test_parameters_on_one_side_only(self) -> None:
         report = run(
