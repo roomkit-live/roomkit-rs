@@ -56,6 +56,9 @@ jobs:
       - run: make examples
       - run: make doc
       - run: make check-core-deps
+      # The pinned Python snapshot's copies match their fingerprint; their
+      # roomkit commit's check needs a roomkit checkout, and is skipped here.
+      - run: make api-check-pin
 
   msrv:
     name: Minimum supported Rust version

@@ -7,9 +7,9 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture
+.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin
 
-all: conformance-check fmt-check clippy test doc deny check-core-deps examples
+all: conformance-check api-check-pin fmt-check clippy test doc deny check-core-deps examples
 
 fmt:
 	$(CARGO) fmt --all
@@ -160,3 +160,58 @@ turns-fixture:
 	$(CARGO) test -p roomkit --test turns --locked the_probe_s_turn_carries_python_s_messages && \
 	PYTHONDONTWRITEBYTECODE=1 "$(ROOMKIT_DIR)/.venv/bin/python" -I \
 		$(TURNS_FIXTURES)/read_rust.py $(TURNS_FIXTURES)/rust-case1.jsonl
+
+# The Python implementation's public API, which this one mirrors (step 5,
+# docs/steps/step-05.md lot 0): roomkit's tests/public_api_signatures.json and
+# tests/public_api_names.json at one commit of roomkit's origin/main, copied
+# into api/python with that commit recorded in api/python/ROOMKIT_COMMIT and
+# the copies' fingerprint in api/python/SNAPSHOT_SHA256, which api-check-pin
+# and the parity report check. The copies are never edited here: change the
+# snapshot in roomkit, push it, fetch, and sync again. ROOMKIT_REF names the
+# commit in the roomkit checkout (ROOMKIT_DIR); ALLOW_UNPUSHED=1 takes one
+# origin/main does not hold yet, for a copy synced again before it is pushed.
+API_PYTHON := api/python
+API_SNAPSHOT := public_api_names.json public_api_signatures.json
+ROOMKIT_REF ?= origin/main
+
+api-sync:
+	@commit=$$(git -C "$(ROOMKIT_DIR)" rev-parse --verify "$(ROOMKIT_REF)^{commit}") && \
+	if ! git -C "$(ROOMKIT_DIR)" merge-base --is-ancestor "$$commit" origin/main; then \
+		if [ "$(ALLOW_UNPUSHED)" = 1 ]; then \
+			echo "warning: roomkit $$commit is not on origin/main: sync again once it is"; \
+		else \
+			echo "roomkit $$commit is not on origin/main: push it and fetch first"; exit 1; \
+		fi; \
+	fi && \
+	mkdir -p $(API_PYTHON) && \
+	for file in $(API_SNAPSHOT); do \
+		git -C "$(ROOMKIT_DIR)" show "$$commit:tests/$$file" > "$(API_PYTHON)/$$file.new" || \
+			{ rm -f $(API_PYTHON)/*.new; exit 1; }; \
+	done && \
+	for file in $(API_SNAPSHOT); do mv "$(API_PYTHON)/$$file.new" "$(API_PYTHON)/$$file"; done && \
+	echo "$$commit" > $(API_PYTHON)/ROOMKIT_COMMIT && \
+	(cd $(API_PYTHON) && sha256sum $(API_SNAPSHOT) | sha256sum | cut -c1-64) > $(API_PYTHON)/SNAPSHOT_SHA256 && \
+	echo "api synced from roomkit $$commit"
+
+# A local gate, which `make all` runs and CI too: the copies are the ones
+# their fingerprint names, and their roomkit commit is on roomkit's
+# origin/main, so a copy synced from a commit not pushed yet is never pushed
+# itself. The commit's check is skipped without a roomkit checkout, as in CI;
+# ALLOW_UNPUSHED=1 only warns, for local work.
+api-check-pin:
+	@fingerprint=$$(cd $(API_PYTHON) && sha256sum $(API_SNAPSHOT) | sha256sum | cut -c1-64) && \
+	if [ "$$fingerprint" != "$$(cat $(API_PYTHON)/SNAPSHOT_SHA256)" ]; then \
+		echo "api-check-pin: the copies in $(API_PYTHON) differ from SNAPSHOT_SHA256: they are never edited, run make api-sync"; \
+		exit 1; \
+	fi
+	@commit=$$(cat $(API_PYTHON)/ROOMKIT_COMMIT) && \
+	if ! git -C "$(ROOMKIT_DIR)" rev-parse --git-dir >/dev/null 2>&1; then \
+		echo "api-check-pin: no roomkit checkout at $(ROOMKIT_DIR), its commit's check skipped"; \
+	elif git -C "$(ROOMKIT_DIR)" merge-base --is-ancestor "$$commit" origin/main 2>/dev/null; then \
+		echo "api-check-pin: roomkit $$commit is on origin/main"; \
+	elif [ "$(ALLOW_UNPUSHED)" = 1 ]; then \
+		echo "warning: roomkit $$commit is not on origin/main: sync again once it is"; \
+	else \
+		echo "api-check-pin: roomkit $$commit is not on origin/main: push it, fetch, and run make api-sync"; \
+		exit 1; \
+	fi
