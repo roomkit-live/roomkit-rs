@@ -31,7 +31,7 @@ use roomkit::transcript::Role;
 use roomkit::{RoomKit, current_turn};
 use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderResponse,
-    ProviderToolCall, ResponseStream, ToolDefinition, ToolOutput, Tools,
+    ProviderStream, ProviderToolCall, ToolDefinition, ToolOutput, Tools,
 };
 use serde_json::json;
 
@@ -44,7 +44,7 @@ struct Immediate {
 }
 
 impl AiProvider for Immediate {
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ResponseStream<'a> {
+    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
         let after_tool = request
             .messages
             .last()

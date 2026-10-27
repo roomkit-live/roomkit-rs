@@ -129,7 +129,9 @@ impl ToolError {
 
     /// `error`, raised by the tool: the model reads its kind, the name of
     /// its type (`Tool 'x' failed (Error)` for an `io::Error`), its
-    /// observers its message and causes.
+    /// observers its message and causes. An error that is no `Error`
+    /// itself, a `Box<dyn Error>` or an `anyhow::Error`, is raised with
+    /// [`raised_as`](Self::raised_as), its kind named.
     pub fn raised<E: Error>(error: &E) -> Self {
         Self::Raised {
             kind: short_type_name::<E>().to_owned(),

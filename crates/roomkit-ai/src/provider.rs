@@ -18,7 +18,7 @@ pub type ProviderError = Box<dyn Error + Send + Sync>;
 
 /// The events of one generation, as its provider reads them: text as it
 /// comes, the calls, then the done event.
-pub type ResponseStream<'a> =
+pub type ProviderStream<'a> =
     Pin<Box<dyn Stream<Item = Result<ProviderEvent, ProviderError>> + Send + 'a>>;
 
 /// A model provider (RFC §6.7): one generation per call, read as a stream
@@ -36,7 +36,7 @@ pub trait AiProvider: Send + Sync + 'static {
     }
 
     /// One generation answering `request`.
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ResponseStream<'a>;
+    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a>;
 }
 
 /// What one generation is asked (RFC §6.7 `AIContext`): the system prompt,
@@ -160,7 +160,7 @@ impl ProviderResponse {
     /// The generation of `response`, a future giving the whole response,
     /// as a stream: its text, its calls, then its done event (RFC §6.4: a
     /// provider that does not stream hands the loop everything it read).
-    pub fn into_stream<'a, F>(response: F) -> ResponseStream<'a>
+    pub fn into_stream<'a, F>(response: F) -> ProviderStream<'a>
     where
         F: Future<Output = Result<Self, ProviderError>> + Send + 'a,
     {

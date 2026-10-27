@@ -15,7 +15,7 @@ use roomkit::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiProvider, AiRequest, Done, ProviderResponse, ProviderToolCall, ResponseStream,
+    AiAgent, AiProvider, AiRequest, Done, ProviderResponse, ProviderStream, ProviderToolCall,
     ToolDefinition, ToolOutput, Tools,
 };
 use serde_json::json;
@@ -230,7 +230,7 @@ impl Endless {
 }
 
 impl AiProvider for Endless {
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ResponseStream<'a> {
+    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
         // The rounds of calls the turn made so far: its trailing assistant
         // calls and their results.
         let done = request

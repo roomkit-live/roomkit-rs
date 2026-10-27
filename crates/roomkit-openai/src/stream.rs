@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::Stream;
-use roomkit_ai::{AiRequest, Done, ProviderError, ProviderEvent, ResponseStream};
+use roomkit_ai::{AiRequest, Done, ProviderError, ProviderEvent, ProviderStream};
 
 use crate::agent::{ANSWER_LIMIT, OpenAiProvider, read_body};
 use crate::error::OpenAiError;
@@ -31,7 +31,7 @@ type Item = Result<ProviderEvent, ProviderError>;
 pub(crate) fn answer<'a>(
     provider: &'a OpenAiProvider,
     request: &'a AiRequest,
-) -> ResponseStream<'a> {
+) -> ProviderStream<'a> {
     let reading = Reading {
         provider,
         request,

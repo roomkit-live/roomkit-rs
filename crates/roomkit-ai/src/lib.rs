@@ -64,8 +64,8 @@ mod tools;
 pub use self::agent::AiAgent;
 pub use self::error::AiError;
 pub use self::provider::{
-    AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderResponse, ProviderToolCall,
-    ResponseStream,
+    AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderResponse, ProviderStream,
+    ProviderToolCall,
 };
 pub use self::skills::{Skill, SkillError, SkillRegistry};
 pub use self::tools::{

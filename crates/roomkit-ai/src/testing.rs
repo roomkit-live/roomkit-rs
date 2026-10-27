@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use roomkit::model::Metadata;
 
 use crate::provider::{
-    AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderToolCall, ResponseStream,
+    AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderStream, ProviderToolCall,
 };
 use crate::stream::{Yielder, items};
 
@@ -157,7 +157,7 @@ impl AiProvider for ScriptedProvider {
         Some("scripted")
     }
 
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ResponseStream<'a> {
+    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
         let round = {
             let mut script = self.lock();
             script.requests.push(request.clone());

@@ -10,7 +10,7 @@ use roomkit::model::{
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError, EventDraft};
 use roomkit_ai::{
-    AiAgent, AiError, AiProvider, AiRequest, ResponseStream, SkillRegistry, ToolPolicy, Toolset,
+    AiAgent, AiError, AiProvider, AiRequest, ProviderStream, SkillRegistry, ToolPolicy, Toolset,
 };
 
 use crate::config::OpenAiConfig;
@@ -256,7 +256,7 @@ impl AiProvider for OpenAiProvider {
         Some("openai")
     }
 
-    fn generate<'a>(&'a self, request: &'a AiRequest) -> ResponseStream<'a> {
+    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
         stream::answer(self, request)
     }
 }

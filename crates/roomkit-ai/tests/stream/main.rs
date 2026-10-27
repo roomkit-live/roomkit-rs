@@ -26,7 +26,7 @@ use roomkit::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiProvider, AiRequest, ProviderEvent, ResponseStream, ToolDefinition, ToolOutput,
+    AiAgent, AiProvider, AiRequest, ProviderEvent, ProviderStream, ToolDefinition, ToolOutput,
     Tools,
 };
 use serde_json::json;
@@ -238,7 +238,7 @@ impl Stream for Events {
 }
 
 impl AiProvider for Pieces {
-    fn generate<'a>(&'a self, _request: &'a AiRequest) -> ResponseStream<'a> {
+    fn generate<'a>(&'a self, _request: &'a AiRequest) -> ProviderStream<'a> {
         self.requests.fetch_add(1, Ordering::SeqCst);
         let round = self.rounds.lock().unwrap().pop_front();
         let mut events = VecDeque::new();
@@ -889,7 +889,7 @@ impl Stream for Fed {
 }
 
 impl AiProvider for Controlled {
-    fn generate<'a>(&'a self, _request: &'a AiRequest) -> ResponseStream<'a> {
+    fn generate<'a>(&'a self, _request: &'a AiRequest) -> ProviderStream<'a> {
         let events = self.events.lock().unwrap().take();
         let (_spare, empty) = tokio::sync::mpsc::unbounded_channel();
         Box::pin(Fed {
