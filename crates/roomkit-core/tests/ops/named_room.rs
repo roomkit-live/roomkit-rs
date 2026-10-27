@@ -337,7 +337,7 @@ mod a_missing_room {
         let sent = sim.send_to("room_1", Some("bank"), Sim::message("sms", "Bonjour"));
         assert_eq!(
             (sent, sim.bindings.len()),
-            (Err(InboundError::OtherOrganization(room_id())), 0)
+            (Err(InboundError::RoomNotFound(room_id())), 0)
         );
     }
 
@@ -386,7 +386,7 @@ mod another_organization {
         assert_eq!(
             (sent, sim.trace, sim.notices.len()),
             (
-                Err(InboundError::OtherOrganization(room_id())),
+                Err(InboundError::RoomNotFound(room_id())),
                 ["load_context room_1"].map(str::to_owned).to_vec(),
                 0
             )
@@ -398,7 +398,7 @@ mod another_organization {
         let mut sim = bank_room();
         sim.room.organization_id = None;
         let sent = sim.send_to("room_1", Some("bank"), Sim::message("sms", "Bonjour"));
-        assert_eq!(sent, Err(InboundError::OtherOrganization(room_id())));
+        assert_eq!(sent, Err(InboundError::RoomNotFound(room_id())));
     }
 
     #[test]
@@ -411,9 +411,7 @@ mod another_organization {
         assert_eq!(
             (sent, sim.other_bindings("room_2").len()),
             (
-                Err(InboundError::OtherOrganization(
-                    RoomId::new("room_2").unwrap()
-                )),
+                Err(InboundError::RoomNotFound(RoomId::new("room_2").unwrap())),
                 0
             )
         );

@@ -290,8 +290,10 @@ impl NamedRoom {
     /// rule 7 refuses (gap G-053), or the routed sender recorded (gap
     /// G-061).
     fn on_existing(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> Progress<Named> {
+        // Another organization's room reads as one that does not exist
+        // (RFC §17.2, §5.1), a message's as an injection's (gap G-077).
         if !organizations::admits(self.organization_id.as_deref(), &context.room) {
-            let error = InboundError::OtherOrganization(self.room_id.clone());
+            let error = InboundError::RoomNotFound(self.room_id.clone());
             return Progress::Done(Named::Failed(error));
         }
         match self.mode {

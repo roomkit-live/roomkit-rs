@@ -34,9 +34,7 @@ pub(crate) fn error_of(error: &KitError) -> Option<Value> {
 fn inbound_error(error: &InboundError) -> Option<Value> {
     Some(match error {
         InboundError::UnknownChannel(_) => named("channel_not_registered"),
-        InboundError::RoomNotFound(_) | InboundError::OtherOrganization(_) => {
-            named("room_not_found")
-        }
+        InboundError::RoomNotFound(_) => named("room_not_found"),
         InboundError::InboundOnHostChannel(_)
         | InboundError::NotAHostChannel(_)
         | InboundError::HostAsIntelligence(_)

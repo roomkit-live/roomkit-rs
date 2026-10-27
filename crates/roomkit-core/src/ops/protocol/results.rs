@@ -56,9 +56,10 @@ pub enum InboundError {
     #[error("no channel {0} is registered")]
     UnknownChannel(ChannelId),
     /// The room does not exist, or disappeared while the call was
-    /// processed. A direct injection into a room of another organization
-    /// than the one its caller acts for, or of none, does not find it
-    /// either (RFC §17.2, gap G-077). Nothing was written.
+    /// processed. A room of another organization than the one the caller
+    /// acts for, or of none, is not found either, whether a message, the
+    /// router or a direct injection names it (RFC §17.2, §10.1 step 2, gap
+    /// G-077). Nothing was written.
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
     /// The message arrived on a host channel, which receives no external
@@ -101,12 +102,6 @@ pub enum InboundError {
         /// channels only.
         reached_elsewhere: bool,
     },
-    /// The room a message names, or routing finds, belongs to another
-    /// organization than the one the caller acts for, or to none: it is not
-    /// the caller's (RFC §10.1 step 2, §17.2, gap G-051). Nothing was
-    /// written.
-    #[error("room {0} belongs to another organization")]
-    OtherOrganization(RoomId),
     /// The kit's router failed to route the message (RFC §10.4). Nothing was
     /// written.
     #[error("the router failed: {0:?}")]

@@ -995,7 +995,7 @@ mod a_routed_room {
         assert_eq!(
             (sent, sim.trace),
             (
-                Err(InboundError::OtherOrganization(room_id())),
+                Err(InboundError::RoomNotFound(room_id())),
                 [
                     "resolve_identity sms +15551234567",
                     "route sms +15551234567",

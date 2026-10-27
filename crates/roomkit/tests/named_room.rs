@@ -124,10 +124,10 @@ async fn a_room_created_for_an_organization_belongs_to_it() {
     assert_eq!(room.organization_id.as_deref(), Some("bank"));
 }
 
-/// RFC §17.2: another organization's room fails the message, with nothing
-/// written.
+/// RFC §17.2, §5.1: another organization's room is not found, and the
+/// message fails with nothing written.
 #[tokio::test]
-async fn a_room_of_another_organization_is_refused_with_nothing_written() {
+async fn a_room_of_another_organization_is_not_found_with_nothing_written() {
     let (kit, sms) = kit_without_rooms();
     kit.for_organization("bank")
         .create_room(&room_id())
@@ -143,9 +143,7 @@ async fn a_room_of_another_organization_is_refused_with_nothing_written() {
             kit.store().list_bindings(&room_id()).await.unwrap().len()
         ),
         (
-            Err(KitError::Inbound(
-                InboundError::OtherOrganization(room_id())
-            )),
+            Err(KitError::Inbound(InboundError::RoomNotFound(room_id()))),
             0
         )
     );

@@ -182,7 +182,7 @@ async fn an_event_is_never_brought_into_another_organization_s_room() {
         (refused, as_stored(&kit).await),
         (
             (
-                inbound(InboundError::OtherOrganization(room_id())),
+                inbound(InboundError::RoomNotFound(room_id())),
                 inbound(InboundError::RoomNotFound(room_id()))
             ),
             (RoomStatus::Active, 1, vec![("sms".to_owned(), false)])
