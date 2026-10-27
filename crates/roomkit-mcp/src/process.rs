@@ -50,19 +50,15 @@ pub(crate) struct Stderr {
 }
 
 impl Stderr {
-    /// The last lines the server wrote on its standard error, one per line,
+    /// The last lines the server wrote on its standard error, oldest first,
     /// within [`STDERR_TAIL_LINES`] and [`STDERR_TAIL_BYTES`]; empty when it
     /// wrote none. Called once the server is stopped, it waits for the pipe
     /// to close, within [`STDERR_DRAIN`], so that what the server wrote
     /// before it exited is read.
-    pub(crate) async fn last_lines(self) -> String {
+    pub(crate) async fn last_lines(self) -> Vec<String> {
         let _read_to_end = tokio::time::timeout(STDERR_DRAIN, self.reader).await;
         let tail = self.tail.lock().unwrap_or_else(PoisonError::into_inner);
-        tail.lines
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join("\n")
+        tail.lines.iter().cloned().collect()
     }
 }
 
@@ -230,20 +226,11 @@ async fn read_stderr(stderr: ChildStderr, program: String, tail: Arc<Mutex<Tail>
     }
 }
 
-/// Logs one line of a server's standard error and keeps it in `tail`:
-/// bounded, its control characters replaced, so that what the server
-/// writes cannot move a terminal's cursor or forge a log line.
+/// Logs one line of a server's standard error and keeps it in `tail`,
+/// bounded and harmless as every message of the server's words is
+/// ([`bounded_message`]).
 fn take_line(program: &str, line: &[u8], tail: &Mutex<Tail>) {
-    let text: String = bounded_message(String::from_utf8_lossy(line).trim_end_matches('\r'))
-        .chars()
-        .map(|c| {
-            if c.is_control() && c != '\t' {
-                char::REPLACEMENT_CHARACTER
-            } else {
-                c
-            }
-        })
-        .collect();
+    let text = bounded_message(&String::from_utf8_lossy(line));
     tracing::debug!(
         target: "roomkit::mcp",
         server = program,

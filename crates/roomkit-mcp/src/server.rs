@@ -14,7 +14,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::command::McpCommand;
-use crate::error::McpError;
+use crate::error::{McpError, stderr_ending};
 use crate::listing;
 use crate::process::{ServerProcess, Started, Stderr};
 use crate::results;
@@ -107,6 +107,7 @@ impl McpServer {
             Err(_elapsed) => Err(McpError::Timeout {
                 program: program.clone(),
                 after: command.connect_timeout,
+                stderr: Vec::new(),
             }),
         };
         let (service, tools) = match connected {
@@ -180,33 +181,28 @@ impl McpServer {
 }
 
 /// Stops the server of a connection that failed with `error`, and returns
-/// the error once its process is waited for (RFC §21.2), the last lines it
-/// wrote on its standard error added to a handshake's or a listing's
-/// message: what a server that fails to start says of why.
+/// the error once its process is waited for (RFC §21.2), with the last
+/// lines the server wrote on its standard error: what a server that fails
+/// to start says of why. A handshake's or a listing's message ends with
+/// them, and a timeout carries them.
 async fn failed(error: McpError, process: ServerProcess, stderr: Stderr) -> McpError {
     process.kill().await;
     match error {
         McpError::Handshake { program, message } => McpError::Handshake {
             program,
-            message: with_stderr(message, &stderr.last_lines().await),
+            message: message + &stderr_ending(&stderr.last_lines().await),
         },
         McpError::Listing { program, message } => McpError::Listing {
             program,
-            message: with_stderr(message, &stderr.last_lines().await),
+            message: message + &stderr_ending(&stderr.last_lines().await),
         },
-        error @ (McpError::Command { .. } | McpError::Spawn { .. } | McpError::Timeout { .. }) => {
-            error
-        }
+        McpError::Timeout { program, after, .. } => McpError::Timeout {
+            program,
+            after,
+            stderr: stderr.last_lines().await,
+        },
+        error @ (McpError::Command { .. } | McpError::Spawn { .. }) => error,
     }
-}
-
-/// `message`, then the server's last lines of standard error, `stderr`,
-/// when it wrote any.
-fn with_stderr(message: String, stderr: &str) -> String {
-    if stderr.is_empty() {
-        return message;
-    }
-    format!("{message}; its standard error ended with:\n{stderr}")
 }
 
 /// The MCP handshake over the server's output and input, then the listing

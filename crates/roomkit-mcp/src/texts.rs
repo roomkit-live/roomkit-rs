@@ -40,9 +40,31 @@ pub(crate) fn bounded_result(text: &str, limit: usize) -> String {
 }
 
 /// `text`, a message the server's words make up, within the bound an error
-/// or a log line keeps.
+/// or a log line keeps, and harmless where it is shown: its control
+/// characters, line separators and bidi controls replaced (`U+FFFD`), so
+/// that it cannot drive a terminal or reverse what follows, and each line
+/// break it holds indented, so that none of its lines starts a log line of
+/// its own.
 pub(crate) fn bounded_message(text: &str) -> String {
-    bounded_text(text, MESSAGE_LIMIT)
+    let bounded = bounded_text(text.replace("\r\n", "\n").trim_end(), MESSAGE_LIMIT);
+    let mut harmless = String::with_capacity(bounded.len());
+    for c in bounded.chars() {
+        match c {
+            '\n' => harmless.push_str("\n  "),
+            '\t' => harmless.push(c),
+            c if is_unsafe(c) => harmless.push(char::REPLACEMENT_CHARACTER),
+            c => harmless.push(c),
+        }
+    }
+    harmless
+}
+
+/// Whether `c` changes how what follows it is shown: a control character,
+/// a line or paragraph separator, which some terminals and viewers break a
+/// line at, or a bidi control.
+fn is_unsafe(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
 #[cfg(test)]

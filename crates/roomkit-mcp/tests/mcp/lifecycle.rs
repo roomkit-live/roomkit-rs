@@ -261,45 +261,97 @@ async fn a_server_that_exits_at_once_fails_the_handshake_and_is_waited_for() {
     );
 }
 
-/// What a server wrote on its standard error before it failed its
-/// handshake ends the error, its last 20 lines, their control characters
-/// replaced: why it failed (a missing package, a traceback).
-#[tokio::test]
-async fn a_failed_handshake_s_error_ends_with_the_server_s_last_stderr_lines() {
-    let refused = fake("stderr-exit").connect().await.err();
-    let Some(McpError::Handshake { message, .. }) = &refused else {
-        panic!("{refused:?}");
-    };
-    let (_, stderr) = message
+/// The lines of standard error a failed connection's error ends with, as
+/// its display shows them: each indented, never a log line of its own.
+fn stderr_lines(error: &McpError) -> Vec<String> {
+    let shown = error.to_string();
+    let stderr = shown
         .split_once("; its standard error ended with:\n")
-        .unwrap();
-    let mut expected: Vec<String> = (6..=24).map(|n| format!("line {n}")).collect();
-    expected.push("\u{fffd}[31mModuleNotFoundError\u{fffd}[0m: No module named 'mcp'".to_owned());
-    assert_eq!(stderr.lines().collect::<Vec<_>>(), expected);
+        .map(|(_, stderr)| stderr);
+    assert!(
+        stderr.is_some_and(|stderr| stderr.split('\n').all(|line| line.starts_with("  "))),
+        "{shown:?}"
+    );
+    stderr
+        .unwrap()
+        .split('\n')
+        .map(|line| line.strip_prefix("  ").unwrap().to_owned())
+        .collect()
+}
+
+/// What a server wrote on its standard error before its connection failed
+/// ends the error, whether it failed its handshake, its listing or the
+/// connect bound: its last 20 lines, their control characters replaced,
+/// why it failed (a missing package, a traceback, an image being pulled).
+#[tokio::test]
+async fn a_failed_connection_s_error_ends_with_the_server_s_last_stderr_lines() {
+    let mut exited: Vec<String> = (6..=24).map(|n| format!("line {n}")).collect();
+    exited.push("\u{fffd}[31mModuleNotFoundError\u{fffd}[0m: No module named 'mcp'".to_owned());
+    let waiting = vec![
+        "pulling the server's image".to_owned(),
+        "\u{fffd}[33mlayer 1/3\u{fffd}[0m: waiting".to_owned(),
+    ];
+    for (mode, expected) in [
+        ("stderr-exit", exited),
+        ("stderr-listing-error", waiting.clone()),
+        ("stderr-hang", waiting),
+    ] {
+        let refused = fake(mode)
+            .connect_timeout(Duration::from_millis(300))
+            .connect()
+            .await
+            .err()
+            .unwrap();
+        let failed_as = match (mode, &refused) {
+            ("stderr-exit", McpError::Handshake { .. })
+            | ("stderr-listing-error", McpError::Listing { .. }) => true,
+            ("stderr-hang", McpError::Timeout { stderr, .. }) => stderr.len() == 2,
+            _ => false,
+        };
+        assert!(failed_as, "{mode}: {refused:?}");
+        assert_eq!(stderr_lines(&refused), expected, "{mode}");
+    }
 }
 
 /// The standard error a failed connection's error keeps takes 4 KiB at
 /// most, each line cut, the last lines kept.
 #[tokio::test]
 async fn the_stderr_a_failed_connection_s_error_keeps_takes_4_kib_at_most() {
-    let refused = fake("stderr-exit-long").connect().await.err();
-    let Some(McpError::Handshake { message, .. }) = &refused else {
-        panic!("{refused:?}");
-    };
-    let (_, stderr) = message
-        .split_once("; its standard error ended with:\n")
-        .unwrap();
-    let lines: Vec<&str> = stderr.lines().collect();
+    let refused = fake("stderr-exit-long").connect().await.err().unwrap();
+    let lines = stderr_lines(&refused);
     let firsts: Vec<char> = lines
         .iter()
         .filter_map(|line| line.chars().next())
         .collect();
-    let bytes: usize = lines.iter().map(|line| line.len()).sum();
+    let bytes: usize = lines.iter().map(String::len).sum();
     assert!(
         firsts == ['5', '6', '7', '8']
             && bytes <= 4096
             && lines.iter().all(|line| line.ends_with('…')),
         "{firsts:?} {bytes}"
+    );
+}
+
+/// What a server's words make up in an error cannot drive a terminal or
+/// forge a log line: its control characters, line separators and bidi
+/// controls are replaced, and a line break it sends is indented, so that
+/// no line of it starts a line of its own.
+#[tokio::test]
+async fn a_server_s_words_in_an_error_cannot_forge_a_log_line() {
+    let refused = fake("initialize-error").connect().await.err().unwrap();
+    let shown = refused.to_string();
+    let McpError::Handshake { message, .. } = &refused else {
+        panic!("{refused:?}");
+    };
+    let forbidden = |c: char| {
+        (c.is_control() && c != '\n')
+            || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    };
+    assert!(
+        message.contains("FORGED")
+            && !shown.chars().any(forbidden)
+            && shown.split('\n').skip(1).all(|line| line.starts_with("  ")),
+        "{shown:?}"
     );
 }
 

@@ -52,7 +52,7 @@ const INHERITED: &[&str] = &[
 /// standard error is read as it writes, each line logged at debug level
 /// under the target `roomkit::mcp`, so that it never fills a pipe, and its
 /// last 20 lines, 4 KiB at most, end the error of a connection that fails
-/// its handshake or its listing.
+/// its handshake, its listing or its connect bound.
 ///
 /// On Unix the server leads a process group of its own, which is stopped
 /// whole, so that what it starts (the real server, behind `npx` or `uvx`)
@@ -160,8 +160,9 @@ impl McpCommand {
     /// could be started, and [`McpError::Handshake`], [`McpError::Listing`]
     /// or [`McpError::Timeout`] when the connection failed part-way: the
     /// process is then stopped and waited for before the error is returned
-    /// (RFC §21.2). A handshake's or a listing's error ends with the last
-    /// lines the server wrote on its standard error, when it wrote any.
+    /// (RFC §21.2). Each of the three carries the last lines the server
+    /// wrote on its standard error, when it wrote any: a handshake's or a
+    /// listing's message ends with them, and they are a timeout's `stderr`.
     pub async fn connect(self) -> Result<McpServer, McpError> {
         McpServer::connect(self).await
     }

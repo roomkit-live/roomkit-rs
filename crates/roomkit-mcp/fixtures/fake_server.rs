@@ -14,6 +14,10 @@
 //! child that ignores `SIGTERM` first, `stderr-flood` (`normal`, after 4 MiB of standard error),
 //! `stderr-exit` (24 lines of standard error and a colored one, then exits
 //! failing), `stderr-exit-long` (8 lines of 1,501 characters, then exits failing),
+//! `stderr-hang` (two lines of standard error, then never answers the
+//! handshake), `stderr-listing-error` (two lines of standard error, then
+//! `listing-error`), `initialize-error` (answers the handshake with an error
+//! whose message carries escapes, a forged log line and bidi controls),
 //! `listing-error`, `pages:<n>`, `same-cursor`, `endless`, `endless-same`,
 //! `empty-page`, `many`, `names`, `skill-names`.
 //!
@@ -69,6 +73,13 @@ fn main() -> ExitCode {
             write_stderr((1..=8).map(|n| format!("{n}{}", "x".repeat(1500))));
             return ExitCode::FAILURE;
         }
+        "stderr-hang" | "stderr-listing-error" => write_stderr(
+            [
+                "pulling the server's image".to_owned(),
+                "\u{1b}[33mlayer 1/3\u{1b}[0m: waiting".to_owned(),
+            ]
+            .into_iter(),
+        ),
         "stderr-flood" => {
             let line = "x".repeat(1023) + "\n";
             let mut stderr = io::stderr().lock();
@@ -178,8 +189,15 @@ fn serve(options: &Options) {
         let params = &message["params"];
         let answer = match method {
             "initialize" if options.mode.starts_with("silent") => continue,
+            "initialize" if options.mode == "stderr-hang" => continue,
+            "initialize" if options.mode == "initialize-error" => {
+                if answer_error(&id, FORGING).is_err() {
+                    return;
+                }
+                continue;
+            }
             "initialize" => Some(initialized(params, options)),
-            "tools/list" if options.mode == "listing-error" => None,
+            "tools/list" if options.mode.ends_with("listing-error") => None,
             "tools/list" => {
                 listings += 1;
                 Some(listing(&options.mode, params, listings))
@@ -206,6 +224,23 @@ fn serve(options: &Options) {
             return;
         }
     }
+}
+
+/// An error message that, written as it is, would set a terminal's title,
+/// clear its screen, start a log line of its own, reverse what follows and
+/// split a line where a terminal does not.
+const FORGING: &str = "\u{1b}]0;title\u{7}\u{1b}[2Jcleared\nFORGED 2026-10-27T08:00:00Z ERROR roomkit: forged line \u{202e}desrever\u{2028}split";
+
+/// Answers the request `id` with an error saying `message`.
+fn answer_error(id: &Value, message: &str) -> io::Result<()> {
+    let reply = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": -32603, "message": message },
+    });
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{reply}")?;
+    stdout.flush()
 }
 
 fn initialized(params: &Value, options: &Options) -> Value {
