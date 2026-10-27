@@ -11,7 +11,8 @@ use roomkit::model::{
 };
 use roomkit::testing::TurnTap;
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, DeliveryStream, RoomKit,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
+    CreateRoomOptions, DeliveryStream, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use roomkit_ai::AiAgent;
 use roomkit_ai::ToolOutput;
@@ -81,7 +82,16 @@ async fn the_kit_s_shutdown_while_a_tool_runs_crosses_as_cancel_and_ends_the_cal
     let tap = TurnTap::on(&kit);
     let asking = tokio::spawn({
         let kit = kit.clone();
-        async move { kit.process_inbound_in(&room(), message()).await }
+        async move {
+            kit.process_inbound(
+                message(),
+                ProcessInboundOptions {
+                    room_id: Some(room()),
+                    ..Default::default()
+                },
+            )
+            .await
+        }
     });
     running.notified().await;
     kit.shutdown().await;
@@ -166,7 +176,7 @@ impl Channel for Leaving {
 /// and what it was handed is stored `cancelled`.
 #[tokio::test(start_paused = true)]
 async fn a_streaming_reader_that_leaves_crosses_as_close() {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(roomkit::testing::RecordingTransport::new(
         channel("sms"),
         ChannelType::SMS,
@@ -184,9 +194,16 @@ async fn a_streaming_reader_that_leaves_crosses_as_close() {
     let model = ScriptedProvider::new([ScriptedRound::writing(["The answer ", "is 42."])]);
     kit.register_channel(AiAgent::new(channel("ai"), model))
         .unwrap();
-    kit.create_room(&room()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in ["sms", "ws", "ai"] {
-        kit.attach(&room(), &channel(id)).await.unwrap();
+        kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     let tap = TurnTap::on(&kit);
     asks(&kit, "What is it?").await;

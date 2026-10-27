@@ -12,6 +12,7 @@ use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId};
 use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
 
 use shared::Checks;
 
@@ -25,9 +26,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.register_channel(agent.clone())?;
 
     let room = RoomId::new("room_1")?;
-    kit.create_room(&room).await?;
-    kit.attach(&room, sms.id()).await?;
-    kit.attach(&room, agent.id()).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
+    kit.attach_channel(&room, sms.id(), AttachChannelOptions::default())
+        .await?;
+    kit.attach_channel(&room, agent.id(), AttachChannelOptions::default())
+        .await?;
 
     println!("The customer writes \"Bonjour\" on SMS.");
     let message = InboundMessage::new(
@@ -35,7 +42,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "+15551234567",
         EventContent::text("Bonjour"),
     );
-    let result = kit.process_inbound_in(&room, message).await?;
+    let result = kit
+        .process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
 
     let timeline = shared::timeline(&kit, &room).await?;
     shared::print_timeline(&timeline);

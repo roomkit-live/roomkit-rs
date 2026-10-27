@@ -21,8 +21,9 @@ use roomkit::model::{
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, DeliveryStream, HookExecution,
-    HookSpec, HookTrigger, InboundResult, RoomKit, StreamItem,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
+    CreateRoomOptions, DeliveryStream, HookExecution, HookSpec, HookTrigger, InboundResult,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, StreamItem,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -314,7 +315,7 @@ impl Room {
     ) -> (Self, Pieces) {
         let model = Pieces::new(rounds);
         let dropped = Arc::clone(&model.dropped);
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         let agent = AiAgent::new(channel("agent"), model.clone())
             .with_tools(tools(&kit))
             .unwrap();
@@ -322,9 +323,16 @@ impl Room {
         kit.register_channel(web.clone()).unwrap();
         kit.register_channel(ws.clone()).unwrap();
         kit.register_channel(agent).unwrap();
-        kit.create_room(&room_id()).await.unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
         for id in ["web", "ws", "agent"] {
-            kit.attach(&room_id(), &channel(id)).await.unwrap();
+            kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+                .await
+                .unwrap();
         }
         let room = Self {
             kit,
@@ -339,7 +347,13 @@ impl Room {
         let message = InboundMessage::new(channel("web"), "alice", EventContent::text(text));
         let result = self
             .kit
-            .process_inbound_in(&room_id(), message)
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         self.kit.idle().await;
@@ -912,7 +926,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
     *model.events.lock().unwrap() = Some(events);
     let dropped = Arc::clone(&model.dropped);
     let agent = AiAgent::new(channel("agent"), model);
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let ws = Streaming::new(Stop::Never);
     kit.register_channel(RecordingTransport::new(
         channel("web"),
@@ -921,13 +935,30 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
     .unwrap();
     kit.register_channel(ws.clone()).unwrap();
     kit.register_channel(agent).unwrap();
-    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in ["web", "ws", "agent"] {
-        kit.attach(&room_id(), &channel(id)).await.unwrap();
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     let message = InboundMessage::new(channel("web"), "alice", EventContent::text("Hi"));
     let calling = kit.clone();
-    let caller = tokio::spawn(async move { calling.process_inbound_in(&room_id(), message).await });
+    let caller = tokio::spawn(async move {
+        calling
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
+            .await
+    });
     for piece in ["The ", "answer "] {
         feed.send(ProviderEvent::Text(piece.to_owned())).unwrap();
     }
@@ -978,7 +1009,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
 async fn the_default_deliver_stream_delivers_each_row_once_the_stream_is_over() {
     let model = ScriptedProvider::new([ScriptedRound::writing(["Hello ", "there."])]);
     let agent = AiAgent::new(channel("agent"), model);
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let buffered = Buffered {
         inner: RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET),
@@ -986,12 +1017,27 @@ async fn the_default_deliver_stream_delivers_each_row_once_the_stream_is_over() 
     kit.register_channel(sms).unwrap();
     kit.register_channel(buffered.clone()).unwrap();
     kit.register_channel(agent).unwrap();
-    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in ["sms", "ws", "agent"] {
-        kit.attach(&room_id(), &channel(id)).await.unwrap();
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Hi"));
-    kit.process_inbound_in(&room_id(), message).await.unwrap();
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     let delivered: Vec<String> = buffered
         .inner

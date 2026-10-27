@@ -11,7 +11,10 @@ use roomkit::model::{
 use roomkit::testing::{
     EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
 };
-use roomkit::{ConversationStore, RoomKit};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitOptions,
+};
 
 fn channel(id: &str) -> ChannelId {
     ChannelId::new(id).unwrap()
@@ -25,7 +28,7 @@ fn room_id() -> RoomId {
 /// echo agent, all attached.
 async fn room() -> (RoomKit, RecordingTransport, RecordingTransport) {
     let kit = kit_with_environment(
-        Default::default(),
+        RoomKitOptions::default(),
         SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
     );
     let app = RecordingTransport::new(channel("app"), ChannelType::WEBSOCKET);
@@ -34,9 +37,16 @@ async fn room() -> (RoomKit, RecordingTransport, RecordingTransport) {
     kit.register_channel(app.clone()).unwrap();
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(agent.clone()).unwrap();
-    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in [app.id(), sms.id(), agent.id()] {
-        kit.attach(&room_id(), id).await.unwrap();
+        kit.attach_channel(&room_id(), id, AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     (kit, app, sms)
 }
@@ -65,7 +75,13 @@ async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
 async fn an_echo_agent_answers_an_instruction_the_room_never_stores() {
     let (kit, _app, sms) = room().await;
     let result = kit
-        .process_inbound_in(&room_id(), instruction("Introduce yourself."))
+        .process_inbound(
+            instruction("Introduce yourself."),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     let instruction = result.event.unwrap();
@@ -100,9 +116,15 @@ async fn an_echo_agent_answers_an_instruction_the_room_never_stores() {
 #[tokio::test]
 async fn no_transport_receives_the_instruction() {
     let (kit, app, sms) = room().await;
-    kit.process_inbound_in(&room_id(), instruction("Introduce yourself."))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        instruction("Introduce yourself."),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(
         (app.texts(), sms.texts()),
         (
@@ -118,7 +140,16 @@ async fn an_unaddressed_instruction_is_refused_and_reaches_nobody() {
     let (kit, _app, sms) = room().await;
     let mut message = instruction("Introduce yourself.");
     message.addressed_to = None;
-    let result = kit.process_inbound_in(&room_id(), message).await.unwrap();
+    let result = kit
+        .process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(
         (
             result.blocked,

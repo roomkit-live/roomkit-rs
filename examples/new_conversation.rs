@@ -18,7 +18,10 @@ use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, EventContent, InboundMessage, RoomId};
 use roomkit::testing::EchoAgent;
-use roomkit::{ConversationStore, FrameworkEvent, HookTrigger, RoomKit, text_of};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, FrameworkEvent, HookTrigger, ProcessInboundOptions,
+    RoomKit, text_of,
+};
 
 use shared::{Checks, SmsNumber};
 
@@ -34,7 +37,9 @@ async fn customer_says(
 ) -> Result<RoomId, Box<dyn Error>> {
     println!("{from} writes {text:?}.");
     let message = InboundMessage::new(sms.id().clone(), from, EventContent::text(text));
-    let result = kit.process_inbound(message).await?;
+    let result = kit
+        .process_inbound(message, ProcessInboundOptions::default())
+        .await?;
     let room = result
         .event
         .map(|event| event.room_id)
@@ -81,7 +86,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
                 // No kit once the host dropped it. The hook's failure would
                 // be logged; the example's checks see it.
                 if let Some(kit) = kit {
-                    let _attached = kit.attach(&event.room_id, &agent_id).await;
+                    let _attached = kit
+                        .attach_channel(&event.room_id, &agent_id, AttachChannelOptions::default())
+                        .await;
                 }
             }
         },

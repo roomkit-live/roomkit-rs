@@ -951,7 +951,7 @@ mod check_timers {
     use pretty_assertions::assert_eq;
 
     fn check(sim: &mut Sim) -> TimersChecked {
-        sim.run(CheckTimers::new(sim.shared_config(), room_id()))
+        sim.run(CheckTimers::new(sim.shared_config(), room_id(), None))
             .unwrap()
     }
 
@@ -1562,7 +1562,7 @@ mod a_failed_store_write {
         sim.observer("on_paused", HookTrigger::OnRoomPaused);
         sim.failing_effect = Some("update room");
         sim.env.advance(Duration::from_secs(90));
-        let checked = sim.run(CheckTimers::new(sim.shared_config(), room_id()));
+        let checked = sim.run(CheckTimers::new(sim.shared_config(), room_id(), None));
         assert_eq!(
             (checked, sim.trace, sim.notices, sim.room.status),
             (

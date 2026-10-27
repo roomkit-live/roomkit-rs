@@ -561,7 +561,7 @@ async fn write_record<S: ConversationStore>(
         metadata: Some(metadata),
         ..EventUpdates::default()
     };
-    if let Err(error) = kit.update_event(room_id, event_id, updates).await {
+    if let Err(error) = kit.update_stored(room_id, event_id, updates, None).await {
         tracing::warn!(
             target: "roomkit::driver",
             room_id = %room_id,

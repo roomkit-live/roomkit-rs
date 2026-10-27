@@ -31,12 +31,15 @@ use std::future::{Future, ready};
 use std::process::ExitCode;
 
 use roomkit::model::{
-    BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
-    ChannelType, EventContent, EventDirection, EventSource, EventType, InboundMessage, RoomContext,
-    RoomEvent, RoomId, Visibility,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    EventContent, EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent,
+    RoomId, Visibility,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{Channel, ChannelDeclaration, ChannelError, RoomKit, text_of};
+use roomkit::{
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
+    ProcessInboundOptions, RoomKit, text_of,
+};
 
 use shared::Checks;
 
@@ -121,7 +124,14 @@ async fn writes(
         text_of(&message.content),
         message.visibility
     );
-    kit.process_inbound_in(room, message).await?;
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -138,15 +148,25 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.register_channel(Assistant::new(assistant.clone()))?;
 
     let room = RoomId::new("hybrid")?;
-    kit.create_room(&room).await?;
-    kit.attach(&room, call.id()).await?;
-    kit.attach(&room, screen.id()).await?;
-    kit.attach(&room, &assistant).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
+    kit.attach_channel(&room, call.id(), AttachChannelOptions::default())
+        .await?;
+    kit.attach_channel(&room, screen.id(), AttachChannelOptions::default())
+        .await?;
+    kit.attach_channel(&room, &assistant, AttachChannelOptions::default())
+        .await?;
     // What the supervisor writes is for the people in the room, not for
     // its agents.
-    let mut for_people = BindingOptions::default();
-    for_people.visibility = Visibility::Transport;
-    kit.attach_with(&room, supervisor.id(), for_people).await?;
+    let for_people = AttachChannelOptions {
+        visibility: Visibility::Transport,
+        ..Default::default()
+    };
+    kit.attach_channel(&room, supervisor.id(), for_people)
+        .await?;
 
     let spoken = "What time is it?";
     writes(&kit, &room, message(&call, spoken, Visibility::All)).await?;

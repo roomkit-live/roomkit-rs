@@ -22,7 +22,7 @@ use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId};
 use roomkit::testing::RecordingTransport;
-use roomkit::text_of;
+use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, text_of};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::Value;
 
@@ -53,9 +53,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.register_channel(web.clone())?;
     kit.register_channel(agent)?;
     let room = RoomId::new("room_1")?;
-    kit.create_room(&room).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
     for channel in [sms.id(), web.id(), &agent_id] {
-        kit.attach(&room, channel).await?;
+        kit.attach_channel(&room, channel, AttachChannelOptions::default())
+            .await?;
     }
 
     let mut errors = Vec::new();
@@ -74,7 +79,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         message
             .metadata
             .insert("sender_name".to_owned(), name.into());
-        let result = kit.process_inbound_in(&room, message).await?;
+        let result = kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
         errors.extend(result.error);
     }
 

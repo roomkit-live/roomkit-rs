@@ -6,8 +6,11 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{BindingUpdate, EventStatus, EventType, HookResult, Visibility};
-use roomkit::{HookExecution, HookSpec, HookTrigger, RoomKit};
+use roomkit::model::{EventStatus, EventType, HookResult, Visibility};
+use roomkit::{
+    DetachChannelOptions, HookExecution, HookSpec, HookTrigger, MuteOptions, RoomKit,
+    SetVisibilityOptions,
+};
 use roomkit_ai::testing::ScriptedRound;
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use serde_json::json;
@@ -100,19 +103,25 @@ fn changing(kit: &RoomKit, change: Change) -> Tools {
         async move {
             match change {
                 Change::Detach => {
-                    kit.detach(&room_id(), &channel("ws")).await.unwrap();
-                }
-                Change::Narrow => {
-                    let update = BindingUpdate {
-                        visibility: Some(Visibility::channels([channel("web")]).unwrap()),
-                        ..BindingUpdate::default()
-                    };
-                    kit.update_binding(&room_id(), &channel("agent"), update)
+                    kit.detach_channel(&room_id(), &channel("ws"), DetachChannelOptions::default())
                         .await
                         .unwrap();
                 }
+                Change::Narrow => {
+                    let web = Visibility::channels([channel("web")]).unwrap();
+                    kit.set_visibility(
+                        &room_id(),
+                        &channel("agent"),
+                        web,
+                        SetVisibilityOptions::default(),
+                    )
+                    .await
+                    .unwrap();
+                }
                 Change::Mute => {
-                    kit.mute(&room_id(), &channel("agent")).await.unwrap();
+                    kit.mute(&room_id(), &channel("agent"), MuteOptions::default())
+                        .await
+                        .unwrap();
                 }
             }
             Ok(ToolOutput::Text("done".to_owned()))

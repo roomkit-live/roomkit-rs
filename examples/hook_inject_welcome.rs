@@ -21,7 +21,10 @@ use roomkit::model::{
     InboundMessage, InjectedEvent, RoomEvent, RoomId, SystemContent,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{HookTrigger, LifecyclePayload, RoomKit};
+use roomkit::{
+    AttachChannelOptions, CreateRoomOptions, HookTrigger, LifecyclePayload, ProcessInboundOptions,
+    RoomKit,
+};
 
 use shared::{Checks, Log};
 
@@ -109,10 +112,16 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     welcome_newcomers(&kit, &attached, &welcomed)?;
 
     let room = RoomId::new("welcome_room")?;
-    kit.create_room(&room).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
     println!("Alice and Bob join the room.");
-    kit.attach(&room, alice.id()).await?;
-    kit.attach(&room, bob.id()).await?;
+    kit.attach_channel(&room, alice.id(), AttachChannelOptions::default())
+        .await?;
+    kit.attach_channel(&room, bob.id(), AttachChannelOptions::default())
+        .await?;
     // The observer runs in the background, once each attach returned.
     kit.idle().await;
 
@@ -120,7 +129,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         println!("{} writes {text:?}.", on.id());
         let message =
             InboundMessage::new(on.id().clone(), on.id().as_str(), EventContent::text(text));
-        kit.process_inbound_in(&room, message).await?;
+        kit.process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
         Ok(())
     };
     says(&alice, "Hey everyone, I just joined!").await?;

@@ -8,14 +8,14 @@ use roomkit_core::ops::{DeleteEvent, UpdateEvent};
 use roomkit_core::rules::chain_depth::Draw;
 
 use super::RoomKit;
-use super::scope::Scope;
+use super::options::{DeleteEventOptions, UpdateEventOptions};
 use crate::context::ExecutionContext;
 use crate::driver;
 use crate::error::KitError;
 use crate::store::ConversationStore;
 
 impl<S: ConversationStore> RoomKit<S> {
-    /// Replaces the fields `updates` names on the room's stored event
+    /// Replaces the fields `options` names on the room's stored event
     /// `event_id`, each whole, under the room lock; once the lock is
     /// released, reads the room and fires `ON_EVENT_UPDATED` with the event
     /// as it now stands and the room read then (RFC §10.3). Unlike
@@ -23,9 +23,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `edited` marker: the host authorizes it on its own surface.
     ///
     /// Returns the event as it now stands, or `None` when the room holds no
-    /// such event or does not exist, which changes and fires nothing (gap
-    /// G-063). An update that changes nothing writes and fires nothing
-    /// either.
+    /// such event, does not exist, or is not of the organization `options`
+    /// names, which changes and fires nothing (gap G-063). An update that
+    /// changes nothing writes and fires nothing either.
     ///
     /// Made from the body of an ASYNC hook a cascade fires once an event's
     /// delivery set has run, an update that changes something draws one of
@@ -43,10 +43,14 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         room_id: &RoomId,
         event_id: &EventId,
-        updates: EventUpdates,
+        options: UpdateEventOptions,
     ) -> Result<Option<RoomEvent>, KitError> {
-        self.unscoped()
-            .update_event(room_id, event_id, updates)
+        let updates = EventUpdates {
+            content: options.content,
+            source: options.source,
+            metadata: options.metadata,
+        };
+        self.update_stored(room_id, event_id, updates, options.organization_id)
             .await
     }
 
@@ -63,8 +67,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// Returns the ids removed: the target's, then its replies' by index,
     /// then the changes' by index, an event both a reply and a change among
-    /// the replies; none when the room holds no such event or does not
-    /// exist, which changes and fires nothing (gap G-063).
+    /// the replies; none when the room holds no such event, does not exist,
+    /// or is not of the organization `options` names, which changes and
+    /// fires nothing (gap G-063).
     ///
     /// Made from an ASYNC hook's body, a delete of an event the room holds
     /// draws one hook call before it removes anything, as an update does
@@ -79,57 +84,43 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         room_id: &RoomId,
         event_id: &EventId,
-        cascade_replies: bool,
+        options: DeleteEventOptions,
     ) -> Result<Vec<EventId>, KitError> {
-        self.unscoped()
-            .delete_event(room_id, event_id, cascade_replies)
-            .await
+        let operation = DeleteEvent::new(
+            self.config(),
+            room_id.clone(),
+            event_id.clone(),
+            options.cascade_replies,
+            options.organization_id,
+        );
+        let operation = match room_work(room_id) {
+            Some((draw, floor)) => operation.made_in(draw, floor),
+            None => operation,
+        };
+        Ok(driver::run(&self.inner, "delete_event", operation).await??)
     }
-}
 
-impl<S: ConversationStore> Scope<'_, S> {
-    /// Updates the stored event in a room the scope reaches; another room
-    /// holds no event of the scope's.
-    pub(super) async fn update_event(
+    /// Writes `updates` on the stored event in a room `organization_id`
+    /// reaches, as [`update_event`](Self::update_event) does.
+    pub(crate) async fn update_stored(
         &self,
         room_id: &RoomId,
         event_id: &EventId,
         updates: EventUpdates,
+        organization_id: Option<String>,
     ) -> Result<Option<RoomEvent>, KitError> {
         let operation = UpdateEvent::new(
-            self.kit.config(),
+            self.config(),
             room_id.clone(),
             event_id.clone(),
             updates,
-            self.organization_id(),
+            organization_id,
         );
         let operation = match room_work(room_id) {
             Some((draw, floor)) => operation.made_in(draw, floor),
             None => operation,
         };
-        Ok(driver::run(&self.kit.inner, "update_event", operation).await??)
-    }
-
-    /// Deletes the stored event from a room the scope reaches; another room
-    /// holds no event of the scope's.
-    pub(super) async fn delete_event(
-        &self,
-        room_id: &RoomId,
-        event_id: &EventId,
-        cascade_replies: bool,
-    ) -> Result<Vec<EventId>, KitError> {
-        let operation = DeleteEvent::new(
-            self.kit.config(),
-            room_id.clone(),
-            event_id.clone(),
-            cascade_replies,
-            self.organization_id(),
-        );
-        let operation = match room_work(room_id) {
-            Some((draw, floor)) => operation.made_in(draw, floor),
-            None => operation,
-        };
-        Ok(driver::run(&self.kit.inner, "delete_event", operation).await??)
+        Ok(driver::run(&self.inner, "update_event", operation).await??)
     }
 }
 

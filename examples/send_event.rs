@@ -21,12 +21,13 @@ use std::process::ExitCode;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    DirectEvent, EventContent, EventDirection, EventSource, EventType, InboundMessage, RoomContext,
-    RoomEvent, RoomId,
+    EventContent, EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent,
+    RoomId,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, FrameworkEvent, InboundError, KitError, RoomKit,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
+    FrameworkEvent, InboundError, KitError, ProcessInboundOptions, RoomKit, SendEventOptions,
     WeakRoomKit, text_of,
 };
 
@@ -103,14 +104,11 @@ impl Channel for Agent {
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         let from_customer = event.source.channel_id == *self.customer.id();
         let answer = self.answer(&event);
-        let note = DirectEvent::new(
-            self.declaration.channel_id.clone(),
-            EventContent::text("Let me check your refund..."),
-        );
-        let (kit, customer, notes) = (
+        let (kit, customer, notes, agent) = (
             self.kit.upgrade(),
             self.customer.clone(),
             self.notes.clone(),
+            self.declaration.channel_id.clone(),
         );
         async move {
             if !from_customer {
@@ -118,7 +116,10 @@ impl Channel for Agent {
             }
             // A call from a turn into its own room returns at its decision.
             let kit = kit.ok_or("the kit was dropped")?;
-            let sent = kit.send_event(&event.room_id, note).await?;
+            let note = EventContent::text("Let me check your refund...");
+            let sent = kit
+                .send_event(&event.room_id, &agent, note, SendEventOptions::default())
+                .await?;
             let delivered_yet = customer.texts().contains(&text_of(&sent.content));
             notes.push(Note {
                 event: sent,
@@ -143,23 +144,30 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.register_channel(crm.clone())?;
     kit.register_channel(agent)?;
     let room = RoomId::new("support")?;
-    kit.create_room(&room).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
     for channel in [customer.id(), console.id(), &agent_id] {
-        kit.attach(&room, channel).await?;
+        kit.attach_channel(&room, channel, AttachChannelOptions::default())
+            .await?;
     }
     let mut checks = Checks::default();
 
     println!("The back office tells the customer their order shipped, and retries.");
-    let shipped = DirectEvent {
+    let shipped = || EventContent::text("Your order #42 has shipped.");
+    let keyed = || SendEventOptions {
         idempotency_key: Some("order_42_shipped".to_owned()),
-        ..DirectEvent::new(
-            console.id().clone(),
-            EventContent::text("Your order #42 has shipped."),
-        )
+        ..Default::default()
     };
-    let sent = kit.send_event(&room, shipped.clone()).await?;
+    let sent = kit
+        .send_event(&room, console.id(), shipped(), keyed())
+        .await?;
     let delivered_on_return = customer.texts();
-    let retried = kit.send_event(&room, shipped).await?;
+    let retried = kit
+        .send_event(&room, console.id(), shipped(), keyed())
+        .await?;
     // The three attaches' lifecycle records take indexes 0 to 2 (RFC §5.1,
     // gap G-046).
     checks.expect(
@@ -172,8 +180,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
 
     println!("The CRM, registered but not bound to the room, injects an event.");
-    let unbound = DirectEvent::new(crm.id().clone(), EventContent::text("Account updated."));
-    let refused = kit.send_event(&room, unbound).await;
+    let refused = kit
+        .send_event(
+            &room,
+            crm.id(),
+            EventContent::text("Account updated."),
+            SendEventOptions::default(),
+        )
+        .await;
     checks.expect(
         "a channel the room does not bind is refused source_unbound, nothing written",
         matches!(
@@ -189,7 +203,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "+15551234567",
         EventContent::text("Where is my refund?"),
     );
-    kit.process_inbound_in(&room, question).await?;
+    kit.process_inbound(
+        question,
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
     let note = notes
         .entries()
         .first()

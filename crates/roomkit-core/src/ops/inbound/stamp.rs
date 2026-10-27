@@ -107,9 +107,17 @@ pub(crate) fn stamp_direct(
         EventDirection::Inbound
     };
     let mut source = EventSource::new(direct.channel_id, channel.channel_type.clone(), direction);
-    source.provider.clone_from(&channel.provider_name);
+    source.provider = direct.provider.or_else(|| channel.provider_name.clone());
     source.participant_id = direct.participant_id;
-    let mut event = RoomEvent::new(id, room_id, direct.event_type, source, direct.content, now);
+    let created_at = direct.created_at.unwrap_or(now);
+    let mut event = RoomEvent::new(
+        id,
+        room_id,
+        direct.event_type,
+        source,
+        direct.content,
+        created_at,
+    );
     event.chain_depth = direct.chain_depth;
     event.visibility = direct.visibility;
     event.addressed_to = direct.addressed_to;

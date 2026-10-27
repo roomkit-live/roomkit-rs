@@ -501,7 +501,7 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         let kit = self.upgrade().map(|inner| RoomKit { inner });
         Box::pin(async move {
             let kit = kit.ok_or(KitError::ShutDown)?;
-            kit.send_event(&room_id, event).await
+            kit.inject(&room_id, None, event).await
         })
     }
 

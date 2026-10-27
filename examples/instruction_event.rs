@@ -20,7 +20,9 @@ use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomId};
 use roomkit::testing::RecordingTransport;
-use roomkit::{InboundResult, text_of};
+use roomkit::{
+    AttachChannelOptions, CreateRoomOptions, InboundResult, ProcessInboundOptions, text_of,
+};
 
 use shared::{Checks, Script, ScriptedAgent};
 
@@ -65,14 +67,23 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.register_channel(advisor.clone())?;
     kit.register_channel(notetaker.clone())?;
     let room = RoomId::new("support")?;
-    kit.create_room(&room).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
     for channel in [app.id(), sms.id(), advisor.id(), notetaker.id()] {
-        kit.attach(&room, channel).await?;
+        kit.attach_channel(&room, channel, AttachChannelOptions::default())
+            .await?;
     }
+    let into_room = ProcessInboundOptions {
+        room_id: Some(room.clone()),
+        ..ProcessInboundOptions::default()
+    };
     let run = async |message: InboundMessage| -> Result<InboundResult, Box<dyn Error>> {
         let (channel, text) = (&message.channel_id, text_of(&message.content));
         println!("{channel} sends {text:?} ({:?}).", message.event_type);
-        Ok(kit.process_inbound_in(&room, message).await?)
+        Ok(kit.process_inbound(message, into_room.clone()).await?)
     };
 
     let introduced = run(instruction(app.id(), advisor.id(), INTRODUCE, false)).await?;

@@ -136,10 +136,12 @@ pub struct CheckTimers {
 }
 
 impl CheckTimers {
-    /// The check of `room_id`'s timers.
-    pub fn new(config: Arc<KitConfig>, room_id: RoomId) -> Self {
+    /// The check of `room_id`'s timers, for a caller acting for
+    /// `organization_id`: a room of another organization, or of none, is
+    /// not found, nothing written (RFC §17.2).
+    pub fn new(config: Arc<KitConfig>, room_id: RoomId, organization_id: Option<String>) -> Self {
         Self {
-            change: LockedChange::new(config, room_id, None, TimersChange),
+            change: LockedChange::new(config, room_id, organization_id, TimersChange),
         }
     }
 }

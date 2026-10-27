@@ -19,7 +19,8 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    ConversationStore, HookExecution, HookSpec, HookTrigger, InboundResult, RoomKit, text_of,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
+    HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions, text_of,
 };
 use roomkit_ai::{AiError, ToolDefinition, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -82,7 +83,7 @@ impl Room {
     ) -> Self {
         let fake = FakeOpenAi::start(replies).await;
         let kit = kit_with_environment(
-            Default::default(),
+            RoomKitOptions::default(),
             SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
         );
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
@@ -95,9 +96,16 @@ impl Room {
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(web.clone()).unwrap();
         kit.register_channel(agent).unwrap();
-        kit.create_room(&room_id()).await.unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
         for id in ["sms", "web", "assistant"] {
-            kit.attach(&room_id(), &channel(id)).await.unwrap();
+            kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+                .await
+                .unwrap();
         }
         Self {
             kit,
@@ -121,7 +129,13 @@ impl Room {
             .metadata
             .insert("sender_name".to_owned(), name.into());
         self.kit
-            .process_inbound_in(&room_id(), message)
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
     }
@@ -273,7 +287,13 @@ async fn two_senders_with_no_name_on_one_number_are_labelled_apart() {
     for (sender, text) in [("+15550001", "Refund me"), ("+15550002", "Do not")] {
         let message = InboundMessage::new(room.sms.id().clone(), sender, EventContent::text(text));
         room.kit
-            .process_inbound_in(&room_id(), message)
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
     }
@@ -296,7 +316,13 @@ async fn an_instruction_is_sent_as_the_application_s_marked_input() {
         )
     };
     room.kit
-        .process_inbound_in(&room_id(), instruction)
+        .process_inbound(
+            instruction,
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -364,18 +390,34 @@ async fn an_unreachable_endpoint_fails_the_turn_without_naming_its_url() {
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = closed.local_addr().unwrap();
     drop(closed);
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let config = OpenAiConfig::new(format!("http://{address}/v1"), API_KEY, "m");
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(OpenAiAgent::new(channel("assistant"), config).unwrap())
         .unwrap();
-    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in ["sms", "assistant"] {
-        kit.attach(&room_id(), &channel(id)).await.unwrap();
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     let message = InboundMessage::new(sms.id().clone(), "+15550001", EventContent::text("Hi"));
-    let result = kit.process_inbound_in(&room_id(), message).await.unwrap();
+    let result = kit
+        .process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     let error = result.error.unwrap();
     assert!(
         error.message.starts_with("the completion request failed: "),

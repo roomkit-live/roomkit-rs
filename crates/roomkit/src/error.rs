@@ -145,7 +145,7 @@ mod tests {
     /// The error of an effect answered twice.
     fn answered_twice() -> ProtocolError {
         let room_id = RoomId::new("room_1").unwrap();
-        let mut check = CheckTimers::new(Arc::new(KitConfig::new()), room_id);
+        let mut check = CheckTimers::new(Arc::new(KitConfig::new()), room_id, None);
         let step = check.poll(&SequentialEnvironment::default());
         let Next::Effects(effects) = step.next else {
             panic!("the check asks for the room's lock first");

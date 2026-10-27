@@ -9,8 +9,8 @@ use std::time::Duration;
 use futures_core::Stream;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    DirectEvent, EventContent, EventDirection, EventSource, EventType, InboundMessage, Metadata,
-    RoomContext, RoomEvent, RoomId,
+    EventContent, EventDirection, EventSource, EventType, InboundMessage, Metadata, RoomContext,
+    RoomEvent, RoomId,
 };
 use roomkit_core::ops::{ChannelDeclaration, InboundResult};
 use serde_json::Value;
@@ -19,7 +19,10 @@ use tokio::time::Instant;
 use crate::stream::{DeliveryStream, ResponseItem};
 use crate::testing::RecordingTransport;
 use crate::turns::observe::{Carried, Fate};
-use crate::{Channel, ChannelError, KitError, RoomKit, current_turn};
+use crate::{
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, KitError,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, current_turn,
+};
 
 pub(super) fn channel(id: &str) -> ChannelId {
     ChannelId::new(id).unwrap()
@@ -31,11 +34,18 @@ pub(super) fn room_id() -> RoomId {
 
 /// A kit whose room binds an SMS transport and `agent`.
 pub(super) async fn kit_with(agent: impl Channel) -> RoomKit {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.attach(&room_id(), &channel("sms")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     bind(&kit, agent).await;
     kit
 }
@@ -44,13 +54,22 @@ pub(super) async fn kit_with(agent: impl Channel) -> RoomKit {
 pub(super) async fn bind(kit: &RoomKit, channel: impl Channel) {
     let id = channel.declaration().channel_id;
     kit.register_channel(channel).unwrap();
-    kit.attach(&room_id(), &id).await.unwrap();
+    kit.attach_channel(&room_id(), &id, AttachChannelOptions::default())
+        .await
+        .unwrap();
 }
 
 /// Alice writes `text` by SMS.
 pub(super) async fn says(kit: &RoomKit, text: &str) -> Result<InboundResult, KitError> {
     let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text(text));
-    kit.process_inbound_in(&room_id(), message).await
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// What a fault does to the messages of `family` whose JSON holds `marks`.
@@ -412,8 +431,10 @@ impl Channel for Eager {
             self.turned.lock().unwrap().push(current_turn().is_some());
             let room_id = event.room_id.clone();
             tokio::spawn(crate::keep_context(async move {
-                let note = DirectEvent::new(channel("ai"), EventContent::text("(note)"));
-                kit.send_event(&room_id, note).await.map(|_| ())
+                let note = EventContent::text("(note)");
+                kit.send_event(&room_id, &channel("ai"), note, SendEventOptions::default())
+                    .await
+                    .map(|_| ())
             }))
         });
         async move {

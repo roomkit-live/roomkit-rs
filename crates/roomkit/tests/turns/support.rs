@@ -8,7 +8,10 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, InboundMessage, Metadata, RoomId, Timestamp, ToolCall,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
-use roomkit::{InboundResult, RoomKit};
+use roomkit::{
+    AttachChannelOptions, CreateRoomOptions, InboundResult, ProcessInboundOptions, RoomKit,
+    RoomKitOptions,
+};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, ToolContext, ToolDefinition, ToolError, ToolOutput, Tools};
 use serde_json::json;
@@ -53,16 +56,23 @@ where
     Fut: Future<Output = Result<ToolOutput, ToolError>> + Send + 'static,
 {
     let at: Timestamp = "2026-10-26T12:00:00Z".parse().unwrap();
-    let kit = kit_with_environment(Default::default(), SequentialEnvironment::new(at));
+    let kit = kit_with_environment(RoomKitOptions::default(), SequentialEnvironment::new(at));
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     let agent = AiAgent::new(channel("ai"), model())
         .with_tools(Tools::new().tool(lookup(), handler))
         .unwrap();
     kit.register_channel(agent).unwrap();
-    kit.create_room(&room()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in ["sms", "ai"] {
-        kit.attach(&room(), &channel(id)).await.unwrap();
+        kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     kit
 }
@@ -70,7 +80,15 @@ where
 /// Alice asks by SMS.
 pub(crate) async fn asks(kit: &RoomKit, text: &str) -> InboundResult {
     let message = InboundMessage::new(channel("sms"), "+15550000001", EventContent::text(text));
-    kit.process_inbound_in(&room(), message).await.unwrap()
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
 }
 
 /// Every event of a room's timeline the room received.

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::error::Error;
 
 use roomkit::model::{ParticipantId, RoomId};
-use roomkit::{ConversationStore, TimelineQuery, visible_events};
+use roomkit::{ConversationStore, GetTimelineOptions, visible_events};
 use serde_json::{Value, json};
 
 use super::App;
@@ -25,12 +25,12 @@ impl App {
         &self,
         room_id: &RoomId,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
-        let query = TimelineQuery {
+        let query = GetTimelineOptions {
             newest_first: true,
             limit: self.history,
-            ..TimelineQuery::default()
+            ..GetTimelineOptions::default()
         };
-        let page = self.kit.get_timeline(room_id, &query).await?;
+        let page = self.kit.get_timeline(room_id, query).await?;
         let Some(mut context) = self.kit.store().load_context(room_id, 0).await? else {
             return Err(format!("room {room_id} is gone").into());
         };

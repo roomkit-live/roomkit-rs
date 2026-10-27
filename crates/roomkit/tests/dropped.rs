@@ -12,14 +12,15 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, DirectEvent, EventContent, EventId, EventStatus,
-    EventUpdates, Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId,
-    Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    ChannelBinding, ChannelId, ChannelType, EventContent, EventId, EventStatus, EventUpdates,
+    Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId, Room,
+    RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    ConversationStore, EventFilter, EventQuery, FrameworkEvent, InMemoryStore, RoomCounters,
-    RoomFilter, RoomKit, RoomKitOptions, StoreError, TargetUpdate,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, EventFilter, EventQuery,
+    FrameworkEvent, InMemoryStore, ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit,
+    RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -288,9 +289,18 @@ async fn gated_room() -> (RoomKit<GatedStore>, RecordingTransport) {
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.register_channel(ws.clone()).unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.attach(&room_id(), &channel("sms")).await.unwrap();
-    kit.attach(&room_id(), &channel("ws")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     (kit, ws)
 }
 
@@ -342,7 +352,17 @@ async fn a_message_dropped_during_its_commit_is_delivered() {
         "+15551234567",
         EventContent::text("Bonjour"),
     );
-    drop_during_the_commit(&kit, kit.process_inbound_in(&room, message)).await;
+    drop_during_the_commit(
+        &kit,
+        kit.process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
     assert_eq!(
         (delivered_and_processed(&kit, &mut events).await, ws.texts()),
         (
@@ -357,8 +377,12 @@ async fn an_injected_event_dropped_during_its_commit_is_delivered() {
     let (kit, ws) = gated_room().await;
     let mut events = kit.subscribe();
     let room = room_id();
-    let event = DirectEvent::new(channel("sms"), EventContent::text("Bonjour"));
-    drop_during_the_commit(&kit, kit.send_event(&room, event)).await;
+    let event = SendEventOptions::default();
+    drop_during_the_commit(
+        &kit,
+        kit.send_event(&room, &channel("sms"), EventContent::text("Bonjour"), event),
+    )
+    .await;
     assert_eq!(
         (delivered_and_processed(&kit, &mut events).await, ws.texts()),
         (

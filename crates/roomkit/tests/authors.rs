@@ -10,7 +10,10 @@
 use pretty_assertions::assert_eq;
 use roomkit::model::{ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomId};
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, RoomKit};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitOptions,
+};
 use serde_json::{Value, json};
 
 fn channel(id: &str) -> ChannelId {
@@ -87,7 +90,7 @@ const SENT: [(&str, &str, Option<&str>, Option<Record>); 11] = [
 
 #[tokio::test]
 async fn names_that_read_alike_are_ranked_as_the_python_implementation_ranks_them() {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let room = RoomId::new("room_1").unwrap();
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
@@ -96,9 +99,18 @@ async fn names_that_read_alike_are_ranked_as_the_python_implementation_ranks_the
         ChannelType::WEBSOCKET,
     ))
     .unwrap();
-    kit.create_room(&room).await.unwrap();
-    kit.attach(&room, &channel("sms")).await.unwrap();
-    kit.attach(&room, &channel("ws")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room, &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit.attach_channel(&room, &channel("ws"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     for (from, sender, name, _) in SENT {
         let mut message = InboundMessage::new(channel(from), sender, EventContent::text("hi"));
         if let Some(name) = name {
@@ -106,7 +118,15 @@ async fn names_that_read_alike_are_ranked_as_the_python_implementation_ranks_the
                 .metadata
                 .insert("sender_name".to_owned(), name.into());
         }
-        kit.process_inbound_in(&room, message).await.unwrap();
+        kit.process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     }
     let records: Vec<Option<Value>> = kit
         .store()

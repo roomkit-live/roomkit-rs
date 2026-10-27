@@ -11,8 +11,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use roomkit::KitError;
 use roomkit::model::{EventContent, InboundMessage, ParticipantId, RoomId};
+use roomkit::{KitError, ProcessInboundOptions};
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite;
@@ -213,7 +213,17 @@ impl App {
             user.as_str(),
             EventContent::text(text),
         );
-        let told = match self.kit.process_inbound_in(room_id, message).await {
+        let told = match self
+            .kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room_id.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
             Ok(result) if result.blocked => {
                 println!(
                     "  {:?}'s message was refused: {:?}",

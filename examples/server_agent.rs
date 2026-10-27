@@ -98,8 +98,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use roomkit::model::{EventContent, EventType, Post, RoomEvent, RoomId};
-use roomkit::{ConversationStore, HookTrigger, text_of};
+use roomkit::model::{EventContent, EventType, RoomEvent, RoomId};
+use roomkit::{ConversationStore, HookTrigger, PostOptions, text_of};
 use roomkit_sqlite::SqliteStore;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
@@ -587,7 +587,11 @@ async fn a_client_stops_reading(checks: &mut Checks) -> Result<(), Box<dyn Error
     while server.websocket().connections() > 0 && posts < POSTS_AT_MOST {
         server
             .kit()
-            .post(&room, Post::new(EventContent::text(menu.as_str())))
+            .post(
+                &room,
+                EventContent::text(menu.as_str()),
+                PostOptions::default(),
+            )
             .await?;
         posts += 1;
     }

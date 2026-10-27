@@ -21,15 +21,15 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    DeleteContent, DirectEvent, EditContent, EventContent, EventDirection, EventId, EventSource,
-    EventType, EventUpdates, HookResult, InboundMessage, ParticipantId, Post, RoomContext,
-    RoomEvent, RoomId,
+    DeleteContent, EditContent, EventContent, EventDirection, EventId, EventSource, EventType,
+    HookResult, InboundMessage, ParticipantId, RoomContext, RoomEvent, RoomId,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, HookTrigger, InboundResult,
-    InboundRoomRouter, KitError, MutationError, RoomKit, RoomKitOptions, RouteOptions,
-    RouterFuture, keep_context, text_of,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
+    CreateRoomOptions, DeleteEventOptions, HookTrigger, InboundResult, InboundRoomRouter, KitError,
+    MutationError, PostOptions, ProcessInboundOptions, RoomKit, RoomKitOptions, RouteOptions,
+    RouterFuture, SendEventOptions, UpdateEventOptions, keep_context, text_of,
 };
 
 /// `max_chain_depth` 1: ten passes and ten hook calls per cascade.
@@ -78,8 +78,15 @@ async fn room_with(options: RoomKitOptions) -> RoomKit {
     let kit = RoomKit::new(options);
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.attach(&room_id(), &channel("sms")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     kit
 }
 
@@ -87,12 +94,12 @@ fn message(text: &str) -> InboundMessage {
     InboundMessage::new(channel("sms"), "+15551234567", EventContent::text(text))
 }
 
-/// The customer's `text` from the SMS, sent as `u`.
-fn from_u(content: EventContent, event_type: EventType) -> DirectEvent {
-    DirectEvent {
+/// What the customer `u` sends on the SMS: an event of `event_type`.
+fn from_u(event_type: EventType) -> SendEventOptions {
+    SendEventOptions {
         event_type,
         participant_id: Some(ParticipantId::new("u").unwrap()),
-        ..DirectEvent::new(channel("sms"), content)
+        ..Default::default()
     }
 }
 
@@ -156,16 +163,29 @@ async fn a_hook_posting_after_every_event_stops_at_the_cap() {
         let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
         async move {
             if event.event_type == EventType::Message && len(&posted) <= 2 * BUDGET {
-                let notice = Post::new(EventContent::text(format!("Noted {}.", len(&posted))));
-                let event = kit.post(&room_id(), notice).await.unwrap();
+                let notice = PostOptions::default();
+                let event = kit
+                    .post(
+                        &room_id(),
+                        EventContent::text(format!("Noted {}.", len(&posted))),
+                        notice,
+                    )
+                    .await
+                    .unwrap();
                 push(&posted, event.blocked_by);
             }
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), message("hi"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message("hi"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     let mut expected = vec![None; BUDGET];
     expected.push(Some("reentry_loop_cap".to_owned()));
@@ -186,16 +206,29 @@ async fn an_observer_of_before_broadcast_posting_on_every_event_stops_at_the_cap
         let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
         async move {
             if event.event_type == EventType::Message && len(&posted) <= 2 * BUDGET {
-                let notice = Post::new(EventContent::text(format!("Noted {}.", len(&posted))));
-                let event = kit.post(&room_id(), notice).await.unwrap();
+                let notice = PostOptions::default();
+                let event = kit
+                    .post(
+                        &room_id(),
+                        EventContent::text(format!("Noted {}.", len(&posted))),
+                        notice,
+                    )
+                    .await
+                    .unwrap();
                 push(&posted, event.blocked_by);
             }
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), message("hi"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message("hi"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     let mut expected = vec![None; BUDGET];
     expected.push(Some("reentry_loop_cap".to_owned()));
@@ -216,14 +249,24 @@ async fn an_observer_of_before_broadcast_s_call_returns_with_its_delivery_result
         ChannelType::WEBSOCKET,
     ))
     .unwrap();
-    kit.attach(&room_id(), &channel("ws")).await.unwrap();
+    kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     let results: Kept<Vec<String>> = kept();
     let (hook_kit, hook_results) = (kit.clone(), Arc::clone(&results));
     kit.observe("watcher", HookTrigger::BeforeBroadcast, move |event, _| {
         let (kit, results) = (hook_kit.clone(), Arc::clone(&hook_results));
         async move {
             if text_of(&event.content) == "hi" {
-                let again = kit.process_inbound_in(&room_id(), message("again")).await;
+                let again = kit
+                    .process_inbound(
+                        message("again"),
+                        ProcessInboundOptions {
+                            room_id: Some(room_id()),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
                 let delivered = again
                     .unwrap()
                     .delivery_results
@@ -235,9 +278,15 @@ async fn an_observer_of_before_broadcast_s_call_returns_with_its_delivery_result
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), message("hi"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message("hi"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     assert_eq!(taken(&results), vec![vec!["ws".to_owned()]]);
 }
@@ -281,15 +330,24 @@ async fn a_hook_opening_a_room_after_every_event_stops_at_the_cap() {
         async move {
             if event.event_type == EventType::Message && len(&calls) <= 2 * BUDGET {
                 push(&calls, ());
-                let result: InboundResult = kit.process_inbound(message("again")).await.unwrap();
+                let result: InboundResult = kit
+                    .process_inbound(message("again"), ProcessInboundOptions::default())
+                    .await
+                    .unwrap();
                 push(&answers, result.reason);
             }
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), message("hi"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message("hi"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     let rooms = kit
         .store()
@@ -311,7 +369,9 @@ async fn a_judge_posting_back_after_each_answer_stops_at_the_depth_limit() {
     let kit = room(6).await;
     let agent = Answering::new("a");
     kit.register_channel(agent.clone()).unwrap();
-    kit.attach(&room_id(), &channel("a")).await.unwrap();
+    kit.attach_channel(&room_id(), &channel("a"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     let depths: Kept<u32> = kept();
     let (hook_kit, hook_depths) = (kit.clone(), Arc::clone(&depths));
     kit.observe("judge", HookTrigger::AfterBroadcast, move |event, _| {
@@ -323,16 +383,29 @@ async fn a_judge_posting_back_after_each_answer_stops_at_the_depth_limit() {
             {
                 return;
             }
-            let mut again = Post::new(EventContent::text("@a again"));
-            again.addressed_to = vec![channel("a")];
-            let posted = kit.post(&room_id(), again).await.unwrap();
+            let again = PostOptions {
+                addressed_to: vec![channel("a")],
+                ..Default::default()
+            };
+            let posted = kit
+                .post(&room_id(), EventContent::text("@a again"), again)
+                .await
+                .unwrap();
             push(&depths, posted.chain_depth);
         }
     })
     .unwrap();
     let mut hello = message("@a hello");
     hello.addressed_to = Some(vec![channel("a")]);
-    kit.process_inbound_in(&room_id(), hello).await.unwrap();
+    kit.process_inbound(
+        hello,
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     assert_eq!((len(&agent.asked), taken(&depths)), (3, vec![2, 4, 6]));
 }
@@ -360,19 +433,30 @@ async fn a_mutation_hook_changing_again_stops_at_the_cap() {
                 }
                 let n = len(&sent);
                 if deleting {
-                    let mut another =
-                        from_u(EventContent::text(format!("m{n}")), EventType::Message);
-                    another.addressed_to = Some(Vec::new());
-                    let another = kit.send_event(&room_id(), another).await.unwrap();
+                    let options = SendEventOptions {
+                        addressed_to: Some(Vec::new()),
+                        ..from_u(EventType::Message)
+                    };
+                    let text = EventContent::text(format!("m{n}"));
+                    let another = kit
+                        .send_event(&room_id(), &channel("sms"), text, options)
+                        .await
+                        .unwrap();
                     push(&sent, another.blocked_by.clone());
                     if another.blocked_by.is_none() {
-                        let delete = delete_of(&another.id);
-                        let deleted = kit.send_event(&room_id(), delete).await.unwrap();
+                        let (delete, options) = delete_of(&another.id);
+                        let deleted = kit
+                            .send_event(&room_id(), &channel("sms"), delete, options)
+                            .await
+                            .unwrap();
                         push(&sent, deleted.blocked_by);
                     }
                 } else {
-                    let edit = edit_of(&event.id, &format!("v{n}"));
-                    let edited = kit.send_event(&room_id(), edit).await.unwrap();
+                    let (edit, options) = edit_of(&event.id, &format!("v{n}"));
+                    let edited = kit
+                        .send_event(&room_id(), &channel("sms"), edit, options)
+                        .await
+                        .unwrap();
                     push(&sent, edited.blocked_by);
                 }
             }
@@ -381,16 +465,20 @@ async fn a_mutation_hook_changing_again_stops_at_the_cap() {
         let first = kit
             .send_event(
                 &room_id(),
-                from_u(EventContent::text("v"), EventType::Message),
+                &channel("sms"),
+                EventContent::text("v"),
+                from_u(EventType::Message),
             )
             .await
             .unwrap();
-        let change = if deleting {
+        let (change, options) = if deleting {
             delete_of(&first.id)
         } else {
             edit_of(&first.id, "v")
         };
-        kit.send_event(&room_id(), change).await.unwrap();
+        kit.send_event(&room_id(), &channel("sms"), change, options)
+            .await
+            .unwrap();
         kit.idle().await;
         let mut expected = vec![None; BUDGET];
         expected.push(Some("reentry_loop_cap".to_owned()));
@@ -399,15 +487,15 @@ async fn a_mutation_hook_changing_again_stops_at_the_cap() {
 }
 
 /// The customer's edit of `target` to `text`.
-fn edit_of(target: &EventId, text: &str) -> DirectEvent {
+fn edit_of(target: &EventId, text: &str) -> (EventContent, SendEventOptions) {
     let edit = EditContent::new(target.clone(), EventContent::text(text));
-    from_u(EventContent::Edit(edit), EventType::Edit)
+    (EventContent::Edit(edit), from_u(EventType::Edit))
 }
 
 /// The customer's delete of `target`.
-fn delete_of(target: &EventId) -> DirectEvent {
+fn delete_of(target: &EventId) -> (EventContent, SendEventOptions) {
     let delete = DeleteContent::new(target.clone());
-    from_u(EventContent::Delete(delete), EventType::Delete)
+    (EventContent::Delete(delete), from_u(EventType::Delete))
 }
 
 /// RFC §9.5.1: a notice, one post for each message, draws one hook call of
@@ -423,7 +511,11 @@ async fn a_hook_posting_once_per_message_posts_for_every_message() {
         async move {
             if event.source.channel_id == channel("sms") {
                 let receipt = kit
-                    .post(&room_id(), Post::new(EventContent::text("Received.")))
+                    .post(
+                        &room_id(),
+                        EventContent::text("Received."),
+                        PostOptions::default(),
+                    )
                     .await
                     .unwrap();
                 push(&posted, receipt.blocked_by);
@@ -432,9 +524,15 @@ async fn a_hook_posting_once_per_message_posts_for_every_message() {
     })
     .unwrap();
     for n in 0..=BUDGET {
-        kit.process_inbound_in(&room_id(), message(&format!("message {n}")))
-            .await
-            .unwrap();
+        kit.process_inbound(
+            message(&format!("message {n}")),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     }
     kit.idle().await;
     assert_eq!(taken(&posted), vec![None; BUDGET + 1]);
@@ -478,11 +576,16 @@ async fn a_task_the_hook_starts_calls_as_work_of_its_own() {
                 tokio::spawn(keep_context(async move {
                     over.notified().await;
                     for n in 0..=2 * BUDGET {
-                        let later = DirectEvent::new(
-                            channel("sms"),
-                            EventContent::text(format!("later {n}")),
-                        );
-                        let event = kit.send_event(&room_id(), later).await.unwrap();
+                        let later = SendEventOptions::default();
+                        let event = kit
+                            .send_event(
+                                &room_id(),
+                                &channel("sms"),
+                                EventContent::text(format!("later {n}")),
+                                later,
+                            )
+                            .await
+                            .unwrap();
                         push(&sent, (event.chain_depth, event.blocked_by));
                     }
                 }));
@@ -494,9 +597,15 @@ async fn a_task_the_hook_starts_calls_as_work_of_its_own() {
             }
         })
         .unwrap();
-        kit.process_inbound_in(&room_id(), message("hi"))
-            .await
-            .unwrap();
+        kit.process_inbound(
+            message("hi"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         tokio::time::sleep(Duration::from_millis(30)).await;
         over.notify_one();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -516,7 +625,9 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
     let kit = room(4).await;
     let agent = Answering::new("ai");
     kit.register_channel(agent.clone()).unwrap();
-    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     let mut events = kit.subscribe();
     let failures: Kept<KitError> = kept();
     let (hook_kit, hook_failures) = (kit.clone(), Arc::clone(&failures));
@@ -528,19 +639,30 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
             }
             // Not kept: the task's calls are work of its own.
             tokio::spawn(async move {
-                let mut again = Post::new(EventContent::text("Try again."));
-                again.addressed_to = vec![channel("ai")];
-                again.chain_depth = event.chain_depth + 1;
-                if let Err(error) = kit.post(&room_id(), again).await {
+                let again = PostOptions {
+                    addressed_to: vec![channel("ai")],
+                    chain_depth: event.chain_depth + 1,
+                    ..Default::default()
+                };
+                if let Err(error) = kit
+                    .post(&room_id(), EventContent::text("Try again."), again)
+                    .await
+                {
                     push(&failures, error);
                 }
             });
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), message("hi"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message("hi"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let limited = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match events.recv().await {
@@ -587,7 +709,9 @@ async fn a_notice_per_answer_costs_the_agents_no_answer() {
     for n in 0..3 {
         let id = format!("agent-{n}");
         kit.register_channel(Answering::new(&id)).unwrap();
-        kit.attach(&room_id(), &channel(&id)).await.unwrap();
+        kit.attach_channel(&room_id(), &channel(&id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     let notices: Kept<Option<String>> = kept();
     let (hook_kit, hook_notices) = (kit.clone(), Arc::clone(&notices));
@@ -596,17 +720,33 @@ async fn a_notice_per_answer_costs_the_agents_no_answer() {
         async move {
             if event.source.channel_id.as_str().starts_with("agent-") && event.blocked_by.is_none()
             {
-                let mut noted = DirectEvent::new(channel("sms"), EventContent::text("Noted."));
-                noted.addressed_to = Some(Vec::new());
-                let noted = kit.send_event(&room_id(), noted).await.unwrap();
+                let noted = SendEventOptions {
+                    addressed_to: Some(Vec::new()),
+                    ..Default::default()
+                };
+                let noted = kit
+                    .send_event(
+                        &room_id(),
+                        &channel("sms"),
+                        EventContent::text("Noted."),
+                        noted,
+                    )
+                    .await
+                    .unwrap();
                 push(&notices, noted.blocked_by);
             }
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), message("hi"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message("hi"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     let answers: Vec<Option<String>> = kit
         .store()
@@ -654,22 +794,27 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
                     return;
                 }
                 let changed = if deleting {
-                    let mut x = DirectEvent::new(channel("sms"), EventContent::text("x"));
-                    x.addressed_to = Some(Vec::new());
-                    let sent = kit.send_event(&room_id(), x).await.unwrap();
+                    let x = SendEventOptions {
+                        addressed_to: Some(Vec::new()),
+                        ..Default::default()
+                    };
+                    let sent = kit
+                        .send_event(&room_id(), &channel("sms"), EventContent::text("x"), x)
+                        .await
+                        .unwrap();
                     if sent.blocked_by.is_some() {
                         push(&refused, None);
                         return;
                     }
-                    kit.delete_event(&room_id(), &sent.id, true)
+                    kit.delete_event(&room_id(), &sent.id, DeleteEventOptions::default())
                         .await
                         .map(|_| ())
                 } else {
                     let mut metadata = event.metadata.clone();
                     metadata.insert("n".to_owned(), len(&ran).into());
-                    let updates = EventUpdates {
+                    let updates = UpdateEventOptions {
                         metadata: Some(metadata),
-                        ..EventUpdates::default()
+                        ..UpdateEventOptions::default()
                     };
                     kit.update_event(&room_id(), &event.id, updates)
                         .await
@@ -684,18 +829,22 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
         let first = kit
             .send_event(
                 &room_id(),
-                DirectEvent::new(channel("sms"), EventContent::text("v")),
+                &channel("sms"),
+                EventContent::text("v"),
+                SendEventOptions::default(),
             )
             .await
             .unwrap();
         if deleting {
-            kit.delete_event(&room_id(), &first.id, true).await.unwrap();
+            kit.delete_event(&room_id(), &first.id, DeleteEventOptions::default())
+                .await
+                .unwrap();
         } else {
             let mut metadata = first.metadata.clone();
             metadata.insert("n".to_owned(), 0.into());
-            let updates = EventUpdates {
+            let updates = UpdateEventOptions {
                 metadata: Some(metadata),
-                ..EventUpdates::default()
+                ..UpdateEventOptions::default()
             };
             kit.update_event(&room_id(), &first.id, updates)
                 .await
@@ -725,10 +874,22 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
         let kit = room(3).await;
         let agent = Answering::new("ai");
         kit.register_channel(agent.clone()).unwrap();
-        kit.attach(&room_id(), &channel("ai")).await.unwrap();
-        let mut spare = DirectEvent::new(channel("sms"), EventContent::text("spare"));
-        spare.addressed_to = Some(Vec::new());
-        let spare = kit.send_event(&room_id(), spare).await.unwrap();
+        kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let spare = SendEventOptions {
+            addressed_to: Some(Vec::new()),
+            ..Default::default()
+        };
+        let spare = kit
+            .send_event(
+                &room_id(),
+                &channel("sms"),
+                EventContent::text("spare"),
+                spare,
+            )
+            .await
+            .unwrap();
         let refused: Kept<KitError> = kept();
         let (hook_kit, hook_refused) = (kit.clone(), Arc::clone(&refused));
         kit.observe("bulk", HookTrigger::AfterBroadcast, move |event, _| {
@@ -744,20 +905,20 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
                 for n in 0..30 {
                     let mut metadata = roomkit::model::Metadata::new();
                     metadata.insert("n".to_owned(), n.into());
-                    let updates = EventUpdates {
+                    let updates = UpdateEventOptions {
                         metadata: Some(metadata),
-                        ..EventUpdates::default()
+                        ..UpdateEventOptions::default()
                     };
                     kit.update_event(&room_id(), &spare, updates).await.unwrap();
                 }
                 let one_more = if deleting {
-                    kit.delete_event(&room_id(), &event.id, true)
+                    kit.delete_event(&room_id(), &event.id, DeleteEventOptions::default())
                         .await
                         .map(|_| ())
                 } else {
-                    let updates = EventUpdates {
+                    let updates = UpdateEventOptions {
                         content: Some(EventContent::text("changed")),
-                        ..EventUpdates::default()
+                        ..UpdateEventOptions::default()
                     };
                     kit.update_event(&room_id(), &event.id, updates)
                         .await
@@ -772,7 +933,9 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
         let hi = kit
             .send_event(
                 &room_id(),
-                DirectEvent::new(channel("sms"), EventContent::text("hi")),
+                &channel("sms"),
+                EventContent::text("hi"),
+                SendEventOptions::default(),
             )
             .await
             .unwrap();
@@ -839,9 +1002,9 @@ async fn update_sixty_times(kit: &RoomKit, target: &EventId, failures: &Kept<Kit
     for n in 0..60 {
         let mut metadata = roomkit::model::Metadata::new();
         metadata.insert("n".to_owned(), n.into());
-        let updates = EventUpdates {
+        let updates = UpdateEventOptions {
             metadata: Some(metadata),
-            ..EventUpdates::default()
+            ..UpdateEventOptions::default()
         };
         if let Err(error) = kit.update_event(&room_id(), target, updates).await {
             push(failures, error);
@@ -883,19 +1046,29 @@ async fn work_outside_a_hook_body_draws_nothing() {
                 failures: Arc::clone(&failures),
             })
             .unwrap();
-            kit.attach(&room_id(), &channel("calling")).await.unwrap();
+            kit.attach_channel(
+                &room_id(),
+                &channel("calling"),
+                AttachChannelOptions::default(),
+            )
+            .await
+            .unwrap();
         }
         let target = kit
             .send_event(
                 &room_id(),
-                DirectEvent::new(channel("sms"), EventContent::text("target")),
+                &channel("sms"),
+                EventContent::text("target"),
+                SendEventOptions::default(),
             )
             .await
             .unwrap();
         *target_id.lock().unwrap_or_else(PoisonError::into_inner) = Some(target.id.clone());
         kit.send_event(
             &room_id(),
-            DirectEvent::new(channel("sms"), EventContent::text("go")),
+            &channel("sms"),
+            EventContent::text("go"),
+            SendEventOptions::default(),
         )
         .await
         .unwrap();
@@ -921,10 +1094,23 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
     let kit = room(3).await;
     let agent = Answering::new("a");
     kit.register_channel(agent.clone()).unwrap();
-    kit.attach(&room_id(), &channel("a")).await.unwrap();
-    let mut target = DirectEvent::new(channel("sms"), EventContent::text("target"));
-    target.addressed_to = Some(Vec::new());
-    let target = kit.send_event(&room_id(), target).await.unwrap().id;
+    kit.attach_channel(&room_id(), &channel("a"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let target = SendEventOptions {
+        addressed_to: Some(Vec::new()),
+        ..Default::default()
+    };
+    let target = kit
+        .send_event(
+            &room_id(),
+            &channel("sms"),
+            EventContent::text("target"),
+            target,
+        )
+        .await
+        .unwrap()
+        .id;
     let hook_kit = kit.clone();
     kit.before_broadcast("touch", move |event, _| {
         let (kit, target) = (hook_kit.clone(), target.clone());
@@ -932,9 +1118,9 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
             if event.source.channel_id == channel("a") {
                 let mut metadata = roomkit::model::Metadata::new();
                 metadata.insert("by".to_owned(), event.id.as_str().into());
-                let updates = EventUpdates {
+                let updates = UpdateEventOptions {
                     metadata: Some(metadata),
-                    ..EventUpdates::default()
+                    ..UpdateEventOptions::default()
                 };
                 kit.update_event(&room_id(), &target, updates).await?;
             }
@@ -950,16 +1136,29 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
             if len(&posted) > 200 {
                 return;
             }
-            let mut again = Post::new(EventContent::text("@a again"));
-            again.addressed_to = vec![channel("a")];
-            let event = kit.post(&room_id(), again).await.unwrap();
+            let again = PostOptions {
+                addressed_to: vec![channel("a")],
+                ..Default::default()
+            };
+            let event = kit
+                .post(&room_id(), EventContent::text("@a again"), again)
+                .await
+                .unwrap();
             push(&posted, (event.chain_depth, event.blocked_by));
         }
     })
     .unwrap();
     let mut hello = message("@a hello");
     hello.addressed_to = Some(vec![channel("a")]);
-    kit.process_inbound_in(&room_id(), hello).await.unwrap();
+    kit.process_inbound(
+        hello,
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     let answers: Vec<Option<String>> = kit
         .store()
@@ -987,17 +1186,32 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
 async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
     for needs_lock in [true, false] {
         let kit = room(1).await;
-        let mut target = DirectEvent::new(channel("sms"), EventContent::text("target"));
-        target.addressed_to = Some(Vec::new());
-        let target = kit.send_event(&room_id(), target).await.unwrap().id;
+        let target = SendEventOptions {
+            addressed_to: Some(Vec::new()),
+            ..Default::default()
+        };
+        let target = kit
+            .send_event(
+                &room_id(),
+                &channel("sms"),
+                EventContent::text("target"),
+                target,
+            )
+            .await
+            .unwrap()
+            .id;
         let hook_kit = kit.clone();
         kit.observe("send", HookTrigger::AfterBroadcast, move |event, _| {
             let kit = hook_kit.clone();
             async move {
                 if text_of(&event.content) == "hi" {
-                    let mut x = DirectEvent::new(channel("sms"), EventContent::text("x"));
-                    x.addressed_to = Some(Vec::new());
-                    kit.send_event(&room_id(), x).await.unwrap();
+                    let x = SendEventOptions {
+                        addressed_to: Some(Vec::new()),
+                        ..Default::default()
+                    };
+                    kit.send_event(&room_id(), &channel("sms"), EventContent::text("x"), x)
+                        .await
+                        .unwrap();
                 }
             }
         })
@@ -1022,9 +1236,9 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
                     for n in 0..15 {
                         let mut metadata = roomkit::model::Metadata::new();
                         metadata.insert("n".to_owned(), n.into());
-                        let updates = EventUpdates {
+                        let updates = UpdateEventOptions {
                             metadata: Some(metadata),
-                            ..EventUpdates::default()
+                            ..UpdateEventOptions::default()
                         };
                         if let Err(error) = kit.update_event(&room_id(), &target, updates).await {
                             push(&failures, error);
@@ -1037,7 +1251,9 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
         .unwrap();
         kit.send_event(
             &room_id(),
-            DirectEvent::new(channel("sms"), EventContent::text("hi")),
+            &channel("sms"),
+            EventContent::text("hi"),
+            SendEventOptions::default(),
         )
         .await
         .unwrap();

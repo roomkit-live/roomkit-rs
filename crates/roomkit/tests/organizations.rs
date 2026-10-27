@@ -1,7 +1,9 @@
-//! The kit acting for one organization (RFC §17.2, decision 2 of step 2b):
-//! every call of an organization's handle reaches its rooms only, a room of
-//! another organization, or of none, never changed, its due timers
-//! included; the kit itself acts for none.
+//! The organization a call acts for (RFC §17.2, step 5 decision 6): every
+//! call takes it in its options, `organization_id`, as the Python
+//! implementation's calls take it. A room of another organization, or of
+//! none, reads as one that does not exist, as Python reads it (decision 9),
+//! and nothing is written in it, its due timers included; a call that
+//! names no organization reaches every room.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
@@ -10,14 +12,18 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    BindingUpdate, ChannelId, ChannelType, DirectEvent, EventContent, EventDirection, EventSource,
-    EventType, EventUpdates, InboundMessage, ParticipantId, RoomEvent, RoomId, RoomOptions,
-    RoomStatus, Timestamp, Visibility,
+    Access, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType,
+    InboundMessage, Metadata, RoomEvent, RoomId, RoomStatus, RoomTimers, Timestamp, Visibility,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    ConversationStore, InboundError, KitError, LifecycleError, MutationError, OrganizationKit,
-    RoomFilter, RoomKit, StoreError, TimelineQuery,
+    ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
+    CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
+    DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions, InboundError,
+    KitError, LifecycleError, ListBindingsOptions, ListMembersOptions, MutationError, MuteOptions,
+    PauseRoomOptions, PostOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions,
+    RoomKit, RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, StoreError,
+    UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions,
 };
 
 const START_MILLIS: i64 = 1_792_677_780_000;
@@ -30,31 +36,43 @@ fn room_id() -> RoomId {
     RoomId::new("room_1").unwrap()
 }
 
+/// The organization whose calls reach no room of the tests'.
+const CLINIC: &str = "clinic";
+
+fn clinic() -> String {
+    CLINIC.to_owned()
+}
+
 /// A kit on a clock the test moves, with an SMS and a WebSocket transport
-/// registered, and `room_1` created by `owner`, none when `None`, its SMS
-/// attached and its timers pausing it after 60 seconds without activity.
+/// registered, and `room_1` of `owner`, none when `None`, its SMS attached
+/// and its timers pausing it after 60 seconds without activity.
 async fn room_of(owner: Option<&str>) -> (RoomKit, Arc<SequentialEnvironment>) {
     let clock = Arc::new(SequentialEnvironment::new(
         Timestamp::from_unix_millis(START_MILLIS).unwrap(),
     ));
-    let kit = kit_with_environment(Default::default(), Arc::clone(&clock));
+    let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&clock));
     for (id, channel_type) in [("sms", ChannelType::SMS), ("ws", ChannelType::WEBSOCKET)] {
         kit.register_channel(RecordingTransport::new(channel(id), channel_type))
             .unwrap();
     }
-    let timers = || {
-        let mut options = RoomOptions::default();
-        options.inactive_after_seconds = Some(60);
-        options
+    let organization_id = owner.map(str::to_owned);
+    let room = CreateRoomOptions {
+        room_id: Some(room_id()),
+        organization_id: organization_id.clone(),
+        timers: Some(RoomTimers {
+            inactive_after_seconds: Some(60),
+            ..RoomTimers::default()
+        }),
+        ..Default::default()
     };
-    if let Some(owner) = owner {
-        let owner = kit.for_organization(owner);
-        owner.create_room_with(&room_id(), timers()).await.unwrap();
-        owner.attach(&room_id(), &channel("sms")).await.unwrap();
-    } else {
-        kit.create_room_with(&room_id(), timers()).await.unwrap();
-        kit.attach(&room_id(), &channel("sms")).await.unwrap();
-    }
+    kit.create_room(room).await.unwrap();
+    let sms = AttachChannelOptions {
+        organization_id,
+        ..Default::default()
+    };
+    kit.attach_channel(&room_id(), &channel("sms"), sms)
+        .await
+        .unwrap();
     (kit, clock)
 }
 
@@ -75,21 +93,8 @@ fn record(text: &str) -> RoomEvent {
     )
 }
 
-/// What `clinic`'s lifecycle changes of `room_1` fail with, each.
-async fn lifecycle_refusals(clinic: &OrganizationKit) -> Vec<Option<KitError>> {
-    let (room, sms, ws) = (room_id(), channel("sms"), channel("ws"));
-    let hidden = BindingUpdate::visibility(Visibility::None);
-    vec![
-        clinic.attach(&room, &ws).await.err(),
-        clinic.detach(&room, &sms).await.err(),
-        clinic.update_binding(&room, &sms, hidden).await.err(),
-        clinic.mute(&room, &sms).await.err(),
-        clinic.pause_room(&room).await.err(),
-        clinic.resume_room(&room).await.err(),
-        clinic.reopen_room(&room).await.err(),
-        clinic.close_room(&room).await.err(),
-        clinic.archive_room(&room).await.err(),
-    ]
+fn hi() -> InboundMessage {
+    InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("Hi"))
 }
 
 /// `room_1` as the store holds it: its status, its event count, its
@@ -106,87 +111,279 @@ async fn as_stored(kit: &RoomKit) -> (RoomStatus, u64, Vec<(String, bool)>) {
     (room.status, room.event_count, bindings)
 }
 
-#[tokio::test]
-async fn a_room_an_organization_creates_belongs_to_it() {
-    let kit = RoomKit::new(Default::default());
-    kit.for_organization("bank")
-        .create_room(&room_id())
-        .await
-        .unwrap();
-    let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
-    assert_eq!(room.organization_id.as_deref(), Some("bank"));
+/// What a call came to, as the Python implementation's outcomes are named:
+/// `RoomNotFound`, or the value it returned when it found nothing.
+fn outcome<T: std::fmt::Debug>(result: Result<T, KitError>) -> String {
+    match result {
+        Err(
+            KitError::Store(StoreError::RoomNotFound(_))
+            | KitError::Lifecycle(LifecycleError::RoomNotFound(_))
+            | KitError::Inbound(InboundError::RoomNotFound(_))
+            | KitError::Mutation(MutationError::RoomNotFound(_)),
+        ) => "RoomNotFound".to_owned(),
+        Err(other) => format!("{other:?}"),
+        Ok(value) => format!("{value:?}"),
+    }
 }
 
-/// RFC §17.2: a room of another organization, or of none, is not found by
-/// an organization's lifecycle changes, and none of them writes in it, its
-/// due timers included.
+/// Each of `clinic`'s calls on `room_1`, scoped to it, and what it came to;
+/// `committed` is an event the room holds.
+async fn clinic_calls(kit: &RoomKit, committed: &RoomEvent) -> Vec<(&'static str, String)> {
+    let room = room_id();
+    let mut called = room_calls(kit, &room).await;
+    called.extend(binding_changes(kit, &room).await);
+    called.extend(binding_reads(kit, &room).await);
+    called.extend(event_calls(kit, &room, committed).await);
+    called
+}
+
+/// `clinic`'s read and lifecycle changes of `room`, and its timer checks.
+async fn room_calls(kit: &RoomKit, room: &RoomId) -> Vec<(&'static str, String)> {
+    let read = GetRoomOptions {
+        organization_id: Some(clinic()),
+    };
+    let pause = PauseRoomOptions {
+        organization_id: Some(clinic()),
+    };
+    let resume = ResumeRoomOptions {
+        organization_id: Some(clinic()),
+    };
+    let reopen = ReopenRoomOptions {
+        organization_id: Some(clinic()),
+    };
+    let close = CloseRoomOptions {
+        organization_id: Some(clinic()),
+    };
+    let archive = ArchiveRoomOptions {
+        organization_id: Some(clinic()),
+    };
+    let check = CheckRoomTimersOptions {
+        organization_id: Some(clinic()),
+    };
+    let check_all = CheckAllTimersOptions {
+        organization_id: Some(clinic()),
+    };
+    vec![
+        (
+            "get_room",
+            outcome(kit.get_room(room, read).await.map(|room| room.id)),
+        ),
+        ("pause_room", outcome(kit.pause_room(room, pause).await)),
+        ("resume_room", outcome(kit.resume_room(room, resume).await)),
+        ("reopen_room", outcome(kit.reopen_room(room, reopen).await)),
+        ("close_room", outcome(kit.close_room(room, close).await)),
+        (
+            "archive_room",
+            outcome(kit.archive_room(room, archive).await),
+        ),
+        (
+            "check_room_timers",
+            outcome(kit.check_room_timers(room, check).await),
+        ),
+        (
+            "check_all_timers",
+            outcome(kit.check_all_timers(check_all).await),
+        ),
+    ]
+}
+
+/// `clinic`'s changes of the bindings of `room`.
+async fn binding_changes(kit: &RoomKit, room: &RoomId) -> Vec<(&'static str, String)> {
+    let (sms, ws) = (channel("sms"), channel("ws"));
+    let attach = AttachChannelOptions {
+        organization_id: Some(clinic()),
+        ..AttachChannelOptions::default()
+    };
+    let detach = DetachChannelOptions {
+        organization_id: Some(clinic()),
+    };
+    let mute = MuteOptions {
+        organization_id: Some(clinic()),
+    };
+    let unmute = UnmuteOptions {
+        organization_id: Some(clinic()),
+    };
+    let access = SetAccessOptions {
+        organization_id: Some(clinic()),
+    };
+    let visibility = SetVisibilityOptions {
+        organization_id: Some(clinic()),
+    };
+    let tagged = UpdateBindingMetadataOptions {
+        organization_id: Some(clinic()),
+    };
+    let tag = Metadata::from_iter([("tag".to_owned(), "x".into())]);
+    vec![
+        (
+            "attach_channel",
+            outcome(kit.attach_channel(room, &ws, attach).await),
+        ),
+        (
+            "detach_channel",
+            outcome(kit.detach_channel(room, &sms, detach).await),
+        ),
+        ("mute", outcome(kit.mute(room, &sms, mute).await)),
+        ("unmute", outcome(kit.unmute(room, &sms, unmute).await)),
+        (
+            "set_access",
+            outcome(kit.set_access(room, &sms, Access::ReadOnly, access).await),
+        ),
+        (
+            "set_visibility",
+            outcome(
+                kit.set_visibility(room, &sms, Visibility::None, visibility)
+                    .await,
+            ),
+        ),
+        (
+            "update_binding_metadata",
+            outcome(kit.update_binding_metadata(room, &sms, tag, tagged).await),
+        ),
+    ]
+}
+
+/// `clinic`'s reads of the bindings and members of `room`.
+async fn binding_reads(kit: &RoomKit, room: &RoomId) -> Vec<(&'static str, String)> {
+    let binding = GetBindingOptions {
+        organization_id: Some(clinic()),
+    };
+    let bindings = ListBindingsOptions {
+        organization_id: Some(clinic()),
+    };
+    let members = ListMembersOptions {
+        organization_id: Some(clinic()),
+        ..ListMembersOptions::default()
+    };
+    vec![
+        (
+            "get_binding",
+            outcome(kit.get_binding(room, &channel("sms"), binding).await),
+        ),
+        (
+            "list_bindings",
+            outcome(kit.list_bindings(room, bindings).await),
+        ),
+        (
+            "list_members",
+            outcome(kit.list_members(room, members).await),
+        ),
+    ]
+}
+
+/// `clinic`'s calls on the events of `room`, `committed` one of them.
+async fn event_calls(
+    kit: &RoomKit,
+    room: &RoomId,
+    committed: &RoomEvent,
+) -> Vec<(&'static str, String)> {
+    let (sms, x) = (channel("sms"), || EventContent::text("x"));
+    let timeline = GetTimelineOptions {
+        organization_id: Some(clinic()),
+        ..GetTimelineOptions::default()
+    };
+    let send = SendEventOptions {
+        organization_id: Some(clinic()),
+        ..SendEventOptions::default()
+    };
+    let post = PostOptions {
+        organization_id: Some(clinic()),
+        ..PostOptions::default()
+    };
+    let commit = CommitEventOptions {
+        organization_id: Some(clinic()),
+    };
+    let inbound = ProcessInboundOptions {
+        room_id: Some(room.clone()),
+        organization_id: Some(clinic()),
+    };
+    let update = UpdateEventOptions {
+        content: Some(EventContent::text("Changed")),
+        organization_id: Some(clinic()),
+        ..UpdateEventOptions::default()
+    };
+    let delete = DeleteEventOptions {
+        organization_id: Some(clinic()),
+        ..DeleteEventOptions::default()
+    };
+    let id = &committed.id;
+    vec![
+        (
+            "get_timeline",
+            outcome(kit.get_timeline(room, timeline).await),
+        ),
+        (
+            "send_event",
+            outcome(kit.send_event(room, &sms, x(), send).await),
+        ),
+        ("post", outcome(kit.post(room, x(), post).await)),
+        (
+            "commit_event",
+            outcome(kit.commit_event(room, record("Note"), commit).await),
+        ),
+        (
+            "process_inbound",
+            outcome(kit.process_inbound(hi(), inbound).await),
+        ),
+        (
+            "update_event",
+            outcome(kit.update_event(room, id, update).await),
+        ),
+        (
+            "delete_event",
+            outcome(kit.delete_event(room, id, delete).await),
+        ),
+    ]
+}
+
+/// RFC §17.2, §5.1: every scoped call on a room of another organization,
+/// or of none, gets the Python implementation's outcome
+/// (tasks/probes/step5-lot1/other_org.py): `RoomNotFound`, but `None` from
+/// `update_event`, no id from `delete_event` and no room from
+/// `check_all_timers`; and writes nothing in the room, its due timers
+/// included.
 #[tokio::test]
-async fn a_lifecycle_change_never_reaches_a_room_that_is_not_its_organization_s() {
+async fn another_organizations_room_is_not_found() {
     for owner in [Some("bank"), None] {
         let (kit, clock) = room_of(owner).await;
+        let committed = kit
+            .commit_event(&room_id(), record("Kept"), CommitEventOptions::default())
+            .await
+            .unwrap();
         clock.advance(Duration::from_secs(120));
-        let refusals = lifecycle_refusals(&kit.for_organization("clinic")).await;
-        let not_found = || Some(KitError::Lifecycle(LifecycleError::RoomNotFound(room_id())));
+        let called = clinic_calls(&kit, &committed).await;
+        let python = |name: &str| match name {
+            "update_event" => "None".to_owned(),
+            "delete_event" | "check_all_timers" => "[]".to_owned(),
+            _ => "RoomNotFound".to_owned(),
+        };
+        let expected: Vec<(&str, String)> = called
+            .iter()
+            .map(|(name, _)| (*name, python(name)))
+            .collect();
         assert_eq!(
-            (refusals, as_stored(&kit).await),
+            (called, as_stored(&kit).await),
             (
-                (0..9).map(|_| not_found()).collect::<Vec<_>>(),
-                (RoomStatus::Active, 1, vec![("sms".to_owned(), false)])
+                expected,
+                // The attach's record and the one record the test commits.
+                (RoomStatus::Active, 2, vec![("sms".to_owned(), false)])
             ),
             "a room of {owner:?}"
         );
     }
 }
 
-/// RFC §17.2, §10.5: another organization's room takes no record, and its
-/// due timers are not applied for the refused call.
+/// RFC §17.2: a room a call for an organization creates belongs to it.
 #[tokio::test]
-async fn a_record_is_never_committed_to_another_organization_s_room() {
-    let (kit, clock) = room_of(Some("bank")).await;
-    clock.advance(Duration::from_secs(120));
-    let refused = kit
-        .for_organization("clinic")
-        .commit_event(&room_id(), record("Note"))
-        .await;
-    assert_eq!(
-        (refused, as_stored(&kit).await),
-        (
-            Err(KitError::Mutation(MutationError::RoomNotFound(room_id()))),
-            (RoomStatus::Active, 1, vec![("sms".to_owned(), false)])
-        )
-    );
-}
-
-/// RFC §17.2, gaps G-069 and G-077: another organization's room refuses a
-/// message as not its own, and an injected event fails as not found, with
-/// nothing written in it, its due timers included.
-#[tokio::test]
-async fn an_event_is_never_brought_into_another_organization_s_room() {
-    let (kit, clock) = room_of(Some("bank")).await;
-    clock.advance(Duration::from_secs(120));
-    let clinic = kit.for_organization("clinic");
-    let message = InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("Hi"));
-    let refused = (
-        clinic.process_inbound_in(&room_id(), message).await.err(),
-        clinic
-            .send_event(
-                &room_id(),
-                DirectEvent::new(channel("sms"), EventContent::text("Hi")),
-            )
-            .await
-            .err(),
-    );
-    let inbound = |error| Some(KitError::Inbound(error));
-    assert_eq!(
-        (refused, as_stored(&kit).await),
-        (
-            (
-                inbound(InboundError::RoomNotFound(room_id())),
-                inbound(InboundError::RoomNotFound(room_id()))
-            ),
-            (RoomStatus::Active, 1, vec![("sms".to_owned(), false)])
-        )
-    );
+async fn a_room_an_organization_creates_belongs_to_it() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let options = CreateRoomOptions {
+        room_id: Some(room_id()),
+        organization_id: Some("bank".to_owned()),
+        ..Default::default()
+    };
+    kit.create_room(options).await.unwrap();
+    let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+    assert_eq!(room.organization_id.as_deref(), Some("bank"));
 }
 
 /// RFC §17.2, §13.4: from the room's own work, a hook under its lock, an
@@ -196,20 +393,30 @@ async fn an_event_is_never_brought_into_another_organization_s_room() {
 #[tokio::test]
 async fn a_replay_is_never_handed_to_another_organization() {
     let (kit, _) = room_of(Some("bank")).await;
-    let bank = kit.for_organization("bank");
-    bank.attach(&room_id(), &channel("ws")).await.unwrap();
-    let mut held = DirectEvent::new(channel("ws"), EventContent::text("Your balance is 5000$"));
-    held.idempotency_key = Some("WS1".to_owned());
-    bank.send_event(&room_id(), held.clone()).await.unwrap();
+    let bank = AttachChannelOptions {
+        organization_id: Some("bank".to_owned()),
+        ..Default::default()
+    };
+    kit.attach_channel(&room_id(), &channel("ws"), bank)
+        .await
+        .unwrap();
+    let held = |organization: &str| SendEventOptions {
+        idempotency_key: Some("WS1".to_owned()),
+        organization_id: Some(organization.to_owned()),
+        ..Default::default()
+    };
+    let balance = || EventContent::text("Your balance is 5000$");
+    kit.send_event(&room_id(), &channel("ws"), balance(), held("bank"))
+        .await
+        .unwrap();
     let answers = Arc::new(std::sync::Mutex::new(Vec::new()));
     let (hook_kit, hook_answers) = (kit.clone(), Arc::clone(&answers));
     kit.before_broadcast("relay", move |event, _| {
-        let (kit, answers, held) = (hook_kit.clone(), Arc::clone(&hook_answers), held.clone());
+        let (kit, answers) = (hook_kit.clone(), Arc::clone(&hook_answers));
         async move {
             if event.source.channel_id == channel("sms") {
                 let replayed = kit
-                    .for_organization("clinic")
-                    .send_event(&room_id(), held)
+                    .send_event(&room_id(), &channel("ws"), balance(), held("clinic"))
                     .await
                     .map(|event| event.id);
                 answers.lock().unwrap().push(replayed);
@@ -218,8 +425,11 @@ async fn a_replay_is_never_handed_to_another_organization() {
         }
     })
     .unwrap();
-    let message = InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("Hi"));
-    bank.process_inbound_in(&room_id(), message).await.unwrap();
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        organization_id: Some("bank".to_owned()),
+    };
+    kit.process_inbound(hi(), options).await.unwrap();
     assert_eq!(
         std::mem::take(&mut *answers.lock().unwrap()),
         [Err(KitError::Inbound(
@@ -228,132 +438,71 @@ async fn a_replay_is_never_handed_to_another_organization() {
     );
 }
 
-/// RFC §17.2, gap G-063: another organization's room holds no stored event
-/// of the caller's, so an update or a delete changes nothing.
-#[tokio::test]
-async fn a_stored_event_of_another_organization_s_room_is_never_changed() {
-    let (kit, _clock) = room_of(Some("bank")).await;
-    let message = InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("Hi"));
-    let committed = kit
-        .for_organization("bank")
-        .process_inbound_in(&room_id(), message)
-        .await
-        .unwrap()
-        .event
-        .unwrap();
-    let clinic = kit.for_organization("clinic");
-    let updates = EventUpdates {
-        content: Some(EventContent::text("Changed")),
-        ..EventUpdates::default()
-    };
-    let changed = (
-        clinic
-            .update_event(&room_id(), &committed.id, updates)
-            .await
-            .unwrap(),
-        clinic
-            .delete_event(&room_id(), &committed.id, true)
-            .await
-            .unwrap(),
-    );
-    let stored = kit.store().get_event(&committed.id).await.unwrap();
-    assert_eq!(
-        (changed, stored.map(|event| event.content)),
-        ((None, vec![]), Some(EventContent::text("Hi")))
-    );
-}
-
+/// RFC §17.2: an organization's calls reach its own rooms, its reads
+/// included.
 #[tokio::test]
 async fn an_organization_s_calls_reach_its_own_rooms() {
     let (kit, _clock) = room_of(Some("bank")).await;
-    let bank = kit.for_organization("bank");
-    bank.attach(&room_id(), &channel("ws")).await.unwrap();
-    bank.mute(&room_id(), &channel("sms")).await.unwrap();
-    bank.commit_event(&room_id(), record("Note")).await.unwrap();
-    bank.pause_room(&room_id()).await.unwrap();
+    let bank = || Some("bank".to_owned());
+    let ws = AttachChannelOptions {
+        organization_id: bank(),
+        ..Default::default()
+    };
+    kit.attach_channel(&room_id(), &channel("ws"), ws)
+        .await
+        .unwrap();
+    kit.mute(
+        &room_id(),
+        &channel("sms"),
+        MuteOptions {
+            organization_id: bank(),
+        },
+    )
+    .await
+    .unwrap();
+    let commit = CommitEventOptions {
+        organization_id: bank(),
+    };
+    kit.commit_event(&room_id(), record("Note"), commit)
+        .await
+        .unwrap();
+    kit.pause_room(
+        &room_id(),
+        PauseRoomOptions {
+            organization_id: bank(),
+        },
+    )
+    .await
+    .unwrap();
+    let read = GetTimelineOptions {
+        organization_id: bank(),
+        ..Default::default()
+    };
+    let timeline = kit.get_timeline(&room_id(), read).await.unwrap();
     assert_eq!(
-        as_stored(&kit).await,
+        (as_stored(&kit).await, timeline.len()),
         // Three lifecycle records and the record; the pause writes none.
         (
-            RoomStatus::Paused,
-            4,
-            vec![("sms".to_owned(), true), ("ws".to_owned(), false)]
+            (
+                RoomStatus::Paused,
+                4,
+                vec![("sms".to_owned(), true), ("ws".to_owned(), false)]
+            ),
+            4
         )
     );
 }
 
-/// RFC §17.2: an organization reads its own rooms, their timelines,
-/// bindings and participants; another organization's room, or one of none,
-/// reads as a room that does not exist, a read of its roster failing as
-/// not found.
+/// RFC §17.2: a call that names no organization reaches every room.
 #[tokio::test]
-async fn an_organization_reads_its_own_rooms_only() {
-    for (reader, own) in [("bank", true), ("clinic", false)] {
-        let (kit, _clock) = room_of(Some("bank")).await;
-        let committed = kit.commit_event(&room_id(), record("Note")).await.unwrap();
-        let reader = kit.for_organization(reader);
-        let room = room_id();
-        let not_found = || KitError::Store(StoreError::RoomNotFound(room_id()));
-        let read = (
-            reader.get_room(&room).await.unwrap().map(|room| room.id),
-            reader
-                .list_rooms(&RoomFilter::default())
-                .await
-                .unwrap()
-                .len(),
-            reader
-                .get_event(&committed.id)
-                .await
-                .unwrap()
-                .map(|event| event.id),
-            reader
-                .get_timeline(&room, &TimelineQuery::default())
-                .await
-                .map(|events| events.len()),
-            reader
-                .list_bindings(&room)
-                .await
-                .map(|bindings| bindings.len()),
-            reader
-                .list_participants(&room)
-                .await
-                .map(|people| people.len()),
-            reader
-                .get_participant(&room, &ParticipantId::new("u").unwrap())
-                .await,
-        );
-        let expected = if own {
-            (
-                Some(room_id()),
-                1,
-                Some(committed.id.clone()),
-                // The attach's lifecycle record, then the record.
-                Ok(2),
-                Ok(1),
-                Ok(0),
-                Ok(None),
-            )
-        } else {
-            (
-                None,
-                0,
-                None,
-                Err(not_found()),
-                Err(not_found()),
-                Err(not_found()),
-                Err(not_found()),
-            )
-        };
-        assert_eq!(read, expected, "read by {}", reader.organization_id());
-    }
-}
-
-/// RFC §17.2: the kit acts for no organization, and reaches every room.
-#[tokio::test]
-async fn the_kit_reaches_an_organization_s_room() {
+async fn a_call_naming_no_organization_reaches_an_organization_s_room() {
     let (kit, _clock) = room_of(Some("bank")).await;
-    kit.commit_event(&room_id(), record("Note")).await.unwrap();
-    kit.pause_room(&room_id()).await.unwrap();
+    kit.commit_event(&room_id(), record("Note"), CommitEventOptions::default())
+        .await
+        .unwrap();
+    kit.pause_room(&room_id(), PauseRoomOptions::default())
+        .await
+        .unwrap();
     assert_eq!(
         as_stored(&kit).await,
         (RoomStatus::Paused, 2, vec![("sms".to_owned(), false)])

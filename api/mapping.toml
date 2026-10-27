@@ -39,6 +39,16 @@ roomkit_openai = ["roomkit.providers.openai"]
 roomkit_mcp = ["roomkit.tools"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
 
+# The architecture table's mappings that a rule gives no name to.
+
+# `**kwargs` of attach_channel: the binding's fields the keywords reach.
+[[map]]
+rust = "roomkit::RoomKit::attach_channel"
+python = "roomkit.RoomKit.attach_channel"
+params = { direction = "kwargs", muted = "kwargs", output_muted = "kwargs", participant_id = "kwargs", group = "kwargs", last_read_index = "kwargs", attached_at = "kwargs", rate_limit = "kwargs", retry_policy = "kwargs", metadata = "kwargs" }
+py_spec = "sha256:4b2a61decacb668503c8a74d01ebf57c79e35c4517cb681eee19fbae86eadbd6"
+reason = "Python's **kwargs, which go to the binding's fields (the architecture table)"
+
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
 [[exception]]
@@ -221,6 +231,24 @@ reason = "decision 5: Python's tests patch the clock and uuid4; the sans-IO core
 rust = "roomkit::testing::kit_with_environment"
 approved = "2026-10-27"
 reason = "decision 5: Python's tests patch the clock and uuid4; the sans-IO core takes them as an input"
+
+[[exception]]
+rust = "roomkit::PauseRoomOptions"
+approved = "2026-10-27"
+until = "roomkit.RoomKit.pause_room"
+reason = "the options of pause_room, which RFC §5.1 names and Rust has; Python adds it (RMK-1010 item 22)"
+
+[[exception]]
+rust = "roomkit::ResumeRoomOptions"
+approved = "2026-10-27"
+until = "roomkit.RoomKit.resume_room"
+reason = "the options of resume_room, which RFC §5.1 names and Rust has; Python adds it (RMK-1010 item 22)"
+
+[[exception]]
+rust = "roomkit::ReopenRoomOptions"
+approved = "2026-10-27"
+until = "roomkit.RoomKit.reopen_room"
+reason = "the options of reopen_room, which RFC §5.1 names and Rust has; Python adds it (RMK-1010 item 22)"
 
 # Python names of classes in scope that Rust lacks: not in 0.x (rule 5).
 
@@ -493,107 +521,9 @@ reason = "decision 15: run_timers / TimerSweeper leave the public API, idle beco
 
 [[pending]]
 lot = 1
-python = "roomkit.RoomKit"
-members = [
-    "attach_channel", "check_all_timers", "check_room_timers",
-    "detach_channel", "get_binding", "get_room", "list_bindings",
-    "list_members", "set_access", "set_visibility", "update_binding_metadata",
-]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.archive_room"
-params = ["organization_id"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.close_room"
-params = ["organization_id"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.commit_event"
-params = ["organization_id"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.create_room"
-params = ["metadata", "organization_id", "timers", "agent_response_policy"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.delete_event"
-params = ["organization_id"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.get_timeline"
-params = [
-    "offset", "limit", "visibility_filter", "after_index", "before_index",
-    "newest_first", "include_blocked", "organization_id",
-]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.mute"
-params = ["organization_id"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.post"
-params = [
-    "content", "participant_id", "addressed_to", "metadata", "channel_id",
-    "organization_id", "idempotency_key", "chain_depth",
-]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
 python = "roomkit.RoomKit.process_inbound"
 params = ["defer_delivery"]
 reason = "decision 7: defer_delivery and the DeliveryHandle InboundResult.delivery carries"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.process_inbound"
-params = ["room_id", "organization_id"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.send_event"
-params = [
-    "channel_id", "content", "event_type", "chain_depth", "participant_id",
-    "metadata", "visibility", "provider", "response_visibility", "created_at",
-    "parent_event_id", "idempotency_key", "addressed_to", "organization_id",
-    "standalone",
-]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.unmute"
-params = ["organization_id"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.update_event"
-params = ["content", "source", "metadata", "organization_id"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-rust = "roomkit::OrganizationKit"
-reason = "decision 6: organization_id in each call's options; for_organization and OrganizationKit go"
 
 [[pending]]
 lot = 1
@@ -603,94 +533,8 @@ reason = "decision 15: run_timers / TimerSweeper leave the public API, idle beco
 
 [[pending]]
 lot = 1
-rust = "roomkit::RoomKit"
-members = ["for_organization"]
-reason = "decision 6: organization_id in each call's options; for_organization and OrganizationKit go"
-
-[[pending]]
-lot = 1
-rust = "roomkit::RoomKit"
-members = [
-    "create_room_with", "attach", "attach_with", "detach", "update_binding",
-    "check_timers", "process_inbound_in",
-]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-rust = "roomkit::RoomKit::create_room"
-params = ["room_id"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-rust = "roomkit::RoomKit::delete_event"
-params = ["cascade_replies"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-rust = "roomkit::RoomKit::get_timeline"
-params = ["query"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-rust = "roomkit::RoomKit::post"
-params = ["post"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-rust = "roomkit::RoomKit::send_event"
-params = ["event"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-rust = "roomkit::RoomKit::update_event"
-params = ["updates"]
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-rust = "roomkit::TimelineQuery"
-reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
 rust = "roomkit::TimerSweeper"
 reason = "decision 15: run_timers / TimerSweeper leave the public API, idle becomes a hidden test seam, shutdown becomes a draining close"
-
-[[pending]]
-lot = 1
-rust = "roomkit::model::BindingOptions"
-reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
-
-[[pending]]
-lot = 1
-rust = "roomkit::model::BindingUpdate"
-reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
-
-[[pending]]
-lot = 1
-rust = "roomkit::model::DirectEvent"
-reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
-
-[[pending]]
-lot = 1
-rust = "roomkit::model::EventUpdates"
-reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
-
-[[pending]]
-lot = 1
-rust = "roomkit::model::Post"
-reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
-
-[[pending]]
-lot = 1
-rust = "roomkit::model::RoomOptions"
-reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
 
 [[pending]]
 lot = 2
@@ -1574,6 +1418,11 @@ rust = "roomkit::turn_context"
 reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
 
 [[pending]]
+lot = 3
+rust = "roomkit::model::DirectEvent"
+reason = "decision 1: the kit's send_event takes lot 1's SendEventOptions; TurnHost::send_event takes a DirectEvent until lot 3 gives it the same options, and DirectEvent leaves roomkit's re-exports then"
+
+[[pending]]
 lot = 4
 python = "roomkit.Channel"
 members = [
@@ -1871,6 +1720,11 @@ reason = "Python's delivery and response streams as named Rust stream types, a r
 lot = 4
 rust = "roomkit::StreamItem"
 reason = "Python's delivery and response streams as named Rust stream types, a rule lot 4 adds to the report"
+
+[[pending]]
+lot = 4
+rust = "roomkit::model::EventUpdates"
+reason = "decision 1: the kit's update_event takes lot 1's UpdateEventOptions; the store's update_event takes EventUpdates until lot 4 gives it Python's update_event(event), and EventUpdates leaves roomkit's re-exports then"
 
 [[pending]]
 lot = 5

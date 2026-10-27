@@ -20,10 +20,13 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    Access, BindingUpdate, ChannelId, ChannelType, EventContent, InboundMessage, RoomId, Visibility,
+    Access, ChannelId, ChannelType, EventContent, InboundMessage, RoomId, Visibility,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{FrameworkEvent, HookTrigger, RoomKit, text_of};
+use roomkit::{
+    AttachChannelOptions, CreateRoomOptions, FrameworkEvent, HookTrigger, MuteOptions,
+    ProcessInboundOptions, RoomKit, SetVisibilityOptions, UnmuteOptions, text_of,
+};
 use tokio::sync::broadcast;
 
 use shared::{Checks, Log, Script, ScriptedAgent};
@@ -74,9 +77,15 @@ impl Conversation {
         observe_mutes(&kit, &mute_hooks)?;
         let events = kit.subscribe();
         let room = RoomId::new("room_1")?;
-        kit.create_room(&room).await?;
-        kit.attach(&room, customer.id()).await?;
-        kit.attach(&room, &agent).await?;
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        })
+        .await?;
+        kit.attach_channel(&room, customer.id(), AttachChannelOptions::default())
+            .await?;
+        kit.attach_channel(&room, &agent, AttachChannelOptions::default())
+            .await?;
         Ok(Self {
             kit,
             room,
@@ -104,15 +113,27 @@ impl Conversation {
     ) -> Result<(), Box<dyn Error>> {
         println!("{sender} writes {text:?}.");
         let message = InboundMessage::new(on.id().clone(), sender, EventContent::text(text));
-        self.kit.process_inbound_in(&self.room, message).await?;
+        self.kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(self.room.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
         Ok(())
     }
 
     /// Sets who sees what the agent writes (RFC §7.3).
     async fn agent_visible_to(&self, visibility: Visibility) -> Result<(), Box<dyn Error>> {
-        let update = BindingUpdate::visibility(visibility);
         self.kit
-            .update_binding(&self.room, &self.agent, update)
+            .set_visibility(
+                &self.room,
+                &self.agent,
+                visibility,
+                SetVisibilityOptions::default(),
+            )
             .await?;
         Ok(())
     }
@@ -123,14 +144,24 @@ impl Conversation {
         self.customer_says("I need help with my mortgage").await?;
 
         println!("The advisor joins.");
-        self.kit.attach(&self.room, self.advisor.id()).await?;
+        self.kit
+            .attach_channel(
+                &self.room,
+                self.advisor.id(),
+                AttachChannelOptions::default(),
+            )
+            .await?;
         println!(
             "The integrator mutes the agent, makes it visible to the advisor only, unmutes it."
         );
-        self.kit.mute(&self.room, &self.agent).await?;
+        self.kit
+            .mute(&self.room, &self.agent, MuteOptions::default())
+            .await?;
         self.agent_visible_to(Visibility::channels([self.advisor.id().clone()])?)
             .await?;
-        self.kit.unmute(&self.room, &self.agent).await?;
+        self.kit
+            .unmute(&self.room, &self.agent, UnmuteOptions::default())
+            .await?;
 
         self.customer_says("What rate can I get?").await?;
         self.advisor_says("We can offer you 4.5% fixed.").await?;

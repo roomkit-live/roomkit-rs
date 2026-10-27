@@ -31,7 +31,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ///   [`KitError::ShutDown`](crate::KitError::ShutDown): an inbound call,
     ///   a lifecycle change, a direct change of a stored event,
     ///   [`commit_event`](Self::commit_event) and
-    ///   [`check_timers`](Self::check_timers). Registering channels and
+    ///   [`check_all_timers`](Self::check_all_timers). Registering channels and
     ///   hooks, subscribing and reading the store go on working;
     /// - the background work is ended at its next wait. An observer hook
     ///   running after the fact is dropped, and so is a timer sweep under

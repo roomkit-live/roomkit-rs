@@ -2,28 +2,29 @@
 //! that run the core's operations against them.
 //!
 //! - this module: the kit itself and the inbound pipeline;
-//! - `options`: what a kit is built with;
+//! - `options`: what a kit is built with, and what each call takes beside
+//!   its required arguments, the organization it acts for among them (RFC
+//!   §17.2);
 //! - `registry`: registering and unregistering channels and hooks;
-//! - `rooms`: the room lifecycle and channel bindings;
+//! - `rooms`: the room lifecycle;
+//! - `bindings`: a room's channel bindings and members;
 //! - `events`: the host's direct changes to stored events;
 //! - `inject`: direct injection and records committed outside the
 //!   pipeline;
+//! - `post`: the host's own voice;
+//! - `timeline`: a room's timeline;
 //! - `timers`: applying room timers, on demand or in the background;
 //! - `background`: waiting for the kit's background work, and ending it;
-//! - `weak`: the kit held without keeping it alive;
-//! - `organization`: the kit acting for one organization;
-//! - `scope`: the organization a call acts for, which every call is
-//!   written once for.
+//! - `weak`: the kit held without keeping it alive.
 
 mod background;
+mod bindings;
 mod events;
 mod inject;
 mod options;
-mod organization;
 mod post;
 mod registry;
 mod rooms;
-mod scope;
 #[cfg(test)]
 mod tests;
 mod timeline;
@@ -41,10 +42,15 @@ use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookTrigger};
 use tokio::sync::broadcast;
 
-pub use self::options::RoomKitOptions;
-pub use self::organization::OrganizationKit;
-use self::scope::Scope;
-pub use self::timeline::TimelineQuery;
+pub use self::options::{
+    ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
+    CloseRoomOptions, CommitEventOptions, CreateRoomOptions, DeleteEventOptions,
+    DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions,
+    ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions, PostOptions,
+    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKitOptions, SendEventOptions,
+    SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions,
+    UpdateEventOptions,
+};
 pub use self::timers::TimerSweeper;
 pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;
@@ -69,12 +75,8 @@ use crate::turns::Turns;
 /// misses some.
 const FRAMEWORK_EVENT_BACKLOG: usize = 1024;
 
-/// The kit's call that runs a routed message, as an error names it.
+/// The kit's call that runs a message, as an error names it.
 const PROCESS_INBOUND: &str = "process_inbound";
-
-/// The kit's call that runs a message into a named room, as an error names
-/// it.
-const PROCESS_INBOUND_IN: &str = "process_inbound_in";
 
 /// A RoomKit deployment: its channels, its hooks and its store.
 ///
@@ -84,17 +86,19 @@ const PROCESS_INBOUND_IN: &str = "process_inbound_in";
 ///
 /// ```no_run
 /// # async fn example(sms: impl roomkit::Channel) -> Result<(), Box<dyn std::error::Error>> {
-/// use roomkit::RoomKit;
 /// use roomkit::model::{ChannelId, EventContent, InboundMessage, RoomId};
+/// use roomkit::{CreateRoomOptions, ProcessInboundOptions, RoomKit};
 ///
 /// let kit = RoomKit::new(Default::default());
 /// kit.register_channel(sms)?;
 /// let room = RoomId::new("room_1")?;
 /// let channel = ChannelId::new("sms")?;
-/// kit.create_room(&room).await?;
-/// kit.attach(&room, &channel).await?;
+/// kit.create_room(CreateRoomOptions { room_id: Some(room.clone()), ..Default::default() })
+///     .await?;
+/// kit.attach_channel(&room, &channel, Default::default()).await?;
 /// let message = InboundMessage::new(channel, "+15551234567", EventContent::text("Bonjour"));
-/// let result = kit.process_inbound_in(&room, message).await?;
+/// let options = ProcessInboundOptions { room_id: Some(room), ..Default::default() };
+/// let result = kit.process_inbound(message, options).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -207,23 +211,39 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner.events.subscribe()
     }
 
-    /// Runs `message` through the inbound pipeline (RFC §10.1) into the
-    /// room the kit's router finds for it (RFC §10.4), and the whole
-    /// cascade it starts. The call reads rooms unscoped, whatever their
-    /// organization, and a room it creates belongs to none (RFC §17.2); an
-    /// organization's [`process_inbound`](OrganizationKit::process_inbound)
-    /// routes among its own rooms only. A message whose room the caller
-    /// knows goes into it with [`process_inbound_in`](Self::process_inbound_in).
+    /// Runs `message` through the inbound pipeline (RFC §10.1), and the
+    /// whole cascade it starts: into the room `options` name, or into the
+    /// room the kit's router finds for it (RFC §10.4), for the organization
+    /// they name. A room of another organization, or of none, is not found,
+    /// nothing written; a room the call creates belongs to the organization
+    /// (RFC §17.2); `None` reads rooms unscoped.
     ///
     /// The sender is written in the channel's form first: a phone number in
-    /// E.164, an email address lower-case (RFC §5.7). The message goes to
-    /// the sender's conversation on the channel, a paused one included,
-    /// which the message resumes, or to the one room bound to the channel
-    /// when it admits them, active, or paused with a `group` binding; the
-    /// sender is then recorded on the room's binding, and a message no room
-    /// was found for gets a new one, bound to its sender. On a chat channel
-    /// the conversation is the chat the message was posted in, read under
-    /// the channel's chat key (RFC §5.7).
+    /// E.164, an email address lower-case (RFC §5.7).
+    ///
+    /// A message into a named room: a room that does not exist is created
+    /// with its id, `ON_ROOM_CREATED`'s hooks running, and finishing, before
+    /// the channel is attached with a binding naming the sender (RFC §10.1
+    /// step 2). A room that exists has the channel attached when it does not
+    /// bind it, unless it was detached from the room (RFC §7.5 rule 7).
+    /// Called from inside a call's work in the room it names, under the
+    /// room's lock or in its admission order (a hook, a channel's parse),
+    /// the message is adopted by that call instead of waiting for it: it
+    /// returns at its commit, with no delivery result, and its delivery set
+    /// follows in the room's lane (RFC §13.5, §9.5.1 Reentrance, §10.1 step
+    /// 18).
+    ///
+    /// A routed message goes to the sender's conversation on the channel, a
+    /// paused one included, which the message resumes, or to the one room
+    /// bound to the channel when it admits them, active, or paused with a
+    /// `group` binding; the sender is then recorded on the room's binding,
+    /// and a message no room was found for gets a new one, bound to its
+    /// sender. On a chat channel the conversation is the chat the message
+    /// was posted in, read under the channel's chat key (RFC §5.7). Called
+    /// from under a room's lock or in its admission order, by a hook, an
+    /// off-lock hook's body or a parse, a message routed back into that room
+    /// fails with [`KitError::Reentrant`]: its room is known only once
+    /// routed, too late for the call to be adopted (RFC §13.5).
     ///
     /// Inbound messages of one room overlap up to the room lock: they
     /// commit in lock order, each event taking its place in the room's
@@ -234,16 +254,12 @@ impl<S: ConversationStore> RoomKit<S> {
     /// cascade that delivers, so that a channel that calls into a room on
     /// every delivery stops at the cap (gap G-070), and returns at its
     /// decision when it comes into the room that turn or delivery works in.
-    /// Called from under a room's lock or in its admission order, by a hook,
-    /// an off-lock hook's body or a parse, a message routed back into that
-    /// room fails with [`KitError::Reentrant`]: its room is known only once
-    /// routed, too late for the call to be adopted (RFC §13.5). A call into
-    /// another room waits for its delivery as any call does: two rooms whose
-    /// deliveries call into each other at the same moment wait for each
-    /// other. Made within an agent's turn, the message is at least as deep
-    /// as the turn's response, whatever depth it was given (RFC §10.6), so
-    /// an agent that calls into its room on every turn stops at the
-    /// chain-depth limit, as its responses do (RFC §8.3).
+    /// A call into another room waits for its delivery as any call does: two
+    /// rooms whose deliveries call into each other at the same moment wait
+    /// for each other. Made within an agent's turn, the message is at least
+    /// as deep as the turn's response, whatever depth it was given (RFC
+    /// §10.6), so an agent that calls into its room on every turn stops at
+    /// the chain-depth limit, as its responses do (RFC §8.3).
     ///
     /// A `BEFORE_BROADCAST` hook registered with `needs_lock = false` runs
     /// before the room lock, ordered by the room's admission ticket, so the
@@ -263,88 +279,40 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// Returns [`KitError::Inbound`] when the pipeline refused or failed the
-    /// message before committing it, the router's failure among others, and
-    /// [`KitError::Reentrant`] for a call that would wait for itself.
+    /// message before committing it, with
+    /// [`InboundError::RoomNotFound`](crate::InboundError::RoomNotFound) for
+    /// a room of another organization and the router's failure among
+    /// others, and [`KitError::Reentrant`] for a call that would wait for
+    /// itself.
     pub async fn process_inbound(
         &self,
-        message: InboundMessage,
+        mut message: InboundMessage,
+        options: ProcessInboundOptions,
     ) -> Result<InboundResult, KitError> {
-        self.unscoped().process_inbound(message).await
-    }
-
-    /// Runs `message` through the inbound pipeline (RFC §10.1) into the
-    /// room `room_id`, and the whole cascade it starts, as
-    /// [`process_inbound`](Self::process_inbound) runs a routed message:
-    /// its sender written in the channel's form, the room's messages
-    /// overlapping up to its lock, its off-lock hooks, its
-    /// `process_timeout`, a turn's or a delivery's call and a dropped call
-    /// alike. The call reads the room unscoped, whatever its organization,
-    /// and a room it creates belongs to none (RFC §17.2); an organization's
-    /// [`process_inbound_in`](OrganizationKit::process_inbound_in) reaches
-    /// its own rooms only.
-    ///
-    /// A room that does not exist is created with its id: `ON_ROOM_CREATED`'s
-    /// hooks run, and finish, before the channel is attached with a binding
-    /// naming the sender (RFC §10.1 step 2). A room that exists has the
-    /// channel attached when it does not bind it, unless it was detached from
-    /// the room (RFC §7.5 rule 7).
-    ///
-    /// Called from inside a call's work in the room it names, under the
-    /// room's lock or in its admission order (a hook, a channel's parse),
-    /// the message is adopted by that call instead of waiting for it: it
-    /// returns at its commit, with no delivery result, and its delivery set
-    /// follows in the room's lane (RFC §13.5, §9.5.1 Reentrance, §10.1 step
-    /// 18).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KitError::Inbound`] when the pipeline refused or failed the
-    /// message before committing it, and [`KitError::Reentrant`] for a call
-    /// that would wait for itself.
-    pub async fn process_inbound_in(
-        &self,
-        room_id: &RoomId,
-        message: InboundMessage,
-    ) -> Result<InboundResult, KitError> {
-        self.unscoped().process_inbound_in(room_id, message).await
+        let ProcessInboundOptions {
+            room_id,
+            organization_id,
+        } = options;
+        let Some(room_id) = room_id else {
+            context::as_deep_as_its_turn(&mut message.chain_depth);
+            let routed = Inbound::new(
+                self.config(),
+                InboundTarget::Routed,
+                organization_id,
+                message,
+            );
+            return Ok(driver::run_inbound(&self.inner, PROCESS_INBOUND, None, routed).await??);
+        };
+        let entry = Entry::Message {
+            room_id,
+            organization_id,
+            message: Box::new(message),
+        };
+        self.enter(entry, PROCESS_INBOUND).await
     }
 
     fn config(&self) -> Arc<KitConfig> {
         Arc::clone(&read(&self.inner.config))
-    }
-}
-
-impl<S: ConversationStore> Scope<'_, S> {
-    /// Runs `message` into the room the router finds for it among the
-    /// scope's rooms, at least as deep as the turn it is made within, if
-    /// any (RFC §10.6).
-    async fn process_inbound(
-        &self,
-        mut message: InboundMessage,
-    ) -> Result<InboundResult, KitError> {
-        context::as_deep_as_its_turn(&mut message.chain_depth);
-        let inbound = Inbound::new(
-            self.kit.config(),
-            InboundTarget::Routed,
-            self.organization_id(),
-            message,
-        );
-        Ok(driver::run_inbound(&self.kit.inner, PROCESS_INBOUND, None, inbound).await??)
-    }
-
-    /// Runs `message` into the room `room_id` of the scope, adopted by the
-    /// call whose work in the room made it, when one did (RFC §13.5).
-    async fn process_inbound_in(
-        &self,
-        room_id: &RoomId,
-        message: InboundMessage,
-    ) -> Result<InboundResult, KitError> {
-        let entry = Entry::Message {
-            room_id: room_id.clone(),
-            organization_id: self.organization_id(),
-            message: Box::new(message),
-        };
-        self.kit.enter(entry, PROCESS_INBOUND_IN).await
     }
 }
 

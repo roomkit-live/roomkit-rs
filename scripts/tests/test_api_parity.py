@@ -595,6 +595,33 @@ class Entries(unittest.TestCase):
         self.assertEqual(found(report), [])
         self.assertEqual(report.moved, [])
 
+    def test_kwargs_stand_for_the_fields_a_map_entry_names(self) -> None:
+        spec = ["async def", "room_id", "access=<Access.READ_WRITE>", "**kwargs"]
+        report = run(
+            [
+                struct(
+                    "roomkit::RoomKit",
+                    methods=["pub async fn attach_channel(&self, room_id: &RoomId, options: AttachChannelOptions)"],
+                ),
+                struct(
+                    "roomkit::AttachChannelOptions",
+                    fields=[("access", "Access"), ("muted", "bool"), ("group", "bool"), ("extra", "u8")],
+                ),
+            ],
+            {"roomkit.RoomKit": {"attach_channel": spec}},
+            entries={
+                "map": [
+                    {
+                        "rust": "roomkit::RoomKit::attach_channel",
+                        "python": "roomkit.RoomKit.attach_channel",
+                        "params": {"muted": "kwargs", "group": "kwargs"},
+                        "py_spec": parity.spec_hash(spec),
+                    }
+                ]
+            },
+        )
+        self.assertEqual(found(report), [("rust", "roomkit::AttachChannelOptions::extra")])
+
     def test_a_map_entry_whose_python_spec_moved(self) -> None:
         report = run(
             [struct("roomkit::KitError", methods=["pub fn new() -> Self"])],

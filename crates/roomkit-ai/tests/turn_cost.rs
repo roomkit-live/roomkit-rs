@@ -28,7 +28,10 @@ use tokio::time::Instant;
 use roomkit::model::{ChannelId, ChannelType, DirectEvent, EventContent, InboundMessage, RoomId};
 use roomkit::testing::RecordingTransport;
 use roomkit::transcript::Role;
-use roomkit::{RoomKit, current_turn};
+use roomkit::{
+    AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    current_turn,
+};
 use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderResponse,
     ProviderStream, ProviderToolCall, ToolDefinition, ToolOutput, Tools,
@@ -94,7 +97,7 @@ fn kit(calls: bool, deltas: usize) -> RoomKit {
 
 /// The kit, its tool writing to the room through its turn when `writes`.
 fn kit_writing(calls: bool, deltas: usize, writes: bool) -> RoomKit {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     let lookup = ToolDefinition::new(
@@ -119,23 +122,49 @@ fn kit_writing(calls: bool, deltas: usize, writes: bool) -> RoomKit {
 
 async fn room(kit: &RoomKit, id: &str, history: usize) -> RoomId {
     let room = RoomId::new(id).unwrap();
-    kit.create_room(&room).await.unwrap();
-    kit.attach(&room, &channel("sms")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room, &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     for index in 0..history {
         let message = InboundMessage::new(
             channel("sms"),
             "+15550000001",
             EventContent::text(format!("Earlier message {index}")),
         );
-        kit.process_inbound_in(&room, message).await.unwrap();
+        kit.process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     }
-    kit.attach(&room, &channel("ai")).await.unwrap();
+    kit.attach_channel(&room, &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     room
 }
 
 async fn turn(kit: &RoomKit, room: &RoomId) {
     let message = InboundMessage::new(channel("sms"), "+15550000001", EventContent::text("What?"));
-    let result = kit.process_inbound_in(room, message).await.unwrap();
+    let result = kit
+        .process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     assert!(!result.blocked);
 }
 
@@ -181,7 +210,7 @@ async fn measure() {
     );
 
     // A buffered answer, no stream: the turn's fixed cost alone.
-    let echo = RoomKit::new(Default::default());
+    let echo = RoomKit::new(RoomKitOptions::default());
     echo.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     echo.register_channel(roomkit::testing::EchoAgent::new(channel("ai"), "Hello."))

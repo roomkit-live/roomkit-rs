@@ -35,7 +35,10 @@ use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId};
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, RoomKit, RoomKitOptions};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitOptions,
+};
 use roomkit_ai::{SkillRegistry, ToolPolicy};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use roomkit_sqlite::SqliteStore;
@@ -172,9 +175,18 @@ impl Shop {
         kit.register_channel(agent)?;
         let room = RoomId::new("returns")?;
         if kit.store().get_room(&room).await?.is_none() {
-            kit.create_room(&room).await?;
+            kit.create_room(CreateRoomOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            })
+            .await?;
             for channel in ["sms", "assistant"] {
-                kit.attach(&room, &ChannelId::new(channel)?).await?;
+                kit.attach_channel(
+                    &room,
+                    &ChannelId::new(channel)?,
+                    AttachChannelOptions::default(),
+                )
+                .await?;
             }
         }
         Ok(Self { kit, sms, room })
@@ -187,7 +199,15 @@ impl Shop {
             "+15551234567",
             EventContent::text(text),
         );
-        self.kit.process_inbound_in(&self.room, message).await?;
+        self.kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(self.room.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
         self.kit.idle().await;
         Ok(())
     }

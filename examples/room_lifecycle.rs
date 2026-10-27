@@ -4,7 +4,7 @@
 //! then archives it for good: a reopen or a close of the archived room is
 //! refused, since a room never leaves ARCHIVED, and archiving it again
 //! does nothing. A second room has timers: a minute without activity
-//! pauses it, two minutes paused close it, and `check_timers` applies both,
+//! pauses it, two minutes paused close it, and `check_all_timers` applies both,
 //! each at the instant it fell due.
 //! `ON_ROOM_PAUSED` and `ON_ROOM_CLOSED` fire with every transition.
 //!
@@ -19,12 +19,14 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventType, InboundMessage, Room, RoomId, RoomOptions,
-    RoomStatus,
+    ChannelId, ChannelType, EventContent, EventType, InboundMessage, Room, RoomId, RoomStatus,
+    RoomTimers,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    ConversationStore, FrameworkEvent, HookTrigger, InboundResult, KitError, LifecycleError,
+    ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CloseRoomOptions,
+    ConversationStore, CreateRoomOptions, FrameworkEvent, HookTrigger, InboundResult, KitError,
+    LifecycleError, PauseRoomOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions,
     RoomKit, TransitionReason, text_of,
 };
 
@@ -56,11 +58,20 @@ impl Helpdesk {
         })
     }
 
-    /// Creates `room` with `options`, Alice's SMS and the advisor attached.
-    async fn open(&self, room: &RoomId, options: RoomOptions) -> Result<(), Box<dyn Error>> {
-        self.kit.create_room_with(room, options).await?;
-        self.kit.attach(room, self.sms.id()).await?;
-        self.kit.attach(room, self.advisor.id()).await?;
+    /// Creates `room` with `timers`, Alice's SMS and the advisor attached.
+    async fn open(&self, room: &RoomId, timers: Option<RoomTimers>) -> Result<(), Box<dyn Error>> {
+        let options = CreateRoomOptions {
+            room_id: Some(room.clone()),
+            timers,
+            ..Default::default()
+        };
+        self.kit.create_room(options).await?;
+        self.kit
+            .attach_channel(room, self.sms.id(), AttachChannelOptions::default())
+            .await?;
+        self.kit
+            .attach_channel(room, self.advisor.id(), AttachChannelOptions::default())
+            .await?;
         Ok(())
     }
 
@@ -71,7 +82,16 @@ impl Helpdesk {
             "+15551234567",
             EventContent::text(text),
         );
-        Ok(self.kit.process_inbound_in(room, message).await?)
+        Ok(self
+            .kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?)
     }
 }
 
@@ -98,10 +118,10 @@ fn observe_transitions(kit: &RoomKit, transitions: &Log<String>) -> Result<(), B
 async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     let (kit, room) = (&desk.kit, RoomId::new("support")?);
     println!("The integrator runs the room `support` through its lifecycle.");
-    desk.open(&room, RoomOptions::default()).await?;
+    desk.open(&room, None).await?;
     desk.alice_says(&room, "Hello").await?;
 
-    let paused = kit.pause_room(&room).await?;
+    let paused = kit.pause_room(&room, PauseRoomOptions::default()).await?;
     println!("  Paused.");
     let while_paused = desk.alice_says(&room, "Anyone there?").await?;
     let after_message = kit.store().get_room(&room).await?;
@@ -112,15 +132,15 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
             && after_message.is_some_and(|room| room.status == RoomStatus::Active),
     );
 
-    kit.pause_room(&room).await?;
-    let resumed = kit.resume_room(&room).await?;
+    kit.pause_room(&room, PauseRoomOptions::default()).await?;
+    let resumed = kit.resume_room(&room, ResumeRoomOptions::default()).await?;
     println!("  Paused, then resumed by the integrator.");
     checks.expect(
         "the integrator resumes a paused room",
         resumed.status == RoomStatus::Active && resumed.paused_at.is_none(),
     );
 
-    kit.close_room(&room).await?;
+    kit.close_room(&room, CloseRoomOptions::default()).await?;
     println!("  Closed.");
     let while_closed = desk.alice_says(&room, "Hello?").await?;
     checks.expect(
@@ -130,7 +150,7 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
             && while_closed.event.is_none(),
     );
 
-    kit.reopen_room(&room).await?;
+    kit.reopen_room(&room, ReopenRoomOptions::default()).await?;
     println!("  Reopened.");
     let after_reopen = desk.alice_says(&room, "Back again").await?;
     checks.expect(
@@ -138,18 +158,24 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
         after_reopen.event.is_some(),
     );
 
-    kit.archive_room(&room).await?;
+    kit.archive_room(&room, ArchiveRoomOptions::default())
+        .await?;
     println!("  Archived.");
     let while_archived = desk.alice_says(&room, "Still here?").await?;
     checks.expect(
         "an archived room refuses messages as a closed one does",
         while_archived.reason.as_deref() == Some("room_closed"),
     );
-    let refused = [kit.reopen_room(&room).await, kit.close_room(&room).await];
+    let refused = [
+        kit.reopen_room(&room, ReopenRoomOptions::default()).await,
+        kit.close_room(&room, CloseRoomOptions::default()).await,
+    ];
     for error in refused.iter().filter_map(|result| result.as_ref().err()) {
         println!("  {error}.");
     }
-    let archived_again = kit.archive_room(&room).await?;
+    let archived_again = kit
+        .archive_room(&room, ArchiveRoomOptions::default())
+        .await?;
     checks.expect(
         "an archived room is never left: a reopen or a close is refused, a new archive does nothing",
         refused.iter().all(|result| {
@@ -180,20 +206,29 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
 async fn by_timers(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     let (kit, room) = (&desk.kit, RoomId::new("timed")?);
     println!("The room `timed` pauses after 60 s without activity, and closes 120 s later.");
-    let mut timers = RoomOptions::default();
-    timers.inactive_after_seconds = Some(60);
-    timers.closed_after_seconds = Some(120);
-    desk.open(&room, timers).await?;
+    let timers = RoomTimers {
+        inactive_after_seconds: Some(60),
+        closed_after_seconds: Some(120),
+        ..RoomTimers::default()
+    };
+    desk.open(&room, Some(timers)).await?;
     desk.alice_says(&room, "Hello").await?;
     let mut events = kit.subscribe();
 
     desk.clock.advance(Duration::from_secs(90));
-    let paused = kit.check_timers().await?;
-    println!("  90 s later, check_timers changes {:?}", statuses(&paused));
-    desk.clock.advance(Duration::from_secs(150));
-    let closed = kit.check_timers().await?;
+    let paused = kit
+        .check_all_timers(CheckAllTimersOptions::default())
+        .await?;
     println!(
-        "  240 s later, check_timers changes {:?}",
+        "  90 s later, check_all_timers changes {:?}",
+        statuses(&paused)
+    );
+    desk.clock.advance(Duration::from_secs(150));
+    let closed = kit
+        .check_all_timers(CheckAllTimersOptions::default())
+        .await?;
+    println!(
+        "  240 s later, check_all_timers changes {:?}",
         statuses(&closed)
     );
     let reported = shared::framework_events(&mut events);

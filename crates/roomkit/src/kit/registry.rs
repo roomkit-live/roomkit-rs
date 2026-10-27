@@ -40,7 +40,9 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(())
     }
 
-    /// Unregisters a channel, then emits `channel_unregistered` (RFC §8.2).
+    /// Unregisters a channel, then emits `channel_unregistered` (RFC §8.2);
+    /// a channel no one registered is left as it is, nothing emitted, as the
+    /// Python implementation's `unregister_channel` returns `None` then.
     ///
     /// A message on the channel is refused from now on. Its bindings stay in
     /// their rooms, as the store holds them: a delivery to one fails, and
@@ -50,21 +52,22 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::UnknownChannel`] when no channel has the id.
+    /// None today; the `Result` is the kit's calls' form.
     pub fn unregister_channel(&self, channel_id: &ChannelId) -> Result<(), KitError> {
-        let declaration = self.inner.try_change_config(|config| {
-            // Unregistering fails for an unknown channel only.
-            let declaration = config
-                .unregister_channel(channel_id)
-                .map_err(|_unknown| KitError::UnknownChannel(channel_id.clone()))?;
+        let unregistered = self.inner.try_change_config(|config| {
+            let Ok(declaration) = config.unregister_channel(channel_id) else {
+                return Ok::<_, KitError>(None);
+            };
             // No operation can see the declaration once the channel goes.
             write(&self.inner.channels).remove(channel_id);
-            Ok::<_, KitError>(declaration)
+            Ok(Some(declaration))
         })?;
-        self.inner.publish(FrameworkEvent::channel_unregistered(
-            declaration.channel_id,
-            declaration.channel_type,
-        ));
+        if let Some(declaration) = unregistered {
+            self.inner.publish(FrameworkEvent::channel_unregistered(
+                declaration.channel_id,
+                declaration.channel_type,
+            ));
+        }
         Ok(())
     }
 

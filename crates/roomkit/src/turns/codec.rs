@@ -166,9 +166,9 @@ pub(crate) fn send_event_arguments(
         participant_id: event.participant_id,
         metadata: Some(event.metadata),
         visibility: event.visibility,
-        provider: None,
+        provider: event.provider,
         response_visibility: event.response_visibility,
-        created_at: None,
+        created_at: event.created_at,
         parent_event_id: event.parent_event_id,
         idempotency_key: event.idempotency_key,
         addressed_to: event.addressed_to,
@@ -186,24 +186,21 @@ pub(crate) fn send_event_arguments(
 ///
 /// # Errors
 ///
-/// Arguments the verb does not take, or that do not read, refuse it; so do
-/// a provider and an instant, which a direct event of this implementation
-/// does not carry.
+/// Arguments the verb does not take, or that do not read, refuse it.
 pub(crate) fn decode_send_event(
     arguments: Metadata,
 ) -> Result<(RoomId, Option<String>, DirectEvent), String> {
     let arguments: SendEvent =
         serde_json::from_value(Value::Object(arguments)).map_err(|error| error.to_string())?;
-    if arguments.provider.is_some() || arguments.created_at.is_some() {
-        return Err("send_event takes no provider and no created_at here".to_owned());
-    }
     let event = DirectEvent {
         channel_id: arguments.channel_id,
         content: arguments.content,
         event_type: arguments.event_type,
         participant_id: arguments.participant_id,
         visibility: arguments.visibility,
+        provider: arguments.provider,
         response_visibility: arguments.response_visibility,
+        created_at: arguments.created_at,
         addressed_to: arguments.addressed_to,
         parent_event_id: arguments.parent_event_id,
         idempotency_key: arguments.idempotency_key,

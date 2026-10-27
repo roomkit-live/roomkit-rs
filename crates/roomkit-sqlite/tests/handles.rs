@@ -14,7 +14,10 @@ use std::path::Path;
 
 use roomkit::model::{ChannelId, ChannelType, RoomId};
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, HookTrigger, RoomKit, RoomKitOptions};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookTrigger, RoomKit,
+    RoomKitOptions,
+};
 use roomkit_sqlite::SqliteStore;
 
 use crate::support::TempFile;
@@ -64,16 +67,25 @@ async fn left_after_drop(held: Held) -> (bool, usize) {
                 .or_else(|| weak.as_ref().and_then(roomkit::WeakRoomKit::upgrade));
             async move {
                 if let Some(kit) = kit {
-                    kit.attach(&event.room_id, &ChannelId::new("websocket").unwrap())
-                        .await
-                        .unwrap();
+                    kit.attach_channel(
+                        &event.room_id,
+                        &ChannelId::new("websocket").unwrap(),
+                        AttachChannelOptions::default(),
+                    )
+                    .await
+                    .unwrap();
                 }
             }
         },
     )
     .unwrap();
     let room = RoomId::new("room_1").unwrap();
-    kit.create_room(&room).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     kit.idle().await;
     let bindings = kit.store().list_bindings(&room).await.unwrap();
     let attached = bindings

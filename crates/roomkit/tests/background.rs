@@ -16,7 +16,11 @@ use roomkit::model::{
     EventContent, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{Channel, ChannelDeclaration, ChannelError, HookTrigger, KitError, RoomKit, text_of};
+use roomkit::{
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CheckAllTimersOptions,
+    CreateRoomOptions, HookTrigger, KitError, PauseRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitOptions, text_of,
+};
 use tokio::sync::Notify;
 
 /// How long a call that should not wait may take before the test fails it.
@@ -40,11 +44,18 @@ fn message(text: &str) -> InboundMessage {
 
 /// A kit with an SMS transport attached to `room_1`.
 async fn room() -> RoomKit {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.attach(&room_id(), &channel("sms")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     kit
 }
 
@@ -133,9 +144,15 @@ async fn idle_waits_for_an_observer_hook_running_after_its_call() {
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), message("Bonjour"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message("Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     tokio::time::timeout(BOUND, gate.reached.notified())
         .await
         .unwrap();
@@ -152,9 +169,21 @@ async fn idle_waits_for_a_call_that_goes_on_detached() {
     let kit = room().await;
     let slow = Gated::new();
     kit.register_channel(slow.clone()).unwrap();
-    kit.attach(&room_id(), &channel("slow")).await.unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("slow"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
     let room = room_id();
-    let call = kit.process_inbound_in(&room, message("Bonjour"));
+    let call = kit.process_inbound(
+        message("Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        },
+    );
     tokio::select! {
         result = call => panic!("the call ended before its delivery: {result:?}"),
         () = slow.gate.reached.notified() => {}
@@ -185,7 +214,16 @@ async fn shutdown_ends_a_call_running_and_its_caller_receives_shut_down() {
     .unwrap();
     let call = {
         let kit = kit.clone();
-        tokio::spawn(async move { kit.process_inbound_in(&room_id(), message("Bonjour")).await })
+        tokio::spawn(async move {
+            kit.process_inbound(
+                message("Bonjour"),
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
+            .await
+        })
     };
     tokio::time::timeout(BOUND, gate.reached.notified())
         .await
@@ -210,9 +248,15 @@ async fn shutdown_drops_an_observer_hook_still_running() {
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), message("Bonjour"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message("Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     tokio::time::timeout(BOUND, gate.reached.notified())
         .await
         .unwrap();
@@ -229,13 +273,30 @@ async fn a_call_made_after_the_shutdown_is_refused() {
     kit.shutdown().await;
     let room = room_id();
     let refused = (
-        kit.process_inbound_in(&room, message("Bonjour"))
+        kit.process_inbound(
+            message("Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .err(),
+        kit.process_inbound(message("Bonjour"), ProcessInboundOptions::default())
             .await
             .err(),
-        kit.process_inbound(message("Bonjour")).await.err(),
-        kit.create_room(&RoomId::new("room_2").unwrap()).await.err(),
-        kit.pause_room(&room).await.err(),
-        kit.check_timers().await.err(),
+        kit.create_room(CreateRoomOptions {
+            room_id: Some((RoomId::new("room_2").unwrap()).clone()),
+            ..Default::default()
+        })
+        .await
+        .err(),
+        kit.pause_room(&room, PauseRoomOptions::default())
+            .await
+            .err(),
+        kit.check_all_timers(CheckAllTimersOptions::default())
+            .await
+            .err(),
     );
     let registered = kit
         .register_channel(RecordingTransport::new(
@@ -295,7 +356,7 @@ impl Channel for Closing {
 /// beside the first joins it.
 #[tokio::test]
 async fn shutdown_closes_each_channel_once_in_the_order_of_their_ids() {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let closed = Arc::new(Mutex::new(Vec::new()));
     for id in ["ws_b", "ws_a"] {
         kit.register_channel(Closing::new(id, &closed)).unwrap();

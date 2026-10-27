@@ -13,17 +13,19 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    Access, AgentResponsePolicy, BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection,
-    ChannelId, ChannelMediaType, ChannelOutput, ChannelType, DirectEvent, EventContent,
-    EventDirection, EventId, EventSource, EventType, EventUpdates, HookResult, Identity,
-    IdentityId, InboundMessage, Observation, Participant, ParticipantId, Post, Room, RoomContext,
-    RoomEvent, RoomId, RoomOptions, RoomUpdates, Task, Timestamp,
+    Access, AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId,
+    ChannelMediaType, ChannelOutput, ChannelType, EventContent, EventDirection, EventId,
+    EventSource, EventType, EventUpdates, HookResult, Identity, IdentityId, InboundMessage,
+    Metadata, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId,
+    RoomUpdates, Task, Timestamp,
 };
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConfigError, ConversationStore, EventFilter,
-    EventQuery, FrameworkEvent, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore,
-    InboundError, KitError, LifecycleError, RoomCounters, RoomFilter, RoomKit, RoomKitOptions,
-    StoreError, TargetUpdate, text_of,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
+    CommitEventOptions, ConfigError, ConversationStore, CreateRoomOptions, DetachChannelOptions,
+    EventFilter, EventQuery, FrameworkEvent, HookExecution, HookSpec, HookTrigger, HostChannel,
+    InMemoryStore, InboundError, KitError, LifecycleError, PostOptions, ProcessInboundOptions,
+    RoomCounters, RoomFilter, RoomKit, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
+    text_of,
 };
 use tokio::sync::Notify;
 
@@ -196,27 +198,25 @@ impl Channel for CountingHost {
 async fn sms_room<S: ConversationStore>(
     kit: &RoomKit<S>,
     organization: Option<&str>,
-    options: RoomOptions,
+    options: CreateRoomOptions,
 ) -> Sms {
     let sms = Sms::default();
     kit.register_channel(sms.clone()).unwrap();
-    let mut binding = BindingOptions::default();
-    binding
-        .metadata
-        .insert("phone_number".to_owned(), CUSTOMER.into());
-    if let Some(organization) = organization {
-        let owner = kit.for_organization(organization);
-        owner.create_room_with(&room_id(), options).await.unwrap();
-        owner
-            .attach_with(&room_id(), &channel("sms"), binding)
-            .await
-            .unwrap();
-    } else {
-        kit.create_room_with(&room_id(), options).await.unwrap();
-        kit.attach_with(&room_id(), &channel("sms"), binding)
-            .await
-            .unwrap();
-    }
+    let organization_id = organization.map(str::to_owned);
+    let options = CreateRoomOptions {
+        room_id: Some(room_id()),
+        organization_id: organization_id.clone(),
+        ..options
+    };
+    kit.create_room(options).await.unwrap();
+    let binding = AttachChannelOptions {
+        organization_id,
+        metadata: Metadata::from_iter([("phone_number".to_owned(), CUSTOMER.into())]),
+        ..Default::default()
+    };
+    kit.attach_channel(&room_id(), &channel("sms"), binding)
+        .await
+        .unwrap();
     sms
 }
 
@@ -263,23 +263,26 @@ fn participant(id: &str, channel_id: &str) -> Participant {
 #[tokio::test]
 async fn a_post_texts_the_correspondent_and_solicits_no_agent() {
     for organization in [None, Some("acme")] {
-        let kit = RoomKit::new(Default::default());
-        let sms = sms_room(&kit, organization, RoomOptions::default()).await;
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let sms = sms_room(&kit, organization, CreateRoomOptions::default()).await;
         let agent = Agent::new("assistant", "should not answer");
         kit.register_channel(agent.clone()).unwrap();
-        kit.attach(&room_id(), &channel("assistant")).await.unwrap();
-        let mut post = Post::new(text("Your order shipped."));
-        post.metadata
-            .insert("job".to_owned(), "shipping-notice".into());
-        let event = match organization {
-            Some(organization) => {
-                kit.for_organization(organization)
-                    .post(&room_id(), post)
-                    .await
-            }
-            None => kit.post(&room_id(), post).await,
-        }
+        kit.attach_channel(
+            &room_id(),
+            &channel("assistant"),
+            AttachChannelOptions::default(),
+        )
+        .await
         .unwrap();
+        let post = PostOptions {
+            metadata: Metadata::from_iter([("job".to_owned(), "shipping-notice".into())]),
+            organization_id: organization.map(str::to_owned),
+            ..Default::default()
+        };
+        let event = kit
+            .post(&room_id(), text("Your order shipped."), post)
+            .await
+            .unwrap();
         kit.idle().await;
         let host = binding_of(&kit, "host").await.unwrap();
         assert_eq!(
@@ -311,22 +314,36 @@ async fn a_post_texts_the_correspondent_and_solicits_no_agent() {
 /// answer reaches the customer.
 #[tokio::test]
 async fn a_post_addressed_to_an_agent_is_answered_and_names_its_speaker() {
-    let kit = RoomKit::new(Default::default());
-    let sms = sms_room(&kit, None, RoomOptions::default()).await;
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let sms = sms_room(&kit, None, CreateRoomOptions::default()).await;
     let agent = Agent::new("assistant", "It left the warehouse today.");
     kit.register_channel(agent.clone()).unwrap();
-    kit.attach(&room_id(), &channel("assistant")).await.unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("assistant"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
     let host = CountingHost::new("desk-host");
     kit.register_channel(host.clone()).unwrap();
     kit.store()
         .create_participant(participant("desk", "desk-host"))
         .await
         .unwrap();
-    let mut post = Post::new(text("Tell the customer where the order is."));
-    post.participant_id = Some(ParticipantId::new("desk").unwrap());
-    post.addressed_to = vec![channel("assistant")];
-    post.channel_id = Some(channel("desk-host"));
-    kit.post(&room_id(), post).await.unwrap();
+    let post = PostOptions {
+        participant_id: Some(ParticipantId::new("desk").unwrap()),
+        addressed_to: vec![channel("assistant")],
+        channel_id: Some(channel("desk-host")),
+        ..Default::default()
+    };
+    kit.post(
+        &room_id(),
+        text("Tell the customer where the order is."),
+        post,
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     let asked = agent.asked();
     assert_eq!(
@@ -356,14 +373,18 @@ async fn a_post_addressed_to_an_agent_is_answered_and_names_its_speaker() {
 /// concurrent first posts attach the host channel once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_first_posts_attach_the_host_channel_once() {
-    let kit = RoomKit::new(Default::default());
-    sms_room(&kit, None, RoomOptions::default()).await;
+    let kit = RoomKit::new(RoomKitOptions::default());
+    sms_room(&kit, None, CreateRoomOptions::default()).await;
     let mut events = kit.subscribe();
     let posts = (0..5).map(|n| {
         let kit = kit.clone();
         tokio::spawn(async move {
-            kit.post(&room_id(), Post::new(text(&format!("Notice {n}."))))
-                .await
+            kit.post(
+                &room_id(),
+                text(&format!("Notice {n}.")),
+                PostOptions::default(),
+            )
+            .await
         })
     });
     for post in posts.collect::<Vec<_>>() {
@@ -387,25 +408,32 @@ async fn concurrent_first_posts_attach_the_host_channel_once() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_host_binding_the_integrator_sets_keeps_its_settings() {
     for concurrently in [false, true] {
-        let kit = RoomKit::new(Default::default());
-        sms_room(&kit, None, RoomOptions::default()).await;
+        let kit = RoomKit::new(RoomKitOptions::default());
+        sms_room(&kit, None, CreateRoomOptions::default()).await;
         kit.register_channel(HostChannel::new()).unwrap();
-        let mut options = BindingOptions::default();
-        options.access = Access::WriteOnly;
+        let mut options = AttachChannelOptions {
+            access: Access::WriteOnly,
+            ..Default::default()
+        };
         options.metadata.insert("desk".to_owned(), "1".into());
         let attaching = {
             let kit = kit.clone();
-            async move { kit.attach_with(&room_id(), &channel("host"), options).await }
+            async move {
+                kit.attach_channel(&room_id(), &channel("host"), options)
+                    .await
+            }
         };
         if concurrently {
             let room = room_id();
-            let (attached, posted) =
-                tokio::join!(attaching, kit.post(&room, Post::new(text("Notice."))));
+            let (attached, posted) = tokio::join!(
+                attaching,
+                kit.post(&room, text("Notice."), PostOptions::default())
+            );
             attached.unwrap();
             posted.unwrap();
         } else {
             attaching.await.unwrap();
-            kit.post(&room_id(), Post::new(text("Notice.")))
+            kit.post(&room_id(), text("Notice."), PostOptions::default())
                 .await
                 .unwrap();
         }
@@ -429,12 +457,21 @@ async fn a_first_post_waits_for_the_room_lock_within_process_timeout() {
     kit.store().read.arm();
     let holder = {
         let kit = kit.clone();
-        tokio::spawn(async move { kit.commit_event(&room_id(), record("A record.")).await })
+        tokio::spawn(async move {
+            kit.commit_event(
+                &room_id(),
+                record("A record."),
+                CommitEventOptions::default(),
+            )
+            .await
+        })
     };
     kit.store().read.reached.notified().await;
     let before = written(&kit).await;
     let mut events = kit.subscribe();
-    let refused = kit.post(&room_id(), Post::new(text("Notice."))).await;
+    let refused = kit
+        .post(&room_id(), text("Notice."), PostOptions::default())
+        .await;
     let after = written(&kit).await;
     kit.store().read.open.notify_one();
     holder.await.unwrap().unwrap();
@@ -474,27 +511,44 @@ fn record(body: &str) -> RoomEvent {
 async fn the_host_s_words_are_a_person_s_message_to_the_room_s_routing() {
     let mut turns = Vec::new();
     for speak in ["post", "post to a", "unaddressed"] {
-        let kit = RoomKit::new(Default::default());
-        let mut options = RoomOptions::default();
-        options.agent_response_policy = AgentResponsePolicy::AddressedOnly;
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let options = CreateRoomOptions {
+            agent_response_policy: Some(AgentResponsePolicy::AddressedOnly),
+            ..Default::default()
+        };
         let sms = sms_room(&kit, None, options).await;
         let (a, b) = (Agent::new("a", "A says."), Agent::new("b", "B says."));
         for agent in [&a, &b] {
             kit.register_channel(agent.clone()).unwrap();
-            kit.attach(&room_id(), &agent.id).await.unwrap();
-        }
-        if speak == "unaddressed" {
-            kit.post(&room_id(), Post::new(text("Your order shipped.")))
+            kit.attach_channel(&room_id(), &agent.id, AttachChannelOptions::default())
                 .await
                 .unwrap();
-            let unaddressed = DirectEvent::new(channel("host"), text("Any question?"));
-            kit.send_event(&room_id(), unaddressed).await.unwrap();
+        }
+        if speak == "unaddressed" {
+            kit.post(
+                &room_id(),
+                text("Your order shipped."),
+                PostOptions::default(),
+            )
+            .await
+            .unwrap();
+            let unaddressed = SendEventOptions::default();
+            kit.send_event(
+                &room_id(),
+                &channel("host"),
+                text("Any question?"),
+                unaddressed,
+            )
+            .await
+            .unwrap();
         } else {
-            let mut post = Post::new(text("Any question?"));
+            let mut post = PostOptions::default();
             if speak == "post to a" {
                 post.addressed_to = vec![channel("a")];
             }
-            kit.post(&room_id(), post).await.unwrap();
+            kit.post(&room_id(), text("Any question?"), post)
+                .await
+                .unwrap();
         }
         kit.idle().await;
         let texted = sms
@@ -518,24 +572,38 @@ enum Setup {
 }
 
 async fn set_up(kit: &RoomKit, setup: Setup) {
-    let notice = || {
-        let mut post = Post::new(text("An earlier notice."));
-        post.idempotency_key = Some("notice".to_owned());
-        post
+    let acme = || Some("acme".to_owned());
+    let notice = || async {
+        let options = PostOptions {
+            idempotency_key: Some("notice".to_owned()),
+            organization_id: acme(),
+            ..Default::default()
+        };
+        kit.post(&room_id(), text("An earlier notice."), options)
+            .await
+            .unwrap();
     };
-    let acme = kit.for_organization("acme");
+    let close = || async {
+        let options = CloseRoomOptions {
+            organization_id: acme(),
+        };
+        kit.close_room(&room_id(), options).await.unwrap();
+    };
     match setup {
         Setup::Nothing => {}
         Setup::DetachAfterAPost => {
-            acme.post(&room_id(), notice()).await.unwrap();
-            acme.detach(&room_id(), &channel("host")).await.unwrap();
+            notice().await;
+            let options = DetachChannelOptions {
+                organization_id: acme(),
+            };
+            kit.detach_channel(&room_id(), &channel("host"), options)
+                .await
+                .unwrap();
         }
-        Setup::Close => {
-            acme.close_room(&room_id()).await.unwrap();
-        }
+        Setup::Close => close().await,
         Setup::CloseAfterAPost => {
-            acme.post(&room_id(), notice()).await.unwrap();
-            acme.close_room(&room_id()).await.unwrap();
+            notice().await;
+            close().await;
         }
         Setup::TakeTheHostId => {
             kit.register_channel(Agent::new("host", "unused")).unwrap();
@@ -549,16 +617,20 @@ async fn set_up(kit: &RoomKit, setup: Setup) {
         Setup::AnAgent => {
             kit.register_channel(Agent::new("assistant", "unused"))
                 .unwrap();
-            acme.attach(&room_id(), &channel("assistant"))
+            let options = AttachChannelOptions {
+                organization_id: acme(),
+                ..Default::default()
+            };
+            kit.attach_channel(&room_id(), &channel("assistant"), options)
                 .await
                 .unwrap();
         }
     }
 }
 
-/// What a refused post changes of its arguments, the organization it is
-/// made for among them.
-type Arguments = fn(&mut Post, &mut Option<&str>);
+/// What a refused post changes of its options, the organization it is made
+/// for among them.
+type Arguments = fn(&mut PostOptions);
 
 /// The posts refused before anything is written, with what sets each one
 /// up and its error (RFC §10.5).
@@ -581,75 +653,75 @@ fn refusals() -> Vec<(&'static str, Setup, Arguments, KitError)> {
         (
             "a channel of another type",
             Setup::Nothing,
-            |post, _| post.channel_id = Some(channel("sms")),
+            |post| post.channel_id = Some(channel("sms")),
             KitError::Inbound(InboundError::NotAHostChannel(channel("sms"))),
         ),
         (
             "an unregistered channel",
             Setup::Nothing,
-            |post, _| post.channel_id = Some(channel("ghost")),
+            |post| post.channel_id = Some(channel("ghost")),
             KitError::Inbound(InboundError::UnknownChannel(channel("ghost"))),
         ),
         (
             "host taken by another type",
             Setup::TakeTheHostId,
-            |_, _| {},
+            |_| {},
             KitError::Inbound(InboundError::NotAHostChannel(channel("host"))),
         ),
         (
             "a closed room",
             Setup::Close,
-            |_, _| {},
+            |_| {},
             refused("room_closed"),
         ),
         (
             "a detached host channel",
             Setup::DetachAfterAPost,
-            |_, _| {},
+            |_| {},
             refused("source_unbound"),
         ),
         (
             "a replay into a room closed since",
             Setup::CloseAfterAPost,
-            |post, _| post.idempotency_key = Some("notice".to_owned()),
+            |post| post.idempotency_key = Some("notice".to_owned()),
             refused("room_closed"),
         ),
         (
             "a replay after a detach",
             Setup::DetachAfterAPost,
-            |post, _| post.idempotency_key = Some("notice".to_owned()),
+            |post| post.idempotency_key = Some("notice".to_owned()),
             refused("source_unbound"),
         ),
         (
             "another organization's room",
             Setup::Nothing,
-            |_, organization| *organization = Some("other"),
+            |post| post.organization_id = Some("other".to_owned()),
             not_found(),
         ),
         (
             "an unknown speaker",
             Setup::Nothing,
-            |post, _| post.participant_id = Some(ParticipantId::new("ghost").unwrap()),
+            |post| post.participant_id = Some(ParticipantId::new("ghost").unwrap()),
             unreached("ghost", false),
         ),
         (
             "a speaker reached through SMS only",
             Setup::CustomerOnSms,
-            |post, _| post.participant_id = Some(ParticipantId::new(CUSTOMER).unwrap()),
+            |post| post.participant_id = Some(ParticipantId::new(CUSTOMER).unwrap()),
             unreached(CUSTOMER, true),
         ),
         (
             "an agent's channel id as the speaker",
             Setup::AnAgent,
-            |post, _| post.participant_id = Some(ParticipantId::new("assistant").unwrap()),
+            |post| post.participant_id = Some(ParticipantId::new("assistant").unwrap()),
             unreached("assistant", false),
         ),
         (
             "an unknown speaker in another organization's room",
             Setup::Nothing,
-            |post, organization| {
+            |post| {
                 post.participant_id = Some(ParticipantId::new("ghost").unwrap());
-                *organization = Some("other");
+                post.organization_id = Some("other".to_owned());
             },
             not_found(),
         ),
@@ -662,21 +734,16 @@ fn refusals() -> Vec<(&'static str, Setup, Arguments, KitError)> {
 #[tokio::test]
 async fn a_refused_post_writes_nothing() {
     for (case, setup, arguments, expected) in refusals() {
-        let kit = RoomKit::new(Default::default());
-        let sms = sms_room(&kit, Some("acme"), RoomOptions::default()).await;
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let sms = sms_room(&kit, Some("acme"), CreateRoomOptions::default()).await;
         set_up(&kit, setup).await;
         let (before, texted) = (written(&kit).await, sms.sent());
-        let mut post = Post::new(text("Never sent."));
-        let mut organization = Some("acme");
-        arguments(&mut post, &mut organization);
-        let posted = match organization {
-            Some(organization) => {
-                kit.for_organization(organization)
-                    .post(&room_id(), post)
-                    .await
-            }
-            None => kit.post(&room_id(), post).await,
+        let mut post = PostOptions {
+            organization_id: Some("acme".to_owned()),
+            ..Default::default()
         };
+        arguments(&mut post);
+        let posted = kit.post(&room_id(), text("Never sent."), post).await;
         kit.idle().await;
         let error = match posted {
             Err(error) => error,
@@ -693,14 +760,21 @@ async fn a_refused_post_writes_nothing() {
 /// RFC §10.5: the refusal of a speaker says why.
 #[tokio::test]
 async fn a_refused_speaker_is_told_why() {
-    let kit = RoomKit::new(Default::default());
-    sms_room(&kit, None, RoomOptions::default()).await;
+    let kit = RoomKit::new(RoomKitOptions::default());
+    sms_room(&kit, None, CreateRoomOptions::default()).await;
     set_up(&kit, Setup::CustomerOnSms).await;
     let mut told = Vec::new();
     for speaker in ["ghost", CUSTOMER] {
-        let mut post = Post::new(text("Never sent."));
-        post.participant_id = Some(ParticipantId::new(speaker).unwrap());
-        told.push(kit.post(&room_id(), post).await.unwrap_err().to_string());
+        let post = PostOptions {
+            participant_id: Some(ParticipantId::new(speaker).unwrap()),
+            ..Default::default()
+        };
+        told.push(
+            kit.post(&room_id(), text("Never sent."), post)
+                .await
+                .unwrap_err()
+                .to_string(),
+        );
     }
     assert!(
         told[0].ends_with("ghost names nobody of the room")
@@ -717,8 +791,8 @@ async fn a_refused_speaker_is_told_why() {
 async fn a_post_speaks_as_a_participant_its_host_channel_reaches() {
     let mut spoken = Vec::new();
     for speaker in ["desk", "id-desk", CUSTOMER, ""] {
-        let kit = RoomKit::new(Default::default());
-        let sms = sms_room(&kit, None, RoomOptions::default()).await;
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let sms = sms_room(&kit, None, CreateRoomOptions::default()).await;
         let mut desk = participant("desk", "host");
         desk.identity_id = Some(IdentityId::new("id-desk").unwrap());
         let mut customer = participant(CUSTOMER, "sms");
@@ -726,9 +800,14 @@ async fn a_post_speaks_as_a_participant_its_host_channel_reaches() {
         for member in [desk, customer] {
             kit.store().create_participant(member).await.unwrap();
         }
-        let mut post = Post::new(text("Your order shipped."));
-        post.participant_id = (!speaker.is_empty()).then(|| ParticipantId::new(speaker).unwrap());
-        let event = kit.post(&room_id(), post).await.unwrap();
+        let post = PostOptions {
+            participant_id: (!speaker.is_empty()).then(|| ParticipantId::new(speaker).unwrap()),
+            ..Default::default()
+        };
+        let event = kit
+            .post(&room_id(), text("Your order shipped."), post)
+            .await
+            .unwrap();
         kit.idle().await;
         spoken.push((
             event.source.participant_id.map(String::from),
@@ -752,16 +831,26 @@ async fn a_post_speaks_as_a_participant_its_host_channel_reaches() {
 /// opened, nothing attached.
 #[tokio::test]
 async fn a_message_on_the_host_channel_is_refused_before_anything_is_written() {
-    let kit = RoomKit::new(Default::default());
-    sms_room(&kit, None, RoomOptions::default()).await;
-    kit.post(&room_id(), Post::new(text("Notice.")))
+    let kit = RoomKit::new(RoomKitOptions::default());
+    sms_room(&kit, None, CreateRoomOptions::default()).await;
+    kit.post(&room_id(), text("Notice."), PostOptions::default())
         .await
         .unwrap();
     kit.idle().await;
     let before = written(&kit).await;
     let message = || InboundMessage::new(channel("host"), "x", text("hi"));
-    let named = kit.process_inbound_in(&room_id(), message()).await;
-    let routed = kit.process_inbound(message()).await;
+    let named = kit
+        .process_inbound(
+            message(),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await;
+    let routed = kit
+        .process_inbound(message(), ProcessInboundOptions::default())
+        .await;
     let rooms = kit
         .store()
         .list_rooms(&RoomFilter::default())
@@ -795,7 +884,7 @@ impl Channel for Claiming {
 async fn a_channel_claiming_a_reserved_type_is_refused() {
     use ChannelCategory::{Intelligence, Transport};
     use ChannelDirection::{Bidirectional, Inbound};
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let claims = [
         Claiming(ChannelType::HOST, Intelligence, Inbound),
         Claiming(ChannelType::HOST, Transport, Bidirectional),
@@ -832,12 +921,16 @@ async fn a_channel_claiming_a_reserved_type_is_refused() {
 /// names, is refused, nothing bound.
 #[tokio::test]
 async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
-    let kit = RoomKit::new(Default::default());
-    sms_room(&kit, None, RoomOptions::default()).await;
+    let kit = RoomKit::new(RoomKitOptions::default());
+    sms_room(&kit, None, CreateRoomOptions::default()).await;
     kit.register_channel(HostChannel::new()).unwrap();
-    let mut options = BindingOptions::default();
-    options.category = Some(ChannelCategory::Intelligence);
-    let attached = kit.attach_with(&room_id(), &channel("host"), options).await;
+    let options = AttachChannelOptions {
+        category: Some(ChannelCategory::Intelligence),
+        ..Default::default()
+    };
+    let attached = kit
+        .attach_channel(&room_id(), &channel("host"), options)
+        .await;
     assert_eq!(
         (attached.err(), binding_of(&kit, "host").await.is_none()),
         (
@@ -855,15 +948,15 @@ async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
 async fn a_post_replayed_with_its_key_is_not_texted_again() {
     let mut replays = Vec::new();
     for (key, texts) in [("notice-1042", 1), ("", 2), ("   ", 2)] {
-        let kit = RoomKit::new(Default::default());
-        let sms = sms_room(&kit, None, RoomOptions::default()).await;
-        let post = || {
-            let mut post = Post::new(text("Your order shipped."));
-            post.idempotency_key = Some(key.to_owned());
-            post
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let sms = sms_room(&kit, None, CreateRoomOptions::default()).await;
+        let post = || PostOptions {
+            idempotency_key: Some(key.to_owned()),
+            ..Default::default()
         };
-        let first = kit.post(&room_id(), post()).await.unwrap();
-        let again = kit.post(&room_id(), post()).await.unwrap();
+        let shipped = || text("Your order shipped.");
+        let first = kit.post(&room_id(), shipped(), post()).await.unwrap();
+        let again = kit.post(&room_id(), shipped(), post()).await.unwrap();
         kit.idle().await;
         replays.push((
             (sms.sent().len(), again.id == first.id),
@@ -886,7 +979,7 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
             max_chain_depth: 1,
             ..Default::default()
         });
-        sms_room(&kit, None, RoomOptions::default()).await;
+        sms_room(&kit, None, CreateRoomOptions::default()).await;
         let posted = Arc::new(Mutex::new(Vec::new()));
         let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
         let mut framework = kit.subscribe();
@@ -897,13 +990,19 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
             async move {
                 if event.source.channel_id == channel("sms") {
                     for _ in 0..12 {
-                        let mut ack = Post::new(text("Received."));
-                        ack.idempotency_key = Some("ack".to_owned());
-                        let event = kit.post(&room_id(), ack).await?;
+                        let ack = PostOptions {
+                            idempotency_key: Some("ack".to_owned()),
+                            ..Default::default()
+                        };
+                        let event = kit.post(&room_id(), text("Received."), ack).await?;
                         posted.lock().unwrap().push(event.id);
                     }
                     let event = kit
-                        .post(&room_id(), Post::new(text("We answer within the hour.")))
+                        .post(
+                            &room_id(),
+                            text("We answer within the hour."),
+                            PostOptions::default(),
+                        )
                         .await?;
                     posted.lock().unwrap().push(event.id);
                 }
@@ -914,7 +1013,13 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
         let message = InboundMessage::new(channel("sms"), CUSTOMER, text("Hello?"));
         tokio::time::timeout(
             Duration::from_secs(5),
-            kit.process_inbound_in(&room_id(), message),
+            kit.process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            ),
         )
         .await
         .unwrap()
@@ -1221,7 +1326,7 @@ async fn gated_room(process_timeout: Duration) -> (RoomKit<GatedStore>, Sms) {
         process_timeout,
         ..RoomKitOptions::with_store(GatedStore::default())
     });
-    let sms = sms_room(&kit, None, RoomOptions::default()).await;
+    let sms = sms_room(&kit, None, CreateRoomOptions::default()).await;
     (kit, sms)
 }
 
@@ -1256,7 +1361,10 @@ async fn a_first_post_s_attach_spends_the_deadline_its_message_shares() {
     kit.store().binding.arm();
     let posting = {
         let kit = kit.clone();
-        tokio::spawn(async move { kit.post(&room_id(), Post::new(text("Notice."))).await })
+        tokio::spawn(async move {
+            kit.post(&room_id(), text("Notice."), PostOptions::default())
+                .await
+        })
     };
     kit.store().binding.reached.notified().await;
     tokio::time::sleep(Duration::from_millis(80)).await;
@@ -1293,7 +1401,10 @@ async fn a_cancelled_first_post_attaches_the_host_channel_to_its_end() {
     kit.store().binding.arm();
     let posting = {
         let kit = kit.clone();
-        tokio::spawn(async move { kit.post(&room_id(), Post::new(text("Notice."))).await })
+        tokio::spawn(async move {
+            kit.post(&room_id(), text("Notice."), PostOptions::default())
+                .await
+        })
     };
     kit.store().binding.reached.notified().await;
     posting.abort();
@@ -1319,7 +1430,9 @@ async fn a_first_post_s_read_of_its_room_waits_within_process_timeout() {
     let (kit, sms) = gated_room(Duration::from_millis(50)).await;
     let before = written(&kit).await;
     kit.store().read.arm();
-    let refused = kit.post(&room_id(), Post::new(text("Notice."))).await;
+    let refused = kit
+        .post(&room_id(), text("Notice."), PostOptions::default())
+        .await;
     kit.store().read.open.notify_one();
     kit.idle().await;
     assert_eq!(

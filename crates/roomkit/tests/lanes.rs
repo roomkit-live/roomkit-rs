@@ -25,8 +25,9 @@ use roomkit::model::{
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, FrameworkEvent, HookTrigger,
-    RoomFilter, RoomKit, text_of,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
+    CreateRoomOptions, FrameworkEvent, HookTrigger, MuteOptions, PauseRoomOptions,
+    ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions, text_of,
 };
 use tokio::sync::{Barrier, Notify, broadcast};
 
@@ -47,14 +48,23 @@ fn message(from: &str, sender: &str, text: &str) -> InboundMessage {
 
 /// A kit with an SMS transport and an echo agent, both attached to `room_1`.
 async fn room_with_agent() -> RoomKit {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
         .unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.attach(&room_id(), &channel("sms")).await.unwrap();
-    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     kit
 }
 
@@ -62,7 +72,13 @@ async fn room_with_agent() -> RoomKit {
 /// free.
 async fn next_call_goes_through(kit: &RoomKit) -> roomkit::InboundResult {
     let room = room_id();
-    let next = kit.process_inbound_in(&room, message("sms", "+15551234567", "Still there?"));
+    let next = kit.process_inbound(
+        message("sms", "+15551234567", "Still there?"),
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        },
+    );
     tokio::time::timeout(BOUND, next)
         .await
         .unwrap_or_else(|_| panic!("the next call waited on a lane or a lock left held"))
@@ -103,7 +119,7 @@ fn event_names(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<String> 
 /// after them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.observe("welcome", HookTrigger::OnRoomCreated, |_, _| {
@@ -116,8 +132,14 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
         let (kit, start) = (kit.clone(), Arc::clone(&start));
         tokio::spawn(async move {
             start.wait().await;
-            kit.process_inbound_in(&room_id(), message("sms", sender, "Hi"))
-                .await
+            kit.process_inbound(
+                message("sms", sender, "Hi"),
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
+            .await
         })
     });
     for task in tasks {
@@ -200,10 +222,22 @@ impl Channel for Panicking {
 async fn after_a_panic_in(in_on_event: bool) -> roomkit::InboundResult {
     let kit = room_with_agent().await;
     kit.register_channel(Panicking::new(in_on_event)).unwrap();
-    kit.attach(&room_id(), &channel("broken")).await.unwrap();
-    kit.process_inbound_in(&room_id(), message("sms", "+15551234567", "Bonjour"))
-        .await
-        .unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("broken"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    kit.process_inbound(
+        message("sms", "+15551234567", "Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     next_call_goes_through(&kit).await
 }
 
@@ -317,7 +351,13 @@ async fn a_call_dropped_during_its_delivery_still_delivers_its_event() {
     let kit = room_with_agent().await;
     let slow = Gated::new();
     kit.register_channel(slow.clone()).unwrap();
-    kit.attach(&room_id(), &channel("slow")).await.unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("slow"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
     let broadcast_over = Arc::new(Notify::new());
     let observed = Arc::clone(&broadcast_over);
     kit.observe("audit", HookTrigger::AfterBroadcast, move |event, _| {
@@ -329,7 +369,13 @@ async fn a_call_dropped_during_its_delivery_still_delivers_its_event() {
     .unwrap();
     let mut events = kit.subscribe();
     let room = room_id();
-    let call = kit.process_inbound_in(&room, message("sms", "+15551234567", "Bonjour"));
+    let call = kit.process_inbound(
+        message("sms", "+15551234567", "Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        },
+    );
     tokio::select! {
         result = call => panic!("the call ended before its delivery: {result:?}"),
         () = slow.delivering.notified() => {}
@@ -432,16 +478,23 @@ impl Channel for SlowAgent {
 /// receives it, and its `AFTER_BROADCAST` hooks run.
 #[tokio::test]
 async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_event() {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
     let agent = SlowAgent::new();
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.register_channel(ws.clone()).unwrap();
     kit.register_channel(agent.clone()).unwrap();
-    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in ["sms", "ws", "ai"] {
-        kit.attach(&room_id(), &channel(id)).await.unwrap();
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     let observed = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&observed);
@@ -451,7 +504,13 @@ async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_e
     })
     .unwrap();
     let room = room_id();
-    let call = kit.process_inbound_in(&room, message("sms", "+15551234567", "Bonjour"));
+    let call = kit.process_inbound(
+        message("sms", "+15551234567", "Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        },
+    );
     tokio::select! {
         result = call => panic!("the call ended before its agent's turn: {result:?}"),
         () = agent.turning.notified() => {}
@@ -492,7 +551,7 @@ async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_e
 /// in turn. It reads the room's latest index once its sets have run.
 #[tokio::test]
 async fn the_delivery_cursor_follows_the_lane() {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let slow = Gated::new();
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
@@ -508,10 +567,19 @@ async fn the_delivery_cursor_follows_the_lane() {
     .unwrap();
     let room = room_id();
     let store = kit.store();
-    kit.create_room(&room).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     let mut cursors = vec![store.get_delivered_index(&room).await.unwrap()];
-    kit.attach(&room, &channel("sms")).await.unwrap();
-    kit.attach(&room, &channel("slow")).await.unwrap();
+    kit.attach_channel(&room, &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit.attach_channel(&room, &channel("slow"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     cursors.push(store.get_delivered_index(&room).await.unwrap());
     let delivering = async {
         slow.delivering.notified().await;
@@ -520,18 +588,32 @@ async fn the_delivery_cursor_follows_the_lane() {
         during
     };
     let (sent, during) = tokio::join!(
-        kit.process_inbound_in(&room, message("sms", "+15551234567", "one")),
+        kit.process_inbound(
+            message("sms", "+15551234567", "one"),
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            }
+        ),
         delivering
     );
     sent.unwrap();
     cursors.push(during);
     cursors.push(store.get_delivered_index(&room).await.unwrap());
-    kit.mute(&room, &channel("slow")).await.unwrap();
+    kit.mute(&room, &channel("slow"), MuteOptions::default())
+        .await
+        .unwrap();
     cursors.push(store.get_delivered_index(&room).await.unwrap());
     for text in ["spam", "two"] {
-        kit.process_inbound_in(&room, message("sms", "+15551234567", text))
-            .await
-            .unwrap();
+        kit.process_inbound(
+            message("sms", "+15551234567", text),
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         cursors.push(store.get_delivered_index(&room).await.unwrap());
     }
     let latest = kit
@@ -562,10 +644,20 @@ async fn a_call_dropped_under_the_room_lock_leaves_the_lane_and_the_lock_free() 
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
-        kit.process_inbound_in(&room_id(), message("sms", "+15551234567", "Bonjour")),
+        kit.process_inbound(
+            message("sms", "+15551234567", "Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        ),
     )
     .await;
-    let paused = tokio::time::timeout(BOUND, kit.pause_room(&room_id())).await;
+    let paused = tokio::time::timeout(
+        BOUND,
+        kit.pause_room(&room_id(), PauseRoomOptions::default()),
+    )
+    .await;
     let next = next_call_goes_through(&kit).await;
     assert_eq!(
         (

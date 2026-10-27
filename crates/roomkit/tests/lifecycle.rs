@@ -10,16 +10,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::model::{
-    BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
-    ChannelType, EventContent, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId,
-    RoomOptions, RoomStatus, Timestamp,
+    Access, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
+    ChannelType, EventContent, InboundMessage, Metadata, Participant, ParticipantId,
+    ParticipantStatus, RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, Timestamp,
+    Visibility,
 };
 use roomkit::testing::{
     EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
-    CHANNEL_NOT_REGISTERED, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    FrameworkEvent, HookTrigger, InboundError, KitError, RoomKit, TransitionReason,
+    AttachChannelOptions, CHANNEL_NOT_REGISTERED, Channel, ChannelDeclaration, ChannelError,
+    CheckAllTimersOptions, CheckRoomTimersOptions, CloseRoomOptions, ConversationStore,
+    CreateRoomOptions, DetachChannelOptions, FrameworkEvent, GetBindingOptions, HookTrigger,
+    InboundError, KitError, LifecycleError, ListMembersOptions, MuteOptions, ProcessInboundOptions,
+    ReopenRoomOptions, RoomKit, RoomKitOptions, SetAccessOptions, SetVisibilityOptions,
+    TransitionReason, UnmuteOptions, UpdateBindingMetadataOptions,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -66,14 +71,22 @@ impl Clock {
 /// pause it after 60 seconds without activity and close it 120 seconds
 /// after the pause.
 async fn timed_room(clock: &Clock) -> (RoomKit, RecordingTransport) {
-    let kit = kit_with_environment(Default::default(), Arc::clone(&clock.0));
+    let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&clock.0));
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
-    let mut timers = RoomOptions::default();
-    timers.inactive_after_seconds = Some(60);
-    timers.closed_after_seconds = Some(120);
-    kit.create_room_with(&room_id(), timers).await.unwrap();
-    kit.attach(&room_id(), sms.id()).await.unwrap();
+    let options = CreateRoomOptions {
+        room_id: Some(room_id()),
+        timers: Some(RoomTimers {
+            inactive_after_seconds: Some(60),
+            closed_after_seconds: Some(120),
+            ..RoomTimers::default()
+        }),
+        ..Default::default()
+    };
+    kit.create_room(options).await.unwrap();
+    kit.attach_channel(&room_id(), sms.id(), AttachChannelOptions::default())
+        .await
+        .unwrap();
     (kit, sms)
 }
 
@@ -103,14 +116,42 @@ mod timers {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// RFC §5.1: `check_room_timers` applies one room's due transitions and
+    /// returns the room as it now stands, as the Python implementation's
+    /// does.
+    #[tokio::test]
+    async fn check_room_timers_applies_the_room_s_due_transitions() {
+        let clock = Clock::new();
+        let (kit, _sms) = timed_room(&clock).await;
+        let early = kit
+            .check_room_timers(&room_id(), CheckRoomTimersOptions::default())
+            .await
+            .unwrap();
+        clock.advance(90);
+        let paused = kit
+            .check_room_timers(&room_id(), CheckRoomTimersOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            (early.status, paused.status),
+            (RoomStatus::Active, RoomStatus::Paused)
+        );
+    }
+
     #[tokio::test]
     async fn check_timers_pauses_a_silent_room_then_closes_it() {
         let clock = Clock::new();
         let (kit, _sms) = timed_room(&clock).await;
         clock.advance(90);
-        let paused = kit.check_timers().await.unwrap();
+        let paused = kit
+            .check_all_timers(CheckAllTimersOptions::default())
+            .await
+            .unwrap();
         clock.advance(120);
-        let closed = kit.check_timers().await.unwrap();
+        let closed = kit
+            .check_all_timers(CheckAllTimersOptions::default())
+            .await
+            .unwrap();
         assert_eq!(
             (statuses(&paused), statuses(&closed)),
             (vec![RoomStatus::Paused], vec![RoomStatus::Closed])
@@ -122,7 +163,10 @@ mod timers {
         let clock = Clock::new();
         let (kit, _sms) = timed_room(&clock).await;
         clock.advance(3600);
-        let checked = kit.check_timers().await.unwrap();
+        let checked = kit
+            .check_all_timers(CheckAllTimersOptions::default())
+            .await
+            .unwrap();
         assert_eq!(
             checked
                 .iter()
@@ -138,7 +182,9 @@ mod timers {
         let (kit, _sms) = timed_room(&clock).await;
         let mut events = kit.subscribe();
         clock.advance(3600);
-        kit.check_timers().await.unwrap();
+        kit.check_all_timers(CheckAllTimersOptions::default())
+            .await
+            .unwrap();
         let reported = [events.recv().await.unwrap(), events.recv().await.unwrap()];
         assert_eq!(
             reported,
@@ -154,7 +200,12 @@ mod timers {
         let clock = Clock::new();
         let (kit, _sms) = timed_room(&clock).await;
         clock.advance(59);
-        assert_eq!(kit.check_timers().await.unwrap(), []);
+        assert_eq!(
+            kit.check_all_timers(CheckAllTimersOptions::default())
+                .await
+                .unwrap(),
+            []
+        );
     }
 
     #[tokio::test]
@@ -162,11 +213,22 @@ mod timers {
         let clock = Clock::new();
         let (kit, sms) = timed_room(&clock).await;
         clock.advance(50);
-        kit.process_inbound_in(&room_id(), message(&sms, "Still here"))
-            .await
-            .unwrap();
+        kit.process_inbound(
+            message(&sms, "Still here"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         clock.advance(50);
-        assert_eq!(kit.check_timers().await.unwrap(), []);
+        assert_eq!(
+            kit.check_all_timers(CheckAllTimersOptions::default())
+                .await
+                .unwrap(),
+            []
+        );
     }
 
     #[tokio::test]
@@ -175,7 +237,13 @@ mod timers {
         let (kit, sms) = timed_room(&clock).await;
         clock.advance(200);
         let result = kit
-            .process_inbound_in(&room_id(), message(&sms, "Hello?"))
+            .process_inbound(
+                message(&sms, "Hello?"),
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
@@ -215,7 +283,7 @@ mod timers {
 
     #[tokio::test]
     async fn the_sweeper_refuses_a_zero_period() {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         assert!(matches!(
             kit.run_timers(Duration::ZERO),
             Err(KitError::ZeroPeriod)
@@ -224,7 +292,7 @@ mod timers {
 
     #[test]
     fn the_sweeper_needs_a_tokio_runtime() {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         assert!(matches!(
             kit.run_timers(Duration::from_secs(1)),
             Err(KitError::NoRuntime)
@@ -243,7 +311,9 @@ mod a_paused_conversation {
         let (kit, sms) = timed_room(clock).await;
         let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
         kit.register_channel(ws.clone()).unwrap();
-        kit.attach(&room_id(), ws.id()).await.unwrap();
+        kit.attach_channel(&room_id(), ws.id(), AttachChannelOptions::default())
+            .await
+            .unwrap();
         (kit, sms, ws)
     }
 
@@ -256,7 +326,10 @@ mod a_paused_conversation {
     ) -> (Vec<RoomStatus>, FrameworkEvent) {
         let mut events = kit.subscribe();
         clock.advance(90);
-        let paused = kit.check_timers().await.unwrap();
+        let paused = kit
+            .check_all_timers(CheckAllTimersOptions::default())
+            .await
+            .unwrap();
         let reported = next_matching(&mut events, |event| {
             matches!(event, FrameworkEvent::RoomPaused { .. })
         })
@@ -268,10 +341,15 @@ mod a_paused_conversation {
     async fn its_sender_writing_again_lands_in_it_and_resumes_it() {
         let clock = Clock::new();
         let (kit, sms, ws) = with_websocket(&clock).await;
-        kit.process_inbound(message(&sms, "Bonjour")).await.unwrap();
+        kit.process_inbound(message(&sms, "Bonjour"), ProcessInboundOptions::default())
+            .await
+            .unwrap();
         let (paused, reported) = paused_by_its_timer(&kit, &clock).await;
         let result = kit
-            .process_inbound(message(&sms, "Still there?"))
+            .process_inbound(
+                message(&sms, "Still there?"),
+                ProcessInboundOptions::default(),
+            )
             .await
             .unwrap();
         let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
@@ -301,7 +379,10 @@ mod a_paused_conversation {
         let clock = Clock::new();
         let (kit, sms, ws) = with_websocket(&clock).await;
         paused_by_its_timer(&kit, &clock).await;
-        let result = kit.process_inbound(message(&sms, "Bonjour")).await.unwrap();
+        let result = kit
+            .process_inbound(message(&sms, "Bonjour"), ProcessInboundOptions::default())
+            .await
+            .unwrap();
         let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
         assert_eq!(
             (
@@ -320,17 +401,26 @@ mod a_paused_conversation {
     async fn bound_as_a_group_takes_another_member_s_message_and_is_resumed() {
         let clock = Clock::new();
         let (kit, sms, ws) = with_websocket(&clock).await;
-        let mut group = BindingOptions::default();
-        group.group = true;
-        kit.attach_with(&room_id(), sms.id(), group).await.unwrap();
-        kit.process_inbound(message(&sms, "Bonjour")).await.unwrap();
+        let group = AttachChannelOptions {
+            group: true,
+            ..Default::default()
+        };
+        kit.attach_channel(&room_id(), sms.id(), group)
+            .await
+            .unwrap();
+        kit.process_inbound(message(&sms, "Bonjour"), ProcessInboundOptions::default())
+            .await
+            .unwrap();
         let (paused, _) = paused_by_its_timer(&kit, &clock).await;
         let other = InboundMessage::new(
             sms.id().clone(),
             "+15550000002",
             EventContent::text("Me too"),
         );
-        let result = kit.process_inbound(other).await.unwrap();
+        let result = kit
+            .process_inbound(other, ProcessInboundOptions::default())
+            .await
+            .unwrap();
         let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
         assert_eq!(
             (
@@ -354,14 +444,23 @@ mod unregistering {
     use pretty_assertions::assert_eq;
 
     async fn room_with_sms_and_ws() -> (RoomKit, RecordingTransport, RecordingTransport) {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(ws.clone()).unwrap();
-        kit.create_room(&room_id()).await.unwrap();
-        kit.attach(&room_id(), sms.id()).await.unwrap();
-        kit.attach(&room_id(), ws.id()).await.unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        kit.attach_channel(&room_id(), sms.id(), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        kit.attach_channel(&room_id(), ws.id(), AttachChannelOptions::default())
+            .await
+            .unwrap();
         (kit, sms, ws)
     }
 
@@ -381,7 +480,13 @@ mod unregistering {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         kit.unregister_channel(sms.id()).unwrap();
         let refused = kit
-            .process_inbound_in(&room_id(), message(&sms, "Hello?"))
+            .process_inbound(
+                message(&sms, "Hello?"),
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
             .await;
         assert_eq!(
             refused,
@@ -398,9 +503,15 @@ mod unregistering {
         let (kit, sms, ws) = room_with_sms_and_ws().await;
         kit.unregister_channel(ws.id()).unwrap();
         let mut events = kit.subscribe();
-        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
-            .await
-            .unwrap();
+        kit.process_inbound(
+            message(&sms, "Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         let mut failed = 0;
         while let Ok(event) = events.try_recv() {
             if matches!(event, FrameworkEvent::DeliveryFailed { .. }) {
@@ -418,12 +529,20 @@ mod unregistering {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         kit.register_channel(EchoAgent::new(channel("ai"), "Hello"))
             .unwrap();
-        kit.attach(&room_id(), &channel("ai")).await.unwrap();
-        kit.unregister_channel(&channel("ai")).unwrap();
-        let mut events = kit.subscribe();
-        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
+        kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
             .await
             .unwrap();
+        kit.unregister_channel(&channel("ai")).unwrap();
+        let mut events = kit.subscribe();
+        kit.process_inbound(
+            message(&sms, "Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         let failed = next_matching(&mut events, |event| {
             matches!(event, FrameworkEvent::DeliveryFailed { .. })
         })
@@ -449,13 +568,23 @@ mod unregistering {
         for agent in ["ai", "bot"] {
             kit.register_channel(EchoAgent::new(channel(agent), "Hello"))
                 .unwrap();
-            kit.attach(&room_id(), &channel(agent)).await.unwrap();
+            kit.attach_channel(&room_id(), &channel(agent), AttachChannelOptions::default())
+                .await
+                .unwrap();
         }
         kit.unregister_channel(&channel("ai")).unwrap();
         let mut events = kit.subscribe();
         let mut addressed = message(&sms, "Bonjour");
         addressed.addressed_to = Some(vec![channel("bot")]);
-        kit.process_inbound_in(&room_id(), addressed).await.unwrap();
+        kit.process_inbound(
+            addressed,
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         kit.idle().await;
         let mut failed = Vec::new();
         while let Ok(event) = events.try_recv() {
@@ -486,9 +615,15 @@ mod unregistering {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         unregistering_during_the_call(&kit, "ws");
         let mut events = kit.subscribe();
-        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
-            .await
-            .unwrap();
+        kit.process_inbound(
+            message(&sms, "Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         let mut failed = 0;
         while let Ok(event) = events.try_recv() {
             if matches!(event, FrameworkEvent::DeliveryFailed { .. }) {
@@ -505,12 +640,20 @@ mod unregistering {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         kit.register_channel(EchoAgent::new(channel("ai"), "Hello"))
             .unwrap();
-        kit.attach(&room_id(), &channel("ai")).await.unwrap();
-        unregistering_during_the_call(&kit, "ai");
-        let mut events = kit.subscribe();
-        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
+        kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
             .await
             .unwrap();
+        unregistering_during_the_call(&kit, "ai");
+        let mut events = kit.subscribe();
+        kit.process_inbound(
+            message(&sms, "Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         let failed = next_matching(&mut events, |event| {
             matches!(event, FrameworkEvent::DeliveryFailed { .. })
         })
@@ -527,12 +670,18 @@ mod unregistering {
         );
     }
 
+    /// A channel no one registered is left as it is, nothing emitted, as
+    /// the Python implementation's `unregister_channel` returns `None`.
     #[tokio::test]
-    async fn an_unknown_channel_fails() {
-        let kit = RoomKit::new(Default::default());
+    async fn unregister_of_an_unknown_channel_is_ok() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let mut events = kit.subscribe();
         assert_eq!(
-            kit.unregister_channel(&channel("sms")),
-            Err(KitError::UnknownChannel(channel("sms")))
+            (
+                kit.unregister_channel(&channel("sms")),
+                events.try_recv().ok()
+            ),
+            (Ok(()), None)
         );
     }
 
@@ -542,9 +691,15 @@ mod unregistering {
         kit.unregister_channel(sms.id()).unwrap();
         let replacement = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         kit.register_channel(replacement.clone()).unwrap();
-        kit.process_inbound_in(&room_id(), message(&replacement, "Back"))
-            .await
-            .unwrap();
+        kit.process_inbound(
+            message(&replacement, "Back"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(timeline_texts(&kit).await, ["Back"]);
     }
 
@@ -613,7 +768,7 @@ mod creating {
     /// `create_room` returns, however long the hook takes.
     #[tokio::test]
     async fn returns_once_its_on_room_created_hooks_are_over() {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         kit.register_channel(EchoAgent::new(channel("ai"), "Hello"))
             .unwrap();
         let attaching = kit.clone();
@@ -621,11 +776,22 @@ mod creating {
             let kit = attaching.clone();
             async move {
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                kit.attach(&event.room_id, &channel("ai")).await.unwrap();
+                kit.attach_channel(
+                    &event.room_id,
+                    &channel("ai"),
+                    AttachChannelOptions::default(),
+                )
+                .await
+                .unwrap();
             }
         })
         .unwrap();
-        kit.create_room(&room_id()).await.unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
         let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
         let bound: Vec<&str> = bindings
             .iter()
@@ -640,16 +806,31 @@ mod metadata_updates {
     use pretty_assertions::assert_eq;
 
     async fn tagged_room() -> roomkit::model::Room {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(Tagger::new()).unwrap();
-        kit.create_room(&room_id()).await.unwrap();
-        kit.attach(&room_id(), sms.id()).await.unwrap();
-        kit.attach(&room_id(), &channel("crm")).await.unwrap();
-        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        kit.attach_channel(&room_id(), sms.id(), AttachChannelOptions::default())
             .await
             .unwrap();
+        kit.attach_channel(&room_id(), &channel("crm"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        kit.process_inbound(
+            message(&sms, "Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         kit.store().get_room(&room_id()).await.unwrap().unwrap()
     }
 
@@ -675,15 +856,18 @@ mod metadata_updates {
     /// does.
     #[tokio::test]
     async fn create_room_drops_a_reserved_metadata_key() {
-        let kit = RoomKit::new(Default::default());
-        let mut options = RoomOptions::default();
-        options.metadata = Metadata::from_iter([
-            ("roomkit:x".to_owned(), 1.into()),
-            ("author_register".to_owned(), 3.into()),
-            ("ok".to_owned(), 2.into()),
-        ]);
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let options = CreateRoomOptions {
+            room_id: Some(room_id()),
+            metadata: Metadata::from_iter([
+                ("roomkit:x".to_owned(), 1.into()),
+                ("author_register".to_owned(), 3.into()),
+                ("ok".to_owned(), 2.into()),
+            ]),
+            ..Default::default()
+        };
         let (warnings, guard) = Warnings::capture();
-        let room = kit.create_room_with(&room_id(), options).await.unwrap();
+        let room = kit.create_room(options).await.unwrap();
         drop(guard);
         let stored = kit.store().get_room(&room_id()).await.unwrap().unwrap();
         assert_eq!(
@@ -706,24 +890,192 @@ mod bindings {
     use pretty_assertions::assert_eq;
 
     async fn sms_and_agent() -> (RoomKit, RecordingTransport, EchoAgent) {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         let agent = EchoAgent::new(channel("ai"), "Hello back");
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(agent.clone()).unwrap();
-        kit.create_room(&room_id()).await.unwrap();
-        kit.attach(&room_id(), sms.id()).await.unwrap();
-        kit.attach(&room_id(), agent.id()).await.unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        kit.attach_channel(&room_id(), sms.id(), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        kit.attach_channel(&room_id(), agent.id(), AttachChannelOptions::default())
+            .await
+            .unwrap();
         (kit, sms, agent)
+    }
+
+    /// The room's event count and its bindings' channels.
+    async fn bound(kit: &RoomKit) -> (u64, Vec<String>) {
+        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
+        let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
+        let channels = bindings
+            .into_iter()
+            .map(|binding| binding.channel_id.as_str().to_owned())
+            .collect();
+        (room.event_count, channels)
+    }
+
+    /// A detach returns whether the room bound the channel, as the Python
+    /// implementation's does: `false` for a channel no longer bound, or for
+    /// a room the store lacks when the call names no organization, writing
+    /// nothing.
+    #[tokio::test]
+    async fn detach_of_an_unbound_channel_returns_false() {
+        let (kit, _sms, agent) = sms_and_agent().await;
+        let first = kit
+            .detach_channel(&room_id(), agent.id(), DetachChannelOptions::default())
+            .await;
+        let after_first = bound(&kit).await;
+        let again = kit
+            .detach_channel(&room_id(), agent.id(), DetachChannelOptions::default())
+            .await;
+        let missing = RoomId::new("room_9").unwrap();
+        let elsewhere = kit
+            .detach_channel(&missing, agent.id(), DetachChannelOptions::default())
+            .await;
+        assert_eq!(
+            (first, again, elsewhere, bound(&kit).await == after_first),
+            (Ok(true), Ok(false), Ok(false), true)
+        );
+    }
+
+    /// RFC §7.5 rule 6: `update_binding_metadata` merges key by key, as the
+    /// Python implementation's does; `set_access` and `set_visibility`
+    /// change what they name, the rest kept.
+    #[tokio::test]
+    async fn the_binding_setters_change_what_they_name() {
+        let (kit, sms, _agent) = sms_and_agent().await;
+        let first = Metadata::from_iter([("a".to_owned(), 1.into()), ("b".to_owned(), 2.into())]);
+        let then = Metadata::from_iter([("b".to_owned(), 3.into()), ("c".to_owned(), 4.into())]);
+        for metadata in [first, then] {
+            kit.update_binding_metadata(
+                &room_id(),
+                sms.id(),
+                metadata,
+                UpdateBindingMetadataOptions::default(),
+            )
+            .await
+            .unwrap();
+        }
+        kit.set_access(
+            &room_id(),
+            sms.id(),
+            Access::ReadOnly,
+            SetAccessOptions::default(),
+        )
+        .await
+        .unwrap();
+        let binding = kit
+            .set_visibility(
+                &room_id(),
+                sms.id(),
+                Visibility::None,
+                SetVisibilityOptions::default(),
+            )
+            .await
+            .unwrap();
+        let read = kit
+            .get_binding(&room_id(), sms.id(), GetBindingOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                binding.metadata,
+                binding.access,
+                binding.visibility,
+                read.access
+            ),
+            (
+                Metadata::from_iter([
+                    ("a".to_owned(), 1.into()),
+                    ("b".to_owned(), 3.into()),
+                    ("c".to_owned(), 4.into())
+                ]),
+                Access::ReadOnly,
+                Visibility::None,
+                Access::ReadOnly
+            )
+        );
+    }
+
+    /// `get_binding` of a channel the room does not bind fails, as the
+    /// Python implementation's raises `ChannelNotFoundError`.
+    #[tokio::test]
+    async fn get_binding_of_an_unbound_channel_fails() {
+        let (kit, _sms, _agent) = sms_and_agent().await;
+        assert_eq!(
+            kit.get_binding(&room_id(), &channel("ws"), GetBindingOptions::default())
+                .await,
+            Err(KitError::Lifecycle(LifecycleError::ChannelNotBound {
+                room_id: room_id(),
+                channel_id: channel("ws")
+            }))
+        );
+    }
+
+    /// RFC §5.5: `list_members` gives the ACTIVE participants, the others
+    /// too with `include_left`, as the Python implementation's does.
+    #[tokio::test]
+    async fn list_members_leaves_out_who_left_unless_asked() {
+        let (kit, sms, _agent) = sms_and_agent().await;
+        for (id, status) in [
+            ("ana", ParticipantStatus::Active),
+            ("ben", ParticipantStatus::Left),
+        ] {
+            let mut person = Participant::new(
+                ParticipantId::new(id).unwrap(),
+                room_id(),
+                sms.id().clone(),
+                Timestamp::UNIX_EPOCH,
+            );
+            person.status = status;
+            kit.store().create_participant(person).await.unwrap();
+        }
+        let ids = |members: Vec<Participant>| -> Vec<String> {
+            members
+                .into_iter()
+                .map(|member| member.id.as_str().to_owned())
+                .collect()
+        };
+        let active = kit
+            .list_members(&room_id(), ListMembersOptions::default())
+            .await
+            .unwrap();
+        let every = ListMembersOptions {
+            include_left: true,
+            ..Default::default()
+        };
+        let all = kit.list_members(&room_id(), every).await.unwrap();
+        assert_eq!(
+            (ids(active), ids(all)),
+            (
+                vec!["ana".to_owned()],
+                vec!["ana".to_owned(), "ben".to_owned()]
+            )
+        );
     }
 
     #[tokio::test]
     async fn a_detached_agent_is_asked_nothing_more() {
         let (kit, sms, agent) = sms_and_agent().await;
-        kit.detach(&room_id(), agent.id()).await.unwrap();
-        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
+        kit.detach_channel(&room_id(), agent.id(), DetachChannelOptions::default())
             .await
             .unwrap();
+        kit.process_inbound(
+            message(&sms, "Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(sms.texts(), Vec::<String>::new());
     }
 
@@ -744,9 +1096,13 @@ mod bindings {
             })
             .unwrap();
         }
-        kit.mute(&room_id(), agent.id()).await.unwrap();
+        kit.mute(&room_id(), agent.id(), MuteOptions::default())
+            .await
+            .unwrap();
         let muted = next(&mut fired).await;
-        kit.unmute(&room_id(), agent.id()).await.unwrap();
+        kit.unmute(&room_id(), agent.id(), UnmuteOptions::default())
+            .await
+            .unwrap();
         let unmuted = next(&mut fired).await;
         assert_eq!(
             [muted, unmuted],
@@ -757,11 +1113,21 @@ mod bindings {
     #[tokio::test]
     async fn a_closed_room_reopened_answers_again() {
         let (kit, sms, _agent) = sms_and_agent().await;
-        kit.close_room(&room_id()).await.unwrap();
-        kit.reopen_room(&room_id()).await.unwrap();
-        kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
+        kit.close_room(&room_id(), CloseRoomOptions::default())
             .await
             .unwrap();
+        kit.reopen_room(&room_id(), ReopenRoomOptions::default())
+            .await
+            .unwrap();
+        kit.process_inbound(
+            message(&sms, "Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(sms.texts(), ["Hello back"]);
     }
 

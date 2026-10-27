@@ -13,16 +13,18 @@ use std::time::Duration;
 
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, DeleteContent, DirectEvent, EditContent, EditSource, EventContent,
-    EventDirection, EventId, EventSource, EventType, EventUpdates, HookResult, InboundMessage,
-    RoomContext, RoomEvent, RoomId, Timestamp,
+    ChannelOutput, ChannelType, DeleteContent, EditContent, EditSource, EventContent,
+    EventDirection, EventId, EventSource, EventType, HookResult, InboundMessage, RoomContext,
+    RoomEvent, RoomId, Timestamp,
 };
 use roomkit::testing::{
     Environment, RecordingTransport, SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, EventFilter, HookTrigger,
-    InboundResult, RoomKit, is_deleted, is_edited, text_of,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
+    ConversationStore, CreateRoomOptions, DeleteEventOptions, EventFilter, HookTrigger,
+    InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
+    UpdateEventOptions, is_deleted, is_edited, text_of,
 };
 use tokio::sync::{Barrier, Notify, mpsc};
 
@@ -110,7 +112,7 @@ struct Fixture {
 /// own, so that the room's first message is `evt_1`.
 #[derive(Debug)]
 struct Setup {
-    setup: SequentialEnvironment,
+    fixture: SequentialEnvironment,
     room: SequentialEnvironment,
     setting_up: AtomicBool,
 }
@@ -119,7 +121,7 @@ impl Setup {
     fn new() -> Arc<Self> {
         let at = Timestamp::from_unix_millis(1_792_677_780_000).unwrap();
         Arc::new(Self {
-            setup: SequentialEnvironment::new(at),
+            fixture: SequentialEnvironment::new(at),
             room: SequentialEnvironment::new(at),
             setting_up: AtomicBool::new(true),
         })
@@ -138,7 +140,7 @@ impl Environment for Setup {
 
     fn new_event_id(&self) -> EventId {
         if self.setting_up.load(Ordering::Relaxed) {
-            EventId::new(format!("setup_{}", self.setup.new_event_id())).unwrap()
+            EventId::new(format!("setup_{}", self.fixture.new_event_id())).unwrap()
         } else {
             self.room.new_event_id()
         }
@@ -155,7 +157,7 @@ impl Environment for Setup {
 
 async fn room() -> Fixture {
     let setup = Setup::new();
-    let kit = kit_with_environment(Default::default(), Arc::clone(&setup));
+    let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&setup));
     let wa = RecordingTransport::new(channel("wa"), ChannelType::WHATSAPP);
     let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET)
         .with_capabilities(edits_natively());
@@ -165,9 +167,16 @@ async fn room() -> Fixture {
     kit.register_channel(ws.clone()).unwrap();
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(agent.clone()).unwrap();
-    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in ["wa", "ws", "sms", "ai"] {
-        kit.attach(&room_id(), &channel(id)).await.unwrap();
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     // The room's messages start at evt_1, after the attaches' records.
     setup.done();
@@ -183,7 +192,15 @@ async fn room() -> Fixture {
 
 async fn say(kit: &RoomKit, sender: &str, text: &str) -> InboundResult {
     let message = InboundMessage::new(channel("wa"), sender, EventContent::text(text));
-    kit.process_inbound_in(&room_id(), message).await.unwrap()
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
 }
 
 fn edit_from(sender: &str, text: &str) -> InboundMessage {
@@ -210,7 +227,15 @@ fn delete() -> InboundMessage {
 }
 
 async fn send(kit: &RoomKit, message: InboundMessage) -> InboundResult {
-    kit.process_inbound_in(&room_id(), message).await.unwrap()
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
 }
 
 /// The stored `evt_1`, if it is still stored.
@@ -436,9 +461,9 @@ mod a_direct_call {
     async fn update_rewrites_the_event_without_a_marker_and_fires_on_event_updated() {
         let room = room().await;
         let mut updated = observed(&room.kit, HookTrigger::OnEventUpdated);
-        let update = EventUpdates {
+        let update = UpdateEventOptions {
             content: Some(EventContent::text("I need 6000$")),
-            ..EventUpdates::default()
+            ..UpdateEventOptions::default()
         };
         let returned = room
             .kit
@@ -461,7 +486,7 @@ mod a_direct_call {
             .update_event(
                 &room_id(),
                 &EventId::new("evt_404").unwrap(),
-                EventUpdates::default(),
+                UpdateEventOptions::default(),
             )
             .await
             .unwrap();
@@ -477,9 +502,12 @@ mod a_direct_call {
         let event_id = EventId::new("evt_1").unwrap();
         let updated = room
             .kit
-            .update_event(&missing, &event_id, EventUpdates::default())
+            .update_event(&missing, &event_id, UpdateEventOptions::default())
             .await;
-        let deleted = room.kit.delete_event(&missing, &event_id, true).await;
+        let deleted = room
+            .kit
+            .delete_event(&missing, &event_id, DeleteEventOptions::default())
+            .await;
         assert_eq!((updated, deleted), (Ok(None), Ok(vec![])));
     }
 
@@ -493,7 +521,11 @@ mod a_direct_call {
         say(&room.kit, CUSTOMER, "Unrelated").await;
         let removed = room
             .kit
-            .delete_event(&room_id(), &EventId::new("evt_1").unwrap(), true)
+            .delete_event(
+                &room_id(),
+                &EventId::new("evt_1").unwrap(),
+                DeleteEventOptions::default(),
+            )
             .await
             .unwrap();
         let stored = room
@@ -524,9 +556,19 @@ mod a_direct_call {
         let mut reply = InboundMessage::new(channel("wa"), CUSTOMER, EventContent::text("Ok?"));
         reply.parent_event_id = reply_to("evt_1");
         let reply = send(&room.kit, reply).await.event.unwrap().id;
-        let mut injected = DirectEvent::new(channel("ws"), EventContent::text("Checking"));
-        injected.parent_event_id = Some(reply.clone());
-        room.kit.send_event(&room_id(), injected).await.unwrap();
+        let injected = SendEventOptions {
+            parent_event_id: Some(reply.clone()),
+            ..Default::default()
+        };
+        room.kit
+            .send_event(
+                &room_id(),
+                &channel("ws"),
+                EventContent::text("Checking"),
+                injected,
+            )
+            .await
+            .unwrap();
         let mut record = RoomEvent::new(
             EventId::new("snap_1").unwrap(),
             room_id(),
@@ -540,9 +582,16 @@ mod a_direct_call {
             Timestamp::UNIX_EPOCH,
         );
         record.parent_event_id = Some(reply);
-        room.kit.commit_event(&room_id(), record).await.unwrap();
         room.kit
-            .delete_event(&room_id(), &EventId::new("evt_1").unwrap(), true)
+            .commit_event(&room_id(), record, CommitEventOptions::default())
+            .await
+            .unwrap();
+        room.kit
+            .delete_event(
+                &room_id(),
+                &EventId::new("evt_1").unwrap(),
+                DeleteEventOptions::default(),
+            )
             .await
             .unwrap();
         // The attaches' lifecycle records alone are left.
@@ -560,7 +609,11 @@ mod a_direct_call {
         send(&room.kit, reply).await;
         let mut deleted = observed(&room.kit, HookTrigger::OnEventDeleted);
         room.kit
-            .delete_event(&room_id(), &EventId::new("evt_1").unwrap(), true)
+            .delete_event(
+                &room_id(),
+                &EventId::new("evt_1").unwrap(),
+                DeleteEventOptions::default(),
+            )
             .await
             .unwrap();
         let mut ids = vec![next(&mut deleted).await.id, next(&mut deleted).await.id];
@@ -579,7 +632,11 @@ mod a_direct_call {
     async fn after_a_hard_delete_the_next_message_takes_a_new_index() {
         let room = room().await;
         room.kit
-            .delete_event(&room_id(), &EventId::new("evt_1").unwrap(), true)
+            .delete_event(
+                &room_id(),
+                &EventId::new("evt_1").unwrap(),
+                DeleteEventOptions::default(),
+            )
             .await
             .unwrap();
         let next = say(&room.kit, CUSTOMER, "Hello?").await;
@@ -677,12 +734,22 @@ mod changes_at_once {
             let (edited, removed) = at_once(
                 round,
                 async move {
-                    kit.process_inbound_in(&room_id(), edit_from(CUSTOMER, "I need 50000$"))
-                        .await
+                    kit.process_inbound(
+                        edit_from(CUSTOMER, "I need 50000$"),
+                        ProcessInboundOptions {
+                            room_id: Some(room_id()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
                 },
                 async move {
                     other
-                        .delete_event(&room_id(), &EventId::new("evt_1").unwrap(), true)
+                        .delete_event(
+                            &room_id(),
+                            &EventId::new("evt_1").unwrap(),
+                            DeleteEventOptions::default(),
+                        )
                         .await
                 },
             )
@@ -726,7 +793,11 @@ mod changes_at_once {
         locked.notified().await;
         let removed = room
             .kit
-            .delete_event(&room_id(), &EventId::new("evt_1").unwrap(), true)
+            .delete_event(
+                &room_id(),
+                &EventId::new("evt_1").unwrap(),
+                DeleteEventOptions::default(),
+            )
             .await
             .unwrap();
         let edited = editing.await.unwrap();

@@ -4,14 +4,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, HookResult,
-    InboundMessage, Metadata, Post, RoomContext, RoomEvent, RoomId,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, EventContent, HookResult,
+    InboundMessage, Metadata, RoomContext, RoomEvent, RoomId,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::transcript::Role;
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, HookExecution, HookSpec,
-    HookTrigger, InboundResult, RoomKit, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
+    CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult, PostOptions,
+    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -72,13 +73,20 @@ impl Room {
         let agent = AiAgent::new(channel("assistant"), model)
             .with_tools(tools)
             .unwrap();
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(adjust(agent)).unwrap();
-        kit.create_room(&room_id()).await.unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
         for id in ["sms", "assistant"] {
-            kit.attach(&room_id(), &channel(id)).await.unwrap();
+            kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+                .await
+                .unwrap();
         }
         Self { kit, sms }
     }
@@ -86,7 +94,13 @@ impl Room {
     pub(crate) async fn says(&self, text: &str) -> InboundResult {
         let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text(text));
         self.kit
-            .process_inbound_in(&room_id(), message)
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
     }
@@ -165,9 +179,16 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(Counting { sms, answers }).unwrap();
     kit.register_channel(agent).unwrap();
-    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in ["sms", "assistant"] {
-        kit.attach(&room_id(), &channel(id)).await.unwrap();
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     let posted = Arc::new(Mutex::new(Vec::new()));
     let (posting, weak) = (Arc::clone(&posted), kit.downgrade());
@@ -189,8 +210,16 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
             if posted.lock().unwrap().len() >= ROUNDS {
                 return;
             }
-            let post = DirectEvent::new(channel("sms"), EventContent::text("called"));
-            if let Ok(event) = kit.send_event(&room_id(), post).await {
+            let post = SendEventOptions::default();
+            if let Ok(event) = kit
+                .send_event(
+                    &room_id(),
+                    &channel("sms"),
+                    EventContent::text("called"),
+                    post,
+                )
+                .await
+            {
                 posted
                     .lock()
                     .unwrap()
@@ -200,7 +229,15 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
     })
     .unwrap();
     let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Go"));
-    kit.process_inbound_in(&room_id(), message).await.unwrap();
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     kit.shutdown().await;
     let mut depths = posted.lock().unwrap().clone();
@@ -268,7 +305,7 @@ impl AiProvider for Endless {
 /// the kit's default limits.
 pub(crate) async fn two_agents(rounds: usize) -> usize {
     let (alpha, beta) = (Endless::new(rounds), Endless::new(rounds));
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     for (id, model) in [("alpha", alpha.clone()), ("beta", beta.clone())] {
@@ -277,12 +314,27 @@ pub(crate) async fn two_agents(rounds: usize) -> usize {
             .unwrap();
         kit.register_channel(agent).unwrap();
     }
-    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in ["sms", "alpha", "beta"] {
-        kit.attach(&room_id(), &channel(id)).await.unwrap();
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Go"));
-    kit.process_inbound_in(&room_id(), message).await.unwrap();
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     kit.shutdown().await;
     alpha.turns.load(Ordering::SeqCst) + beta.turns.load(Ordering::SeqCst)
@@ -317,9 +369,16 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
         .with_tools(served())
         .unwrap();
     kit.register_channel(agent).unwrap();
-    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     for id in ["sms", "assistant"] {
-        kit.attach(&room_id(), &channel(id)).await.unwrap();
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
     }
     let calling = kit.downgrade();
     match echo {
@@ -331,10 +390,17 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
                     .filter(|_| event.source.channel_id == channel("assistant"));
                 async move {
                     if let Some(kit) = kit {
-                        let echo = DirectEvent::new(channel("sms"), EventContent::text("Echo"));
+                        let echo = SendEventOptions::default();
                         // Past the budget the call is refused, its event
                         // stored refused.
-                        let _sent = kit.send_event(&room_id(), echo).await;
+                        let _sent = kit
+                            .send_event(
+                                &room_id(),
+                                &channel("sms"),
+                                EventContent::text("Echo"),
+                                echo,
+                            )
+                            .await;
                     }
                     Ok(HookResult::allow())
                 }
@@ -351,10 +417,13 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
                         .filter(|_| event.source.channel_id == channel("assistant"));
                     async move {
                         if let Some(kit) = kit {
-                            let mut post = Post::new(EventContent::text("Echo"));
-                            post.addressed_to = vec![channel("assistant")];
+                            let post = PostOptions {
+                                addressed_to: vec![channel("assistant")],
+                                ..Default::default()
+                            };
                             // Past the hook calls the post is stored refused.
-                            let _posted = kit.post(&room_id(), post).await;
+                            let echo = EventContent::text("Echo");
+                            let _posted = kit.post(&room_id(), echo, post).await;
                         }
                     }
                 },
@@ -363,7 +432,15 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
         }
     }
     let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Go"));
-    kit.process_inbound_in(&room_id(), message).await.unwrap();
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     kit.idle().await;
     let capped = kit
         .store()

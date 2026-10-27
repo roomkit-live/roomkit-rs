@@ -37,8 +37,9 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, FrameworkEvent, HookExecution,
-    HookSpec, HookTrigger, InboundResult, RoomKit, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
+    CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundResult,
+    PauseRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -78,8 +79,15 @@ async fn room_bound_by(process_timeout: Duration) -> RoomKit {
 async fn room_with(kit: RoomKit) -> RoomKit {
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.attach(&room_id(), &channel("sms")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     kit
 }
 
@@ -104,10 +112,19 @@ fn slow_the_first_time(kit: &RoomKit, needs_lock: bool) {
 
 /// Runs `message` into `room_1`, failing the test past `BOUND`.
 async fn send(kit: &RoomKit, text: &str) -> InboundResult {
-    tokio::time::timeout(BOUND, kit.process_inbound_in(&room_id(), message(text)))
-        .await
-        .unwrap_or_else(|_| panic!("the call outlasted its process_timeout"))
-        .unwrap()
+    tokio::time::timeout(
+        BOUND,
+        kit.process_inbound(
+            message(text),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("the call outlasted its process_timeout"))
+    .unwrap()
 }
 
 /// What a refusal for the timeout reads: blocked, its reason, no event.
@@ -184,7 +201,11 @@ async fn a_timeout_during_a_locked_hook_releases_the_lock_and_names_the_event() 
     let mut events = kit.subscribe();
     let result = send(&kit, "Bonjour").await;
     let written = timeline(&kit).await.len();
-    let paused = tokio::time::timeout(BOUND, kit.pause_room(&room_id())).await;
+    let paused = tokio::time::timeout(
+        BOUND,
+        kit.pause_room(&room_id(), PauseRoomOptions::default()),
+    )
+    .await;
     let next = send(&kit, "Still there?").await;
     assert_eq!(
         (
@@ -302,7 +323,13 @@ async fn a_slow_delivery_never_times_out_the_committed_event() {
     let bound = Duration::from_millis(250);
     let kit = room_bound_by(bound).await;
     kit.register_channel(Slow::new(bound * 3, false)).unwrap();
-    kit.attach(&room_id(), &channel("slow")).await.unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("slow"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
     let mut events = kit.subscribe();
     let result = send(&kit, "Bonjour").await;
     assert_eq!(
@@ -325,10 +352,25 @@ async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
     let slow = Slow::new(Duration::ZERO, true);
     let (delivering, release) = (Arc::clone(&slow.delivering), Arc::clone(&slow.release));
     kit.register_channel(slow).unwrap();
-    kit.attach(&room_id(), &channel("slow")).await.unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("slow"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
     let first = {
         let kit = kit.clone();
-        tokio::spawn(async move { kit.process_inbound_in(&room_id(), message("Bonjour")).await })
+        tokio::spawn(async move {
+            kit.process_inbound(
+                message("Bonjour"),
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
+            .await
+        })
     };
     // The first call committed and hangs in its delivery, its place first.
     tokio::time::timeout(BOUND, delivering.notified())
@@ -415,7 +457,7 @@ async fn a_timeout_past_the_clocks_range_bounds_nothing() {
 /// within its own 60 seconds, has the message blocked `process_timeout`.
 #[tokio::test(start_paused = true)]
 async fn process_timeout_defaults_to_30_seconds() {
-    let kit = room_with(RoomKit::new(Default::default())).await;
+    let kit = room_with(RoomKit::new(RoomKitOptions::default())).await;
     let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
     spec.timeout = Duration::from_secs(60);
     kit.hook(spec, |_, _| async {
@@ -424,7 +466,13 @@ async fn process_timeout_defaults_to_30_seconds() {
     })
     .unwrap();
     let room = room_id();
-    let call = kit.process_inbound_in(&room, message("Bonjour"));
+    let call = kit.process_inbound(
+        message("Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        },
+    );
     let result = tokio::time::timeout(Duration::from_secs(120), call)
         .await
         .unwrap()

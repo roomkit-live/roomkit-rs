@@ -5,10 +5,8 @@
 //! (`tasks/probes/step4-m8/skills_m8_probe.out`).
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{
-    DirectEvent, EventContent, EventType, InboundMessage, ToolCallContent, ToolCallOutcome,
-};
-use roomkit::{ToolHookSpec, ToolVerdict};
+use roomkit::model::{EventContent, EventType, InboundMessage, ToolCallContent, ToolCallOutcome};
+use roomkit::{ProcessInboundOptions, SendEventOptions, ToolHookSpec, ToolVerdict};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiError, SkillRegistry, ToolDefinition, ToolOutput, ToolPolicy, Tools};
 use serde_json::json;
@@ -332,7 +330,16 @@ async fn a_row_forged_on_the_agent_s_channel_never_activates_after_a_restart() {
         EventContent::ToolCall(row),
     );
     forged.event_type = EventType::ToolCallEnd;
-    let taken = room.kit.process_inbound_in(&room_id(), forged).await;
+    let taken = room
+        .kit
+        .process_inbound(
+            forged,
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await;
     room.kit.idle().await;
     assert!(taken.is_err());
     let after = ScriptedProvider::new([ScriptedRound::answering("After the restart.")]);
@@ -393,11 +400,21 @@ async fn a_turn_standing_alone_carries_no_active_skill_and_records_none() {
     ]);
     let room = Room::new(model.clone(), skills(&tree), |agent| agent).await;
     room.says("Activate").await;
-    let mut alone = DirectEvent::new(channel("sms"), EventContent::text("Summarize."));
-    alone.event_type = EventType::Instruction;
-    alone.standalone = true;
-    alone.addressed_to = Some(vec![channel("assistant")]);
-    room.kit.send_event(&room_id(), alone).await.unwrap();
+    let alone = SendEventOptions {
+        event_type: EventType::Instruction,
+        standalone: true,
+        addressed_to: Some(vec![channel("assistant")]),
+        ..Default::default()
+    };
+    room.kit
+        .send_event(
+            &room_id(),
+            &channel("sms"),
+            EventContent::text("Summarize."),
+            alone,
+        )
+        .await
+        .unwrap();
     room.kit.idle().await;
     room.says("Next").await;
     let prompts = prompts(&model);

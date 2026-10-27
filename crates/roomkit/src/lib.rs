@@ -18,8 +18,6 @@
 //!   returns at its decision.
 //! - [`WeakRoomKit`]: the kit held without keeping it alive, for a hook or
 //!   a channel that calls into the kit holding it.
-//! - [`OrganizationKit`]: the kit acting for one organization, every call
-//!   reaching its rooms only (RFC §17.2); the kit itself acts for none.
 //! - [`InboundRoomRouter`]: a routing strategy; [`DefaultInboundRoomRouter`]
 //!   is the RFC's.
 //! - [`ConversationStore`]: where rooms and their timelines live (RFC §14),
@@ -40,7 +38,8 @@
 //!   [`TurnTimeouts`], a failure it carries a [`TurnError`], and
 //!   [`testing::TurnTap`] shows what crosses.
 //!
-//! The core's model is re-exported whole as [`model`]. Of its operations
+//! The core's model is re-exported as [`model`], but for the requests the
+//! kit's calls build from their options. Of its operations
 //! and rules, only what a caller names is: the results and errors of the
 //! kit's calls, the framework events, what a channel declares and how it
 //! writes its addresses, what a store's commit writes, and the rules that
@@ -68,7 +67,26 @@ mod tools;
 mod turn;
 mod turns;
 
-pub use roomkit_core::model;
+/// The data model of RFC §5, field for field: the core's, but for the
+/// requests the kit's calls build from their options (a binding's update,
+/// a post), which are no model.
+pub mod model {
+    pub use roomkit_core::model::{
+        Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCapabilities,
+        ChannelCategory, ChannelDirection, ChannelId, ChannelMediaType, ChannelOutput, ChannelSet,
+        ChannelType, CompositeContent, Confidence, Consumption, ConsumptionState, DeleteContent,
+        DeleteType, DeliveryError, DeliveryResult, DeliveryStatus, DirectEvent, EditContent,
+        EditSource, ErrorRecord, EventContent, EventDirection, EventId, EventSource, EventStatus,
+        EventType, EventUpdates, HOST_CHANNEL_ID, HookDecision, HookResult, IdentificationStatus,
+        Identity, IdentityId, InboundMessage, InjectedEvent, Latitude, LocationContent, Longitude,
+        MAX_COMPOSITE_DEPTH, MediaContent, Metadata, ModelError, Observation, ObservationId,
+        Participant, ParticipantConsumption, ParticipantId, ParticipantRole, ParticipantStatus,
+        ProviderResult, RateLimit, RetryPolicy, RichContent, RichFormat, Room, RoomContext,
+        RoomEvent, RoomId, RoomStatus, RoomTimers, RoomUpdates, SystemContent, Task, TaskId,
+        TaskStatus, TemplateContent, TextContent, Timestamp, ToolCall, ToolCallContent,
+        ToolCallOutcome, ToolCallStatus, VerificationStatus, VideoContent, Visibility,
+    };
+}
 pub use roomkit_core::ops::{
     CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, ConfigError, FrameworkEvent,
     InboundError, InboundResult, LifecycleChange, LifecycleError, LifecyclePayload, MutationError,
@@ -93,7 +111,13 @@ pub use self::error::KitError;
 pub use self::hooks::{HookError, HookFuture, HookHandler, HookReturn};
 pub use self::host::HostChannel;
 pub use self::kit::{
-    OrganizationKit, RoomKit, RoomKitOptions, TimelineQuery, TimerSweeper, WeakRoomKit,
+    ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
+    CloseRoomOptions, CommitEventOptions, CreateRoomOptions, DeleteEventOptions,
+    DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions,
+    ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions, PostOptions,
+    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitOptions,
+    SendEventOptions, SetAccessOptions, SetVisibilityOptions, TimerSweeper, UnmuteOptions,
+    UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 pub use self::registered::RegisteredChannel;
 pub use self::router::{

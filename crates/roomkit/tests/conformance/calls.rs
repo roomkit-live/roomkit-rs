@@ -8,12 +8,16 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use roomkit::model::{
-    Access, BindingOptions, BindingUpdate, ChannelCategory, ChannelId, ChannelType, DirectEvent,
-    EventContent, EventDirection, EventId, EventSource, EventType, EventUpdates, InboundMessage,
-    Metadata, Participant, ParticipantId, Post, RoomEvent, RoomId, RoomOptions, Visibility,
+    Access, ChannelCategory, ChannelId, ChannelType, EventContent, EventDirection, EventId,
+    EventSource, EventType, InboundMessage, Metadata, Participant, ParticipantId, RoomEvent,
+    RoomId, RoomTimers, Visibility,
 };
 use roomkit::{
-    ConversationStore, HookExecution, HookSpec, HookTrigger, HostChannel, InboundResult, KitError,
+    ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CloseRoomOptions,
+    CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
+    DetachChannelOptions, HookExecution, HookSpec, HookTrigger, HostChannel, InboundResult,
+    KitError, MuteOptions, PostOptions, ProcessInboundOptions, SendEventOptions, SetAccessOptions,
+    SetVisibilityOptions, UnmuteOptions, UpdateEventOptions,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -53,7 +57,7 @@ fn channel_id(spec: &Value) -> Result<ChannelId, Unreadable> {
     field(spec, "channel_id")
 }
 
-fn organization(spec: &Value) -> Option<String> {
+fn organization_id(spec: &Value) -> Option<String> {
     spec.get("organization_id")
         .and_then(Value::as_str)
         .map(str::to_owned)
@@ -93,23 +97,6 @@ fn finish<T>(
     }
 }
 
-/// Runs `$body` on the kit acting for the call's organization, or on the
-/// kit itself when the call names none.
-macro_rules! on_door {
-    ($run:expr, $spec:expr, |$door:ident| $body:expr) => {
-        match organization($spec) {
-            Some(organization) => {
-                let $door = $run.kit().for_organization(organization);
-                $body.await
-            }
-            None => {
-                let $door = $run.kit().clone();
-                $body.await
-            }
-        }
-    };
-}
-
 /// Makes the call `spec` names, its references already resolved.
 pub(crate) async fn call(
     run: &std::sync::Arc<Run>,
@@ -120,11 +107,11 @@ pub(crate) async fn call(
     Ok(match name {
         "process_inbound" => {
             let message: InboundMessage = field(spec, "message")?;
-            let target: Option<RoomId> = optional(spec, "room_id")?;
-            let outcome = match target {
-                Some(room) => on_door!(run, spec, |door| door.process_inbound_in(&room, message)),
-                None => on_door!(run, spec, |door| door.process_inbound(message)),
+            let options = ProcessInboundOptions {
+                room_id: optional(spec, "room_id")?,
+                organization_id: organization_id(spec),
             };
+            let outcome = run.kit().process_inbound(message, options).await;
             let id = outcome
                 .as_ref()
                 .ok()
@@ -134,16 +121,21 @@ pub(crate) async fn call(
         }
         "send_event" => {
             let room = room_id(spec)?;
-            let event = direct_event(spec)?;
-            let outcome = on_door!(run, spec, |door| door.send_event(&room, event));
+            let (channel, content) = (channel_id(spec)?, field(spec, "content")?);
+            let options = send_event_options(spec)?;
+            let outcome = run
+                .kit()
+                .send_event(&room, &channel, content, options)
+                .await;
             let called = finish(run, name, outcome, dump);
             let id = called.as_ref().ok().and_then(event_of);
             (called, id)
         }
         "post" => {
             let room = room_id(spec)?;
-            let post = post(spec)?;
-            let outcome = on_door!(run, spec, |door| door.post(&room, post));
+            let content = field(spec, "content")?;
+            let options = post_options(spec)?;
+            let outcome = run.kit().post(&room, content, options).await;
             let called = finish(run, name, outcome, dump);
             let id = called.as_ref().ok().and_then(event_of);
             (called, id)
@@ -156,7 +148,10 @@ pub(crate) async fn call(
                 &system_source(),
             ))
             .map_err(|error| format!("event: {error}"))?;
-            let outcome = on_door!(run, spec, |door| door.commit_event(&room, record));
+            let options = CommitEventOptions {
+                organization_id: organization_id(spec),
+            };
+            let outcome = run.kit().commit_event(&room, record, options).await;
             let called = finish(run, name, outcome, dump);
             let id = called.as_ref().ok().and_then(event_of);
             (called, id)
@@ -173,60 +168,75 @@ async fn lifecycle_call(
     Ok(match name {
         "update_event" => {
             let (room, event): (RoomId, EventId) = (room_id(spec)?, field(spec, "event_id")?);
-            let updates = EventUpdates {
+            let options = UpdateEventOptions {
                 content: optional::<EventContent>(spec, "content")?,
                 source: optional::<EventSource>(spec, "source")?,
                 metadata: optional::<Metadata>(spec, "metadata")?,
+                organization_id: organization_id(spec),
             };
-            let outcome = on_door!(run, spec, |door| door.update_event(&room, &event, updates));
+            let outcome = run.kit().update_event(&room, &event, options).await;
             finish(run, name, outcome, dump)
         }
         "delete_event" => {
             let (room, event): (RoomId, EventId) = (room_id(spec)?, field(spec, "event_id")?);
-            let cascade = optional::<bool>(spec, "cascade_replies")?.unwrap_or(true);
-            let outcome = on_door!(run, spec, |door| door.delete_event(&room, &event, cascade));
+            let options = DeleteEventOptions {
+                cascade_replies: optional::<bool>(spec, "cascade_replies")?.unwrap_or(true),
+                organization_id: organization_id(spec),
+            };
+            let outcome = run.kit().delete_event(&room, &event, options).await;
             finish(run, name, outcome, dump)
         }
         "create_room" => create_room(run, &spec["room"]).await?,
         "attach_channel" => {
             let (room, channel) = (room_id(spec)?, channel_id(spec)?);
-            let options = binding_options(spec)?;
-            let outcome = on_door!(run, spec, |door| door.attach_with(&room, &channel, options));
+            let options = AttachChannelOptions {
+                organization_id: organization_id(spec),
+                ..binding_options(spec)?
+            };
+            let outcome = run.kit().attach_channel(&room, &channel, options).await;
             finish(run, name, outcome, dump)
         }
         "detach_channel" => {
             let (room, channel) = (room_id(spec)?, channel_id(spec)?);
-            let outcome = on_door!(run, spec, |door| door.detach(&room, &channel));
-            finish(run, name, outcome, |_| Value::Null)
+            let options = DetachChannelOptions {
+                organization_id: organization_id(spec),
+            };
+            // A detach of a channel the room does not bind returns `false`;
+            // the suite names it `channel_not_bound`, as Python's runner does.
+            match run.kit().detach_channel(&room, &channel, options).await {
+                Ok(false) => Err(named("channel_not_bound")),
+                outcome => finish(run, name, outcome, |_| Value::Null),
+            }
         }
         "mute" | "unmute" | "set_access" | "set_visibility" => {
-            let (room, channel) = (room_id(spec)?, channel_id(spec)?);
-            let update = match name {
-                "mute" => BindingUpdate::mute(),
-                "unmute" => BindingUpdate::unmute(),
-                "set_access" => BindingUpdate {
-                    access: Some(field::<Access>(spec, "access")?),
-                    ..BindingUpdate::default()
-                },
-                _ => BindingUpdate::visibility(field::<Visibility>(spec, "visibility")?),
-            };
-            let outcome = on_door!(run, spec, |door| door
-                .update_binding(&room, &channel, update));
-            finish(run, name, outcome, dump)
+            binding_call(run, name, spec).await?
         }
         "close_room" => {
             let room = room_id(spec)?;
-            let outcome = on_door!(run, spec, |door| door.close_room(&room));
-            finish(run, name, outcome, dump)
+            let options = CloseRoomOptions {
+                organization_id: organization_id(spec),
+            };
+            finish(run, name, run.kit().close_room(&room, options).await, dump)
         }
         "archive_room" => {
             let room = room_id(spec)?;
-            let outcome = on_door!(run, spec, |door| door.archive_room(&room));
-            finish(run, name, outcome, dump)
+            let options = ArchiveRoomOptions {
+                organization_id: organization_id(spec),
+            };
+            finish(
+                run,
+                name,
+                run.kit().archive_room(&room, options).await,
+                dump,
+            )
         }
         "check_timers" => {
             let room = room_id(spec)?;
-            let outcome = match run.kit().check_timers().await {
+            let outcome = match run
+                .kit()
+                .check_all_timers(CheckAllTimersOptions::default())
+                .await
+            {
                 Ok(_) => run
                     .kit()
                     .store()
@@ -251,38 +261,74 @@ async fn lifecycle_call(
     })
 }
 
-fn direct_event(spec: &Value) -> Result<DirectEvent, Unreadable> {
-    let mut event = DirectEvent::new(channel_id(spec)?, field(spec, "content")?);
+/// A binding's change the scenario names: a mute, an unmute, its access or
+/// its visibility.
+async fn binding_call(
+    run: &std::sync::Arc<Run>,
+    name: &str,
+    spec: &Value,
+) -> Result<Called, Unreadable> {
+    let (room, channel) = (room_id(spec)?, channel_id(spec)?);
+    let organization_id = organization_id(spec);
+    let kit = run.kit();
+    let outcome = match name {
+        "mute" => {
+            kit.mute(&room, &channel, MuteOptions { organization_id })
+                .await
+        }
+        "unmute" => {
+            kit.unmute(&room, &channel, UnmuteOptions { organization_id })
+                .await
+        }
+        "set_access" => {
+            let access = field::<Access>(spec, "access")?;
+            let options = SetAccessOptions { organization_id };
+            kit.set_access(&room, &channel, access, options).await
+        }
+        _ => {
+            let visibility = field::<Visibility>(spec, "visibility")?;
+            let options = SetVisibilityOptions { organization_id };
+            kit.set_visibility(&room, &channel, visibility, options)
+                .await
+        }
+    };
+    Ok(finish(run, name, outcome, dump))
+}
+
+fn send_event_options(spec: &Value) -> Result<SendEventOptions, Unreadable> {
+    let mut options = SendEventOptions::default();
     if let Some(event_type) = optional::<EventType>(spec, "event_type")? {
-        event.event_type = event_type;
+        options.event_type = event_type;
     }
-    event.participant_id = optional::<ParticipantId>(spec, "participant_id")?;
+    options.participant_id = optional::<ParticipantId>(spec, "participant_id")?;
     if let Some(visibility) = optional::<Visibility>(spec, "visibility")? {
-        event.visibility = visibility;
+        options.visibility = visibility;
     }
-    event.response_visibility = optional(spec, "response_visibility")?;
-    event.addressed_to = optional(spec, "addressed_to")?;
-    event.parent_event_id = optional(spec, "parent_event_id")?;
-    event.idempotency_key = optional(spec, "idempotency_key")?;
-    event.metadata = optional(spec, "metadata")?.unwrap_or_default();
-    event.chain_depth = optional(spec, "chain_depth")?.unwrap_or_default();
-    event.standalone = optional(spec, "standalone")?.unwrap_or_default();
-    Ok(event)
+    options.response_visibility = optional(spec, "response_visibility")?;
+    options.addressed_to = optional(spec, "addressed_to")?;
+    options.parent_event_id = optional(spec, "parent_event_id")?;
+    options.idempotency_key = optional(spec, "idempotency_key")?;
+    options.metadata = optional(spec, "metadata")?.unwrap_or_default();
+    options.chain_depth = optional(spec, "chain_depth")?.unwrap_or_default();
+    options.standalone = optional(spec, "standalone")?.unwrap_or_default();
+    options.organization_id = organization_id(spec);
+    Ok(options)
 }
 
-fn post(spec: &Value) -> Result<Post, Unreadable> {
-    let mut post = Post::new(field(spec, "content")?);
-    post.participant_id = optional(spec, "participant_id")?;
-    post.addressed_to = optional(spec, "addressed_to")?.unwrap_or_default();
-    post.metadata = optional(spec, "metadata")?.unwrap_or_default();
-    post.channel_id = optional(spec, "channel_id")?;
-    post.idempotency_key = optional(spec, "idempotency_key")?;
-    post.chain_depth = optional(spec, "chain_depth")?.unwrap_or_default();
-    Ok(post)
+fn post_options(spec: &Value) -> Result<PostOptions, Unreadable> {
+    Ok(PostOptions {
+        participant_id: optional(spec, "participant_id")?,
+        addressed_to: optional(spec, "addressed_to")?.unwrap_or_default(),
+        metadata: optional(spec, "metadata")?.unwrap_or_default(),
+        channel_id: optional(spec, "channel_id")?,
+        organization_id: organization_id(spec),
+        idempotency_key: optional(spec, "idempotency_key")?,
+        chain_depth: optional(spec, "chain_depth")?.unwrap_or_default(),
+    })
 }
 
-fn binding_options(spec: &Value) -> Result<BindingOptions, Unreadable> {
-    let mut options = BindingOptions::default();
+fn binding_options(spec: &Value) -> Result<AttachChannelOptions, Unreadable> {
+    let mut options = AttachChannelOptions::default();
     if let Some(access) = optional::<Access>(spec, "access")? {
         options.access = access;
     }
@@ -301,24 +347,22 @@ pub(crate) async fn create_room(
     run: &std::sync::Arc<Run>,
     room: &Value,
 ) -> Result<Called, Unreadable> {
-    let id: RoomId = field(room, "id")?;
-    let mut options = RoomOptions::default();
-    if let Some(metadata) = optional::<Metadata>(room, "metadata")? {
-        options.metadata = metadata;
-    }
-    if let Some(timers) = room.get("timers") {
-        options.inactive_after_seconds = optional(timers, "inactive_after_seconds")?.flatten();
-        options.closed_after_seconds = optional(timers, "closed_after_seconds")?.flatten();
-    }
-    let outcome = match organization(room) {
-        Some(organization) => {
-            run.kit()
-                .for_organization(organization)
-                .create_room_with(&id, options)
-                .await
-        }
-        None => run.kit().create_room_with(&id, options).await,
+    let timers = match room.get("timers") {
+        Some(timers) => Some(RoomTimers {
+            inactive_after_seconds: optional(timers, "inactive_after_seconds")?.flatten(),
+            closed_after_seconds: optional(timers, "closed_after_seconds")?.flatten(),
+            ..RoomTimers::default()
+        }),
+        None => None,
     };
+    let options = CreateRoomOptions {
+        room_id: Some(field(room, "id")?),
+        metadata: optional::<Metadata>(room, "metadata")?.unwrap_or_default(),
+        organization_id: organization_id(room),
+        timers,
+        ..Default::default()
+    };
+    let outcome = run.kit().create_room(options).await;
     Ok(finish(run, "create_room", outcome, dump))
 }
 
@@ -330,16 +374,11 @@ pub(crate) async fn attach_binding(
 ) -> Result<(), String> {
     let id: RoomId = field(room, "id")?;
     let channel: ChannelId = field(binding, "channel_id")?;
-    let options = binding_options(binding)?;
-    let outcome = match organization(room) {
-        Some(organization) => {
-            run.kit()
-                .for_organization(organization)
-                .attach_with(&id, &channel, options)
-                .await
-        }
-        None => run.kit().attach_with(&id, &channel, options).await,
+    let options = AttachChannelOptions {
+        organization_id: organization_id(room),
+        ..binding_options(binding)?
     };
+    let outcome = run.kit().attach_channel(&id, &channel, options).await;
     outcome
         .map(drop)
         .map_err(|error| format!("attach {channel}: {error}"))

@@ -16,9 +16,9 @@
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::ConversationStore;
 use roomkit::model::{ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomId};
 use roomkit::testing::RecordingTransport;
+use roomkit::{AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions};
 
 use shared::Checks;
 
@@ -30,9 +30,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.register_channel(sms.clone())?;
     kit.register_channel(web.clone())?;
     let room = RoomId::new("room_1")?;
-    kit.create_room(&room).await?;
-    kit.attach(&room, sms.id()).await?;
-    kit.attach(&room, web.id()).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
+    kit.attach_channel(&room, sms.id(), AttachChannelOptions::default())
+        .await?;
+    kit.attach_channel(&room, web.id(), AttachChannelOptions::default())
+        .await?;
 
     for (channel, sender, name) in [
         (sms.id(), "+15551234567", "Alice"),
@@ -45,7 +51,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         message
             .metadata
             .insert("sender_name".to_owned(), name.into());
-        kit.process_inbound_in(&room, message).await?;
+        kit.process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
     }
 
     let timeline = shared::timeline(&kit, &room).await?;

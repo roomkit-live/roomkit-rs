@@ -21,8 +21,8 @@ use std::time::Duration;
 use roomkit::model::{ChannelId, ChannelType, EventContent, HookResult, InboundMessage, RoomId};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundResult, KitError, RoomKit,
-    RoomKitOptions, text_of,
+    AttachChannelOptions, CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger,
+    InboundResult, KitError, ProcessInboundOptions, RoomKit, RoomKitOptions, text_of,
 };
 
 use shared::{Checks, Log};
@@ -71,7 +71,15 @@ struct Chat {
 impl Chat {
     async fn says(self, text: &'static str) -> Result<InboundResult, KitError> {
         let message = InboundMessage::new(self.user, "user", EventContent::text(text));
-        self.kit.process_inbound_in(&self.room, message).await
+        self.kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(self.room.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
     }
 }
 
@@ -88,9 +96,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let scans = Log::new();
     scan_off_the_lock(&kit, &scans)?;
     let room = RoomId::new("room")?;
-    kit.create_room(&room).await?;
-    kit.attach(&room, user.id()).await?;
-    kit.attach(&room, agent.id()).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
+    kit.attach_channel(&room, user.id(), AttachChannelOptions::default())
+        .await?;
+    kit.attach_channel(&room, agent.id(), AttachChannelOptions::default())
+        .await?;
     let chat = Chat {
         kit: kit.clone(),
         room: room.clone(),

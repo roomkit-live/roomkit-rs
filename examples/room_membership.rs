@@ -26,7 +26,10 @@ use roomkit::model::{
     RoomId,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, InboundResult, RoomKit, StoreError, is_deleted};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, InboundResult,
+    ProcessInboundOptions, RoomKit, StoreError, is_deleted,
+};
 
 use shared::{Checks, Clock, Log};
 
@@ -60,8 +63,13 @@ impl Team {
             async { Ok(HookResult::allow()) }
         })?;
         let room = RoomId::new("team")?;
-        kit.create_room(&room).await?;
-        kit.attach(&room, ws.id()).await?;
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        })
+        .await?;
+        kit.attach_channel(&room, ws.id(), AttachChannelOptions::default())
+            .await?;
         Ok(Self {
             kit,
             clock,
@@ -112,7 +120,16 @@ impl Team {
     async fn says(&self, who: &str, text: &str) -> Result<EventId, Box<dyn Error>> {
         println!("  {who} writes {text:?}.");
         let message = InboundMessage::new(self.ws.clone(), who, EventContent::text(text));
-        let result = self.kit.process_inbound_in(&self.room, message).await?;
+        let result = self
+            .kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(self.room.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
         Ok(result.event.ok_or("the message was refused")?.id)
     }
 
@@ -130,7 +147,16 @@ impl Team {
             event_type: EventType::Delete,
             ..InboundMessage::new(self.ws.clone(), who, content)
         };
-        Ok(self.kit.process_inbound_in(&self.room, message).await?)
+        Ok(self
+            .kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(self.room.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?)
     }
 
     /// Whether the stored event `id` is marked deleted.

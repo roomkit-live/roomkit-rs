@@ -37,6 +37,7 @@ use roomkit::model::{
     ToolCallContent, ToolCallOutcome,
 };
 use roomkit::testing::RecordingTransport;
+use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
 use roomkit_ai::ToolPolicy;
 use roomkit_mcp::{McpCommand, McpError, McpServer};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -90,7 +91,15 @@ async fn run() -> Result<ExitCode, Box<dyn Error>> {
         "+15551234567",
         EventContent::text("Where is order 42? Cancel it, and wipe my data."),
     );
-    let result = kit.process_inbound_in(&room, message).await?;
+    let result = kit
+        .process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
     kit.idle().await;
     let timeline = shared::timeline(&kit, &room).await?;
     print_ends(&timeline);
@@ -135,9 +144,18 @@ async fn shop_room(
     ))?;
     kit.register_channel(agent)?;
     let room = RoomId::new("room_1")?;
-    kit.create_room(&room).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
     for channel in ["sms", "assistant"] {
-        kit.attach(&room, &ChannelId::new(channel)?).await?;
+        kit.attach_channel(
+            &room,
+            &ChannelId::new(channel)?,
+            AttachChannelOptions::default(),
+        )
+        .await?;
     }
     Ok((kit, room))
 }

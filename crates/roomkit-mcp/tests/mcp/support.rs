@@ -11,7 +11,10 @@ use roomkit::model::{
     ToolCallContent,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, RoomKit};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitOptions,
+};
 use roomkit_ai::AiAgent;
 use roomkit_ai::testing::ScriptedProvider;
 use roomkit_mcp::{McpCommand, McpServer};
@@ -122,13 +125,20 @@ pub(crate) struct Room {
 impl Room {
     /// The room, its agent the one `agent` builds.
     pub(crate) async fn with(agent: AiAgent<ScriptedProvider>) -> Self {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
             .unwrap();
         kit.register_channel(agent).unwrap();
-        kit.create_room(&room_id()).await.unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
         for id in ["sms", "assistant"] {
-            kit.attach(&room_id(), &channel(id)).await.unwrap();
+            kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+                .await
+                .unwrap();
         }
         Self { kit }
     }
@@ -137,7 +147,13 @@ impl Room {
         let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text(text));
         let result = self
             .kit
-            .process_inbound_in(&room_id(), message)
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         assert!(result.error.is_none(), "{:?}", result.error);

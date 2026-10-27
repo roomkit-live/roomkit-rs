@@ -41,7 +41,8 @@ use roomkit::model::{
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, DeliveryStream, RoomKit, StreamItem, text_of,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
+    DeliveryStream, ProcessInboundOptions, RoomKit, StreamItem, text_of,
 };
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -196,9 +197,18 @@ async fn bakery(
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent)?;
     let room = RoomId::new("bakery")?;
-    kit.create_room(&room).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
     for channel in ["screen", "sms", "assistant"] {
-        kit.attach(&room, &ChannelId::new(channel)?).await?;
+        kit.attach_channel(
+            &room,
+            &ChannelId::new(channel)?,
+            AttachChannelOptions::default(),
+        )
+        .await?;
     }
     Ok((kit, screen, sms, room))
 }
@@ -212,7 +222,15 @@ async fn ask(
     text: &str,
 ) -> Result<(), Box<dyn Error>> {
     let message = InboundMessage::new(sms.id().clone(), number, EventContent::text(text));
-    let result = kit.process_inbound_in(room, message).await?;
+    let result = kit
+        .process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
     kit.idle().await;
     if let Some(error) = result.error {
         println!("  the turn failed: {}", error.message);

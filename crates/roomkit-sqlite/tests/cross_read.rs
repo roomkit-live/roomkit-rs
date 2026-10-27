@@ -22,7 +22,7 @@ use roomkit::model::{
     InboundMessage, RoomId, RoomUpdates, Timestamp,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
-use roomkit::{ConversationStore, RoomFilter, RoomKit, RoomKitOptions};
+use roomkit::{ConversationStore, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions};
 use roomkit_sqlite::{OpenError, SqliteStore};
 use rusqlite::Connection;
 use serde_json::Value;
@@ -71,11 +71,11 @@ async fn fixture_kit(file: &TempFile) -> RoomKit<SqliteStore> {
         .timers
         .last_activity_at
         .map_or(room.updated_at, |activity| activity.max(room.updated_at));
-    let kit = kit_with_environment(
+
+    kit_with_environment(
         RoomKitOptions::with_store(store),
         SequentialEnvironment::new(written),
-    );
-    kit
+    )
 }
 
 /// The fixture is the one `make sqlite-fixture` wrote, at a roomkit commit.
@@ -410,7 +410,16 @@ async fn a_channel_python_detached_stays_detached() {
     let mut results = Vec::new();
     for id in ["ws-gone", "ws-user"] {
         let message = InboundMessage::new(channel(id), "user-1", EventContent::text("Still here"));
-        let result = kit.process_inbound_in(&full, message).await.unwrap();
+        let result = kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(full.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
         results.push((result.blocked, result.reason));
     }
     let bound: Vec<String> = kit
@@ -453,7 +462,13 @@ async fn what_python_reads_beside_the_timeline_is_kept_right() {
     );
     message.idempotency_key = Some("rust-key".to_owned());
     let event = kit
-        .process_inbound_in(&full, message)
+        .process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(full.clone()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap()
         .event
@@ -628,7 +643,16 @@ async fn a_delete_marks_its_target_s_edits_as_python_reads_them() {
         EventContent::Delete(DeleteContent::new(edited.clone())),
     );
     delete.event_type = EventType::Delete;
-    let result = kit.process_inbound_in(&full, delete).await.unwrap();
+    let result = kit
+        .process_inbound(
+            delete,
+            ProcessInboundOptions {
+                room_id: Some(full.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     kit.shutdown().await;
     let marks: Vec<Option<bool>> = {
         let connection = Connection::open(file.path()).unwrap();

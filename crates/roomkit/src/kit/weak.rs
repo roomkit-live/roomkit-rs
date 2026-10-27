@@ -40,7 +40,7 @@ use crate::store::InMemoryStore;
 ///     async move {
 ///         if let Some(kit) = kit {
 ///             // The hook's failure would be logged.
-///             let _attached = kit.attach(&event.room_id, &agent).await;
+///             let _attached = kit.attach_channel(&event.room_id, &agent, Default::default()).await;
 ///         }
 ///     }
 /// })?;

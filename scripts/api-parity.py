@@ -36,7 +36,8 @@ The rules, which apply with no entry:
 - a parameter typed `<Method>Options` (`<Type>Options` for `new`) stands for
   the method's defaulted Python parameters, its fields for theirs; a Python
   parameter without a default is a positional Rust one, and one with a
-  default is an option;
+  default is an option; a `**kwargs` stands for every field a `[[map]]`
+  entry gives its name;
 - a struct a caller builds, an options struct or a model, is not
   `#[non_exhaustive]`, which refuses the struct update standing for Python's
   keywords outside its crate (convention 9); an enum may be;

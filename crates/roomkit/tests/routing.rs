@@ -14,15 +14,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
-    ChannelType, ErrorRecord, EventContent, Identity, IdentityId, InboundMessage, Participant,
-    ParticipantId, RoomContext, RoomEvent, RoomId, Timestamp,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    ErrorRecord, EventContent, Identity, IdentityId, InboundMessage, Participant, ParticipantId,
+    RoomContext, RoomEvent, RoomId, Timestamp,
 };
 use roomkit::testing::{EchoAgent, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    Addressing, Channel, ChannelDeclaration, ChannelError, ChannelOf, ConversationStore,
-    DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookTrigger, InMemoryStore,
-    InboundError, InboundRoomRouter, KitError, RoomFilter, RoomKit, RoomKitOptions, RouteOptions,
+    Addressing, AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ChannelOf,
+    CloseRoomOptions, ConversationStore, CreateRoomOptions, DefaultInboundRoomRouter,
+    DefaultInboundRoomRouterOptions, HookTrigger, InMemoryStore, InboundError, InboundRoomRouter,
+    KitError, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions, RouteOptions,
     RouterError, RouterFuture, WeakRoomKit, text_of,
 };
 use tokio::sync::{Barrier, Notify};
@@ -97,7 +98,7 @@ impl Channel for Provider {
 /// A kit with an SMS number and an agent an `ON_ROOM_CREATED` hook attaches
 /// to every room created for a message (RFC Appendix B.1).
 fn kit_with_agent() -> (RoomKit, Provider) {
-    kit_with_agent_on(Default::default())
+    kit_with_agent_on(RoomKitOptions::default())
 }
 
 /// [`kit_with_agent`], routed by `router`.
@@ -147,7 +148,13 @@ fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Provider) {
     kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
         let kit = attaching.clone();
         async move {
-            kit.attach(&event.room_id, &channel("ai")).await.unwrap();
+            kit.attach_channel(
+                &event.room_id,
+                &channel("ai"),
+                AttachChannelOptions::default(),
+            )
+            .await
+            .unwrap();
         }
     })
     .unwrap();
@@ -160,7 +167,10 @@ fn message(from: &str, text: &str) -> InboundMessage {
 
 /// Routes `message` and returns the room it landed in.
 async fn routed(kit: &RoomKit, message: InboundMessage) -> RoomId {
-    let result = kit.process_inbound(message).await.unwrap();
+    let result = kit
+        .process_inbound(message, ProcessInboundOptions::default())
+        .await
+        .unwrap();
     result.event.unwrap().room_id
 }
 
@@ -191,9 +201,18 @@ async fn texts(kit: &RoomKit, room_id: &RoomId) -> Vec<String> {
 /// A room the host opens with the SMS number attached at its defaults.
 async fn open_room(kit: &RoomKit, id: &str) -> RoomId {
     let room_id = room(id);
-    kit.create_room(&room_id).await.unwrap();
-    kit.attach(&room_id, &channel("sms")).await.unwrap();
-    kit.attach(&room_id, &channel("ai")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id, &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit.attach_channel(&room_id, &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     room_id
 }
 
@@ -347,12 +366,26 @@ async fn a_room_opened_naming_no_one_takes_its_first_sender_only() {
 async fn a_message_is_routed_among_its_caller_s_organization_only() {
     let (kit, _sms) = kit_with_agent();
     let banks = room("bank_room");
-    let bank = kit.for_organization("bank");
-    bank.create_room(&banks).await.unwrap();
-    bank.attach(&banks, &channel("sms")).await.unwrap();
+    let bank = || Some("bank".to_owned());
+    let options = CreateRoomOptions {
+        room_id: Some(banks.clone()),
+        organization_id: bank(),
+        ..Default::default()
+    };
+    kit.create_room(options).await.unwrap();
+    let options = AttachChannelOptions {
+        organization_id: bank(),
+        ..Default::default()
+    };
+    kit.attach_channel(&banks, &channel("sms"), options)
+        .await
+        .unwrap();
+    let clinic = ProcessInboundOptions {
+        organization_id: Some("clinic".to_owned()),
+        ..Default::default()
+    };
     let result = kit
-        .for_organization("clinic")
-        .process_inbound(message(ALICE, "Bonjour"))
+        .process_inbound(message(ALICE, "Bonjour"), clinic)
         .await
         .unwrap();
     let landed = result.event.unwrap().room_id;
@@ -424,7 +457,7 @@ async fn a_custom_router_routes_to_the_room_it_chooses() {
 #[tokio::test]
 async fn a_custom_router_s_room_recorded_for_another_sender_gives_the_message_a_new_room() {
     let router = Arc::new(ByTicket::default());
-    let (kit, _sms) = kit_routed_by(router.clone());
+    let (kit, _sms) = kit_routed_by(Arc::<ByTicket>::clone(&router));
     let ticket = open_room(&kit, "ticket_42").await;
     routed(&kit, on_ticket(ALICE, "ticket_42")).await;
     let bobs = routed(&kit, on_ticket(BOB, "ticket_42")).await;
@@ -445,10 +478,17 @@ async fn a_custom_router_s_room_recorded_for_another_sender_gives_the_message_a_
 async fn a_custom_router_s_group_room_takes_every_sender() {
     let (kit, _sms) = kit_routed_by(Arc::new(ByTicket::default()));
     let group = room("group");
-    kit.create_room(&group).await.unwrap();
-    let mut options = BindingOptions::default();
-    options.group = true;
-    kit.attach_with(&group, &channel("sms"), options)
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(group.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let options = AttachChannelOptions {
+        group: true,
+        ..Default::default()
+    };
+    kit.attach_channel(&group, &channel("sms"), options)
         .await
         .unwrap();
     let landed = [
@@ -467,11 +507,16 @@ async fn a_custom_router_s_group_room_takes_every_sender() {
 #[tokio::test]
 async fn a_custom_router_s_closed_room_gives_the_message_a_new_room() {
     let router = Arc::new(ByTicket::default());
-    let (kit, _sms) = kit_routed_by(router.clone());
+    let (kit, _sms) = kit_routed_by(Arc::<ByTicket>::clone(&router));
     let ticket = open_room(&kit, "ticket_42").await;
-    kit.close_room(&ticket).await.unwrap();
+    kit.close_room(&ticket, CloseRoomOptions::default())
+        .await
+        .unwrap();
     let result = kit
-        .process_inbound(on_ticket(ALICE, "ticket_42"))
+        .process_inbound(
+            on_ticket(ALICE, "ticket_42"),
+            ProcessInboundOptions::default(),
+        )
         .await
         .unwrap();
     let landed = result.event.map(|event| event.room_id);
@@ -503,7 +548,9 @@ impl InboundRoomRouter for Unreachable {
 #[tokio::test]
 async fn a_failing_router_fails_the_message_with_nothing_written() {
     let (kit, sms) = kit_routed_by(Arc::new(Unreachable));
-    let failed = kit.process_inbound(message(ALICE, "Bonjour")).await;
+    let failed = kit
+        .process_inbound(message(ALICE, "Bonjour"), ProcessInboundOptions::default())
+        .await;
     let rooms = kit
         .store()
         .list_rooms(&RoomFilter::default())
@@ -545,7 +592,7 @@ async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
         (Provider::new("telegram", ChannelType::TELEGRAM), "chat_id"),
         (slack(), "channel"),
     ] {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         let channel_id = chat_channel.declaration.channel_id.clone();
         kit.register_channel(chat_channel.clone()).unwrap();
         kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
@@ -554,7 +601,13 @@ async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
         kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
             let kit = attaching.clone();
             async move {
-                kit.attach(&event.room_id, &channel("ai")).await.unwrap();
+                kit.attach_channel(
+                    &event.room_id,
+                    &channel("ai"),
+                    AttachChannelOptions::default(),
+                )
+                .await
+                .unwrap();
             }
         })
         .unwrap();
@@ -593,18 +646,27 @@ async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
 async fn a_room_the_host_opened_for_a_chat_id_is_the_chat_s() {
     let mut landed = Vec::new();
     for held in [7.into(), "7".into()] {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         let telegram = Provider::new("tg", ChannelType::TELEGRAM);
         kit.register_channel(telegram.clone()).unwrap();
         kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
             .unwrap();
-        kit.create_room(&room("chat-room")).await.unwrap();
-        kit.attach(&room("chat-room"), &channel("ai"))
-            .await
-            .unwrap();
-        let mut options = BindingOptions::default();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room("chat-room")),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        kit.attach_channel(
+            &room("chat-room"),
+            &channel("ai"),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+        let mut options = AttachChannelOptions::default();
         options.metadata.insert("telegram_chat_id".to_owned(), held);
-        kit.attach_with(&room("chat-room"), &channel("tg"), options)
+        kit.attach_channel(&room("chat-room"), &channel("tg"), options)
             .await
             .unwrap();
         let mut message = InboundMessage::new(channel("tg"), "7", EventContent::text("Hi"));
@@ -782,9 +844,15 @@ async fn a_room_that_heard_another_sender_before_the_record_routes_the_message_o
         tokio::spawn(async move { routed(&kit, message(ALICE, "Bonjour")).await })
     };
     router.routed.notified().await;
-    kit.process_inbound_in(&opened, message(BOB, "Hello"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message(BOB, "Hello"),
+        ProcessInboundOptions {
+            room_id: Some(opened.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     router.go.notify_one();
     let landed = alices.await.unwrap();
     assert_eq!(

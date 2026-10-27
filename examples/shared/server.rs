@@ -18,8 +18,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::routing::get;
-use roomkit::model::{BindingOptions, ChannelId, Participant, ParticipantId, RoomId, Timestamp};
-use roomkit::{ConversationStore, RoomKit, RoomKitOptions};
+use roomkit::model::{ChannelId, Participant, ParticipantId, RoomId, Timestamp};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, RoomKit, RoomKitOptions,
+};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use roomkit_sqlite::SqliteStore;
 use tokio::net::TcpListener;
@@ -300,13 +302,21 @@ impl App {
         let _one_at_a_time = self.joining.lock().await;
         let store = self.kit.store();
         if store.get_room(room_id).await?.is_none() {
-            self.kit.create_room(room_id).await?;
-            self.kit.attach(room_id, &self.agent).await?;
-            // Several people share the channel's conversation (RFC §10.4).
-            let mut group = BindingOptions::default();
-            group.group = true;
+            let room = CreateRoomOptions {
+                room_id: Some(room_id.clone()),
+                ..Default::default()
+            };
+            self.kit.create_room(room).await?;
             self.kit
-                .attach_with(room_id, self.websocket.id(), group)
+                .attach_channel(room_id, &self.agent, AttachChannelOptions::default())
+                .await?;
+            // Several people share the channel's conversation (RFC §10.4).
+            let group = AttachChannelOptions {
+                group: true,
+                ..Default::default()
+            };
+            self.kit
+                .attach_channel(room_id, self.websocket.id(), group)
                 .await?;
         }
         if store.get_participant(room_id, user).await?.is_none() {

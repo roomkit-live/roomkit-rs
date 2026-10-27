@@ -10,7 +10,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use roomkit::model::RoomId;
-use roomkit::{ConversationStore, RoomFilter, RoomKitOptions};
+use roomkit::{
+    ArchiveRoomOptions, CloseRoomOptions, ConversationStore, RoomFilter, RoomKitOptions,
+};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -76,11 +78,14 @@ async fn set_up(run: &Arc<Run>, setup: &Value) -> Result<(), String> {
         let status = room["status"].as_str();
         let id = RoomId::new(room["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
         if matches!(status, Some("closed" | "archived")) {
-            run.kit().close_room(&id).await.map_err(|e| e.to_string())?;
+            run.kit()
+                .close_room(&id, CloseRoomOptions::default())
+                .await
+                .map_err(|e| e.to_string())?;
         }
         if status == Some("archived") {
             run.kit()
-                .archive_room(&id)
+                .archive_room(&id, ArchiveRoomOptions::default())
                 .await
                 .map_err(|e| e.to_string())?;
         }

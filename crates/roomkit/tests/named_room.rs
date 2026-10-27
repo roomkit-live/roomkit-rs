@@ -13,16 +13,17 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
-    ChannelType, EventContent, HookResult, InboundMessage, Metadata, Participant, ParticipantId,
-    RoomContext, RoomEvent, RoomId, Timestamp,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    EventContent, HookResult, InboundMessage, Metadata, Participant, ParticipantId, RoomContext,
+    RoomEvent, RoomId, Timestamp,
 };
 use roomkit::testing::{
     EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, FrameworkEvent, HookExecution,
-    HookSpec, HookTrigger, InboundError, KitError, RoomFilter, RoomKit,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
+    CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundError,
+    KitError, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions,
 };
 use tokio::sync::{Notify, broadcast, mpsc};
 
@@ -41,7 +42,7 @@ fn message(from: &RecordingTransport, text: &str) -> InboundMessage {
 /// A kit with no room, an SMS transport and an echo agent registered.
 fn kit_without_rooms() -> (RoomKit, RecordingTransport) {
     let kit = kit_with_environment(
-        Default::default(),
+        RoomKitOptions::default(),
         SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
     );
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
@@ -68,8 +69,20 @@ async fn two_messages_naming_one_missing_room_create_it_once() {
     let mut events = kit.subscribe();
     let room = room_id();
     let (first, second) = tokio::join!(
-        kit.process_inbound_in(&room, message(&sms, "one")),
-        kit.process_inbound_in(&room, message(&sms, "two")),
+        kit.process_inbound(
+            message(&sms, "one"),
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            }
+        ),
+        kit.process_inbound(
+            message(&sms, "two"),
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            }
+        ),
     );
     first.unwrap();
     second.unwrap();
@@ -105,21 +118,36 @@ async fn an_agent_attached_by_an_on_room_created_hook_answers_the_first_message(
         async move {
             // Slow enough that an attach not awaited would come too late.
             tokio::time::sleep(Duration::from_millis(20)).await;
-            kit.attach(&event.room_id, &channel("ai")).await.unwrap();
+            kit.attach_channel(
+                &event.room_id,
+                &channel("ai"),
+                AttachChannelOptions::default(),
+            )
+            .await
+            .unwrap();
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message(&sms, "Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(sms.texts(), ["You said: Bonjour"]);
 }
 
 #[tokio::test]
 async fn a_room_created_for_an_organization_belongs_to_it() {
     let (kit, sms) = kit_without_rooms();
-    kit.for_organization("bank")
-        .process_inbound_in(&room_id(), message(&sms, "Bonjour"))
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        organization_id: Some("bank".to_owned()),
+    };
+    kit.process_inbound(message(&sms, "Bonjour"), options)
         .await
         .unwrap();
     let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
@@ -131,14 +159,17 @@ async fn a_room_created_for_an_organization_belongs_to_it() {
 #[tokio::test]
 async fn a_room_of_another_organization_is_not_found_with_nothing_written() {
     let (kit, sms) = kit_without_rooms();
-    kit.for_organization("bank")
-        .create_room(&room_id())
-        .await
-        .unwrap();
-    let refused = kit
-        .for_organization("clinic")
-        .process_inbound_in(&room_id(), message(&sms, "Bonjour"))
-        .await;
+    let bank = CreateRoomOptions {
+        room_id: Some(room_id()),
+        organization_id: Some("bank".to_owned()),
+        ..Default::default()
+    };
+    kit.create_room(bank).await.unwrap();
+    let clinic = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        organization_id: Some("clinic".to_owned()),
+    };
+    let refused = kit.process_inbound(message(&sms, "Bonjour"), clinic).await;
     assert_eq!(
         (
             refused,
@@ -155,7 +186,12 @@ async fn a_room_of_another_organization_is_not_found_with_nothing_written() {
 #[tokio::test]
 async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
     let (kit, sms) = kit_without_rooms();
-    kit.create_room(&room_id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     let jean = Participant::new(
         ParticipantId::new("+15551234567").unwrap(),
         room_id(),
@@ -172,9 +208,15 @@ async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), message(&sms, "Bonjour"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        message(&sms, "Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(read.recv().await, Some(vec![jean]));
 }
 
@@ -195,7 +237,13 @@ async fn an_on_room_created_hook_that_hangs_is_bounded_by_its_timeout() {
     let room = room_id();
     let sent = tokio::time::timeout(
         Duration::from_secs(5),
-        kit.process_inbound_in(&room, message(&sms, "Bonjour")),
+        kit.process_inbound(
+            message(&sms, "Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        ),
     )
     .await;
     let mut timed_out = false;
@@ -232,7 +280,13 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
     .unwrap();
     let mut events = kit.subscribe();
     let room = room_id();
-    let call = kit.process_inbound_in(&room, message(&sms, "Bonjour"));
+    let call = kit.process_inbound(
+        message(&sms, "Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        },
+    );
     tokio::select! {
         result = call => panic!("the call ended before its room's hooks: {result:?}"),
         () = observing.notified() => {}
@@ -326,17 +380,26 @@ impl Channel for Sms {
 /// attached to; the SMS channel too, when `attach_sms` names the number its
 /// binding delivers to.
 async fn sms_room(attach_sms: Option<&str>) -> (RoomKit, Sms) {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let sms = Sms::new();
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
         .unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.attach(&room_id(), &channel("ai")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     if let Some(number) = attach_sms {
-        let mut recipient = BindingOptions::default();
-        recipient.metadata = Metadata::from_iter([("phone_number".to_owned(), number.into())]);
-        kit.attach_with(&room_id(), &channel("sms"), recipient)
+        let recipient = AttachChannelOptions {
+            metadata: Metadata::from_iter([("phone_number".to_owned(), number.into())]),
+            ..Default::default()
+        };
+        kit.attach_channel(&room_id(), &channel("sms"), recipient)
             .await
             .unwrap();
     }
@@ -357,9 +420,15 @@ fn customer(text: &str) -> InboundMessage {
 #[tokio::test]
 async fn an_sms_channel_attached_to_an_existing_room_names_no_recipient_and_sends_nothing() {
     let (kit, sms) = sms_room(None).await;
-    kit.process_inbound_in(&room_id(), customer("Bonjour"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        customer("Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let bound = kit.store().list_bindings(&room_id()).await.unwrap();
     let sms_binding = bound
         .iter()
@@ -374,9 +443,15 @@ async fn an_sms_channel_attached_to_an_existing_room_names_no_recipient_and_send
 #[tokio::test]
 async fn an_sms_binding_the_integrator_addresses_receives_the_answer() {
     let (kit, sms) = sms_room(Some("+15551234567")).await;
-    kit.process_inbound_in(&room_id(), customer("Bonjour"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        customer("Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(sms.sent_to(), ["+15551234567"]);
 }
 
@@ -384,7 +459,7 @@ async fn an_sms_binding_the_integrator_addresses_receives_the_answer() {
 /// to the sender, in E.164, and the agent its hook attaches answers there.
 #[tokio::test]
 async fn a_room_created_for_an_sms_sender_answers_at_their_number() {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let sms = Sms::new();
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
@@ -393,13 +468,25 @@ async fn a_room_created_for_an_sms_sender_answers_at_their_number() {
     kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
         let kit = attaching.clone();
         async move {
-            kit.attach(&event.room_id, &channel("ai")).await.unwrap();
+            kit.attach_channel(
+                &event.room_id,
+                &channel("ai"),
+                AttachChannelOptions::default(),
+            )
+            .await
+            .unwrap();
         }
     })
     .unwrap();
-    kit.process_inbound_in(&room_id(), customer("Bonjour"))
-        .await
-        .unwrap();
+    kit.process_inbound(
+        customer("Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(sms.sent_to(), ["+15551234567"]);
 }
 

@@ -310,6 +310,12 @@ class Comparison:
         renames = renames or {}
         taken: set[str] = set()
         for param in python_signature(member_spec):
+            named = [r for r in rust if renames.get(r.name) == param.name]
+            if param.variadic and named:
+                # `**kwargs` stands for every parameter a [[map]] entry names
+                # it for: the fields the keywords reach.
+                taken.update(r.path for r in named)
+                continue
             pair = next((r for r in rust if r.path not in taken and self._stands_for(param.name, r, renames)), None)
             if pair is None:
                 self._find("python", f"{python_path}({param.name})", "no Rust parameter", *owner)

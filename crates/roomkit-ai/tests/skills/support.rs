@@ -11,7 +11,10 @@ use roomkit::model::{
     ToolCallContent,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, InboundResult};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, InboundResult,
+    ProcessInboundOptions, RoomKitOptions,
+};
 use roomkit_ai::testing::ScriptedProvider;
 use roomkit_ai::{AiAgent, SkillRegistry};
 
@@ -108,13 +111,20 @@ impl Room {
         skills: SkillRegistry,
         adjust: impl FnOnce(AiAgent<ScriptedProvider>) -> AiAgent<ScriptedProvider>,
     ) -> Self {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         kit.register_channel(sms).unwrap();
         kit.register_channel(agent(model, skills, adjust)).unwrap();
-        kit.create_room(&room_id()).await.unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
         for id in ["sms", "assistant"] {
-            kit.attach(&room_id(), &channel(id)).await.unwrap();
+            kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+                .await
+                .unwrap();
         }
         Self { kit }
     }
@@ -122,7 +132,13 @@ impl Room {
     pub(crate) async fn says(&self, text: &str) -> InboundResult {
         let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text(text));
         self.kit
-            .process_inbound_in(&room_id(), message)
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
     }

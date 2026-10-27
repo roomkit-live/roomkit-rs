@@ -18,7 +18,10 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventStatus, InboundMessage, RoomEvent, RoomId,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{HookTrigger, RoomKit, text_of};
+use roomkit::{
+    AttachChannelOptions, CreateRoomOptions, HookTrigger, MuteOptions, ProcessInboundOptions,
+    RoomKit, UnmuteOptions, text_of,
+};
 
 use shared::{Checks, Log, Script, ScriptedAgent};
 
@@ -65,7 +68,14 @@ async fn says(
         from.id().as_str(),
         EventContent::text(text),
     );
-    kit.process_inbound_in(room, message).await?;
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -95,25 +105,33 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     observe_mutes(&kit, &changes)?;
 
     let room = RoomId::new("support")?;
-    kit.create_room(&room).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
     for channel in [customer.id(), agent.id(), assistant.id()] {
-        kit.attach(&room, channel).await?;
+        kit.attach_channel(&room, channel, AttachChannelOptions::default())
+            .await?;
     }
 
     println!("The assistant answers the customer.");
     says(&kit, &room, &customer, "I need help with my order").await?;
 
     println!("A human agent takes over: the integrator mutes the assistant.");
-    kit.mute(&room, assistant.id()).await?;
+    kit.mute(&room, assistant.id(), MuteOptions::default())
+        .await?;
     let delivered_before = customer.texts().len();
     says(&kit, &room, &customer, "It's order #12345").await?;
     says(&kit, &room, &agent, "Order #12345 shipped yesterday.").await?;
     let while_muted = customer.texts().split_off(delivered_before);
     println!("  The customer received: {while_muted:?}");
-    kit.mute(&room, assistant.id()).await?;
+    kit.mute(&room, assistant.id(), MuteOptions::default())
+        .await?;
 
     println!("The human agent is done: the integrator unmutes the assistant.");
-    kit.unmute(&room, assistant.id()).await?;
+    kit.unmute(&room, assistant.id(), UnmuteOptions::default())
+        .await?;
     says(&kit, &room, &customer, "Thanks! One more question.").await?;
 
     let timeline = shared::timeline(&kit, &room).await?;

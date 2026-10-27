@@ -28,11 +28,14 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    BindingOptions, ChannelId, ChannelType, EventContent, Identity, IdentityId, InboundMessage,
-    Participant, ParticipantId, RoomId,
+    ChannelId, ChannelType, EventContent, Identity, IdentityId, InboundMessage, Participant,
+    ParticipantId, RoomId,
 };
 use roomkit::testing::EchoAgent;
-use roomkit::{ConversationStore, RoomKit, StoreError};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
+    StoreError,
+};
 
 use shared::{Checks, Clock, SmsNumber};
 
@@ -90,12 +93,33 @@ impl Bank {
 
     /// A room of the bank, bound to its agent, and to its number with
     /// `options`.
-    async fn open(&self, room: &str, options: BindingOptions) -> Result<RoomId, Box<dyn Error>> {
+    async fn open(
+        &self,
+        room: &str,
+        options: AttachChannelOptions,
+    ) -> Result<RoomId, Box<dyn Error>> {
         let room_id = RoomId::new(room)?;
-        let bank = self.kit.for_organization(BANK);
-        bank.create_room(&room_id).await?;
-        bank.attach_with(&room_id, self.sms.id(), options).await?;
-        bank.attach(&room_id, self.agent.id()).await?;
+        let bank = || Some(BANK.to_owned());
+        let room = CreateRoomOptions {
+            room_id: Some(room_id.clone()),
+            organization_id: bank(),
+            ..Default::default()
+        };
+        self.kit.create_room(room).await?;
+        let sms = AttachChannelOptions {
+            organization_id: bank(),
+            ..options
+        };
+        self.kit
+            .attach_channel(&room_id, self.sms.id(), sms)
+            .await?;
+        let agent = AttachChannelOptions {
+            organization_id: bank(),
+            ..Default::default()
+        };
+        self.kit
+            .attach_channel(&room_id, self.agent.id(), agent)
+            .await?;
         Ok(room_id)
     }
 
@@ -107,7 +131,7 @@ impl Bank {
         identity_id: &IdentityId,
         room: &str,
     ) -> Result<RoomId, Box<dyn Error>> {
-        let room_id = self.open(room, BindingOptions::default()).await?;
+        let room_id = self.open(room, AttachChannelOptions::default()).await?;
         let member = Participant {
             identity_id: Some(identity_id.clone()),
             ..Participant::new(
@@ -130,8 +154,10 @@ impl Bank {
         room: &str,
     ) -> Result<RoomId, Box<dyn Error>> {
         let correspondent = ParticipantId::new(identity_id.as_str())?;
-        let mut naming = BindingOptions::default();
-        naming.participant_id = Some(correspondent);
+        let naming = AttachChannelOptions {
+            participant_id: Some(correspondent),
+            ..Default::default()
+        };
         self.open(room, naming).await
     }
 
@@ -140,11 +166,11 @@ impl Bank {
     async fn text_from(&self, organization: &str, number: &str) -> Result<RoomId, Box<dyn Error>> {
         let message =
             InboundMessage::new(self.sms.id().clone(), number, EventContent::text("Bonjour"));
-        let result = self
-            .kit
-            .for_organization(organization)
-            .process_inbound(message)
-            .await?;
+        let options = ProcessInboundOptions {
+            organization_id: Some(organization.to_owned()),
+            ..Default::default()
+        };
+        let result = self.kit.process_inbound(message, options).await?;
         let room = result.event.ok_or("the message was refused")?.room_id;
         println!("{number} texts {organization}: routed to {room}.");
         Ok(room)

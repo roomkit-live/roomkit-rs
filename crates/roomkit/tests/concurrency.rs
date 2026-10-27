@@ -22,7 +22,10 @@ use roomkit::model::{
     RoomId,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
-use roomkit::{ConversationStore, HookExecution, HookSpec, HookTrigger, RoomKit, text_of};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
+    HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions, text_of,
+};
 use tokio::sync::Barrier;
 
 const ROOMS: usize = 8;
@@ -50,7 +53,7 @@ fn sent(task: usize, message: usize) -> String {
 /// and an agent echoing every message, and an off-lock check that holds
 /// each task's first message into `room_0` until all four are inside it.
 async fn rooms() -> (RoomKit, RecordingTransport) {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
@@ -72,9 +75,20 @@ async fn rooms() -> (RoomKit, RecordingTransport) {
     })
     .unwrap();
     for index in 0..ROOMS {
-        kit.create_room(&room(index)).await.unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room(index)),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
         for bound in ["sms", "ws", "ai"] {
-            kit.attach(&room(index), &channel(bound)).await.unwrap();
+            kit.attach_channel(
+                &room(index),
+                &channel(bound),
+                AttachChannelOptions::default(),
+            )
+            .await
+            .unwrap();
         }
     }
     (kit, ws)
@@ -87,7 +101,15 @@ async fn send_all(kit: RoomKit, task: usize) {
             let sender = format!("+1555000000{task}");
             let text = EventContent::text(sent(task, message));
             let inbound = InboundMessage::new(channel("sms"), sender, text);
-            kit.process_inbound_in(&room(index), inbound).await.unwrap();
+            kit.process_inbound(
+                inbound,
+                ProcessInboundOptions {
+                    room_id: Some(room(index)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
         }
     }
 }

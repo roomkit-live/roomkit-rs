@@ -29,10 +29,12 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    BindingOptions, ChannelId, EventContent, InboundMessage, Participant, ParticipantId, Post,
-    RoomId,
+    ChannelId, EventContent, InboundMessage, Metadata, Participant, ParticipantId, RoomId,
 };
-use roomkit::{ConversationStore, InboundError, KitError};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, InboundError, KitError,
+    PostOptions, ProcessInboundOptions, RoomKit,
+};
 
 use shared::{Checks, ScriptedAgent, SmsNumber, print_timeline, timeline};
 
@@ -50,26 +52,30 @@ const ASSISTANT: shared::Script = &[
     ),
 ];
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<ExitCode, Box<dyn Error>> {
-    let kit = shared::kit();
-    let room = RoomId::new("order-1042")?;
-    let sms = SmsNumber::new(ChannelId::new("sms")?);
-    let assistant = ScriptedAgent::new(ChannelId::new("assistant")?, ASSISTANT);
-    kit.register_channel(sms.clone())?;
-    kit.register_channel(assistant.clone())?;
-    kit.create_room(&room).await?;
-    let mut customer = BindingOptions::default();
-    customer
-        .metadata
-        .insert("phone_number".to_owned(), CUSTOMER.into());
-    kit.attach_with(&room, sms.id(), customer).await?;
-    kit.attach(&room, assistant.id()).await?;
-    // The backend's desk speaks through the host channel, whose id is
-    // "host"; the customer is reached through SMS.
+/// Opens the order's room: the customer's SMS, its binding naming their
+/// number, and the assistant; the backend's desk a member through the host
+/// channel, whose id is "host", and the customer one through SMS.
+async fn open_order(
+    kit: &RoomKit,
+    room: &RoomId,
+    sms: &SmsNumber,
+    assistant: &ScriptedAgent,
+) -> Result<(), Box<dyn Error>> {
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
+    let customer = AttachChannelOptions {
+        metadata: Metadata::from_iter([("phone_number".to_owned(), CUSTOMER.into())]),
+        ..AttachChannelOptions::default()
+    };
+    kit.attach_channel(room, sms.id(), customer).await?;
+    kit.attach_channel(room, assistant.id(), AttachChannelOptions::default())
+        .await?;
     let now = kit
         .store()
-        .get_room(&room)
+        .get_room(room)
         .await?
         .map(|room| room.created_at);
     let joined = now.unwrap_or(roomkit::model::Timestamp::UNIX_EPOCH);
@@ -87,31 +93,63 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.store()
         .create_participant(member(CUSTOMER, "sms")?)
         .await?;
+    Ok(())
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<ExitCode, Box<dyn Error>> {
+    let kit = shared::kit();
+    let room = RoomId::new("order-1042")?;
+    let sms = SmsNumber::new(ChannelId::new("sms")?);
+    let assistant = ScriptedAgent::new(ChannelId::new("assistant")?, ASSISTANT);
+    kit.register_channel(sms.clone())?;
+    kit.register_channel(assistant.clone())?;
+    open_order(&kit, &room, &sms, &assistant).await?;
 
     // 1. The backend's notice: texted to the customer, no agent answers it.
-    let mut notice = Post::new(EventContent::text("Your order shipped."));
-    notice.idempotency_key = Some("shipped-1042".to_owned());
-    let posted = kit.post(&room, notice.clone()).await?;
+    let notice = || EventContent::text("Your order shipped.");
+    let shipped = || PostOptions {
+        idempotency_key: Some("shipped-1042".to_owned()),
+        ..Default::default()
+    };
+    let posted = kit.post(&room, notice(), shipped()).await?;
     // 2. The customer replies: the agent answers her, as usual.
     let question = InboundMessage::new(
         sms.id().clone(),
         CUSTOMER,
         EventContent::text("Where is my order?"),
     );
-    kit.process_inbound_in(&room, question).await?;
+    let into_room = ProcessInboundOptions {
+        room_id: Some(room.clone()),
+        ..ProcessInboundOptions::default()
+    };
+    kit.process_inbound(question, into_room).await?;
     // 3. The backend asks the agent, in front of the customer, as "desk".
-    let mut ask = Post::new(EventContent::text(
-        "Confirm the delivery address with the customer.",
-    ));
-    ask.participant_id = Some(ParticipantId::new("desk")?);
-    ask.addressed_to = vec![assistant.id().clone()];
-    kit.post(&room, ask).await?;
+    let ask = PostOptions {
+        participant_id: Some(ParticipantId::new("desk")?),
+        addressed_to: vec![assistant.id().clone()],
+        ..Default::default()
+    };
+    kit.post(
+        &room,
+        EventContent::text("Confirm the delivery address with the customer."),
+        ask,
+    )
+    .await?;
     // 4. A retry of the notice is a replay: nothing is texted again.
-    let replayed = kit.post(&room, notice).await?;
+    let replayed = kit.post(&room, notice(), shipped()).await?;
     // 5. The host never speaks in the customer's name.
-    let mut impersonating = Post::new(EventContent::text("I cancel my order."));
-    impersonating.participant_id = Some(ParticipantId::new(CUSTOMER)?);
-    let refused = kit.post(&room, impersonating).await;
+    let impersonating = PostOptions {
+        participant_id: Some(ParticipantId::new(CUSTOMER)?),
+        ..Default::default()
+    };
+    let refused = kit
+        .post(
+            &room,
+            EventContent::text("I cancel my order."),
+            impersonating,
+        )
+        .await;
     kit.idle().await;
 
     let texted = sms.sent_to(CUSTOMER);

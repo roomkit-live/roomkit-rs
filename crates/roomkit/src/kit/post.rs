@@ -1,20 +1,20 @@
 //! The host's own voice (RFC §10.5 `post()`): what the application that
 //! embeds the kit says in a room in its own name.
 
-use roomkit_core::model::{ChannelId, Post, RoomEvent, RoomId};
+use roomkit_core::model::{ChannelId, EventContent, RoomEvent, RoomId};
 use roomkit_core::ops::{ConfigError, Entry};
 
 use super::RoomKit;
-use super::scope::Scope;
+use super::options::PostOptions;
 use crate::error::KitError;
 use crate::host::HostChannel;
 use crate::store::ConversationStore;
 
 impl<S: ConversationStore> RoomKit<S> {
-    /// Writes `post` to the people of the room `room_id` in the host's own
-    /// name (RFC §10.5): a notice, a workflow's question, a reminder. It
+    /// Writes `content` to the people of the room `room_id` in the host's
+    /// own name (RFC §10.5): a notice, a workflow's question, a reminder. It
     /// comes from a host channel, a transport of type `HOST`: the channel
-    /// the post names, or the kit's own, registered on first use under the
+    /// `options` name, or the kit's own, registered on first use under the
     /// id [`HOST_CHANNEL_ID`](crate::model::HOST_CHANNEL_ID). The room reads it as
     /// a party's message, `INBOUND`, broadcasts it to its transports, and
     /// asks the agents it addresses only, none by default (RFC §19.3).
@@ -28,8 +28,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// the host channel reaches (`connected_via`), by their id or their
     /// identity's (RFC §5.5). One `process_timeout` bounds the whole call,
     /// the wait for the lock included; once the lock is held, the attach
-    /// runs to its end. The room is read unscoped; an organization's
-    /// [`post`](crate::OrganizationKit::post) reaches its own rooms only.
+    /// runs to its end. A room of another organization than the one
+    /// `options` name, or of none, is not found, whoever its speaker names,
+    /// nothing written (RFC §17.2).
     ///
     /// Returns the committed event, as `send_event` returns it.
     ///
@@ -47,8 +48,23 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `send_event`'s: `room_closed`, `source_unbound` for a room the host
     /// channel was detached from, `process_timeout`; or with what
     /// `send_event` raises.
-    pub async fn post(&self, room_id: &RoomId, post: Post) -> Result<RoomEvent, KitError> {
-        self.unscoped().post(room_id, post).await
+    pub async fn post(
+        &self,
+        room_id: &RoomId,
+        content: EventContent,
+        options: PostOptions,
+    ) -> Result<RoomEvent, KitError> {
+        if options.channel_id.is_none() {
+            self.register_host_channel()?;
+        }
+        let organization_id = options.organization_id.clone();
+        let entry = Entry::Post {
+            room_id: room_id.clone(),
+            organization_id,
+            post: Box::new(options.post(content)),
+        };
+        let result = self.enter(entry, POST).await?;
+        result.event.ok_or(KitError::NoEvent)
     }
 
     /// Registers the kit's own host channel, when no channel holds its id:
@@ -63,23 +79,6 @@ impl<S: ConversationStore> RoomKit<S> {
             Err(KitError::Config(ConfigError::DuplicateChannel(_))) | Ok(()) => Ok(()),
             Err(error) => Err(error),
         }
-    }
-}
-
-impl<S: ConversationStore> Scope<'_, S> {
-    /// Posts in a room the scope reaches, adopted by the call whose work in
-    /// the room made it, when one did (RFC §13.5).
-    pub(super) async fn post(&self, room_id: &RoomId, post: Post) -> Result<RoomEvent, KitError> {
-        if post.channel_id.is_none() {
-            self.kit.register_host_channel()?;
-        }
-        let entry = Entry::Post {
-            room_id: room_id.clone(),
-            organization_id: self.organization_id(),
-            post: Box::new(post),
-        };
-        let result = self.kit.enter(entry, POST).await?;
-        result.event.ok_or(KitError::NoEvent)
     }
 }
 

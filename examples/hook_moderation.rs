@@ -19,7 +19,10 @@ use roomkit::model::{
     RoomId,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{HookExecution, HookSpec, HookTrigger, InboundResult, RoomKit, text_of};
+use roomkit::{
+    AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult,
+    ProcessInboundOptions, RoomKit, text_of,
+};
 
 use shared::{Checks, Log};
 
@@ -113,13 +116,27 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     moderate(&kit, &ran)?;
 
     let room = RoomId::new("moderated")?;
-    kit.create_room(&room).await?;
-    kit.attach(&room, user.id()).await?;
-    kit.attach(&room, agent.id()).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
+    kit.attach_channel(&room, user.id(), AttachChannelOptions::default())
+        .await?;
+    kit.attach_channel(&room, agent.id(), AttachChannelOptions::default())
+        .await?;
 
     let says = async |text: &str| -> Result<InboundResult, Box<dyn Error>> {
         let message = InboundMessage::new(user.id().clone(), "user", EventContent::text(text));
-        let result = kit.process_inbound_in(&room, message).await?;
+        let result = kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(room.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
         println!("The user writes {text:?}: blocked {}.", result.blocked);
         Ok(result)
     };

@@ -24,7 +24,9 @@ use roomkit_core::ops::{
 use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
 use tokio::sync::Notify;
 
-use super::{RoomKit, RoomKitOptions};
+use super::{
+    AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
+};
 use crate::channel::{Channel, ChannelError};
 use crate::driver;
 use crate::error::KitError;
@@ -61,10 +63,19 @@ async fn checked_room() -> RoomKit {
         ChannelType::SMS,
     ))
     .unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.attach(&room_id(), &ChannelId::new("sms").unwrap())
-        .await
-        .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &ChannelId::new("sms").unwrap(),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
     let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
     spec.needs_lock = false;
     kit.hook(spec, |_, _| async { Ok(HookResult::allow()) })
@@ -83,10 +94,19 @@ fn unbounded(kit: &RoomKit) {
 }
 
 async fn send(kit: &RoomKit, text: &str) -> InboundResult {
-    tokio::time::timeout(BOUND, kit.process_inbound_in(&room_id(), message(text)))
-        .await
-        .unwrap()
-        .unwrap()
+    tokio::time::timeout(
+        BOUND,
+        kit.process_inbound(
+            message(text),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap()
 }
 
 /// What a refusal for the timeout reads, and what the room's timeline
@@ -218,12 +238,25 @@ async fn a_call_releases_its_ticket_once_its_event_is_committed() {
         go: Arc::clone(&go),
     })
     .unwrap();
-    kit.attach(&room_id(), &ChannelId::new("ws").unwrap())
-        .await
-        .unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &ChannelId::new("ws").unwrap(),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
     let call = {
         let kit = kit.clone();
-        tokio::spawn(async move { kit.process_inbound_in(&room_id(), message("Bonjour")).await })
+        tokio::spawn(async move {
+            kit.process_inbound(
+                message("Bonjour"),
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
+            .await
+        })
     };
     tokio::time::timeout(BOUND, delivering.notified())
         .await
@@ -267,7 +300,7 @@ impl Operation for WaitsForNothing {
 /// stall, a defect of the operation's, not as a cancelled run.
 #[tokio::test]
 async fn a_run_waiting_for_an_effect_never_asked_for_stalls() {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     let stalled = driver::run(&kit.inner, "test", WaitsForNothing).await;
     assert_eq!(stalled, Err(KitError::Stalled));
 }
@@ -291,7 +324,13 @@ fn a_call_whose_runtime_shuts_down_under_it_is_cancelled() {
     })
     .unwrap();
     let room = room_id();
-    let mut call = std::pin::pin!(kit.process_inbound_in(&room, message("Bonjour")));
+    let mut call = std::pin::pin!(kit.process_inbound(
+        message("Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        }
+    ));
     let started = first.block_on(async { tokio::time::timeout(TIMEOUT, call.as_mut()).await });
     drop(first);
     let cancelled = runtime().block_on(call);

@@ -84,9 +84,9 @@ documentation of each crate shows its own setup, compiled as a doctest.
 The kit's calls on their own, with the crate's test channels:
 
 ```rust
-use roomkit::RoomKit;
 use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId};
 use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::{CreateRoomOptions, ProcessInboundOptions, RoomKit};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -97,12 +97,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     kit.register_channel(agent.clone())?;
 
     let room = RoomId::new("room_1")?;
-    kit.create_room(&room).await?;
-    kit.attach(&room, sms.id()).await?;
-    kit.attach(&room, agent.id()).await?;
+    kit.create_room(CreateRoomOptions { room_id: Some(room.clone()), ..Default::default() }).await?;
+    kit.attach_channel(&room, sms.id(), Default::default()).await?;
+    kit.attach_channel(&room, agent.id(), Default::default()).await?;
 
     let message = InboundMessage::new(sms.id().clone(), "+15551234567", EventContent::text("Bonjour"));
-    kit.process_inbound_in(&room, message).await?;
+    kit.process_inbound(message, ProcessInboundOptions { room_id: Some(room), ..Default::default() }).await?;
     assert_eq!(sms.texts(), ["You said: Bonjour"]);
     Ok(())
 }
@@ -169,7 +169,7 @@ The RFC's Appendix B flows:
 
 Rooms and channels:
 
-- `room_lifecycle`: pause, resume, close, reopen and archive, and the timers `check_timers` applies.
+- `room_lifecycle`: pause, resume, close, reopen and archive, and the timers `check_all_timers` applies.
 - `channel_mute_unmute`: a muted agent still reads, and its answers are stored blocked.
 - `room_membership`: participants and their roles, a member who leaves, an agent banned.
 

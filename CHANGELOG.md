@@ -32,6 +32,34 @@ kit, its construction and its calls).
   `RouteQuery` and `RouteSender` leave the public API.
   `RoomKit::get_channel` gives the kit's view of a registered channel
   (`RegisteredChannel`).
+- The kit's calls take the Python implementation's names, its required
+  parameters positional and the rest in one `<Call>Options` with Python's
+  names and defaults: `create_room(CreateRoomOptions)`, its id optional and
+  its timers a `RoomTimers`; `attach_channel` (for `attach` and
+  `attach_with`), `detach_channel`, `mute`, `unmute`; `send_event(room_id,
+  channel_id, content, SendEventOptions)`, which gains `provider` and
+  `created_at`; `post(room_id, content, PostOptions)`; `commit_event`,
+  `update_event(UpdateEventOptions)`, `delete_event(DeleteEventOptions)`,
+  `get_timeline(GetTimelineOptions)` (for `TimelineQuery`);
+  `check_all_timers` (for `check_timers`) and the five transitions.
+  `process_inbound(message, ProcessInboundOptions)` is one call: a
+  `room_id` runs the message into that room, as `process_inbound_in` did.
+- Every call takes the organization it acts for in its options,
+  `organization_id`; `for_organization` and `OrganizationKit` go. A room of
+  another organization reads as not found, as Python reads it: `None` from
+  `update_event`, no id from `delete_event`, `RoomNotFound` from the rest.
+- New calls, as Python's: `get_room` (a missing room fails
+  `RoomNotFound`), `get_binding`, `list_bindings`, `list_members` (the
+  ACTIVE participants unless `include_left`), `check_room_timers`, and the
+  binding setters `set_access`, `set_visibility` and
+  `update_binding_metadata`, which merges key by key; `update_binding`
+  goes.
+- `detach_channel` returns whether the room bound the channel, `false`
+  rather than an error for one it does not; `unregister_channel` of an
+  unknown channel is `Ok`; `get_timeline` reads the room before it checks
+  the query, a missing room `RoomNotFound` whatever the query.
+- `RoomOptions`, `BindingOptions`, `BindingUpdate` and `Post` leave
+  `roomkit::model`.
 - A message into a room of another organization, named or routed, fails
   `InboundError::RoomNotFound`, as RFC §17.2 reads such a room;
   `InboundError::OtherOrganization` goes.

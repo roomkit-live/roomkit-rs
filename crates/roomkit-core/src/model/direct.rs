@@ -1,6 +1,8 @@
 //! An event the integrator injects into a room directly (RFC §10.5).
 
-use super::{ChannelId, EventContent, EventId, EventType, Metadata, ParticipantId, Visibility};
+use super::{
+    ChannelId, EventContent, EventId, EventType, Metadata, ParticipantId, Timestamp, Visibility,
+};
 
 /// An event injected into a room without a channel's message, from a REST
 /// API or a tool call (RFC §10.5 `send_event(room_id, channel_id, content,
@@ -26,6 +28,11 @@ pub struct DirectEvent {
     /// Who may see it (RFC §7.3). `internal` is the framework's alone (gap
     /// G-041).
     pub visibility: Visibility,
+    /// The provider or backend behind it, written on its source (RFC §5.2);
+    /// `None`, the channel's own.
+    pub provider: Option<String>,
+    /// When it was created; `None`, the instant it is injected at.
+    pub created_at: Option<Timestamp>,
     /// Where its answers may go, as a message's `response_visibility` (RFC
     /// §5.12, gap G-073): every response its cascade derives from it is
     /// kept within it; `None` restricts nothing. Never `internal` (gap
@@ -58,6 +65,8 @@ impl DirectEvent {
             event_type: EventType::Message,
             participant_id: None,
             visibility: Visibility::All,
+            provider: None,
+            created_at: None,
             response_visibility: None,
             addressed_to: None,
             parent_event_id: None,

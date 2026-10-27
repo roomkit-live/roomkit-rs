@@ -15,15 +15,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    BindingOptions, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
-    ChannelType, EventContent, InboundMessage, Metadata, ParticipantId, RoomContext, RoomEvent,
-    RoomId, Timestamp,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    EventContent, InboundMessage, Metadata, ParticipantId, RoomContext, RoomEvent, RoomId,
+    Timestamp,
 };
 use roomkit::testing::{EchoAgent, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ChannelOf, ConversationStore,
-    DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookTrigger, InMemoryStore,
-    InboundRoomRouter, RoomKit, RoomKitOptions, RouteOptions, RouterFuture, WeakRoomKit, text_of,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ChannelOf, ConversationStore,
+    CreateRoomOptions, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookTrigger,
+    InMemoryStore, InboundRoomRouter, ProcessInboundOptions, RoomKit, RoomKitOptions, RouteOptions,
+    RouterFuture, WeakRoomKit, text_of,
 };
 use serde_json::{Value, json};
 
@@ -111,7 +112,7 @@ impl Channel for Sms {
 /// A kit with an SMS number and an agent an `ON_ROOM_CREATED` hook attaches
 /// to every room created for a message (RFC Appendix B.1).
 fn kit_with_agent() -> (RoomKit, Sms) {
-    kit_with_agent_on(Default::default())
+    kit_with_agent_on(RoomKitOptions::default())
 }
 
 /// [`kit_with_agent`], routed by what `wrap` makes of the default strategy
@@ -152,7 +153,13 @@ fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Sms) {
     kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
         let kit = attaching.clone();
         async move {
-            kit.attach(&event.room_id, &channel("ai")).await.unwrap();
+            kit.attach_channel(
+                &event.room_id,
+                &channel("ai"),
+                AttachChannelOptions::default(),
+            )
+            .await
+            .unwrap();
         }
     })
     .unwrap();
@@ -164,16 +171,25 @@ fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Sms) {
 /// when `None`), declared `group` when `group`.
 async fn open_room(kit: &RoomKit, id: &str, held: Option<Value>, group: bool) -> RoomId {
     let room_id = room(id);
-    kit.create_room(&room_id).await.unwrap();
-    kit.attach(&room_id, &channel("ai")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id, &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     let mut metadata = Metadata::new();
     if let Some(held) = held {
         metadata.insert("phone_number".to_owned(), held);
     }
-    let mut options = BindingOptions::default();
-    options.group = group;
-    options.metadata = metadata;
-    kit.attach_with(&room_id, &channel("sms"), options)
+    let options = AttachChannelOptions {
+        group,
+        metadata,
+        ..Default::default()
+    };
+    kit.attach_channel(&room_id, &channel("sms"), options)
         .await
         .unwrap();
     room_id
@@ -185,7 +201,10 @@ fn message(from: &str, text: &str) -> InboundMessage {
 
 /// Routes `message` and returns the room it landed in.
 async fn routed(kit: &RoomKit, message: InboundMessage) -> RoomId {
-    let result = kit.process_inbound(message).await.unwrap();
+    let result = kit
+        .process_inbound(message, ProcessInboundOptions::default())
+        .await
+        .unwrap();
     result.event.unwrap().room_id
 }
 
@@ -363,10 +382,17 @@ async fn a_group_binding_s_recipient_is_not_read() {
         let (kit, _sms) = kit_with_agent();
         let team_beside = open_room(&kit, "team", held.clone(), true).await;
         let desk = room("desk");
-        kit.create_room(&desk).await.unwrap();
-        let mut alices = BindingOptions::default();
-        alices.participant_id = Some(ParticipantId::new(ALICE).unwrap());
-        kit.attach_with(&desk, &channel("sms"), alices)
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(desk.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let alices = AttachChannelOptions {
+            participant_id: Some(ParticipantId::new(ALICE).unwrap()),
+            ..Default::default()
+        };
+        kit.attach_channel(&desk, &channel("sms"), alices)
             .await
             .unwrap();
         let (beside_warnings, guard) = Warnings::capture();
@@ -420,7 +446,13 @@ async fn a_room_whose_recipient_is_not_one_is_no_stranger_s() {
     let warned = warnings.containing("not a recipient");
 
     let named = kit
-        .process_inbound_in(&host_room, message(BOB, "bob: hello"))
+        .process_inbound(
+            message(BOB, "bob: hello"),
+            ProcessInboundOptions {
+                room_id: Some(host_room.clone()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     drop(guard);

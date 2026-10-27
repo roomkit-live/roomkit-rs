@@ -16,7 +16,9 @@ use roomkit::model::{
     HookResult, InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, text_of};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, text_of,
+};
 
 use shared::{Checks, Clock};
 
@@ -85,9 +87,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     })?;
 
     let room = RoomId::new("room_1")?;
-    kit.create_room(&room).await?;
-    kit.attach(&room, customer.id()).await?;
-    kit.attach(&room, advisor.id()).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
+    kit.attach_channel(&room, customer.id(), AttachChannelOptions::default())
+        .await?;
+    kit.attach_channel(&room, advisor.id(), AttachChannelOptions::default())
+        .await?;
 
     println!("The customer writes their SIN on SMS.");
     let message = InboundMessage::new(
@@ -95,7 +103,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "+15551234567",
         EventContent::text("Mon NAS est 123-456-789"),
     );
-    let result = kit.process_inbound_in(&room, message).await?;
+    let result = kit
+        .process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
 
     let timeline = shared::timeline(&kit, &room).await?;
     shared::print_timeline(&timeline);

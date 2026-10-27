@@ -10,9 +10,9 @@
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::FrameworkEvent;
 use roomkit::model::{ChannelId, ChannelType, EventContent, EventStatus, InboundMessage, RoomId};
 use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::{AttachChannelOptions, CreateRoomOptions, FrameworkEvent, ProcessInboundOptions};
 
 use shared::Checks;
 
@@ -32,9 +32,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.register_channel(writer.clone())?;
 
     let room = RoomId::new("room_1")?;
-    kit.create_room(&room).await?;
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room.clone()),
+        ..Default::default()
+    })
+    .await?;
     for channel in [human.id(), analyst.id(), writer.id()] {
-        kit.attach(&room, channel).await?;
+        kit.attach_channel(&room, channel, AttachChannelOptions::default())
+            .await?;
     }
 
     println!("The human asks the analyst; each agent then answers the other (AGENT_CHAIN).");
@@ -44,7 +49,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         EventContent::text("Analyse the quarter"),
     );
     message.addressed_to = Some(vec![analyst.id().clone()]);
-    kit.process_inbound_in(&room, message).await?;
+    kit.process_inbound(
+        message,
+        ProcessInboundOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     let timeline = shared::timeline(&kit, &room).await?;
     shared::print_timeline(&timeline);

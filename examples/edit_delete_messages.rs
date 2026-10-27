@@ -22,7 +22,10 @@ use roomkit::model::{
     EventContent, EventId, EventType, HookResult, InboundMessage, RoomEvent, RoomId,
 };
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, HookTrigger, RoomKit, is_deleted, is_edited, text_of};
+use roomkit::{
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookTrigger, ProcessInboundOptions,
+    RoomKit, is_deleted, is_edited, text_of,
+};
 
 use shared::{Checks, Log, ScriptedAgent};
 
@@ -89,11 +92,17 @@ impl Conversation {
         observe_changes(&kit, &changed)?;
         moderate_edits(&kit)?;
         let room = RoomId::new("room_1")?;
-        kit.create_room(&room).await?;
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room.clone()),
+            ..Default::default()
+        })
+        .await?;
         for channel_id in [customer.id(), advisor.id(), sms.id()] {
-            kit.attach(&room, channel_id).await?;
+            kit.attach_channel(&room, channel_id, AttachChannelOptions::default())
+                .await?;
         }
-        kit.attach(&room, agent.id()).await?;
+        kit.attach_channel(&room, agent.id(), AttachChannelOptions::default())
+            .await?;
         Ok(Self {
             kit,
             room,
@@ -117,7 +126,16 @@ impl Conversation {
         &self,
         message: InboundMessage,
     ) -> Result<roomkit::InboundResult, Box<dyn Error>> {
-        Ok(self.kit.process_inbound_in(&self.room, message).await?)
+        Ok(self
+            .kit
+            .process_inbound(
+                message,
+                ProcessInboundOptions {
+                    room_id: Some(self.room.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?)
     }
 
     /// The customer writes [`MESSAGES`].

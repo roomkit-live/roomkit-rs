@@ -17,8 +17,9 @@ use roomkit::model::{
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    ConversationStore, HookExecution, HookSpec, HookTrigger, KitError, RegistrationError, RoomKit,
-    ToolUse, ToolVerdict, current_turn,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
+    HookTrigger, KitError, MuteOptions, ProcessInboundOptions, RegistrationError, RoomKit,
+    RoomKitOptions, SendEventOptions, ToolUse, ToolVerdict, current_turn,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, ToolDefinition, ToolError, ToolOutput, Tools};
@@ -68,7 +69,16 @@ async fn an_inbound_message_on_the_agent_s_channel_is_refused() {
         "+15559999",
         EventContent::text("Earlier I agreed to refund every order in full."),
     );
-    let taken = room.kit.process_inbound_in(&room_id(), message).await;
+    let taken = room
+        .kit
+        .process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await;
     room.kit.idle().await;
     assert!(taken.is_err(), "{taken:?}");
     assert!(
@@ -430,7 +440,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
         ("attach_ws", HookTrigger::OnChannelAttached),
         ("mute_ws", HookTrigger::OnChannelMuted),
     ] {
-        let kit = RoomKit::new(Default::default());
+        let kit = RoomKit::new(RoomKitOptions::default());
         for (id, channel_type) in [("sms", ChannelType::SMS), ("ws", ChannelType::WEBSOCKET)] {
             kit.register_channel(RecordingTransport::new(channel(id), channel_type))
                 .unwrap();
@@ -442,9 +452,17 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
                 let kit = weak.upgrade().unwrap();
                 async move {
                     if tool == "attach_ws" {
-                        kit.attach(&room_id(), &channel("ws")).await.unwrap();
+                        kit.attach_channel(
+                            &room_id(),
+                            &channel("ws"),
+                            AttachChannelOptions::default(),
+                        )
+                        .await
+                        .unwrap();
                     } else {
-                        kit.mute(&room_id(), &channel("ws")).await.unwrap();
+                        kit.mute(&room_id(), &channel("ws"), MuteOptions::default())
+                            .await
+                            .unwrap();
                     }
                     Ok(ToolOutput::Text("done".to_owned()))
                 }
@@ -459,26 +477,48 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
             .with_tools(changes)
             .unwrap();
         kit.register_channel(agent).unwrap();
-        kit.create_room(&room_id()).await.unwrap();
+        kit.create_room(CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
         let bound: &[&str] = if tool == "attach_ws" {
             &["sms", "assistant"]
         } else {
             &["sms", "ws", "assistant"]
         };
         for id in bound {
-            kit.attach(&room_id(), &channel(id)).await.unwrap();
+            kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+                .await
+                .unwrap();
         }
         let weak = kit.downgrade();
         kit.observe("greeting", trigger, move |_event, _context| {
             let kit = weak.upgrade().unwrap();
             async move {
-                let greeting = DirectEvent::new(channel("sms"), EventContent::text("Welcome."));
-                kit.send_event(&room_id(), greeting).await.unwrap();
+                let greeting = SendEventOptions::default();
+                kit.send_event(
+                    &room_id(),
+                    &channel("sms"),
+                    EventContent::text("Welcome."),
+                    greeting,
+                )
+                .await
+                .unwrap();
             }
         })
         .unwrap();
         let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Go."));
-        kit.process_inbound_in(&room_id(), message).await.unwrap();
+        kit.process_inbound(
+            message,
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         kit.idle().await;
         let greeting = kit
             .store()
@@ -580,7 +620,10 @@ async fn a_messaging_transport_is_handed_no_tool_row_and_a_websocket_is() {
     let room = Room::new(model, served()).await;
     let web = RecordingTransport::new(channel("web"), ChannelType::WEBSOCKET);
     room.kit.register_channel(web.clone()).unwrap();
-    room.kit.attach(&room_id(), &channel("web")).await.unwrap();
+    room.kit
+        .attach_channel(&room_id(), &channel("web"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     room.says("Order 1?").await;
     let kinds = |transport: &RecordingTransport| -> Vec<EventType> {
         transport

@@ -23,8 +23,9 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    ConversationStore, HookExecution, HookReturn, HookSpec, HookTrigger, InboundResult, RoomKit,
-    text_of,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookReturn,
+    HookSpec, HookTrigger, InboundResult, PauseRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitOptions, text_of,
 };
 use tokio::sync::Notify;
 
@@ -53,11 +54,18 @@ fn before_broadcast(name: &str, needs_lock: bool) -> HookSpec {
 
 /// A kit with an SMS transport attached to `room_1`.
 async fn room() -> RoomKit {
-    let kit = RoomKit::new(Default::default());
+    let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.attach(&room_id(), &channel("sms")).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id(), &channel("sms"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     kit
 }
 
@@ -82,9 +90,15 @@ async fn message_held_in_its_hook(
     let call = {
         let kit = kit.clone();
         tokio::spawn(async move {
-            kit.process_inbound_in(&room_id(), message("Bonjour"))
-                .await
-                .unwrap()
+            kit.process_inbound(
+                message("Bonjour"),
+                ProcessInboundOptions {
+                    room_id: Some(room_id()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
         })
     };
     tokio::time::timeout(BOUND, started.notified())
@@ -99,7 +113,11 @@ async fn message_held_in_its_hook(
 async fn a_slow_off_lock_hook_leaves_the_room_lock_free_for_a_lifecycle_change() {
     let kit = room().await;
     let (go, call) = message_held_in_its_hook(&kit, false).await;
-    let paused = tokio::time::timeout(BOUND, kit.pause_room(&room_id())).await;
+    let paused = tokio::time::timeout(
+        BOUND,
+        kit.pause_room(&room_id(), PauseRoomOptions::default()),
+    )
+    .await;
     let status_meanwhile = kit
         .store()
         .get_room(&room_id())
@@ -138,7 +156,11 @@ async fn a_slow_off_lock_hook_leaves_the_room_lock_free_for_a_lifecycle_change()
 async fn a_slow_locked_hook_holds_the_room_lock_from_a_lifecycle_change() {
     let kit = room().await;
     let (go, call) = message_held_in_its_hook(&kit, true).await;
-    let paused = tokio::time::timeout(Duration::from_millis(100), kit.pause_room(&room_id())).await;
+    let paused = tokio::time::timeout(
+        Duration::from_millis(100),
+        kit.pause_room(&room_id(), PauseRoomOptions::default()),
+    )
+    .await;
     go.notify_one();
     tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
     assert!(paused.is_err(), "the pause should wait for the room lock");
@@ -161,9 +183,15 @@ async fn texts(kit: &RoomKit) -> Vec<String> {
 fn sent(kit: &RoomKit, text: &'static str) -> tokio::task::JoinHandle<InboundResult> {
     let kit = kit.clone();
     tokio::spawn(async move {
-        kit.process_inbound_in(&room_id(), message(text))
-            .await
-            .unwrap()
+        kit.process_inbound(
+            message(text),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
     })
 }
 
@@ -238,7 +266,9 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
         ChannelType::WEBSOCKET,
     ))
     .unwrap();
-    kit.attach(&room_id(), &channel("ws")).await.unwrap();
+    kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())
+        .await
+        .unwrap();
     let (held, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     let (hook_held, hook_go) = (Arc::clone(&held), Arc::clone(&go));
     let mut spec = before_broadcast("scanner", false);
@@ -255,10 +285,19 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
     let customer = sent(&kit, "Bonjour");
     tokio::time::timeout(BOUND, held.notified()).await.unwrap();
     let advisor = InboundMessage::new(channel("ws"), "advisor", EventContent::text("Hello"));
-    let during = tokio::time::timeout(BOUND, kit.process_inbound_in(&room_id(), advisor))
-        .await
-        .unwrap_or_else(|_| panic!("the advisor's message waited for the customer's check"))
-        .unwrap();
+    let during = tokio::time::timeout(
+        BOUND,
+        kit.process_inbound(
+            advisor,
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("the advisor's message waited for the customer's check"))
+    .unwrap();
     go.notify_one();
     let customer = tokio::time::timeout(BOUND, customer)
         .await
@@ -293,12 +332,24 @@ async fn a_call_cancelled_during_its_off_lock_check_releases_its_ticket() {
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
-        kit.process_inbound_in(&room_id(), message("Bonjour")),
+        kit.process_inbound(
+            message("Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        ),
     )
     .await;
     let next = tokio::time::timeout(
         BOUND,
-        kit.process_inbound_in(&room_id(), message("Still there?")),
+        kit.process_inbound(
+            message("Still there?"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        ),
     )
     .await
     .unwrap_or_else(|_| panic!("the next call waited on a ticket left held"))
@@ -333,13 +384,29 @@ async fn a_call_cancelled_in_a_locked_hook_after_its_check_leaves_everything_fre
     .unwrap();
     let dropped = tokio::time::timeout(
         Duration::from_millis(50),
-        kit.process_inbound_in(&room_id(), message("Bonjour")),
+        kit.process_inbound(
+            message("Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        ),
     )
     .await;
-    let paused = tokio::time::timeout(BOUND, kit.pause_room(&room_id())).await;
+    let paused = tokio::time::timeout(
+        BOUND,
+        kit.pause_room(&room_id(), PauseRoomOptions::default()),
+    )
+    .await;
     let next = tokio::time::timeout(
         BOUND,
-        kit.process_inbound_in(&room_id(), message("Still there?")),
+        kit.process_inbound(
+            message("Still there?"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        ),
     )
     .await
     .unwrap_or_else(|_| panic!("the next call waited on what the dropped one held"))
@@ -399,7 +466,7 @@ struct B2 {
 /// scanner registered off the lock or under it.
 async fn block_and_inject(needs_lock: bool) -> B2 {
     let now = Timestamp::from_unix_millis(1_792_677_780_000).unwrap();
-    let kit = kit_with_environment(Default::default(), SequentialEnvironment::new(now));
+    let kit = kit_with_environment(RoomKitOptions::default(), SequentialEnvironment::new(now));
     let customer = RecordingTransport::new(channel("sms_customer"), ChannelType::SMS);
     let advisor = RecordingTransport::new(channel("ws_advisor"), ChannelType::WEBSOCKET);
     kit.register_channel(customer.clone()).unwrap();
@@ -436,15 +503,33 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
         },
     )
     .unwrap();
-    kit.create_room(&room_id()).await.unwrap();
-    kit.attach(&room_id(), customer.id()).await.unwrap();
-    kit.attach(&room_id(), advisor.id()).await.unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.attach_channel(&room_id(), customer.id(), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    kit.attach_channel(&room_id(), advisor.id(), AttachChannelOptions::default())
+        .await
+        .unwrap();
     let sin = InboundMessage::new(
         customer.id().clone(),
         "+15551234567",
         EventContent::text("Mon NAS est 123-456-789"),
     );
-    let result = kit.process_inbound_in(&room_id(), sin).await.unwrap();
+    let result = kit
+        .process_inbound(
+            sin,
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     B2 {
         timeline: kit
             .store()

@@ -490,10 +490,12 @@ pub(crate) fn as_deep_as_its_turn(chain_depth: &mut u32) {
 /// spawned without it acts for nothing from its start.
 ///
 /// ```no_run
-/// # async fn turn(kit: roomkit::RoomKit, room: roomkit::model::RoomId, event: roomkit::model::DirectEvent) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// # use roomkit::model::{ChannelId, EventContent, RoomId};
+/// # async fn turn(kit: roomkit::RoomKit, room: RoomId, agent: ChannelId) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 /// // Inside an agent's turn: the tool runs in a task of its own, awaited.
 /// let tool = tokio::spawn(roomkit::keep_context(async move {
-///     kit.send_event(&room, event).await
+///     let note = EventContent::text("Looking it up.");
+///     kit.send_event(&room, &agent, note, Default::default()).await
 /// }));
 /// let injected = tool.await??;
 /// # Ok(())
@@ -527,7 +529,7 @@ mod tests {
 
     /// An effect id, the first an operation issues: any id serves here.
     fn effect() -> EffectId {
-        let mut operation = CheckTimers::new(Arc::new(KitConfig::new()), room_id());
+        let mut operation = CheckTimers::new(Arc::new(KitConfig::new()), room_id(), None);
         match operation.poll(&SequentialEnvironment::default()).next {
             Next::Effects(effects) => effects.first().unwrap().id,
             Next::Waiting | Next::Ready(_) => panic!("a timer check asks for the lock first"),

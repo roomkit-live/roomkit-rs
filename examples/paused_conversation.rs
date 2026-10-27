@@ -18,23 +18,31 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    BindingOptions, ChannelId, ChannelType, EventContent, InboundMessage, Room, RoomId,
-    RoomOptions, RoomStatus,
+    ChannelId, ChannelType, EventContent, InboundMessage, Room, RoomId, RoomStatus, RoomTimers,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
-use roomkit::{ConversationStore, HookTrigger, RoomKit};
+use roomkit::{
+    AttachChannelOptions, CheckAllTimersOptions, ConversationStore, CreateRoomOptions, HookTrigger,
+    ProcessInboundOptions, RoomKit,
+};
 
 use shared::{Checks, Clock, SmsNumber};
 
 const ALICE: &str = "+15550000001";
 const BOB: &str = "+15550000002";
 
-/// An hour without activity pauses a room; a day paused closes it.
-fn hourly() -> RoomOptions {
-    let mut options = RoomOptions::default();
-    options.inactive_after_seconds = Some(3600);
-    options.closed_after_seconds = Some(86_400);
-    options
+/// The room `room_id`, which an hour without activity pauses and a day
+/// paused closes.
+fn hourly(room_id: &RoomId) -> CreateRoomOptions {
+    CreateRoomOptions {
+        room_id: Some(room_id.clone()),
+        timers: Some(RoomTimers {
+            inactive_after_seconds: Some(3600),
+            closed_after_seconds: Some(86_400),
+            ..RoomTimers::default()
+        }),
+        ..Default::default()
+    }
 }
 
 /// A text from `from` on `channel`, naming no room; returns the room it was
@@ -46,7 +54,9 @@ async fn text(
     body: &str,
 ) -> Result<RoomId, Box<dyn Error>> {
     let message = InboundMessage::new(channel.clone(), from, EventContent::text(body));
-    let result = kit.process_inbound(message).await?;
+    let result = kit
+        .process_inbound(message, ProcessInboundOptions::default())
+        .await?;
     let room = result.event.ok_or("the message was refused")?.room_id;
     println!("{from} texts {body:?}: routed to {room}.");
     Ok(room)
@@ -56,7 +66,9 @@ async fn text(
 /// the check changed.
 async fn two_hours_later(kit: &RoomKit, clock: &Clock) -> Result<Vec<Room>, Box<dyn Error>> {
     clock.advance(Duration::from_hours(2));
-    let changed = kit.check_timers().await?;
+    let changed = kit
+        .check_all_timers(CheckAllTimersOptions::default())
+        .await?;
     for room in &changed {
         println!("Two hours later, {} is {:?}.", room.id, room.status);
     }
@@ -81,7 +93,9 @@ fn agent_joins_every_room(kit: &RoomKit, agent: &ChannelId) -> Result<(), Box<dy
             async move {
                 // A failure would be logged; the example's checks see it.
                 if let Some(kit) = kit {
-                    let _attached = kit.attach(&event.room_id, &agent).await;
+                    let _attached = kit
+                        .attach_channel(&event.room_id, &agent, AttachChannelOptions::default())
+                        .await;
                 }
             }
         },
@@ -103,8 +117,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let mut checks = Checks::default();
 
     let support = RoomId::new("support")?;
-    kit.create_room_with(&support, hourly()).await?;
-    kit.attach(&support, sms.id()).await?;
+    kit.create_room(hourly(&support)).await?;
+    kit.attach_channel(&support, sms.id(), AttachChannelOptions::default())
+        .await?;
     text(&kit, sms.id(), ALICE, "Hello").await?;
     let paused = two_hours_later(&kit, &clock).await?;
     checks.expect(
@@ -133,10 +148,12 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     println!("The team's number is dedicated to its room, bound as a group.");
     let team_room = RoomId::new("team")?;
-    kit.create_room_with(&team_room, hourly()).await?;
-    let mut group = BindingOptions::default();
-    group.group = true;
-    kit.attach_with(&team_room, team.id(), group).await?;
+    kit.create_room(hourly(&team_room)).await?;
+    let group = AttachChannelOptions {
+        group: true,
+        ..Default::default()
+    };
+    kit.attach_channel(&team_room, team.id(), group).await?;
     text(&kit, team.id(), ALICE, "Meeting at 3?").await?;
     two_hours_later(&kit, &clock).await?;
     let paused_group = status(&kit, &team_room).await?;
