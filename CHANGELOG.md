@@ -12,6 +12,11 @@ as it stands.
 
 ### Changed
 
+- **An AI agent takes no inbound message** (step 4, milestone 8, review).
+  `AiAgent` and `OpenAiAgent` refuse a message sent on their channel
+  (`process_inbound` fails, nothing enters the room), as the reference
+  implementation's AI channel does: an event under the agent's id was read
+  as the agent's own words, and a forged tool row as one of its calls.
 - **Every intelligence turn runs through the turn backend** (step 4,
   milestone 7, RFC §10.6). An intelligence channel's turn runs on the
   kit's own turn executor, behind the in-memory backend: its request, its
@@ -135,7 +140,7 @@ as it stands.
 
 - **Skills from the host's directories** (step 4, milestone 8, RFC §24,
   §6.4, §21.1). `roomkit_ai::SkillRegistry` discovers the skills of
-  directories (`discover`) or registers one (`register`), strictly and
+  directories (`discover(&[dir])`, a slice) or registers one (`register`), strictly and
   atomically: the first skill that cannot be loaded fails the call with a
   `SkillError` naming it, and the registry is left as it was. A skill is a
   directory holding a `SKILL.md` whose frontmatter is read line by line,
@@ -154,12 +159,15 @@ as it stands.
   answers a skill's instructions and references the first time and an
   acknowledgement after, and `read_skill_reference`, which reads a file of
   the skill's `references/` by a name of `[A-Za-z0-9._-]`, resolved with
-  its links followed and inside that directory, 256 KiB at most. The two
+  its links followed and inside that directory, 256 KiB at most; each
+  file is opened, then checked through its handle (the path resolved anew
+  names the very file opened), so one swapped for a link out meanwhile is
+  never read. The two
   tools escape the agent's tool policy, as RFC §21.1 lists them. An
   activation counts once its call is served, for the room, four skills at
   most; a restarted agent reads the room's served activations again from
-  the stored rows its turn is handed. A turn that stands alone carries and
-  records none. No skill script runs. The example `agent_skills`, over
+  the stored rows its turn is handed, those it wrote outbound. A turn that
+  stands alone carries none, and records none in memory. No skill script runs. The example `agent_skills`, over
   `examples/skills/`, shows them.
 - **The turn backend** (step 4, milestone 7, RFC §10.6):
   `RoomKit::set_turn_timeouts` with `TurnTimeouts` (accept, heartbeat
