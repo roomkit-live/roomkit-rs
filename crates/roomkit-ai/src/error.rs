@@ -24,4 +24,15 @@ pub enum AiError {
         /// The label.
         label: String,
     },
+    /// A tool's name is one the provider's vendor refuses (RFC §6.7): a
+    /// request declaring it would fail, on every turn.
+    #[error("tool {name:?}: {vendor} accepts tool names matching {rule}")]
+    ToolName {
+        /// The name.
+        name: String,
+        /// The vendor whose rule refuses it.
+        vendor: String,
+        /// The names the vendor accepts, as a pattern matched whole.
+        rule: String,
+    },
 }

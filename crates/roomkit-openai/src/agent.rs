@@ -15,6 +15,7 @@ use roomkit_ai::{
 
 use crate::config::OpenAiConfig;
 use crate::error::OpenAiError;
+use crate::names;
 use crate::stream;
 use crate::wire::{self, CompletionRequest};
 
@@ -76,13 +77,20 @@ impl OpenAiAgent {
     }
 
     /// The same agent, serving the tools of `toolset` too (see
-    /// [`AiAgent::with_tools`]).
+    /// [`AiAgent::with_tools`]). On OpenAI's own endpoint
+    /// (`https://api.openai.com/v1`), a tool's name is checked against the
+    /// names OpenAI accepts, `[A-Za-z0-9_-]{1,128}` (RFC §6.7): an MCP tool
+    /// named `files.read` would fail every turn's request. A server behind
+    /// another base URL decides itself.
     ///
     /// # Errors
     ///
-    /// Returns [`AiError::DuplicateTool`] for a tool under a name the agent
-    /// serves already, or one the toolset declares twice.
+    /// Returns [`AiError::ToolName`] for a name OpenAI's endpoint refuses,
+    /// and [`AiError::DuplicateTool`] for a tool under a name the agent
+    /// serves already, or one the toolset declares twice; the agent takes
+    /// none of the toolset's tools then.
     pub fn with_tools(self, toolset: impl Toolset) -> Result<Self, AiError> {
+        names::check(&self.agent.provider().config.base_url, &toolset.tools())?;
         Ok(Self {
             agent: self.agent.with_tools(toolset)?,
         })

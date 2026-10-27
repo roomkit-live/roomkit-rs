@@ -37,6 +37,7 @@
 mod agent;
 mod config;
 mod error;
+mod names;
 mod sse;
 mod stream;
 mod wire;

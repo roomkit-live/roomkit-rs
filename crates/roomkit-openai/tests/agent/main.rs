@@ -22,7 +22,7 @@ use roomkit::{
     ConversationStore, HookExecution, HookSpec, HookTrigger, InboundResult, RoomKit,
     SequentialEnvironment, text_of,
 };
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiError, ToolDefinition, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -574,5 +574,59 @@ async fn a_stream_whose_event_never_ends_is_cut_at_the_event_s_bound() {
     assert_eq!(
         result.error.unwrap().message,
         "the provider's stream sent an event longer than 1048576 bytes"
+    );
+}
+
+/// RFC §6.7: on OpenAI's own endpoint, a tool whose name OpenAI refuses
+/// (`[A-Za-z0-9_-]{1,128}`, the rule the reference implementation measured)
+/// is refused when the agent takes it, naming the tool and the rule, where
+/// the reference implementation fails every turn before its request
+/// (`tasks/probes/step4-m9/fix-pass/py_openai_tool_names.out`). A server
+/// behind another base URL decides itself.
+#[test]
+fn a_tool_name_openai_refuses_is_refused_when_the_agent_takes_it() {
+    let tools = |name: &str| {
+        Tools::new().tool(
+            ToolDefinition::new(name, "Reads a file", json!({ "type": "object" })),
+            |_call, _context| async { Ok(ToolOutput::from("read")) },
+        )
+    };
+    let refused = |base_url: &str, name: &str| {
+        let config = OpenAiConfig::new(base_url, API_KEY, "gpt-6-luna");
+        OpenAiAgent::new(channel("assistant"), config)
+            .unwrap()
+            .with_tools(tools(name))
+            .err()
+    };
+    let openai = "https://api.openai.com/v1";
+    let by_openai = |name: &str| {
+        Some(AiError::ToolName {
+            name: name.to_owned(),
+            vendor: "openai".to_owned(),
+            rule: "[A-Za-z0-9_-]{1,128}".to_owned(),
+        })
+    };
+    let (long, longest) = ("d".repeat(129), "c".repeat(128));
+    assert_eq!(
+        [
+            refused(openai, "files.read"),
+            refused(openai, "files:read"),
+            refused(openai, &long),
+            refused("HTTPS://API.OpenAI.com:443/v1/", "files.read"),
+            refused(openai, &longest),
+            refused(openai, "files_read-2"),
+            refused("http://localhost:8000/v1", "files.read"),
+            refused("https://user:key@api.openai.com/v1", "files.read"),
+        ],
+        [
+            by_openai("files.read"),
+            by_openai("files:read"),
+            by_openai(&long),
+            by_openai("files.read"),
+            None,
+            None,
+            None,
+            None,
+        ]
     );
 }
