@@ -4,8 +4,8 @@
 - `sides`: the Rust surface `scripts/rs-surface.py` writes, and Python's
   pinned snapshot;
 - `mapping`: `api/mapping.toml`, its rules and its entries;
-- `compare`: each Rust item against its Python counterpart, and what the
-  entries cover;
+- `compare`: each Rust item against its Python counterpart;
+- `cover`: what the entries cover, and the dead and moved ones;
 - `report`: the report, as text and as JSON.
 """
 

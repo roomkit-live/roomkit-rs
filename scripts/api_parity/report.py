@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from api_parity.compare import Finding, Report
+from api_parity.compare import Finding
+from api_parity.cover import Report
 from api_parity.mapping import LOTS
 
 _ORDER = ("matches", "differs", "options", "exception", "unmapped")

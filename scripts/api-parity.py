@@ -69,7 +69,7 @@ from typing import TextIO
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from api_parity import ParityError  # noqa: E402
-from api_parity.compare import Report, compare  # noqa: E402
+from api_parity.cover import Report, compare  # noqa: E402
 from api_parity.mapping import Mapping, Rules, load_mapping, variant_name  # noqa: E402
 from api_parity.report import as_json, render  # noqa: E402
 from api_parity.sides import Python, Surface, fingerprint, load_python, load_surface, spec_hash  # noqa: E402
