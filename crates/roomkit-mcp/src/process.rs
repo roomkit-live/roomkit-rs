@@ -11,12 +11,8 @@ use tokio::task::JoinHandle;
 
 use crate::command::McpCommand;
 use crate::error::McpError;
+use crate::group::Group;
 use crate::texts::bounded_message;
-
-/// How long a killed process is waited for: a process that a kill does not
-/// end at once is stuck in the kernel, and is left to the runtime, which
-/// reaps it once it ends.
-const KILL_WAIT: Duration = Duration::from_secs(5);
 
 /// The longest line of a server's standard error a log line keeps, in
 /// bytes: the rest of the line is read and dropped.
@@ -32,18 +28,21 @@ pub(crate) struct Started {
 /// How the watcher of a process is asked to end it.
 #[derive(Clone, Copy, Debug)]
 enum Stop {
-    /// Its input closed already, it is given this long to exit, then
-    /// killed.
+    /// Its input closed already, it is given this long to exit, then its
+    /// group is ended.
     Grace(Duration),
-    /// It is killed at once.
+    /// Its group is ended at once.
     Kill,
 }
 
-/// The process of a server, held by a task that waits for it: a process
-/// that exits on its own is waited for at once, so that no zombie stays
-/// while its connection does. Stopped or killed, it is waited for before
-/// the call returns; dropped, its watcher kills it, and if the runtime is
-/// gone, dropping the process kills it (the tokio runtime reaps it).
+/// The process of a server, the leader of a process group of its own on
+/// Unix, held by a task that waits for it: a process that exits on its own
+/// is waited for at once, so that no zombie stays while its connection
+/// does, and what it started is ended with it. Stopped or killed, its group
+/// is ended (`SIGTERM`, the command's grace, `SIGKILL`) and the process
+/// waited for before the call returns; dropped, its watcher does the same;
+/// and if the runtime is gone, dropping the watcher sends the group
+/// `SIGKILL`, the process killed too (the tokio runtime reaps it).
 pub(crate) struct ServerProcess {
     pid: Option<u32>,
     stop: Option<oneshot::Sender<Stop>>,
@@ -79,7 +78,7 @@ impl ServerProcess {
         };
         tokio::spawn(read_stderr(stderr, program));
         let (stop, stopped) = oneshot::channel();
-        let watcher = tokio::spawn(watch(child, pid, stopped));
+        let watcher = tokio::spawn(watch(child, pid, command.close_grace, stopped));
         Ok(Started {
             process: Self {
                 pid,
@@ -119,25 +118,26 @@ impl ServerProcess {
 }
 
 /// Holds `child` until it exits on its own, or until it is asked to end
-/// it, or its handle is dropped, which kills it; then waits for it.
-async fn watch(mut child: Child, pid: Option<u32>, stopped: oneshot::Receiver<Stop>) {
+/// it, or its handle is dropped, which ends it; then ends what is left of
+/// its group, each wait between `SIGTERM` and `SIGKILL` lasting `grace`,
+/// and waits for it.
+async fn watch(
+    mut child: Child,
+    pid: Option<u32>,
+    grace: Duration,
+    stopped: oneshot::Receiver<Stop>,
+) {
+    let group = Group::led_by(pid);
+    let mut guard = group.guard();
     let how = tokio::select! {
-        _exited = child.wait() => return,
-        how = stopped => how.unwrap_or(Stop::Kill),
+        _exited = child.wait() => None,
+        how = stopped => Some(how.unwrap_or(Stop::Kill)),
     };
-    if let Stop::Grace(grace) = how
-        && tokio::time::timeout(grace, child.wait()).await.is_ok()
-    {
-        return;
+    if let Some(Stop::Grace(grace)) = how {
+        let _exited = tokio::time::timeout(grace, child.wait()).await;
     }
-    let _already_gone = child.start_kill();
-    if tokio::time::timeout(KILL_WAIT, child.wait()).await.is_err() {
-        tracing::warn!(
-            target: "roomkit::mcp",
-            pid,
-            "an MCP server's process did not end once killed"
-        );
-    }
+    group.end(&mut child, grace).await;
+    guard.disarm();
 }
 
 /// Reads a server's standard error to its end, so that it never fills the

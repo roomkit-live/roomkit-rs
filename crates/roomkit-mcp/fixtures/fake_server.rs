@@ -3,11 +3,15 @@
 //!
 //! ```text
 //! fake-mcp-server <mode> [--pid-file <path>] [--instructions <text>]
+//!     [--child-pid-file <path>] [--stubborn-pid-file <path>]
 //! ```
 //!
 //! Modes: `normal` (the tools below), `silent` (never answers the
 //! handshake), `exit` (exits at once), `deaf` (`normal`, and stays once its
-//! input closes), `stderr-flood` (`normal`, after 4 MiB of standard error),
+//! input closes), `silent-deaf` (both), `wrap:<mode>` (as `npx` does,
+//! starts the server in `<mode>` as its child, its id written to
+//! `--child-pid-file`, and waits for it); `--stubborn-pid-file` starts a
+//! child that ignores `SIGTERM` first, `stderr-flood` (`normal`, after 4 MiB of standard error),
 //! `listing-error`, `pages:<n>`, `same-cursor`, `endless`, `endless-same`,
 //! `empty-page`, `many`, `names`, `skill-names`.
 //!
@@ -34,12 +38,20 @@ const PNG: &str =
 struct Options {
     mode: String,
     instructions: Option<String>,
+    child_pid_file: Option<String>,
+    stubborn_pid_file: Option<String>,
 }
 
 fn main() -> ExitCode {
     let Some(options) = options() else {
         return ExitCode::FAILURE;
     };
+    if let Some(inner) = options.mode.strip_prefix("wrap:") {
+        return wrap(inner, options.child_pid_file.as_deref());
+    }
+    if let Some(path) = &options.stubborn_pid_file {
+        start_stubborn(path);
+    }
     match options.mode.as_str() {
         "exit" => return ExitCode::SUCCESS,
         "stderr-flood" => {
@@ -54,7 +66,7 @@ fn main() -> ExitCode {
         _ => {}
     }
     serve(&options);
-    if options.mode == "deaf" {
+    if matches!(options.mode.as_str(), "deaf" | "silent-deaf") {
         loop {
             std::thread::park();
         }
@@ -67,15 +79,62 @@ fn options() -> Option<Options> {
     let mut args = std::env::args().skip(1);
     let mode = args.next()?;
     let mut instructions = None;
+    let mut child_pid_file = None;
+    let mut stubborn_pid_file = None;
     while let Some(flag) = args.next() {
         let value = args.next()?;
         match flag.as_str() {
             "--pid-file" => std::fs::write(&value, std::process::id().to_string()).ok()?,
             "--instructions" => instructions = Some(value),
+            "--child-pid-file" => child_pid_file = Some(value),
+            "--stubborn-pid-file" => stubborn_pid_file = Some(value),
             _ => return None,
         }
     }
-    Some(Options { mode, instructions })
+    Some(Options {
+        mode,
+        instructions,
+        child_pid_file,
+        stubborn_pid_file,
+    })
+}
+
+/// Starts a child that ignores `SIGTERM` and sleeps, its id written to
+/// `path`, and leaves it running: a process of the server's group that only
+/// `SIGKILL` ends.
+fn start_stubborn(path: &str) {
+    let script = "echo $$ > \"$1\"; trap '' TERM; exec sleep 300";
+    let _started = std::process::Command::new("sh")
+        .args(["-c", script, "stubborn", path])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    // The child writes its id before the server answers anything.
+    for _ in 0..500 {
+        if std::fs::metadata(path).is_ok_and(|file| file.len() > 0) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// Stands for `npx` or `uvx`: starts the server in `mode` as a child, which
+/// inherits the three standard streams and writes its id to
+/// `child_pid_file`, and exits when it does.
+fn wrap(mode: &str, child_pid_file: Option<&str>) -> ExitCode {
+    let Ok(program) = std::env::current_exe() else {
+        return ExitCode::FAILURE;
+    };
+    let mut server = std::process::Command::new(program);
+    server.arg(mode);
+    if let Some(path) = child_pid_file {
+        server.arg("--pid-file").arg(path);
+    }
+    match server.status() {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(_) | Err(_) => ExitCode::FAILURE,
+    }
 }
 
 /// Answers each request read on stdin until it closes.
@@ -93,7 +152,7 @@ fn serve(options: &Options) {
         let method = message["method"].as_str().unwrap_or_default();
         let params = &message["params"];
         let answer = match method {
-            "initialize" if options.mode == "silent" => continue,
+            "initialize" if options.mode.starts_with("silent") => continue,
             "initialize" => Some(initialized(params, options)),
             "tools/list" if options.mode == "listing-error" => None,
             "tools/list" => {

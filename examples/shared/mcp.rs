@@ -100,31 +100,31 @@ fn call(name: Option<&str>) -> Value {
     }
 }
 
-/// The ids of the processes this one started that are still there, a
-/// zombie included, read from `/proc`; `None` where there is no `/proc`
-/// to read.
-pub fn processes_left() -> Option<Vec<u32>> {
+/// The ids of the processes still there, a zombie included, that this one
+/// started or that belong to one of `groups`, the process groups the
+/// servers it started lead with the processes they started themselves;
+/// read from `/proc`, `None` where there is no `/proc` to read.
+pub fn processes_left(groups: &[u32]) -> Option<Vec<u32>> {
     let own = std::process::id();
     let entries = std::fs::read_dir("/proc").ok()?;
-    let children = entries
+    let left = entries
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
-        .filter(|&pid| parent_of(pid) == Some(own))
+        .filter(|&pid| {
+            stat_of(pid).is_some_and(|(parent, group)| parent == own || groups.contains(&group))
+        })
         .collect();
-    Some(children)
+    Some(left)
 }
 
-/// The parent of the process `pid`: the fourth field of its `stat`, after
-/// its name in parentheses, which may hold anything.
-fn parent_of(pid: u32) -> Option<u32> {
+/// The parent and the process group of the process `pid`: the fourth and
+/// fifth fields of its `stat`, after its name in parentheses, which may
+/// hold anything.
+fn stat_of(pid: u32) -> Option<(u32, u32)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let (_, after_name) = stat.rsplit_once(')')?;
-    after_name.split_whitespace().nth(1)?.parse().ok()
-}
-
-/// Whether the process `pid` is still there, a zombie included; `None`
-/// where there is no `/proc` to read.
-pub fn process_exists(pid: u32) -> Option<bool> {
-    std::fs::metadata("/proc/self").ok()?;
-    Some(std::fs::metadata(format!("/proc/{pid}")).is_ok())
+    let mut fields = after_name.split_whitespace().skip(1);
+    let parent = fields.next()?.parse().ok()?;
+    let group = fields.next()?.parse().ok()?;
+    Some((parent, group))
 }

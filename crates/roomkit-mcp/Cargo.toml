@@ -23,6 +23,11 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "time"] }
 tracing.workspace = true
 
+# A server leads a process group of its own, stopped whole: the processes
+# it starts (the real server, behind npx or uvx) go with it.
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
 [dev-dependencies]
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }

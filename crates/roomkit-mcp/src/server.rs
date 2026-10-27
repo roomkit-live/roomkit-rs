@@ -61,11 +61,13 @@ const CALL_FAILED: &str = "McpError";
 /// which frames and bounds them, rather than into a prompt.
 ///
 /// [`close`](Self::close) closes the server's input, gives it the
-/// command's grace to exit (2 seconds by default), then kills it, and
-/// returns once it is waited for; an agent serving the tools closes it when
-/// its kit shuts down. Dropping the last clone has the process killed and
-/// waited for at once, and a server that exits on its own is waited for as
-/// it exits: no zombie stays. Cloning shares the connection.
+/// command's grace to exit (2 seconds by default), then sends its process
+/// group `SIGTERM`, and `SIGKILL` after the grace again, and returns once
+/// the server is waited for; an agent serving the tools closes it when its
+/// kit shuts down. Dropping the last clone ends the group the same way at
+/// once, and a server that exits on its own is waited for as it exits, what
+/// it started ended with it: no zombie and no orphan stays. Cloning shares
+/// the connection.
 #[derive(Clone)]
 pub struct McpServer {
     inner: Arc<Inner>,
@@ -158,9 +160,10 @@ impl McpServer {
     }
 
     /// Closes the connection and stops the server (RFC §21.2): its input
-    /// closed, it is given the command's grace to exit, then killed, and
-    /// this returns once it is waited for. A call running fails. Called
-    /// again, or beside a close running, it waits for that one's end.
+    /// closed, it is given the command's grace to exit, then its process
+    /// group is ended (`SIGTERM`, the grace, `SIGKILL`), and this returns
+    /// once it is waited for. A call running fails. Called again, or beside
+    /// a close running, it waits for that one's end.
     pub async fn close(&self) {
         self.inner
             .closed

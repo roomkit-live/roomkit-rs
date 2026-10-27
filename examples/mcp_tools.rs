@@ -104,15 +104,15 @@ async fn run() -> Result<ExitCode, Box<dyn Error>> {
     check_the_instructions(&mut checks, &requests);
 
     kit.shutdown().await;
+    // The server leads a process group of its own: nothing of it is left.
+    let groups: Vec<u32> = pid.into_iter().collect();
     checks.expect(
-        "the kit's shutdown stops the server's process, and waits for it",
+        "the kit's shutdown stops the server's process and its process group, and waits for it",
         pid.is_some()
             && server.process_id().is_none()
-            && pid
-                .and_then(mcp::process_exists)
-                .is_none_or(|exists| !exists),
+            && mcp::processes_left(&groups).is_none_or(|left| left.is_empty()),
     );
-    check_the_failed_connections(&mut checks).await?;
+    check_the_failed_connections(&mut checks, &groups).await?;
     Ok(checks.finish())
 }
 
@@ -218,7 +218,10 @@ fn check_the_instructions(checks: &mut Checks, requests: &[Value]) {
 
 /// A command naming no program, and a server that never answers the
 /// handshake: each fails, and leaves no process.
-async fn check_the_failed_connections(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+async fn check_the_failed_connections(
+    checks: &mut Checks,
+    groups: &[u32],
+) -> Result<(), Box<dyn Error>> {
     let missing = McpCommand::new("/nonexistent/shop-mcp-server")
         .connect()
         .await
@@ -227,7 +230,7 @@ async fn check_the_failed_connections(checks: &mut Checks) -> Result<(), Box<dyn
     checks.expect(
         "a missing command fails to start, and leaves no process",
         matches!(missing, Some(McpError::Spawn { .. }))
-            && mcp::processes_left().is_none_or(|left| left.is_empty()),
+            && mcp::processes_left(groups).is_none_or(|left| left.is_empty()),
     );
     let silent = McpCommand::new(std::env::current_exe()?)
         .args([mcp::SERVER_FLAG, mcp::SILENT])
@@ -239,7 +242,7 @@ async fn check_the_failed_connections(checks: &mut Checks) -> Result<(), Box<dyn
     checks.expect(
         "a server that never answers is cut at the connect bound, its process gone before the error",
         matches!(silent, Some(McpError::Timeout { .. }))
-            && mcp::processes_left().is_none_or(|left| left.is_empty()),
+            && mcp::processes_left(groups).is_none_or(|left| left.is_empty()),
     );
     Ok(())
 }

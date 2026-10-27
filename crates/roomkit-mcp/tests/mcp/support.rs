@@ -60,9 +60,24 @@ impl PidFile {
         command.arg("--pid-file").arg(&self.path)
     }
 
+    /// `command`, a wrapper, having the server it starts as its child
+    /// write its process's id to this file.
+    pub(crate) fn on_child(&self, command: McpCommand) -> McpCommand {
+        command.arg("--child-pid-file").arg(&self.path)
+    }
+
+    /// The file's path.
+    pub(crate) fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
     /// The id the server wrote.
     pub(crate) fn pid(&self) -> u32 {
-        fs::read_to_string(&self.path).unwrap().parse().unwrap()
+        fs::read_to_string(&self.path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
     }
 }
 

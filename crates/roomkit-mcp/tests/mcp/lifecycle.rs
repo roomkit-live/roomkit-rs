@@ -85,6 +85,124 @@ async fn a_server_that_exits_is_waited_for_at_once() {
     server.close().await;
 }
 
+/// A server started through a wrapper (as `npx` or `uvx` start one) is the
+/// wrapper's child, and the process an agent's tools reach.
+struct Wrapped {
+    wrapper: PidFile,
+    server: PidFile,
+}
+
+impl Wrapped {
+    fn new() -> Self {
+        Self {
+            wrapper: PidFile::new(),
+            server: PidFile::new(),
+        }
+    }
+
+    /// The wrapper, starting the fake server in `mode` as its child.
+    fn command(&self, mode: &str) -> McpCommand {
+        self.server
+            .on_child(self.wrapper.on(fake(&format!("wrap:{mode}"))))
+    }
+
+    /// Whether the wrapper is gone at once, and the server, which the
+    /// system's init reaps once the wrapper is gone, within a bound.
+    async fn gone(&self) -> (bool, bool) {
+        let wrapper = !exists(self.wrapper.pid());
+        let server = gone_within(self.server.pid(), Duration::from_secs(5)).await;
+        (wrapper, server)
+    }
+}
+
+/// RFC §21.2: a wrapped server that outlives its input's end stops with its
+/// wrapper at the close: the wrapper leads a process group of its own, and
+/// the group is stopped whole (as the Python SDK kills a server's session).
+#[tokio::test]
+async fn a_wrapped_server_that_outlives_its_input_stops_at_the_close() {
+    let wrapped = Wrapped::new();
+    let server = wrapped.command("deaf").connect().await.unwrap();
+    server.close().await;
+    assert_eq!(wrapped.gone().await, (true, true));
+}
+
+/// A process of the server's group that ignores `SIGTERM` is sent
+/// `SIGKILL` once the grace is over.
+#[tokio::test]
+async fn a_process_of_the_group_that_ignores_sigterm_is_killed_after_the_grace() {
+    let stubborn = PidFile::new();
+    let server = fake("deaf")
+        .arg("--stubborn-pid-file")
+        .arg(stubborn.path())
+        .connect()
+        .await
+        .unwrap();
+    let pid = stubborn.pid();
+    let running = exists(pid);
+    server.close().await;
+    let gone = gone_within(pid, Duration::from_secs(5)).await;
+    assert_eq!((running, gone), (true, true));
+}
+
+/// A wrapped server stops when the last handle on it is dropped.
+#[tokio::test]
+async fn a_wrapped_server_stops_when_its_last_handle_is_dropped() {
+    let wrapped = Wrapped::new();
+    let server = wrapped.command("deaf").connect().await.unwrap();
+    let leader = wrapped.wrapper.pid();
+    drop(server);
+    let wrapper_gone = gone_within(leader, Duration::from_secs(5)).await;
+    assert_eq!((wrapper_gone, wrapped.gone().await.1), (true, true));
+}
+
+/// A wrapped server stops when its runtime is dropped with the handle on it
+/// still held: the watcher, dropped with the runtime, sends the group
+/// `SIGKILL`. The wrapper, this process's child, stays a zombie until this
+/// process exits, as no runtime is left to reap it.
+#[test]
+fn a_wrapped_server_stops_when_its_runtime_is_dropped() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let wrapped = Wrapped::new();
+    let server = runtime.block_on(wrapped.command("deaf").connect()).unwrap();
+    let (leader, child) = (wrapped.wrapper.pid(), wrapped.server.pid());
+    drop(runtime);
+    let ended = (0..500).find(|_| {
+        let ended = !running(leader) && !exists(child);
+        if !ended {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        ended
+    });
+    drop(server);
+    assert!(ended.is_some());
+}
+
+/// Whether the process `pid` runs: there, and no zombie.
+fn running(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rsplit_once(')')
+            .is_some_and(|(_, after)| !after.trim_start().starts_with('Z'))
+    })
+}
+
+/// RFC §21.2: a wrapped server that never answers the handshake is stopped
+/// with its wrapper before the error is returned.
+#[tokio::test]
+async fn a_wrapped_server_that_never_answers_is_stopped_before_the_error() {
+    let wrapped = Wrapped::new();
+    let refused = wrapped
+        .command("silent-deaf")
+        .connect_timeout(Duration::from_millis(300))
+        .connect()
+        .await
+        .err();
+    assert!(matches!(refused, Some(McpError::Timeout { .. })));
+    assert_eq!(wrapped.gone().await, (true, true));
+}
+
 /// The kit's shutdown closes the agent serving the server's tools, which
 /// stops the server.
 #[tokio::test]

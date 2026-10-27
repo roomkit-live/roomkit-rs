@@ -15,7 +15,8 @@ use crate::server::McpServer;
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How long a server is given by default to exit once its input is closed,
-/// before it is killed: the reference implementation's.
+/// then once its group is sent `SIGTERM`, before `SIGKILL`: the reference
+/// implementation's.
 const DEFAULT_CLOSE_GRACE: Duration = Duration::from_secs(2);
 
 /// The variables of the host's environment a server inherits, as the
@@ -50,6 +51,14 @@ const INHERITED: &[&str] = &[
 /// needs to run), and the variables given with [`env`](Self::env); its
 /// standard error is read as it writes, each line logged at debug level
 /// under the target `roomkit::mcp`, so that it never fills a pipe.
+///
+/// On Unix the server leads a process group of its own, which is stopped
+/// whole, so that what it starts (the real server, behind `npx` or `uvx`)
+/// goes with it: `SIGTERM` to the group, then `SIGKILL` once the grace is
+/// over. In its own group, the server no longer receives a terminal's
+/// Ctrl+C: a host stops it through its close, its kit's shutdown or the
+/// drop of its last handle, which a Ctrl+C handler that shuts the kit down
+/// covers. Elsewhere, the server's process alone is killed.
 ///
 /// ```
 /// use std::time::Duration;
@@ -130,7 +139,9 @@ impl McpCommand {
     }
 
     /// The same command, the server given `grace` to exit once its input
-    /// is closed at its close, before it is killed.
+    /// is closed at its close, then `grace` again once its group is sent
+    /// `SIGTERM` (at its close, a failed connection or a drop), before
+    /// `SIGKILL`.
     #[must_use]
     pub fn close_grace(mut self, grace: Duration) -> Self {
         self.close_grace = grace;
@@ -175,6 +186,11 @@ impl McpCommand {
         if let Some(dir) = &self.current_dir {
             process.current_dir(dir);
         }
+        // The server leads a process group of its own, so that the
+        // processes it starts (the real server, behind `npx` or `uvx`) are
+        // stopped with it.
+        #[cfg(unix)]
+        process.process_group(0);
         Ok(process)
     }
 

@@ -24,6 +24,9 @@ roomkit-sqlite = { path = "crates/roomkit-sqlite" }
 # MCP's client over stdio (step 4, decisions 11 and 12), for roomkit-mcp
 # alone: its minor version pinned, and moved on purpose.
 rmcp = { version = "~3.8", default-features = false, features = ["client", "transport-async-rw"] }
+# The signal roomkit-mcp stops an MCP server's process group with, on Unix
+# (killpg, without unsafe code here): its minor version pinned.
+nix = { version = "~0.31", default-features = false, features = ["signal"] }
 futures-core = { version = "0.3", default-features = false, features = ["std"] }
 jiff = { version = "0.2", default-features = false, features = ["alloc"] }
 # The OpenAI agent's HTTP client (step 4, decision 4): rustls with its ring

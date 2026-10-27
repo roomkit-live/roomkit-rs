@@ -11,10 +11,11 @@
 //!   name"). The agent's tool policy governs its tools as any other (RFC
 //!   §21.1), and its bound per call applies (RFC §21.6).
 //!
-//! A server's process stops when its connection closes, when the kit of the
-//! agent serving its tools shuts down, or when the last handle on it is
-//! dropped; a connection that fails part-way releases it before the error
-//! is returned. What a server sends is bounded: its messages, its listing,
+//! A server's process stops, with the processes it started (its process
+//! group, on Unix), when its connection closes, when the kit of the agent
+//! serving its tools shuts down, or when the last handle on it is dropped;
+//! a connection that fails part-way releases it before the error is
+//! returned. What a server sends is bounded: its messages, its listing,
 //! its tools' names and descriptions, a call's result.
 //!
 //! ```no_run
@@ -43,6 +44,7 @@
 
 mod command;
 mod error;
+mod group;
 mod listing;
 mod process;
 mod results;
