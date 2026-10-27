@@ -49,6 +49,9 @@ pub(crate) struct OwnerTurn {
     /// The calls whose start was read and whose end was not: the start's
     /// frame, and the call's id.
     open: Vec<(u64, String)>,
+    /// The turn's record as the last `record` frame gave it: the record a
+    /// loop's end ends the turn on.
+    record: Option<Metadata>,
 }
 
 impl OwnerTurn {
@@ -59,6 +62,7 @@ impl OwnerTurn {
             stage: Stage::Output,
             window: PullWindow::default(),
             open: Vec::new(),
+            record: None,
         }
     }
 
@@ -80,6 +84,10 @@ impl OwnerTurn {
                     continue;
                 }
             };
+            if let Some(Main::Record(record)) = next {
+                self.record = Some(record);
+                continue;
+            }
             self.stage = Stage::Done;
             return match next {
                 Some(Main::Output(output, streams)) => {
@@ -100,7 +108,7 @@ impl OwnerTurn {
                     "the turn ended before its output",
                 )
                 .to_record()),
-                Some(Main::Item(..)) => Err(TurnError::new(
+                Some(Main::Item(..) | Main::Record(_)) => Err(TurnError::new(
                     "frame_invalid",
                     "an item of the turn came before its output",
                 )
@@ -126,6 +134,10 @@ impl OwnerTurn {
             let next = self.main.recv().await;
             let read = match next {
                 Some(Main::Item(seq, item)) => self.read(seq, item),
+                Some(Main::Record(record)) => {
+                    self.record = Some(record);
+                    Read::Skipped
+                }
                 Some(Main::Error(error)) => Read::Failed(Box::new(RemoteError(error))),
                 Some(Main::Failed(error)) => Read::Failed(Box::new(error)),
                 Some(Main::End) => Read::Failed(Box::new(TurnError::new(
@@ -233,7 +245,11 @@ impl OwnerTurn {
             }
             Item::LoopEnd { reason, usage, .. } => {
                 self.window.read_other();
-                Read::Item(RemoteItem::Item(decode_loop_end(reason, usage)))
+                let end = match self.record.take() {
+                    Some(record) => ResponseItem::End(record),
+                    None => decode_loop_end(reason, usage),
+                };
+                Read::Item(RemoteItem::Item(end))
             }
             Item::StreamEnd => Read::Ended,
         }

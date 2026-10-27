@@ -64,9 +64,11 @@ pub(super) async fn work(
         context,
         ..
     } = request;
+    // `on_event()` is called within the turn and its context, so the work
+    // it does before its future, as much as its future's, is the turn's.
     let reaction = host
         .clone()
-        .scope(channel.on_event(event, binding, context));
+        .scope(async move { channel.on_event(event, binding, context).await });
     let answered = turn.turn_context().scope(reaction).await;
     let output = match answered {
         Ok(output) => output,
@@ -188,8 +190,12 @@ impl Pump<'_> {
             }
             Some(Ok(ResponseItem::End(record))) => {
                 self.starting = false;
-                encode_loop_end(&record, self.rounds)
-                    .and_then(|item| self.sender.send(&Frame::Item { item }).map(drop))
+                let (whole, item) = encode_loop_end(&record, self.rounds);
+                let recorded = match whole {
+                    Some(record) => self.sender.send(&Frame::Record { record }).map(drop),
+                    None => Ok(()),
+                };
+                recorded.and_then(|()| self.sender.send(&Frame::Item { item }).map(drop))
             }
             Some(Err(error)) => {
                 let error = channel_error(&*error);

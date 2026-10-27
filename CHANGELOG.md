@@ -19,11 +19,12 @@ as it stands.
   messages serialized and parsed anew, the request's events alone handed
   over as they are. Its `on_event()` runs in a copy of the execution
   context of the call that submitted it, its stream in that of the call
-  that first read it, so reentrancy, depth and budgets hold as before; the
-  part of `on_event()` that runs before its future is first polled is
-  outside the turn (`current_turn()` is `None` there). Each side beats
-  every 2 seconds: a turn busy for as long as it likes is never lost, an
-  executor or an owner silent for 10 seconds is. `TurnHost::send_event`
+  that first read it, so reentrancy, depth and budgets hold as before, and
+  `on_event()` runs whole within its turn: `current_turn()` is the turn's
+  in the work it does before its future too, where it was `None` before.
+  Each side beats every 2 seconds, the executor from a task of its own: a
+  turn busy for as long as it likes, its thread blocked included, is never
+  lost; an executor or an owner silent for 10 seconds is. `TurnHost::send_event`
   crosses as a `host_call`, and after its turn as a `room_call`, refused
   once a later turn of the agent was sent in the room; its errors come
   back as the `KitError` they were when it carries no data, as the new

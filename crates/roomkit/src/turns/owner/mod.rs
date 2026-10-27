@@ -64,6 +64,9 @@ impl Facts {
 #[derive(Debug)]
 pub(super) enum Main {
     Output(WireOutput, bool),
+    /// The turn's record as it stands, sent before the item it was read
+    /// with: the record a loop's end that cannot carry it whole ends on.
+    Record(Metadata),
     Item(u64, Item),
     Error(WireError),
     End,

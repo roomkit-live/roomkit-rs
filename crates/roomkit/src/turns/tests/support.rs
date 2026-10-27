@@ -9,8 +9,8 @@ use std::time::Duration;
 use futures_core::Stream;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventDirection, EventSource, EventType, InboundMessage, Metadata, RoomContext,
-    RoomEvent, RoomId,
+    DirectEvent, EventContent, EventDirection, EventSource, EventType, InboundMessage, Metadata,
+    RoomContext, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{ChannelDeclaration, InboundResult};
 use serde_json::Value;
@@ -213,11 +213,19 @@ impl Channel for Waiting {
 pub(super) struct Streaming {
     declaration: ChannelDeclaration,
     deltas: usize,
+    end: Metadata,
     pub(super) produced: Arc<AtomicUsize>,
 }
 
 impl Streaming {
     pub(super) fn new(deltas: usize) -> Self {
+        let mut end = Metadata::new();
+        end.insert("loop_end_reason".to_owned(), Value::from("completed"));
+        Self::ending(deltas, end)
+    }
+
+    /// The agent, its stream ending on the record `end`.
+    pub(super) fn ending(deltas: usize, end: Metadata) -> Self {
         Self {
             declaration: ChannelDeclaration::new(
                 channel("ai"),
@@ -226,6 +234,7 @@ impl Streaming {
                 ChannelDirection::Bidirectional,
             ),
             deltas,
+            end,
             produced: Arc::default(),
         }
     }
@@ -235,7 +244,7 @@ impl Streaming {
 struct Deltas {
     left: usize,
     produced: Arc<AtomicUsize>,
-    ended: bool,
+    end: Option<Metadata>,
 }
 
 impl Stream for Deltas {
@@ -251,13 +260,7 @@ impl Stream for Deltas {
             this.produced.fetch_add(1, Ordering::SeqCst);
             return std::task::Poll::Ready(Some(Ok(ResponseItem::Text("word ".to_owned()))));
         }
-        if this.ended {
-            return std::task::Poll::Ready(None);
-        }
-        this.ended = true;
-        let mut record = Metadata::new();
-        record.insert("loop_end_reason".to_owned(), Value::from("completed"));
-        std::task::Poll::Ready(Some(Ok(ResponseItem::End(record))))
+        std::task::Poll::Ready(this.end.take().map(|end| Ok(ResponseItem::End(end))))
     }
 }
 
@@ -276,7 +279,7 @@ impl Channel for Streaming {
         let deltas = Deltas {
             left: self.deltas,
             produced: Arc::clone(&self.produced),
-            ended: false,
+            end: Some(self.end.clone()),
         };
         // The turn's host is read as the turn runs, within it.
         async move {
@@ -363,5 +366,61 @@ impl Channel for Panicking {
         let own = event.source.channel_id == self.declaration.channel_id;
         assert!(own, "the provider SDK panicked in on_event");
         std::future::ready(Ok(ChannelOutput::default()))
+    }
+}
+
+/// An agent whose `on_event` does its work before its future, as the
+/// examples write it: it reads `current_turn()` there, and spawns the task
+/// that posts a note into the room, wrapped in `keep_context` as its
+/// rustdoc shows; its future awaits the task, then answers.
+#[derive(Clone)]
+pub(super) struct Eager {
+    declaration: ChannelDeclaration,
+    pub(super) kit: Arc<Mutex<Option<RoomKit>>>,
+    pub(super) turned: Arc<Mutex<Vec<bool>>>,
+}
+
+impl Eager {
+    pub(super) fn new() -> Self {
+        Self {
+            declaration: ChannelDeclaration::new(
+                channel("ai"),
+                ChannelType::AI,
+                ChannelCategory::Intelligence,
+                ChannelDirection::Bidirectional,
+            ),
+            kit: Arc::default(),
+            turned: Arc::default(),
+        }
+    }
+}
+
+impl Channel for Eager {
+    fn declaration(&self) -> ChannelDeclaration {
+        self.declaration.clone()
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let own = event.source.channel_id == self.declaration.channel_id;
+        let kit = self.kit.lock().unwrap().clone();
+        let posting = kit.filter(|_| !own).map(|kit| {
+            self.turned.lock().unwrap().push(current_turn().is_some());
+            let room_id = event.room_id.clone();
+            tokio::spawn(crate::keep_context(async move {
+                let note = DirectEvent::new(channel("ai"), EventContent::text("(note)"));
+                kit.send_event(&room_id, note).await.map(|_| ())
+            }))
+        });
+        async move {
+            if let Some(posting) = posting {
+                posting.await.unwrap()?;
+            }
+            Ok(ChannelOutput::default())
+        }
     }
 }

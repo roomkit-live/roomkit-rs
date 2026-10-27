@@ -155,10 +155,10 @@ impl Pump {
                 event_id,
                 data,
             } => self.publish(event_type, room_id, channel_id, event_id, data),
-            // What the reader settles itself, before it closes or once it
-            // reads the end (a call's early end, a record no row reads), and
-            // the ephemerals no owner of 0.1 publishes.
-            Frame::ToolEnded { .. } | Frame::Record { .. } | Frame::Ephemeral { .. } => {
+            // What the reader settles itself, before it closes (a call's
+            // early end), and the ephemerals no owner of 0.1 publishes.
+            Frame::Record { record } => self.hand(Main::Record(record)),
+            Frame::ToolEnded { .. } | Frame::Ephemeral { .. } => {
                 tracing::trace!(target: "roomkit::turns", turn = %self.state.turn.turn_id, "a frame left unread");
             }
         }

@@ -119,31 +119,27 @@ pub(crate) fn decode_end(end: ToolEnd) -> ToolCallContent {
 }
 
 /// A turn's record (RFC §6.4 "The turn's record") as the loop's end
-/// carries it: its reason and its usage, after `rounds` rounds of calls.
-/// Any other key of the record does not cross.
-///
-/// # Errors
-///
-/// A record without a reason cannot cross: the loop's end names one.
-pub(crate) fn encode_loop_end(record: &Metadata, rounds: u64) -> Result<Item, Uncarried> {
-    let Some(reason) = record.get(LOOP_END_REASON).and_then(Value::as_str) else {
-        return Err(Uncarried(format!(
-            "a turn's end names its {LOOP_END_REASON}, which this record lacks"
-        )));
-    };
+/// carries it, after `rounds` rounds of calls: its reason and its usage;
+/// and the record itself when the loop's end cannot carry it whole (a key
+/// of its own, no reason, a usage that is no object), to cross before it
+/// in a `record` frame. A record without a reason ends with an empty one.
+pub(crate) fn encode_loop_end(record: &Metadata, rounds: u64) -> (Option<Metadata>, Item) {
+    let reason = record.get(LOOP_END_REASON).and_then(Value::as_str);
     let usage = match record.get(AI_USAGE) {
-        Some(Value::Object(usage)) => usage.clone(),
-        _ => Metadata::new(),
+        Some(Value::Object(usage)) => Some(usage),
+        _ => None,
     };
-    Ok(Item::LoopEnd {
-        reason: reason.to_owned(),
+    let whole = reason.is_some() && usage.is_some() && record.len() == 2;
+    let item = Item::LoopEnd {
+        reason: reason.unwrap_or_default().to_owned(),
         rounds,
-        usage,
+        usage: usage.cloned().unwrap_or_default(),
         max_rounds: None,
         timeout_seconds: None,
         budget_tokens: None,
         budget_usd: None,
-    })
+    };
+    ((!whole).then(|| record.clone()), item)
 }
 
 /// A turn's record from its loop's end: its reason and its usage.

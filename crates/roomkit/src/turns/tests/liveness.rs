@@ -239,3 +239,26 @@ async fn a_turn_on_a_closed_backend_fails_backend_closed() {
         )
     );
 }
+
+/// RFC §10.6.5: a turn's `on_event()` runs whole within its turn and in
+/// the execution context of the call that submitted it, the work it does
+/// before its future included: it reads its turn, and a task it spawns
+/// there with `keep_context`, posting into the room, acts for the turn, so
+/// the turn awaiting it answers. (Run before its future's first poll, that
+/// work stood outside the turn's context: the post waited for the room's
+/// lane the turn held, for ever.)
+#[tokio::test(start_paused = true)]
+async fn the_work_on_event_does_before_its_future_is_the_turn_s() {
+    let agent = super::support::Eager::new();
+    let kit = kit_with(agent.clone()).await;
+    *agent.kit.lock().unwrap() = Some(kit.clone());
+    let answered = tokio::time::timeout(Duration::from_secs(60), says(&kit, "Hi")).await;
+    agent.kit.lock().unwrap().take();
+    assert_eq!(
+        (
+            answered.map(|result| result.unwrap().error),
+            agent.turned.lock().unwrap().clone()
+        ),
+        (Ok(None), vec![true])
+    );
+}

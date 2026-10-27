@@ -41,6 +41,8 @@ use super::wire::{ContextRest, Control, Frame, RequestRest, TurnRequest};
 use super::{CarriedRequest, MemoryTurn, Turns, lock};
 use crate::channel::DynChannel;
 use crate::turn::{self, TurnHost, TurnKit};
+use tokio::task::AbortHandle;
+use tokio::time::{Instant, MissedTickBehavior};
 
 /// The kind of the refusal of a turn whose channel the executor does not
 /// hold, as the core records a channel that is no longer registered.
@@ -133,7 +135,9 @@ impl Executor {
             request,
             channel,
         ));
+        let beating = Beating::start(&self.kit, &self.sender, &self.turn);
         let cut = self.watch(&mut controls, work, &flow, &link).await;
+        drop(beating);
         self.end(cut, &host, &link);
         panicked.disarm();
     }
@@ -207,8 +211,9 @@ impl Executor {
                     link.close();
                 }
                 () = link.settled(), if idle => {}
+                // The beat is sent from a task of its own (`Beating`); here
+                // the owner's silence is counted.
                 silent = beat.tick() => {
-                    drop(self.send(&Frame::Heartbeat));
                     if silent >= timeouts.silent_intervals() {
                         tracing::warn!(target: "roomkit::turns", turn = %self.turn.turn_id, "a turn's owner fell silent");
                         return Some(Cut::Lost(TurnError::new("owner_lost", "the turn's owner fell silent")));
@@ -249,6 +254,39 @@ impl Executor {
 
     fn send(&self, frame: &Frame) -> Result<u64, Uncarried> {
         self.sender.send(frame)
+    }
+}
+
+/// The executor's heartbeat (RFC §10.6.8), sent every interval from a task
+/// of its own beside the turn's, so that a turn whose work blocks its
+/// thread (a synchronous call, a CPU-bound job) still beats on a runtime
+/// of several threads; stopped as the turn ends, however it ends.
+struct Beating(Option<AbortHandle>);
+
+impl Beating {
+    fn start(kit: &Arc<dyn TurnKit>, sender: &Arc<FrameSender>, turn: &Arc<MemoryTurn>) -> Self {
+        let (sender, turn) = (Arc::clone(sender), Arc::clone(turn));
+        let period = turn.timeouts.interval();
+        let beating = async move {
+            let mut tick = tokio::time::interval_at(Instant::now() + period, period);
+            tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                if !turn.frames.is_open() {
+                    return;
+                }
+                drop(sender.send(&Frame::Heartbeat));
+            }
+        };
+        Self(kit.spawn_tracked(Box::pin(beating)))
+    }
+}
+
+impl Drop for Beating {
+    fn drop(&mut self) {
+        if let Some(beating) = self.0.take() {
+            beating.abort();
+        }
     }
 }
 

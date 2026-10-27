@@ -3,5 +3,6 @@
 
 mod cross_read;
 mod liveness;
+mod records;
 mod support;
 mod window;

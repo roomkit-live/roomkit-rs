@@ -35,12 +35,11 @@ tokio::task_local! {
 /// `current_turn_host()`).
 ///
 /// The kit's turn executor sets it around every intelligence turn's work,
-/// its `on_event()`'s future and its stream, so a tool the turn calls reads
-/// it at any depth, without a kit clone of its own. A task the turn spawns
+/// its `on_event()` whole and its stream, so a tool the turn calls reads it
+/// at any depth, without a kit clone of its own. A task the turn spawns
 /// reads it when its future is wrapped in
 /// [`keep_context`](crate::keep_context), as does an observer of its tool
-/// calls, after the turn too. The code `on_event()` runs before its future
-/// is first polled is outside the turn.
+/// calls, after the turn too.
 ///
 /// ```
 /// // Outside every turn there is none.
