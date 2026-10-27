@@ -8,6 +8,7 @@ use std::process::ExitCode;
 #[derive(Debug, Default)]
 pub struct Checks {
     failed: usize,
+    skipped: usize,
 }
 
 impl Checks {
@@ -21,9 +22,19 @@ impl Checks {
         }
     }
 
+    /// Prints `SKIP` for `what`, a check this run cannot make, and `why`.
+    /// A skipped check fails nothing; the last line counts it.
+    pub fn skip(&mut self, what: &str, why: &str) {
+        println!("SKIP {what}: {why}");
+        self.skipped += 1;
+    }
+
     /// The process's exit code: success when every check passed.
     pub fn finish(self) -> ExitCode {
-        if self.failed == 0 {
+        if self.failed == 0 && self.skipped > 0 {
+            println!("All checks made passed; {} skipped.", self.skipped);
+            ExitCode::SUCCESS
+        } else if self.failed == 0 {
             println!("All checks passed.");
             ExitCode::SUCCESS
         } else {

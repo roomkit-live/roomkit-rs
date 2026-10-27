@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Bakery chat</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="bar">
+    <h1>Bakery chat</h1>
+    <p id="state" class="state" data-state="closed" role="status">Not connected</p>
+  </header>
+  <form id="join" class="join">
+    <label>Name
+      <input id="name" maxlength="64" autocomplete="nickname" placeholder="Alice">
+    </label>
+    <label>Conversation
+      <input id="conversation" value="bakery" maxlength="64" required
+             pattern="[A-Za-z0-9_\-]{1,64}" title="1 to 64 letters, digits, _ or -">
+    </label>
+    <button id="connect" type="submit">Join</button>
+  </form>
+  <main id="scroller" class="scroller">
+    <ol id="messages" class="messages" aria-live="polite"></ol>
+  </main>
+  <form id="composer" class="composer">
+    <input id="text" autocomplete="off" aria-label="Message"
+           placeholder="Write a message, Enter sends" disabled>
+    <button id="send" type="submit" disabled>Send</button>
+  </form>
+</body>
+</html>

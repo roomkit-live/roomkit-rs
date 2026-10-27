@@ -1,7 +1,7 @@
 //! The bakery's agent served over WebSocket, its rooms kept in SQLite: the
-//! server `server_agent` shows. Each connection to
-//! `/conversations/{conversation}` is a person taking part in the
-//! conversation's room through the `websocket` channel, and the agent
+//! server `server_agent` shows and `web_chat` puts a page in front of. Each
+//! connection to `/conversations/{conversation}` is a person taking part in
+//! the conversation's room through the `websocket` channel, and the agent
 //! answers each message through an OpenAI-compatible endpoint (RFC §6.4).
 //! `server_agent`'s header says what a connection names, sends and
 //! receives.

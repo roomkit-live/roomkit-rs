@@ -3,7 +3,8 @@
 //! through the `websocket` channel, an agent answering each message through
 //! an OpenAI-compatible endpoint (RFC §6.4), and the rooms in a SQLite file
 //! (RFC §14), so that a restarted server goes on with each conversation.
-//! The server is the examples' own, in `shared/server.rs`.
+//! The server is the examples' own, in `shared/server.rs`, which `web_chat`
+//! serves a page in front of.
 //!
 //! - A connection to `/conversations/{conversation}?user=alice&name=Alice`
 //!   is the participant `alice`, named Alice, of the room whose id is the
@@ -50,7 +51,8 @@
 //!   takes the participant from its session.
 //! - The `Origin` check: none is made, so with a session held in a cookie
 //!   any web page could open a socket as its visitor (cross-site WebSocket
-//!   hijacking). A service checks it in `connect`, given the request's
+//!   hijacking). `web_chat`, which serves its page itself, makes it in a
+//!   layer; a service checks it in `connect`, given the request's
 //!   `headers: HeaderMap`:
 //!
 //!   ```text

@@ -22,22 +22,23 @@ serde.workspace = true
 serde_json.workspace = true
 # The fake of the OpenAI wire (shared/openai.rs) is a local HTTP server.
 tokio = { workspace = true, features = ["net", "io-util"] }
-# The server example's server (shared/server.rs): its WebSocket server,
-# the socket's two directions and the error of a message over its limit,
-# and its store, on which the skills example (agent_skills.rs) restarts as
-# well. The server example's checks connect with tokio-tungstenite's
-# client.
+# The server the server examples run (shared/server.rs): its WebSocket
+# server, the socket's two directions and the error of a message over its
+# limit, and its store, on which the skills example (agent_skills.rs)
+# restarts as well. The server examples' checks connect with
+# tokio-tungstenite's client.
 axum.workspace = true
 futures-util.workspace = true
 roomkit-sqlite.workspace = true
 tokio-tungstenite.workspace = true
 
-# What the shared library does not use: the signal that stops the server
-# example when it serves.
+# What the shared library does not use: the signal that stops a server
+# example when it serves, and the process the web chat's check reads its
+# page's script with (web_chat.rs, `node --check`).
 [dev-dependencies]
 # The MCP example's (mcp_tools.rs), which starts itself as its MCP server.
 roomkit-mcp.workspace = true
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["process", "signal"] }
 
 [lints]
 workspace = true
@@ -154,7 +155,8 @@ path = "agent_skills.rs"
 name = "mcp_tools"
 path = "mcp_tools.rs"
 
-# A server: an agent over WebSocket, kept in SQLite.
+# A server: an agent over WebSocket, kept in SQLite, and a page to chat
+# with it.
 
 [[example]]
 name = "streamed_answer"
@@ -163,3 +165,7 @@ path = "streamed_answer.rs"
 [[example]]
 name = "server_agent"
 path = "server_agent.rs"
+
+[[example]]
+name = "web_chat"
+path = "web_chat.rs"

@@ -1,0 +1,219 @@
+/* The page of the web chat example (examples/web_chat.rs): light or dark as
+   the system is, one column, the conversation scrolling between the join
+   form and the composer. */
+
+:root {
+  color-scheme: light dark;
+  --background: #f4f3ef;
+  --surface: #ffffff;
+  --text: #1c1c1e;
+  --muted: #6a6a70;
+  --border: #dcdad3;
+  --mine: #dce8fb;
+  --accent: #2c64c9;
+  --accent-text: #ffffff;
+  --open: #23804a;
+  --warn: #a15c00;
+  --error: #b3261e;
+  --error-surface: #fbe9e7;
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #141518;
+    --surface: #1f2125;
+    --text: #e9e9ee;
+    --muted: #9b9ba4;
+    --border: #30333a;
+    --mine: #1d3557;
+    --accent: #6d9eff;
+    --accent-text: #0c1424;
+    --open: #5ccf8a;
+    --warn: #f0b25a;
+    --error: #ff8f86;
+    --error-surface: #3a1e1c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html {
+  height: 100%;
+  background: var(--background);
+  color: var(--text);
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+.bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0 0.25rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.state {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.state::before {
+  content: "●";
+  margin-right: 0.35rem;
+  color: var(--error);
+}
+
+.state[data-state="connecting"]::before {
+  color: var(--warn);
+}
+
+.state[data-state="open"]::before {
+  color: var(--open);
+}
+
+form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.join {
+  flex-wrap: wrap;
+  align-items: end;
+  padding: 0.5rem 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+label {
+  display: flex;
+  flex: 1 1 10rem;
+  flex-direction: column;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+input,
+button {
+  font: inherit;
+  color: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+input:disabled {
+  opacity: 0.6;
+}
+
+button {
+  cursor: pointer;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.scroller {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 1rem 0;
+  list-style: none;
+}
+
+.message {
+  align-self: flex-start;
+  max-width: 85%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.message.mine {
+  align-self: flex-end;
+  border-color: transparent;
+  background: var(--mine);
+}
+
+.message.streaming .text::after {
+  content: "▍";
+  margin-left: 0.1rem;
+  color: var(--muted);
+}
+
+.who {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool,
+.waiting {
+  font-size: 0.85rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.tool::before {
+  content: "⚙ ";
+}
+
+.tool.failed {
+  color: var(--error);
+}
+
+.note {
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--error-surface);
+  color: var(--error);
+}
+
+.composer {
+  padding: 0.75rem 0 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.composer input {
+  flex: 1;
+  min-width: 0;
+}

@@ -666,8 +666,9 @@ A service depends on `roomkit` and on the crates it needs beside it,
   `paused_conversation`, `identity_addresses`), agents (`openai_agent`,
   against a local fake of the OpenAI wire unless `OPENAI_BASE_URL`,
   `OPENAI_API_KEY` and `OPENAI_MODEL` name an endpoint, `agent_tools`,
-  `streamed_answer`, `agent_skills`, `mcp_tools`), and a server
-  (`server_agent`).
+  `streamed_answer`, `agent_skills`, `mcp_tools`), and two servers
+  (`server_agent`, and `web_chat`, which serves a page to chat with its
+  agent in a browser).
 - **The server example** (`server_agent`), the README's quickstart: an axum
   server where each WebSocket connection to
   `/conversations/{conversation}?user=...&name=...` is a participant of the
