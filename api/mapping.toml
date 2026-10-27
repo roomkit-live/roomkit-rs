@@ -143,6 +143,48 @@ rust = "roomkit_mcp::McpError"
 approved = "2026-10-27"
 reason = "the error type a Result needs for the exceptions the MCP SDK raises"
 
+[[exception]]
+rust = "roomkit::ConversationStore"
+members = ["delete_participant"]
+approved = "2026-10-27"
+until = "roomkit.ConversationStore.delete_participant"
+reason = "RFC §14.1 names it and Rust has it; Python adds it (RMK-1010 item 23)"
+
+[[exception]]
+rust = "roomkit::RoomKit"
+members = ["pause_room"]
+approved = "2026-10-27"
+until = "roomkit.RoomKit.pause_room"
+reason = "RFC §5.1 names it and Rust has it; Python adds it (RMK-1010 item 22)"
+
+[[exception]]
+rust = "roomkit::RoomKit"
+members = ["resume_room"]
+approved = "2026-10-27"
+until = "roomkit.RoomKit.resume_room"
+reason = "RFC §5.1 names it and Rust has it; Python adds it (RMK-1010 item 22)"
+
+[[exception]]
+rust = "roomkit::RoomKit"
+members = ["reopen_room"]
+approved = "2026-10-27"
+until = "roomkit.RoomKit.reopen_room"
+reason = "RFC §5.1 names it and Rust has it; Python adds it (RMK-1010 item 22)"
+
+[[exception]]
+rust = "roomkit::model::ChannelType"
+members = ["new", "as_str"]
+approved = "2026-10-27"
+until = "roomkit.ChannelType.__init__"
+reason = "decision 19: ChannelType stays open, Rust is right and Python aligns (RMK-1010 item 1, RMK-986); until Python's open ChannelType gains its constructor"
+
+[[exception]]
+rust = "roomkit_ai::SkillError"
+members = ["ManifestTooLarge"]
+approved = "2026-10-27"
+until = "roomkit.skills.SkillManifestTooLargeError"
+reason = "decision 19: the skills manifest bound stays, Rust is right and Python aligns (RMK-1010 item 6); until Python's skill error family gains the class"
+
 # Python names of classes in scope that Rust lacks: not in 0.x (rule 5).
 
 [[missing]]
@@ -677,6 +719,12 @@ rust = "roomkit::model::RoomOptions"
 reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
 
 [[pending]]
+lot = 1
+python = "roomkit.RoomKit"
+members = ["get_channel"]
+reason = "lot 1: get_channel returns the registered channel (lot 4's RegisteredChannel)"
+
+[[pending]]
 lot = 2
 python = "roomkit.ChannelBinding"
 members = ["can_write", "sends"]
@@ -1025,6 +1073,200 @@ lot = 2
 python = "roomkit.ProviderResult"
 members = ["__init__"]
 reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
+
+[[pending]]
+lot = 2
+python = "roomkit.TextContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.ToolCallContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.AudioContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.CompositeContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.DeleteContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.EditContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.LocationContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.MediaContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.RichContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.SystemContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.TemplateContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+python = "roomkit.models.VideoContent.__init__"
+params = ["type"]
+reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::ChannelError"
+reason = "the error alias of a raised exception, a rule lot 2 adds with the error rules"
+
+[[pending]]
+lot = 2
+rust = "roomkit::CountryCode"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::InvalidCountryCode"
+reason = "the error of a validated strong type: lot 2's strong-type and error rules read it"
+
+[[pending]]
+lot = 2
+rust = "roomkit::RouterError"
+reason = "the error alias of a raised exception, a rule lot 2 adds with the error rules"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ChannelId"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ChannelSet"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::CompositeContent"
+members = ["into_parts"]
+reason = "decision 16: CompositeContent::into_parts, a Rust-only helper, hidden in lot 2"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Confidence"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::EditSource"
+reason = "decision 4: a Literal reads as an enum of its values, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::EventId"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::HOST_CHANNEL_ID"
+reason = "decision 16: hidden from the public API in lot 2"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::IdentityId"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Latitude"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Longitude"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::MAX_COMPOSITE_DEPTH"
+reason = "decision 16: hidden from the public API in lot 2"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Metadata"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ObservationId"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ParticipantId"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RichFormat"
+reason = "decision 4: a Literal reads as an enum of its values, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::RoomId"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::TaskId"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Timestamp"
+reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::ToolCallStatus"
+reason = "decision 4: a Literal reads as an enum of its values, a rule lot 2 adds to the report"
+
+[[pending]]
+lot = 2
+rust = "roomkit::model::Visibility"
+members = ["Channels"]
+reason = "decision 4: Visibility::Channels(ChannelSet) stands for Python's channel list, read by lot 2's strong-type rule"
 
 [[pending]]
 lot = 3
@@ -1563,6 +1805,21 @@ rust = "roomkit::model::RoomUpdates"
 reason = "decision 13: the store takes Python's method names, shapes, options and returns"
 
 [[pending]]
+lot = 4
+rust = "roomkit::DeliveryStream"
+reason = "Python's delivery and response streams as named Rust stream types, a rule lot 4 adds to the report"
+
+[[pending]]
+lot = 4
+rust = "roomkit::ResponseStream"
+reason = "Python's delivery and response streams as named Rust stream types, a rule lot 4 adds to the report"
+
+[[pending]]
+lot = 4
+rust = "roomkit::StreamItem"
+reason = "Python's delivery and response streams as named Rust stream types, a rule lot 4 adds to the report"
+
+[[pending]]
 lot = 5
 python = "roomkit.SQLiteStore"
 members = ["__init__"]
@@ -1797,247 +2054,7 @@ members = ["open"]
 reason = "lot 5: SqliteStore::new(SqliteStoreOptions) opens lazily, close(); OpenError gives way to SqliteSchemaError"
 
 [[pending]]
-lot = "?"
-python = "roomkit.RoomKit"
-members = ["get_channel"]
-reason = "lot 4 speaks of lot 1's get_channel, which lot 1's list of calls does not name"
-
-[[pending]]
-lot = "?"
+lot = 5
 python = "roomkit.SQLiteStore"
 members = ["search_events"]
-reason = "Python's SQLiteStore.search_events: the plan names no lot and no reason"
-
-[[pending]]
-lot = "?"
-python = "roomkit.TextContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.ToolCallContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.models.AudioContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.models.CompositeContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.models.DeleteContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.models.EditContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.models.LocationContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.models.MediaContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.models.RichContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.models.SystemContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.models.TemplateContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-python = "roomkit.models.VideoContent.__init__"
-params = ["type"]
-reason = "a union of models tagged by type is an enum tagged the same: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::ChannelError"
-reason = "a Result's error for any raised exception: a mapping lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::ConversationStore"
-members = ["delete_participant"]
-reason = "decision 15 / point 1: Rust keeps it and Python gains it (a Python item); no table row says how the report holds it meanwhile"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::CountryCode"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::DeliveryStream"
-reason = "Python's response and delivery streams as named Rust stream types: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::InvalidCountryCode"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::ResponseStream"
-reason = "Python's response and delivery streams as named Rust stream types: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::RoomKit"
-members = ["pause_room", "resume_room", "reopen_room"]
-reason = "decision 15 / point 1: Rust keeps it and Python gains it (a Python item); no table row says how the report holds it meanwhile"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::RouterError"
-reason = "a Result's error for any raised exception: a mapping lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::StreamItem"
-reason = "Python's response and delivery streams as named Rust stream types: a mapping row lot 0's rules do not implement"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::ChannelId"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::ChannelSet"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::ChannelType"
-members = ["new", "as_str"]
-reason = "decision 19: ChannelType stays open, a Python item (RMK-986); its new and as_str have no Python counterpart yet"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::CompositeContent"
-members = ["into_parts"]
-reason = "CompositeContent::into_parts: Rust-only, the plan does not say"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::Confidence"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::EditSource"
-reason = "decision 4: an enum for a Python Literal is a language mapping; lot 0's rules have no rule for it (table, Types and values row 2)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::EventId"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::HOST_CHANNEL_ID"
-reason = "the plan hides it in lot 2 (model) and again in lot 3 (helpers)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::IdentityId"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::Latitude"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::Longitude"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::MAX_COMPOSITE_DEPTH"
-reason = "the plan hides it in lot 2 (model) and again in lot 3 (helpers)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::Metadata"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::ObservationId"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::ParticipantId"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::RichFormat"
-reason = "decision 4: an enum for a Python Literal is a language mapping; lot 0's rules have no rule for it (table, Types and values row 2)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::RoomId"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::TaskId"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::Timestamp"
-reason = "decision 4: a strong type is a language mapping; lot 0's rules have no rule for it (table, Types and values row 1)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::ToolCallStatus"
-reason = "decision 4: an enum for a Python Literal is a language mapping; lot 0's rules have no rule for it (table, Types and values row 2)"
-
-[[pending]]
-lot = "?"
-rust = "roomkit::model::Visibility"
-members = ["Channels"]
-reason = "decision 4: Visibility keeps Channels(ChannelSet), a typed variant for Python's str"
-
-[[pending]]
-lot = "?"
-rust = "roomkit_ai::SkillError"
-members = ["ManifestTooLarge"]
-reason = "decision 19: the skills manifest bound stays, a Python item"
-
+reason = "lot 5 decides: mirror SQLiteStore.search_events, or list it [[missing]] with its reason"
