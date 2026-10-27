@@ -73,3 +73,11 @@ pub(crate) async fn asks(kit: &RoomKit, text: &str) -> InboundResult {
     let message = InboundMessage::new(channel("sms"), "+15550000001", EventContent::text(text));
     kit.process_inbound_in(&room(), message).await.unwrap()
 }
+
+/// Every event of a room's timeline the room received.
+pub(crate) fn received() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        ..roomkit::EventQuery::default()
+    }
+}

@@ -106,6 +106,43 @@ pub(crate) fn context_for(reader: &ChannelBinding, whole: &RoomContext) -> RoomC
     }
 }
 
+/// `context.recent_events` as the channel `channel_id` may know them (RFC
+/// §7.5 rule 8), the Python implementation's `visible_events`: what a
+/// caller rebuilding a channel's history by itself hands it, a timeline
+/// page set as the context's `recent_events` among them.
+///
+/// The channel keeps its own accepted events, and another source's whose
+/// visibility admits it (`visibility_allows` in the Python implementation,
+/// [`Visibility::admits`] here), the visibility stamped at the event's
+/// commit. An event stored `BLOCKED` reaches nobody, its own source
+/// included. A deleted event, and an edit of one, stay with their content
+/// withheld (RFC §10.3, gap G-062). A channel the context binds no binding
+/// to is handed none.
+///
+/// It answers the visibility half of §7.5 rule 1 only: as in the Python
+/// implementation, a caller rebuilding history by itself checks the
+/// binding's access, which the pipeline checks where it delivers.
+pub fn visible_events(context: &RoomContext, channel_id: &ChannelId) -> Vec<RoomEvent> {
+    let Some(reader) = context
+        .bindings
+        .iter()
+        .find(|binding| &binding.channel_id == channel_id)
+    else {
+        return Vec::new();
+    };
+    let deleted = deleted_events(&context.recent_events);
+    context
+        .recent_events
+        .iter()
+        .filter(|event| event.status != EventStatus::Blocked)
+        .filter(|event| {
+            &event.source.channel_id == channel_id
+                || event.visibility.admits(&reader.channel_id, reader.category)
+        })
+        .map(|event| withheld(event, &deleted))
+        .collect()
+}
+
 /// The events `timeline` shows deleted (RFC §10.3): an event it holds is
 /// deleted when it carries the mark an accepted delete leaves, which a host's
 /// direct update may have removed since; an event before the window, when
@@ -813,6 +850,107 @@ mod tests {
             blocked.status = EventStatus::Blocked;
             let edited = edit("evt_2", "I need 50000$");
             assert_eq!(history(vec![edited.clone(), blocked]), [edited]);
+        }
+    }
+
+    /// RFC §7.5 rule 8, the Python implementation's `visible_events`: a
+    /// context's events as a channel may know them, a timeline page set as
+    /// its `recent_events` among them.
+    mod visible_events {
+        use super::*;
+        use crate::model::Room;
+        use pretty_assertions::assert_eq;
+        use serde_json::json;
+
+        /// The event `id` from `source`, saying `text`, of `visibility`.
+        fn said(
+            id: &str,
+            source: &ChannelBinding,
+            text: &str,
+            visibility: Visibility,
+        ) -> RoomEvent {
+            let mut event = event_from(source);
+            event.id = EventId::new(id).unwrap();
+            event.content = EventContent::text(text);
+            event.visibility = visibility;
+            event
+        }
+
+        fn context(bindings: Vec<ChannelBinding>, recent_events: Vec<RoomEvent>) -> RoomContext {
+            RoomContext {
+                bindings,
+                recent_events,
+                ..RoomContext::new(Room::new(
+                    RoomId::new("room_1").unwrap(),
+                    Timestamp::UNIX_EPOCH,
+                ))
+            }
+        }
+
+        /// The texts of what `reader`, bound as `binding`, knows of `events`.
+        fn known(
+            binding: ChannelBinding,
+            others: &[ChannelBinding],
+            events: Vec<RoomEvent>,
+        ) -> Vec<String> {
+            let reader = binding.channel_id.clone();
+            let mut bindings = vec![binding];
+            bindings.extend(others.iter().cloned());
+            visible_events(&context(bindings, events), &reader)
+                .iter()
+                .map(|event| crate::rules::transcoding::text_of(&event.content))
+                .collect()
+        }
+
+        /// The events `ws` reads: its own, whispered to an advisor; one to
+        /// every channel; one to agents only; one listing it; a refused one;
+        /// a deleted one.
+        fn page() -> Vec<RoomEvent> {
+            let (ws, sms, ai) = (transport("ws"), transport("sms"), agent("ai"));
+            let listing_ws = Visibility::channels([channel("ws")]).unwrap();
+            let advisor = Visibility::channels([channel("advisor")]).unwrap();
+            let mut refused = said("evt_5", &sms, "refused", Visibility::All);
+            refused.status = EventStatus::Blocked;
+            let mut deleted = said("evt_6", &sms, "deleted", Visibility::All);
+            deleted
+                .metadata
+                .insert(edits::DELETED.to_owned(), json!(true));
+            vec![
+                said("evt_1", &ws, "own", advisor),
+                said("evt_2", &sms, "to all", Visibility::All),
+                said("evt_3", &ai, "to agents", Visibility::Intelligence),
+                said("evt_4", &sms, "to ws", listing_ws),
+                refused,
+                deleted,
+            ]
+        }
+
+        #[test]
+        fn a_channel_knows_its_own_events_and_those_their_visibility_admits() {
+            assert_eq!(
+                known(transport("ws"), &[transport("sms"), agent("ai")], page()),
+                ["own", "to all", "to ws", ""]
+            );
+        }
+
+        #[test]
+        fn a_channel_the_room_does_not_bind_knows_none_of_its_events() {
+            assert_eq!(
+                visible_events(&context(vec![transport("sms")], page()), &channel("ws")),
+                Vec::<RoomEvent>::new()
+            );
+        }
+
+        /// As in the Python implementation, the binding's access is the
+        /// caller's to check: the pipeline checks it where it delivers.
+        #[test]
+        fn a_channel_s_access_is_left_to_the_caller() {
+            let mut write_only = transport("ws");
+            write_only.access = Access::WriteOnly;
+            assert_eq!(
+                known(write_only, &[transport("sms"), agent("ai")], page()),
+                ["own", "to all", "to ws", ""]
+            );
         }
     }
 

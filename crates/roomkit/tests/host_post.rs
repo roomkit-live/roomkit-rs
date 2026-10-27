@@ -21,8 +21,9 @@ use roomkit::model::{
 };
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConfigError, ConversationStore, EventFilter,
-    FrameworkEvent, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore, InboundError,
-    KitError, LifecycleError, RoomCounters, RoomFilter, RoomKit, StoreError, TargetUpdate, text_of,
+    EventQuery, FrameworkEvent, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore,
+    InboundError, KitError, LifecycleError, RoomCounters, RoomFilter, RoomKit, StoreError,
+    TargetUpdate, text_of,
 };
 use tokio::sync::Notify;
 
@@ -219,7 +220,11 @@ async fn sms_room<S: ConversationStore>(
 /// What the room holds: its events, refused ones included, its bindings
 /// and the room itself.
 async fn written<S: ConversationStore>(kit: &RoomKit<S>) -> String {
-    let events = kit.store().list_events(&room_id(), true).await.unwrap();
+    let events = kit
+        .store()
+        .list_events(&room_id(), &every_row())
+        .await
+        .unwrap();
     let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
     let room = kit.store().get_room(&room_id()).await.unwrap();
     format!("{events:?}\n{bindings:?}\n{room:?}")
@@ -916,7 +921,7 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
         let posted = posted.lock().unwrap().clone();
         let host: Vec<(String, Option<String>)> = kit
             .store()
-            .list_events(&room_id(), true)
+            .list_events(&room_id(), &every_row())
             .await
             .unwrap()
             .into_iter()
@@ -1193,9 +1198,9 @@ impl ConversationStore for GatedStore {
     async fn list_events(
         &self,
         room_id: &RoomId,
-        include_blocked: bool,
+        query: &EventQuery,
     ) -> Result<Vec<RoomEvent>, StoreError> {
-        self.store.list_events(room_id, include_blocked).await
+        self.store.list_events(room_id, query).await
     }
 
     async fn list_tasks(&self, room_id: &RoomId) -> Result<Vec<Task>, StoreError> {
@@ -1228,7 +1233,7 @@ fn host_attaches(events: &mut tokio::sync::broadcast::Receiver<FrameworkEvent>) 
 /// The room's messages from the host channel.
 async fn host_messages<S: ConversationStore>(kit: &RoomKit<S>) -> usize {
     kit.store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .iter()
@@ -1324,4 +1329,16 @@ async fn a_first_post_s_read_of_its_room_waits_within_process_timeout() {
             0
         )
     );
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> EventQuery {
+    EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(EventFilter {
+            include_blocked: true,
+            ..EventFilter::default()
+        }),
+        ..EventQuery::default()
+    }
 }

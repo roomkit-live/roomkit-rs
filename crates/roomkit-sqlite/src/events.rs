@@ -4,8 +4,8 @@
 
 use std::collections::BTreeSet;
 
-use roomkit::model::{ChannelId, EventId, EventStatus, EventUpdates, RoomEvent, RoomId};
-use roomkit::{EventFilter, RoomCounters, StoreError, TargetUpdate};
+use roomkit::model::{ChannelId, EventId, EventUpdates, RoomEvent, RoomId};
+use roomkit::{RoomCounters, StoreError, TargetUpdate};
 use roomkit_core::rules::edits::{self, Mutation};
 use roomkit_core::rules::idempotency;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -219,46 +219,6 @@ fn changes_one_of(event: &RoomEvent, gone: &BTreeSet<&EventId>) -> bool {
         .ok()
         .flatten()
         .is_some_and(|mutation| gone.contains(mutation.target_event_id()))
-}
-
-/// How many of the room's events `filter` admits, every row with none.
-pub(crate) fn count(
-    connection: &Connection,
-    room_id: &RoomId,
-    filter: Option<EventFilter>,
-) -> Result<u64, Failure> {
-    let include_blocked = filter.is_none_or(|filter| filter.include_blocked);
-    let counted: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM events WHERE room_id = ?1
-             AND (?2 OR json_extract(data, '$.status') IS NOT ?3)",
-        params![
-            room_id.as_str(),
-            include_blocked,
-            records::name(&EventStatus::Blocked)?
-        ],
-        |row| row.get(0),
-    )?;
-    u64::try_from(counted).map_err(|_| Failure::OutOfRange("an event count"))
-}
-
-/// The room's timeline in index order, the refused events only when
-/// `include_blocked`.
-pub(crate) fn list(
-    connection: &Connection,
-    room_id: &RoomId,
-    include_blocked: bool,
-) -> Result<Vec<RoomEvent>, Failure> {
-    select(
-        connection,
-        "SELECT data FROM events WHERE room_id = ?1
-             AND (?2 OR json_extract(data, '$.status') IS NOT ?3)
-         ORDER BY idx",
-        params![
-            room_id.as_str(),
-            include_blocked,
-            records::name(&EventStatus::Blocked)?
-        ],
-    )
 }
 
 /// The room's latest `count` events, refused ones included, in index order.

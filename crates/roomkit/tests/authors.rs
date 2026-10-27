@@ -110,7 +110,7 @@ async fn names_that_read_alike_are_ranked_as_the_python_implementation_ranks_the
     }
     let records: Vec<Option<Value>> = kit
         .store()
-        .list_events(&room, true)
+        .list_events(&room, &every_row())
         .await
         .unwrap()
         .into_iter()
@@ -153,4 +153,16 @@ async fn names_that_read_alike_are_ranked_as_the_python_implementation_ranks_the
             false
         )
     );
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

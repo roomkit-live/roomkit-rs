@@ -78,7 +78,11 @@ async fn send(kit: &RoomKit, text: &str) -> InboundResult {
 /// What a refusal for the timeout reads, and what the room's timeline
 /// holds after it.
 async fn refusal(kit: &RoomKit, result: &InboundResult) -> (bool, Option<String>, usize) {
-    let timeline = kit.store().list_events(&room_id(), true).await.unwrap();
+    let timeline = kit
+        .store()
+        .list_events(&room_id(), &every_row())
+        .await
+        .unwrap();
     (result.blocked, result.reason.clone(), timeline.len())
 }
 
@@ -328,4 +332,16 @@ async fn a_call_keeps_the_environment_it_started_with() {
         ),
         (Some(first), Some(later))
     );
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> crate::store::EventQuery {
+    crate::store::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(crate::store::EventFilter {
+            include_blocked: true,
+            ..crate::store::EventFilter::default()
+        }),
+        ..crate::store::EventQuery::default()
+    }
 }

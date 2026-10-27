@@ -34,7 +34,7 @@ use roomkit::model::{
 };
 use roomkit::{ConversationStore, InboundError, KitError};
 
-use shared::{Checks, ScriptedAgent, SmsNumber, print_timeline};
+use shared::{Checks, ScriptedAgent, SmsNumber, print_timeline, timeline};
 
 const CUSTOMER: &str = "+15550100001";
 
@@ -115,7 +115,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     kit.idle().await;
 
     let texted = sms.sent_to(CUSTOMER);
-    print_timeline(&kit.store().list_events(&room, true).await?);
+    print_timeline(&timeline(&kit, &room).await?);
     println!("Texted to {CUSTOMER}: {texted:?}");
 
     let mut checks = Checks::default();

@@ -19,7 +19,7 @@ use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use serde_json::Value;
 use tokio::sync::Notify;
 
-use crate::support::{asks, channel, kit, room};
+use crate::support::{asks, channel, kit, received, room};
 
 /// What crossed, as `family type`, a cancel with its reason.
 fn crossed(tap: &TurnTap) -> Vec<String> {
@@ -96,7 +96,7 @@ async fn the_kit_s_shutdown_while_a_tool_runs_crosses_as_cancel_and_ends_the_cal
         .collect();
     let end = kit
         .store()
-        .list_events(&room(), false)
+        .list_events(&room(), &received())
         .await
         .unwrap()
         .into_iter()
@@ -194,7 +194,7 @@ async fn a_streaming_reader_that_leaves_crosses_as_close() {
     let crossed = crossed(&tap);
     let stored: Vec<(String, Option<Value>)> = kit
         .store()
-        .list_events(&room(), false)
+        .list_events(&room(), &received())
         .await
         .unwrap()
         .into_iter()

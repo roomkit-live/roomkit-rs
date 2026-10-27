@@ -17,7 +17,7 @@ use roomkit_core::model::{RoomId, RoomStatus};
 use roomkit_core::rules::routing::{self, Candidate, Refusal, RouteQuery};
 
 use crate::channel::BoxFuture;
-use crate::store::{ConversationStore, RoomFilter, StoreError};
+use crate::store::{self, ConversationStore, RoomFilter, StoreError};
 
 /// What a router failed with. The message fails with it, before anything is
 /// written (RFC §10.4).
@@ -184,7 +184,7 @@ impl DefaultRouter {
         let Some(sole) = routing::sole_bound(query, &bound).map(|sole| sole.room.id.clone()) else {
             return Ok(candidates);
         };
-        let events = store.list_events(&sole, false).await?;
+        let events = store::whole_timeline(store, &sole).await?;
         if let Some(candidate) = candidates
             .iter_mut()
             .find(|candidate| candidate.room.id == sole)

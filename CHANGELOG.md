@@ -266,11 +266,31 @@ A service depends on `roomkit` and on the crates it needs beside it,
   moves it at each index delivered, as Python's does: an event's index once
   its set has run, an index with no delivery set (a record stored
   `BLOCKED`, a lifecycle record) once committed, one index at a time.
+- **A timeline read** (§14.1, "Reading a timeline"), with the Python
+  implementation's names, arguments and defaults (docs/architecture.md,
+  Conventions, lists how they map): `ConversationStore::list_events(room_id,
+  &EventQuery)`, `offset` and `limit` (50 by default), or one of the
+  cursors `after_index` and `before_index`, which exclude each other
+  (`StoreError::InvalidArgument`), `newest_first` choosing the newest end
+  in offset mode, the page always in ascending index order; the events an
+  `EventFilter` admits, or those the room received with none, its criteria
+  (types, types excluded, visibility, source channel and type, correlation
+  group, participant, answered event, thread parent or top level only, a
+  time range, `include_blocked`) applied before the page is cut, as is the
+  exact `visibility_filter`; `get_event_count` with a filter counts the
+  rows the page would serve. `RoomKit::get_timeline(room_id,
+  &TimelineQuery)`, Python's `get_timeline`, reads it through the kit, and
+  `OrganizationKit::get_timeline` for an organization.
+  `roomkit::visible_events(context, channel_id)`, Python's, gives what a
+  channel may know of a context's events (§7.5 rule 8): its own accepted
+  ones and those their visibility admits, deleted content withheld, none
+  for a channel the room does not bind; a page set as the context's
+  `recent_events` is what a reconnecting client is sent.
 - **Organizations** (§17.2, gap G-077): every room operation acts for an
   organization or for none. `RoomKit::for_organization(organization_id)`
   returns an `OrganizationKit` whose calls are the kit's, made for the
   organization, and whose reads (`get_room`, `list_rooms`, `get_event`,
-  `list_events`, `list_bindings`, `list_participants`, `get_participant`)
+  `get_timeline`, `list_bindings`, `list_participants`, `get_participant`)
   see its rooms only. A room of another organization, or of none, is not
   found by its changes, its injections and its posts (`RoomNotFound`),
   before any hook runs or anything is drawn, nor by the reads of its
@@ -497,7 +517,8 @@ A service depends on `roomkit` and on the crates it needs beside it,
   not model kept when it rewrites the record; the tables Python derives from
   the timeline kept right (idempotency keys, the full-text index, which a
   deleted message leaves, and the index sequences); the delivery cursor read
-  from its column; the tables it does not use left alone; a new file, and
+  from its column; a timeline page read from the index on `(room_id, idx)`,
+  its filter's criteria on the row's columns; the tables it does not use left alone; a new file, and
   its missing directory, created at version 12 as Python creates it, and a
   file of another version refused (`OpenError`, whose `Database` variant
   holds a `StoreFailure`, so SQLite's version is no part of the crate's

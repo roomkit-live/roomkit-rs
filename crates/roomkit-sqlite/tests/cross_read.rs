@@ -243,7 +243,7 @@ async fn rewrite_everything(store: &SqliteStore) {
     for participant in store.list_participants(&full).await.unwrap() {
         store.update_participant(participant).await.unwrap();
     }
-    for event in store.list_events(&full, true).await.unwrap() {
+    for event in store.list_events(&full, &every_row()).await.unwrap() {
         store
             .update_event(&event.id, EventUpdates::default())
             .await
@@ -351,7 +351,7 @@ async fn every_record_python_wrote_reads() {
         .into_iter()
         .map(|binding| binding.channel_type.to_string())
         .collect();
-    let timeline = store.list_events(&full, true).await.unwrap();
+    let timeline = store.list_events(&full, &every_row()).await.unwrap();
     let indexes: Vec<u64> = timeline.iter().map(|event| event.index).collect();
     let slack = ChannelType::new("slack").unwrap();
     let resolved = store
@@ -613,7 +613,7 @@ async fn a_delete_marks_its_target_s_edits_as_python_reads_them() {
     ))
     .unwrap();
     let full = room("room-full");
-    let timeline = kit.store().list_events(&full, true).await.unwrap();
+    let timeline = kit.store().list_events(&full, &every_row()).await.unwrap();
     let edited = timeline
         .iter()
         .find(|event| event.index == 3)
@@ -706,4 +706,16 @@ async fn an_identity_with_a_key_rust_does_not_read_resolves_and_keeps_it() {
             })
         )
     );
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

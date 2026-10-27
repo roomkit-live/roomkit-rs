@@ -710,7 +710,7 @@ mod changes_at_once {
         let left = room
             .kit
             .store()
-            .list_events(&room_id(), true)
+            .list_events(&room_id(), &every_row())
             .await
             .unwrap();
         assert_eq!(
@@ -756,5 +756,17 @@ mod changes_at_once {
                 EventContent::text(last)
             );
         }
+    }
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(EventFilter {
+            include_blocked: true,
+            ..EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
     }
 }

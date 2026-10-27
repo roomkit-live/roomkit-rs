@@ -128,7 +128,11 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
         .list_rooms(&RoomFilter::default())
         .await
         .unwrap();
-    let timeline = kit.store().list_events(&room_id(), true).await.unwrap();
+    let timeline = kit
+        .store()
+        .list_events(&room_id(), &every_row())
+        .await
+        .unwrap();
     let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
     let names = event_names(&mut events);
     let count = |name: &str| names.iter().filter(|seen| *seen == name).count();
@@ -281,7 +285,11 @@ async fn first_event_processed(
     kit: &RoomKit,
     events: &mut broadcast::Receiver<FrameworkEvent>,
 ) -> bool {
-    let timeline = kit.store().list_events(&room_id(), true).await.unwrap();
+    let timeline = kit
+        .store()
+        .list_events(&room_id(), &every_row())
+        .await
+        .unwrap();
     let first = timeline
         .iter()
         .find(|event| event.event_type == EventType::Message)
@@ -453,7 +461,7 @@ async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_e
     tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
     let timeline: Vec<(String, EventStatus)> = kit
         .store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .into_iter()
@@ -569,4 +577,16 @@ async fn a_call_dropped_under_the_room_lock_leaves_the_lane_and_the_lock_free() 
         // integrator's pause writes none (gap G-046).
         (true, true, Some(2))
     );
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

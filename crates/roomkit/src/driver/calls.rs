@@ -50,8 +50,7 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
             .get_event(&event_id)
             .await
             .map(|event| StoreOutcome::Event(event.map(Box::new))),
-        StoreRequest::ListEvents { room_id } => store
-            .list_events(&room_id, false)
+        StoreRequest::ListEvents { room_id } => crate::store::whole_timeline(store, &room_id)
             .await
             .map(StoreOutcome::Events),
         StoreRequest::Commit {

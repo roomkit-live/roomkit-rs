@@ -8,15 +8,15 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ChannelType, EventId, EventStatus, EventUpdates, Identity,
-    IdentityId, Metadata, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent,
-    RoomId, RoomUpdates, Task,
+    ChannelBinding, ChannelId, ChannelType, EventId, EventUpdates, Identity, IdentityId, Metadata,
+    Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
+    Task,
 };
 use roomkit_core::ops::{RoomCounters, TargetUpdate};
 use roomkit_core::rules::{idempotency, routing};
 
 use self::identities::Identities;
-use super::{ConversationStore, EventFilter, RoomFilter, StoreError};
+use super::{ConversationStore, EventFilter, EventQuery, RoomFilter, StoreError};
 
 /// The key of a room's private state holding its register of authors (RFC
 /// §10.1 step 12, §14.1), which a context carries.
@@ -121,6 +121,44 @@ fn names(
 ) -> bool {
     named == participant_id
         || identity_id.is_some_and(|identity| named.as_str() == identity.as_str())
+}
+
+/// The page of `timeline` `query` asks for, as the Python implementation's
+/// in-memory store cuts it: the events between the cursor and the end in
+/// index order, those the query admits, then the window, taken from the
+/// newest end for a `before_index` cursor and for `newest_first` in offset
+/// mode, the page ascending either way.
+fn page(timeline: &[RoomEvent], query: &EventQuery) -> Vec<RoomEvent> {
+    let mut events: Vec<&RoomEvent> = timeline
+        .iter()
+        .filter(|event| query.after_index.is_none_or(|after| event.index > after))
+        .filter(|event| query.before_index.is_none_or(|before| event.index < before))
+        .filter(|event| query.admits(event))
+        .collect();
+    // Rendered by index whatever the commit order (RFC §14.1); the sort is
+    // stable.
+    events.sort_by_key(|event| event.index);
+    let limit = usize::try_from(query.limit).unwrap_or(usize::MAX);
+    let cursor = query.after_index.is_some() || query.before_index.is_some();
+    let offset = if cursor {
+        0
+    } else {
+        usize::try_from(query.offset).unwrap_or(usize::MAX)
+    };
+    let from_newest = query.before_index.is_some() || (!cursor && query.newest_first);
+    let (start, end) = if from_newest {
+        let end = events.len().saturating_sub(offset);
+        (end.saturating_sub(limit), end)
+    } else {
+        let start = offset.min(events.len());
+        (start, start.saturating_add(limit).min(events.len()))
+    };
+    events
+        .get(start..end)
+        .unwrap_or_default()
+        .iter()
+        .map(|event| (*event).clone())
+        .collect()
 }
 
 /// The refusal of `event`'s commit when `events`, its room's timeline,
@@ -564,16 +602,10 @@ impl ConversationStore for InMemoryStore {
     async fn list_events(
         &self,
         room_id: &RoomId,
-        include_blocked: bool,
+        query: &EventQuery,
     ) -> Result<Vec<RoomEvent>, StoreError> {
-        self.read(room_id, |record| {
-            record
-                .events
-                .iter()
-                .filter(|event| include_blocked || event.status != EventStatus::Blocked)
-                .cloned()
-                .collect()
-        })
+        query.validate()?;
+        self.read(room_id, |record| page(&record.events, query))
     }
 
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
@@ -620,11 +652,14 @@ impl ConversationStore for InMemoryStore {
         room_id: &RoomId,
         filter: Option<EventFilter>,
     ) -> Result<u64, StoreError> {
+        if let Some(filter) = &filter {
+            filter.validate()?;
+        }
         self.read(room_id, |record| {
             let counted = record
                 .events
                 .iter()
-                .filter(|event| filter.is_none_or(|filter| filter.matches(event)))
+                .filter(|event| filter.as_ref().is_none_or(|filter| filter.matches(event)))
                 .count();
             u64::try_from(counted).unwrap_or(u64::MAX)
         })

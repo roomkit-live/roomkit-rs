@@ -141,7 +141,7 @@ impl Room {
         let timeline: Vec<RoomEvent> = self
             .kit
             .store()
-            .list_events(&room_id(), true)
+            .list_events(&room_id(), &every_row())
             .await
             .unwrap();
         timeline
@@ -193,4 +193,16 @@ pub(crate) fn prompts(model: &ScriptedProvider) -> Vec<String> {
         .iter()
         .map(|request| request.system_prompt.clone().unwrap_or_default())
         .collect()
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

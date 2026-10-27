@@ -228,7 +228,7 @@ async fn delivered(audit: &RecordingTransport, count: usize) -> Vec<String> {
 /// text` lines.
 async fn timeline(kit: &RoomKit) -> Vec<String> {
     kit.store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .iter()
@@ -685,7 +685,7 @@ async fn a_delivery_s_keyed_injection_past_the_reentry_cap_is_a_replay() {
         .map(|(call, id, status)| (*call, id.clone(), *status));
     let keyed = kit
         .store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .into_iter()
@@ -828,7 +828,7 @@ async fn an_awaited_creation_hook_injects_into_the_room_being_created() {
         .unwrap();
     let texts: Vec<(u64, String)> = kit
         .store()
-        .list_events(&new_room, true)
+        .list_events(&new_room, &every_row())
         .await
         .unwrap()
         .iter()
@@ -874,7 +874,7 @@ async fn an_integrator_creation_hook_sends_into_the_room_being_created() {
         .unwrap();
     let texts: Vec<String> = kit
         .store()
-        .list_events(&new_room, true)
+        .list_events(&new_room, &every_row())
         .await
         .unwrap()
         .iter()
@@ -979,7 +979,7 @@ async fn a_task_a_turn_awaits_as_its_own_keeps_the_turn_s_context() {
 /// on: its lifecycle records left out.
 async fn messages(kit: &RoomKit) -> Vec<String> {
     kit.store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .iter()
@@ -2342,7 +2342,11 @@ async fn a_blank_key_is_no_key() {
             record.idempotency_key = Some(blank.to_owned());
             kit.commit_event(&room_id(), record).await.unwrap();
         }
-        let mut stored = kit.store().list_events(&room_id(), true).await.unwrap();
+        let mut stored = kit
+            .store()
+            .list_events(&room_id(), &every_row())
+            .await
+            .unwrap();
         // The attaches' lifecycle records carry no key either (gap G-046).
         stored.drain(..3);
         let keys: Vec<Option<String>> = stored.iter().map(|e| e.idempotency_key.clone()).collect();
@@ -2373,4 +2377,16 @@ async fn commit_event_keeps_the_delivery_results_it_brings() {
         corrected.delivery_results.get("sms").cloned(),
         Some("failed".into())
     );
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

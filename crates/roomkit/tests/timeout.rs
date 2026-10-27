@@ -126,7 +126,11 @@ fn process_timeouts(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<(bo
 
 /// The room's timeline but its lifecycle records (gap G-046).
 async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
-    let mut timeline = kit.store().list_events(&room_id(), true).await.unwrap();
+    let mut timeline = kit
+        .store()
+        .list_events(&room_id(), &every_row())
+        .await
+        .unwrap();
     timeline.retain(|event| event.source.channel_type != ChannelType::SYSTEM);
     timeline
 }
@@ -389,4 +393,16 @@ async fn a_timeout_past_the_clocks_range_bounds_nothing() {
         statuses,
         [Some(EventStatus::Delivered), Some(EventStatus::Delivered)]
     );
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

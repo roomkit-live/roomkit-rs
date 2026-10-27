@@ -834,7 +834,9 @@ async fn timeline_in(
     conversation: &str,
 ) -> Result<Vec<RoomEvent>, Box<dyn Error>> {
     let store = SqliteStore::open(database).await?;
-    Ok(store.list_events(&RoomId::new(conversation)?, true).await?)
+    Ok(store
+        .list_events(&RoomId::new(conversation)?, &every_row())
+        .await?)
 }
 
 /// The texts of a timeline's messages.
@@ -1153,4 +1155,16 @@ fn goes_on(request: &Value) -> bool {
         && ANSWERS.get(1).is_some_and(|reply| answered(second, reply))
         && is_labelled(again, "Alice", ALICE_AGAIN)
         && replays_no_call
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

@@ -98,7 +98,11 @@ async fn send_all(kit: RoomKit, task: usize) {
 /// else but its attaches' lifecycle records (gap G-046), and whether the
 /// reader got every message once, in index order.
 async fn as_seen(kit: &RoomKit, ws: &RecordingTransport, index: usize) -> (bool, bool, bool, bool) {
-    let timeline = kit.store().list_events(&room(index), true).await.unwrap();
+    let timeline = kit
+        .store()
+        .list_events(&room(index), &every_row())
+        .await
+        .unwrap();
     let messages: Vec<_> = timeline
         .iter()
         .filter(|event| event.event_type == EventType::Message)
@@ -157,4 +161,16 @@ async fn eight_rooms_take_four_senders_at_once() {
         seen.push(as_seen(&kit, &ws, index).await);
     }
     assert_eq!(seen, vec![(true, true, true, true); ROOMS]);
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

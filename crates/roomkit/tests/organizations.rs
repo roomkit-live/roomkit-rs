@@ -17,7 +17,7 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     ConversationStore, InboundError, KitError, LifecycleError, MutationError, OrganizationKit,
-    RoomFilter, RoomKit, SequentialEnvironment, StoreError,
+    RoomFilter, RoomKit, SequentialEnvironment, StoreError, TimelineQuery,
 };
 
 const START_MILLIS: i64 = 1_792_677_780_000;
@@ -308,7 +308,7 @@ async fn an_organization_reads_its_own_rooms_only() {
                 .unwrap()
                 .map(|event| event.id),
             reader
-                .list_events(&room, true)
+                .get_timeline(&room, &TimelineQuery::default())
                 .await
                 .map(|events| events.len()),
             reader

@@ -350,7 +350,7 @@ impl Room {
     async fn rows(&self) -> Vec<(EventType, String, Option<bool>, Option<String>)> {
         self.kit
             .store()
-            .list_events(&room_id(), true)
+            .list_events(&room_id(), &every_row())
             .await
             .unwrap()
             .into_iter()
@@ -378,7 +378,7 @@ impl Room {
     async fn timeline(&self) -> Vec<RoomEvent> {
         self.kit
             .store()
-            .list_events(&room_id(), true)
+            .list_events(&room_id(), &every_row())
             .await
             .unwrap()
     }
@@ -947,7 +947,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
         .unwrap();
     let answer = kit
         .store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .into_iter()
@@ -1024,5 +1024,17 @@ impl Channel for Buffered {
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         self.inner.deliver(event, binding, context).await
+    }
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
     }
 }

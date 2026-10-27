@@ -85,6 +85,7 @@ pub use roomkit_core::rules::lifecycle::Transition;
 pub use roomkit_core::rules::routing::{RouteQuery, Sender as RouteSender};
 pub use roomkit_core::rules::transcoding::text_of;
 pub use roomkit_core::rules::transcript;
+pub use roomkit_core::rules::visible_events;
 
 pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::context::keep_context;
@@ -92,11 +93,11 @@ pub use self::environment::SystemEnvironment;
 pub use self::error::KitError;
 pub use self::hooks::{HookError, HookFuture, HookHandler, HookReturn};
 pub use self::host::HostChannel;
-pub use self::kit::{OrganizationKit, RoomKit, TimerSweeper, WeakRoomKit};
+pub use self::kit::{OrganizationKit, RoomKit, TimelineQuery, TimerSweeper, WeakRoomKit};
 pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
 pub use self::store::{
-    ConversationStore, EventFilter, InMemoryStore, RoomCounters, RoomFilter, StoreError,
-    StoreFailure, TargetUpdate,
+    ConversationStore, EventFilter, EventQuery, InMemoryStore, RoomCounters, RoomFilter,
+    StoreError, StoreFailure, TargetUpdate,
 };
 pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem};
 pub use self::tools::{ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict};

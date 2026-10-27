@@ -382,7 +382,7 @@ impl Run {
         let mut events: Vec<Value> = self
             .kit
             .store()
-            .list_events(&room_id, true)
+            .list_events(&room_id, &every_row())
             .await
             .unwrap_or_default()
             .iter()
@@ -423,5 +423,17 @@ impl Run {
             self.problem(format!("the kit did not go idle within {CALL_BOUND:?}"));
         }
         self.drain_events();
+    }
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
     }
 }

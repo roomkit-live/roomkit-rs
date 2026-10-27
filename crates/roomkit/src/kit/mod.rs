@@ -24,6 +24,7 @@ mod rooms;
 mod scope;
 #[cfg(test)]
 mod tests;
+mod timeline;
 mod timers;
 mod weak;
 
@@ -41,6 +42,7 @@ use tokio::sync::broadcast;
 
 pub use self::organization::OrganizationKit;
 use self::scope::Scope;
+pub use self::timeline::TimelineQuery;
 pub use self::timers::TimerSweeper;
 pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;

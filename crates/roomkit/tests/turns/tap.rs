@@ -23,7 +23,7 @@ use roomkit::{ConversationStore, current_turn};
 use roomkit_ai::{ToolError, ToolOutput};
 use serde_json::Value;
 
-use crate::support::{asks, channel, kit, room};
+use crate::support::{asks, channel, kit, received, room};
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/turns")
@@ -180,7 +180,7 @@ async fn the_probe_s_turn_carries_python_s_messages() {
         .collect();
     let timeline: Vec<(EventType, String, u32)> = kit
         .store()
-        .list_events(&room(), false)
+        .list_events(&room(), &received())
         .await
         .unwrap()
         .into_iter()

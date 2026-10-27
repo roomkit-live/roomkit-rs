@@ -94,7 +94,7 @@ impl Room {
     pub(crate) async fn timeline(&self) -> Vec<RoomEvent> {
         self.kit
             .store()
-            .list_events(&room_id(), true)
+            .list_events(&room_id(), &every_row())
             .await
             .unwrap()
     }
@@ -363,7 +363,7 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
     kit.idle().await;
     let capped = kit
         .store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .iter()
@@ -371,4 +371,16 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
         .count();
     kit.shutdown().await;
     (model.turns.load(Ordering::SeqCst), capped)
+}
+
+/// Every row of a room's timeline, the refused ones included.
+pub(crate) fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

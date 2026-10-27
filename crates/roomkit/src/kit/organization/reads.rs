@@ -13,6 +13,7 @@ use roomkit_core::rules::organizations;
 
 use super::OrganizationKit;
 use crate::error::KitError;
+use crate::kit::TimelineQuery;
 use crate::store::{ConversationStore, RoomFilter, StoreError};
 
 impl<S: ConversationStore> OrganizationKit<S> {
@@ -53,32 +54,29 @@ impl<S: ConversationStore> OrganizationKit<S> {
         Ok(own.then_some(event))
     }
 
-    /// The timeline of the organization's room `room_id` in index order,
-    /// the refused events with it when `include_blocked` is set (RFC §14.1).
+    /// A page of the timeline of the organization's room `room_id`, as
+    /// [`RoomKit::get_timeline`](crate::RoomKit::get_timeline) reads it: the
+    /// Python implementation's `get_timeline` with an `organization_id`.
     ///
     /// # Errors
     ///
     /// Returns [`KitError::Store`] with [`StoreError::RoomNotFound`] when the
-    /// room is not the organization's or does not exist, and when the store
-    /// fails a read.
-    pub async fn list_events(
+    /// room is not the organization's or does not exist, and as
+    /// [`RoomKit::get_timeline`](crate::RoomKit::get_timeline) does.
+    pub async fn get_timeline(
         &self,
         room_id: &RoomId,
-        include_blocked: bool,
+        query: &TimelineQuery,
     ) -> Result<Vec<RoomEvent>, KitError> {
         self.own_room(room_id).await?;
-        Ok(self
-            .kit
-            .store()
-            .list_events(room_id, include_blocked)
-            .await?)
+        self.kit.get_timeline(room_id, query).await
     }
 
     /// The bindings of the organization's room `room_id`.
     ///
     /// # Errors
     ///
-    /// As [`list_events`](Self::list_events).
+    /// As [`get_timeline`](Self::get_timeline).
     pub async fn list_bindings(&self, room_id: &RoomId) -> Result<Vec<ChannelBinding>, KitError> {
         self.own_room(room_id).await?;
         Ok(self.kit.store().list_bindings(room_id).await?)
@@ -89,7 +87,7 @@ impl<S: ConversationStore> OrganizationKit<S> {
     ///
     /// # Errors
     ///
-    /// As [`list_events`](Self::list_events).
+    /// As [`get_timeline`](Self::get_timeline).
     pub async fn list_participants(&self, room_id: &RoomId) -> Result<Vec<Participant>, KitError> {
         self.own_room(room_id).await?;
         Ok(self.kit.store().list_participants(room_id).await?)
@@ -100,7 +98,7 @@ impl<S: ConversationStore> OrganizationKit<S> {
     ///
     /// # Errors
     ///
-    /// As [`list_events`](Self::list_events): a read of the roster of a
+    /// As [`get_timeline`](Self::get_timeline): a read of the roster of a
     /// room that is not the organization's fails as not found, as on a room
     /// that does not exist (RFC §17.2).
     pub async fn get_participant(

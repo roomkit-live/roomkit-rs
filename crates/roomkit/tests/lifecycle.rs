@@ -547,7 +547,7 @@ mod unregistering {
     /// (gap G-046).
     async fn timeline_texts(kit: &RoomKit) -> Vec<String> {
         kit.store()
-            .list_events(&room_id(), true)
+            .list_events(&room_id(), &every_row())
             .await
             .unwrap()
             .iter()
@@ -758,4 +758,16 @@ mod bindings {
 fn the_sweeper_can_be_held_across_tasks() {
     fn sendable<T: Send + Sync + 'static>() {}
     sendable::<roomkit::TimerSweeper>();
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

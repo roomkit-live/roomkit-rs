@@ -540,7 +540,7 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
     kit.idle().await;
     let messages: Vec<(String, u32, Option<String>)> = kit
         .store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .into_iter()
@@ -597,7 +597,7 @@ async fn a_notice_per_answer_costs_the_agents_no_answer() {
     kit.idle().await;
     let answers: Vec<Option<String>> = kit
         .store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .into_iter()
@@ -950,7 +950,7 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
     kit.idle().await;
     let answers: Vec<Option<String>> = kit
         .store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .into_iter()
@@ -1035,5 +1035,17 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
             (Vec::new(), Some(14.into())),
             "needs_lock {needs_lock}"
         );
+    }
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
     }
 }

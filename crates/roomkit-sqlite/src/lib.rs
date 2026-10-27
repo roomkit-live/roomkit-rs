@@ -50,6 +50,7 @@ mod rooms;
 mod schema;
 mod side_effects;
 mod store;
+mod timeline;
 
 pub use self::error::OpenError;
 pub use self::store::SqliteStore;

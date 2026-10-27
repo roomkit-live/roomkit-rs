@@ -139,7 +139,7 @@ async fn correspondent(kit: &RoomKit, room_id: &RoomId) -> Option<String> {
 /// G-046).
 async fn texts(kit: &RoomKit, room_id: &RoomId) -> Vec<String> {
     kit.store()
-        .list_events(room_id, true)
+        .list_events(room_id, &every_row())
         .await
         .unwrap()
         .iter()
@@ -756,4 +756,16 @@ async fn a_room_that_heard_another_sender_before_the_record_routes_the_message_o
         ),
         (false, None, Some(ALICE.to_owned()), false, 2)
     );
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

@@ -12,7 +12,7 @@ pub async fn timeline<S: ConversationStore>(
     kit: &RoomKit<S>,
     room_id: &RoomId,
 ) -> Result<Vec<RoomEvent>, StoreError> {
-    kit.store().list_events(room_id, true).await
+    kit.store().list_events(room_id, &every_row()).await
 }
 
 /// Prints the timeline, one event per line: its index, source, depth,
@@ -45,5 +45,17 @@ pub fn print_timeline(events: &[RoomEvent]) {
             status,
             text_of(&event.content)
         );
+    }
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
     }
 }

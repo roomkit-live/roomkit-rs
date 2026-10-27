@@ -148,7 +148,7 @@ async fn a_slow_locked_hook_holds_the_room_lock_from_a_lifecycle_change() {
 /// left out (gap G-046).
 async fn texts(kit: &RoomKit) -> Vec<String> {
     kit.store()
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .iter()
@@ -447,7 +447,11 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
     );
     let result = kit.process_inbound_in(&room_id(), sin).await.unwrap();
     B2 {
-        timeline: kit.store().list_events(&room_id(), true).await.unwrap(),
+        timeline: kit
+            .store()
+            .list_events(&room_id(), &every_row())
+            .await
+            .unwrap(),
         customer: customer.texts(),
         advisor: advisor.texts(),
         observations: kit.store().list_observations(&room_id()).await.unwrap(),
@@ -500,4 +504,16 @@ async fn b2_leaves_the_same_room_off_the_lock_as_under_it() {
     let under_the_lock = block_and_inject(true).await;
     let off_the_lock = block_and_inject(false).await;
     assert_eq!(off_the_lock, under_the_lock);
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(roomkit::EventFilter {
+            include_blocked: true,
+            ..roomkit::EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
 }

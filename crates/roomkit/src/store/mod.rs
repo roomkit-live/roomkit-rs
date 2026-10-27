@@ -9,13 +9,14 @@
 
 mod error;
 mod memory;
+mod query;
 
 use std::future::Future;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ChannelType, EventId, EventStatus, EventUpdates, Identity,
-    IdentityId, Metadata, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent,
-    RoomId, RoomStatus, RoomUpdates, Task,
+    ChannelBinding, ChannelId, ChannelType, EventId, EventUpdates, Identity, IdentityId, Metadata,
+    Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomStatus,
+    RoomUpdates, Task,
 };
 use roomkit_core::rules::timers;
 
@@ -23,6 +24,7 @@ pub use roomkit_core::ops::{RoomCounters, TargetUpdate};
 
 pub use self::error::{StoreError, StoreFailure};
 pub use self::memory::InMemoryStore;
+pub use self::query::{EventFilter, EventQuery};
 
 /// Which rooms [`ConversationStore::list_rooms`] returns; an empty filter
 /// returns every room.
@@ -73,26 +75,29 @@ impl RoomFilter {
     }
 }
 
-/// Which of a room's events a count stands for (RFC §14.1 `EventFilter`):
-/// the rows [`ConversationStore::list_events`] serves under the same
-/// criteria.
-///
-/// It is not `#[non_exhaustive]`, on purpose: a store reads every field,
-/// so a new field is a breaking change on purpose. A store that
-/// destructures it fails to compile until it reads the new field, rather
-/// than silently reading too wide (a field narrowing a read to an
-/// organization, say).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct EventFilter {
-    /// Whether the events stored `BLOCKED` count; a timeline read serves
-    /// what the room received by default.
-    pub include_blocked: bool,
-}
+/// How many events a read of a whole timeline asks the store for at a time.
+const TIMELINE_PAGE: u64 = 500;
 
-impl EventFilter {
-    /// Whether `event` passes the filter.
-    pub fn matches(&self, event: &RoomEvent) -> bool {
-        self.include_blocked || event.status != EventStatus::Blocked
+/// The whole timeline of what the room `room_id` received, in index order,
+/// read a page at a time, as the Python implementation reads it where it
+/// needs it whole (a register's rebuild, the default router's step 3).
+pub(crate) async fn whole_timeline<S: ConversationStore>(
+    store: &S,
+    room_id: &RoomId,
+) -> Result<Vec<RoomEvent>, StoreError> {
+    let mut events: Vec<RoomEvent> = Vec::new();
+    loop {
+        let query = EventQuery {
+            limit: TIMELINE_PAGE,
+            after_index: events.last().map(|event| event.index),
+            ..EventQuery::default()
+        };
+        let page = store.list_events(room_id, &query).await?;
+        let full = u64::try_from(page.len()).is_ok_and(|read| read >= TIMELINE_PAGE);
+        events.extend(page);
+        if !full {
+            return Ok(events);
+        }
     }
 }
 
@@ -470,12 +475,22 @@ pub trait ConversationStore: Send + Sync + 'static {
         observations: Vec<Observation>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
-    /// The room's timeline in index order: the events the room received,
-    /// and the refused ones when `include_blocked` is set (RFC §14.1).
+    /// The page of the room's timeline `query` asks for, in ascending index
+    /// order, the criteria applied before the page is cut (RFC §14.1,
+    /// "Reading a timeline"; the Python implementation's `list_events`):
+    /// see [`EventQuery`].
+    ///
+    /// A store that holds a room's events in a database reads the window
+    /// from its index on `(room_id, index)`, never the whole timeline.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a missing room with [`StoreError::RoomNotFound`], and a query
+    /// [`EventQuery::validate`] refuses with [`StoreError::InvalidArgument`].
     fn list_events(
         &self,
         room_id: &RoomId,
-        include_blocked: bool,
+        query: &EventQuery,
     ) -> impl Future<Output = Result<Vec<RoomEvent>, StoreError>> + Send;
 
     /// The room's tasks.

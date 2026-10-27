@@ -18,7 +18,7 @@ async fn ending_on(end: Metadata) -> (Option<String>, Option<Value>) {
     kit.idle().await;
     let last = kit
         .store()
-        .list_events(&room_id(), false)
+        .list_events(&room_id(), &received())
         .await
         .unwrap()
         .into_iter()
@@ -50,4 +50,12 @@ async fn an_end_with_an_empty_record_ends_the_turn_with_nothing_written() {
 async fn an_end_with_a_key_of_its_own_writes_the_record_whole() {
     let end = json!({ "loop_end_reason": "completed", "my_model": "m-1" });
     assert_eq!(ending_on(record(end.clone())).await, (None, Some(end)));
+}
+
+/// Every event of a room's timeline the room received.
+fn received() -> crate::store::EventQuery {
+    crate::store::EventQuery {
+        limit: u64::MAX,
+        ..crate::store::EventQuery::default()
+    }
 }

@@ -157,6 +157,14 @@ pub enum StoreError {
         /// The key.
         key: String,
     },
+    /// A read's arguments cannot be served together, as the Python
+    /// implementation's `ValueError` says: a timeline read's two cursors,
+    /// which exclude each other (RFC §14.1), or a filter that admits
+    /// nothing by construction ([`EventQuery::validate`]).
+    ///
+    /// [`EventQuery::validate`]: super::EventQuery::validate
+    #[error("{0}")]
+    InvalidArgument(&'static str),
     /// The store could not be reached or failed: the error it met is the
     /// cause ([`std::error::Error::source`]), which the message leaves to
     /// a reader of the chain, the kit's record of a failed call among
@@ -186,6 +194,7 @@ impl StoreError {
             Self::EventNotFound(_) => "EventNotFound",
             Self::IndexTaken { .. } => "IndexTaken",
             Self::IdempotencyKeyTaken { .. } => "IdempotencyKeyTaken",
+            Self::InvalidArgument(_) => "InvalidArgument",
             Self::Unavailable(_) => "StoreUnavailable",
         };
         ErrorRecord::new(error_type, error::with_causes(self))

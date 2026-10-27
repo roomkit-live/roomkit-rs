@@ -13,7 +13,7 @@ use roomkit::model::EventType;
 use roomkit::{ConversationStore, TurnTimeouts};
 use roomkit_ai::ToolOutput;
 
-use crate::support::{asks, channel, kit, room};
+use crate::support::{asks, channel, kit, received, room};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tool_blocking_its_thread_past_the_heartbeat_timeout_ends_normally() {
@@ -30,7 +30,7 @@ async fn a_tool_blocking_its_thread_past_the_heartbeat_timeout_ends_normally() {
     let result = asks(&kit, "What is it?").await;
     let rows: Vec<EventType> = kit
         .store()
-        .list_events(&room(), false)
+        .list_events(&room(), &received())
         .await
         .unwrap()
         .into_iter()

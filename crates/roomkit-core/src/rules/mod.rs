@@ -9,7 +9,7 @@
 //!
 //! | Module | RFC |
 //! |---|---|
-//! | `permissions` | §7.5, §10.2 step 2, §19.3: who reads, who writes, whom a broadcast reaches |
+//! | `permissions` | §7.5, §10.2 step 2, §19.3: who reads, who writes, whom a broadcast reaches; [`visible_events`], what a channel may know of a room's history |
 //! | [`attachment`] | §7.5 rule 7, §10.6.5: a detach's revocation, when the framework attaches a channel itself, and the room metadata the implementation reserves |
 //! | [`addresses`] | §5.7, §10.1 step 1, §10.2 step 3d: an address in its channel's form, and a binding's recipient |
 //! | [`organizations`] | §17.2: which rooms a caller reaches, by the organization it acts for |
@@ -59,3 +59,5 @@ pub mod transcoding;
 pub mod transcript;
 mod unicode;
 mod unicode_data;
+
+pub use self::permissions::visible_events;

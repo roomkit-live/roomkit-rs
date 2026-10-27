@@ -76,26 +76,6 @@ async fn a_commit_to_a_missing_room_is_refused() {
 }
 
 #[tokio::test]
-async fn a_timeline_read_leaves_refused_events_out_by_default() {
-    let store = with_events(vec![
-        event_stored(0, EventStatus::Blocked),
-        event_stored(1, EventStatus::Delivered),
-    ])
-    .await;
-    let received = store.list_events(&room_id(), false).await.unwrap();
-    assert_eq!(
-        received.iter().map(|event| event.index).collect::<Vec<_>>(),
-        [1]
-    );
-}
-
-#[tokio::test]
-async fn a_timeline_read_serves_refused_events_when_asked() {
-    let store = with_events(vec![event_stored(0, EventStatus::Blocked)]).await;
-    assert_eq!(store.list_events(&room_id(), true).await.unwrap().len(), 1);
-}
-
-#[tokio::test]
 async fn a_context_holds_the_latest_events_only() {
     let store = with_events((0..3).map(event).collect()).await;
     let context = store.load_context(&room_id(), 2).await.unwrap().unwrap();
@@ -322,6 +302,7 @@ async fn a_filtered_count_leaves_refused_events_out_as_a_timeline_read_does() {
         .unwrap();
     let with_blocked = EventFilter {
         include_blocked: true,
+        ..EventFilter::default()
     };
     let counts = (
         store.get_event_count(&room_id(), None).await,
@@ -330,7 +311,7 @@ async fn a_filtered_count_leaves_refused_events_out_as_a_timeline_read_does() {
             .await,
         store.get_event_count(&room_id(), Some(with_blocked)).await,
         store
-            .list_events(&room_id(), false)
+            .list_events(&room_id(), &received())
             .await
             .map(|events| events.len()),
     );
@@ -394,7 +375,7 @@ async fn deleting(
         .delete_event(&room_id(), &event_id(target), cascade_replies)
         .await
         .unwrap();
-    let left = store.list_events(&room_id(), true).await.unwrap();
+    let left = store.list_events(&room_id(), &every_row()).await.unwrap();
     (ids(&removed), ids(&left))
 }
 
@@ -546,7 +527,7 @@ async fn a_delete_s_commit_marks_its_target_s_edits_deleted() {
         .await
         .unwrap();
     let marks: Vec<Option<serde_json::Value>> = store
-        .list_events(&room_id(), true)
+        .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .into_iter()
@@ -554,4 +535,24 @@ async fn a_delete_s_commit_marks_its_target_s_edits_deleted() {
         .map(|event| event.metadata.get("deleted").cloned())
         .collect();
     assert_eq!(marks, [Some(json!(true)), Some(json!(true)), None, None]);
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(EventFilter {
+            include_blocked: true,
+            ..EventFilter::default()
+        }),
+        ..roomkit::EventQuery::default()
+    }
+}
+
+/// Every event of a room's timeline the room received.
+fn received() -> roomkit::EventQuery {
+    roomkit::EventQuery {
+        limit: u64::MAX,
+        ..roomkit::EventQuery::default()
+    }
 }

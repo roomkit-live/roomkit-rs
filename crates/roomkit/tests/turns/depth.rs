@@ -101,13 +101,16 @@ async fn sends_through_the_turn(sends: usize) -> (usize, Vec<u32>, usize) {
     .await;
     asks(&kit, "What is it?").await;
     kit.idle().await;
-    let notes: Vec<roomkit::model::RoomEvent> =
-        roomkit::ConversationStore::list_events(kit.store(), &crate::support::room(), false)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|event| roomkit::text_of(&event.content).starts_with("Note "))
-            .collect();
+    let notes: Vec<roomkit::model::RoomEvent> = roomkit::ConversationStore::list_events(
+        kit.store(),
+        &crate::support::room(),
+        &crate::support::received(),
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .filter(|event| roomkit::text_of(&event.content).starts_with("Note "))
+    .collect();
     let capped = notes
         .iter()
         .filter(|event| event.blocked_by.as_deref() == Some("reentry_loop_cap"))

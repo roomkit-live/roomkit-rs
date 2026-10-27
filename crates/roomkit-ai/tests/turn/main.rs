@@ -25,7 +25,7 @@ use roomkit_ai::{AiAgent, ToolDefinition, ToolError, ToolOutput, Tools};
 use serde_json::{Value, json};
 use tokio::sync::Barrier;
 
-use self::support::{Room, channel, room_id, served};
+use self::support::{Room, channel, every_row, room_id, served};
 
 /// The end row of the call `id` in `timeline`.
 fn end_row<'a>(timeline: &'a [RoomEvent], id: &str) -> &'a ToolCallContent {
@@ -482,7 +482,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
         kit.idle().await;
         let greeting = kit
             .store()
-            .list_events(&room_id(), true)
+            .list_events(&room_id(), &every_row())
             .await
             .unwrap()
             .into_iter()

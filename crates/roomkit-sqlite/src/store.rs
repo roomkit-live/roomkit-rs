@@ -7,11 +7,13 @@ use roomkit::model::{
     Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
     Task,
 };
-use roomkit::{ConversationStore, EventFilter, RoomCounters, RoomFilter, StoreError, TargetUpdate};
+use roomkit::{
+    ConversationStore, EventFilter, EventQuery, RoomCounters, RoomFilter, StoreError, TargetUpdate,
+};
 
 use crate::connection::Database;
 use crate::error::OpenError;
-use crate::{events, identities, lookups, members, rooms, side_effects};
+use crate::{events, identities, lookups, members, rooms, side_effects, timeline};
 
 /// The key of a room's private state holding its register of authors (RFC
 /// §10.1 step 12, §14.1), which a context carries.
@@ -404,11 +406,14 @@ impl ConversationStore for SqliteStore {
         room_id: &RoomId,
         filter: Option<EventFilter>,
     ) -> Result<u64, StoreError> {
+        if let Some(filter) = &filter {
+            filter.validate()?;
+        }
         let room_id = room_id.clone();
         self.database
             .read(move |connection| {
                 rooms::check(connection, &room_id)?;
-                events::count(connection, &room_id, filter)
+                timeline::count(connection, &room_id, filter.as_ref())
             })
             .await
     }
@@ -437,13 +442,14 @@ impl ConversationStore for SqliteStore {
     async fn list_events(
         &self,
         room_id: &RoomId,
-        include_blocked: bool,
+        query: &EventQuery,
     ) -> Result<Vec<RoomEvent>, StoreError> {
-        let room_id = room_id.clone();
+        query.validate()?;
+        let (room_id, query) = (room_id.clone(), query.clone());
         self.database
             .read(move |connection| {
                 rooms::check(connection, &room_id)?;
-                events::list(connection, &room_id, include_blocked)
+                timeline::page(connection, &room_id, &query)
             })
             .await
     }

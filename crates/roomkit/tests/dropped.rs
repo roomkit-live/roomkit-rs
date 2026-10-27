@@ -18,8 +18,8 @@ use roomkit::model::{
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    ConversationStore, EventFilter, FrameworkEvent, InMemoryStore, RoomCounters, RoomFilter,
-    RoomKit, StoreError, TargetUpdate,
+    ConversationStore, EventFilter, EventQuery, FrameworkEvent, InMemoryStore, RoomCounters,
+    RoomFilter, RoomKit, StoreError, TargetUpdate,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -266,9 +266,9 @@ impl ConversationStore for GatedStore {
     async fn list_events(
         &self,
         room_id: &RoomId,
-        include_blocked: bool,
+        query: &EventQuery,
     ) -> Result<Vec<RoomEvent>, StoreError> {
-        self.store.list_events(room_id, include_blocked).await
+        self.store.list_events(room_id, query).await
     }
 
     async fn list_tasks(&self, room_id: &RoomId) -> Result<Vec<Task>, StoreError> {
@@ -312,7 +312,11 @@ async fn delivered_and_processed(
     kit: &RoomKit<GatedStore>,
     events: &mut broadcast::Receiver<FrameworkEvent>,
 ) -> (Vec<(EventStatus, String)>, bool) {
-    let mut timeline = kit.store().list_events(&room_id(), true).await.unwrap();
+    let mut timeline = kit
+        .store()
+        .list_events(&room_id(), &every_row())
+        .await
+        .unwrap();
     timeline.retain(|event| event.source.channel_type != ChannelType::SYSTEM);
     let mut processed = Vec::new();
     while let Ok(event) = events.try_recv() {
@@ -362,4 +366,16 @@ async fn an_injected_event_dropped_during_its_commit_is_delivered() {
             vec!["Bonjour".to_owned()]
         )
     );
+}
+
+/// Every row of a room's timeline, the refused ones included.
+fn every_row() -> EventQuery {
+    EventQuery {
+        limit: u64::MAX,
+        event_filter: Some(EventFilter {
+            include_blocked: true,
+            ..EventFilter::default()
+        }),
+        ..EventQuery::default()
+    }
 }

@@ -11,6 +11,7 @@ mod identities;
 mod members;
 mod rooms;
 mod routing;
+mod timeline;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EditContent,
