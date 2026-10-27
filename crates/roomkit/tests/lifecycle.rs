@@ -17,10 +17,15 @@ use roomkit::model::{
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
     CHANNEL_NOT_REGISTERED, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    FrameworkEvent, HookTrigger, InboundError, KitError, LifecycleError, RoomKit,
-    SequentialEnvironment, TransitionReason,
+    FrameworkEvent, HookTrigger, InboundError, KitError, RoomKit, SequentialEnvironment,
+    TransitionReason,
 };
 use tokio::sync::{broadcast, mpsc};
+
+#[path = "support/warnings.rs"]
+mod warnings;
+
+use warnings::Warnings;
 
 const START_MILLIS: i64 = 1_792_677_780_000;
 
@@ -664,20 +669,34 @@ mod metadata_updates {
         assert!(!room.metadata.contains_key("roomkit:detached_channels"));
     }
 
+    /// RFC §5.1: a key only the framework writes, of the `roomkit:`
+    /// namespace or of the room's private state, is dropped from a room's
+    /// creation with a warning, the rest written, as Python's `create_room`
+    /// does.
     #[tokio::test]
-    async fn a_room_created_with_a_reserved_key_is_refused() {
+    async fn create_room_drops_a_reserved_metadata_key() {
         let kit = RoomKit::new();
         let mut options = RoomOptions::default();
-        options.metadata = Metadata::from_iter([(
-            "roomkit:detached_channels".to_owned(),
-            Vec::<String>::new().into(),
-        )]);
-        let refused = kit.create_room_with(&room_id(), options).await;
+        options.metadata = Metadata::from_iter([
+            ("roomkit:x".to_owned(), 1.into()),
+            ("author_register".to_owned(), 3.into()),
+            ("ok".to_owned(), 2.into()),
+        ]);
+        let (warnings, guard) = Warnings::capture();
+        let room = kit.create_room_with(&room_id(), options).await.unwrap();
+        drop(guard);
+        let stored = kit.store().get_room(&room_id()).await.unwrap().unwrap();
         assert_eq!(
-            refused,
-            Err(KitError::Lifecycle(LifecycleError::ReservedMetadataKey(
-                "roomkit:detached_channels".to_owned()
-            )))
+            (
+                room.metadata,
+                stored.metadata,
+                warnings.containing("only the framework writes it").len()
+            ),
+            (
+                Metadata::from_iter([("ok".to_owned(), 2.into())]),
+                Metadata::from_iter([("ok".to_owned(), 2.into())]),
+                2
+            )
         );
     }
 }

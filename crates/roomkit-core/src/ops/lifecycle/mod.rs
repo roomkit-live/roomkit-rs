@@ -100,9 +100,9 @@ pub enum LifecycleError {
 /// answers `Failed`, which is logged, and the room is created all the same.
 /// Its output is the stored room.
 ///
-/// A room whose metadata holds a key of the namespace the implementation
-/// reserves is refused before anything is written (RFC §10.6.5, gap
-/// G-049).
+/// A key of its metadata only the framework writes, of the namespace the
+/// implementation reserves or of the room's private state, is dropped with
+/// a warning, the rest written (RFC §5.1, §10.6.5, gap G-049).
 #[derive(Debug)]
 pub struct CreateRoom {
     config: Arc<KitConfig>,
@@ -172,15 +172,15 @@ impl CreateRoom {
         self.room.clone()
     }
 
-    /// Asks for the write, unless the room is refused as it stands.
-    fn start(&mut self) -> Option<Result<Room, LifecycleError>> {
+    /// Asks for the write, the keys only the framework writes dropped from
+    /// the room's metadata.
+    fn start(&mut self) {
         self.started = true;
-        if let Some(key) = attachment::reserved_key(&self.room.metadata) {
-            return Some(Err(LifecycleError::ReservedMetadataKey(key.to_owned())));
-        }
+        let metadata = std::mem::take(&mut self.room.metadata);
+        self.room.metadata =
+            attachment::without_framework_keys(metadata, &self.room.id, "create_room");
         let room = self.room.clone();
         self.creating = Some(self.io.issue(StoreRequest::CreateRoom { room }));
-        None
     }
 }
 
@@ -188,7 +188,10 @@ impl Operation for CreateRoom {
     type Output = Result<Room, LifecycleError>;
 
     fn poll(&mut self, environment: &dyn Environment) -> Step<Self::Output> {
-        let mut result = if self.started { None } else { self.start() };
+        if !self.started {
+            self.start();
+        }
+        let mut result = None;
         while let Some((effect, outcome)) = self.io.next_outcome() {
             if self.creating == Some(effect) {
                 self.creating = None;

@@ -114,24 +114,21 @@ mod create_room {
         assert_eq!(sim.trace, ["store room room_1 Active"]);
     }
 
-    /// RFC §10.6.5: the integrator never writes the implementation's keys.
+    /// RFC §5.1, §10.6.5: a key of the implementation's namespace is
+    /// dropped from a creation, the rest written.
     #[test]
-    fn with_a_reserved_metadata_key_is_refused_before_any_effect() {
-        let mut sim = Sim::new();
+    fn with_a_reserved_metadata_key_drops_it_and_writes_the_rest() {
+        let mut sim = Sim::without_rooms();
         let mut room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
         room.metadata.insert(
             attachment::REVOCATIONS_KEY.to_owned(),
             serde_json::json!([]),
         );
-        let created = sim.run(CreateRoom::new(sim.shared_config(), room));
+        room.metadata.insert("ok".to_owned(), serde_json::json!(2));
+        let created = sim.run(CreateRoom::new(sim.shared_config(), room)).unwrap();
         assert_eq!(
-            (created, sim.trace.len()),
-            (
-                Err(LifecycleError::ReservedMetadataKey(
-                    attachment::REVOCATIONS_KEY.to_owned()
-                )),
-                0
-            )
+            (created.metadata.keys().collect::<Vec<_>>(), sim.trace.len()),
+            (vec![&"ok".to_owned()], 1)
         );
     }
 }

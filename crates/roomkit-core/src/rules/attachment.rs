@@ -27,7 +27,8 @@
 
 use serde_json::Value;
 
-use crate::model::{ChannelId, Metadata, Room, RoomContext, RoomUpdates, Timestamp};
+use super::authors::AUTHOR_REGISTER;
+use crate::model::{ChannelId, Metadata, Room, RoomContext, RoomId, RoomUpdates, Timestamp};
 
 /// The prefix of the room metadata keys the implementation reserves (gap
 /// G-049).
@@ -48,12 +49,42 @@ pub(crate) fn is_reserved_key(key: &str) -> bool {
     key.starts_with(RESERVED_PREFIX)
 }
 
-/// The first key of `metadata` an integrator may not write, if any.
-pub(crate) fn reserved_key(metadata: &Metadata) -> Option<&str> {
+/// The Python implementation's key of a room's speak-queue results, a key
+/// of the room's private state a store shared with it may hold (RFC
+/// §14.1).
+const SPEAK_QUEUE_RESULTS: &str = "_speak_queue_results";
+
+/// Whether only the framework writes the room metadata key `key`: one of
+/// the namespace the implementation reserves, or a key of the room's
+/// private state, its register of authors among them (RFC §5.1, §14.1, gap
+/// G-049).
+pub(crate) fn the_framework_s(key: &str) -> bool {
+    is_reserved_key(key) || [AUTHOR_REGISTER, SPEAK_QUEUE_RESULTS].contains(&key)
+}
+
+/// `metadata`, a write of room `room_id`'s metadata by `writer`, without the
+/// keys only the framework writes, each dropped with a warning naming the
+/// writer; the rest is written (RFC §5.1: "a room's creation ... that name
+/// such a key have it dropped with a warning, the rest written").
+pub(crate) fn without_framework_keys(
+    mut metadata: Metadata,
+    room_id: &RoomId,
+    writer: &str,
+) -> Metadata {
+    metadata.retain(|key, _| {
+        let the_framework_s = the_framework_s(key);
+        if the_framework_s {
+            tracing::warn!(
+                target: "roomkit::core::lifecycle",
+                %room_id,
+                key = %key,
+                writer,
+                "the metadata key is dropped: only the framework writes it"
+            );
+        }
+        !the_framework_s
+    });
     metadata
-        .keys()
-        .map(String::as_str)
-        .find(|key| is_reserved_key(key))
 }
 
 /// Whether `channel` was detached from the room and not explicitly attached
@@ -283,15 +314,21 @@ mod tests {
         assert_eq!(clear_revocation(&room(), &sms(), at()), None);
     }
 
+    /// RFC §5.1, §14.1: a key of the reserved namespace or of the room's
+    /// private state is dropped; the rest is kept.
     #[test]
-    fn a_key_of_the_reserved_namespace_is_refused() {
+    fn the_framework_s_keys_are_dropped_and_the_rest_kept() {
         let metadata: Metadata = [
             ("crm".to_owned(), json!("c_1")),
             ("roomkit:detached_channels".to_owned(), json!([])),
+            ("author_register".to_owned(), json!({})),
+            ("_speak_queue_results".to_owned(), json!([])),
         ]
         .into_iter()
         .collect();
-        assert_eq!(reserved_key(&metadata), Some("roomkit:detached_channels"));
+        let room_id = RoomId::new("room_1").unwrap();
+        let kept = without_framework_keys(metadata, &room_id, "create_room");
+        assert_eq!(kept.keys().collect::<Vec<_>>(), ["crm"]);
     }
 
     #[test]
