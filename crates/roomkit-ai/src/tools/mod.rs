@@ -20,7 +20,7 @@ use std::error::Error;
 use std::future::Future;
 
 use roomkit::TurnHost;
-use roomkit::model::{ChannelId, RoomId, ToolCall};
+use roomkit::model::{ChannelId, RoomId, ToolCall, ToolCallOutcome};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -187,6 +187,9 @@ pub struct ToolContext {
     /// The agent whose turn calls.
     pub channel_id: ChannelId,
     turn: Option<TurnHost>,
+    /// Whether the turn is an instruction that stands alone, which reads
+    /// none of the room's working state (RFC §10.1.1 rule 7).
+    pub(crate) stands_alone: bool,
 }
 
 impl ToolContext {
@@ -197,12 +200,19 @@ impl ToolContext {
             room_id,
             channel_id,
             turn: None,
+            stands_alone: false,
         }
     }
 
     /// The same context, within `turn`.
     pub(crate) fn within(mut self, turn: Option<TurnHost>) -> Self {
         self.turn = turn;
+        self
+    }
+
+    /// The same context, for a turn that stands alone or not.
+    pub(crate) fn standing_alone(mut self, stands_alone: bool) -> Self {
+        self.stands_alone = stands_alone;
         self
     }
 
@@ -242,6 +252,12 @@ pub(crate) trait DynToolset: Send + Sync {
         call: ToolCall,
         context: ToolContext,
     ) -> BoxFuture<'_, Result<ToolOutput, ToolError>>;
+
+    /// `call` ended `outcome`, the kit's `ON_TOOL_CALL` hooks run: what a
+    /// toolset of the agent's own that keeps state on its calls records
+    /// then, once nothing can withhold the result any more (RFC §24.4: an
+    /// activation counts once its call is served).
+    fn settled(&self, _call: &ToolCall, _outcome: ToolCallOutcome, _context: &ToolContext) {}
 }
 
 impl<T: Toolset> DynToolset for T {

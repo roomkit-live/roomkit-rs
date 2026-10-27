@@ -11,6 +11,9 @@
 //! - [`Toolset`] and [`Tools`]: the tools an agent serves, many behind one
 //!   handler (step 4, decision 7), and the host's closures.
 //! - [`ToolPolicy`]: which tools the agent may call (RFC §21.1).
+//! - [`SkillRegistry`]: the skills of the host's directories (RFC §24),
+//!   which the agent lists in its system prompt and the model activates
+//!   ([`AiAgent::with_skills`]).
 //!
 //! A call runs through its gate (RFC §21.1), then the kit's tool hooks
 //! (RFC §9.3), which the agent reaches through its turn
@@ -46,6 +49,7 @@ mod agent;
 mod error;
 mod provider;
 mod rows;
+mod skills;
 mod stream;
 pub mod testing;
 mod texts;
@@ -58,6 +62,7 @@ pub use self::provider::{
     AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderResponse, ProviderToolCall,
     ResponseStream,
 };
+pub use self::skills::{Skill, SkillError, SkillRegistry};
 pub use self::tools::{
     ToolContext, ToolDefinition, ToolError, ToolOutput, ToolPolicy, Tools, Toolset, arguments,
 };

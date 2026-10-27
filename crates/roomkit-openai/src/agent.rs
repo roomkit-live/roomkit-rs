@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use roomkit::model::{ChannelBinding, ChannelId, ChannelOutput, RoomContext, RoomEvent};
 use roomkit::{Channel, ChannelDeclaration, ChannelError};
-use roomkit_ai::{AiAgent, AiError, AiProvider, AiRequest, ResponseStream, ToolPolicy, Toolset};
+use roomkit_ai::{
+    AiAgent, AiError, AiProvider, AiRequest, ResponseStream, SkillRegistry, ToolPolicy, Toolset,
+};
 
 use crate::config::OpenAiConfig;
 use crate::error::OpenAiError;
@@ -28,7 +30,8 @@ pub(crate) const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 /// Each turn sends the configuration's system prompt, then the conversation
 /// the room hands the agent ([`roomkit::transcript::conversation`]), and
 /// declares the tools the agent serves ([`with_tools`](Self::with_tools))
-/// that its policy permits. A completion's calls run, their results go back
+/// that its policy permits; with skills ([`with_skills`](Self::with_skills)),
+/// the system prompt lists them after the configuration's. A completion's calls run, their results go back
 /// in the next completion, and the turn answers with what the model said,
 /// each round's text a message of its own, each call its two rows (see
 /// [`AiAgent`]). It answers a message or an instruction, never its own
@@ -77,6 +80,20 @@ impl OpenAiAgent {
     pub fn with_tools(self, toolset: impl Toolset) -> Result<Self, AiError> {
         Ok(Self {
             agent: self.agent.with_tools(toolset)?,
+        })
+    }
+
+    /// The same agent, serving the skills of `skills` (RFC §24): the
+    /// system prompt lists them, and the model activates one and reads its
+    /// references (see [`AiAgent::with_skills`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AiError::DuplicateTool`] when the agent serves
+    /// `activate_skill` or `read_skill_reference` already.
+    pub fn with_skills(self, skills: SkillRegistry) -> Result<Self, AiError> {
+        Ok(Self {
+            agent: self.agent.with_skills(skills)?,
         })
     }
 

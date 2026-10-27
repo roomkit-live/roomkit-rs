@@ -75,7 +75,7 @@ impl<P: AiProvider> Loop<P> {
         let Some((tool, _)) = self.toolbox.find(&call.name) else {
             return refuse(texts::not_declared(&call.name));
         };
-        if !self.policy.permits(&call.name) {
+        if !self.toolbox.permits(&self.policy, &call.name) {
             return refuse(texts::not_permitted(&call.name));
         }
         if let Some(why) = schema::mismatch(&tool.parameters, &call.arguments) {

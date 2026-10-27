@@ -186,6 +186,10 @@ impl<P: AiProvider> Loop<P> {
             .map(|called| called.call)
             .collect();
         let mut read = vec![Message::assistant_calls(generation.text, made)];
+        // Before the next round's calls, which may read what these left.
+        for end in &ends {
+            self.toolbox.settled(&end.call, end.outcome, &self.context);
+        }
         for end in ends {
             read.push(Message::tool_result(
                 end.call.id.clone(),

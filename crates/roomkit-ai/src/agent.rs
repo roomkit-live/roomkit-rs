@@ -12,12 +12,16 @@ use roomkit::model::{
 use roomkit::transcript::conversation;
 use roomkit::{Channel, ChannelDeclaration, ChannelError, current_turn};
 
+use serde_json::Value;
+
 use crate::error::AiError;
 use crate::provider::AiProvider;
 use crate::rows;
+use crate::skills::SkillRegistry;
+use crate::skills::tools::{SkillTools, SkillTurn};
 use crate::tool_loop::{Bounds, Loop};
 use crate::tools::toolbox::Toolbox;
-use crate::tools::{ToolContext, ToolPolicy, Toolset};
+use crate::tools::{DynToolset, ToolContext, ToolPolicy, Toolset};
 
 /// How many of the room's latest messages a turn sends by default: as many
 /// as a kit's context can hold, 50 events.
@@ -29,6 +33,10 @@ const DEFAULT_MAX_ROUNDS: u32 = 50;
 
 /// The longest a tool's call may take by default (RFC §21.6).
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The metadata word of an instruction that stands alone (RFC §10.1.1
+/// rule 7), as the pipeline writes it.
+const STANDALONE: &str = "standalone";
 
 /// An AI agent (RFC §6.4, Appendix A.9): an intelligence channel whose turn
 /// sends the conversation the room hands it to a model through its
@@ -61,8 +69,12 @@ const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 /// its calls. Called outside a kit, the turn returns the same rows at its
 /// end, buffered.
 ///
+/// With skills ([`with_skills`](Self::with_skills)), each turn's system
+/// prompt lists them, and carries the instructions of those active in the
+/// room (RFC §24.4).
+///
 /// It answers a message or an instruction, never its own events. Cloning
-/// it shares its provider and its tools.
+/// it shares its provider, its tools and its skills.
 pub struct AiAgent<P> {
     declaration: ChannelDeclaration,
     provider: Arc<P>,
@@ -71,6 +83,7 @@ pub struct AiAgent<P> {
     bounds: Bounds,
     system_prompt: Option<String>,
     history: usize,
+    skills: Option<Arc<SkillTools>>,
 }
 
 impl<P> Clone for AiAgent<P> {
@@ -83,6 +96,7 @@ impl<P> Clone for AiAgent<P> {
             bounds: self.bounds.clone(),
             system_prompt: self.system_prompt.clone(),
             history: self.history,
+            skills: self.skills.clone(),
         }
     }
 }
@@ -110,6 +124,7 @@ impl<P: AiProvider> AiAgent<P> {
             },
             system_prompt: None,
             history: DEFAULT_HISTORY,
+            skills: None,
         }
     }
 
@@ -125,7 +140,7 @@ impl<P: AiProvider> AiAgent<P> {
 
     /// The same agent, opening every turn with `prompt`. It stays the same
     /// from turn to turn, so a provider that caches a request's prefix
-    /// keeps it (RFC §6.4).
+    /// keeps it (RFC §6.4); the skills follow it.
     #[must_use]
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = Some(prompt.into()).filter(|prompt| !prompt.is_empty());
@@ -152,6 +167,44 @@ impl<P: AiProvider> AiAgent<P> {
     /// tool per name").
     pub fn with_tools(mut self, toolset: impl Toolset) -> Result<Self, AiError> {
         Arc::make_mut(&mut self.toolbox).add(toolset)?;
+        Ok(self)
+    }
+
+    /// The same agent, serving the skills of `skills` (RFC §24): each
+    /// turn's system prompt carries, after the agent's own, the skills'
+    /// preamble and manifest, then the instructions of the skills active in
+    /// the room (RFC §6.4, §24.4), and the agent serves two tools, which
+    /// its policy does not govern (RFC §21.1):
+    ///
+    /// - `activate_skill` answers a skill's instructions and the names of
+    ///   its references, and once the call is served, the skill is active
+    ///   in the room: its instructions ride the system prompt from the
+    ///   room's next turn, and a repeated activation answers that they are
+    ///   in force. A room keeps four active skills at most, the least
+    ///   recently used retired; the agent keeps them in memory, and reads
+    ///   them again from the room's stored rows the first time it serves
+    ///   the room (a restart), from the events its turn is handed. A turn
+    ///   that stands alone carries none, and records none.
+    /// - `read_skill_reference` answers a file of a skill's `references/`:
+    ///   a name of `[A-Za-z0-9._-]` alone, resolved with its links followed
+    ///   and inside that directory, at most 256 KiB. What it refuses, the
+    ///   model reads why.
+    ///
+    /// No script runs: the preamble says so. A registry with no skill adds
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AiError::DuplicateTool`] when the agent serves either
+    /// tool already: its skills are given once.
+    pub fn with_skills(mut self, skills: SkillRegistry) -> Result<Self, AiError> {
+        if skills.is_empty() {
+            return Ok(self);
+        }
+        let tools = Arc::new(SkillTools::new(skills));
+        let own: Arc<dyn DynToolset> = Arc::<SkillTools>::clone(&tools);
+        Arc::make_mut(&mut self.toolbox).add_own(own, SkillTools::definitions())?;
+        self.skills = Some(tools);
         Ok(self)
     }
 
@@ -189,6 +242,21 @@ impl<P: AiProvider> AiAgent<P> {
                 || event.event_type == EventType::Instruction)
     }
 
+    /// The system prompt of a turn in `context`'s room: the agent's own,
+    /// then what its skills add (RFC §6.4, §24.4).
+    fn turn_system_prompt(&self, context: &RoomContext, stands_alone: bool) -> Option<String> {
+        let Some(skills) = &self.skills else {
+            return self.system_prompt.clone();
+        };
+        let turn = SkillTurn {
+            room: &context.room.id,
+            agent: self.id(),
+            history: &context.recent_events,
+            stands_alone,
+        };
+        Some(skills.system_prompt(self.system_prompt.as_deref(), turn))
+    }
+
     /// The source of the agent's rows.
     fn source(&self) -> EventSource {
         EventSource::new(self.id().clone(), ChannelType::AI, EventDirection::Outbound)
@@ -211,14 +279,17 @@ impl<P: AiProvider> Channel for AiAgent<P> {
         }
         let messages = conversation(self.id(), &event, &context, self.history);
         let turn = current_turn();
-        let tools =
-            ToolContext::new(context.room.id.clone(), self.id().clone()).within(turn.clone());
+        let stands_alone = stands_alone(&event);
+        let system_prompt = self.turn_system_prompt(&context, stands_alone);
+        let tools = ToolContext::new(context.room.id.clone(), self.id().clone())
+            .within(turn.clone())
+            .standing_alone(stands_alone);
         let looped = Loop {
             provider: Arc::clone(&self.provider),
             toolbox: Arc::clone(&self.toolbox),
             policy: self.policy.clone(),
             bounds: self.bounds.clone(),
-            system_prompt: self.system_prompt.clone(),
+            system_prompt,
             turn: turn.clone(),
             context: tools,
         };
@@ -231,6 +302,13 @@ impl<P: AiProvider> Channel for AiAgent<P> {
     }
 }
 
+/// Whether `event` is an instruction that stands alone, which reads none
+/// of the room's working state (RFC §10.1.1 rule 7).
+fn stands_alone(event: &RoomEvent) -> bool {
+    event.event_type == EventType::Instruction
+        && event.metadata.get(STANDALONE) == Some(&Value::Bool(true))
+}
+
 impl<P> fmt::Debug for AiAgent<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AiAgent")
@@ -238,6 +316,7 @@ impl<P> fmt::Debug for AiAgent<P> {
             .field("toolbox", &self.toolbox)
             .field("policy", &self.policy)
             .field("bounds", &self.bounds)
+            .field("skills", &self.skills.is_some())
             .finish_non_exhaustive()
     }
 }

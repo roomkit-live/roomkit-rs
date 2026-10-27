@@ -133,6 +133,34 @@ as it stands.
 
 ### Added
 
+- **Skills from the host's directories** (step 4, milestone 8, RFC §24,
+  §6.4, §21.1). `roomkit_ai::SkillRegistry` discovers the skills of
+  directories (`discover`) or registers one (`register`), strictly and
+  atomically: the first skill that cannot be loaded fails the call with a
+  `SkillError` naming it, and the registry is left as it was. A skill is a
+  directory holding a `SKILL.md` whose frontmatter is read line by line,
+  with no YAML reader, within RFC §24.1's bounds (65,536 characters, 64
+  brackets open at once); a frontmatter the reader cannot read whole, and
+  one declaring `allowed_tools` or `requires`, are refused. Names and
+  descriptions follow the reference implementation's rules (kebab-case, 64
+  characters, the directory's name; 1,024 characters), a `SKILL.md` takes
+  256 KiB at most and the manifest 65,536 characters. A link to a skill
+  directory is followed inside the directory discovery scans, refused out
+  of it. `AiAgent::with_skills` and `OpenAiAgent::with_skills` give an
+  agent its skills: each turn's system prompt carries, after the agent's
+  own, the reference implementation's preamble and `<available_skills>`
+  manifest (`SkillRegistry::to_prompt_xml`), then the instructions of the
+  skills active in the room; the agent serves `activate_skill`, which
+  answers a skill's instructions and references the first time and an
+  acknowledgement after, and `read_skill_reference`, which reads a file of
+  the skill's `references/` by a name of `[A-Za-z0-9._-]`, resolved with
+  its links followed and inside that directory, 256 KiB at most. The two
+  tools escape the agent's tool policy, as RFC §21.1 lists them. An
+  activation counts once its call is served, for the room, four skills at
+  most; a restarted agent reads the room's served activations again from
+  the stored rows its turn is handed. A turn that stands alone carries and
+  records none. No skill script runs. The example `agent_skills`, over
+  `examples/skills/`, shows them.
 - **The turn backend** (step 4, milestone 7, RFC §10.6):
   `RoomKit::set_turn_timeouts` with `TurnTimeouts` (accept, heartbeat
   interval and timeout, cancel; the RFC's defaults), `TurnError`, the
