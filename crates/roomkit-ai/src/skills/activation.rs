@@ -14,7 +14,8 @@
 
 use roomkit::is_deleted;
 use roomkit::model::{
-    ChannelId, EventContent, EventType, RoomEvent, RoomId, ToolCallContent, ToolCallOutcome,
+    ChannelId, EventContent, EventDirection, EventType, RoomEvent, RoomId, ToolCallContent,
+    ToolCallOutcome,
 };
 use serde_json::Value;
 
@@ -115,7 +116,8 @@ impl Activations {
 
 /// The skills `agent`'s stored rows among `events` show activated, oldest
 /// first: each `activate_skill` call served, whose result is an answer and
-/// no error, a row deleted since left out. A call a hook withheld, one
+/// no error, in a row the agent wrote (outbound), a row deleted since left
+/// out. A call a hook withheld, one
 /// refused or one that failed never put the rules before the model.
 pub(crate) fn activated_in(events: &[RoomEvent], agent: &ChannelId) -> Vec<String> {
     events
@@ -123,6 +125,9 @@ pub(crate) fn activated_in(events: &[RoomEvent], agent: &ChannelId) -> Vec<Strin
         .filter(|event| {
             event.event_type == EventType::ToolCallEnd
                 && &event.source.channel_id == agent
+                // The agent writes its rows outbound: one that entered the
+                // room inbound under its id is no call it made.
+                && event.source.direction == EventDirection::Outbound
                 && !is_deleted(event)
         })
         .filter_map(|event| {
@@ -155,4 +160,52 @@ fn activation_of(row: &ToolCallContent) -> Option<String> {
         });
     let name = row.arguments.get("name").and_then(Value::as_str)?;
     (answered && !name.is_empty()).then(|| name.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use roomkit::model::{ChannelType, EventDirection, EventId, EventSource, Metadata, Timestamp};
+    use serde_json::json;
+
+    use super::*;
+
+    /// A served activation's end row from the agent `assistant`, in the
+    /// `direction` its source names.
+    fn end_row(direction: EventDirection) -> RoomEvent {
+        let mut row = ToolCallContent::new(ACTIVATE_SKILL, "call_1");
+        let mut arguments = Metadata::new();
+        arguments.insert("name".to_owned(), json!("doc-helper"));
+        row.arguments = arguments;
+        row.result = json!("{\"name\": \"doc-helper\"}");
+        row.outcome = Some(ToolCallOutcome::Served);
+        RoomEvent::new(
+            EventId::new("evt_1").unwrap(),
+            RoomId::new("room_1").unwrap(),
+            EventType::ToolCallEnd,
+            EventSource::new(
+                ChannelId::new("assistant").unwrap(),
+                ChannelType::AI,
+                direction,
+            ),
+            EventContent::ToolCall(row),
+            Timestamp::UNIX_EPOCH,
+        )
+    }
+
+    /// RFC §24.4: only the agent's own rows count, which it writes
+    /// outbound; a row that entered the room inbound under its id is no
+    /// activation it made.
+    #[test]
+    fn only_a_row_the_agent_wrote_outbound_counts_as_its_activation() {
+        let agent = ChannelId::new("assistant").unwrap();
+        assert_eq!(
+            activated_in(&[end_row(EventDirection::Outbound)], &agent),
+            ["doc-helper"]
+        );
+        assert_eq!(
+            activated_in(&[end_row(EventDirection::Inbound)], &agent),
+            Vec::<String>::new()
+        );
+    }
 }

@@ -5,8 +5,10 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use roomkit::model::{ChannelBinding, ChannelId, ChannelOutput, RoomContext, RoomEvent};
-use roomkit::{Channel, ChannelDeclaration, ChannelError};
+use roomkit::model::{
+    ChannelBinding, ChannelId, ChannelOutput, InboundMessage, RoomContext, RoomEvent,
+};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, EventDraft};
 use roomkit_ai::{
     AiAgent, AiError, AiProvider, AiRequest, ResponseStream, SkillRegistry, ToolPolicy, Toolset,
 };
@@ -35,7 +37,8 @@ pub(crate) const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 /// in the next completion, and the turn answers with what the model said,
 /// each round's text a message of its own, each call its two rows (see
 /// [`AiAgent`]). It answers a message or an instruction, never its own
-/// events; a turn with no text answers nothing. A completion that fails
+/// events, and takes no inbound message; a turn with no text answers
+/// nothing. A completion that fails
 /// returns an [`OpenAiError`]; an answer longer than 4 MiB fails it too, and
 /// so does a streamed one sending a line or an event longer than 1 MiB.
 /// Each completion is streamed (`stream`, with `stream_options.include_usage`),
@@ -128,6 +131,17 @@ impl OpenAiAgent {
 impl Channel for OpenAiAgent {
     fn declaration(&self) -> ChannelDeclaration {
         self.agent.declaration()
+    }
+
+    /// Refuses the message, as [`AiAgent`] does: an AI agent takes no
+    /// inbound message.
+    async fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+        draft: EventDraft,
+    ) -> Result<RoomEvent, ChannelError> {
+        self.agent.handle_inbound(message, context, draft).await
     }
 
     async fn on_event(

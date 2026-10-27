@@ -2,15 +2,16 @@
 //! turn runs the tool loop over a provider.
 
 use std::fmt;
+use std::future::{self, Future};
 use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, EventType, RoomContext, RoomEvent,
+    EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent,
 };
 use roomkit::transcript::conversation;
-use roomkit::{Channel, ChannelDeclaration, ChannelError, current_turn};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, EventDraft, current_turn};
 
 use serde_json::Value;
 
@@ -73,8 +74,9 @@ const STANDALONE: &str = "standalone";
 /// prompt lists them, and carries the instructions of those active in the
 /// room (RFC §24.4).
 ///
-/// It answers a message or an instruction, never its own events. Cloning
-/// it shares its provider, its tools and its skills.
+/// It answers a message or an instruction, never its own events, and takes
+/// no inbound message. Cloning it shares its provider, its tools and its
+/// skills.
 pub struct AiAgent<P> {
     declaration: ChannelDeclaration,
     provider: Arc<P>,
@@ -266,6 +268,20 @@ impl<P: AiProvider> AiAgent<P> {
 impl<P: AiProvider> Channel for AiAgent<P> {
     fn declaration(&self) -> ChannelDeclaration {
         self.declaration.clone()
+    }
+
+    /// An AI agent takes no inbound message, as the reference
+    /// implementation's AI channel refuses one: a message sent on its
+    /// channel is refused before anything enters the room, so that nothing
+    /// is stored under its id that it did not write, which its history
+    /// would read as its own words and a restart as its own calls.
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+        _draft: EventDraft,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        future::ready(Err("AI channel does not accept inbound messages".into()))
     }
 
     async fn on_event(

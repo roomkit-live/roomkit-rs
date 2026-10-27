@@ -93,6 +93,11 @@ pub trait Channel: Send + Sync + 'static {
     /// The pipeline then writes the fields it owns: the id of `draft`
     /// (RFC §8.1), and the type, depth, visibility, address and source the
     /// message decides.
+    ///
+    /// The default takes any message, as a transport does. A channel that
+    /// receives none refuses it here with an error, before anything enters
+    /// the room: an AI agent does (`roomkit_ai::AiAgent`), since an event
+    /// under its id is read as its own words.
     fn handle_inbound(
         &self,
         message: InboundMessage,
