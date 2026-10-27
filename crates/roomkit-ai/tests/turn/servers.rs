@@ -4,7 +4,7 @@
 //! the kit's shutdown. The texts are the reference implementation's
 //! (`tasks/probes/step4-m9/py_mcp_m9_probe.out`).
 
-use std::future::Future;
+use std::future::{self, Future};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -143,7 +143,7 @@ impl Toolset for Closing {
         _call: ToolCall,
         _context: ToolContext,
     ) -> impl Future<Output = Result<ToolOutput, ToolError>> + Send {
-        async { Ok(ToolOutput::from("ok")) }
+        future::ready(Ok(ToolOutput::from("ok")))
     }
 
     async fn close(&self) {
