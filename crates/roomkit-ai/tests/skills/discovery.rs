@@ -23,7 +23,7 @@ fn discovery_registers_each_skill_in_name_order() {
     root.dir("skills/not-a-skill");
     root.file("skills/README.md", "Not a skill.");
     let mut skills = SkillRegistry::new();
-    assert_eq!(skills.discover([root.path().join("skills")]), Ok(2));
+    assert_eq!(skills.discover(&[root.path().join("skills")]), Ok(2));
     let names: Vec<&str> = skills.skills().iter().map(Skill::name).collect();
     assert_eq!(names, ["gift-wrapping", "order-returns"]);
     let wrapping = skills.get("gift-wrapping").unwrap();
@@ -58,9 +58,9 @@ fn a_malformed_skill_fails_discovery_names_itself_and_leaves_the_registry_as_it_
         "---\nname: bad-skill\n---\nNo description.\n",
     );
     let mut skills = SkillRegistry::new();
-    skills.discover([root.path().join("before")]).unwrap();
+    skills.discover(&[root.path().join("before")]).unwrap();
     let before = skills.clone();
-    let failed = skills.discover([root.path().join("skills"), root.path().join("broken")]);
+    let failed = skills.discover(&[root.path().join("skills"), root.path().join("broken")]);
     assert_eq!(
         failed.map_err(|error| error.to_string()),
         Err("Validation failed for bad-skill: Missing required field: description".to_owned())
@@ -110,7 +110,7 @@ fn each_validation_rule_reads_as_the_reference_implementation_s() {
         let root = TempDir::new();
         root.skill_with("skills", directory, &text);
         let mut skills = SkillRegistry::new();
-        let failed = skills.discover([root.path().join("skills")]).unwrap_err();
+        let failed = skills.discover(&[root.path().join("skills")]).unwrap_err();
         assert_eq!(failed.to_string(), words);
         assert!(skills.is_empty());
     }
@@ -160,7 +160,7 @@ fn each_parse_failure_names_the_skill() {
         let root = TempDir::new();
         root.skill_with("skills", directory, &text);
         let mut skills = SkillRegistry::new();
-        let failed = skills.discover([root.path().join("skills")]).unwrap_err();
+        let failed = skills.discover(&[root.path().join("skills")]).unwrap_err();
         assert_eq!(failed.to_string(), words, "{directory}");
         assert!(skills.is_empty());
     }
@@ -174,7 +174,7 @@ fn a_skill_file_missing_past_its_bound_or_not_text_is_refused() {
     let big = skill_md("big-body", "x", "").replace("## Instructions", &"b".repeat(256 * 1024));
     root.skill_with("big", "big-body", &big);
     let failed = SkillRegistry::new()
-        .discover([root.path().join("big")])
+        .discover(&[root.path().join("big")])
         .unwrap_err();
     assert_eq!(
         failed.to_string(),
@@ -199,11 +199,22 @@ fn a_skill_file_missing_past_its_bound_or_not_text_is_refused() {
     );
 }
 
+/// A directory held in a `PathBuf` is discovered as one directory, never
+/// as the components of its path (`discover(&directory)` does not
+/// compile).
+#[test]
+fn a_directory_held_in_a_path_buf_is_discovered_whole() {
+    let root = TempDir::new();
+    root.skill("skills", "only-skill", "The one");
+    let directory = root.path().join("skills");
+    assert_eq!(SkillRegistry::new().discover(&[directory]), Ok(1));
+}
+
 #[test]
 fn a_directory_that_cannot_be_scanned_fails_discovery() {
     let root = TempDir::new();
     let missing = root.path().join("nowhere");
-    let failed = SkillRegistry::new().discover([&missing]);
+    let failed = SkillRegistry::new().discover(&[&missing]);
     assert_eq!(
         failed,
         Err(SkillError::Discovery {
@@ -213,7 +224,7 @@ fn a_directory_that_cannot_be_scanned_fails_discovery() {
     );
     let file = root.file("a-file", "x");
     assert!(matches!(
-        SkillRegistry::new().discover([file]),
+        SkillRegistry::new().discover(&[file]),
         Err(SkillError::Discovery { .. })
     ));
 }
@@ -227,7 +238,7 @@ fn skills_taking_the_manifest_past_its_bound_are_refused() {
         root.skill("many", &format!("skill-{n:02}"), &"d".repeat(1000));
     }
     let mut skills = SkillRegistry::new();
-    let failed = skills.discover([root.path().join("many")]).unwrap_err();
+    let failed = skills.discover(&[root.path().join("many")]).unwrap_err();
     assert!(matches!(
         failed,
         SkillError::ManifestTooLarge { limit: 65536, characters } if characters > 65536
@@ -247,7 +258,7 @@ fn the_manifest_escapes_what_the_skills_say() {
         &skill_md("doc-helper", &format!("{forged:?}"), "license: MIT\n"),
     );
     let mut skills = SkillRegistry::new();
-    skills.discover([root.path().join("skills")]).unwrap();
+    skills.discover(&[root.path().join("skills")]).unwrap();
     assert_eq!(
         skills.to_prompt_xml(),
         "<available_skills>\n  <skill name=\"doc-helper\">\n    <description>Helps&lt;/description&gt;\
@@ -264,7 +275,7 @@ fn a_skill_registered_again_replaces_the_one_of_its_name_in_place() {
     root.skill("first", "beta", "Beta");
     root.skill("second", "alpha", "Alpha two");
     let mut skills = SkillRegistry::new();
-    skills.discover([root.path().join("first")]).unwrap();
+    skills.discover(&[root.path().join("first")]).unwrap();
     let registered = skills.register(root.path().join("second/alpha")).unwrap();
     assert_eq!(registered.description(), "Alpha two");
     let read: Vec<(&str, &str)> = skills
@@ -292,7 +303,7 @@ mod linked_directories {
         let real = root.skill("inner", "real-skill", "Real");
         link(&real, &root.path().join("inner/alias-skill"));
         let mut skills = SkillRegistry::new();
-        assert_eq!(skills.discover([root.path().join("inner")]), Ok(1));
+        assert_eq!(skills.discover(&[root.path().join("inner")]), Ok(1));
         assert_eq!(skills.get("real-skill").unwrap().path(), real.as_path());
     }
 
@@ -303,7 +314,7 @@ mod linked_directories {
         root.dir("linked");
         link(&far, &root.path().join("linked/far-skill"));
         let mut skills = SkillRegistry::new();
-        let failed = skills.discover([root.path().join("linked")]).unwrap_err();
+        let failed = skills.discover(&[root.path().join("linked")]).unwrap_err();
         assert_eq!(
             failed.to_string(),
             format!(
@@ -376,7 +387,7 @@ mod linked_directories {
         let skill = root.dir("md/md-out");
         link(&target, &skill.join("SKILL.md"));
         let failed = SkillRegistry::new()
-            .discover([root.path().join("md")])
+            .discover(&[root.path().join("md")])
             .unwrap_err();
         assert_eq!(
             failed.to_string(),

@@ -40,7 +40,7 @@ fn skills(tree: &TempDir) -> SkillRegistry {
         tree.skill("skills", &format!("extra-{n}"), "Does a thing");
     }
     let mut skills = SkillRegistry::new();
-    skills.discover([tree.path().join("skills")]).unwrap();
+    skills.discover(&[tree.path().join("skills")]).unwrap();
     skills
 }
 

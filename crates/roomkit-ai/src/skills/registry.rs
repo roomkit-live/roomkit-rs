@@ -90,7 +90,7 @@ impl Skill {
 /// use roomkit_ai::SkillRegistry;
 ///
 /// let mut skills = SkillRegistry::new();
-/// let error = skills.discover(["no/such/directory"]).unwrap_err();
+/// let error = skills.discover(&["no/such/directory"]).unwrap_err();
 /// assert!(error.to_string().starts_with("Skill directory not found"));
 /// assert!(skills.is_empty());
 /// ```
@@ -116,10 +116,15 @@ impl SkillRegistry {
     /// [`SkillError::Parse`] and [`SkillError::Validation`] for the first
     /// skill that cannot be loaded; [`SkillError::ManifestTooLarge`] past
     /// the manifest's bound. The registry is then as it was.
-    pub fn discover<P: AsRef<Path>>(
-        &mut self,
-        directories: impl IntoIterator<Item = P>,
-    ) -> Result<usize, SkillError> {
+    ///
+    /// The directories are a slice, so that one directory is never read as
+    /// the components of its path:
+    ///
+    /// ```compile_fail,E0308
+    /// let directory = std::path::PathBuf::from("skills");
+    /// let _found = roomkit_ai::SkillRegistry::new().discover(&directory);
+    /// ```
+    pub fn discover<P: AsRef<Path>>(&mut self, directories: &[P]) -> Result<usize, SkillError> {
         let mut found: Vec<PathBuf> = Vec::new();
         for directory in directories {
             for candidate in candidates(directory.as_ref())? {

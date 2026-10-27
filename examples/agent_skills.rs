@@ -123,7 +123,7 @@ fn examples(name: &str) -> PathBuf {
 /// on the malformed skill, naming it, and registers nothing.
 fn a_malformed_skill_fails_discovery(checks: &mut Checks) {
     let mut skills = SkillRegistry::new();
-    let failed = skills.discover([examples("skills"), examples("skills-broken")]);
+    let failed = skills.discover(&[examples("skills"), examples("skills-broken")]);
     let error = failed
         .err()
         .map(|error| error.to_string())
@@ -152,7 +152,7 @@ impl Shop {
         checks: &mut Checks,
     ) -> Result<Self, Box<dyn Error>> {
         let mut skills = SkillRegistry::new();
-        let found = skills.discover([examples("skills")])?;
+        let found = skills.discover(&[examples("skills")])?;
         checks.expect(
             "discovery registers the two skills of examples/skills/",
             found == 2 && skills.get("order-returns").is_some(),
