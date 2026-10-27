@@ -518,23 +518,6 @@ reason = "not in 0.x: retries, reasoning effort and response schemas of OpenAICo
 # none left. "?": the plan names no lot.
 
 [[pending]]
-lot = 1
-python = "roomkit.RoomKit"
-members = ["close"]
-reason = "decision 15: run_timers / TimerSweeper leave the public API, idle becomes a hidden test seam, shutdown becomes a draining close"
-
-[[pending]]
-lot = 1
-rust = "roomkit::RoomKit"
-members = ["idle", "shutdown", "run_timers"]
-reason = "decision 15: run_timers / TimerSweeper leave the public API, idle becomes a hidden test seam, shutdown becomes a draining close"
-
-[[pending]]
-lot = 1
-rust = "roomkit::TimerSweeper"
-reason = "decision 15: run_timers / TimerSweeper leave the public API, idle becomes a hidden test seam, shutdown becomes a draining close"
-
-[[pending]]
 lot = 2
 python = "roomkit.ChannelBinding"
 members = ["can_write", "sends"]

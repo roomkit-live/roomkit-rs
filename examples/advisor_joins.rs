@@ -173,9 +173,9 @@ impl Conversation {
     }
 
     /// The mute and unmute hooks that fired. They run as observers, in the
-    /// background: the kit's background work is waited for first.
+    /// background: the kit is closed first, which lets them finish.
     async fn mute_hooks_fired(&self) -> Vec<String> {
-        self.kit.idle().await;
+        self.kit.close().await;
         let mut fired = self.mute_hooks.entries();
         fired.sort();
         fired

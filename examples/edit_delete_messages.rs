@@ -115,10 +115,16 @@ impl Conversation {
         })
     }
 
-    /// The mutation triggers that fired so far. They run as observers, in
-    /// the background: the kit's background work is waited for first.
-    async fn changes(&self) -> Vec<Change> {
-        self.kit.idle().await;
+    /// The mutation triggers that fired, once `count` did. They run as
+    /// observers, in the background, after the call that fired them.
+    async fn changes(&self, count: usize) -> Vec<Change> {
+        self.changed.wait_for(count).await
+    }
+
+    /// The mutation triggers that fired, once the kit is closed, which lets
+    /// the observers still running finish.
+    async fn every_change(&self) -> Vec<Change> {
+        self.kit.close().await;
         self.changed.entries()
     }
 
@@ -255,7 +261,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let target = conversation.stored(3).await?;
     let to_advisor = last_delivered(&conversation.advisor);
     let read = conversation.agent.turns().last().cloned();
-    let updated = conversation.changes().await.last().cloned();
+    let updated = conversation.changes(1).await.last().cloned();
     checks.expect(
         "the edit is stored after its target, which now reads \"I need 50000$\" and is marked edited",
         edited.event.as_ref().is_some_and(|event| event.index == 10)
@@ -290,7 +296,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let deleted = conversation.send(delete).await?;
     let target = conversation.stored(5).await?;
     let to_advisor = last_delivered(&conversation.advisor);
-    let removed = conversation.changes().await.last().cloned();
+    let removed = conversation.changes(2).await.last().cloned();
     checks.expect(
         "the delete is stored after its target, which is marked deleted",
         deleted
@@ -316,7 +322,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let blocked = conversation.edit(4, "To card 4242 4242 4242 4242")?;
     let refused = conversation.send(blocked).await?;
     let target = conversation.stored(4).await?;
-    let fired = conversation.changes().await;
+    let fired = conversation.every_change().await;
     checks.expect(
         "the edit is blocked by the scanner, and its target still reads \"To my savings account\"",
         refused.blocked

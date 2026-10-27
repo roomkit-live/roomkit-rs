@@ -167,7 +167,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     shared::print_timeline(&timeline);
     let read_by_noah = screen.read.entries().split_off(before);
     check_noah(&mut checks, &read_by_noah, &sms, &timeline, &endpoint);
-    kit.shutdown().await;
+    kit.close().await;
     Ok(checks.finish())
 }
 
@@ -213,7 +213,7 @@ async fn bakery(
     Ok((kit, screen, sms, room))
 }
 
-/// `text` from `number` by SMS, and the kit left to finish.
+/// `text` from `number` by SMS, once its turn answered.
 async fn ask(
     kit: &RoomKit,
     sms: &RecordingTransport,
@@ -231,7 +231,6 @@ async fn ask(
             },
         )
         .await?;
-    kit.idle().await;
     if let Some(error) = result.error {
         println!("  the turn failed: {}", error.message);
     }

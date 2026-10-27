@@ -48,8 +48,8 @@ pub struct Patience {
     /// gone: one that stopped reading (the Python implementation's
     /// `send_timeout`, 5 seconds by default).
     pub send: Duration,
-    /// How long a stop waits for the connections and the kit's work to
-    /// end.
+    /// How long a stop waits for the connections to end, before it closes
+    /// the kit, which drains its own work for up to 5 seconds.
     pub grace: Duration,
 }
 
@@ -238,10 +238,10 @@ impl AgentServer {
     }
 
     /// Stops the server: it accepts no more connections and closes the
-    /// ones open. Their work and the kit's get the grace of its patience to
-    /// end; the kit is then shut down (`RoomKit::shutdown`), which ends
-    /// what still runs, and the file is closed once the last connection
-    /// let go of it.
+    /// ones open, which get the grace of its patience to end. The kit is
+    /// then closed (`RoomKit::close`): what still runs drains for up to 5
+    /// seconds, then is cut, and the file is closed once the last
+    /// connection let go of it.
     ///
     /// # Errors
     ///
@@ -259,11 +259,10 @@ impl AgentServer {
         let ended = async {
             let served = (&mut serving).await;
             live.down_to(0).await;
-            kit.idle().await;
             served
         };
         let ended = tokio::time::timeout(patience.grace, ended).await;
-        kit.shutdown().await;
+        kit.close().await;
         let Ok(served) = ended else {
             serving.abort();
             return Err("the server's work outlived its grace".into());

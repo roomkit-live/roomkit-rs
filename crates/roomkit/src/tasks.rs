@@ -1,8 +1,8 @@
 //! The tasks a kit runs in the background, tracked so that the kit can wait
-//! for them and end them (decision 3 of step 2b): the observer hooks that run
-//! after the fact (RFC §9.3), the inbound runs (RFC §10.1), whose caller
-//! waits for them or went on, answered at the decision or gone, and the
-//! timer sweeps (RFC §5.1).
+//! for them and end them (decision 3 of step 2b): the inbound runs (RFC
+//! §10.1), whose caller waits for them or went on, answered at the decision
+//! or gone, with the tasks their turns run, and the observer hooks that run
+//! after the fact (RFC §9.3). The kit's close waits for each kind in turn.
 //!
 //! A task is tracked from its spawn until its future is dropped: at its end,
 //! aborted, or with the runtime. A task that spawns another one spawns it
@@ -15,26 +15,41 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::Notify;
 use tokio::task::{AbortHandle, JoinHandle};
 
+/// What a tracked task is, which the kit's close waits for in turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// An inbound run, its deliveries and its turns, or a task a turn runs:
+    /// drained first, within the close's grace.
+    Work,
+    /// An observer hook running after the fact (RFC §9.3), bounded by its
+    /// hook's timeout: waited for once the work is drained or cut.
+    Observer,
+}
+
 /// The kit's background tasks.
 #[derive(Debug, Default)]
 pub(crate) struct Tasks {
     state: Mutex<State>,
-    /// Woken whenever a task ends, and when the kit shuts down.
+    /// Woken whenever the last task of a kind ends, and when the kit shuts
+    /// down.
     changed: Notify,
 }
 
 #[derive(Debug, Default)]
 struct State {
-    /// Whether the kit is shutting down: no call starts an operation any
-    /// more, while the work under way is given its end.
-    closing: bool,
+    /// Whether the kit is closed: no call starts an operation any more,
+    /// while the work under way drains.
+    closed: bool,
+    /// Whether the close cut the work under way: a run ending now was ended
+    /// by it.
+    cut: bool,
     /// Whether the kit is shut down: no task is spawned any more.
     shut_down: bool,
     /// The key the next task is tracked under.
     next: u64,
-    /// The tasks running, each by its key, with the handle that aborts it
-    /// once its spawn returned it.
-    running: HashMap<u64, Option<AbortHandle>>,
+    /// The tasks running, each by its key, with its kind and the handle that
+    /// aborts it once its spawn returned it.
+    running: HashMap<u64, (Kind, Option<AbortHandle>)>,
 }
 
 /// The mark of a tracked task, carried by its future: dropped with it, it
@@ -45,9 +60,9 @@ struct Tracked {
 }
 
 impl Tasks {
-    /// Runs `future` as a task the kit tracks; `None`, nothing spawned, once
-    /// the kit is shut down.
-    pub(crate) fn spawn<F>(self: &Arc<Self>, future: F) -> Option<JoinHandle<F::Output>>
+    /// Runs `future` as a task of `kind` the kit tracks; `None`, nothing
+    /// spawned, once the kit is shut down.
+    pub(crate) fn spawn<F>(self: &Arc<Self>, kind: Kind, future: F) -> Option<JoinHandle<F::Output>>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
@@ -59,7 +74,7 @@ impl Tasks {
             }
             let key = state.next;
             state.next = key.wrapping_add(1);
-            state.running.insert(key, None);
+            state.running.insert(key, (kind, None));
             key
         };
         let tracked = Tracked {
@@ -74,7 +89,7 @@ impl Tasks {
         });
         let shut_down = {
             let mut state = self.state();
-            if let Some(handle) = state.running.get_mut(&key) {
+            if let Some((_, handle)) = state.running.get_mut(&key) {
                 *handle = Some(task.abort_handle());
             }
             state.shut_down
@@ -85,31 +100,47 @@ impl Tasks {
         Some(task)
     }
 
-    /// Whether the kit is shut down.
-    pub(crate) fn is_shut_down(&self) -> bool {
-        self.state().shut_down
-    }
-
     /// Refuses the calls that would start an operation from now on, the
-    /// tasks running going on, as the kit's shutdown begins.
-    pub(crate) fn close(&self) {
-        self.state().closing = true;
+    /// tasks running going on, as the kit's close begins; `false` when the
+    /// kit was closed already.
+    pub(crate) fn close(&self) -> bool {
+        !std::mem::replace(&mut self.state().closed, true)
     }
 
-    /// Whether the kit's shutdown began.
-    pub(crate) fn is_closing(&self) -> bool {
+    /// Whether the kit's close began.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.state().closed
+    }
+
+    /// Marks the work under way cut by the kit's close, once its grace ran
+    /// out.
+    pub(crate) fn cut(&self) {
+        self.state().cut = true;
+    }
+
+    /// Whether the kit's close cut the work under way, or shut it down.
+    pub(crate) fn is_cut(&self) -> bool {
         let state = self.state();
-        state.closing || state.shut_down
+        state.cut || state.shut_down
     }
 
     /// Waits until no tracked task runs.
     pub(crate) async fn idle(&self) {
+        self.idle_of(|_| true).await;
+    }
+
+    /// Waits until no tracked task of `kind` runs.
+    pub(crate) async fn idle_of_kind(&self, kind: Kind) {
+        self.idle_of(|running| running == kind).await;
+    }
+
+    async fn idle_of(&self, counts: impl Fn(Kind) -> bool) {
         loop {
             // Listening before looking: a task that ends between the look
             // and the wait still wakes this one.
             let mut changed = pin!(self.changed.notified());
             changed.as_mut().enable();
-            if self.state().running.is_empty() {
+            if !self.state().running.values().any(|(kind, _)| counts(*kind)) {
                 return;
             }
             changed.await;
@@ -124,25 +155,17 @@ impl Tasks {
         let running: Vec<AbortHandle> = {
             let mut state = self.state();
             state.shut_down = true;
-            state.running.values().flatten().cloned().collect()
+            state
+                .running
+                .values()
+                .filter_map(|(_, handle)| handle.clone())
+                .collect()
         };
         self.changed.notify_waiters();
         for task in running {
             task.abort();
         }
         self.idle().await;
-    }
-
-    /// Waits until the kit is shut down.
-    pub(crate) async fn shutting_down(&self) {
-        loop {
-            let mut changed = pin!(self.changed.notified());
-            changed.as_mut().enable();
-            if self.is_shut_down() {
-                return;
-            }
-            changed.await;
-        }
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -158,12 +181,14 @@ impl Tasks {
 
 impl Drop for Tracked {
     fn drop(&mut self) {
-        let idle = {
+        let last_of_its_kind = {
             let mut state = self.tasks.state();
-            state.running.remove(&self.key);
-            state.running.is_empty()
+            state
+                .running
+                .remove(&self.key)
+                .is_some_and(|(ended, _)| !state.running.values().any(|(kind, _)| *kind == ended))
         };
-        if idle {
+        if last_of_its_kind {
             self.tasks.changed.notify_waiters();
         }
     }
@@ -189,7 +214,9 @@ mod tests {
     async fn idle_waits_for_the_last_task_to_end() {
         let tasks = Arc::new(Tasks::default());
         let (go, wait) = tokio::sync::oneshot::channel::<()>();
-        tasks.spawn(async move { drop(wait.await) }).unwrap();
+        tasks
+            .spawn(Kind::Work, async move { drop(wait.await) })
+            .unwrap();
         let early = tokio::time::timeout(Duration::from_millis(20), tasks.idle()).await;
         go.send(()).unwrap();
         let idle = tokio::time::timeout(BOUND, tasks.idle()).await;
@@ -199,13 +226,17 @@ mod tests {
     #[tokio::test]
     async fn a_shut_down_kit_aborts_its_tasks_and_spawns_none() {
         let tasks = Arc::new(Tasks::default());
-        let task = tasks.spawn(pending::<()>()).unwrap();
+        let task = tasks.spawn(Kind::Work, pending::<()>()).unwrap();
         tokio::time::timeout(BOUND, tasks.shut_down())
             .await
             .unwrap();
         let aborted = task.await.is_err_and(|error| error.is_cancelled());
         assert_eq!(
-            (aborted, tasks.running(), tasks.spawn(async {}).is_none()),
+            (
+                aborted,
+                tasks.running(),
+                tasks.spawn(Kind::Work, async {}).is_none()
+            ),
             (true, 0, true)
         );
     }

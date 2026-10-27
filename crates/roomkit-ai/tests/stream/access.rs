@@ -79,7 +79,7 @@ async fn a_row_the_streaming_target_may_not_read_is_never_handed_to_it() {
         };
         assert_eq!(room.ws.read(), read, "narrowed: {narrowed}");
         assert_eq!(room.ws.delivered(), delivered, "narrowed: {narrowed}");
-        room.kit.shutdown().await;
+        room.kit.close().await;
     }
 }
 
@@ -167,7 +167,7 @@ async fn reads_nothing_once_withdrawn(change: Change, stored_as: EventStatus) {
             ("After the change.".to_owned(), stored_as),
             "{shape}"
         );
-        room.kit.shutdown().await;
+        room.kit.close().await;
     }
 }
 
@@ -238,5 +238,5 @@ async fn a_hook_hiding_the_tool_rows_leaves_the_text_streaming() {
             (EventType::Message, 7)
         ]
     );
-    room.kit.shutdown().await;
+    room.kit.close().await;
 }

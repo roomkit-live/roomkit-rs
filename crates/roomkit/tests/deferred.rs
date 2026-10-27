@@ -186,16 +186,16 @@ async fn a_call_that_waits_has_no_delivery_handle() {
     );
 }
 
-/// A deferred delivery the kit's shutdown ends reports it as a call that
-/// waited would: `ShutDown`, the message committed.
-#[tokio::test]
-async fn a_deferred_delivery_the_shutdown_ends_reports_it() {
+/// A deferred delivery the kit's close cuts past its grace reports it as a
+/// call that waited would: `ShutDown`, the message committed.
+#[tokio::test(start_paused = true)]
+async fn a_deferred_delivery_the_close_cuts_reports_it() {
     let (kit, sms, held) = room().await;
     let mut result = kit.process_inbound(hello(&sms), deferred()).await.unwrap();
     tokio::time::timeout(BOUND, held.delivering.notified())
         .await
         .unwrap();
-    kit.shutdown().await;
+    kit.close().await;
     let delivery = result.delivery.take().unwrap();
     let waited = tokio::time::timeout(BOUND, delivery.wait()).await.unwrap();
     assert_eq!(

@@ -73,7 +73,7 @@ async fn the_server_s_tools_are_declared_and_its_answers_read() {
             ]
         )
     );
-    room.kit.shutdown().await;
+    room.kit.close().await;
 }
 
 /// RFC §21.2: the server's tools are subject to the agent's tool policy: a
@@ -104,7 +104,7 @@ async fn a_tool_the_policy_denies_is_not_declared_and_refused() {
             )]
         )
     );
-    room.kit.shutdown().await;
+    room.kit.close().await;
 }
 
 /// RFC §21.6: a server that never answers a call, and one whose answer is
@@ -143,7 +143,7 @@ async fn a_call_the_server_never_answers_is_cut_at_the_agent_s_bound() {
             ),
         ]
     );
-    room.kit.shutdown().await;
+    room.kit.close().await;
 }
 
 /// RFC §21.1 "One tool per name": a server's tool named like a host tool
@@ -236,5 +236,5 @@ async fn the_server_s_instructions_sit_in_their_block() {
         ),
         "{prompt}"
     );
-    room.kit.shutdown().await;
+    room.kit.close().await;
 }

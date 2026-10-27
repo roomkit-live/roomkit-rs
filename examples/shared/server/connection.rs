@@ -277,7 +277,7 @@ fn tell(registration: &Registration, user: &ParticipantId, outcome: Told) {
             );
             TURN_FAILED
         }
-        // Stored, its turn ended by the kit's shutdown past the grace.
+        // Stored, its turn cut by the kit's close past its grace.
         Err(KitError::ShutDown) => {
             println!("  the server stopped before {:?}'s answer", user.as_str());
             STOPPED

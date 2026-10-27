@@ -313,7 +313,9 @@ async fn drop_during_the_commit<T>(kit: &RoomKit<GatedStore>, call: impl Future<
         () = store.committing.notified() => {}
     }
     store.go.notify_one();
-    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    tokio::time::timeout(BOUND, roomkit::testing::idle(kit))
+        .await
+        .unwrap();
 }
 
 /// The room's events but its lifecycle records (gap G-046), as `status

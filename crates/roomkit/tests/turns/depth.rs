@@ -56,7 +56,7 @@ async fn a_verb_after_its_turn_crosses_as_room_call_at_its_observer_s_floor() {
     let tap = TurnTap::on(&kit);
     let result = asks(&kit, "What is it?").await;
     go.notify_one();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let room_calls = tap
         .messages()
         .iter()
@@ -77,7 +77,7 @@ async fn a_verb_after_its_turn_is_refused_once_a_later_turn_was_sent() {
     // The model has no round left: the later turn fails, sent all the same.
     asks(&kit, "And now?").await;
     go.notify_one();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     assert_eq!(
         sent.lock().unwrap().clone(),
         vec![Err("PermissionError".to_owned())]
@@ -100,7 +100,7 @@ async fn sends_through_the_turn(sends: usize) -> (usize, Vec<u32>, usize) {
     })
     .await;
     asks(&kit, "What is it?").await;
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let notes: Vec<roomkit::model::RoomEvent> = roomkit::ConversationStore::list_events(
         kit.store(),
         &crate::support::room(),

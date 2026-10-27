@@ -164,5 +164,6 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             && landed == team_room
             && status(&kit, &team_room).await? == Some(RoomStatus::Active),
     );
+    kit.close().await;
     Ok(checks.finish())
 }

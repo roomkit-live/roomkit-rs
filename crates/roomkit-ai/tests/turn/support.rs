@@ -238,8 +238,8 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
     )
     .await
     .unwrap();
-    kit.idle().await;
-    kit.shutdown().await;
+    roomkit::testing::idle(&kit).await;
+    kit.close().await;
     let mut depths = posted.lock().unwrap().clone();
     depths.sort_unstable();
     depths.into_iter().map(|(_, depth)| depth).collect()
@@ -335,8 +335,8 @@ pub(crate) async fn two_agents(rounds: usize) -> usize {
     )
     .await
     .unwrap();
-    kit.idle().await;
-    kit.shutdown().await;
+    roomkit::testing::idle(&kit).await;
+    kit.close().await;
     alpha.turns.load(Ordering::SeqCst) + beta.turns.load(Ordering::SeqCst)
 }
 
@@ -441,7 +441,7 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
     )
     .await
     .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let capped = kit
         .store()
         .list_events(&room_id(), &every_row())
@@ -450,7 +450,7 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
         .iter()
         .filter(|event| event.blocked_by.as_deref() == Some("reentry_loop_cap"))
         .count();
-    kit.shutdown().await;
+    kit.close().await;
     (model.turns.load(Ordering::SeqCst), capped)
 }
 

@@ -38,7 +38,7 @@ async fn a_tool_blocking_its_thread_past_the_heartbeat_timeout_ends_normally() {
         .filter(|event| event.source.channel_id == channel("ai"))
         .map(|event| event.event_type)
         .collect();
-    kit.shutdown().await;
+    kit.close().await;
     assert_eq!(
         (result.error, rows),
         (

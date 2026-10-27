@@ -79,7 +79,7 @@ async fn an_inbound_message_on_the_agent_s_channel_is_refused() {
             },
         )
         .await;
-    room.kit.idle().await;
+    roomkit::testing::idle(&room.kit).await;
     assert!(taken.is_err(), "{taken:?}");
     assert!(
         room.timeline()
@@ -244,7 +244,7 @@ async fn a_call_past_its_bound_fails_as_a_timeout() {
     .await;
     let details = room.observed_details();
     room.says("Wait?").await;
-    room.kit.idle().await;
+    roomkit::testing::idle(&room.kit).await;
     let timeline = room.timeline().await;
     assert_eq!(
         (
@@ -415,7 +415,7 @@ async fn a_tool_writes_to_its_room_at_the_turn_s_depth() {
     );
     let room = Room::new(model, notifies).await;
     room.says("Notify me").await;
-    room.kit.idle().await;
+    roomkit::testing::idle(&room.kit).await;
     let timeline = room.timeline().await;
     let notice = timeline
         .iter()
@@ -519,7 +519,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
         )
         .await
         .unwrap();
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let greeting = kit
             .store()
             .list_events(&room_id(), &every_row())
@@ -529,7 +529,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
             .find(|event| roomkit::text_of(&event.content) == "Welcome.")
             .unwrap();
         assert_eq!(greeting.chain_depth, 1, "{tool}");
-        kit.shutdown().await;
+        kit.close().await;
     }
 }
 

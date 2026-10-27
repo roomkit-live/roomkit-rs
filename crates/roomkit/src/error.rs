@@ -33,12 +33,6 @@ pub enum KitError {
     /// The store failed a read the kit made itself.
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// The timer sweeper needs a tokio runtime to run on.
-    #[error("the timer sweeper must be started from within a tokio runtime")]
-    NoRuntime,
-    /// The timer sweeper's period must be longer than zero.
-    #[error("the timer sweeper's period must be longer than zero")]
-    ZeroPeriod,
     /// A call made from inside a room's own work, under the room's lock or
     /// in its admission order, could not be adopted: it would have waited
     /// for what its own caller holds, the room's lock or its admission
@@ -81,9 +75,9 @@ pub enum KitError {
     /// (RFC §10.5): a defect of this crate.
     #[error("a direct injection ended with neither its event nor a refusal")]
     NoEvent,
-    /// The kit is shut down ([`RoomKit::shutdown`](crate::RoomKit::shutdown)):
-    /// the call was made after it, or its run was running and the shutdown
-    /// ended it, what it wrote by then not known.
+    /// The kit is closed ([`RoomKit::close`](crate::RoomKit::close)): the
+    /// call was made once the close began, or its run was running and the
+    /// close cut it past its grace, what it wrote by then not known.
     #[error("the kit is shut down")]
     ShutDown,
     /// A call across the turn backend failed (RFC §10.6.8): a turn's host

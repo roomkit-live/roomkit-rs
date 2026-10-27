@@ -86,12 +86,12 @@ async fn left_after_drop(held: Held) -> (bool, usize) {
     })
     .await
     .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let bindings = kit.store().list_bindings(&room).await.unwrap();
     let attached = bindings
         .iter()
         .any(|binding| binding.channel_id == websocket);
-    kit.shutdown().await;
+    kit.close().await;
     drop(kit);
     (attached, open_handles(file.path()))
 }

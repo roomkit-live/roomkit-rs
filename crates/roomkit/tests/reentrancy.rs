@@ -776,7 +776,7 @@ async fn a_delivery_s_keyed_injection_past_the_reentry_cap_is_a_replay() {
         .await
         .unwrap();
     send(&kit, "hello").await.unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let returned = returned.lock().unwrap().clone();
     let first = returned.first().map(|(_, id, _)| id.clone());
     let last = returned
@@ -1179,7 +1179,9 @@ async fn a_task_a_locked_hook_spawns_in_its_context_acts_for_it_while_it_runs() 
         })
         .unwrap();
         send(&kit, "hello").await.unwrap();
-        tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+        tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+            .await
+            .unwrap();
         orders.push(messages(&kit).await);
     }
     assert_eq!(
@@ -1253,7 +1255,9 @@ async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_ove
     })
     .unwrap();
     send(&kit, "hello").await.unwrap();
-    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
     let sent = sent.lock().unwrap().take();
     assert_eq!(
         (sent, messages(&kit).await),
@@ -1319,7 +1323,9 @@ async fn a_later_hook_awaiting_a_task_an_earlier_one_left_waits_until_its_timeou
     })
     .unwrap();
     let result = send(&kit, "hello").await.unwrap();
-    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
     let seen = *seen.lock().unwrap();
     assert_eq!(
         (result.blocked, seen, messages(&kit).await),
@@ -1442,7 +1448,9 @@ async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
         () = delivering.notified() => {}
     }
     go.notify_one();
-    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
     let delivered = delivered.lock().unwrap().clone();
     let next = send(&kit, "second").await.unwrap();
     assert_eq!(

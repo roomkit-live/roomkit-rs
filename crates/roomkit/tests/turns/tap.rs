@@ -172,7 +172,7 @@ async fn the_probe_s_turn_carries_python_s_messages() {
     .await;
     let tap = TurnTap::on(&kit);
     let result = asks(&kit, "What is it?").await;
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let messages = turn_messages(&tap);
     let rust: Vec<String> = messages
         .iter()

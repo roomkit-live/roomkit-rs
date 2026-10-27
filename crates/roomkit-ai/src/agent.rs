@@ -78,7 +78,7 @@ const STANDALONE: &str = "standalone";
 /// ([`with_skills`](Self::with_skills)), it then lists them, and carries the
 /// instructions of those active in the room (RFC §24.4).
 ///
-/// The kit's shutdown closes the agent ([`Channel::close`]), which closes
+/// The kit's close closes the agent ([`Channel::close`]), which closes
 /// its toolsets: an MCP server's process stops.
 ///
 /// It answers a message or an instruction, never its own events, and takes

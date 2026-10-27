@@ -174,7 +174,7 @@ async fn eight_rooms_take_four_senders_at_once() {
         for sender in senders {
             sender.await.unwrap();
         }
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
     })
     .await
     .unwrap();

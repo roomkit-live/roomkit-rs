@@ -409,7 +409,7 @@ impl Run {
     pub(crate) async fn idle(&self) {
         let waiting = async {
             loop {
-                self.kit.idle().await;
+                roomkit::testing::idle(&self.kit).await;
                 let running = lock(&self.background)
                     .values()
                     .any(|handle| !handle.is_finished());

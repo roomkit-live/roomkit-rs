@@ -58,8 +58,8 @@ const INHERITED: &[&str] = &[
 /// whole, so that what it starts (the real server, behind `npx` or `uvx`)
 /// goes with it: `SIGTERM` to the group, then `SIGKILL` once the grace is
 /// over. In its own group, the server no longer receives a terminal's
-/// Ctrl+C: a host stops it through its close, its kit's shutdown or the
-/// drop of its last handle, which a Ctrl+C handler that shuts the kit down
+/// Ctrl+C: a host stops it through its close, its kit's close or the
+/// drop of its last handle, which a Ctrl+C handler that closes the kit
 /// covers. Elsewhere, the server's process alone is killed.
 ///
 /// ```

@@ -122,8 +122,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .await?;
     kit.attach_channel(&room, bob.id(), AttachChannelOptions::default())
         .await?;
-    // The observer runs in the background, once each attach returned.
-    kit.idle().await;
+    // The observer runs in the background, once each attach returned: the
+    // room goes on once it noted both.
+    attached.wait_for(2).await;
 
     let says = async |on: &RecordingTransport, text: &str| -> Result<(), Box<dyn Error>> {
         println!("{} writes {text:?}.", on.id());
@@ -143,6 +144,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     says(&bob, "Hi Alice!").await?;
     says(&alice, "How are you, Bob?").await?;
 
+    kit.close().await;
     let timeline = shared::timeline(&kit, &room).await?;
     shared::print_timeline(&timeline);
     println!("Alice received: {:?}", alice.texts());

@@ -1,11 +1,13 @@
 //! The kit's background work on the tokio driver (decision 3 of step 2b):
-//! `idle` waits for the observer hooks that run after the fact (RFC §9.3)
-//! and for the calls that go on detached (RFC §10.1 step 18, §13.6);
-//! `shutdown` ends them, and every call made after it is refused.
+//! the test seam `idle` waits for the observer hooks that run after the
+//! fact (RFC §9.3) and for the calls that go on detached (RFC §10.1 step
+//! 18, §13.6); `close` drains them, as the Python implementation's `close`
+//! does, ends what outlives its grace, and every call made after it is
+//! refused.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
-use std::future::{Future, pending};
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,7 +15,7 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    EventContent, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -22,6 +24,7 @@ use roomkit::{
     RoomKitOptions, text_of,
 };
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 
 /// How long a call that should not wait may take before the test fails it.
 const BOUND: Duration = Duration::from_secs(5);
@@ -156,9 +159,13 @@ async fn idle_waits_for_an_observer_hook_running_after_its_call() {
     tokio::time::timeout(BOUND, gate.reached.notified())
         .await
         .unwrap();
-    let busy = tokio::time::timeout(BRIEF, kit.idle()).await.is_err();
+    let busy = tokio::time::timeout(BRIEF, roomkit::testing::idle(&kit))
+        .await
+        .is_err();
     gate.open.notify_one();
-    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
     assert_eq!((busy, observed.load(Ordering::SeqCst)), (true, true));
 }
 
@@ -188,66 +195,96 @@ async fn idle_waits_for_a_call_that_goes_on_detached() {
         result = call => panic!("the call ended before its delivery: {result:?}"),
         () = slow.gate.reached.notified() => {}
     }
-    let busy = tokio::time::timeout(BRIEF, kit.idle()).await.is_err();
+    let busy = tokio::time::timeout(BRIEF, roomkit::testing::idle(&kit))
+        .await
+        .is_err();
     slow.gate.open.notify_one();
-    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
     assert_eq!(
         (busy, slow.delivered.lock().unwrap().clone()),
         (true, vec!["Bonjour".to_owned()])
     );
 }
 
-/// A call whose run the shutdown ends receives `ShutDown`; the shutdown
-/// returns once it is over.
+/// Decision 15: a delivery under way when the kit closes runs to its end:
+/// its event is delivered, its caller receives its result, and `close`
+/// returns once it is over. A second `close` meanwhile returns at once.
 #[tokio::test]
-async fn shutdown_ends_a_call_running_and_its_caller_receives_shut_down() {
-    let kit = room().await;
-    let gate = Gate::default();
-    let hook_gate = gate.clone();
-    kit.before_broadcast("stuck", move |_, _| {
-        let gate = hook_gate.clone();
-        async move {
-            gate.pass().await;
-            Ok(HookResult::allow())
-        }
-    })
-    .unwrap();
-    let call = {
-        let kit = kit.clone();
-        tokio::spawn(async move {
-            kit.process_inbound(
-                message("Bonjour"),
-                ProcessInboundOptions {
-                    room_id: Some(room_id()),
-                    ..Default::default()
-                },
-            )
-            .await
-        })
-    };
-    tokio::time::timeout(BOUND, gate.reached.notified())
+async fn close_drains_a_queued_delivery() {
+    let (kit, slow) = slow_room().await;
+    let call = spawn_bonjour(&kit);
+    tokio::time::timeout(BOUND, slow.gate.reached.notified())
         .await
         .unwrap();
-    tokio::time::timeout(BOUND, kit.shutdown()).await.unwrap();
+    let closing = tokio::spawn({
+        let kit = kit.clone();
+        async move { kit.close().await }
+    });
+    // Once the first close began, which refuses the calls, the second
+    // returns at once, the first still draining.
+    while kit
+        .check_all_timers(CheckAllTimersOptions::default())
+        .await
+        .is_ok()
+    {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::timeout(BOUND, kit.close()).await.unwrap();
+    slow.gate.open.notify_one();
+    tokio::time::timeout(BOUND, closing).await.unwrap().unwrap();
     let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
-    assert_eq!(ended, Err(KitError::ShutDown));
+    assert_eq!(
+        (
+            ended.map(|result| result.event.is_some()),
+            slow.delivered.lock().unwrap().clone()
+        ),
+        (Ok(true), vec!["Bonjour".to_owned()])
+    );
 }
 
-/// An observer still running when the kit shuts down is dropped: the
-/// shutdown does not wait for it to finish.
-#[tokio::test]
-async fn shutdown_drops_an_observer_hook_still_running() {
+/// Decision 15: a delivery that never ends is aborted 5 seconds into the
+/// close, which then returns: its caller receives `ShutDown`, the event
+/// undelivered.
+#[tokio::test(start_paused = true)]
+async fn close_aborts_what_outlives_the_lane_grace() {
+    let (kit, slow) = slow_room().await;
+    let call = spawn_bonjour(&kit);
+    slow.gate.reached.notified().await;
+    let started = tokio::time::Instant::now();
+    kit.close().await;
+    let took = started.elapsed();
+    let ended = call.await.unwrap();
+    assert_eq!(
+        (
+            took >= Duration::from_secs(5) && took < Duration::from_secs(6),
+            ended.err(),
+            slow.delivered.lock().unwrap().is_empty()
+        ),
+        (true, Some(KitError::ShutDown), true)
+    );
+}
+
+/// Decision 15: an observer still running when the kit closes finishes
+/// within its hook's timeout before the close returns; one that would run
+/// longer is dropped at its timeout, 30 seconds unless its hook names
+/// another.
+#[tokio::test(start_paused = true)]
+async fn close_lets_an_observer_finish_within_its_hook_s_timeout() {
     let kit = room().await;
-    let gate = Gate::default();
-    let hook_gate = gate.clone();
-    kit.observe("audit", HookTrigger::AfterBroadcast, move |_, _| {
-        let gate = hook_gate.clone();
-        async move {
-            gate.reached.notify_one();
-            pending::<()>().await;
-        }
-    })
-    .unwrap();
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    for (name, runs) in [("brief", 1), ("endless", 3600)] {
+        let observed = Arc::clone(&observed);
+        kit.observe(name, HookTrigger::AfterBroadcast, move |_, _| {
+            let observed = Arc::clone(&observed);
+            async move {
+                tokio::time::sleep(Duration::from_secs(runs)).await;
+                observed.lock().unwrap().push(name);
+            }
+        })
+        .unwrap();
+    }
     kit.process_inbound(
         message("Bonjour"),
         ProcessInboundOptions {
@@ -257,20 +294,54 @@ async fn shutdown_drops_an_observer_hook_still_running() {
     )
     .await
     .unwrap();
-    tokio::time::timeout(BOUND, gate.reached.notified())
-        .await
-        .unwrap();
-    let shut = tokio::time::timeout(BOUND, kit.shutdown()).await;
-    let idle = tokio::time::timeout(BOUND, kit.idle()).await;
-    assert_eq!((shut.is_ok(), idle.is_ok()), (true, true));
+    let started = tokio::time::Instant::now();
+    kit.close().await;
+    let took = started.elapsed();
+    assert_eq!(
+        (
+            took >= Duration::from_secs(30) && took < Duration::from_secs(31),
+            observed.lock().unwrap().clone()
+        ),
+        (true, vec!["brief"])
+    );
 }
 
-/// Every call that runs an operation is refused once the kit is shut down;
+/// The kit with its SMS and the gated `slow` transport attached.
+async fn slow_room() -> (RoomKit, Gated) {
+    let kit = room().await;
+    let slow = Gated::new();
+    kit.register_channel(slow.clone()).unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("slow"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    (kit, slow)
+}
+
+/// `Bonjour` into `room_1`, on a task of its own.
+fn spawn_bonjour(kit: &RoomKit) -> JoinHandle<Result<roomkit::InboundResult, KitError>> {
+    let kit = kit.clone();
+    tokio::spawn(async move {
+        kit.process_inbound(
+            message("Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+    })
+}
+
+/// Every call that runs an operation is refused once the kit is closed;
 /// registering a channel still works.
 #[tokio::test]
-async fn a_call_made_after_the_shutdown_is_refused() {
+async fn a_call_made_after_the_close_is_refused() {
     let kit = room().await;
-    kit.shutdown().await;
+    kit.close().await;
     let room = room_id();
     let refused = (
         kit.process_inbound(
@@ -351,18 +422,17 @@ impl Channel for Closing {
     }
 }
 
-/// The shutdown closes each channel registered, one after the other in the
-/// order of their ids (RFC §6.1 `close`), once: a second shutdown running
-/// beside the first joins it.
+/// The close closes each channel registered, one after the other in the
+/// order of their ids (RFC §6.1 `close`), once.
 #[tokio::test]
-async fn shutdown_closes_each_channel_once_in_the_order_of_their_ids() {
+async fn close_closes_each_channel_once_in_the_order_of_their_ids() {
     let kit = RoomKit::new(RoomKitOptions::default());
     let closed = Arc::new(Mutex::new(Vec::new()));
     for id in ["ws_b", "ws_a"] {
         kit.register_channel(Closing::new(id, &closed)).unwrap();
     }
-    let (first, second) = tokio::join!(kit.shutdown(), kit.shutdown());
+    let (first, second) = tokio::join!(kit.close(), kit.close());
     let ((), ()) = (first, second);
-    kit.shutdown().await;
+    kit.close().await;
     assert_eq!(*closed.lock().unwrap(), ["ws_a", "ws_b"]);
 }

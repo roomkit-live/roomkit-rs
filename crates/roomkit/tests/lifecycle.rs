@@ -252,52 +252,6 @@ mod timers {
             (Some("room_closed"), RoomStatus::Closed)
         );
     }
-
-    #[tokio::test]
-    async fn the_sweeper_applies_a_due_transition_in_the_background() {
-        let clock = Clock::new();
-        let (kit, _sms) = timed_room(&clock).await;
-        let mut events = kit.subscribe();
-        clock.advance(90);
-        let _sweeper = kit.run_timers(Duration::from_millis(10)).unwrap();
-        let paused = next_matching(&mut events, |event| {
-            matches!(event, FrameworkEvent::RoomPaused { .. })
-        })
-        .await;
-        assert_eq!(
-            paused,
-            FrameworkEvent::room_paused(room_id(), TransitionReason::Timer)
-        );
-    }
-
-    #[tokio::test]
-    async fn a_stopped_sweeper_applies_nothing_more() {
-        let clock = Clock::new();
-        let (kit, _sms) = timed_room(&clock).await;
-        kit.run_timers(Duration::from_millis(10)).unwrap().stop();
-        clock.advance(90);
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let room = kit.store().get_room(&room_id()).await.unwrap().unwrap();
-        assert_eq!(room.status, RoomStatus::Active);
-    }
-
-    #[tokio::test]
-    async fn the_sweeper_refuses_a_zero_period() {
-        let kit = RoomKit::new(RoomKitOptions::default());
-        assert!(matches!(
-            kit.run_timers(Duration::ZERO),
-            Err(KitError::ZeroPeriod)
-        ));
-    }
-
-    #[test]
-    fn the_sweeper_needs_a_tokio_runtime() {
-        let kit = RoomKit::new(RoomKitOptions::default());
-        assert!(matches!(
-            kit.run_timers(Duration::from_secs(1)),
-            Err(KitError::NoRuntime)
-        ));
-    }
 }
 
 /// RFC §10.4 step 1, gap G-045: a sender who writes again after the timer
@@ -585,7 +539,7 @@ mod unregistering {
         )
         .await
         .unwrap();
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let mut failed = Vec::new();
         while let Ok(event) = events.try_recv() {
             if let FrameworkEvent::DeliveryFailed { channel_id, .. } = event {
@@ -1137,12 +1091,6 @@ mod bindings {
             .unwrap()
             .unwrap()
     }
-}
-
-#[test]
-fn the_sweeper_can_be_held_across_tasks() {
-    fn sendable<T: Send + Sync + 'static>() {}
-    sendable::<roomkit::TimerSweeper>();
 }
 
 /// Every row of a room's timeline, the refused ones included.

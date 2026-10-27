@@ -13,7 +13,7 @@
 //!
 //! The server's instructions reach the model in the system prompt, under
 //! the host's name for the server, in a `<server_instructions>` block whose
-//! closing tag, which the server forges, is neutralised. The kit's shutdown
+//! closing tag, which the server forges, is neutralised. The kit's close
 //! stops the server's process. Then two connections fail, and leave no
 //! process: a command that names no program, and a server that never
 //! answers the handshake, cut at the connect bound.
@@ -100,7 +100,7 @@ async fn run() -> Result<ExitCode, Box<dyn Error>> {
             },
         )
         .await?;
-    kit.idle().await;
+    kit.close().await;
     let timeline = shared::timeline(&kit, &room).await?;
     print_ends(&timeline);
     checks.expect("the turn did not fail", result.error.is_none());
@@ -112,11 +112,10 @@ async fn run() -> Result<ExitCode, Box<dyn Error>> {
     check_each_call(&mut checks, &timeline);
     check_the_instructions(&mut checks, &requests);
 
-    kit.shutdown().await;
     // The server leads a process group of its own: nothing of it is left.
     let groups: Vec<u32> = pid.into_iter().collect();
     checks.expect(
-        "the kit's shutdown stops the server's process and its process group, and waits for it",
+        "the kit's close stops the server's process and its process group, and waits for it",
         pid.is_some()
             && server.process_id().is_none()
             && mcp::processes_left(&groups).is_none_or(|left| left.is_empty()),

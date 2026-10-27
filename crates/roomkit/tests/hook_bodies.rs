@@ -186,7 +186,7 @@ async fn a_hook_posting_after_every_event_stops_at_the_cap() {
     )
     .await
     .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let mut expected = vec![None; BUDGET];
     expected.push(Some("reentry_loop_cap".to_owned()));
     assert_eq!(taken(&posted), expected);
@@ -229,7 +229,7 @@ async fn an_observer_of_before_broadcast_posting_on_every_event_stops_at_the_cap
     )
     .await
     .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let mut expected = vec![None; BUDGET];
     expected.push(Some("reentry_loop_cap".to_owned()));
     assert_eq!(taken(&posted), expected);
@@ -287,7 +287,7 @@ async fn an_observer_of_before_broadcast_s_call_returns_with_its_delivery_result
     )
     .await
     .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     assert_eq!(taken(&results), vec![vec!["ws".to_owned()]]);
 }
 
@@ -348,7 +348,7 @@ async fn a_hook_opening_a_room_after_every_event_stops_at_the_cap() {
     )
     .await
     .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let rooms = kit
         .store()
         .list_rooms(&roomkit::RoomFilter::default())
@@ -406,7 +406,7 @@ async fn a_judge_posting_back_after_each_answer_stops_at_the_depth_limit() {
     )
     .await
     .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     assert_eq!((len(&agent.asked), taken(&depths)), (3, vec![2, 4, 6]));
 }
 
@@ -479,7 +479,7 @@ async fn a_mutation_hook_changing_again_stops_at_the_cap() {
         kit.send_event(&room_id(), &channel("sms"), change, options)
             .await
             .unwrap();
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let mut expected = vec![None; BUDGET];
         expected.push(Some("reentry_loop_cap".to_owned()));
         assert_eq!(taken(&sent), expected, "deleting {deleting}");
@@ -534,7 +534,7 @@ async fn a_hook_posting_once_per_message_posts_for_every_message() {
         .await
         .unwrap();
     }
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     assert_eq!(taken(&posted), vec![None; BUDGET + 1]);
 }
 
@@ -672,7 +672,7 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
         }
     });
     limited.await.unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let messages: Vec<(String, u32, Option<String>)> = kit
         .store()
         .list_events(&room_id(), &every_row())
@@ -747,7 +747,7 @@ async fn a_notice_per_answer_costs_the_agents_no_answer() {
     )
     .await
     .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let answers: Vec<Option<String>> = kit
         .store()
         .list_events(&room_id(), &every_row())
@@ -850,7 +850,7 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
                 .await
                 .unwrap();
         }
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let expected = if deleting {
             (BUDGET / 2 + 1, vec![None])
         } else {
@@ -939,7 +939,7 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
             )
             .await
             .unwrap();
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let stored = kit.store().get_event(&hi.id).await.unwrap();
         assert_eq!(
             (
@@ -1072,7 +1072,7 @@ async fn work_outside_a_hook_body_draws_nothing() {
         )
         .await
         .unwrap();
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let stored = kit.store().get_event(&target.id).await.unwrap().unwrap();
         assert_eq!(
             (taken(&failures), stored.metadata.get("n").cloned()),
@@ -1159,7 +1159,7 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
     )
     .await
     .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let answers: Vec<Option<String>> = kit
         .store()
         .list_events(&room_id(), &every_row())
@@ -1257,7 +1257,7 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
         )
         .await
         .unwrap();
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let stored = kit.store().get_event(&target).await.unwrap().unwrap();
         assert_eq!(
             (taken(&failures), stored.metadata.get("n").cloned()),

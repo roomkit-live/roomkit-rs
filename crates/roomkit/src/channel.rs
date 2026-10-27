@@ -172,8 +172,8 @@ pub trait Channel: Send + Sync + 'static {
     }
 
     /// Releases what the channel holds (RFC §6.1 `close`): the kit's
-    /// [`shutdown`](crate::RoomKit::shutdown) calls it once for each
-    /// channel registered then, in turn, after the turns running are cut. It
+    /// [`close`](crate::RoomKit::close) calls it once for each channel
+    /// registered then, in turn, after the work under way ended. It
     /// must not wait without bound on anything the channel does not own.
     ///
     /// The default releases nothing.

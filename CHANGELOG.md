@@ -71,6 +71,16 @@ kit, its construction and its calls).
 - A room's creation drops a metadata key only the framework writes (under
   `roomkit:`, or of the room's private state) with a warning and writes the
   rest (RFC §5.1); it was refused.
+- `RoomKit::close` replaces `shutdown` and drains as Python's `close`
+  does: the calls are refused at once and a second `close` returns at
+  once; the inbound runs, their deliveries and turns, get up to 5 seconds
+  to end, one ending then reporting its result; the turns still running
+  are cut; the observers still running finish within their hook's timeout;
+  what is left is aborted; the channels close once.
+- `idle` leaves the public API for the hidden test seam
+  `roomkit::testing::idle(&kit)`. `run_timers`, `TimerSweeper`,
+  `KitError::NoRuntime` and `KitError::ZeroPeriod` go: the host calls
+  `check_all_timers` on the period it chooses, as with Python.
 
 ## [0.1.0] — 2026-10-27
 

@@ -340,7 +340,7 @@ async fn a_row_forged_on_the_agent_s_channel_never_activates_after_a_restart() {
             },
         )
         .await;
-    room.kit.idle().await;
+    roomkit::testing::idle(&room.kit).await;
     assert!(taken.is_err());
     let after = ScriptedProvider::new([ScriptedRound::answering("After the restart.")]);
     room.replace_agent(after.clone(), skills(&tree));
@@ -415,7 +415,7 @@ async fn a_turn_standing_alone_carries_no_active_skill_and_records_none() {
         )
         .await
         .unwrap();
-    room.kit.idle().await;
+    roomkit::testing::idle(&room.kit).await;
     room.says("Next").await;
     let prompts = prompts(&model);
     assert!(!prompts[2].contains("# Active skill instructions"));

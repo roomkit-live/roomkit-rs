@@ -517,7 +517,9 @@ async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_e
     }
     // The agent could answer now: a turn left running would.
     agent.go.notify_one();
-    tokio::time::timeout(BOUND, kit.idle()).await.unwrap();
+    tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
     let timeline: Vec<(String, EventStatus)> = kit
         .store()
         .list_events(&room_id(), &every_row())

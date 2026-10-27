@@ -41,6 +41,7 @@ use crate::context::ExecutionContext;
 use crate::error::{KitError, with_causes};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
+use crate::tasks::Kind;
 
 /// What an inbound call's run comes to: the operation's output, or why the
 /// kit's call failed.
@@ -276,12 +277,12 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     };
     // The kit tracks the run. Dropped, the handle detaches it: the run
     // itself stops when its caller is gone before the call's decision.
-    let Some(mut task) = inner.tasks.spawn(context.scope(run)) else {
+    let Some(mut task) = inner.tasks.spawn(Kind::Work, context.scope(run)) else {
         return ran(Err(KitError::ShutDown));
     };
     tokio::select! {
         biased;
-        joined = &mut task => ran(ended(joined, inner.tasks.is_closing())),
+        joined = &mut task => ran(ended(joined, inner.tasks.is_cut())),
         Ok(answer) = decided => Ran {
             output: answer,
             delivery: defer.then_some(task),
@@ -289,17 +290,18 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     }
 }
 
-/// The output of a run's task that ended, cancelled by the kit's shutdown
-/// when `shut_down`, by the runtime otherwise. A run that ended once the
-/// shutdown began, its turns cut by it (RFC §10.6.8), was ended by it too.
-pub(crate) fn ended(joined: Result<InboundOutput, JoinError>, shut_down: bool) -> InboundOutput {
+/// The output of a run's task that ended, cancelled by the kit's close when
+/// `cut`, by the runtime otherwise. A run that ended once the close cut the
+/// work under way, its turns cut by it (RFC §10.6.8), was ended by it too;
+/// one that ended while the close drained it ran to its end.
+pub(crate) fn ended(joined: Result<InboundOutput, JoinError>, cut: bool) -> InboundOutput {
     match joined {
-        Ok(_ended) if shut_down => Err(KitError::ShutDown),
+        Ok(_ended) if cut => Err(KitError::ShutDown),
         Ok(output) => output,
         // A panic of the driver's own loop is a defect of this crate: the
         // caller receives it as it would from a run it drove itself.
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
-        Err(_cancelled) if shut_down => Err(KitError::ShutDown),
+        Err(_cancelled) if cut => Err(KitError::ShutDown),
         Err(_cancelled) => Err(KitError::Cancelled),
     }
 }

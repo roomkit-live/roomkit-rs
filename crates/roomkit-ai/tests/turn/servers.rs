@@ -1,7 +1,7 @@
 //! What an agent carries of the MCP servers whose tools it serves (RFC
 //! §21.2, §6.4): their instructions in its system prompt, each under the
 //! host's label in a block it cannot close, and their toolsets closed at
-//! the kit's shutdown. The texts are the reference implementation's
+//! the kit's close. The texts are the reference implementation's
 //! (`tasks/probes/step4-m9/py_mcp_m9_probe.out`).
 
 use std::future::{self, Future};
@@ -151,15 +151,15 @@ impl Toolset for Closing {
     }
 }
 
-/// The kit's shutdown closes the agent, which closes each of its toolsets
-/// once, a second shutdown included.
+/// The kit's close closes the agent, which closes each of its toolsets
+/// once, a second close included.
 #[tokio::test]
-async fn the_kit_s_shutdown_closes_the_agent_s_toolsets_once() {
+async fn the_kit_s_close_closes_the_agent_s_toolsets_once() {
     let closing = Closing::default();
     let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
     let toolset = closing.clone();
     let room = Room::equipped(model, served(), |agent| agent.with_tools(toolset).unwrap()).await;
-    room.kit.shutdown().await;
-    room.kit.shutdown().await;
+    room.kit.close().await;
+    room.kit.close().await;
     assert_eq!(closing.closes.load(Ordering::SeqCst), 1);
 }

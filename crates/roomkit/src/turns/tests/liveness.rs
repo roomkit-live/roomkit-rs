@@ -60,7 +60,7 @@ async fn dropped_executor_heartbeats_fail_the_turn_executor_lost() {
     let started = Instant::now();
     let result = says(&kit, "Hi").await.unwrap();
     let failed_after = started.elapsed();
-    kit.idle().await;
+    crate::testing::idle(&kit).await;
     assert_eq!(
         (
             failure(&result),
@@ -120,7 +120,7 @@ async fn an_unanswered_cancel_is_given_up_at_the_cancel_timeout_and_late_frames_
     // The caller leaves once the turn runs: its turn is cut (RFC §10.1
     // "Explicit delivery cancellation").
     let gone = tokio::time::timeout(Duration::from_secs(1), says(&kit, "Hi")).await;
-    kit.idle().await;
+    crate::testing::idle(&kit).await;
     let given_up = Duration::from_secs(1) + Duration::from_secs(5);
     let late_frames = timed.after(Carried::Frame, given_up);
     let late_controls = timed.after(Carried::Control, given_up);

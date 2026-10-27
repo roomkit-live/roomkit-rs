@@ -31,7 +31,8 @@
 //!   source (RFC §10.2 step 2), so the people on `websocket` see the
 //!   agent's answers, not each other's messages. A client that stops
 //!   reading is dropped, reader included, once one send waits 5 seconds; a
-//!   stop gives the connections and the kit 10 seconds.
+//!   stop gives the connections 10 seconds, then closes the kit, which
+//!   drains what still runs for up to 5 seconds (`RoomKit::close`).
 //! - The agent's answer streams (RFC §6.1, §12.2 steps 13s and 14s): a
 //!   connection opened with `&stream=1` receives its text as the model
 //!   writes it, `{"type": "delta", "stream_id": "...", "text": "..."}`
@@ -201,8 +202,9 @@ const ANNOUNCED: u64 = 1 << 20;
 /// The receive buffer of a client that falls behind, in bytes.
 const SMALL_BUFFER: u32 = 4096;
 
-/// How long a check waits for a connection to end or a server to stop.
-const STOP_PATIENCE: Duration = Duration::from_secs(5);
+/// How long a check waits for a connection to end or a server to stop: a
+/// stop's grace and its kit's close drain included.
+const STOP_PATIENCE: Duration = Duration::from_secs(15);
 
 /// How long a client waits for an answer: a real model's included.
 const ANSWER_PATIENCE: Duration = Duration::from_secs(60);
@@ -552,7 +554,7 @@ async fn a_client_leaves_mid_answer(checks: &mut Checks) -> Result<(), Box<dyn E
     }
     println!("  Gina read {read:?}, and leaves");
     gina.leave();
-    tokio::time::timeout(STOP_PATIENCE, server.kit().idle()).await?;
+    // The stop closes the kit, which lets the answer's turn end first.
     server.stop().await?;
     let timeline = timeline_in(database.path(), TERRACE).await?;
     let answer = timeline
@@ -828,10 +830,11 @@ async fn a_close_during_a_turn(checks: &mut Checks) -> Result<(), Box<dyn Error>
     let server = AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, brief).await?;
     let mut lee = Client::connect(server.address(), ORCHARD, "lee", "Lee").await?;
     lee.say("Are the apples ripe?").await?;
-    let _asked = tokio::time::timeout(STOP_PATIENCE, silent.accept()).await??;
+    let asked = tokio::time::timeout(STOP_PATIENCE, silent.accept()).await??;
     let answered = lee.close_answered(TOLD_PATIENCE).await;
-    // The turn, which never ends, outlives the grace.
-    let _outlived = tokio::time::timeout(STOP_PATIENCE, server.stop()).await;
+    // The model goes away: the turn fails, and the stop waits for nothing.
+    drop((asked, silent));
+    tokio::time::timeout(STOP_PATIENCE, server.stop()).await??;
     checks.expect(
         "a client that closes during a turn has its close answered at once: the server \
          reads on while the agent answers",

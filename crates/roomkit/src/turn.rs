@@ -23,6 +23,7 @@ use crate::error::KitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::stream::ResponseStream;
+use crate::tasks::Kind;
 use crate::tools::{ToolCallEvent, ToolHandler, ToolUse, ToolVerdict, error_envelope};
 use crate::turns::{HostLink, TurnError, send_event_arguments};
 
@@ -367,7 +368,7 @@ impl TurnHost {
                 .clone()
                 .at_least(floor)
                 .scope(TURN.scope(self.clone(), bounded));
-            if !self.shared.kit.spawn(Box::pin(task)) {
+            if !self.shared.kit.spawn_observer(Box::pin(task)) {
                 tracing::debug!(target: "roomkit::hooks", "the kit is shut down: a tool call's observer is not run");
             }
         }
@@ -485,6 +486,11 @@ pub(crate) trait TurnKit: Send + Sync {
     /// the kit is shut down.
     fn spawn_tracked(&self, task: BoxFuture<'static, ()>) -> Option<AbortHandle>;
 
+    /// Runs `task`, an observer hook's body bounded by its timeout, in the
+    /// background, tracked as an observer, which the kit's close lets
+    /// finish; `false` once the kit is shut down.
+    fn spawn_observer(&self, task: BoxFuture<'static, ()>) -> bool;
+
     /// The channel the kit registered under `channel_id`, live.
     fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>>;
 
@@ -517,7 +523,16 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
 
     fn spawn_tracked(&self, task: BoxFuture<'static, ()>) -> Option<AbortHandle> {
         let inner = self.upgrade()?;
-        inner.tasks.spawn(task).map(|task| task.abort_handle())
+        inner
+            .tasks
+            .spawn(Kind::Work, task)
+            .map(|task| task.abort_handle())
+    }
+
+    fn spawn_observer(&self, task: BoxFuture<'static, ()>) -> bool {
+        self.upgrade()
+            .and_then(|inner| inner.tasks.spawn(Kind::Observer, task))
+            .is_some()
     }
 
     fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>> {

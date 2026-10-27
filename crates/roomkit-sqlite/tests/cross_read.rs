@@ -431,7 +431,7 @@ async fn a_channel_python_detached_stays_detached() {
         .map(|binding| binding.channel_id.to_string())
         .filter(|id| id.starts_with("ws-"))
         .collect();
-    kit.shutdown().await;
+    kit.close().await;
     assert_eq!(
         (results, bound),
         (
@@ -502,7 +502,7 @@ async fn what_python_reads_beside_the_timeline_is_kept_right() {
         .await
         .unwrap();
     let removed = derived(file.path());
-    kit.shutdown().await;
+    kit.close().await;
     assert_eq!(
         (committed, marked, removed),
         ((1, 1, 21), (1, 0, 21), (0, 0, 21))
@@ -653,7 +653,7 @@ async fn a_delete_marks_its_target_s_edits_as_python_reads_them() {
         )
         .await
         .unwrap();
-    kit.shutdown().await;
+    kit.close().await;
     let marks: Vec<Option<bool>> = {
         let connection = Connection::open(file.path()).unwrap();
         let mut statement = connection

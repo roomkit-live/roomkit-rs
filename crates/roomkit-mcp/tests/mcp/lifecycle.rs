@@ -1,6 +1,6 @@
 //! The server's process (RFC §21.2): started without a shell, with the
-//! host's environment withheld; stopped at its close, at the kit's
-//! shutdown and when its last handle is dropped; released before a failed
+//! host's environment withheld; stopped at its close, at the kit's close
+//! and when its last handle is dropped; released before a failed
 //! connection reports; never blocked by its standard error. A process gone
 //! from `/proc` was waited for: no zombie is left.
 
@@ -203,10 +203,10 @@ async fn a_wrapped_server_that_never_answers_is_stopped_before_the_error() {
     assert_eq!(wrapped.gone().await, (true, true));
 }
 
-/// The kit's shutdown closes the agent serving the server's tools, which
+/// The kit's close closes the agent serving the server's tools, which
 /// stops the server.
 #[tokio::test]
-async fn the_kit_s_shutdown_stops_the_server_of_its_agent() {
+async fn the_kit_s_close_stops_the_server_of_its_agent() {
     let pid_file = PidFile::new();
     let server = pid_file.on(fake("normal")).connect().await.unwrap();
     let pid = pid_file.pid();
@@ -214,7 +214,7 @@ async fn the_kit_s_shutdown_stops_the_server_of_its_agent() {
     let room = Room::with(agent(&model).with_tools(server).unwrap()).await;
     room.says("Hello").await;
     let running = exists(pid);
-    room.kit.shutdown().await;
+    room.kit.close().await;
     assert_eq!((running, exists(pid)), (true, false));
 }
 

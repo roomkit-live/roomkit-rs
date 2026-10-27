@@ -160,8 +160,6 @@ fn rebuilt_variant(error: &WireError) -> Option<KitError> {
         "Cancelled" => KitError::Cancelled,
         "Stalled" => KitError::Stalled,
         "NoEvent" => KitError::NoEvent,
-        "NoRuntime" => KitError::NoRuntime,
-        "ZeroPeriod" => KitError::ZeroPeriod,
         "UnknownChannel" => {
             let id = error.attributes.get("channel_id")?.as_str()?;
             KitError::UnknownChannel(ChannelId::new(id).ok()?)
@@ -184,8 +182,6 @@ fn variant_of(error: &KitError) -> (&'static str, Metadata) {
             "UnknownChannel"
         }
         KitError::Store(_) => "Store",
-        KitError::NoRuntime => "NoRuntime",
-        KitError::ZeroPeriod => "ZeroPeriod",
         KitError::Reentrant { .. } => "Reentrant",
         KitError::Abandoned { .. } => "Abandoned",
         KitError::Protocol(_) => "Protocol",

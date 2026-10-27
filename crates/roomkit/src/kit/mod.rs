@@ -50,7 +50,6 @@ pub use self::options::{
     SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions,
     UpdateEventOptions,
 };
-pub use self::timers::TimerSweeper;
 pub use self::weak::WeakRoomKit;
 use crate::channel::DynChannel;
 use crate::context;
@@ -139,8 +138,8 @@ pub(crate) struct Inner<S> {
     events: broadcast::Sender<FrameworkEvent>,
     /// The turn backend every intelligence turn runs through (RFC §10.6).
     pub(crate) turns: Arc<Turns>,
-    /// Set once the channels were closed at the kit's shutdown: they are
-    /// closed once, a second shutdown joining the first.
+    /// Set once the channels were closed at the kit's close: they are
+    /// closed once.
     channels_closed: tokio::sync::OnceCell<()>,
 }
 
@@ -350,13 +349,13 @@ fn default_router<S: ConversationStore>(
 }
 
 impl<S> Inner<S> {
-    /// Refuses a call once the kit is shut down.
+    /// Refuses a call once the kit's close began.
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::ShutDown`] once [`RoomKit::shutdown`] was called.
+    /// Returns [`KitError::ShutDown`] once [`RoomKit::close`] was called.
     pub(crate) fn open(&self) -> Result<(), KitError> {
-        if self.tasks.is_closing() {
+        if self.tasks.is_closed() {
             return Err(KitError::ShutDown);
         }
         Ok(())

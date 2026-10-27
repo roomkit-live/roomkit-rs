@@ -35,6 +35,23 @@ pub fn kit_with_environment<S: ConversationStore>(
     RoomKit::with_environment(options, Arc::new(environment))
 }
 
+/// Waits until `kit` runs nothing in the background: no observer hook
+/// running after the fact (RFC §9.3), and no inbound call running, whether
+/// its caller waits for it, was answered at its decision (RFC §10.1 step
+/// 18) or stopped waiting. What one of them starts, an observer its
+/// delivery fires, a call its channel makes, is waited for too. A call that
+/// runs in its caller's own task, a lifecycle change, a direct change of a
+/// stored event or `commit_event`, is its caller's to wait for. A test
+/// seam: the Python implementation's kit has no such call.
+///
+/// Work that keeps coming keeps the kit busy: `idle` returns at a moment
+/// nothing runs. Awaited from the kit's own work, a hook or a channel, it
+/// waits for itself: a test awaits it once its calls returned.
+#[doc(hidden)]
+pub async fn idle<S>(kit: &RoomKit<S>) {
+    kit.inner.tasks.idle().await;
+}
+
 /// Sets the bounds both sides of `kit`'s turns keep (RFC §10.6.8), which
 /// the Python implementation's kit takes no keyword for: a test seam. The
 /// RFC's defaults unless set: 10 seconds to accept a turn, a heartbeat each

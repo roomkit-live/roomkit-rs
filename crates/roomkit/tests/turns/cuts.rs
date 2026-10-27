@@ -1,5 +1,5 @@
 //! RFC §10.6.8, §10.6.4, §12.2 step 13s: a turn ended early crosses as
-//! its own message: the kit's shutdown while a tool runs as `cancel`, a
+//! its own message: the kit's close while a tool runs as `cancel`, a
 //! streaming reader that leaves as `close`.
 
 use std::sync::{Arc, Mutex};
@@ -50,13 +50,13 @@ impl Drop for Cut {
     }
 }
 
-/// RFC §10.6.8: the kit's shutdown while a tool runs crosses as `cancel`
+/// RFC §10.6.8: the kit's close while a tool runs crosses as `cancel`
 /// with its reason; the executor cuts the handler and reports the call
 /// `cancelled` to the kit's observers; the turn's end follows; the reader
 /// stores the call's end `cancelled`. (Milestone 6 left the call's start
 /// with no end, and reported nothing.)
 #[tokio::test(start_paused = true)]
-async fn the_kit_s_shutdown_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_cancelled() {
+async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_cancelled() {
     let running = Arc::new(Notify::new());
     let log = Arc::new(Mutex::new(Vec::new()));
     let (started, cut) = (Arc::clone(&running), Arc::clone(&log));
@@ -94,7 +94,7 @@ async fn the_kit_s_shutdown_while_a_tool_runs_crosses_as_cancel_and_ends_the_cal
         }
     });
     running.notified().await;
-    kit.shutdown().await;
+    kit.close().await;
     let asked = asking.await.unwrap();
     let crossed = crossed(&tap);
     let tail: Vec<&str> = crossed
@@ -207,7 +207,7 @@ async fn a_streaming_reader_that_leaves_crosses_as_close() {
     }
     let tap = TurnTap::on(&kit);
     asks(&kit, "What is it?").await;
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let crossed = crossed(&tap);
     let stored: Vec<(String, Option<Value>)> = kit
         .store()

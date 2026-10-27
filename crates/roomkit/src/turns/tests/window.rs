@@ -14,7 +14,7 @@ use crate::turns::pulls::PULL_WINDOW;
 /// A streaming target that reads one delta of an answer of ten thousand,
 /// then stops pulling: the executor reads ahead within the window the
 /// owner granted, 64 deltas, and waits there, the turn alive and beating,
-/// until the kit's shutdown cuts it.
+/// until the kit's close cuts it.
 #[tokio::test(start_paused = true)]
 async fn a_reader_that_stops_pulling_holds_the_executor_at_its_window() {
     let agent = Streaming::new(10_000);
@@ -26,7 +26,7 @@ async fn a_reader_that_stops_pulling_holds_the_executor_at_its_window() {
     let produced = agent.produced.load(Ordering::SeqCst);
     let items = timed.count(Carried::Frame, "item");
     let pulls = timed.count(Carried::Control, "pull");
-    kit.shutdown().await;
+    kit.close().await;
     assert_eq!(
         (still_reading, produced, items, pulls),
         (true, window(), window(), 1)

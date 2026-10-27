@@ -131,14 +131,14 @@ impl DeliveryHandle {
     /// # Errors
     ///
     /// Returns what a call that waited would have returned past its commit:
-    /// [`KitError::ShutDown`] for a delivery the kit's shutdown ended, what
+    /// [`KitError::ShutDown`] for a delivery the kit's close cut, what
     /// was committed standing, or a defect of this crate, as
     /// [`KitError::Stalled`] is.
     pub async fn wait(self) -> Result<InboundResult, KitError> {
         let Some(run) = self.run.filter(|_| !waits_for_itself(&self.decided)) else {
             return Ok(self.decided.into());
         };
-        Ok(driver::ended(run.await, self.tasks.is_closing())??.into())
+        Ok(driver::ended(run.await, self.tasks.is_cut())??.into())
     }
 }
 

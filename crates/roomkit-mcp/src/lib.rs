@@ -37,7 +37,7 @@
 //! let kit = RoomKit::new(Default::default());
 //! kit.register_channel(agent)?;
 //! // ...
-//! kit.shutdown().await; // the server's process stops
+//! kit.close().await; // the server's process stops
 //! # Ok(())
 //! # }
 //! ```

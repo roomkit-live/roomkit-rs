@@ -23,6 +23,7 @@ use crate::kit::Inner;
 use crate::router;
 use crate::store::ConversationStore;
 use crate::stream::{self, KeptStream, Stops};
+use crate::tasks::Kind;
 use crate::turn::TurnKit;
 use crate::turns::Answer;
 
@@ -278,7 +279,7 @@ pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notic
                 };
                 let observing =
                     in_its_work(trigger, &event.room_id, after_delivery.as_ref(), observing);
-                if inner.tasks.spawn(observing).is_none() {
+                if inner.tasks.spawn(Kind::Observer, observing).is_none() {
                     tracing::debug!(
                         target: "roomkit::hooks",
                         ?trigger,

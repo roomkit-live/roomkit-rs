@@ -118,7 +118,7 @@ pub use self::kit::{
     DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions,
     ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions, PostOptions,
     ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitOptions,
-    SendEventOptions, SetAccessOptions, SetVisibilityOptions, TimerSweeper, UnmuteOptions,
+    SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
     UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 pub use self::registered::RegisteredChannel;

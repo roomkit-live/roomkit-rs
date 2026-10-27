@@ -15,7 +15,7 @@ use crate::ConversationStore;
 async fn ending_on(end: Metadata) -> (Option<String>, Option<Value>) {
     let kit = kit_with(Streaming::ending(2, end)).await;
     let result = says(&kit, "Hi").await.unwrap();
-    kit.idle().await;
+    crate::testing::idle(&kit).await;
     let last = kit
         .store()
         .list_events(&room_id(), &received())

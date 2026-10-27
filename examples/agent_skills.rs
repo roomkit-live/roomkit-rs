@@ -208,13 +208,12 @@ impl Shop {
                 },
             )
             .await?;
-        self.kit.idle().await;
         Ok(())
     }
 
     /// Closes the shop; returns the answers Alice received.
     async fn close(self) -> Vec<String> {
-        self.kit.shutdown().await;
+        self.kit.close().await;
         self.sms.texts()
     }
 }

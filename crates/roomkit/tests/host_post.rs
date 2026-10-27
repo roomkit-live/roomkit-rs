@@ -283,7 +283,7 @@ async fn a_post_texts_the_correspondent_and_solicits_no_agent() {
             .post(&room_id(), text("Your order shipped."), post)
             .await
             .unwrap();
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let host = binding_of(&kit, "host").await.unwrap();
         assert_eq!(
             (
@@ -344,7 +344,7 @@ async fn a_post_addressed_to_an_agent_is_answered_and_names_its_speaker() {
     )
     .await
     .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let asked = agent.asked();
     assert_eq!(
         (
@@ -550,7 +550,7 @@ async fn the_host_s_words_are_a_person_s_message_to_the_room_s_routing() {
                 .await
                 .unwrap();
         }
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let texted = sms
             .sent()
             .contains(&(CUSTOMER.to_owned(), "Any question?".to_owned()));
@@ -744,7 +744,7 @@ async fn a_refused_post_writes_nothing() {
         };
         arguments(&mut post);
         let posted = kit.post(&room_id(), text("Never sent."), post).await;
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let error = match posted {
             Err(error) => error,
             Ok(event) => panic!("{case}: posted {event:?}"),
@@ -808,7 +808,7 @@ async fn a_post_speaks_as_a_participant_its_host_channel_reaches() {
             .post(&room_id(), text("Your order shipped."), post)
             .await
             .unwrap();
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         spoken.push((
             event.source.participant_id.map(String::from),
             sms.sent().len(),
@@ -836,7 +836,7 @@ async fn a_message_on_the_host_channel_is_refused_before_anything_is_written() {
     kit.post(&room_id(), text("Notice."), PostOptions::default())
         .await
         .unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     let before = written(&kit).await;
     let message = || InboundMessage::new(channel("host"), "x", text("hi"));
     let named = kit
@@ -957,7 +957,7 @@ async fn a_post_replayed_with_its_key_is_not_texted_again() {
         let shipped = || text("Your order shipped.");
         let first = kit.post(&room_id(), shipped(), post()).await.unwrap();
         let again = kit.post(&room_id(), shipped(), post()).await.unwrap();
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         replays.push((
             (sms.sent().len(), again.id == first.id),
             (texts, texts == 1),
@@ -1024,7 +1024,7 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
         .await
         .unwrap()
         .unwrap();
-        kit.idle().await;
+        roomkit::testing::idle(&kit).await;
         let posted = posted.lock().unwrap().clone();
         let host: Vec<(String, Option<String>)> = kit
             .store()
@@ -1370,7 +1370,7 @@ async fn a_first_post_s_attach_spends_the_deadline_its_message_shares() {
     tokio::time::sleep(Duration::from_millis(80)).await;
     kit.store().binding.open.notify_one();
     let refused = posting.await.unwrap();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     assert_eq!(
         (
             refused,
@@ -1410,7 +1410,7 @@ async fn a_cancelled_first_post_attaches_the_host_channel_to_its_end() {
     posting.abort();
     assert!(posting.await.is_err_and(|ended| ended.is_cancelled()));
     kit.store().binding.open.notify_one();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     assert_eq!(
         (
             binding_of(&kit, "host").await.is_some(),
@@ -1434,7 +1434,7 @@ async fn a_first_post_s_read_of_its_room_waits_within_process_timeout() {
         .post(&room_id(), text("Notice."), PostOptions::default())
         .await;
     kit.store().read.open.notify_one();
-    kit.idle().await;
+    roomkit::testing::idle(&kit).await;
     assert_eq!(
         (refused, written(&kit).await == before, sms.sent().len()),
         (
