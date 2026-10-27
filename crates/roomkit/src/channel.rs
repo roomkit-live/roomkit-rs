@@ -170,6 +170,16 @@ pub trait Channel: Send + Sync + 'static {
             }
         }
     }
+
+    /// Releases what the channel holds (RFC §6.1 `close`): the kit's
+    /// [`shutdown`](crate::RoomKit::shutdown) calls it once for each
+    /// channel registered then, in turn, after the turns running are cut. It
+    /// must not wait without bound on anything the channel does not own.
+    ///
+    /// The default releases nothing.
+    fn close(&self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 }
 
 /// The rows of `stream`, read to its end, and the failure it ended on.
@@ -219,6 +229,8 @@ pub(crate) trait DynChannel: Send + Sync {
         binding: ChannelBinding,
         context: RoomContext,
     ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>>;
+
+    fn close(&self) -> BoxFuture<'_, ()>;
 }
 
 impl<C: Channel> DynChannel for C {
@@ -256,5 +268,9 @@ impl<C: Channel> DynChannel for C {
         context: RoomContext,
     ) -> BoxFuture<'_, Result<ChannelOutput, ChannelError>> {
         Box::pin(Channel::deliver_stream(self, stream, binding, context))
+    }
+
+    fn close(&self) -> BoxFuture<'_, ()> {
+        Box::pin(Channel::close(self))
     }
 }

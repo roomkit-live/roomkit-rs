@@ -127,6 +127,9 @@ pub(crate) struct Inner<S> {
     events: broadcast::Sender<FrameworkEvent>,
     /// The turn backend every intelligence turn runs through (RFC §10.6).
     pub(crate) turns: Arc<Turns>,
+    /// Set once the channels were closed at the kit's shutdown: they are
+    /// closed once, a second shutdown joining the first.
+    channels_closed: tokio::sync::OnceCell<()>,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -168,6 +171,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 environment: RwLock::new(Arc::new(SystemEnvironment)),
                 events,
                 turns: Arc::default(),
+                channels_closed: tokio::sync::OnceCell::new(),
             }),
         }
     }
@@ -392,6 +396,24 @@ impl<S> Inner<S> {
 
     pub(crate) fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>> {
         read(&self.channels).get(channel_id).cloned()
+    }
+
+    /// Closes each channel registered now, in the order of their ids, one
+    /// after the other (RFC §6.1 `close`), once: a second call waits for the
+    /// first one's end.
+    pub(crate) async fn close_channels(&self) {
+        self.channels_closed
+            .get_or_init(|| async {
+                let mut channels: Vec<(ChannelId, Arc<dyn DynChannel>)> = read(&self.channels)
+                    .iter()
+                    .map(|(id, channel)| (id.clone(), Arc::clone(channel)))
+                    .collect();
+                channels.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+                for (_, channel) in channels {
+                    channel.close().await;
+                }
+            })
+            .await;
     }
 
     /// The kit's router, held only while the driver reads it.

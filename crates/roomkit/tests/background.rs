@@ -257,3 +257,51 @@ async fn a_call_made_after_the_shutdown_is_refused() {
         )
     );
 }
+
+/// A channel that records each close it is asked for into a shared log.
+struct Closing {
+    declaration: ChannelDeclaration,
+    closed: Arc<Mutex<Vec<String>>>,
+}
+
+impl Closing {
+    fn new(id: &str, closed: &Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            declaration: ChannelDeclaration::new(
+                channel(id),
+                ChannelType::WEBSOCKET,
+                ChannelCategory::Transport,
+                ChannelDirection::Bidirectional,
+            ),
+            closed: Arc::clone(closed),
+        }
+    }
+}
+
+impl Channel for Closing {
+    fn declaration(&self) -> ChannelDeclaration {
+        self.declaration.clone()
+    }
+
+    async fn close(&self) {
+        tokio::time::sleep(BRIEF).await;
+        let id = self.declaration.channel_id.as_str().to_owned();
+        self.closed.lock().unwrap().push(id);
+    }
+}
+
+/// The shutdown closes each channel registered, one after the other in the
+/// order of their ids (RFC §6.1 `close`), once: a second shutdown running
+/// beside the first joins it.
+#[tokio::test]
+async fn shutdown_closes_each_channel_once_in_the_order_of_their_ids() {
+    let kit = RoomKit::new();
+    let closed = Arc::new(Mutex::new(Vec::new()));
+    for id in ["ws_b", "ws_a"] {
+        kit.register_channel(Closing::new(id, &closed)).unwrap();
+    }
+    let (first, second) = tokio::join!(kit.shutdown(), kit.shutdown());
+    let ((), ()) = (first, second);
+    kit.shutdown().await;
+    assert_eq!(*closed.lock().unwrap(), ["ws_a", "ws_b"]);
+}

@@ -66,11 +66,15 @@ impl<S: ConversationStore> RoomKit<S> {
     /// text it was handed marked `cancelled` and each call it opened ended
     /// `cancelled`. The shutdown waits for that within twice the turns'
     /// cancel bound, 10 seconds by default; with no turn running, it waits
-    /// for nothing. Then the turn backend takes no more turns.
+    /// for nothing. Then the turn backend takes no more turns, and each
+    /// channel registered is closed ([`Channel::close`](crate::Channel::close)),
+    /// one after the other, once: an AI agent stops the MCP servers whose
+    /// tools it serves.
     pub async fn shutdown(&self) {
         self.inner.tasks.close();
         self.inner.turns.cut_all().await;
         self.inner.tasks.shut_down().await;
         self.inner.turns.close();
+        self.inner.close_channels().await;
     }
 }
