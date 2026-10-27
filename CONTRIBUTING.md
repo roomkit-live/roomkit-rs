@@ -34,6 +34,15 @@ minimum supported Rust version is the workspace's `rust-version`, written
 once in `Cargo.toml` (`make msrv-toolchain` installs it). CI checks the
 dependency graph against the security advisories every week.
 
+## Public API
+
+The public API is the Python implementation's, in Rust's terms (step 5,
+[docs/steps/step-05.md](docs/steps/step-05.md)). `make api-parity` reports,
+from rustdoc's HTML, what differs from Python's snapshot pinned in
+`api/python/` (`make api-sync` pins another roomkit commit), and
+`api/mapping.toml` holds what its rules do not give. A change to the public
+API keeps the report free of findings no entry covers, and of dead entries.
+
 ## Code
 
 - English everywhere: code, comments, documentation, examples, test data.

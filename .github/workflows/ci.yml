@@ -59,8 +59,26 @@ jobs:
       # The pinned Python snapshot's copies match their fingerprint; their
       # roomkit commit's check needs a roomkit checkout, and is skipped here.
       - run: make api-check-pin
-      # The tests of the rustdoc reader.
+      # The tests of the rustdoc reader and of the parity report.
       - run: make api-test
+
+  api-parity:
+    name: Public API parity report
+    runs-on: ubuntu-latest
+    # A report while step 5's lots remove its pending entries; lot 6 makes it
+    # a gate (docs/steps/step-05.md).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # Builds the docs (`make doc`), reads their HTML, and writes the report,
+      # the surface and the findings in target/api-parity.
+      - run: make api-parity
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: api-parity
+          path: target/api-parity/
 
   msrv:
     name: Minimum supported Rust version

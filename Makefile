@@ -7,7 +7,7 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin api-test
+.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin api-test api-parity
 
 all: conformance-check api-check-pin api-test fmt-check clippy test doc deny check-core-deps examples
 
@@ -171,6 +171,7 @@ turns-fixture:
 # commit in the roomkit checkout (ROOMKIT_DIR); ALLOW_UNPUSHED=1 takes one
 # origin/main does not hold yet, for a copy synced again before it is pushed.
 API_PYTHON := api/python
+API_REPORT := target/api-parity
 API_SNAPSHOT := public_api_names.json public_api_signatures.json
 ROOMKIT_REF ?= origin/main
 PYTHON ?= python3
@@ -220,3 +221,14 @@ api-check-pin:
 # The tests of the reader and of the report, on fixtures: no build needed.
 api-test:
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m unittest discover -s scripts/tests
+
+# The parity report (docs/steps/step-05.md, lot 0): the public surface read
+# from rustdoc's HTML, against the pinned snapshot and api/mapping.toml. It
+# exits 0 whatever it finds, and fails on an input it cannot read whole.
+# The report, the surface and the findings as JSON stay in target/api-parity.
+api-parity: doc
+	@mkdir -p $(API_REPORT)
+	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) scripts/rs-surface.py --doc target/doc > $(API_REPORT)/rs-surface.json
+	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) scripts/api-parity.py $(API_REPORT)/rs-surface.json \
+		--json $(API_REPORT)/report.json > $(API_REPORT)/report.txt
+	@cat $(API_REPORT)/report.txt

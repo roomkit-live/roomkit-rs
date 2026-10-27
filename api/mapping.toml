@@ -1,0 +1,37 @@
+# How roomkit-rs's public API maps to the Python implementation's
+# (docs/steps/step-05.md, "The architecture table"), read by
+# scripts/api-parity.py (`make api-parity`) against the snapshot pinned in
+# api/python/.
+#
+# The rules below apply with no entry; scripts/api-parity.py's docstring says
+# what each one does. The entries cover what a rule does not give:
+# - [[map]]: the Python counterpart of a Rust item or member, `params` its
+#   parameters' Python names, `py_spec` the hash of the Python spec it was
+#   written against (`scripts/api-parity.py --spec NAME`);
+# - [[exception]]: a Rust form the architecture table approves, with its date
+#   and reason, `until` for one dated until a Python release;
+# - [[missing]]: a Python name of a class in scope that Rust lacks, not in
+#   0.x, with its reason;
+# - [[pending]]: a known difference not removed yet, with the lot of step 5
+#   that removes it ("?" while the plan names none). Lot 6 requires none left.
+# An entry names a `rust` or a `python` path, and some of its `members` or
+# `params`, or the whole item: `roomkit::RoomKit::attach`,
+# `roomkit.RoomKit.attach_channel(category)`.
+
+[rules]
+# Rust's casing of an acronym in a type's name (rust-lang RFC 430).
+acronyms = { Ai = "AI", OpenAi = "OpenAI", Mcp = "MCP", Sqlite = "SQLite" }
+# What a `Duration` drops from a Python name (decision 3).
+duration_suffix = "_seconds"
+
+# The Python packages a Rust module's items are looked for in, in order. A
+# module not listed takes its closest listed parent's.
+[rules.packages]
+roomkit = ["roomkit"]
+"roomkit::model" = ["roomkit", "roomkit.models"]
+"roomkit::testing" = ["roomkit.testing"]
+"roomkit::tools" = ["roomkit.tools"]
+roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skills"]
+roomkit_openai = ["roomkit.providers.openai"]
+roomkit_mcp = ["roomkit.tools"]
+roomkit_sqlite = ["roomkit", "roomkit.store"]
