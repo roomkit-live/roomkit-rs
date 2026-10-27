@@ -104,6 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let message = InboundMessage::new(sms.id().clone(), "+15551234567", EventContent::text("Bonjour"));
     kit.process_inbound(message, ProcessInboundOptions { room_id: Some(room), ..Default::default() }).await?;
     assert_eq!(sms.texts(), ["You said: Bonjour"]);
+    kit.close().await;
     Ok(())
 }
 ```
@@ -116,7 +117,7 @@ A service depends on `roomkit` and on the crates it needs beside it:
   `ConversationStore` and `InboundRoomRouter` traits, the hooks and the
   typed tool hooks, streamed delivery, the in-memory turn backend, the
   in-memory store, and the test channels of `roomkit::testing`. It
-  re-exports the core's model whole as `roomkit::model`.
+  re-exports the core's model as `roomkit::model`.
 - `roomkit-ai`: `AiAgent`, the AI channel over any `AiProvider`: the tool
   loop, `Toolset`, `Tools` and `ToolPolicy`, streamed answers, skills from
   the host's directories, an MCP server's instructions, and a scripted
