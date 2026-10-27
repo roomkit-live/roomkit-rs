@@ -1,2 +1,3 @@
 /target
 *.profraw
+__pycache__/

@@ -26,8 +26,9 @@ denied, tests, documentation with warnings denied, `cargo deny` (it fails
 when cargo-deny is not installed: `cargo install cargo-deny --locked`), the
 check that `roomkit-core` depends, on every target, only on the crates its
 allow list names (`scripts/check-core-deps.sh`), every example, each of
-which checks what it shows (`make examples`), and the pin of the Python
-implementation's public API snapshot (`make api-check-pin`). Run `make msrv`
+which checks what it shows (`make examples`), the pin of the Python
+implementation's public API snapshot (`make api-check-pin`) and the tests of
+the parity report's scripts (`make api-test`). Run `make msrv`
 when a change adds a dependency or uses a recent standard library API: the
 minimum supported Rust version is the workspace's `rust-version`, written
 once in `Cargo.toml` (`make msrv-toolchain` installs it). CI checks the

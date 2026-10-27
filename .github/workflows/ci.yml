@@ -59,6 +59,8 @@ jobs:
       # The pinned Python snapshot's copies match their fingerprint; their
       # roomkit commit's check needs a roomkit checkout, and is skipped here.
       - run: make api-check-pin
+      # The tests of the rustdoc reader.
+      - run: make api-test
 
   msrv:
     name: Minimum supported Rust version

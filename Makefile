@@ -7,9 +7,9 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin
+.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin api-test
 
-all: conformance-check api-check-pin fmt-check clippy test doc deny check-core-deps examples
+all: conformance-check api-check-pin api-test fmt-check clippy test doc deny check-core-deps examples
 
 fmt:
 	$(CARGO) fmt --all
@@ -173,6 +173,7 @@ turns-fixture:
 API_PYTHON := api/python
 API_SNAPSHOT := public_api_names.json public_api_signatures.json
 ROOMKIT_REF ?= origin/main
+PYTHON ?= python3
 
 api-sync:
 	@commit=$$(git -C "$(ROOMKIT_DIR)" rev-parse --verify "$(ROOMKIT_REF)^{commit}") && \
@@ -215,3 +216,7 @@ api-check-pin:
 		echo "api-check-pin: roomkit $$commit is not on origin/main: push it, fetch, and run make api-sync"; \
 		exit 1; \
 	fi
+
+# The tests of the reader and of the report, on fixtures: no build needed.
+api-test:
+	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m unittest discover -s scripts/tests
