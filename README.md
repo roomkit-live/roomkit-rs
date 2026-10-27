@@ -225,7 +225,9 @@ A server:
 - [Step 3](docs/steps/step-03.md): the Rust core behind the Python API,
   stopped after milestone 2.
 - [Step 4](docs/steps/step-04.md): a first usable version, an agent on a
-  server, persisted, done: 0.1.0.
+  server, persisted, done; the tag waits for step 5.
+- [Step 5](docs/steps/step-05.md): one public API, roomkit-rs's in
+  Python's terms, then the tag v0.1.0; in progress.
 - [Changelog](CHANGELOG.md): what 0.1.0 holds.
 - [RFC gaps](docs/rfc-gaps.md): what the specification leaves open, and the
   decisions taken here.
