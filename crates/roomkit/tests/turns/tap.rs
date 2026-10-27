@@ -9,7 +9,9 @@
 //! `tests/fixtures/turns/rust-case1.jsonl`, the ids the run draws at
 //! random named in order: the test checks the file is what the turn
 //! carries, and `ROOMKIT_WRITE_TURNS_FIXTURE=1` writes it again. Python
-//! parses it with its own models (`read_rust.py`, `make turns-fixture`).
+//! parses it with its own models (`read_rust.py`) in `make turns-fixture`
+//! only, which runs this test first: a change to the file is read by
+//! Python once that target runs, not by `make all`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

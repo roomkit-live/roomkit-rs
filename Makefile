@@ -138,9 +138,10 @@ sqlite-fixture:
 # with the interpreter of a roomkit checkout (ROOMKIT_DIR), whose commit, on
 # roomkit's origin/main, is recorded in tests/fixtures/turns/ROOMKIT_COMMIT,
 # and the file's fingerprint in tests/fixtures/turns/FIXTURE_SHA256, which
-# the test checks; tests/fixtures/turns/read_rust.py then reads
-# rust-case1.jsonl with Python's own models and fails on any message they
-# refuse.
+# the test checks; tap.rs then checks rust-case1.jsonl is what the turn
+# carries, and tests/fixtures/turns/read_rust.py reads it with Python's own
+# models and fails on any message they refuse. That read runs here only,
+# not in `make all`.
 TURNS_FIXTURES := crates/roomkit/tests/fixtures/turns
 
 turns-fixture:
@@ -156,5 +157,6 @@ turns-fixture:
 	echo "$$commit" > $(TURNS_FIXTURES)/ROOMKIT_COMMIT && \
 	sha256sum $(TURNS_FIXTURES)/python-case1.jsonl | cut -c1-64 > $(TURNS_FIXTURES)/FIXTURE_SHA256 && \
 	echo "turns fixture written by roomkit $$commit" && \
+	$(CARGO) test -p roomkit --test turns --locked the_probe_s_turn_carries_python_s_messages && \
 	PYTHONDONTWRITEBYTECODE=1 "$(ROOMKIT_DIR)/.venv/bin/python" -I \
 		$(TURNS_FIXTURES)/read_rust.py $(TURNS_FIXTURES)/rust-case1.jsonl
