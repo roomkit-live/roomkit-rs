@@ -4,13 +4,13 @@
 use std::fmt;
 use std::sync::Arc;
 
-use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::async_rw::AsyncRwTransport;
+use rmcp::{ClientCacheConfig, ServiceExt};
 use roomkit::model::ToolCall;
 use roomkit_ai::{ToolContext, ToolDefinition, ToolError, ToolOutput, Toolset};
-use tokio::process::{ChildStdin, ChildStdout};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::command::McpCommand;
@@ -185,12 +185,16 @@ impl McpServer {
 
 /// The MCP handshake over the server's output and input, then the listing
 /// of its tools; the service is ended if the listing fails.
-async fn handshake(
-    stdout: ChildStdout,
-    stdin: ChildStdin,
+async fn handshake<R, W>(
+    output: R,
+    input: W,
     program: &str,
-) -> Result<(RunningService<RoleClient, ()>, Vec<ToolDefinition>), McpError> {
-    let transport = AsyncRwTransport::new_client(stdout, stdin).with_max_line_length(MESSAGE_LIMIT);
+) -> Result<(RunningService<RoleClient, ()>, Vec<ToolDefinition>), McpError>
+where
+    R: AsyncRead + Send + Unpin + 'static,
+    W: AsyncWrite + Send + Unpin + 'static,
+{
+    let transport = AsyncRwTransport::new_client(output, input).with_max_line_length(MESSAGE_LIMIT);
     let service =
         ().serve(transport)
             .await
@@ -198,6 +202,13 @@ async fn handshake(
                 program: program.to_owned(),
                 message: bounded_message(&error.to_string()),
             })?;
+    // rmcp keeps each page a server marks fresh (`ttlMs`) for as long as
+    // the connection is open; a connection lists once, and keeps only the
+    // tools it takes.
+    service
+        .peer()
+        .set_response_cache_config(ClientCacheConfig::disabled())
+        .await;
     match listing::tools(service.peer(), program).await {
         Ok(tools) => Ok((service, tools)),
         Err(error) => {
@@ -241,5 +252,73 @@ impl fmt::Debug for McpServer {
             .field("tools", &names)
             .field("closed", &self.inner.closed.initialized())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use pretty_assertions::assert_eq;
+    use serde_json::{Value, json};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
+
+    use super::*;
+
+    /// A server on `stream` whose every listing says it stays fresh for a
+    /// day (`ttlMs`), counting the listings it is asked for.
+    async fn fresh_for_a_day(stream: DuplexStream, listings: Arc<AtomicUsize>) {
+        let (read, mut write) = tokio::io::split(stream);
+        let mut lines = BufReader::new(read).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let Some(id) = request.get("id").cloned() else {
+                continue;
+            };
+            let result = match request["method"].as_str() {
+                Some("initialize") => json!({
+                    "protocolVersion": request["params"]["protocolVersion"],
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "fresh", "version": "0" },
+                }),
+                Some("tools/list") => {
+                    listings.fetch_add(1, Ordering::SeqCst);
+                    json!({
+                        "tools": [{ "name": "echo", "inputSchema": { "type": "object" } }],
+                        "ttlMs": 86_400_000,
+                    })
+                }
+                _ => json!({}),
+            };
+            let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+            write
+                .write_all(format!("{reply}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+    }
+
+    /// The listing keeps nothing in rmcp's response cache, though the server
+    /// says it stays fresh: a connection lists once, and a cached page would
+    /// stay resident for as long as it is open. Listing again reaches the
+    /// server.
+    #[tokio::test]
+    async fn a_listing_that_says_it_stays_fresh_leaves_nothing_cached() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let listings = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(fresh_for_a_day(server, Arc::clone(&listings)));
+        let (read, write) = tokio::io::split(client);
+        let (service, tools) = handshake(read, write, "fresh").await.unwrap();
+        let again = service.peer().list_tools(None).await.unwrap();
+        let _ended = service.cancel().await;
+        assert_eq!(
+            (
+                tools.len(),
+                again.tools.len(),
+                listings.load(Ordering::SeqCst)
+            ),
+            (1, 1, 2)
+        );
     }
 }
