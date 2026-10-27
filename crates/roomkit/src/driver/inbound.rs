@@ -58,6 +58,16 @@ pub(crate) struct Ran {
     pub(crate) delivery: Option<JoinHandle<InboundOutput>>,
 }
 
+impl Ran {
+    /// The output of a call whose run ended, or never started.
+    fn ended(output: InboundOutput) -> Self {
+        Self {
+            output,
+            delivery: None,
+        }
+    }
+}
+
 /// The caller of an inbound call's run, as the run sees it: where the
 /// call's decision goes, whether the call is decided, and whether its
 /// caller still waits (decision 1 of step 2b).
@@ -240,24 +250,11 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     inbound: Inbound,
     defer: bool,
 ) -> Ran {
-    let ran = |output| Ran {
-        output,
-        delivery: None,
-    };
     if let Err(error) = inner.open() {
-        return ran(Err(error));
+        return Ran::ended(Err(error));
     }
     let context = ExecutionContext::current();
-    let inbound = match room_id.and_then(|room_id| context.budget(room_id)) {
-        // Into the room a running delivery delivers in.
-        Some(draw) => inbound.drawing_on(draw),
-        // Routed, or into another room: charged once step 2 knows its final
-        // room, the delivering room or one it creates (gap G-070).
-        None => match context.delivery() {
-            Some((delivering, draw)) => inbound.drawing_on_from_delivery(delivering, draw),
-            None => inbound,
-        },
-    };
+    let inbound = charged(inbound, room_id, &context);
     let (answer, decided) = oneshot::channel();
     let kit = Arc::clone(inner);
     let run = async move {
@@ -278,15 +275,30 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     // The kit tracks the run. Dropped, the handle detaches it: the run
     // itself stops when its caller is gone before the call's decision.
     let Some(mut task) = inner.tasks.spawn(Kind::Work, context.scope(run)) else {
-        return ran(Err(KitError::ShutDown));
+        return Ran::ended(Err(KitError::ShutDown));
     };
     tokio::select! {
         biased;
-        joined = &mut task => ran(ended(joined, inner.tasks.is_cut())),
+        joined = &mut task => Ran::ended(ended(joined, inner.tasks.is_cut())),
         Ok(answer) = decided => Ran {
             output: answer,
             delivery: defer.then_some(task),
         },
+    }
+}
+
+/// `inbound`, a call into `room_id` or routed, charged to the reentry
+/// budget it draws on in `context`: the budget of the room a running
+/// delivery delivers in, or, routed or into another room, the delivering
+/// cascade's once step 2 knows its final room, the delivering room or one
+/// it creates (gap G-070).
+fn charged(inbound: Inbound, room_id: Option<&RoomId>, context: &ExecutionContext) -> Inbound {
+    if let Some(draw) = room_id.and_then(|room_id| context.budget(room_id)) {
+        return inbound.drawing_on(draw);
+    }
+    match context.delivery() {
+        Some((delivering, draw)) => inbound.drawing_on_from_delivery(delivering, draw),
+        None => inbound,
     }
 }
 
