@@ -1232,9 +1232,7 @@ impl Sim {
             identity.organization_id.as_deref() == organization
                 && identity.uses(channel_type, address)
         });
-        Outcome::Store(StoreOutcome::Resolved(
-            identity.map(|identity| identity.id.clone()),
-        ))
+        Outcome::Store(StoreOutcome::Resolved(identity.cloned()))
     }
 
     /// The scripted router's next answer; no room once they are spent. The

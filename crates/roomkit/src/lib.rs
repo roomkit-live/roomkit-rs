@@ -6,7 +6,8 @@
 //! against the registered channels, hooks and store.
 //!
 //! - [`Channel`]: implement it for a transport or an intelligence channel.
-//! - [`RoomKit`]: register channels and hooks, run rooms through their
+//! - [`RoomKit`], built with [`RoomKitOptions`], the Python
+//!   implementation's constructor keywords: register channels and hooks, run rooms through their
 //!   lifecycle and timers, process messages into the room they name or the
 //!   room their router finds, inject events and commit records directly,
 //!   wait for the work the kit runs in the background or end it. A
@@ -19,12 +20,12 @@
 //!   a channel that calls into the kit holding it.
 //! - [`OrganizationKit`]: the kit acting for one organization, every call
 //!   reaching its rooms only (RFC §17.2); the kit itself acts for none.
-//! - [`InboundRoomRouter`]: a routing strategy; [`DefaultRouter`] is the
-//!   RFC's.
+//! - [`InboundRoomRouter`]: a routing strategy; [`DefaultInboundRoomRouter`]
+//!   is the RFC's.
 //! - [`ConversationStore`]: where rooms and their timelines live (RFC §14),
 //!   [`InMemoryStore`] by default.
-//! - [`testing`]: a recording transport and an echo agent, for tests and
-//!   examples.
+//! - [`testing`]: a recording transport and an echo agent, and a kit on a
+//!   clock and ids a test sets, for tests and examples.
 //! - [`transcript`]: the conversation an agent's turn hands its model, each
 //!   message in its author's role and labelled by its speaker as RFC §6.4
 //!   requires of an AI channel, and the tool rounds within a turn.
@@ -36,15 +37,15 @@
 //! - The turn backend (RFC §10.6): every intelligence turn runs through the
 //!   kit's in-memory backend, between the kit, the room's owner, and the
 //!   kit's own turn executor, as serialized messages; its bounds are
-//!   [`TurnTimeouts`] ([`RoomKit::set_turn_timeouts`]), a failure it carries
-//!   a [`TurnError`], and [`testing::TurnTap`] shows what crosses.
+//!   [`TurnTimeouts`], a failure it carries a [`TurnError`], and
+//!   [`testing::TurnTap`] shows what crosses.
 //!
 //! The core's model is re-exported whole as [`model`]. Of its operations
 //! and rules, only what a caller names is: the results and errors of the
 //! kit's calls, the framework events, what a channel declares and how it
-//! writes its addresses, the routing query a router answers, what a store's
-//! commit writes, the environment, and the rules that read an event; the
-//! protocol the driver speaks with the core stays the core's.
+//! writes its addresses, what a store's commit writes, and the rules that
+//! read an event; the protocol the driver speaks with the core stays the
+//! core's.
 
 mod channel;
 mod context;
@@ -57,6 +58,7 @@ mod host;
 mod kit;
 mod locks;
 mod queues;
+mod registered;
 mod router;
 mod store;
 mod stream;
@@ -68,10 +70,9 @@ mod turns;
 
 pub use roomkit_core::model;
 pub use roomkit_core::ops::{
-    CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, ConfigError, Environment,
-    FrameworkEvent, InboundError, InboundResult, LifecycleChange, LifecycleError, LifecyclePayload,
-    MutationError, ProtocolError, RefusedOperation, SequentialEnvironment, TransitionReason,
-    default_inbound_event,
+    CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, ConfigError, FrameworkEvent,
+    InboundError, InboundResult, LifecycleChange, LifecycleError, LifecyclePayload, MutationError,
+    ProtocolError, RefusedOperation, TransitionReason, default_inbound_event,
 };
 pub use roomkit_core::rules::addresses::{
     AddressForm, Addressing, CountryCode, InvalidCountryCode,
@@ -82,19 +83,23 @@ pub use roomkit_core::rules::hook_registry::{
 };
 pub use roomkit_core::rules::instructions::turn_context;
 pub use roomkit_core::rules::lifecycle::Transition;
-pub use roomkit_core::rules::routing::{RouteQuery, Sender as RouteSender};
 pub use roomkit_core::rules::transcoding::text_of;
 pub use roomkit_core::rules::transcript;
 pub use roomkit_core::rules::{visibility_allows, visible_events};
 
 pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::context::keep_context;
-pub use self::environment::SystemEnvironment;
 pub use self::error::KitError;
 pub use self::hooks::{HookError, HookFuture, HookHandler, HookReturn};
 pub use self::host::HostChannel;
-pub use self::kit::{OrganizationKit, RoomKit, TimelineQuery, TimerSweeper, WeakRoomKit};
-pub use self::router::{DefaultRouter, InboundRoomRouter, RouterError};
+pub use self::kit::{
+    OrganizationKit, RoomKit, RoomKitOptions, TimelineQuery, TimerSweeper, WeakRoomKit,
+};
+pub use self::registered::RegisteredChannel;
+pub use self::router::{
+    ChannelOf, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, InboundRoomRouter,
+    RouteOptions, RouterError, RouterFuture,
+};
 pub use self::store::{
     ConversationStore, EventFilter, EventQuery, InMemoryStore, RoomCounters, RoomFilter,
     StoreError, StoreFailure, TargetUpdate,

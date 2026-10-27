@@ -186,6 +186,42 @@ approved = "2026-10-27"
 until = "roomkit.skills.SkillManifestTooLargeError"
 reason = "decision 19: the skills manifest bound stays, Rust is right and Python aligns (RMK-1010 item 6); until Python's skill error family gains the class"
 
+[[exception]]
+rust = "roomkit::RoomKitOptions"
+members = ["with_store"]
+approved = "2026-10-27"
+reason = "RoomKit(store=SomeStore()): the store is the kit's type parameter, which a struct update cannot change"
+
+[[exception]]
+rust = "roomkit::RouterFuture"
+approved = "2026-10-27"
+reason = "the kit holds its router as a trait object: InboundRoomRouter::route returns a boxed future"
+
+[[exception]]
+rust = "roomkit::ChannelOf"
+approved = "2026-10-27"
+reason = "channel_of: Callable[[str], Channel | None]; a trait with async methods is not object-safe, so it returns the kit's view, a RegisteredChannel"
+
+[[exception]]
+rust = "roomkit::RegisteredChannel"
+approved = "2026-10-27"
+reason = "what ChannelOf returns: a registered channel's synchronous members, as an object, since a trait with async methods is not object-safe"
+
+[[exception]]
+rust = "roomkit::testing::Environment"
+approved = "2026-10-27"
+reason = "decision 5: Python's tests patch the clock and uuid4; the sans-IO core takes them as an input"
+
+[[exception]]
+rust = "roomkit::testing::SequentialEnvironment"
+approved = "2026-10-27"
+reason = "decision 5: Python's tests patch the clock and uuid4; the sans-IO core takes them as an input"
+
+[[exception]]
+rust = "roomkit::testing::kit_with_environment"
+approved = "2026-10-27"
+reason = "decision 5: Python's tests patch the clock and uuid4; the sans-IO core takes them as an input"
+
 # Python names of classes in scope that Rust lacks: not in 0.x (rule 5).
 
 [[missing]]
@@ -451,15 +487,6 @@ reason = "decision 7: defer_delivery and the DeliveryHandle InboundResult.delive
 
 [[pending]]
 lot = 1
-python = "roomkit.InboundRoomRouter.route"
-params = [
-    "channel_id", "channel_type", "participant_id", "channel_data",
-    "organization_id", "identity",
-]
-reason = "lot 4's Routing, landing with lot 1: route(channel_id, channel_type, RouteOptions), DefaultInboundRoomRouter::new(store, options)"
-
-[[pending]]
-lot = 1
 python = "roomkit.RoomKit"
 members = ["close"]
 reason = "decision 15: run_timers / TimerSweeper leave the public API, idle becomes a hidden test seam, shutdown becomes a draining close"
@@ -473,15 +500,6 @@ members = [
     "list_members", "set_access", "set_visibility", "update_binding_metadata",
 ]
 reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit.__init__"
-params = [
-    "store", "inbound_router", "max_chain_depth", "agent_response_policy",
-    "process_timeout",
-]
-reason = "decision 2: RoomKit::new(RoomKitOptions) with Python's constructor keywords; the set_* methods go"
 
 [[pending]]
 lot = 1
@@ -574,22 +592,6 @@ reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional req
 
 [[pending]]
 lot = 1
-rust = "roomkit::DefaultRouter"
-reason = "lot 4's Routing, landing with lot 1: route(channel_id, channel_type, RouteOptions), DefaultInboundRoomRouter::new(store, options)"
-
-[[pending]]
-lot = 1
-rust = "roomkit::Environment"
-reason = "decision 5: Environment and SequentialEnvironment move to roomkit::testing (a table exception), SystemEnvironment becomes crate-private"
-
-[[pending]]
-lot = 1
-rust = "roomkit::InboundRoomRouter::route"
-params = ["store", "query"]
-reason = "lot 4's Routing, landing with lot 1: route(channel_id, channel_type, RouteOptions), DefaultInboundRoomRouter::new(store, options)"
-
-[[pending]]
-lot = 1
 rust = "roomkit::OrganizationKit"
 reason = "decision 6: organization_id in each call's options; for_organization and OrganizationKit go"
 
@@ -598,15 +600,6 @@ lot = 1
 rust = "roomkit::RoomKit"
 members = ["idle", "shutdown", "run_timers"]
 reason = "decision 15: run_timers / TimerSweeper leave the public API, idle becomes a hidden test seam, shutdown becomes a draining close"
-
-[[pending]]
-lot = 1
-rust = "roomkit::RoomKit"
-members = [
-    "with_store", "set_environment", "set_turn_timeouts",
-    "set_max_chain_depth", "set_process_timeout", "set_router",
-]
-reason = "decision 2: RoomKit::new(RoomKitOptions) with Python's constructor keywords; the set_* methods go"
 
 [[pending]]
 lot = 1
@@ -661,26 +654,6 @@ reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional req
 
 [[pending]]
 lot = 1
-rust = "roomkit::RouteQuery"
-reason = "lot 4's Routing, landing with lot 1: route(channel_id, channel_type, RouteOptions), DefaultInboundRoomRouter::new(store, options)"
-
-[[pending]]
-lot = 1
-rust = "roomkit::RouteSender"
-reason = "lot 4's Routing, landing with lot 1: route(channel_id, channel_type, RouteOptions), DefaultInboundRoomRouter::new(store, options)"
-
-[[pending]]
-lot = 1
-rust = "roomkit::SequentialEnvironment"
-reason = "decision 5: Environment and SequentialEnvironment move to roomkit::testing (a table exception), SystemEnvironment becomes crate-private"
-
-[[pending]]
-lot = 1
-rust = "roomkit::SystemEnvironment"
-reason = "decision 5: Environment and SequentialEnvironment move to roomkit::testing (a table exception), SystemEnvironment becomes crate-private"
-
-[[pending]]
-lot = 1
 rust = "roomkit::TimelineQuery"
 reason = "decisions 1, 6, 7: the kit's calls take Python's names, positional required parameters and a <Method>Options"
 
@@ -718,12 +691,6 @@ reason = "decision 1: kit parameters, not models; they become lot 1's options st
 lot = 1
 rust = "roomkit::model::RoomOptions"
 reason = "decision 1: kit parameters, not models; they become lot 1's options structs and leave roomkit's re-exports"
-
-[[pending]]
-lot = 1
-python = "roomkit.RoomKit"
-members = ["get_channel"]
-reason = "lot 1: get_channel returns the registered channel (lot 4's RegisteredChannel)"
 
 [[pending]]
 lot = 2

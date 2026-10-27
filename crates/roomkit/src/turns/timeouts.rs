@@ -10,7 +10,7 @@ use tokio::time::{Instant, Interval, MissedTickBehavior};
 const SHORTEST: Duration = Duration::from_millis(1);
 
 /// The bounds both sides of a turn keep (RFC §10.6.8), the RFC's defaults
-/// unless the host sets others ([`RoomKit::set_turn_timeouts`](crate::RoomKit::set_turn_timeouts)).
+/// unless a test sets others (`roomkit::testing::set_turn_timeouts`).
 ///
 /// - `accept`: how long the owner waits for an executor to take a turn, 10
 ///   seconds; the kit's own executor takes it at once, and a turn no

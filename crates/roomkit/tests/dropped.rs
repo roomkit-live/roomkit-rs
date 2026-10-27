@@ -19,7 +19,7 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     ConversationStore, EventFilter, EventQuery, FrameworkEvent, InMemoryStore, RoomCounters,
-    RoomFilter, RoomKit, StoreError, TargetUpdate,
+    RoomFilter, RoomKit, RoomKitOptions, StoreError, TargetUpdate,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -283,7 +283,7 @@ impl ConversationStore for GatedStore {
 /// A kit over a gated store, with an SMS sender and a WebSocket reader
 /// attached to `room_1`.
 async fn gated_room() -> (RoomKit<GatedStore>, RecordingTransport) {
-    let kit = RoomKit::with_store(GatedStore::default());
+    let kit = RoomKit::new(RoomKitOptions::with_store(GatedStore::default()));
     let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();

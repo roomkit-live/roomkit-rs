@@ -35,7 +35,7 @@ use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId};
 use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, RoomKit};
+use roomkit::{ConversationStore, RoomKit, RoomKitOptions};
 use roomkit_ai::{SkillRegistry, ToolPolicy};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use roomkit_sqlite::SqliteStore;
@@ -164,7 +164,9 @@ impl Shop {
         let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?
             .with_skills(skills)?
             .with_tool_policy(ToolPolicy::new().deny("*"));
-        let kit = RoomKit::with_store(SqliteStore::open(database).await?);
+        let kit = RoomKit::new(RoomKitOptions::with_store(
+            SqliteStore::open(database).await?,
+        ));
         let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
         kit.register_channel(sms.clone())?;
         kit.register_channel(agent)?;

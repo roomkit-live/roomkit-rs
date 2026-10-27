@@ -324,7 +324,7 @@ impl<S: ConversationStore> OrganizationKit<S> {
     /// # Errors
     ///
     /// As [`RoomKit::process_inbound_in`], with
-    /// [`InboundError::OtherOrganization`](crate::InboundError::OtherOrganization)
+    /// [`InboundError::RoomNotFound`](crate::InboundError::RoomNotFound)
     /// for a room of another organization.
     pub async fn process_inbound_in(
         &self,

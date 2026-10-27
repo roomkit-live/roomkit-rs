@@ -40,7 +40,7 @@ use serde_json::Value;
 use super::addresses::{self, AddressForm, Addressing, Held, SYSTEM_SENDER, Written};
 use super::organizations;
 use crate::model::{
-    BindingUpdate, ChannelBinding, ChannelCategory, ChannelId, ChannelType, EventStatus,
+    BindingUpdate, ChannelBinding, ChannelCategory, ChannelId, ChannelType, EventStatus, Identity,
     IdentityId, Metadata, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId,
     RoomStatus,
 };
@@ -126,6 +126,9 @@ pub struct RouteQuery {
     pub sender: Sender,
     /// The form the channel's addresses are compared in.
     pub form: AddressForm,
+    /// The identity the store resolved the sender's address to, as the
+    /// router is handed it (RFC §10.4, §14.1).
+    pub identity: Option<Identity>,
 }
 
 impl RouteQuery {
@@ -763,6 +766,7 @@ mod tests {
                 identity_id: None,
             },
             form: sms_form(),
+            identity: None,
         }
     }
 

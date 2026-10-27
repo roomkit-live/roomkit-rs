@@ -17,10 +17,12 @@ use roomkit::model::{
     ChannelType, EventContent, HookResult, InboundMessage, Metadata, Participant, ParticipantId,
     RoomContext, RoomEvent, RoomId, Timestamp,
 };
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{
+    EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConversationStore, FrameworkEvent, HookExecution,
-    HookSpec, HookTrigger, InboundError, KitError, RoomFilter, RoomKit, SequentialEnvironment,
+    HookSpec, HookTrigger, InboundError, KitError, RoomFilter, RoomKit,
 };
 use tokio::sync::{Notify, broadcast, mpsc};
 
@@ -38,10 +40,10 @@ fn message(from: &RecordingTransport, text: &str) -> InboundMessage {
 
 /// A kit with no room, an SMS transport and an echo agent registered.
 fn kit_without_rooms() -> (RoomKit, RecordingTransport) {
-    let kit = RoomKit::new();
-    kit.set_environment(SequentialEnvironment::new(
-        Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
-    ));
+    let kit = kit_with_environment(
+        Default::default(),
+        SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
+    );
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
@@ -324,7 +326,7 @@ impl Channel for Sms {
 /// attached to; the SMS channel too, when `attach_sms` names the number its
 /// binding delivers to.
 async fn sms_room(attach_sms: Option<&str>) -> (RoomKit, Sms) {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let sms = Sms::new();
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
@@ -382,7 +384,7 @@ async fn an_sms_binding_the_integrator_addresses_receives_the_answer() {
 /// to the sender, in E.164, and the agent its hook attaches answers there.
 #[tokio::test]
 async fn a_room_created_for_an_sms_sender_answers_at_their_number() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let sms = Sms::new();
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())

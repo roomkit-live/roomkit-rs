@@ -28,7 +28,8 @@ use roomkit::testing::RecordingTransport;
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConversationStore, EventDraft, FrameworkEvent,
     HookExecution, HookSpec, HookTrigger, InboundError, InboundRoomRouter, KitError, MutationError,
-    RoomFilter, RoomKit, RouteQuery, RouterError, default_inbound_event, text_of,
+    RoomFilter, RoomKit, RoomKitOptions, RouteOptions, RouterFuture, default_inbound_event,
+    text_of,
 };
 use tokio::sync::Notify;
 
@@ -186,7 +187,12 @@ impl Channel for Scripted {
 /// three attaches' lifecycle records take the room's indexes 0 to 2 (gap
 /// G-046).
 async fn room() -> (RoomKit, RecordingTransport) {
-    let kit = RoomKit::new();
+    room_with(Default::default()).await
+}
+
+/// [`room`] on a kit built with `options`.
+async fn room_with(options: RoomKitOptions) -> (RoomKit, RecordingTransport) {
+    let kit = RoomKit::new(options);
     let audit = RecordingTransport::new(channel("audit"), ChannelType::WEBSOCKET);
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
@@ -598,8 +604,11 @@ async fn process_inbound_from_a_channel_into_its_own_room_returns_at_its_commit(
 /// it is refused with no event.
 #[tokio::test]
 async fn a_delivery_that_calls_into_its_room_on_every_delivery_stops_at_the_reentry_cap() {
-    let (kit, _) = room().await;
-    kit.set_max_chain_depth(1);
+    let (kit, _) = room_with(RoomKitOptions {
+        max_chain_depth: 1,
+        ..Default::default()
+    })
+    .await;
     let refused = Arc::new(Mutex::new(Vec::new()));
     let (bot_kit, bot_refused) = (kit.clone(), Arc::clone(&refused));
     let bot = Scripted::transport(
@@ -647,8 +656,11 @@ async fn a_delivery_that_calls_into_its_room_on_every_delivery_stops_at_the_reen
 /// key again.
 #[tokio::test]
 async fn a_delivery_s_keyed_injection_past_the_reentry_cap_is_a_replay() {
-    let (kit, _) = room().await;
-    kit.set_max_chain_depth(1);
+    let (kit, _) = room_with(RoomKitOptions {
+        max_chain_depth: 1,
+        ..Default::default()
+    })
+    .await;
     let returned = Arc::new(Mutex::new(Vec::new()));
     let (bot_kit, bot_returned) = (kit.clone(), Arc::clone(&returned));
     let bot = Scripted::transport(
@@ -1162,8 +1174,11 @@ async fn a_later_hook_awaiting_a_task_an_earlier_one_left_waits_until_its_timeou
 /// arrives, before its parse, and the one past the budget is refused.
 #[tokio::test]
 async fn a_parse_that_calls_into_its_room_for_every_message_is_bounded() {
-    let (kit, _) = room().await;
-    kit.set_max_chain_depth(1);
+    let (kit, _) = room_with(RoomKitOptions {
+        max_chain_depth: 1,
+        ..Default::default()
+    })
+    .await;
     let refused = Arc::new(Mutex::new(Vec::new()));
     let (relay_kit, relay_refused) = (kit.clone(), Arc::clone(&refused));
     let relay = Scripted::transport(
@@ -1271,8 +1286,11 @@ async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
 /// `process_timeout` passed meanwhile, not granted.
 #[tokio::test]
 async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
-    let (kit, _) = room().await;
-    kit.set_process_timeout(Some(Duration::from_millis(100)));
+    let (kit, _) = room_with(RoomKitOptions {
+        process_timeout: Duration::from_millis(100),
+        ..Default::default()
+    })
+    .await;
     kit.hook(before_broadcast("slow", true), |event, _| async move {
         if text_of(&event.content) == "Heads up" {
             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -1353,26 +1371,28 @@ async fn a_hook_that_times_out_while_its_entry_works_is_heard_after_it() {
 /// Routes every message to `room_1`.
 struct ToRoom1;
 
-impl<S: ConversationStore> InboundRoomRouter<S> for ToRoom1 {
-    fn route(
-        &self,
-        _store: &S,
-        _query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
-        ready(Ok(Some(room_id())))
+impl InboundRoomRouter for ToRoom1 {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        _options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        Box::pin(ready(Ok(Some(room_id()))))
     }
 }
 
 /// Routes every message to the room it names.
 struct ToRoom(RoomId);
 
-impl<S: ConversationStore> InboundRoomRouter<S> for ToRoom {
-    fn route(
-        &self,
-        _store: &S,
-        _query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
-        ready(Ok(Some(self.0.clone())))
+impl InboundRoomRouter for ToRoom {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        _options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        Box::pin(ready(Ok(Some(self.0.clone()))))
     }
 }
 
@@ -1385,12 +1405,15 @@ async fn a_routed_message_draws_on_the_delivering_budget_in_the_delivering_room_
     const LIMIT: u32 = 2;
     let mut refused_in = Vec::new();
     for into in ["room_1", "room_2"] {
-        let (kit, _) = room().await;
-        kit.set_max_chain_depth(LIMIT);
+        let (kit, _) = room_with(RoomKitOptions {
+            max_chain_depth: LIMIT,
+            inbound_router: Some(Arc::new(ToRoom(RoomId::new(into).unwrap()))),
+            ..Default::default()
+        })
+        .await;
         kit.create_room(&RoomId::new("room_2").unwrap())
             .await
             .unwrap();
-        kit.set_router(ToRoom(RoomId::new(into).unwrap()));
         let refusals = Arc::new(Mutex::new(Vec::new()));
         let (bot_kit, bot_refusals) = (kit.clone(), Arc::clone(&refusals));
         let bot = Scripted::transport(
@@ -1424,13 +1447,14 @@ async fn a_routed_message_draws_on_the_delivering_budget_in_the_delivering_room_
 /// Finds no room for any message: each one opens a new room.
 struct NoRoom;
 
-impl<S: ConversationStore> InboundRoomRouter<S> for NoRoom {
-    fn route(
-        &self,
-        _store: &S,
-        _query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
-        ready(Ok(None))
+impl InboundRoomRouter for NoRoom {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        _options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        Box::pin(ready(Ok(None)))
     }
 }
 
@@ -1438,14 +1462,17 @@ impl<S: ConversationStore> InboundRoomRouter<S> for NoRoom {
 #[derive(Default)]
 struct FreshRoom(AtomicU32);
 
-impl<S: ConversationStore> InboundRoomRouter<S> for FreshRoom {
-    fn route(
-        &self,
-        _store: &S,
-        _query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
+impl InboundRoomRouter for FreshRoom {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        _options: RouteOptions,
+    ) -> RouterFuture<'a> {
         let room = self.0.fetch_add(1, AtomicOrdering::Relaxed);
-        ready(Ok(Some(RoomId::new(format!("fresh_{room}")).unwrap())))
+        Box::pin(ready(Ok(Some(
+            RoomId::new(format!("fresh_{room}")).unwrap(),
+        ))))
     }
 }
 
@@ -1467,12 +1494,16 @@ enum Opens {
 /// lacks): a transport whose every delivery opens a room it is then bound
 /// in stops at the cap, rather than create rooms without end.
 async fn opening_a_room_on_every_delivery_stops_at_the_reentry_cap(opens: Opens) {
-    let (kit, _) = room().await;
-    kit.set_max_chain_depth(1);
-    match opens {
-        Opens::FreshIds => kit.set_router(FreshRoom::default()),
-        Opens::NoRoom | Opens::Named => kit.set_router(NoRoom),
-    }
+    let inbound_router: Arc<dyn InboundRoomRouter> = match opens {
+        Opens::FreshIds => Arc::new(FreshRoom::default()),
+        Opens::NoRoom | Opens::Named => Arc::new(NoRoom),
+    };
+    let (kit, _) = room_with(RoomKitOptions {
+        max_chain_depth: 1,
+        inbound_router: Some(inbound_router),
+        ..Default::default()
+    })
+    .await;
     let named = Arc::new(AtomicU32::new(0));
     let binder = kit.clone();
     kit.observe("bind_bot", HookTrigger::OnRoomCreated, move |event, _| {
@@ -1549,8 +1580,11 @@ async fn a_transport_naming_a_missing_room_on_every_delivery_stops_at_the_reentr
 #[tokio::test]
 async fn a_delivery_s_call_into_another_existing_room_has_a_budget_of_its_own() {
     const LIMIT: u32 = 1;
-    let (kit, _) = room().await;
-    kit.set_max_chain_depth(LIMIT);
+    let (kit, _) = room_with(RoomKitOptions {
+        max_chain_depth: LIMIT,
+        ..Default::default()
+    })
+    .await;
     let other = RoomId::new("room_2").unwrap();
     kit.create_room(&other).await.unwrap();
     let results = Arc::new(Mutex::new(Vec::new()));
@@ -1587,8 +1621,11 @@ async fn a_delivery_s_call_into_another_existing_room_has_a_budget_of_its_own() 
 /// committing within that section's tenure.
 #[tokio::test]
 async fn a_call_that_could_only_wait_for_itself_fails() {
-    let (kit, _) = room().await;
-    kit.set_router(ToRoom1);
+    let (kit, _) = room_with(RoomKitOptions {
+        inbound_router: Some(Arc::new(ToRoom1)),
+        ..Default::default()
+    })
+    .await;
     let refused = Arc::new(Mutex::new(None));
     let (hook_kit, hook_refused) = (kit.clone(), Arc::clone(&refused));
     kit.hook(before_broadcast("forwarder", true), move |event, _| {
@@ -1625,8 +1662,11 @@ async fn a_call_that_could_only_wait_for_itself_fails() {
 /// than recurse on every message.
 #[tokio::test]
 async fn a_parse_that_routes_a_message_back_into_its_room_fails() {
-    let (kit, _) = room().await;
-    kit.set_router(ToRoom1);
+    let (kit, _) = room_with(RoomKitOptions {
+        inbound_router: Some(Arc::new(ToRoom1)),
+        ..Default::default()
+    })
+    .await;
     let failed = Arc::new(Mutex::new(Vec::new()));
     let (relay_kit, relay_failed) = (kit.clone(), Arc::clone(&failed));
     let relay = Scripted::transport(
@@ -1671,8 +1711,11 @@ async fn a_parse_that_routes_a_message_back_into_its_room_fails() {
 /// ahead of the event the hook runs for, outside every order.
 #[tokio::test]
 async fn an_off_lock_hook_routing_back_a_message_no_check_fires_for_fails() {
-    let (kit, _) = room().await;
-    kit.set_router(ToRoom1);
+    let (kit, _) = room_with(RoomKitOptions {
+        inbound_router: Some(Arc::new(ToRoom1)),
+        ..Default::default()
+    })
+    .await;
     let refused = Arc::new(Mutex::new(None));
     let (hook_kit, hook_refused) = (kit.clone(), Arc::clone(&refused));
     let mut customer_only = before_broadcast("forwarder", false);
@@ -1888,8 +1931,11 @@ async fn a_turn_s_call_ticketed_behind_another_message_commits_after_it() {
 /// turn's trigger stays delivered.
 #[tokio::test]
 async fn a_turn_s_call_meets_its_own_process_timeout() {
-    let (kit, _) = room().await;
-    kit.set_process_timeout(Some(Duration::from_millis(100)));
+    let (kit, _) = room_with(RoomKitOptions {
+        process_timeout: Duration::from_millis(100),
+        ..Default::default()
+    })
+    .await;
     kit.hook(before_broadcast("scanner", false), |event, _| async move {
         if text_of(&event.content) == "Let me check." {
             tokio::time::sleep(Duration::from_secs(3600)).await;
@@ -1938,8 +1984,11 @@ async fn a_turn_s_call_meets_its_own_process_timeout() {
 #[tokio::test]
 async fn a_turn_s_calls_draw_on_the_reentry_budget_of_the_cascade_that_delivers() {
     const LIMIT: u32 = 2;
-    let (kit, _) = room().await;
-    kit.set_max_chain_depth(LIMIT);
+    let (kit, _) = room_with(RoomKitOptions {
+        max_chain_depth: LIMIT,
+        ..Default::default()
+    })
+    .await;
     let (turn_kit, last_call) = (kit.clone(), Arc::new(Mutex::new(None)));
     let turn_last_call = Arc::clone(&last_call);
     let agent = Scripted::agent(
@@ -1998,8 +2047,11 @@ async fn a_turn_s_calls_draw_on_the_reentry_budget_of_the_cascade_that_delivers(
 /// where it is no longer asked, as for its own responses.
 #[tokio::test]
 async fn an_agent_injecting_on_every_turn_stops_at_the_chain_depth_limit() {
-    let (kit, _) = room().await;
-    kit.set_max_chain_depth(3);
+    let (kit, _) = room_with(RoomKitOptions {
+        max_chain_depth: 3,
+        ..Default::default()
+    })
+    .await;
     let (turn_kit, depths) = (kit.clone(), Arc::new(Mutex::new(Vec::new())));
     let turn_depths = Arc::clone(&depths);
     let agent = Scripted::agent(
@@ -2068,8 +2120,11 @@ async fn send_through_console(kit: &RoomKit, room: &RoomId, count: u32, sent: &S
 #[tokio::test]
 async fn work_a_turn_began_starts_fresh_once_the_turn_is_over() {
     const LIMIT: u32 = 2;
-    let (kit, _) = room().await;
-    kit.set_max_chain_depth(LIMIT);
+    let (kit, _) = room_with(RoomKitOptions {
+        max_chain_depth: LIMIT,
+        ..Default::default()
+    })
+    .await;
     let (turn_over, sent): (Arc<Notify>, Sent) = (Arc::new(Notify::new()), Sent::default());
     let (turn_kit, turn_notify, turn_sent) =
         (kit.clone(), Arc::clone(&turn_over), Arc::clone(&sent));
@@ -2118,8 +2173,11 @@ async fn work_a_turn_began_starts_fresh_once_the_turn_is_over() {
 #[tokio::test]
 async fn a_turn_s_call_into_another_room_has_a_budget_of_its_own() {
     const LIMIT: u32 = 2;
-    let (kit, _) = room().await;
-    kit.set_max_chain_depth(LIMIT);
+    let (kit, _) = room_with(RoomKitOptions {
+        max_chain_depth: LIMIT,
+        ..Default::default()
+    })
+    .await;
     let other = RoomId::new("room_2").unwrap();
     kit.create_room(&other).await.unwrap();
     kit.attach(&other, &channel("ws")).await.unwrap();
@@ -2151,8 +2209,11 @@ async fn a_turn_s_call_into_another_room_has_a_budget_of_its_own() {
 /// turn's own set in the lane: it waits for nothing its caller holds.
 #[tokio::test]
 async fn a_message_a_turn_routes_into_its_own_room_returns_at_its_decision() {
-    let (kit, _) = room().await;
-    kit.set_router(ToRoom1);
+    let (kit, _) = room_with(RoomKitOptions {
+        inbound_router: Some(Arc::new(ToRoom1)),
+        ..Default::default()
+    })
+    .await;
     let seen = Arc::new(Mutex::new(None));
     let agent = calling_agent(&kit, &seen, |kit| {
         Box::pin(async move {

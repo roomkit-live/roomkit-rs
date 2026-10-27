@@ -9,6 +9,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::future::{Future, ready};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -18,10 +19,11 @@ use roomkit::model::{
     ChannelType, EventContent, InboundMessage, Metadata, ParticipantId, RoomContext, RoomEvent,
     RoomId, Timestamp,
 };
-use roomkit::testing::EchoAgent;
+use roomkit::testing::{EchoAgent, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, DefaultRouter, HookTrigger,
-    InboundRoomRouter, RoomKit, RouteQuery, RouterError, SequentialEnvironment, text_of,
+    Channel, ChannelDeclaration, ChannelError, ChannelOf, ConversationStore,
+    DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookTrigger, InMemoryStore,
+    InboundRoomRouter, RoomKit, RoomKitOptions, RouteOptions, RouterFuture, WeakRoomKit, text_of,
 };
 use serde_json::{Value, json};
 
@@ -109,10 +111,39 @@ impl Channel for Sms {
 /// A kit with an SMS number and an agent an `ON_ROOM_CREATED` hook attaches
 /// to every room created for a message (RFC Appendix B.1).
 fn kit_with_agent() -> (RoomKit, Sms) {
-    let kit = RoomKit::new();
-    kit.set_environment(SequentialEnvironment::new(
-        Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
-    ));
+    kit_with_agent_on(Default::default())
+}
+
+/// [`kit_with_agent`], routed by what `wrap` makes of the default strategy
+/// over the kit's store and its registered channels.
+fn kit_wrapping_the_default(
+    wrap: impl FnOnce(DefaultInboundRoomRouter<InMemoryStore>) -> Arc<dyn InboundRoomRouter>,
+) -> (RoomKit, Sms) {
+    let options = RoomKitOptions::default();
+    let built: Arc<OnceLock<WeakRoomKit>> = Arc::default();
+    let reads = Arc::clone(&built);
+    let channel_of: ChannelOf =
+        Arc::new(move |channel_id| reads.get()?.upgrade()?.get_channel(channel_id));
+    let default = DefaultInboundRoomRouter::new(
+        Arc::clone(&options.store),
+        DefaultInboundRoomRouterOptions {
+            channel_of: Some(channel_of),
+        },
+    );
+    let (kit, sms) = kit_with_agent_on(RoomKitOptions {
+        inbound_router: Some(wrap(default)),
+        ..options
+    });
+    built.set(kit.downgrade()).unwrap();
+    (kit, sms)
+}
+
+/// [`kit_with_agent`], built with `options`.
+fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Sms) {
+    let kit = kit_with_environment(
+        options,
+        SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
+    );
     let sms = Sms::new();
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
@@ -175,27 +206,29 @@ struct Counted<R> {
     calls: Arc<AtomicUsize>,
 }
 
-impl<S: ConversationStore, R: InboundRoomRouter<S>> InboundRoomRouter<S> for Counted<R> {
-    fn route(
-        &self,
-        store: &S,
-        query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
+impl<R: InboundRoomRouter> InboundRoomRouter for Counted<R> {
+    fn route<'a>(
+        &'a self,
+        channel_id: &'a ChannelId,
+        channel_type: &'a ChannelType,
+        options: RouteOptions,
+    ) -> RouterFuture<'a> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.router.route(store, query)
+        self.router.route(channel_id, channel_type, options)
     }
 }
 
 /// A custom strategy that routes every message to one room.
 struct ToRoom(RoomId);
 
-impl<S: ConversationStore> InboundRoomRouter<S> for ToRoom {
-    fn route(
-        &self,
-        _store: &S,
-        _query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
-        ready(Ok(Some(self.0.clone())))
+impl InboundRoomRouter for ToRoom {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        _options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        Box::pin(ready(Ok(Some(self.0.clone()))))
     }
 }
 
@@ -211,17 +244,23 @@ async fn a_room_whose_recipient_is_not_one_admits_no_routed_sender() {
     let mut landed = Vec::new();
     for held in not_recipients() {
         for custom in [false, true] {
-            let (kit, sms) = kit_with_agent();
             let calls = Arc::new(AtomicUsize::new(0));
-            if custom {
-                let router = ToRoom(room("free"));
-                let calls = Arc::clone(&calls);
-                kit.set_router(Counted { router, calls });
-            } else {
-                let router = DefaultRouter;
-                let calls = Arc::clone(&calls);
-                kit.set_router(Counted { router, calls });
-            }
+            let counted = Arc::clone(&calls);
+            let (kit, sms) = kit_wrapping_the_default(move |default| {
+                let router: Arc<dyn InboundRoomRouter> = if custom {
+                    let router = ToRoom(room("free"));
+                    Arc::new(Counted {
+                        router,
+                        calls: counted,
+                    })
+                } else {
+                    Arc::new(Counted {
+                        router: default,
+                        calls: counted,
+                    })
+                };
+                router
+            });
             let free = open_room(&kit, "free", Some(held.clone()), false).await;
             let (warnings, guard) = Warnings::capture();
             let bobs = routed(&kit, message(BOB, "Hello")).await;

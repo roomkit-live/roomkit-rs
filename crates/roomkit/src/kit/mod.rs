@@ -2,6 +2,7 @@
 //! that run the core's operations against them.
 //!
 //! - this module: the kit itself and the inbound pipeline;
+//! - `options`: what a kit is built with;
 //! - `registry`: registering and unregistering channels and hooks;
 //! - `rooms`: the room lifecycle and channel bindings;
 //! - `events`: the host's direct changes to stored events;
@@ -17,6 +18,7 @@
 mod background;
 mod events;
 mod inject;
+mod options;
 mod organization;
 mod post;
 mod registry;
@@ -29,8 +31,7 @@ mod timers;
 mod weak;
 
 use std::collections::HashMap;
-use std::sync::{Arc, PoisonError, RwLock};
-use std::time::Duration;
+use std::sync::{Arc, PoisonError, RwLock, Weak};
 
 use roomkit_core::model::{ChannelId, EventSource, InboundMessage, RoomEvent, RoomId};
 use roomkit_core::ops::{
@@ -40,6 +41,7 @@ use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookTrigger};
 use tokio::sync::broadcast;
 
+pub use self::options::RoomKitOptions;
 pub use self::organization::OrganizationKit;
 use self::scope::Scope;
 pub use self::timeline::TimelineQuery;
@@ -54,11 +56,14 @@ use crate::error::KitError;
 use crate::hooks::HookHandler;
 use crate::locks::RoomMutexes;
 use crate::queues::{RoomLanes, RoomTickets};
-use crate::router::{DefaultRouter, DynRouter, InboundRoomRouter};
+use crate::registered::{Registered, RegisteredChannel};
+use crate::router::{
+    ChannelOf, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, InboundRoomRouter,
+};
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Tasks;
 use crate::tools::ToolHandler;
-use crate::turns::{TurnTimeouts, Turns};
+use crate::turns::Turns;
 
 /// How many framework events a slow subscriber may fall behind before it
 /// misses some.
@@ -82,7 +87,7 @@ const PROCESS_INBOUND_IN: &str = "process_inbound_in";
 /// use roomkit::RoomKit;
 /// use roomkit::model::{ChannelId, EventContent, InboundMessage, RoomId};
 ///
-/// let kit = RoomKit::new();
+/// let kit = RoomKit::new(Default::default());
 /// kit.register_channel(sms)?;
 /// let room = RoomId::new("room_1")?;
 /// let channel = ChannelId::new("sms")?;
@@ -113,8 +118,9 @@ pub(crate) struct Inner<S> {
     hooks: RwLock<HashMap<HookId, Arc<dyn HookHandler>>>,
     /// The handlers of the tool hooks (RFC §9.3), whose payload is no event.
     tool_hooks: RwLock<HashMap<HookId, ToolHandler>>,
-    router: RwLock<Arc<dyn DynRouter<S>>>,
-    pub(crate) store: S,
+    /// The routing strategy (RFC §10.4), fixed at the kit's construction.
+    router: Arc<dyn InboundRoomRouter>,
+    pub(crate) store: Arc<S>,
     pub(crate) locks: RoomMutexes,
     pub(crate) lanes: RoomLanes,
     pub(crate) tickets: RoomTickets,
@@ -123,9 +129,9 @@ pub(crate) struct Inner<S> {
     pub(crate) cursors: RoomCursors,
     /// The tasks the kit runs in the background: observers, inbound runs.
     pub(crate) tasks: Arc<Tasks>,
-    /// The environment the runs started from now on read: each run keeps
-    /// the one it started with.
-    environment: RwLock<Arc<dyn Environment + Send + Sync>>,
+    /// The clock and the ids every run reads: the system's, or a test's
+    /// (`testing::kit_with_environment`).
+    environment: Arc<dyn Environment + Send + Sync>,
     events: broadcast::Sender<FrameworkEvent>,
     /// The turn backend every intelligence turn runs through (RFC §10.6).
     pub(crate) turns: Arc<Turns>,
@@ -140,94 +146,55 @@ impl<S> std::fmt::Debug for Inner<S> {
     }
 }
 
-impl RoomKit<InMemoryStore> {
-    /// A kit over an in-memory store, with the system clock and random ids.
-    pub fn new() -> Self {
-        Self::with_store(InMemoryStore::new())
-    }
-}
-
-impl Default for RoomKit<InMemoryStore> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<S: ConversationStore> RoomKit<S> {
-    /// A kit over `store`, with the system clock and random ids.
-    pub fn with_store(store: S) -> Self {
+    /// A kit built with `options`, Python's `RoomKit(...)` keywords (step 5,
+    /// decision 2), on the system clock with random ids.
+    pub fn new(options: RoomKitOptions<S>) -> Self {
+        Self::with_environment(options, Arc::new(SystemEnvironment))
+    }
+
+    /// A kit built with `options` whose runs read `environment`.
+    pub(crate) fn with_environment(
+        options: RoomKitOptions<S>,
+        environment: Arc<dyn Environment + Send + Sync>,
+    ) -> Self {
+        let RoomKitOptions {
+            store,
+            inbound_router,
+            max_chain_depth,
+            agent_response_policy,
+            process_timeout,
+        } = options;
+        let mut config = KitConfig::new();
+        config.max_chain_depth = max_chain_depth;
+        config.agent_response_policy = agent_response_policy;
+        config.process_timeout = Some(process_timeout);
         let (events, _) = broadcast::channel(FRAMEWORK_EVENT_BACKLOG);
-        Self {
-            inner: Arc::new(Inner {
-                config: RwLock::new(Arc::new(KitConfig::new())),
-                channels: RwLock::new(HashMap::new()),
-                hooks: RwLock::new(HashMap::new()),
-                tool_hooks: RwLock::new(HashMap::new()),
-                router: RwLock::new(Arc::new(DefaultRouter)),
-                store,
-                locks: RoomMutexes::default(),
-                lanes: RoomLanes::default(),
-                tickets: RoomTickets::default(),
-                cursors: RoomCursors::default(),
-                tasks: Arc::default(),
-                environment: RwLock::new(Arc::new(SystemEnvironment)),
-                events,
-                turns: Arc::default(),
-                channels_closed: tokio::sync::OnceCell::new(),
-            }),
-        }
+        let inner = Arc::new_cyclic(|kit: &Weak<Inner<S>>| Inner {
+            config: RwLock::new(Arc::new(config)),
+            channels: RwLock::new(HashMap::new()),
+            hooks: RwLock::new(HashMap::new()),
+            tool_hooks: RwLock::new(HashMap::new()),
+            router: inbound_router.unwrap_or_else(|| default_router(&store, kit)),
+            store,
+            locks: RoomMutexes::default(),
+            lanes: RoomLanes::default(),
+            tickets: RoomTickets::default(),
+            cursors: RoomCursors::default(),
+            tasks: Arc::default(),
+            environment,
+            events,
+            turns: Arc::default(),
+            channels_closed: tokio::sync::OnceCell::new(),
+        });
+        Self { inner }
     }
 
-    /// Replaces the clock and the id source, for example with a
-    /// deterministic one in tests and examples. A call already running
-    /// keeps the environment it started with; the calls made from now on
-    /// read this one.
-    pub fn set_environment(&self, environment: impl Environment + Send + Sync + 'static) {
-        *write(&self.inner.environment) = Arc::new(environment);
-    }
-
-    /// Sets the bounds both sides of a turn keep (RFC §10.6.8): every
-    /// intelligence turn runs through the kit's turn backend, in memory,
-    /// between the kit, which commits and broadcasts, and its own turn
-    /// executor, which runs the channel's turn. The RFC's defaults unless
-    /// set: 10 seconds to accept a turn, a heartbeat each way every 2
-    /// seconds, 10 seconds of silence before a side is taken for lost, 5
-    /// seconds for a cancelled turn to end. A turn already submitted keeps
-    /// the bounds it started with.
-    pub fn set_turn_timeouts(&self, timeouts: TurnTimeouts) {
-        // The cancel bound is read as it is set: a field set directly is
-        // kept to a millisecond too, as `with_cancel` keeps it.
-        let timeouts = timeouts.with_cancel(timeouts.cancel);
-        self.inner.turns.set_timeouts(timeouts);
-    }
-
-    /// Sets the chain-depth limit (RFC §8.3), 5 by default.
-    pub fn set_max_chain_depth(&self, max_chain_depth: u32) {
-        self.inner
-            .change_config(|config| config.max_chain_depth = max_chain_depth);
-    }
-
-    /// Bounds how long an inbound call may take from its start to its
-    /// decision (RFC §13.6); `None`, the default, bounds nothing. Past it,
-    /// the call writes nothing of its event, lets go of what it holds and
-    /// returns `blocked` with the reason `process_timeout`, after the
-    /// `process_timeout` framework event. The commit and what follows it,
-    /// the event's delivery and its responses, are never bounded.
-    ///
-    /// The bound counts from the call's start; the waits for the room's
-    /// admission ticket and its lock count against it, the wait for the
-    /// event's turn in the room's delivery lane, after the commit, does not
-    /// (gap G-068).
-    pub fn set_process_timeout(&self, process_timeout: Option<Duration>) {
-        self.inner
-            .change_config(|config| config.process_timeout = process_timeout);
-    }
-
-    /// Replaces the routing strategy that finds the room of a message that
-    /// names none (RFC §10.4); [`DefaultRouter`] by default. An operation
-    /// already running keeps the router it started with until it asks it.
-    pub fn set_router(&self, router: impl InboundRoomRouter<S>) {
-        *write(&self.inner.router) = Arc::new(router);
+    /// The registered channel `channel_id`, as the kit holds it: its id,
+    /// type, category and direction, and how it writes its addresses
+    /// (Python's `get_channel`); `None` when no channel has the id.
+    pub fn get_channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn RegisteredChannel>> {
+        self.inner.registered(channel_id)
     }
 
     /// The kit's store, to read rooms and timelines.
@@ -283,7 +250,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// room's lifecycle changes go on while it runs; the hooks that need the
     /// lock run under it after the room's status is checked (RFC §9.5.1).
     /// The kit's `process_timeout` bounds the call up to its decision (see
-    /// [`set_process_timeout`](Self::set_process_timeout)).
+    /// [`RoomKitOptions::process_timeout`]).
     ///
     /// Dropped before it returns, by a `tokio::time::timeout` for instance,
     /// the call goes on, detached. Decided, its event is delivered and its
@@ -381,6 +348,21 @@ impl<S: ConversationStore> Scope<'_, S> {
     }
 }
 
+/// The RFC's default strategy over the kit's store, reading the kit's
+/// registered channels, as Python's `DefaultInboundRoomRouter(store,
+/// channel_of=kit.get_channel)`. It holds the kit weakly: the kit holds it.
+fn default_router<S: ConversationStore>(
+    store: &Arc<S>,
+    kit: &Weak<Inner<S>>,
+) -> Arc<dyn InboundRoomRouter> {
+    let kit = Weak::clone(kit);
+    let channel_of: ChannelOf = Arc::new(move |channel_id| kit.upgrade()?.registered(channel_id));
+    let options = DefaultInboundRoomRouterOptions {
+        channel_of: Some(channel_of),
+    };
+    Arc::new(DefaultInboundRoomRouter::new(Arc::clone(store), options))
+}
+
 impl<S> Inner<S> {
     /// Refuses a call once the kit is shut down.
     ///
@@ -396,7 +378,14 @@ impl<S> Inner<S> {
 
     /// The kit's environment, which a run starting now keeps.
     pub(crate) fn environment(&self) -> Arc<dyn Environment + Send + Sync> {
-        Arc::clone(&read(&self.environment))
+        Arc::clone(&self.environment)
+    }
+
+    /// The registered channel `channel_id`, as a router and a caller read
+    /// it.
+    pub(crate) fn registered(&self, channel_id: &ChannelId) -> Option<Arc<dyn RegisteredChannel>> {
+        let declaration = read(&self.config).channel(channel_id)?.clone();
+        Some(Arc::new(Registered(declaration)))
     }
 
     pub(crate) fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>> {
@@ -421,9 +410,9 @@ impl<S> Inner<S> {
             .await;
     }
 
-    /// The kit's router, held only while the driver reads it.
-    pub(crate) fn router(&self) -> Arc<dyn DynRouter<S>> {
-        Arc::clone(&read(&self.router))
+    /// The kit's router.
+    pub(crate) fn router(&self) -> &dyn InboundRoomRouter {
+        &*self.router
     }
 
     pub(crate) fn hook(&self, hook: HookId) -> Option<Arc<dyn HookHandler>> {
@@ -508,14 +497,6 @@ impl<S> Inner<S> {
         let changed = change(&mut next)?;
         *current = Arc::new(next);
         Ok(changed)
-    }
-
-    /// Changes the configuration operations start from.
-    fn change_config(&self, change: impl FnOnce(&mut KitConfig)) {
-        let mut current = write(&self.config);
-        let mut next = KitConfig::clone(&current);
-        change(&mut next);
-        *current = Arc::new(next);
     }
 }
 

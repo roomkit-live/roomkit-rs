@@ -29,7 +29,7 @@
 //!     .with_system_prompt("You answer a bakery's customers, in a few words.")
 //!     .with_history(20);
 //! let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?;
-//! let kit = RoomKit::new();
+//! let kit = RoomKit::new(Default::default());
 //! kit.register_channel(agent)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```

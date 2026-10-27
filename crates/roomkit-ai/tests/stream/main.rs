@@ -314,7 +314,7 @@ impl Room {
     ) -> (Self, Pieces) {
         let model = Pieces::new(rounds);
         let dropped = Arc::clone(&model.dropped);
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let agent = AiAgent::new(channel("agent"), model.clone())
             .with_tools(tools(&kit))
             .unwrap();
@@ -912,7 +912,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
     *model.events.lock().unwrap() = Some(events);
     let dropped = Arc::clone(&model.dropped);
     let agent = AiAgent::new(channel("agent"), model);
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let ws = Streaming::new(Stop::Never);
     kit.register_channel(RecordingTransport::new(
         channel("web"),
@@ -978,7 +978,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
 async fn the_default_deliver_stream_delivers_each_row_once_the_stream_is_over() {
     let model = ScriptedProvider::new([ScriptedRound::writing(["Hello ", "there."])]);
     let agent = AiAgent::new(channel("agent"), model);
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let buffered = Buffered {
         inner: RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET),

@@ -44,7 +44,7 @@
 //!     .with_system_prompt("You answer a shop's customers.")
 //!     .with_tools(tools)?
 //!     .with_tool_policy(ToolPolicy::new().deny("admin_*"));
-//! let kit = RoomKit::new();
+//! let kit = RoomKit::new(Default::default());
 //! kit.register_channel(agent)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```

@@ -21,10 +21,10 @@ use roomkit::model::{
     HookResult, InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, RoomStatus,
     Timestamp,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
     ConversationStore, HookExecution, HookReturn, HookSpec, HookTrigger, InboundResult, RoomKit,
-    SequentialEnvironment, text_of,
+    text_of,
 };
 use tokio::sync::Notify;
 
@@ -53,7 +53,7 @@ fn before_broadcast(name: &str, needs_lock: bool) -> HookSpec {
 
 /// A kit with an SMS transport attached to `room_1`.
 async fn room() -> RoomKit {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.create_room(&room_id()).await.unwrap();
@@ -398,9 +398,8 @@ struct B2 {
 /// RFC Appendix B.2, as the `block_and_inject` example runs it, its
 /// scanner registered off the lock or under it.
 async fn block_and_inject(needs_lock: bool) -> B2 {
-    let kit = RoomKit::new();
     let now = Timestamp::from_unix_millis(1_792_677_780_000).unwrap();
-    kit.set_environment(SequentialEnvironment::new(now));
+    let kit = kit_with_environment(Default::default(), SequentialEnvironment::new(now));
     let customer = RecordingTransport::new(channel("sms_customer"), ChannelType::SMS);
     let advisor = RecordingTransport::new(channel("ws_advisor"), ChannelType::WEBSOCKET);
     kit.register_channel(customer.clone()).unwrap();

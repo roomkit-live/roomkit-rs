@@ -197,7 +197,10 @@ async fn a_turn_whose_work_panics_fails_at_once() {
 async fn a_turn_never_accepted_fails_at_the_accept_timeout() {
     let agent = Waiting::new(Duration::from_secs(60));
     let kit = kit_with(agent.clone()).await;
-    kit.set_turn_timeouts(TurnTimeouts::new().with_accept(Duration::from_secs(4)));
+    crate::testing::set_turn_timeouts(
+        &kit,
+        TurnTimeouts::new().with_accept(Duration::from_secs(4)),
+    );
     kit.inner
         .turns
         .set_fault(std::sync::Arc::new(|carried, raw: &str| {

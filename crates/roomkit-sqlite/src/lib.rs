@@ -29,11 +29,11 @@
 //!
 //! ```no_run
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! use roomkit::RoomKit;
+//! use roomkit::{RoomKit, RoomKitOptions};
 //! use roomkit_sqlite::SqliteStore;
 //!
 //! let store = SqliteStore::open("rooms.db").await?;
-//! let kit = RoomKit::with_store(store);
+//! let kit = RoomKit::new(RoomKitOptions::with_store(store));
 //! # Ok(())
 //! # }
 //! ```

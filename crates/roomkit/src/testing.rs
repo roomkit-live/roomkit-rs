@@ -1,6 +1,11 @@
 //! Channels for tests and examples: a transport that records what it
-//! delivers, and an agent that echoes what it is asked; and a tap on the
-//! messages a kit's turn backend carries.
+//! delivers, and an agent that echoes what it is asked; a kit whose clock
+//! and ids a test sets; and a tap on the messages a kit's turn backend
+//! carries.
+//!
+//! The Python implementation's tests patch its clock and its `uuid4`; the
+//! sans-IO core takes them as an input instead, which
+//! [`kit_with_environment`] gives (step 5, decision 5).
 
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -13,10 +18,36 @@ use roomkit_core::model::{
 use roomkit_core::ops::ChannelDeclaration;
 use roomkit_core::rules::transcoding::text_of;
 
-use crate::RoomKit;
+pub use roomkit_core::ops::{Environment, SequentialEnvironment};
+
 use crate::channel::{Channel, ChannelError};
 use crate::store::ConversationStore;
-use crate::turns::Carried;
+use crate::turns::{Carried, TurnTimeouts};
+use crate::{RoomKit, RoomKitOptions};
+
+/// A kit built with `options` whose runs read `environment` instead of the
+/// system clock and random ids: a deterministic clock and sequential ids,
+/// for a reproducible test or example.
+pub fn kit_with_environment<S: ConversationStore>(
+    options: RoomKitOptions<S>,
+    environment: impl Environment + Send + Sync + 'static,
+) -> RoomKit<S> {
+    RoomKit::with_environment(options, Arc::new(environment))
+}
+
+/// Sets the bounds both sides of `kit`'s turns keep (RFC §10.6.8), which
+/// the Python implementation's kit takes no keyword for: a test seam. The
+/// RFC's defaults unless set: 10 seconds to accept a turn, a heartbeat each
+/// way every 2 seconds, 10 seconds of silence before a side is taken for
+/// lost, 5 seconds for a cancelled turn to end. A turn already submitted
+/// keeps the bounds it started with.
+#[doc(hidden)]
+pub fn set_turn_timeouts<S>(kit: &RoomKit<S>, timeouts: TurnTimeouts) {
+    // The cancel bound is read as it is set: a field set directly is kept
+    // to a millisecond too, as `with_cancel` keeps it.
+    let timeouts = timeouts.with_cancel(timeouts.cancel);
+    kit.inner.turns.set_timeouts(timeouts);
+}
 
 /// A delivery a [`RecordingTransport`] made.
 #[derive(Clone, Debug, PartialEq)]

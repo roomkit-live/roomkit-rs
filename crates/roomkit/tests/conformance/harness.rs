@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use roomkit::model::RoomId;
-use roomkit::{ConversationStore, RoomFilter};
+use roomkit::{ConversationStore, RoomFilter, RoomKitOptions};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -19,17 +19,23 @@ use crate::compare::compare;
 use crate::normalize::Observed;
 use crate::run::{Check, Run, Scope, lock};
 
+/// The kit's options a scenario's setup names, over `options`: its
+/// chain-depth limit and its `process_timeout`.
+fn kit_options<S>(mut options: RoomKitOptions<S>, kit: &Value) -> RoomKitOptions<S> {
+    if let Some(depth) = kit["max_chain_depth"].as_u64() {
+        options.max_chain_depth = u32::try_from(depth).unwrap_or(u32::MAX);
+    }
+    if let Some(timeout) = kit["process_timeout_ms"].as_u64() {
+        options.process_timeout = Duration::from_millis(timeout);
+    }
+    options
+}
+
 /// Runs `scenario`; returns every mismatch with its expectations.
 pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     // The store's file, when it has one, goes once the run is over.
-    let (kit, _store_file) = crate::new_kit().await;
     let setup = scenario.get("setup").cloned().unwrap_or_default();
-    if let Some(depth) = setup["kit"]["max_chain_depth"].as_u64() {
-        kit.set_max_chain_depth(u32::try_from(depth).unwrap_or(u32::MAX));
-    }
-    if let Some(timeout) = setup["kit"]["process_timeout_ms"].as_u64() {
-        kit.set_process_timeout(Some(Duration::from_millis(timeout)));
-    }
+    let (kit, _store_file) = crate::new_kit(|options| kit_options(options, &setup["kit"])).await;
     let run = Arc::new(Run::new(kit, scenario));
     if let Err(problem) = set_up(&run, &setup).await {
         return vec![format!("setup: {problem}")];

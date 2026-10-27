@@ -21,8 +21,8 @@ use roomkit::model::{
     ChannelId, ChannelType, DeleteContent, EventContent, EventType, EventUpdates, IdentityId,
     InboundMessage, RoomId, RoomUpdates, Timestamp,
 };
-use roomkit::testing::RecordingTransport;
-use roomkit::{ConversationStore, RoomFilter, RoomKit, SequentialEnvironment};
+use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
+use roomkit::{ConversationStore, RoomFilter, RoomKit, RoomKitOptions};
 use roomkit_sqlite::{OpenError, SqliteStore};
 use rusqlite::Connection;
 use serde_json::Value;
@@ -71,8 +71,10 @@ async fn fixture_kit(file: &TempFile) -> RoomKit<SqliteStore> {
         .timers
         .last_activity_at
         .map_or(room.updated_at, |activity| activity.max(room.updated_at));
-    let kit = RoomKit::with_store(store);
-    kit.set_environment(SequentialEnvironment::new(written));
+    let kit = kit_with_environment(
+        RoomKitOptions::with_store(store),
+        SequentialEnvironment::new(written),
+    );
     kit
 }
 

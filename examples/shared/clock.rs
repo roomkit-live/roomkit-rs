@@ -5,14 +5,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::model::Timestamp;
-use roomkit::{Environment, RoomKit, SequentialEnvironment};
+use roomkit::testing::{Environment, SequentialEnvironment, kit_with_environment};
+use roomkit::{RoomKit, RoomKitOptions};
 
 /// The instant every example starts at, 2026-10-22 14:03 UTC.
 const START_MILLIS: i64 = 1_792_677_780_000;
 
 /// A kit over an in-memory store, on a [`Clock`] of its own.
 pub fn kit() -> RoomKit {
-    Clock::new().kit()
+    kit_with(RoomKitOptions::default())
+}
+
+/// A kit built with `options`, on a [`Clock`] of its own.
+pub fn kit_with(options: RoomKitOptions) -> RoomKit {
+    Clock::new().kit_with(options)
 }
 
 /// A clock that moves only when told, and ids numbered in order (`evt_1`,
@@ -30,9 +36,12 @@ impl Clock {
 
     /// A kit over an in-memory store that reads this clock.
     pub fn kit(&self) -> RoomKit {
-        let kit = RoomKit::new();
-        kit.set_environment(Arc::clone(&self.0));
-        kit
+        self.kit_with(RoomKitOptions::default())
+    }
+
+    /// A kit built with `options` that reads this clock.
+    pub fn kit_with(&self, options: RoomKitOptions) -> RoomKit {
+        kit_with_environment(options, Arc::clone(&self.0))
     }
 
     /// The instant the clock reads.

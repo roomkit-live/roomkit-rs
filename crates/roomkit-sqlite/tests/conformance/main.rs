@@ -38,7 +38,7 @@ mod templates;
 
 use std::time::Duration;
 
-use roomkit::RoomKit;
+use roomkit::{RoomKit, RoomKitOptions};
 use roomkit_sqlite::SqliteStore;
 
 use crate::support::TempFile;
@@ -54,12 +54,17 @@ pub(crate) const SCENARIO_BOUND: Duration = Duration::from_secs(60);
 /// The kit the scenarios run on, over the SQLite store.
 pub(crate) type Kit = RoomKit<SqliteStore>;
 
-/// A kit over a store on a new file, and the file, removed once the run
-/// is over.
-pub(crate) async fn new_kit() -> (Kit, TempFile) {
+/// A kit over a store on a new file, built with what `configure` makes of
+/// the defaults, and the file, removed once the run is over.
+pub(crate) async fn new_kit(
+    configure: impl FnOnce(RoomKitOptions<SqliteStore>) -> RoomKitOptions<SqliteStore>,
+) -> (Kit, TempFile) {
     let file = TempFile::new("conformance");
     let store = SqliteStore::open(file.path()).await.unwrap();
-    (RoomKit::with_store(store), file)
+    (
+        RoomKit::new(configure(RoomKitOptions::with_store(store))),
+        file,
+    )
 }
 
 /// Every scenario runs; those this implementation fails on this store are

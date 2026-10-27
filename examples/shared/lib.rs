@@ -41,7 +41,7 @@ mod websocket;
 
 pub use self::agents::{Script, ScriptedAgent, Turn};
 pub use self::checks::Checks;
-pub use self::clock::{Clock, kit};
+pub use self::clock::{Clock, kit, kit_with};
 pub use self::files::TempDatabase;
 pub use self::observe::{Log, framework_events};
 pub use self::openai::{FakeOpenAi, OpenAiEndpoint, Reply};

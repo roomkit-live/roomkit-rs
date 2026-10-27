@@ -9,7 +9,7 @@ use roomkit_core::ops::Environment;
 /// The system clock, at millisecond precision, and random version 4 UUIDs as
 /// ids.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SystemEnvironment;
+pub(crate) struct SystemEnvironment;
 
 impl Environment for SystemEnvironment {
     #[expect(

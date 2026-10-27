@@ -94,7 +94,7 @@ fn kit(calls: bool, deltas: usize) -> RoomKit {
 
 /// The kit, its tool writing to the room through its turn when `writes`.
 fn kit_writing(calls: bool, deltas: usize, writes: bool) -> RoomKit {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     let lookup = ToolDefinition::new(
@@ -181,7 +181,7 @@ async fn measure() {
     );
 
     // A buffered answer, no stream: the turn's fixed cost alone.
-    let echo = RoomKit::new();
+    let echo = RoomKit::new(Default::default());
     echo.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     echo.register_channel(roomkit::testing::EchoAgent::new(channel("ai"), "Hello."))

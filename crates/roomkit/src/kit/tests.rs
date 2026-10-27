@@ -7,6 +7,7 @@
 //! operation that breaks the protocol, and a call on a runtime that shuts
 //! down under it.
 
+use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +24,7 @@ use roomkit_core::ops::{
 use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
 use tokio::sync::Notify;
 
-use super::RoomKit;
+use super::{RoomKit, RoomKitOptions};
 use crate::channel::{Channel, ChannelError};
 use crate::driver;
 use crate::error::KitError;
@@ -50,7 +51,11 @@ fn message(text: &str) -> InboundMessage {
 /// A kit with an SMS transport attached to `room_1`, an off-lock check
 /// that allows, and a `process_timeout`.
 async fn checked_room() -> RoomKit {
-    let kit = RoomKit::new();
+    let options = RoomKitOptions {
+        process_timeout: TIMEOUT,
+        ..Default::default()
+    };
+    let kit = RoomKit::new(options);
     kit.register_channel(RecordingTransport::new(
         ChannelId::new("sms").unwrap(),
         ChannelType::SMS,
@@ -64,8 +69,17 @@ async fn checked_room() -> RoomKit {
     spec.needs_lock = false;
     kit.hook(spec, |_, _| async { Ok(HookResult::allow()) })
         .unwrap();
-    kit.set_process_timeout(Some(TIMEOUT));
     kit
+}
+
+/// Lifts the kit's `process_timeout`, for a call that proves what is free,
+/// not how fast it is.
+fn unbounded(kit: &RoomKit) {
+    let lifted = kit.inner.try_change_config(|config| {
+        config.process_timeout = None;
+        Ok::<(), Infallible>(())
+    });
+    lifted.unwrap();
 }
 
 async fn send(kit: &RoomKit, text: &str) -> InboundResult {
@@ -104,7 +118,7 @@ async fn a_call_past_its_deadline_waiting_for_its_ticket_writes_nothing_and_rele
     let held = kit.inner.tickets.held(&room_id());
     drop(earlier);
     // The next call proves what is free, not how fast it is.
-    kit.set_process_timeout(None);
+    unbounded(&kit);
     let next = send(&kit, "Still there?").await;
     assert_eq!(
         (
@@ -127,7 +141,7 @@ async fn a_call_past_its_deadline_waiting_for_the_room_lock_writes_nothing() {
     let result = send(&kit, "Bonjour").await;
     let refused = refusal(&kit, &result).await;
     drop(lock);
-    kit.set_process_timeout(None);
+    unbounded(&kit);
     let next = send(&kit, "Still there?").await;
     let mut named = Vec::new();
     while let Ok(event) = events.try_recv() {
@@ -191,7 +205,7 @@ impl Channel for Paused {
 #[tokio::test]
 async fn a_call_releases_its_ticket_once_its_event_is_committed() {
     let kit = checked_room().await;
-    kit.set_process_timeout(None);
+    unbounded(&kit);
     let (delivering, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     kit.register_channel(Paused {
         declaration: ChannelDeclaration::new(
@@ -253,7 +267,7 @@ impl Operation for WaitsForNothing {
 /// stall, a defect of the operation's, not as a cancelled run.
 #[tokio::test]
 async fn a_run_waiting_for_an_effect_never_asked_for_stalls() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let stalled = driver::run(&kit.inner, "test", WaitsForNothing).await;
     assert_eq!(stalled, Err(KitError::Stalled));
 }
@@ -270,7 +284,7 @@ fn a_call_whose_runtime_shuts_down_under_it_is_cancelled() {
     };
     let first = runtime();
     let kit = first.block_on(checked_room());
-    kit.set_process_timeout(None);
+    unbounded(&kit);
     kit.before_broadcast("stuck", |_, _| async {
         std::future::pending::<()>().await;
         Ok(HookResult::allow())
@@ -284,53 +298,6 @@ fn a_call_whose_runtime_shuts_down_under_it_is_cancelled() {
     assert_eq!(
         (started.is_err(), cancelled.map(|result| result.event)),
         (true, Err(KitError::Cancelled))
-    );
-}
-
-/// A call keeps the environment it started with: the host's new one, set
-/// while the call waits in a hook, serves the calls made from then on.
-#[tokio::test]
-async fn a_call_keeps_the_environment_it_started_with() {
-    let start = |millis| roomkit_core::model::Timestamp::from_unix_millis(millis).unwrap();
-    let (first, later) = (start(1_000_000), start(2_000_000));
-    let kit = checked_room().await;
-    kit.set_process_timeout(None);
-    kit.set_environment(roomkit_core::ops::SequentialEnvironment::new(first));
-    let (reached, open) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
-    let (hook_reached, hook_open) = (Arc::clone(&reached), Arc::clone(&open));
-    kit.before_broadcast("gate", move |event, _| {
-        let (reached, open) = (Arc::clone(&hook_reached), Arc::clone(&hook_open));
-        async move {
-            if roomkit_core::rules::transcoding::text_of(&event.content) == "Bonjour" {
-                reached.notify_one();
-                open.notified().await;
-            }
-            Ok(HookResult::allow())
-        }
-    })
-    .unwrap();
-    let call = {
-        let kit = kit.clone();
-        tokio::spawn(async move { kit.process_inbound_in(&room_id(), message("Bonjour")).await })
-    };
-    tokio::time::timeout(BOUND, reached.notified())
-        .await
-        .unwrap();
-    kit.set_environment(roomkit_core::ops::SequentialEnvironment::new(later));
-    open.notify_one();
-    tokio::time::timeout(BOUND, call)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let activity = kit.store().get_room(&room_id()).await.unwrap().unwrap();
-    let next = send(&kit, "Still there?").await;
-    assert_eq!(
-        (
-            activity.timers.last_activity_at,
-            next.event.map(|event| event.created_at)
-        ),
-        (Some(first), Some(later))
     );
 }
 

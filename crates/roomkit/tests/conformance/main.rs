@@ -31,7 +31,7 @@ mod templates;
 
 use std::time::Duration;
 
-use roomkit::{InMemoryStore, RoomKit};
+use roomkit::{InMemoryStore, RoomKit, RoomKitOptions};
 use sha2::{Digest, Sha256};
 
 use crate::scenarios::{scenarios, suite};
@@ -40,14 +40,14 @@ use crate::scenarios::{scenarios, suite};
 /// runs them on its store too (crates/roomkit-sqlite/tests/conformance).
 pub(crate) type Kit = RoomKit<InMemoryStore>;
 
-/// A kit over an empty store, and what keeps the store until the run ends:
-/// nothing here.
+/// A kit over an empty store, built with what `configure` makes of the
+/// defaults, and what keeps the store until the run ends: nothing here.
 #[expect(
     clippy::unused_async,
     reason = "every store's kit is made the same way, some awaiting their store"
 )]
-pub(crate) async fn new_kit() -> (Kit, ()) {
-    (RoomKit::new(), ())
+pub(crate) async fn new_kit(configure: impl FnOnce(RoomKitOptions) -> RoomKitOptions) -> (Kit, ()) {
+    (RoomKit::new(configure(RoomKitOptions::default())), ())
 }
 
 /// Scenario id → the rule this implementation breaks (roomkit-specs

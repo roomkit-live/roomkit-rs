@@ -74,7 +74,7 @@ authenticate,
 `.cargo/config.toml`, has it run the `git` command with your configuration.
 
 `server_agent` shows what the service writes: the store opened with
-`SqliteStore::open(path)` and handed to `RoomKit::with_store`, an
+`SqliteStore::open(path)` and handed to `RoomKitOptions::with_store`, an
 `OpenAiAgent` registered on the kit with its `OpenAiConfig`, and a
 transport channel of its own whose messages it runs into their rooms. The
 documentation of each crate shows its own setup, compiled as a doctest.
@@ -90,7 +90,7 @@ use roomkit::testing::{EchoAgent, RecordingTransport};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
     let agent = EchoAgent::new(ChannelId::new("ai")?, "You said: ").quoting();
     kit.register_channel(sms.clone())?;

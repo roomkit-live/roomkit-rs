@@ -31,7 +31,7 @@ pub(super) fn room_id() -> RoomId {
 
 /// A kit whose room binds an SMS transport and `agent`.
 pub(super) async fn kit_with(agent: impl Channel) -> RoomKit {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.create_room(&room_id()).await.unwrap();

@@ -430,7 +430,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
         ("attach_ws", HookTrigger::OnChannelAttached),
         ("mute_ws", HookTrigger::OnChannelMuted),
     ] {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         for (id, channel_type) in [("sms", ChannelType::SMS), ("ws", ChannelType::WEBSOCKET)] {
             kit.register_channel(RecordingTransport::new(channel(id), channel_type))
                 .unwrap();

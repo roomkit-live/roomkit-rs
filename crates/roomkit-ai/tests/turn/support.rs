@@ -11,7 +11,7 @@ use roomkit::testing::RecordingTransport;
 use roomkit::transcript::Role;
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConversationStore, HookExecution, HookSpec,
-    HookTrigger, InboundResult, RoomKit,
+    HookTrigger, InboundResult, RoomKit, RoomKitOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -72,7 +72,7 @@ impl Room {
         let agent = AiAgent::new(channel("assistant"), model)
             .with_tools(tools)
             .unwrap();
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(adjust(agent)).unwrap();
@@ -158,8 +158,10 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
     let agent = AiAgent::new(channel("assistant"), ScriptedProvider::new(rounds))
         .with_tools(served())
         .unwrap();
-    let kit = RoomKit::new();
-    kit.set_max_chain_depth(3);
+    let kit = RoomKit::new(RoomKitOptions {
+        max_chain_depth: 3,
+        ..Default::default()
+    });
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(Counting { sms, answers }).unwrap();
     kit.register_channel(agent).unwrap();
@@ -266,7 +268,7 @@ impl AiProvider for Endless {
 /// the kit's default limits.
 pub(crate) async fn two_agents(rounds: usize) -> usize {
     let (alpha, beta) = (Endless::new(rounds), Endless::new(rounds));
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     for (id, model) in [("alpha", alpha.clone()), ("beta", beta.clone())] {
@@ -305,8 +307,10 @@ pub(crate) enum Echo {
 /// the calls stored refused past the cascade's budget.
 pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> (usize, usize) {
     let model = Endless::new(2);
-    let kit = RoomKit::new();
-    kit.set_max_chain_depth(max_chain_depth);
+    let kit = RoomKit::new(RoomKitOptions {
+        max_chain_depth,
+        ..Default::default()
+    });
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     let agent = AiAgent::new(channel("assistant"), model.clone())

@@ -14,12 +14,12 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::routing::get;
-use roomkit::model::{BindingOptions, ChannelId, Participant, ParticipantId, RoomId};
-use roomkit::{ConversationStore, Environment, RoomKit, SystemEnvironment};
+use roomkit::model::{BindingOptions, ChannelId, Participant, ParticipantId, RoomId, Timestamp};
+use roomkit::{ConversationStore, RoomKit, RoomKitOptions};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use roomkit_sqlite::SqliteStore;
 use tokio::net::TcpListener;
@@ -173,7 +173,9 @@ impl AgentServer {
         patience: Patience,
         site: Site,
     ) -> Result<Self, Box<dyn Error>> {
-        let kit = RoomKit::with_store(SqliteStore::open(database).await?);
+        let kit = RoomKit::new(RoomKitOptions::with_store(
+            SqliteStore::open(database).await?,
+        ));
         let websocket = WebSocketChannel::new(ChannelId::new("websocket")?);
         let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model())
             .with_system_prompt(SYSTEM_PROMPT)
@@ -312,11 +314,25 @@ impl App {
                 user.clone(),
                 room_id.clone(),
                 self.websocket.id().clone(),
-                SystemEnvironment.now(),
+                wall_clock(),
             );
             person.display_name = name;
             store.create_participant(person).await?;
         }
         Ok(())
     }
+}
+
+/// The instant a person joins at: the wall clock's, as the kit stamps its
+/// own records on a system clock.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a participant the server stores joins at the wall clock's instant"
+)]
+fn wall_clock() -> Timestamp {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let millis = i64::try_from(elapsed.as_millis()).unwrap_or_default();
+    Timestamp::from_unix_millis(millis).unwrap_or(Timestamp::UNIX_EPOCH)
 }

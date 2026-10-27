@@ -7,6 +7,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::future::{Future, ready};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -16,10 +17,12 @@ use roomkit::model::{
     EventDirection, EventId, EventSource, EventType, EventUpdates, HookResult, InboundMessage,
     RoomContext, RoomEvent, RoomId, Timestamp,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{
+    Environment, RecordingTransport, SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, ConversationStore, Environment, EventFilter,
-    HookTrigger, InboundResult, RoomKit, SequentialEnvironment, is_deleted, is_edited, text_of,
+    Channel, ChannelDeclaration, ChannelError, ConversationStore, EventFilter, HookTrigger,
+    InboundResult, RoomKit, is_deleted, is_edited, text_of,
 };
 use tokio::sync::{Barrier, Notify, mpsc};
 
@@ -102,35 +105,57 @@ struct Fixture {
     agent: Reader,
 }
 
-/// The environment the fixture is set up in: its events, the attaches'
-/// lifecycle records (gap G-046) among them, take ids of their own, so that
-/// the room's first message is `evt_1`.
+/// The fixture's environment: while it is set up, its events, the
+/// attaches' lifecycle records (gap G-046) among them, take ids of their
+/// own, so that the room's first message is `evt_1`.
 #[derive(Debug)]
-struct Setup(SequentialEnvironment);
+struct Setup {
+    setup: SequentialEnvironment,
+    room: SequentialEnvironment,
+    setting_up: AtomicBool,
+}
+
+impl Setup {
+    fn new() -> Arc<Self> {
+        let at = Timestamp::from_unix_millis(1_792_677_780_000).unwrap();
+        Arc::new(Self {
+            setup: SequentialEnvironment::new(at),
+            room: SequentialEnvironment::new(at),
+            setting_up: AtomicBool::new(true),
+        })
+    }
+
+    /// The room's own events take the room's ids from now on.
+    fn done(&self) {
+        self.setting_up.store(false, Ordering::Relaxed);
+    }
+}
 
 impl Environment for Setup {
     fn now(&self) -> Timestamp {
-        self.0.now()
+        self.room.now()
     }
 
     fn new_event_id(&self) -> EventId {
-        EventId::new(format!("setup_{}", self.0.new_event_id())).unwrap()
+        if self.setting_up.load(Ordering::Relaxed) {
+            EventId::new(format!("setup_{}", self.setup.new_event_id())).unwrap()
+        } else {
+            self.room.new_event_id()
+        }
     }
 
     fn new_observation_id(&self) -> roomkit::model::ObservationId {
-        self.0.new_observation_id()
+        self.room.new_observation_id()
     }
 
     fn new_room_id(&self) -> RoomId {
-        self.0.new_room_id()
+        self.room.new_room_id()
     }
 }
 
 async fn room() -> Fixture {
-    let kit = RoomKit::new();
-    kit.set_environment(Setup(SequentialEnvironment::new(
-        Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
-    )));
+    let setup = Setup::new();
+    let kit = kit_with_environment(Default::default(), Arc::clone(&setup));
     let wa = RecordingTransport::new(channel("wa"), ChannelType::WHATSAPP);
     let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET)
         .with_capabilities(edits_natively());
@@ -145,9 +170,7 @@ async fn room() -> Fixture {
         kit.attach(&room_id(), &channel(id)).await.unwrap();
     }
     // The room's messages start at evt_1, after the attaches' records.
-    kit.set_environment(SequentialEnvironment::new(
-        Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
-    ));
+    setup.done();
     let first = say(&kit, CUSTOMER, "I need 5000$").await;
     assert_eq!(first.event.unwrap().id.as_str(), "evt_1");
     Fixture {

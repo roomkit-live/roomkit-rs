@@ -40,7 +40,7 @@ fn message(text: &str) -> InboundMessage {
 
 /// A kit with an SMS transport attached to `room_1`.
 async fn room() -> RoomKit {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.create_room(&room_id()).await.unwrap();
@@ -295,7 +295,7 @@ impl Channel for Closing {
 /// beside the first joins it.
 #[tokio::test]
 async fn shutdown_closes_each_channel_once_in_the_order_of_their_ids() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let closed = Arc::new(Mutex::new(Vec::new()));
     for id in ["ws_b", "ws_a"] {
         kit.register_channel(Closing::new(id, &closed)).unwrap();

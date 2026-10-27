@@ -22,8 +22,8 @@ use roomkit::model::{
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConfigError, ConversationStore, EventFilter,
     EventQuery, FrameworkEvent, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore,
-    InboundError, KitError, LifecycleError, RoomCounters, RoomFilter, RoomKit, StoreError,
-    TargetUpdate, text_of,
+    InboundError, KitError, LifecycleError, RoomCounters, RoomFilter, RoomKit, RoomKitOptions,
+    StoreError, TargetUpdate, text_of,
 };
 use tokio::sync::Notify;
 
@@ -32,6 +32,9 @@ const CUSTOMER: &str = "+15550100001";
 fn channel(id: &str) -> ChannelId {
     ChannelId::new(id).unwrap()
 }
+
+/// A `process_timeout` no test outlasts.
+const UNBOUNDED: Duration = Duration::from_secs(3600);
 
 fn room_id() -> RoomId {
     RoomId::new("r").unwrap()
@@ -260,7 +263,7 @@ fn participant(id: &str, channel_id: &str) -> Participant {
 #[tokio::test]
 async fn a_post_texts_the_correspondent_and_solicits_no_agent() {
     for organization in [None, Some("acme")] {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let sms = sms_room(&kit, organization, RoomOptions::default()).await;
         let agent = Agent::new("assistant", "should not answer");
         kit.register_channel(agent.clone()).unwrap();
@@ -308,7 +311,7 @@ async fn a_post_texts_the_correspondent_and_solicits_no_agent() {
 /// answer reaches the customer.
 #[tokio::test]
 async fn a_post_addressed_to_an_agent_is_answered_and_names_its_speaker() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let sms = sms_room(&kit, None, RoomOptions::default()).await;
     let agent = Agent::new("assistant", "It left the warehouse today.");
     kit.register_channel(agent.clone()).unwrap();
@@ -353,7 +356,7 @@ async fn a_post_addressed_to_an_agent_is_answered_and_names_its_speaker() {
 /// concurrent first posts attach the host channel once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_first_posts_attach_the_host_channel_once() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     sms_room(&kit, None, RoomOptions::default()).await;
     let mut events = kit.subscribe();
     let posts = (0..5).map(|n| {
@@ -384,7 +387,7 @@ async fn concurrent_first_posts_attach_the_host_channel_once() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_host_binding_the_integrator_sets_keeps_its_settings() {
     for concurrently in [false, true] {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         sms_room(&kit, None, RoomOptions::default()).await;
         kit.register_channel(HostChannel::new()).unwrap();
         let mut options = BindingOptions::default();
@@ -420,35 +423,20 @@ async fn a_host_binding_the_integrator_sets_keeps_its_settings() {
 /// `process_timeout`, its framework event emitted, nothing written.
 #[tokio::test]
 async fn a_first_post_waits_for_the_room_lock_within_process_timeout() {
-    let kit = RoomKit::new();
-    let sms = sms_room(&kit, None, RoomOptions::default()).await;
-    let (holding, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
-    let (held, freed) = (Arc::clone(&holding), Arc::clone(&release));
-    let mut holder = HookSpec::new("holder", HookTrigger::BeforeBroadcast, HookExecution::Sync);
-    holder.needs_lock = true;
-    kit.hook(holder, move |_, _| {
-        let (held, freed) = (Arc::clone(&held), Arc::clone(&freed));
-        async move {
-            held.notify_one();
-            freed.notified().await;
-            Ok(HookResult::allow())
-        }
-    })
-    .unwrap();
+    let (kit, sms) = gated_room(Duration::from_millis(50)).await;
+    // A record's commit holds the room lock while its read of the room
+    // waits at the gate, bounded by no `process_timeout`.
+    kit.store().read.arm();
     let holder = {
         let kit = kit.clone();
-        tokio::spawn(async move {
-            let message = InboundMessage::new(channel("sms"), CUSTOMER, text("Hello?"));
-            kit.process_inbound_in(&room_id(), message).await
-        })
+        tokio::spawn(async move { kit.commit_event(&room_id(), record("A record.")).await })
     };
-    holding.notified().await;
+    kit.store().read.reached.notified().await;
     let before = written(&kit).await;
-    kit.set_process_timeout(Some(Duration::from_millis(50)));
     let mut events = kit.subscribe();
     let refused = kit.post(&room_id(), Post::new(text("Notice."))).await;
     let after = written(&kit).await;
-    release.notify_one();
+    kit.store().read.open.notify_one();
     holder.await.unwrap().unwrap();
     let timed_out = std::iter::from_fn(|| events.try_recv().ok())
         .filter(|event| matches!(event, FrameworkEvent::ProcessTimeout { .. }))
@@ -466,6 +454,18 @@ async fn a_first_post_waits_for_the_room_lock_within_process_timeout() {
     );
 }
 
+/// A record of the SMS channel saying `body`, for `commit_event`.
+fn record(body: &str) -> RoomEvent {
+    RoomEvent::new(
+        EventId::new("record_1").unwrap(),
+        room_id(),
+        EventType::Message,
+        EventSource::new(channel("sms"), ChannelType::SMS, EventDirection::Inbound),
+        text(body),
+        Timestamp::UNIX_EPOCH,
+    )
+}
+
 /// RFC §10.5, §19.3: the host's words are a person's message: a post
 /// addressing no one asks no agent of an `ADDRESSED_ONLY` room, one
 /// addressing `a` asks `a`, and the host channel's unaddressed event asks
@@ -474,7 +474,7 @@ async fn a_first_post_waits_for_the_room_lock_within_process_timeout() {
 async fn the_host_s_words_are_a_person_s_message_to_the_room_s_routing() {
     let mut turns = Vec::new();
     for speak in ["post", "post to a", "unaddressed"] {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let mut options = RoomOptions::default();
         options.agent_response_policy = AgentResponsePolicy::AddressedOnly;
         let sms = sms_room(&kit, None, options).await;
@@ -662,7 +662,7 @@ fn refusals() -> Vec<(&'static str, Setup, Arguments, KitError)> {
 #[tokio::test]
 async fn a_refused_post_writes_nothing() {
     for (case, setup, arguments, expected) in refusals() {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let sms = sms_room(&kit, Some("acme"), RoomOptions::default()).await;
         set_up(&kit, setup).await;
         let (before, texted) = (written(&kit).await, sms.sent());
@@ -693,7 +693,7 @@ async fn a_refused_post_writes_nothing() {
 /// RFC §10.5: the refusal of a speaker says why.
 #[tokio::test]
 async fn a_refused_speaker_is_told_why() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     sms_room(&kit, None, RoomOptions::default()).await;
     set_up(&kit, Setup::CustomerOnSms).await;
     let mut told = Vec::new();
@@ -717,7 +717,7 @@ async fn a_refused_speaker_is_told_why() {
 async fn a_post_speaks_as_a_participant_its_host_channel_reaches() {
     let mut spoken = Vec::new();
     for speaker in ["desk", "id-desk", CUSTOMER, ""] {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let sms = sms_room(&kit, None, RoomOptions::default()).await;
         let mut desk = participant("desk", "host");
         desk.identity_id = Some(IdentityId::new("id-desk").unwrap());
@@ -752,7 +752,7 @@ async fn a_post_speaks_as_a_participant_its_host_channel_reaches() {
 /// opened, nothing attached.
 #[tokio::test]
 async fn a_message_on_the_host_channel_is_refused_before_anything_is_written() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     sms_room(&kit, None, RoomOptions::default()).await;
     kit.post(&room_id(), Post::new(text("Notice.")))
         .await
@@ -795,7 +795,7 @@ impl Channel for Claiming {
 async fn a_channel_claiming_a_reserved_type_is_refused() {
     use ChannelCategory::{Intelligence, Transport};
     use ChannelDirection::{Bidirectional, Inbound};
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let claims = [
         Claiming(ChannelType::HOST, Intelligence, Inbound),
         Claiming(ChannelType::HOST, Transport, Bidirectional),
@@ -832,7 +832,7 @@ async fn a_channel_claiming_a_reserved_type_is_refused() {
 /// names, is refused, nothing bound.
 #[tokio::test]
 async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     sms_room(&kit, None, RoomOptions::default()).await;
     kit.register_channel(HostChannel::new()).unwrap();
     let mut options = BindingOptions::default();
@@ -855,7 +855,7 @@ async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
 async fn a_post_replayed_with_its_key_is_not_texted_again() {
     let mut replays = Vec::new();
     for (key, texts) in [("notice-1042", 1), ("", 2), ("   ", 2)] {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let sms = sms_room(&kit, None, RoomOptions::default()).await;
         let post = || {
             let mut post = Post::new(text("Your order shipped."));
@@ -882,8 +882,10 @@ async fn a_post_replayed_with_its_key_is_not_texted_again() {
 #[tokio::test]
 async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
     for needs_lock in [true, false] {
-        let kit = RoomKit::new();
-        kit.set_max_chain_depth(1);
+        let kit = RoomKit::new(RoomKitOptions {
+            max_chain_depth: 1,
+            ..Default::default()
+        });
         sms_room(&kit, None, RoomOptions::default()).await;
         let posted = Arc::new(Mutex::new(Vec::new()));
         let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
@@ -1212,12 +1214,14 @@ impl ConversationStore for GatedStore {
     }
 }
 
-/// A kit on a gated store, with room `r` and its SMS, and a 50 ms
+/// A kit on a gated store, with room `r` and its SMS, its calls bounded by
 /// `process_timeout`.
-async fn gated_room() -> (RoomKit<GatedStore>, Sms) {
-    let kit = RoomKit::with_store(GatedStore::default());
+async fn gated_room(process_timeout: Duration) -> (RoomKit<GatedStore>, Sms) {
+    let kit = RoomKit::new(RoomKitOptions {
+        process_timeout,
+        ..RoomKitOptions::with_store(GatedStore::default())
+    });
     let sms = sms_room(&kit, None, RoomOptions::default()).await;
-    kit.set_process_timeout(Some(Duration::from_millis(50)));
     (kit, sms)
 }
 
@@ -1247,7 +1251,7 @@ async fn host_messages<S: ConversationStore>(kit: &RoomKit<S>) -> usize {
 /// its message not written.
 #[tokio::test]
 async fn a_first_post_s_attach_spends_the_deadline_its_message_shares() {
-    let (kit, sms) = gated_room().await;
+    let (kit, sms) = gated_room(Duration::from_millis(50)).await;
     let mut events = kit.subscribe();
     kit.store().binding.arm();
     let posting = {
@@ -1284,8 +1288,7 @@ async fn a_first_post_s_attach_spends_the_deadline_its_message_shares() {
 /// leaves the host channel attached, and sends nothing.
 #[tokio::test]
 async fn a_cancelled_first_post_attaches_the_host_channel_to_its_end() {
-    let (kit, sms) = gated_room().await;
-    kit.set_process_timeout(None);
+    let (kit, sms) = gated_room(UNBOUNDED).await;
     let mut events = kit.subscribe();
     kit.store().binding.arm();
     let posting = {
@@ -1313,7 +1316,7 @@ async fn a_cancelled_first_post_attaches_the_host_channel_to_its_end() {
 /// written.
 #[tokio::test]
 async fn a_first_post_s_read_of_its_room_waits_within_process_timeout() {
-    let (kit, sms) = gated_room().await;
+    let (kit, sms) = gated_room(Duration::from_millis(50)).await;
     let before = written(&kit).await;
     kit.store().read.arm();
     let refused = kit.post(&room_id(), Post::new(text("Notice."))).await;

@@ -122,7 +122,7 @@ pub(crate) struct Room {
 impl Room {
     /// The room, its agent the one `agent` builds.
     pub(crate) async fn with(agent: AiAgent<ScriptedProvider>) -> Self {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
             .unwrap();
         kit.register_channel(agent).unwrap();

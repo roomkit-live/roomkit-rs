@@ -21,15 +21,17 @@ use std::time::Duration;
 use roomkit::model::{ChannelId, ChannelType, EventContent, HookResult, InboundMessage, RoomId};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundResult, KitError, RoomKit, text_of,
+    FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundResult, KitError, RoomKit,
+    RoomKitOptions, text_of,
 };
 
 use shared::{Checks, Log};
 
 /// How long the scanner's round trip takes.
 const SCAN: Duration = Duration::from_millis(200);
-/// How long a message may take up to its decision.
-const PROCESS_TIMEOUT: Duration = Duration::from_millis(300);
+/// How long a message may take up to its decision: a scan's round trip
+/// and some.
+const PROCESS_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Registers the scanner, off the room lock. It notes in `scans` when each
 /// scan starts and ends; the message `hang` it never answers.
@@ -75,7 +77,10 @@ impl Chat {
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
-    let kit = shared::kit();
+    let kit = shared::kit_with(RoomKitOptions {
+        process_timeout: PROCESS_TIMEOUT,
+        ..Default::default()
+    });
     let user = RecordingTransport::new(ChannelId::new("ws_user")?, ChannelType::WEBSOCKET);
     let agent = RecordingTransport::new(ChannelId::new("ws_agent")?, ChannelType::WEBSOCKET);
     kit.register_channel(user.clone())?;
@@ -119,7 +124,6 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
 
     println!("A message the scanner never answers, with a {PROCESS_TIMEOUT:?} process_timeout.");
-    kit.set_process_timeout(Some(PROCESS_TIMEOUT));
     let mut events = kit.subscribe();
     let hung = chat.clone().says("hang").await?;
     let reported = shared::framework_events(&mut events);

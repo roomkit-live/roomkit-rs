@@ -17,10 +17,9 @@ use roomkit::model::{
     ChannelId, ChannelType, ErrorRecord, EventContent, EventType, InboundMessage, RoomEvent,
     RoomId, Timestamp,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    ConversationStore, HookExecution, HookSpec, HookTrigger, InboundResult, RoomKit,
-    SequentialEnvironment, text_of,
+    ConversationStore, HookExecution, HookSpec, HookTrigger, InboundResult, RoomKit, text_of,
 };
 use roomkit_ai::{AiError, ToolDefinition, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -82,10 +81,10 @@ impl Room {
         equip: impl FnOnce(OpenAiAgent) -> OpenAiAgent,
     ) -> Self {
         let fake = FakeOpenAi::start(replies).await;
-        let kit = RoomKit::new();
-        kit.set_environment(SequentialEnvironment::new(
-            Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
-        ));
+        let kit = kit_with_environment(
+            Default::default(),
+            SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
+        );
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         let web = RecordingTransport::new(channel("web"), ChannelType::WEBSOCKET);
         let config = adjust(
@@ -365,7 +364,7 @@ async fn an_unreachable_endpoint_fails_the_turn_without_naming_its_url() {
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = closed.local_addr().unwrap();
     drop(closed);
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let config = OpenAiConfig::new(format!("http://{address}/v1"), API_KEY, "m");
     kit.register_channel(sms.clone()).unwrap();

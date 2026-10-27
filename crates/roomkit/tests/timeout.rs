@@ -7,8 +7,12 @@
 //! kit clock that stands still bounds the call all the same, and a timeout
 //! past the clocks' range bounds nothing.
 //!
-//! A refusal is deterministic: what it waits for outlasts the bound by far.
-//! The call that follows, which shows what was left free, runs unbounded.
+//! A kit with no `process_timeout` set bounds a call to 30 seconds, as
+//! the Python implementation's does.
+//!
+//! A refusal is deterministic: what it waits for outlasts the bound by far,
+//! and the tests that refuse run on tokio's paused clock, so the call that
+//! follows, which shows what was left free, keeps the same bound.
 //!
 //! The waits for the ticket and for the room lock are made to last by the
 //! kit's own tests, which hold a ticket and the lock as an earlier holder
@@ -31,10 +35,10 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventContent, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConversationStore, FrameworkEvent, HookExecution,
-    HookSpec, HookTrigger, InboundResult, RoomKit, SequentialEnvironment,
+    HookSpec, HookTrigger, InboundResult, RoomKit, RoomKitOptions,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -56,14 +60,26 @@ fn message(text: &str) -> InboundMessage {
 }
 
 /// A kit with an SMS transport attached to `room_1`, and a
-/// `process_timeout`.
+/// `process_timeout` of [`TIMEOUT`].
 async fn room() -> RoomKit {
-    let kit = RoomKit::new();
+    room_bound_by(TIMEOUT).await
+}
+
+/// [`room`], its calls bounded by `process_timeout`.
+async fn room_bound_by(process_timeout: Duration) -> RoomKit {
+    room_with(RoomKit::new(RoomKitOptions {
+        process_timeout,
+        ..Default::default()
+    }))
+    .await
+}
+
+/// `kit` with an SMS transport attached to `room_1`.
+async fn room_with(kit: RoomKit) -> RoomKit {
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.create_room(&room_id()).await.unwrap();
     kit.attach(&room_id(), &channel("sms")).await.unwrap();
-    kit.set_process_timeout(Some(TIMEOUT));
     kit
 }
 
@@ -135,14 +151,13 @@ async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
     timeline
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_timeout_during_an_off_lock_hook_writes_nothing_and_the_next_message_goes_through() {
     let kit = room().await;
     slow_the_first_time(&kit, false);
     let mut events = kit.subscribe();
     let result = send(&kit, "Bonjour").await;
     let written = timeline(&kit).await.len();
-    kit.set_process_timeout(None);
     let next = send(&kit, "Still there?").await;
     assert_eq!(
         (
@@ -162,7 +177,7 @@ async fn a_timeout_during_an_off_lock_hook_writes_nothing_and_the_next_message_g
 }
 
 /// The lock is released: a lifecycle change takes it at once after.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_timeout_during_a_locked_hook_releases_the_lock_and_names_the_event() {
     let kit = room().await;
     slow_the_first_time(&kit, true);
@@ -170,7 +185,6 @@ async fn a_timeout_during_a_locked_hook_releases_the_lock_and_names_the_event() 
     let result = send(&kit, "Bonjour").await;
     let written = timeline(&kit).await.len();
     let paused = tokio::time::timeout(BOUND, kit.pause_room(&room_id())).await;
-    kit.set_process_timeout(None);
     let next = send(&kit, "Still there?").await;
     assert_eq!(
         (
@@ -196,8 +210,7 @@ async fn a_timeout_during_a_locked_hook_releases_the_lock_and_names_the_event() 
 /// timeout, never as the call's.
 #[tokio::test]
 async fn a_hook_s_own_timeout_stays_a_hook_error() {
-    let kit = room().await;
-    kit.set_process_timeout(Some(BOUND));
+    let kit = room_bound_by(BOUND).await;
     let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
     spec.timeout = Duration::from_millis(20);
     kit.hook(spec, |_, _| async {
@@ -285,10 +298,9 @@ impl Channel for Slow {
 /// bounded.
 #[tokio::test]
 async fn a_slow_delivery_never_times_out_the_committed_event() {
-    let kit = room().await;
     // The decision has a quarter of a second; the delivery outlasts it.
     let bound = Duration::from_millis(250);
-    kit.set_process_timeout(Some(bound));
+    let kit = room_bound_by(bound).await;
     kit.register_channel(Slow::new(bound * 3, false)).unwrap();
     kit.attach(&room_id(), &channel("slow")).await.unwrap();
     let mut events = kit.subscribe();
@@ -310,7 +322,6 @@ async fn a_slow_delivery_never_times_out_the_committed_event() {
 #[tokio::test]
 async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
     let kit = room().await;
-    kit.set_process_timeout(None);
     let slow = Slow::new(Duration::ZERO, true);
     let (delivering, release) = (Arc::clone(&slow.delivering), Arc::clone(&slow.release));
     kit.register_channel(slow).unwrap();
@@ -323,7 +334,6 @@ async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
     tokio::time::timeout(BOUND, delivering.notified())
         .await
         .unwrap();
-    kit.set_process_timeout(Some(TIMEOUT));
     let mut events = kit.subscribe();
     let second = {
         let kit = kit.clone();
@@ -362,14 +372,20 @@ async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
 
 /// The kit's clock stands still: the deadline set on it is waited for on
 /// the runtime's clock all the same.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_kit_clock_that_stands_still_bounds_the_call_all_the_same() {
-    let kit = room().await;
     let now = Timestamp::from_unix_millis(1_792_677_780_000).unwrap();
-    kit.set_environment(SequentialEnvironment::new(now));
+    let options = RoomKitOptions {
+        process_timeout: TIMEOUT,
+        ..Default::default()
+    };
+    let kit = room_with(kit_with_environment(
+        options,
+        SequentialEnvironment::new(now),
+    ))
+    .await;
     slow_the_first_time(&kit, false);
     let result = send(&kit, "Bonjour").await;
-    kit.set_process_timeout(None);
     let next = send(&kit, "Still there?").await;
     assert_eq!(
         (refusal(&result), next.event.map(|event| event.status)),
@@ -381,11 +397,10 @@ async fn a_kit_clock_that_stands_still_bounds_the_call_all_the_same() {
 /// panics.
 #[tokio::test]
 async fn a_timeout_past_the_clocks_range_bounds_nothing() {
-    let kit = room().await;
     let seven_thousand_years = Duration::from_hours(7_000 * 365 * 24);
     let mut statuses = Vec::new();
     for timeout in [Duration::MAX, seven_thousand_years] {
-        kit.set_process_timeout(Some(timeout));
+        let kit = room_bound_by(timeout).await;
         let result = send(&kit, "Bonjour").await;
         statuses.push(result.event.map(|event| event.status));
     }
@@ -393,6 +408,28 @@ async fn a_timeout_past_the_clocks_range_bounds_nothing() {
         statuses,
         [Some(EventStatus::Delivered), Some(EventStatus::Delivered)]
     );
+}
+
+/// RFC §13.6: a kit built with no `process_timeout` bounds a call to 30
+/// seconds, Python's `process_timeout=30.0`: a hook that waits 31 seconds,
+/// within its own 60 seconds, has the message blocked `process_timeout`.
+#[tokio::test(start_paused = true)]
+async fn process_timeout_defaults_to_30_seconds() {
+    let kit = room_with(RoomKit::new(Default::default())).await;
+    let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    spec.timeout = Duration::from_secs(60);
+    kit.hook(spec, |_, _| async {
+        tokio::time::sleep(Duration::from_secs(31)).await;
+        Ok(HookResult::allow())
+    })
+    .unwrap();
+    let room = room_id();
+    let call = kit.process_inbound_in(&room, message("Bonjour"));
+    let result = tokio::time::timeout(Duration::from_secs(120), call)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(refusal(&result), timed_out());
 }
 
 /// Every row of a room's timeline, the refused ones included.

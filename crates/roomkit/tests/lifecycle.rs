@@ -14,11 +14,12 @@ use roomkit::model::{
     ChannelType, EventContent, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId,
     RoomOptions, RoomStatus, Timestamp,
 };
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{
+    EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{
     CHANNEL_NOT_REGISTERED, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    FrameworkEvent, HookTrigger, InboundError, KitError, RoomKit, SequentialEnvironment,
-    TransitionReason,
+    FrameworkEvent, HookTrigger, InboundError, KitError, RoomKit, TransitionReason,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -65,8 +66,7 @@ impl Clock {
 /// pause it after 60 seconds without activity and close it 120 seconds
 /// after the pause.
 async fn timed_room(clock: &Clock) -> (RoomKit, RecordingTransport) {
-    let kit = RoomKit::new();
-    kit.set_environment(Arc::clone(&clock.0));
+    let kit = kit_with_environment(Default::default(), Arc::clone(&clock.0));
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
     let mut timers = RoomOptions::default();
@@ -215,7 +215,7 @@ mod timers {
 
     #[tokio::test]
     async fn the_sweeper_refuses_a_zero_period() {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         assert!(matches!(
             kit.run_timers(Duration::ZERO),
             Err(KitError::ZeroPeriod)
@@ -224,7 +224,7 @@ mod timers {
 
     #[test]
     fn the_sweeper_needs_a_tokio_runtime() {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         assert!(matches!(
             kit.run_timers(Duration::from_secs(1)),
             Err(KitError::NoRuntime)
@@ -354,7 +354,7 @@ mod unregistering {
     use pretty_assertions::assert_eq;
 
     async fn room_with_sms_and_ws() -> (RoomKit, RecordingTransport, RecordingTransport) {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
         kit.register_channel(sms.clone()).unwrap();
@@ -529,7 +529,7 @@ mod unregistering {
 
     #[tokio::test]
     async fn an_unknown_channel_fails() {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         assert_eq!(
             kit.unregister_channel(&channel("sms")),
             Err(KitError::UnknownChannel(channel("sms")))
@@ -613,7 +613,7 @@ mod creating {
     /// `create_room` returns, however long the hook takes.
     #[tokio::test]
     async fn returns_once_its_on_room_created_hooks_are_over() {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         kit.register_channel(EchoAgent::new(channel("ai"), "Hello"))
             .unwrap();
         let attaching = kit.clone();
@@ -640,7 +640,7 @@ mod metadata_updates {
     use pretty_assertions::assert_eq;
 
     async fn tagged_room() -> roomkit::model::Room {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(Tagger::new()).unwrap();
@@ -675,7 +675,7 @@ mod metadata_updates {
     /// does.
     #[tokio::test]
     async fn create_room_drops_a_reserved_metadata_key() {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let mut options = RoomOptions::default();
         options.metadata = Metadata::from_iter([
             ("roomkit:x".to_owned(), 1.into()),
@@ -706,7 +706,7 @@ mod bindings {
     use pretty_assertions::assert_eq;
 
     async fn sms_and_agent() -> (RoomKit, RecordingTransport, EchoAgent) {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         let agent = EchoAgent::new(channel("ai"), "Hello back");
         kit.register_channel(sms.clone()).unwrap();

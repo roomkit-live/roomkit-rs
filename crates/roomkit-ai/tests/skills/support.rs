@@ -108,7 +108,7 @@ impl Room {
         skills: SkillRegistry,
         adjust: impl FnOnce(AiAgent<ScriptedProvider>) -> AiAgent<ScriptedProvider>,
     ) -> Self {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         kit.register_channel(sms).unwrap();
         kit.register_channel(agent(model, skills, adjust)).unwrap();

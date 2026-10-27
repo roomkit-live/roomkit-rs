@@ -14,10 +14,10 @@ use roomkit::model::{
     EventType, EventUpdates, InboundMessage, ParticipantId, RoomEvent, RoomId, RoomOptions,
     RoomStatus, Timestamp, Visibility,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
     ConversationStore, InboundError, KitError, LifecycleError, MutationError, OrganizationKit,
-    RoomFilter, RoomKit, SequentialEnvironment, StoreError, TimelineQuery,
+    RoomFilter, RoomKit, StoreError, TimelineQuery,
 };
 
 const START_MILLIS: i64 = 1_792_677_780_000;
@@ -37,8 +37,7 @@ async fn room_of(owner: Option<&str>) -> (RoomKit, Arc<SequentialEnvironment>) {
     let clock = Arc::new(SequentialEnvironment::new(
         Timestamp::from_unix_millis(START_MILLIS).unwrap(),
     ));
-    let kit = RoomKit::new();
-    kit.set_environment(Arc::clone(&clock));
+    let kit = kit_with_environment(Default::default(), Arc::clone(&clock));
     for (id, channel_type) in [("sms", ChannelType::SMS), ("ws", ChannelType::WEBSOCKET)] {
         kit.register_channel(RecordingTransport::new(channel(id), channel_type))
             .unwrap();
@@ -109,7 +108,7 @@ async fn as_stored(kit: &RoomKit) -> (RoomStatus, u64, Vec<(String, bool)>) {
 
 #[tokio::test]
 async fn a_room_an_organization_creates_belongs_to_it() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     kit.for_organization("bank")
         .create_room(&room_id())
         .await

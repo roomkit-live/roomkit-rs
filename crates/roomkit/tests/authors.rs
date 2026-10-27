@@ -87,7 +87,7 @@ const SENT: [(&str, &str, Option<&str>, Option<Record>); 11] = [
 
 #[tokio::test]
 async fn names_that_read_alike_are_ranked_as_the_python_implementation_ranks_them() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let room = RoomId::new("room_1").unwrap();
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();

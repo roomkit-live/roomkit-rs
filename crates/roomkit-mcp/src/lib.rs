@@ -34,7 +34,7 @@
 //! let agent = AiAgent::new(ChannelId::new("assistant")?, model)
 //!     .with_server_instructions("files", files.instructions())?
 //!     .with_tools(files)?;
-//! let kit = RoomKit::new();
+//! let kit = RoomKit::new(Default::default());
 //! kit.register_channel(agent)?;
 //! // ...
 //! kit.shutdown().await; // the server's process stops

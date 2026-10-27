@@ -166,7 +166,7 @@ impl Channel for Leaving {
 /// and what it was handed is stored `cancelled`.
 #[tokio::test(start_paused = true)]
 async fn a_streaming_reader_that_leaves_crosses_as_close() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     kit.register_channel(roomkit::testing::RecordingTransport::new(
         channel("sms"),
         ChannelType::SMS,

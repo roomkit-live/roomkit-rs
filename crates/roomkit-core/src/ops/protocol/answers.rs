@@ -6,7 +6,7 @@ use super::{
     ChannelOutcome, ChannelRequest, EffectId, HoldOutcome, HoldRequest, HookAnswer, HookRequest,
     Outcome, ProtocolError, Request, StoreOutcome, StoreRequest,
 };
-use crate::model::{ChannelOutput, ErrorRecord, IdentityId, RoomContext, RoomEvent, RoomId};
+use crate::model::{ChannelOutput, ErrorRecord, Identity, RoomContext, RoomEvent, RoomId};
 use crate::rules::hook_chain::HookOutcome;
 
 /// The kind of a request, which `Io` keeps until the request is answered,
@@ -340,7 +340,7 @@ impl Outcome {
     }
 
     /// The identity an address resolved to, if any.
-    pub(crate) fn into_resolved(self) -> Result<Option<IdentityId>, ErrorRecord> {
+    pub(crate) fn into_resolved(self) -> Result<Option<Identity>, ErrorRecord> {
         match self {
             Self::Store(StoreOutcome::Resolved(identity)) => Ok(identity),
             other => Err(other.into_failure()),

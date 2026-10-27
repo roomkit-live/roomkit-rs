@@ -373,7 +373,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         match request {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) => self.spawn(id, work, deadline, async move {
-                calls::store(&inner.store, request).await
+                calls::store(&*inner.store, request).await
             }),
             Request::Channel(request) => {
                 let environment = Arc::clone(&self.environment);
@@ -465,7 +465,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let inner: &'kit Arc<Inner<S>> = self.inner;
         inner.cursors.over(&room_id, indexes);
         let caught_up = async move {
-            inner.cursors.catch_up(&inner.store, &room_id).await;
+            inner.cursors.catch_up(&*inner.store, &room_id).await;
             (id, Waited::Answered(outcome))
         };
         self.waits.push((id, Box::pin(caught_up)));

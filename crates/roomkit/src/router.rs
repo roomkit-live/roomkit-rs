@@ -1,99 +1,126 @@
 //! Inbound room routing (RFC §10.4): which room a message that names none
 //! belongs to.
 //!
-//! The kit asks its router through the core's `Route` request, as it runs a
-//! hook, after the core has read the identity the sender's address resolves
-//! to. [`DefaultRouter`] applies the RFC's default strategy
+//! The kit asks its router, after the core has read the identity the
+//! sender's address resolves to, with the Python implementation's
+//! parameters: the channel, its type, and [`RouteOptions`].
+//! [`DefaultInboundRoomRouter`] applies the RFC's default strategy
 //! ([`rules::routing`](roomkit_core::rules::routing)) to the rooms the
 //! message's channel reaches, read from the store; an integrator gives the
-//! kit a strategy of its own with
-//! [`RoomKit::set_router`](crate::RoomKit::set_router).
+//! kit a strategy of its own in
+//! [`RoomKitOptions::inbound_router`](crate::RoomKitOptions::inbound_router).
 
 use std::collections::HashSet;
 use std::error::Error;
+use std::fmt;
 use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
-use roomkit_core::model::{RoomId, RoomStatus};
-use roomkit_core::rules::routing::{self, Candidate, Refusal, RouteQuery};
+use roomkit_core::model::{ChannelId, ChannelType, Identity, Metadata, RoomId, RoomStatus};
+use roomkit_core::rules::addresses::{AddressForm, Addressing};
+use roomkit_core::rules::routing::{self, Candidate, Refusal, RouteQuery, Sender};
 
-use crate::channel::BoxFuture;
+use crate::registered::RegisteredChannel;
 use crate::store::{self, ConversationStore, RoomFilter, StoreError};
 
 /// What a router failed with. The message fails with it, before anything is
 /// written (RFC §10.4).
 pub type RouterError = Box<dyn Error + Send + Sync>;
 
+/// What a router's [`route`](InboundRoomRouter::route) returns: a boxed
+/// future, so that the kit holds its router as a trait object.
+pub type RouterFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<RoomId>, RouterError>> + Send + 'a>>;
+
+/// The registered channel by its id, as the kit holds it: what a router
+/// reads of a channel, its recipient key and the address a binding delivers
+/// to, in its form (RFC §5.7). The Python implementation's `channel_of`.
+pub type ChannelOf = Arc<dyn Fn(&ChannelId) -> Option<Arc<dyn RegisteredChannel>> + Send + Sync>;
+
+/// The sender name the framework's own messages carry, which names no
+/// correspondent (RFC §10.4).
+const SYSTEM_SENDER: &str = "system";
+
 /// A routing strategy (RFC §10.4 `InboundRoomRouter`): the room a message
 /// that names none belongs to, or `None` for a new room.
 ///
-/// Implement it with `async fn`, for any store, or for the store of your
-/// kit. The router answers with a room's id, which step 2 treats as a room
-/// id in hand (RFC §10.1 step 2): a room of another organization than the
-/// caller's fails the message, and a missing room is created with the id.
-/// Unlike a room the caller names, the framework then records the sender on
-/// the room's binding of the channel under the room lock; a room whose
-/// binding names someone else by then, that is CLOSED or ARCHIVED by then,
-/// or PAUSED but neither the sender's conversation by step 1 nor bound to
-/// the channel as a group (gap G-045), or that step 3 no longer admits the
-/// sender to (someone else heard there meanwhile), is not the message's,
-/// which is routed once more, then given a new room (gap G-055): step 2
-/// never refuses it `room_closed`. A room closed once step 2's lock is
-/// released refuses the message at step 6, as it refuses any event. A
-/// PAUSED room that is the sender's conversation, or bound to the channel
-/// as a group, takes the message, which resumes it. A strategy that sends
-/// several senders to one room declares that room's binding `group`.
+/// The router answers with a room's id, which step 2 treats as a room id in
+/// hand (RFC §10.1 step 2): a room of another organization than the
+/// caller's is not found, and a missing room is created with the id. Unlike
+/// a room the caller names, the framework then records the sender on the
+/// room's binding of the channel under the room lock; a room whose binding
+/// names someone else by then, that is CLOSED or ARCHIVED by then, or PAUSED
+/// but neither the sender's conversation by step 1 nor bound to the channel
+/// as a group (gap G-045), or that step 3 no longer admits the sender to
+/// (someone else heard there meanwhile), is not the message's, which is
+/// routed once more, then given a new room (gap G-055): step 2 never
+/// refuses it `room_closed`. A room closed once step 2's lock is released
+/// refuses the message at step 6, as it refuses any event. A PAUSED room
+/// that is the sender's conversation, or bound to the channel as a group,
+/// takes the message, which resumes it. A strategy that sends several
+/// senders to one room declares that room's binding `group`.
 ///
 /// A strategy MUST NOT guess among several rooms, and MUST answer the same
 /// for the same stored state (RFC §10.4).
 ///
 /// ```
-/// use roomkit::model::RoomId;
-/// use roomkit::{ConversationStore, InboundRoomRouter, RouteQuery, RouterError};
+/// use roomkit::model::{ChannelId, ChannelType, RoomId};
+/// use roomkit::{InboundRoomRouter, RouteOptions, RouterFuture};
 ///
-/// /// Routes a message to the room its `ticket` metadata names, when the
-/// /// room exists; any other message gets a new room.
+/// /// Routes a message to the room its `ticket` metadata names; any other
+/// /// message gets a new room.
 /// struct ByTicket;
 ///
-/// impl<S: ConversationStore> InboundRoomRouter<S> for ByTicket {
-///     async fn route(&self, store: &S, query: &RouteQuery) -> Result<Option<RoomId>, RouterError> {
-///         let Some(ticket) = query.metadata.get("ticket").and_then(|ticket| ticket.as_str()) else {
-///             return Ok(None);
-///         };
-///         let room = store.get_room(&RoomId::new(ticket)?).await?;
-///         Ok(room.map(|room| room.id))
+/// impl InboundRoomRouter for ByTicket {
+///     fn route<'a>(
+///         &'a self,
+///         _channel_id: &'a ChannelId,
+///         _channel_type: &'a ChannelType,
+///         options: RouteOptions,
+///     ) -> RouterFuture<'a> {
+///         Box::pin(async move {
+///             let data = options.channel_data.unwrap_or_default();
+///             let Some(ticket) = data.get("ticket").and_then(|ticket| ticket.as_str()) else {
+///                 return Ok(None);
+///             };
+///             Ok(Some(RoomId::new(ticket)?))
+///         })
 ///     }
 /// }
 /// ```
-pub trait InboundRoomRouter<S: ConversationStore>: Send + Sync + 'static {
-    /// The room `query`'s message belongs to, `None` for a new room.
-    fn route(
-        &self,
-        store: &S,
-        query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send;
+pub trait InboundRoomRouter: Send + Sync + 'static {
+    /// The room a message on `channel_id`, of `channel_type`, belongs to,
+    /// `None` for a new room.
+    fn route<'a>(
+        &'a self,
+        channel_id: &'a ChannelId,
+        channel_type: &'a ChannelType,
+        options: RouteOptions,
+    ) -> RouterFuture<'a>;
 }
 
-/// An [`InboundRoomRouter`] behind a trait object, so the kit holds a
-/// router of any type.
-pub(crate) trait DynRouter<S>: Send + Sync {
-    fn route<'call>(
-        &'call self,
-        store: &'call S,
-        query: &'call RouteQuery,
-    ) -> BoxFuture<'call, Result<Option<RoomId>, RouterError>>;
+/// What a router is told of a message beside its channel, the Python
+/// implementation's `route` keywords.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RouteOptions {
+    /// The address naming the message's conversation, in the channel's
+    /// form: the sender's, or on a chat channel the chat it was posted in
+    /// (RFC §5.7); `system` for the framework's own sender, and `None` for a
+    /// message with no address.
+    pub participant_id: Option<String>,
+    /// The message's metadata.
+    pub channel_data: Option<Metadata>,
+    /// The organization the caller acts for (RFC §17.2), `None` when the
+    /// call names none.
+    pub organization_id: Option<String>,
+    /// The identity the store resolves `participant_id` to within that
+    /// organization, read by the kit once per message before the first
+    /// route (RFC §10.4, §14.1).
+    pub identity: Option<Identity>,
 }
 
-impl<S: ConversationStore, R: InboundRoomRouter<S>> DynRouter<S> for R {
-    fn route<'call>(
-        &'call self,
-        store: &'call S,
-        query: &'call RouteQuery,
-    ) -> BoxFuture<'call, Result<Option<RoomId>, RouterError>> {
-        Box::pin(InboundRoomRouter::route(self, store, query))
-    }
-}
-
-/// The RFC's default routing strategy over the kit's store (RFC §10.4): the
+/// The RFC's default routing strategy over a store (RFC §10.4): the
 /// sender's newest conversation on the channel, ACTIVE or PAUSED, else the
 /// one room bound to the channel, ACTIVE or PAUSED with a `group` binding,
 /// when it admits the sender, else a new room (gap G-045).
@@ -102,23 +129,133 @@ impl<S: ConversationStore, R: InboundRoomRouter<S>> DynRouter<S> for R {
 /// channel reaches, with its bindings and participants, and what the room
 /// has heard on the channel when it is the one room bound to it step 3
 /// considers, then decides on what it read, comparing addresses in the
-/// channel's form. A strategy wrapping the default calls its
-/// [`route`](InboundRoomRouter::route) for the rooms it does not decide
-/// itself. A message is routed in a number of store reads that grows with the
-/// rooms its channel reaches. A room step 3 refuses because its binding
+/// form of the channel `channel_of` gives; without one, addresses compare
+/// as written and no binding's recipient names anyone. A strategy wrapping
+/// the default calls its [`route`](InboundRoomRouter::route) for the rooms
+/// it does not decide itself. A room step 3 refuses because its binding
 /// holds a value under the recipient key that is not a recipient is logged
 /// as a warning naming the binding and the value's type (RFC §5.7).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DefaultRouter;
+///
+/// The kit's own default router reads its store and its registered
+/// channels ([`RoomKit::get_channel`](crate::RoomKit::get_channel)).
+pub struct DefaultInboundRoomRouter<S> {
+    store: Arc<S>,
+    channel_of: Option<ChannelOf>,
+}
 
-impl<S: ConversationStore> InboundRoomRouter<S> for DefaultRouter {
-    async fn route(&self, store: &S, query: &RouteQuery) -> Result<Option<RoomId>, RouterError> {
-        let candidates = Self::candidates(store, query).await?;
-        let routed = routing::routed(query, &candidates);
-        if let Some((room_id, Refusal::NotARecipient(kind))) = &routed.refused {
-            not_a_recipient(room_id, query, kind);
+/// What [`DefaultInboundRoomRouter::new`] takes beside the store.
+#[derive(Clone, Default)]
+pub struct DefaultInboundRoomRouterOptions {
+    /// The registered channel by its id; `None` reads none.
+    pub channel_of: Option<ChannelOf>,
+}
+
+impl fmt::Debug for DefaultInboundRoomRouterOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DefaultInboundRoomRouterOptions")
+            .field("channel_of", &self.channel_of.is_some())
+            .finish()
+    }
+}
+
+impl<S> fmt::Debug for DefaultInboundRoomRouter<S> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DefaultInboundRoomRouter")
+            .field("channel_of", &self.channel_of.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S: ConversationStore> DefaultInboundRoomRouter<S> {
+    /// The default strategy over `store`.
+    pub fn new(store: Arc<S>, options: DefaultInboundRoomRouterOptions) -> Self {
+        Self {
+            store,
+            channel_of: options.channel_of,
         }
-        Ok(routed.room_id)
+    }
+
+    /// The query the rules read: the sender as routing names them, and the
+    /// form of the channel's addresses.
+    fn query(
+        &self,
+        channel_id: &ChannelId,
+        channel_type: &ChannelType,
+        options: RouteOptions,
+    ) -> RouteQuery {
+        let form = self
+            .channel_of
+            .as_ref()
+            .and_then(|channel_of| channel_of(channel_id))
+            .map_or_else(as_written, |channel| channel.form());
+        let sender_id = options.participant_id.unwrap_or_default();
+        let address =
+            (!sender_id.is_empty() && sender_id != SYSTEM_SENDER).then(|| sender_id.clone());
+        let identity_id = options
+            .identity
+            .as_ref()
+            .map(|identity| identity.id.clone());
+        RouteQuery {
+            channel_id: channel_id.clone(),
+            channel_type: channel_type.clone(),
+            sender_id,
+            metadata: options.channel_data.unwrap_or_default(),
+            organization_id: options.organization_id,
+            sender: Sender {
+                address,
+                identity_id,
+            },
+            form,
+            identity: options.identity,
+        }
+    }
+}
+
+impl<S: ConversationStore> InboundRoomRouter for DefaultInboundRoomRouter<S> {
+    fn route<'a>(
+        &'a self,
+        channel_id: &'a ChannelId,
+        channel_type: &'a ChannelType,
+        options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        let query = self.query(channel_id, channel_type, options);
+        Box::pin(async move {
+            let candidates = candidates(&*self.store, &query).await?;
+            let routed = routing::routed(&query, &candidates);
+            if let Some((room_id, Refusal::NotARecipient(kind))) = &routed.refused {
+                not_a_recipient(room_id, &query, kind);
+            }
+            Ok(routed.room_id)
+        })
+    }
+}
+
+/// The form of a channel nobody describes: addresses as written, no
+/// recipient key.
+fn as_written() -> AddressForm {
+    AddressForm {
+        addressing: Addressing::AsWritten,
+        country_code: None,
+        recipient_key: None,
+    }
+}
+
+/// What the kit asks its router for the message `query` describes: Python's
+/// `route(channel_id, channel_type, participant_id, channel_data, *,
+/// organization_id, identity)`.
+pub(crate) fn options_of(query: &RouteQuery) -> RouteOptions {
+    let participant_id = if query.is_system() {
+        Some(SYSTEM_SENDER.to_owned())
+    } else {
+        query.sender.address.clone()
+    };
+    RouteOptions {
+        participant_id,
+        channel_data: Some(query.metadata.clone()),
+        organization_id: query.organization_id.clone(),
+        identity: query.identity.clone(),
     }
 }
 
@@ -139,58 +276,56 @@ fn not_a_recipient(room_id: &RoomId, query: &RouteQuery, kind: &str) {
     );
 }
 
-impl DefaultRouter {
-    /// The rooms the default strategy reads for `query`: every ACTIVE and
-    /// PAUSED room of the caller's organization the channel reaches, binding
-    /// it or holding a participant reached through it, with what the room
-    /// heard on the channel when it is the one room bound to it step 3
-    /// considers (gap G-045).
-    ///
-    /// The rooms are listed once per status, so that the router reads no
-    /// CLOSED or ARCHIVED room, which pile up on a channel over time. The
-    /// PAUSED rooms are listed first: a room a message resumes between the
-    /// two lists is in both, and read once. A room paused between them is
-    /// in neither, and the message is routed without it (gap G-055).
-    ///
-    /// # Errors
-    ///
-    /// Returns the store's error when a read fails.
-    pub(crate) async fn candidates<S: ConversationStore>(
-        store: &S,
-        query: &RouteQuery,
-    ) -> Result<Vec<Candidate>, StoreError> {
-        let mut candidates = Vec::new();
-        let mut read = HashSet::new();
-        for status in [RoomStatus::Paused, RoomStatus::Active] {
-            let filter = RoomFilter {
-                organization_id: query.organization_id.clone(),
-                status: Some(status),
-                channel_id: Some(query.channel_id.clone()),
-                ..RoomFilter::default()
-            };
-            for room in store.list_rooms(&filter).await? {
-                if !read.insert(room.id.clone()) {
-                    continue;
-                }
-                if let Some(context) = store.load_context(&room.id, 0).await? {
-                    candidates.push(Candidate::new(context));
-                }
+/// The rooms the default strategy reads for `query`: every ACTIVE and
+/// PAUSED room of the caller's organization the channel reaches, binding it
+/// or holding a participant reached through it, with what the room heard on
+/// the channel when it is the one room bound to it step 3 considers (gap
+/// G-045).
+///
+/// The rooms are listed once per status, so that the router reads no
+/// CLOSED or ARCHIVED room, which pile up on a channel over time. The
+/// PAUSED rooms are listed first: a room a message resumes between the two
+/// lists is in both, and read once. A room paused between them is in
+/// neither, and the message is routed without it (gap G-055).
+///
+/// # Errors
+///
+/// Returns the store's error when a read fails.
+async fn candidates<S: ConversationStore>(
+    store: &S,
+    query: &RouteQuery,
+) -> Result<Vec<Candidate>, StoreError> {
+    let mut candidates = Vec::new();
+    let mut read = HashSet::new();
+    for status in [RoomStatus::Paused, RoomStatus::Active] {
+        let filter = RoomFilter {
+            organization_id: query.organization_id.clone(),
+            status: Some(status),
+            channel_id: Some(query.channel_id.clone()),
+            ..RoomFilter::default()
+        };
+        for room in store.list_rooms(&filter).await? {
+            if !read.insert(room.id.clone()) {
+                continue;
+            }
+            if let Some(context) = store.load_context(&room.id, 0).await? {
+                candidates.push(Candidate::new(context));
             }
         }
-        let bound: Vec<&Candidate> = candidates
-            .iter()
-            .filter(|candidate| routing::step_three_considers(query, candidate))
-            .collect();
-        let Some(sole) = routing::sole_bound(query, &bound).map(|sole| sole.room.id.clone()) else {
-            return Ok(candidates);
-        };
-        let events = store::whole_timeline(store, &sole).await?;
-        if let Some(candidate) = candidates
-            .iter_mut()
-            .find(|candidate| candidate.room.id == sole)
-        {
-            candidate.heard = routing::heard(&events, &query.channel_id);
-        }
-        Ok(candidates)
     }
+    let bound: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|candidate| routing::step_three_considers(query, candidate))
+        .collect();
+    let Some(sole) = routing::sole_bound(query, &bound).map(|sole| sole.room.id.clone()) else {
+        return Ok(candidates);
+    };
+    let events = store::whole_timeline(store, &sole).await?;
+    if let Some(candidate) = candidates
+        .iter_mut()
+        .find(|candidate| candidate.room.id == sole)
+    {
+        candidate.heard = routing::heard(&events, &query.channel_id);
+    }
+    Ok(candidates)
 }

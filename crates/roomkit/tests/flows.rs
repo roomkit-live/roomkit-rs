@@ -18,11 +18,13 @@ use roomkit::model::{
     ChannelType, EventContent, EventId, EventStatus, HookResult, InboundMessage, RoomContext,
     RoomEvent, RoomId, Timestamp,
 };
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{
+    EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConversationStore, EventDraft, FrameworkEvent,
     HookExecution, HookHandler, HookReturn, HookSpec, HookTrigger, KitError, RoomKit,
-    SequentialEnvironment, default_inbound_event, text_of,
+    default_inbound_event, text_of,
 };
 use tokio::sync::mpsc;
 
@@ -40,10 +42,10 @@ fn message(from: &RecordingTransport, text: &str) -> InboundMessage {
 
 /// A kit with one room, an SMS transport and an echo agent, all attached.
 async fn sms_and_agent() -> (RoomKit, RecordingTransport) {
-    let kit = RoomKit::new();
-    kit.set_environment(SequentialEnvironment::new(
-        Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
-    ));
+    let kit = kit_with_environment(
+        Default::default(),
+        SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
+    );
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let agent = EchoAgent::new(channel("ai"), "You said: ").quoting();
     kit.register_channel(sms.clone()).unwrap();
@@ -389,7 +391,7 @@ async fn a_channel_that_panics_fails_its_delivery_and_the_kit_goes_on() {
 
 #[tokio::test]
 async fn a_muted_agent_is_asked_and_its_answer_stored_blocked() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let agent = EchoAgent::new(channel("ai"), "muted answer");
     kit.register_channel(sms.clone()).unwrap();
@@ -417,7 +419,7 @@ async fn a_muted_agent_is_asked_and_its_answer_stored_blocked() {
 
 #[tokio::test]
 async fn registering_a_channel_is_announced_to_subscribers() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let mut events = kit.subscribe();
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
@@ -429,7 +431,7 @@ async fn registering_a_channel_is_announced_to_subscribers() {
 
 #[tokio::test]
 async fn registering_a_channel_twice_is_refused() {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
     assert!(matches!(
@@ -456,7 +458,7 @@ async fn a_kit_is_shared_by_its_clones() {
 #[tokio::test]
 async fn kits_do_not_share_their_store() {
     let (_kit, _sms) = sms_and_agent().await;
-    let other = RoomKit::new();
+    let other = RoomKit::new(Default::default());
     assert_eq!(other.store().get_room(&room_id()).await.unwrap(), None);
 }
 

@@ -30,7 +30,9 @@ use super::deadline::Stopped;
 use super::instructions::{self, Admission};
 use super::named_room::{Mode, Named, NamedRoom};
 use super::{InboundError, InboundResult, result, stamp};
-use crate::model::{ChannelType, EventId, InboundMessage, RoomContext, RoomEvent, RoomId};
+use crate::model::{
+    ChannelType, EventId, Identity, InboundMessage, RoomContext, RoomEvent, RoomId,
+};
 use crate::ops::io::Bound;
 use crate::ops::protocol::{ChannelRequest, EffectId, Outcome, Request, StoreRequest};
 use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
@@ -149,6 +151,9 @@ pub(super) struct Arrival {
     /// Who the message is from, as routing names them. The identity is read
     /// once, for a routed message only.
     sender: Sender,
+    /// The identity the sender's address resolved to, which the router is
+    /// handed (RFC §10.4).
+    identity: Option<Identity>,
     /// How many times the router was asked.
     routes: u8,
     /// The room step 2 works on or arrived in; `None` while the message is
@@ -211,6 +216,7 @@ impl Arrival {
                 address,
                 identity_id: None,
             },
+            identity: None,
             routes: 0,
             room: None,
             charge: DeliveryCharge::new(None),
@@ -344,8 +350,9 @@ impl Arrival {
     /// nothing written.
     fn on_resolved(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Arriving {
         match outcome.into_resolved() {
-            Ok(identity_id) => {
-                self.sender.identity_id = identity_id;
+            Ok(identity) => {
+                self.sender.identity_id = identity.as_ref().map(|identity| identity.id.clone());
+                self.identity = identity;
                 self.route(cx);
                 Progress::Waiting
             }
@@ -365,6 +372,7 @@ impl Arrival {
             organization_id: self.organization_id.clone(),
             sender: self.sender.clone(),
             form: self.channel.form(),
+            identity: self.identity.clone(),
         };
         let request = Request::Route {
             query: Box::new(query),

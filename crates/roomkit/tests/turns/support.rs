@@ -7,8 +7,8 @@ use std::future::Future;
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, InboundMessage, Metadata, RoomId, Timestamp, ToolCall,
 };
-use roomkit::testing::RecordingTransport;
-use roomkit::{InboundResult, RoomKit, SequentialEnvironment};
+use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
+use roomkit::{InboundResult, RoomKit};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, ToolContext, ToolDefinition, ToolError, ToolOutput, Tools};
 use serde_json::json;
@@ -52,9 +52,8 @@ where
     F: Fn(ToolCall, ToolContext) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<ToolOutput, ToolError>> + Send + 'static,
 {
-    let kit = RoomKit::new();
     let at: Timestamp = "2026-10-26T12:00:00Z".parse().unwrap();
-    kit.set_environment(SequentialEnvironment::new(at));
+    let kit = kit_with_environment(Default::default(), SequentialEnvironment::new(at));
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     let agent = AiAgent::new(channel("ai"), model())

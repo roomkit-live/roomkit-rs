@@ -8,8 +8,10 @@ use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomEvent, RoomId, Timestamp,
 };
-use roomkit::testing::{EchoAgent, RecordingTransport};
-use roomkit::{ConversationStore, RoomKit, SequentialEnvironment};
+use roomkit::testing::{
+    EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
+};
+use roomkit::{ConversationStore, RoomKit};
 
 fn channel(id: &str) -> ChannelId {
     ChannelId::new(id).unwrap()
@@ -22,10 +24,10 @@ fn room_id() -> RoomId {
 /// A room with the application's WebSocket `app`, the customer's SMS and an
 /// echo agent, all attached.
 async fn room() -> (RoomKit, RecordingTransport, RecordingTransport) {
-    let kit = RoomKit::new();
-    kit.set_environment(SequentialEnvironment::new(
-        Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
-    ));
+    let kit = kit_with_environment(
+        Default::default(),
+        SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
+    );
     let app = RecordingTransport::new(channel("app"), ChannelType::WEBSOCKET);
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     let agent = EchoAgent::new(channel("ai"), "Hello, I am the assistant.");

@@ -6,8 +6,8 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::model::{
-    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelMediaType, ChannelType, RoomId, Timestamp,
+    AgentResponsePolicy, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection,
+    ChannelId, ChannelMediaType, ChannelType, RoomId, Timestamp,
 };
 use crate::rules::addresses::{self, AddressForm, Addressing, CountryCode};
 use crate::rules::chain_depth::DEFAULT_MAX_CHAIN_DEPTH;
@@ -189,6 +189,10 @@ pub struct KitConfig {
     /// §13.6): past it the call is refused `process_timeout`, with nothing
     /// of its event written. `None`, the default, bounds nothing.
     pub process_timeout: Option<Duration>,
+    /// What an agent's own output solicits in a room created without a
+    /// policy of its own, step 2's among them (RFC §19.3.1): the agent
+    /// chain by default.
+    pub agent_response_policy: AgentResponsePolicy,
 }
 
 impl KitConfig {
@@ -200,6 +204,7 @@ impl KitConfig {
             max_chain_depth: DEFAULT_MAX_CHAIN_DEPTH,
             context_window: DEFAULT_CONTEXT_WINDOW,
             process_timeout: None,
+            agent_response_policy: AgentResponsePolicy::default(),
         }
     }
 

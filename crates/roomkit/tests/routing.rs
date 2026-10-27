@@ -8,6 +8,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::future::{Future, ready};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -17,11 +18,12 @@ use roomkit::model::{
     ChannelType, ErrorRecord, EventContent, Identity, IdentityId, InboundMessage, Participant,
     ParticipantId, RoomContext, RoomEvent, RoomId, Timestamp,
 };
-use roomkit::testing::EchoAgent;
+use roomkit::testing::{EchoAgent, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    Addressing, Channel, ChannelDeclaration, ChannelError, ConversationStore, DefaultRouter,
-    HookTrigger, InMemoryStore, InboundError, InboundRoomRouter, KitError, RoomFilter, RoomKit,
-    RouteQuery, RouterError, SequentialEnvironment, text_of,
+    Addressing, Channel, ChannelDeclaration, ChannelError, ChannelOf, ConversationStore,
+    DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookTrigger, InMemoryStore,
+    InboundError, InboundRoomRouter, KitError, RoomFilter, RoomKit, RoomKitOptions, RouteOptions,
+    RouterError, RouterFuture, WeakRoomKit, text_of,
 };
 use tokio::sync::{Barrier, Notify};
 
@@ -95,10 +97,48 @@ impl Channel for Provider {
 /// A kit with an SMS number and an agent an `ON_ROOM_CREATED` hook attaches
 /// to every room created for a message (RFC Appendix B.1).
 fn kit_with_agent() -> (RoomKit, Provider) {
-    let kit = RoomKit::new();
-    kit.set_environment(SequentialEnvironment::new(
-        Timestamp::from_unix_millis(1_792_677_780_000).unwrap(),
-    ));
+    kit_with_agent_on(Default::default())
+}
+
+/// [`kit_with_agent`], routed by `router`.
+fn kit_routed_by(router: Arc<dyn InboundRoomRouter>) -> (RoomKit, Provider) {
+    kit_with_agent_on(RoomKitOptions {
+        inbound_router: Some(router),
+        ..Default::default()
+    })
+}
+
+/// [`kit_with_agent`], routed by what `wrap` makes of the default strategy
+/// over the kit's store and its registered channels, as an integrator's
+/// router wrapping it is built.
+fn kit_wrapping_the_default(
+    wrap: impl FnOnce(DefaultInboundRoomRouter<InMemoryStore>) -> Arc<dyn InboundRoomRouter>,
+) -> (RoomKit, Provider) {
+    let options = RoomKitOptions::default();
+    let built: Arc<OnceLock<WeakRoomKit>> = Arc::default();
+    let reads = Arc::clone(&built);
+    let channel_of: ChannelOf =
+        Arc::new(move |channel_id| reads.get()?.upgrade()?.get_channel(channel_id));
+    let default = DefaultInboundRoomRouter::new(
+        Arc::clone(&options.store),
+        DefaultInboundRoomRouterOptions {
+            channel_of: Some(channel_of),
+        },
+    );
+    let (kit, sms) = kit_with_agent_on(RoomKitOptions {
+        inbound_router: Some(wrap(default)),
+        ..options
+    });
+    built.set(kit.downgrade()).unwrap();
+    (kit, sms)
+}
+
+/// [`kit_with_agent`], built with `options`.
+fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Provider) {
+    let kit = kit_with_environment(
+        options,
+        SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
+    );
     let sms = Provider::new("sms", ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
@@ -338,22 +378,24 @@ struct ByTicket {
     calls: AtomicUsize,
 }
 
-impl<S: ConversationStore> InboundRoomRouter<S> for ByTicket {
-    fn route(
-        &self,
-        _store: &S,
-        query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
+impl InboundRoomRouter for ByTicket {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        options: RouteOptions,
+    ) -> RouterFuture<'a> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let ticket = query
-            .metadata
-            .get("ticket")
+        let ticket = options
+            .channel_data
+            .as_ref()
+            .and_then(|data| data.get("ticket"))
             .and_then(|value| value.as_str());
         let routed = ticket
             .map(RoomId::new)
             .transpose()
             .map_err(RouterError::from);
-        ready(routed)
+        Box::pin(ready(routed))
     }
 }
 
@@ -367,10 +409,9 @@ fn on_ticket(from: &str, ticket: &str) -> InboundMessage {
 /// returns (RFC §10.1 step 2).
 #[tokio::test]
 async fn a_custom_router_routes_to_the_room_it_chooses() {
-    let (kit, _sms) = kit_with_agent();
+    let (kit, _sms) = kit_routed_by(Arc::new(ByTicket::default()));
     let ticket = open_room(&kit, "ticket_42").await;
     open_room(&kit, "ticket_43").await;
-    kit.set_router(ByTicket::default());
     let landed = routed(&kit, on_ticket(ALICE, "ticket_42")).await;
     assert_eq!(
         (landed, correspondent(&kit, &ticket).await),
@@ -382,10 +423,9 @@ async fn a_custom_router_routes_to_the_room_it_chooses() {
 /// for the first is asked once more, then the message gets a new room.
 #[tokio::test]
 async fn a_custom_router_s_room_recorded_for_another_sender_gives_the_message_a_new_room() {
-    let (kit, _sms) = kit_with_agent();
-    let ticket = open_room(&kit, "ticket_42").await;
     let router = Arc::new(ByTicket::default());
-    kit.set_router(SharedRouter(Arc::clone(&router)));
+    let (kit, _sms) = kit_routed_by(router.clone());
+    let ticket = open_room(&kit, "ticket_42").await;
     routed(&kit, on_ticket(ALICE, "ticket_42")).await;
     let bobs = routed(&kit, on_ticket(BOB, "ticket_42")).await;
     assert_eq!(
@@ -403,7 +443,7 @@ async fn a_custom_router_s_room_recorded_for_another_sender_gives_the_message_a_
 /// its binding `group`, and nobody is recorded on it.
 #[tokio::test]
 async fn a_custom_router_s_group_room_takes_every_sender() {
-    let (kit, _sms) = kit_with_agent();
+    let (kit, _sms) = kit_routed_by(Arc::new(ByTicket::default()));
     let group = room("group");
     kit.create_room(&group).await.unwrap();
     let mut options = BindingOptions::default();
@@ -411,7 +451,6 @@ async fn a_custom_router_s_group_room_takes_every_sender() {
     kit.attach_with(&group, &channel("sms"), options)
         .await
         .unwrap();
-    kit.set_router(ByTicket::default());
     let landed = [
         routed(&kit, on_ticket(ALICE, "group")).await,
         routed(&kit, on_ticket(BOB, "group")).await,
@@ -427,11 +466,10 @@ async fn a_custom_router_s_group_room_takes_every_sender() {
 /// more, then given a new room.
 #[tokio::test]
 async fn a_custom_router_s_closed_room_gives_the_message_a_new_room() {
-    let (kit, _sms) = kit_with_agent();
+    let router = Arc::new(ByTicket::default());
+    let (kit, _sms) = kit_routed_by(router.clone());
     let ticket = open_room(&kit, "ticket_42").await;
     kit.close_room(&ticket).await.unwrap();
-    let router = Arc::new(ByTicket::default());
-    kit.set_router(SharedRouter(Arc::clone(&router)));
     let result = kit
         .process_inbound(on_ticket(ALICE, "ticket_42"))
         .await
@@ -447,37 +485,24 @@ async fn a_custom_router_s_closed_room_gives_the_message_a_new_room() {
     );
 }
 
-/// A router behind a shared handle, so a test reads what it counted.
-struct SharedRouter<R>(Arc<R>);
-
-impl<S: ConversationStore, R: InboundRoomRouter<S>> InboundRoomRouter<S> for SharedRouter<R> {
-    fn route(
-        &self,
-        store: &S,
-        query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
-        self.0.route(store, query)
-    }
-}
-
 /// A router that cannot reach what it routes by.
 struct Unreachable;
 
-impl<S: ConversationStore> InboundRoomRouter<S> for Unreachable {
-    fn route(
-        &self,
-        _store: &S,
-        _query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
-        ready(Err("the CRM is unreachable".into()))
+impl InboundRoomRouter for Unreachable {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        _options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        Box::pin(ready(Err("the CRM is unreachable".into())))
     }
 }
 
 /// RFC §10.4: a failing router fails the message before any write.
 #[tokio::test]
 async fn a_failing_router_fails_the_message_with_nothing_written() {
-    let (kit, sms) = kit_with_agent();
-    kit.set_router(Unreachable);
+    let (kit, sms) = kit_routed_by(Arc::new(Unreachable));
     let failed = kit.process_inbound(message(ALICE, "Bonjour")).await;
     let rooms = kit
         .store()
@@ -520,7 +545,7 @@ async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
         (Provider::new("telegram", ChannelType::TELEGRAM), "chat_id"),
         (slack(), "channel"),
     ] {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let channel_id = chat_channel.declaration.channel_id.clone();
         kit.register_channel(chat_channel.clone()).unwrap();
         kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
@@ -568,7 +593,7 @@ async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
 async fn a_room_the_host_opened_for_a_chat_id_is_the_chat_s() {
     let mut landed = Vec::new();
     for held in [7.into(), "7".into()] {
-        let kit = RoomKit::new();
+        let kit = RoomKit::new(Default::default());
         let telegram = Provider::new("tg", ChannelType::TELEGRAM);
         kit.register_channel(telegram.clone()).unwrap();
         kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
@@ -634,22 +659,26 @@ async fn two_first_messages_at_once_open_a_room_each() {
 /// The default router, whose first two answers wait for each other: both
 /// messages are routed before either is recorded.
 struct BothRoutedFirst {
+    default: DefaultInboundRoomRouter<InMemoryStore>,
     gate: Barrier,
     calls: AtomicUsize,
 }
 
-impl InboundRoomRouter<InMemoryStore> for BothRoutedFirst {
-    async fn route(
-        &self,
-        store: &InMemoryStore,
-        query: &RouteQuery,
-    ) -> Result<Option<RoomId>, RouterError> {
-        let call = self.calls.fetch_add(1, Ordering::SeqCst);
-        let answer = DefaultRouter.route(store, query).await;
-        if call < 2 {
-            self.gate.wait().await;
-        }
-        answer
+impl InboundRoomRouter for BothRoutedFirst {
+    fn route<'a>(
+        &'a self,
+        channel_id: &'a ChannelId,
+        channel_type: &'a ChannelType,
+        options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        Box::pin(async move {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let answer = self.default.route(channel_id, channel_type, options).await;
+            if call < 2 {
+                self.gate.wait().await;
+            }
+            answer
+        })
     }
 }
 
@@ -660,13 +689,18 @@ impl InboundRoomRouter<InMemoryStore> for BothRoutedFirst {
 /// two senders recorded on one binding.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_first_messages_into_one_open_room_at_once_record_one_and_route_the_other_again() {
-    let (kit, _sms) = kit_with_agent();
-    let opened = open_room(&kit, "support").await;
-    let router = Arc::new(BothRoutedFirst {
-        gate: Barrier::new(2),
-        calls: AtomicUsize::new(0),
+    let router = OnceLock::new();
+    let (kit, _sms) = kit_wrapping_the_default(|default| {
+        let wrapped = Arc::new(BothRoutedFirst {
+            default,
+            gate: Barrier::new(2),
+            calls: AtomicUsize::new(0),
+        });
+        router.set(Arc::clone(&wrapped)).ok();
+        wrapped
     });
-    kit.set_router(SharedRouter(Arc::clone(&router)));
+    let router = router.get().unwrap();
+    let opened = open_room(&kit, "support").await;
     let tasks = [ALICE, BOB].map(|sender| {
         let kit = kit.clone();
         tokio::spawn(async move { (sender, routed(&kit, message(sender, "Hi")).await) })
@@ -697,24 +731,28 @@ async fn two_first_messages_into_one_open_room_at_once_record_one_and_route_the_
 /// go: another message can reach the room it chose before this one is
 /// recorded there.
 struct HeldFirst {
+    default: DefaultInboundRoomRouter<InMemoryStore>,
     routed: Notify,
     go: Notify,
     calls: AtomicUsize,
 }
 
-impl InboundRoomRouter<InMemoryStore> for HeldFirst {
-    async fn route(
-        &self,
-        store: &InMemoryStore,
-        query: &RouteQuery,
-    ) -> Result<Option<RoomId>, RouterError> {
-        let call = self.calls.fetch_add(1, Ordering::SeqCst);
-        let answer = DefaultRouter.route(store, query).await;
-        if call == 0 {
-            self.routed.notify_one();
-            self.go.notified().await;
-        }
-        answer
+impl InboundRoomRouter for HeldFirst {
+    fn route<'a>(
+        &'a self,
+        channel_id: &'a ChannelId,
+        channel_type: &'a ChannelType,
+        options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        Box::pin(async move {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let answer = self.default.route(channel_id, channel_type, options).await;
+            if call == 0 {
+                self.routed.notify_one();
+                self.go.notified().await;
+            }
+            answer
+        })
     }
 }
 
@@ -726,14 +764,19 @@ impl InboundRoomRouter<InMemoryStore> for HeldFirst {
 /// is routed once more, into a room of her own.
 #[tokio::test]
 async fn a_room_that_heard_another_sender_before_the_record_routes_the_message_once_more() {
-    let (kit, sms) = kit_with_agent();
-    let opened = open_room(&kit, "support").await;
-    let router = Arc::new(HeldFirst {
-        routed: Notify::new(),
-        go: Notify::new(),
-        calls: AtomicUsize::new(0),
+    let router = OnceLock::new();
+    let (kit, sms) = kit_wrapping_the_default(|default| {
+        let wrapped = Arc::new(HeldFirst {
+            default,
+            routed: Notify::new(),
+            go: Notify::new(),
+            calls: AtomicUsize::new(0),
+        });
+        router.set(Arc::clone(&wrapped)).ok();
+        wrapped
     });
-    kit.set_router(SharedRouter(Arc::clone(&router)));
+    let router = router.get().unwrap();
+    let opened = open_room(&kit, "support").await;
     let alices = {
         let kit = kit.clone();
         tokio::spawn(async move { routed(&kit, message(ALICE, "Bonjour")).await })

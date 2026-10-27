@@ -50,7 +50,7 @@ fn sent(task: usize, message: usize) -> String {
 /// and an agent echoing every message, and an off-lock check that holds
 /// each task's first message into `room_0` until all four are inside it.
 async fn rooms() -> (RoomKit, RecordingTransport) {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();

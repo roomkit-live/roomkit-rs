@@ -2,12 +2,23 @@
 //! the record requires (roomkit-specs `conformance/README.md`, "Templates"),
 //! and a hook's result built from them.
 
-use roomkit::model::{HookResult, RoomEvent};
-use roomkit::{Environment, SystemEnvironment};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use roomkit::model::{HookResult, RoomEvent, Timestamp};
 use serde_json::{Map, Value, json};
 
+/// The instant a scenario's record is written at, at millisecond precision.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a template's instant is the wall clock's, as the Python runner's is"
+)]
 fn now() -> Value {
-    serde_json::to_value(SystemEnvironment.now()).unwrap_or_default()
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let millis = i64::try_from(elapsed.as_millis()).unwrap_or_default();
+    let now = Timestamp::from_unix_millis(millis).unwrap_or(Timestamp::UNIX_EPOCH);
+    serde_json::to_value(now).unwrap_or_default()
 }
 
 fn fresh_id() -> Value {

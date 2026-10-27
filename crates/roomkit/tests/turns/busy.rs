@@ -22,7 +22,8 @@ async fn a_tool_blocking_its_thread_past_the_heartbeat_timeout_ends_normally() {
         Ok(ToolOutput::Text("42".to_owned()))
     })
     .await;
-    kit.set_turn_timeouts(
+    roomkit::testing::set_turn_timeouts(
+        &kit,
         TurnTimeouts::new()
             .with_heartbeat_interval(Duration::from_millis(5))
             .with_heartbeat_timeout(Duration::from_millis(25)),

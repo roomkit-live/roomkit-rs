@@ -16,7 +16,7 @@ fn room_id() -> RoomId {
 /// A kit whose room `room_1`, of the organization `acme`, received
 /// "one", refused "spam" with a hook, then received "two" and "three".
 async fn a_room_that_refused_one_message() -> RoomKit {
-    let kit = RoomKit::new();
+    let kit = RoomKit::new(Default::default());
     let sms = RecordingTransport::new(ChannelId::new("sms").unwrap(), ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
     kit.for_organization("acme")

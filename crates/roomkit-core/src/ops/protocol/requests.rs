@@ -6,8 +6,7 @@ use std::time::Duration;
 use super::{EffectId, RoomCounters, TargetUpdate};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventId, EventUpdates,
-    IdentityId, InboundMessage, Observation, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
-    Task,
+    Identity, InboundMessage, Observation, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
 };
 use crate::rules::hook_chain::HookOutcome;
 use crate::rules::hook_registry::{HookId, HookTrigger};
@@ -478,7 +477,7 @@ pub enum StoreOutcome {
     /// The record is stored.
     Stored,
     /// The identity the address belongs to, if any.
-    Resolved(Option<IdentityId>),
+    Resolved(Option<Identity>),
 }
 
 /// The driver's answer to a [`ChannelRequest`].

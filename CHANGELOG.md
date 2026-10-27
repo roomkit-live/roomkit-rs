@@ -6,6 +6,39 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+The public API in the Python implementation's terms (step 5, lot 1: the
+kit, its construction and its calls).
+
+### Changed
+
+- `RoomKit::new(RoomKitOptions { .. })` builds a kit with the Python
+  implementation's constructor keywords: `store`, `inbound_router`,
+  `max_chain_depth`, `agent_response_policy` and `process_timeout`;
+  `RoomKitOptions::with_store(store)` gives the defaults over a store of
+  another type. `RoomKit::with_store` and the setters (`set_router`,
+  `set_environment`, `set_max_chain_depth`, `set_process_timeout`,
+  `set_turn_timeouts`) go. A test builds a kit on its own clock and ids
+  with `roomkit::testing::kit_with_environment`, where `Environment` and
+  `SequentialEnvironment` now live; `SystemEnvironment` is no longer
+  public.
+- `process_timeout` is 30 seconds unless set, as Python's: a call was
+  unbounded by default.
+- A room the kit creates, step 2's for a message included, takes the kit's
+  `agent_response_policy` unless it names one.
+- A router takes Python's parameters: `InboundRoomRouter::route(channel_id,
+  channel_type, RouteOptions)`, returning a boxed `RouterFuture`, with no
+  store argument. `DefaultInboundRoomRouter::new(store, options)` replaces
+  `DefaultRouter`, reading a channel's addresses through `channel_of`;
+  `RouteQuery` and `RouteSender` leave the public API.
+  `RoomKit::get_channel` gives the kit's view of a registered channel
+  (`RegisteredChannel`).
+- A message into a room of another organization, named or routed, fails
+  `InboundError::RoomNotFound`, as RFC §17.2 reads such a room;
+  `InboundError::OtherOrganization` goes.
+- A room's creation drops a metadata key only the framework writes (under
+  `roomkit:`, or of the room's private state) with a warning and writes the
+  rest (RFC §5.1); it was refused.
+
 ## [0.1.0] — 2026-10-27
 
 The first release: Level 0 of the RoomKit RFC with nothing left out, on a

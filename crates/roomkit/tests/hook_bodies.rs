@@ -28,8 +28,8 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     Channel, ChannelDeclaration, ChannelError, ConversationStore, HookTrigger, InboundResult,
-    InboundRoomRouter, KitError, MutationError, RoomKit, RouteQuery, RouterError, keep_context,
-    text_of,
+    InboundRoomRouter, KitError, MutationError, RoomKit, RoomKitOptions, RouteOptions,
+    RouterFuture, keep_context, text_of,
 };
 
 /// `max_chain_depth` 1: ten passes and ten hook calls per cascade.
@@ -66,8 +66,16 @@ fn taken<T>(kept: &Kept<T>) -> Vec<T> {
 
 /// Room `r1` with an SMS, its kit's chain-depth limit `max_chain_depth`.
 async fn room(max_chain_depth: u32) -> RoomKit {
-    let kit = RoomKit::new();
-    kit.set_max_chain_depth(max_chain_depth);
+    room_with(RoomKitOptions {
+        max_chain_depth,
+        ..Default::default()
+    })
+    .await
+}
+
+/// [`room`] on a kit built with `options`.
+async fn room_with(options: RoomKitOptions) -> RoomKit {
+    let kit = RoomKit::new(options);
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.create_room(&room_id()).await.unwrap();
@@ -237,13 +245,14 @@ async fn an_observer_of_before_broadcast_s_call_returns_with_its_delivery_result
 /// A router that opens a room for every message.
 struct NoRoom;
 
-impl<S: ConversationStore> InboundRoomRouter<S> for NoRoom {
-    fn route(
-        &self,
-        _store: &S,
-        _query: &RouteQuery,
-    ) -> impl Future<Output = Result<Option<RoomId>, RouterError>> + Send {
-        ready(Ok(None))
+impl InboundRoomRouter for NoRoom {
+    fn route<'a>(
+        &'a self,
+        _channel_id: &'a ChannelId,
+        _channel_type: &'a ChannelType,
+        _options: RouteOptions,
+    ) -> RouterFuture<'a> {
+        Box::pin(ready(Ok(None)))
     }
 }
 
@@ -253,8 +262,12 @@ impl<S: ConversationStore> InboundRoomRouter<S> for NoRoom {
 /// stops at the cap.
 #[tokio::test]
 async fn a_hook_opening_a_room_after_every_event_stops_at_the_cap() {
-    let kit = room(1).await;
-    kit.set_router(NoRoom);
+    let kit = room_with(RoomKitOptions {
+        max_chain_depth: 1,
+        inbound_router: Some(Arc::new(NoRoom)),
+        ..Default::default()
+    })
+    .await;
     let answers: Kept<Option<String>> = kept();
     let calls: Kept<()> = kept();
     let (hook_kit, hook_answers, hook_calls) =

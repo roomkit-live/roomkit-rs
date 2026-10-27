@@ -20,6 +20,7 @@ use crate::channel::{ChannelError, EventDraft};
 use crate::context::{ExecutionContext, HookBody, RunShared};
 use crate::hooks;
 use crate::kit::Inner;
+use crate::router;
 use crate::store::ConversationStore;
 use crate::stream::{self, KeptStream, Stops};
 use crate::turn::TurnKit;
@@ -106,7 +107,7 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
         } => store
             .resolve_identity(channel_type, &address, organization_id.as_deref())
             .await
-            .map(|identity| StoreOutcome::Resolved(identity.map(|identity| identity.id))),
+            .map(StoreOutcome::Resolved),
     };
     answer.map_or_else(|error| Outcome::Failed(error.to_record()), Outcome::from)
 }
@@ -237,8 +238,12 @@ pub(super) async fn route<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     query: &RouteQuery,
 ) -> Outcome {
-    let router = inner.router();
-    match router.route(&inner.store, query).await {
+    let options = router::options_of(query);
+    let routed = inner
+        .router()
+        .route(&query.channel_id, &query.channel_type, options)
+        .await;
+    match routed {
         Ok(room_id) => Outcome::Routed(room_id),
         Err(error) => Outcome::Failed(ErrorRecord::new("RouterError", error.to_string())),
     }
