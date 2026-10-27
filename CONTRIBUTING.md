@@ -28,7 +28,8 @@ check that `roomkit-core` depends, on every target, only on the crates its
 allow list names (`scripts/check-core-deps.sh`), every example, each of
 which checks what it shows (`make examples`), the pin of the Python
 implementation's public API snapshot (`make api-check-pin`) and the tests of
-the parity report's scripts (`make api-test`). Run `make msrv`
+the parity report's scripts (`make api-test`), which need Python 3.11 or
+later (`tomllib`) and git. Run `make msrv`
 when a change adds a dependency or uses a recent standard library API: the
 minimum supported Rust version is the workspace's `rust-version`, written
 once in `Cargo.toml` (`make msrv-toolchain` installs it). CI checks the

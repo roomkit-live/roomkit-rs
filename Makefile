@@ -67,18 +67,21 @@ hooks:
 # copy synced again before it is pushed.
 SPECS_DIR ?= $(abspath $(dir $(shell git rev-parse --path-format=absolute --git-common-dir))../roomkit-specs)
 SPECS_REF ?= origin/main
+# Recipes read the refs and paths from their environment, quoted, so that no
+# value is ever run as a command.
+export SPECS_DIR SPECS_REF ALLOW_UNPUSHED
 
 conformance-sync:
-	@commit=$$(git -C "$(SPECS_DIR)" rev-parse --verify "$(SPECS_REF)^{commit}") && \
-	if ! git -C "$(SPECS_DIR)" merge-base --is-ancestor "$$commit" origin/main; then \
-		if [ "$(ALLOW_UNPUSHED)" = 1 ]; then \
+	@commit=$$(git -C "$$SPECS_DIR" rev-parse --verify "$${SPECS_REF}^{commit}") && \
+	if ! git -C "$$SPECS_DIR" merge-base --is-ancestor "$$commit" origin/main; then \
+		if [ "$${ALLOW_UNPUSHED:-}" = 1 ]; then \
 			echo "warning: roomkit-specs $$commit is not on origin/main: sync again once it is"; \
 		else \
 			echo "roomkit-specs $$commit is not on origin/main: push it and fetch first"; exit 1; \
 		fi; \
 	fi && \
 	rm -rf conformance/scenarios && mkdir -p conformance && \
-	git -C "$(SPECS_DIR)" archive --format=tar "$$commit" conformance/scenarios | tar -x -C . && \
+	git -C "$$SPECS_DIR" archive --format=tar "$$commit" conformance/scenarios | tar -x -C . && \
 	echo "$$commit" > conformance/SPECS_COMMIT && \
 	(cd conformance && find scenarios -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-64) \
 		> conformance/SCENARIOS_SHA256 && \
@@ -90,11 +93,11 @@ conformance-sync:
 # ALLOW_UNPUSHED=1 only warns, for local work.
 conformance-check:
 	@commit=$$(cat conformance/SPECS_COMMIT) && \
-	if ! git -C "$(SPECS_DIR)" rev-parse --git-dir >/dev/null 2>&1; then \
-		echo "conformance-check: no roomkit-specs checkout at $(SPECS_DIR), skipped"; \
-	elif git -C "$(SPECS_DIR)" merge-base --is-ancestor "$$commit" origin/main 2>/dev/null; then \
+	if ! git -C "$$SPECS_DIR" rev-parse --git-dir >/dev/null 2>&1; then \
+		echo "conformance-check: no roomkit-specs checkout at $$SPECS_DIR, skipped"; \
+	elif git -C "$$SPECS_DIR" merge-base --is-ancestor "$$commit" origin/main 2>/dev/null; then \
 		echo "conformance-check: roomkit-specs $$commit is on origin/main"; \
-	elif [ "$(ALLOW_UNPUSHED)" = 1 ]; then \
+	elif [ "$${ALLOW_UNPUSHED:-}" = 1 ]; then \
 		echo "warning: roomkit-specs $$commit is not on origin/main: sync again once it is"; \
 	else \
 		echo "conformance-check: roomkit-specs $$commit is not on origin/main: push it, fetch, and run make conformance-sync"; \
@@ -111,17 +114,18 @@ conformance-check:
 # tests/fixtures/FIXTURE_SHA256, which the test checks. The file is never
 # edited here: change the generator, and write it again.
 ROOMKIT_DIR ?= $(abspath $(dir $(shell git rev-parse --path-format=absolute --git-common-dir))../roomkit)
+export ROOMKIT_DIR
 SQLITE_FIXTURES := crates/roomkit-sqlite/tests/fixtures
 
 sqlite-fixture:
-	@commit=$$(git -C "$(ROOMKIT_DIR)" rev-parse --verify HEAD) && \
-	if ! git -C "$(ROOMKIT_DIR)" diff --quiet HEAD -- src; then \
-		echo "roomkit at $(ROOMKIT_DIR) has changes under src/: write the fixture from a commit"; exit 1; \
+	@commit=$$(git -C "$$ROOMKIT_DIR" rev-parse --verify HEAD) && \
+	if ! git -C "$$ROOMKIT_DIR" diff --quiet HEAD -- src; then \
+		echo "roomkit at $$ROOMKIT_DIR has changes under src/: write the fixture from a commit"; exit 1; \
 	fi && \
-	if ! git -C "$(ROOMKIT_DIR)" merge-base --is-ancestor "$$commit" origin/main; then \
+	if ! git -C "$$ROOMKIT_DIR" merge-base --is-ancestor "$$commit" origin/main; then \
 		echo "roomkit $$commit is not on origin/main: push it and fetch first"; exit 1; \
 	fi && \
-	PYTHONDONTWRITEBYTECODE=1 "$(ROOMKIT_DIR)/.venv/bin/python" -I \
+	PYTHONDONTWRITEBYTECODE=1 "$$ROOMKIT_DIR/.venv/bin/python" -I \
 		$(SQLITE_FIXTURES)/make_fixture.py $(SQLITE_FIXTURES)/python-v12.db && \
 	echo "$$commit" > $(SQLITE_FIXTURES)/ROOMKIT_COMMIT && \
 	sha256sum $(SQLITE_FIXTURES)/python-v12.db | cut -c1-64 > $(SQLITE_FIXTURES)/FIXTURE_SHA256 && \
@@ -145,20 +149,20 @@ sqlite-fixture:
 TURNS_FIXTURES := crates/roomkit/tests/fixtures/turns
 
 turns-fixture:
-	@commit=$$(git -C "$(ROOMKIT_DIR)" rev-parse --verify HEAD) && \
-	if ! git -C "$(ROOMKIT_DIR)" diff --quiet HEAD -- src; then \
-		echo "roomkit at $(ROOMKIT_DIR) has changes under src/: write the fixture from a commit"; exit 1; \
+	@commit=$$(git -C "$$ROOMKIT_DIR" rev-parse --verify HEAD) && \
+	if ! git -C "$$ROOMKIT_DIR" diff --quiet HEAD -- src; then \
+		echo "roomkit at $$ROOMKIT_DIR has changes under src/: write the fixture from a commit"; exit 1; \
 	fi && \
-	if ! git -C "$(ROOMKIT_DIR)" merge-base --is-ancestor "$$commit" origin/main; then \
+	if ! git -C "$$ROOMKIT_DIR" merge-base --is-ancestor "$$commit" origin/main; then \
 		echo "roomkit $$commit is not on origin/main: push it and fetch first"; exit 1; \
 	fi && \
-	PYTHONDONTWRITEBYTECODE=1 "$(ROOMKIT_DIR)/.venv/bin/python" -I \
+	PYTHONDONTWRITEBYTECODE=1 "$$ROOMKIT_DIR/.venv/bin/python" -I \
 		$(TURNS_FIXTURES)/make_fixture.py $(TURNS_FIXTURES)/python-case1.jsonl && \
 	echo "$$commit" > $(TURNS_FIXTURES)/ROOMKIT_COMMIT && \
 	sha256sum $(TURNS_FIXTURES)/python-case1.jsonl | cut -c1-64 > $(TURNS_FIXTURES)/FIXTURE_SHA256 && \
 	echo "turns fixture written by roomkit $$commit" && \
 	$(CARGO) test -p roomkit --test turns --locked the_probe_s_turn_carries_python_s_messages && \
-	PYTHONDONTWRITEBYTECODE=1 "$(ROOMKIT_DIR)/.venv/bin/python" -I \
+	PYTHONDONTWRITEBYTECODE=1 "$$ROOMKIT_DIR/.venv/bin/python" -I \
 		$(TURNS_FIXTURES)/read_rust.py $(TURNS_FIXTURES)/rust-case1.jsonl
 
 # The Python implementation's public API, which this one mirrors (step 5,
@@ -174,49 +178,65 @@ API_PYTHON := api/python
 API_REPORT := target/api-parity
 API_SNAPSHOT := public_api_names.json public_api_signatures.json
 ROOMKIT_REF ?= origin/main
+# The first roomkit commit whose snapshot is the exact public surface
+# (RMK-1010): an older one leaves out what was added without breaking.
+API_SNAPSHOT_SINCE ?= 6e420487c204b6642b927a2323122c0ec84af8e9
+export ROOMKIT_REF API_PYTHON API_SNAPSHOT_SINCE
 PYTHON ?= python3
 
 api-sync:
-	@commit=$$(git -C "$(ROOMKIT_DIR)" rev-parse --verify "$(ROOMKIT_REF)^{commit}") && \
-	if ! git -C "$(ROOMKIT_DIR)" merge-base --is-ancestor "$$commit" origin/main; then \
-		if [ "$(ALLOW_UNPUSHED)" = 1 ]; then \
+	@commit=$$(git -C "$$ROOMKIT_DIR" rev-parse --verify "$${ROOMKIT_REF}^{commit}") && \
+	if ! git -C "$$ROOMKIT_DIR" merge-base --is-ancestor "$$commit" origin/main; then \
+		if [ "$${ALLOW_UNPUSHED:-}" = 1 ]; then \
 			echo "warning: roomkit $$commit is not on origin/main: sync again once it is"; \
 		else \
 			echo "roomkit $$commit is not on origin/main: push it and fetch first"; exit 1; \
 		fi; \
 	fi && \
-	mkdir -p $(API_PYTHON) && \
+	if ! git -C "$$ROOMKIT_DIR" merge-base --is-ancestor "$$API_SNAPSHOT_SINCE" "$$commit"; then \
+		echo "roomkit $$commit does not hold $$API_SNAPSHOT_SINCE, the first commit whose snapshot is the exact public surface"; \
+		exit 1; \
+	fi && \
+	mkdir -p "$$API_PYTHON" && \
 	for file in $(API_SNAPSHOT); do \
-		git -C "$(ROOMKIT_DIR)" show "$$commit:tests/$$file" > "$(API_PYTHON)/$$file.new" || \
-			{ rm -f $(API_PYTHON)/*.new; exit 1; }; \
+		git -C "$$ROOMKIT_DIR" show "$$commit:tests/$$file" > "$$API_PYTHON/$$file.new" || \
+			{ rm -f "$$API_PYTHON"/*.new; exit 1; }; \
 	done && \
-	for file in $(API_SNAPSHOT); do mv "$(API_PYTHON)/$$file.new" "$(API_PYTHON)/$$file"; done && \
-	echo "$$commit" > $(API_PYTHON)/ROOMKIT_COMMIT && \
-	(cd $(API_PYTHON) && sha256sum $(API_SNAPSHOT) | sha256sum | cut -c1-64) > $(API_PYTHON)/SNAPSHOT_SHA256 && \
+	for file in $(API_SNAPSHOT); do mv "$$API_PYTHON/$$file.new" "$$API_PYTHON/$$file"; done && \
+	echo "$$commit" > "$$API_PYTHON/ROOMKIT_COMMIT" && \
+	(cd "$$API_PYTHON" && sha256sum $(API_SNAPSHOT) | sha256sum | cut -c1-64) > "$$API_PYTHON/SNAPSHOT_SHA256" && \
 	echo "api synced from roomkit $$commit"
 
 # A local gate, which `make all` runs and CI too: the copies are the ones
-# their fingerprint names, and their roomkit commit is on roomkit's
-# origin/main, so a copy synced from a commit not pushed yet is never pushed
-# itself. The commit's check is skipped without a roomkit checkout, as in CI;
-# ALLOW_UNPUSHED=1 only warns, for local work.
+# their fingerprint names; with a roomkit checkout, their commit is on
+# roomkit's origin/main, so a copy synced from a commit not pushed yet is never
+# pushed itself, and each copy is that commit's file. Without a checkout, as
+# in CI, only the fingerprint is checked; ALLOW_UNPUSHED=1 only warns about the
+# commit, for local work.
 api-check-pin:
-	@fingerprint=$$(cd $(API_PYTHON) && sha256sum $(API_SNAPSHOT) | sha256sum | cut -c1-64) && \
-	if [ "$$fingerprint" != "$$(cat $(API_PYTHON)/SNAPSHOT_SHA256)" ]; then \
-		echo "api-check-pin: the copies in $(API_PYTHON) differ from SNAPSHOT_SHA256: they are never edited, run make api-sync"; \
+	@fingerprint=$$(cd "$$API_PYTHON" && sha256sum $(API_SNAPSHOT) | sha256sum | cut -c1-64) && \
+	if [ "$$fingerprint" != "$$(cat "$$API_PYTHON/SNAPSHOT_SHA256")" ]; then \
+		echo "api-check-pin: the copies in $$API_PYTHON differ from SNAPSHOT_SHA256: they are never edited, run make api-sync"; \
 		exit 1; \
 	fi
-	@commit=$$(cat $(API_PYTHON)/ROOMKIT_COMMIT) && \
-	if ! git -C "$(ROOMKIT_DIR)" rev-parse --git-dir >/dev/null 2>&1; then \
-		echo "api-check-pin: no roomkit checkout at $(ROOMKIT_DIR), its commit's check skipped"; \
-	elif git -C "$(ROOMKIT_DIR)" merge-base --is-ancestor "$$commit" origin/main 2>/dev/null; then \
+	@commit=$$(cat "$$API_PYTHON/ROOMKIT_COMMIT") && \
+	if ! git -C "$$ROOMKIT_DIR" rev-parse --git-dir >/dev/null 2>&1; then \
+		echo "api-check-pin: no roomkit checkout at $$ROOMKIT_DIR, its commit's check skipped"; exit 0; \
+	fi && \
+	if git -C "$$ROOMKIT_DIR" merge-base --is-ancestor "$$commit" origin/main 2>/dev/null; then \
 		echo "api-check-pin: roomkit $$commit is on origin/main"; \
-	elif [ "$(ALLOW_UNPUSHED)" = 1 ]; then \
+	elif [ "$${ALLOW_UNPUSHED:-}" = 1 ]; then \
 		echo "warning: roomkit $$commit is not on origin/main: sync again once it is"; \
 	else \
 		echo "api-check-pin: roomkit $$commit is not on origin/main: push it, fetch, and run make api-sync"; \
 		exit 1; \
-	fi
+	fi && \
+	for file in $(API_SNAPSHOT); do \
+		if ! git -C "$$ROOMKIT_DIR" show "$$commit:tests/$$file" | cmp -s - "$$API_PYTHON/$$file"; then \
+			echo "api-check-pin: $$API_PYTHON/$$file is not roomkit $$commit's tests/$$file: the copies are never edited, run make api-sync"; \
+			exit 1; \
+		fi; \
+	done
 
 # The tests of the reader and of the report, on fixtures: no build needed.
 api-test:
