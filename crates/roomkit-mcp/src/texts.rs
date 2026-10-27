@@ -61,10 +61,19 @@ pub(crate) fn bounded_message(text: &str) -> String {
 
 /// Whether `c` changes how what follows it is shown: a control character,
 /// a line or paragraph separator, which some terminals and viewers break a
-/// line at, or a bidi control.
+/// line at, or one of Unicode's twelve bidi controls (`Bidi_Control`).
 fn is_unsafe(c: char) -> bool {
     c.is_control()
-        || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        || matches!(
+            c,
+            '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
 }
 
 #[cfg(test)]

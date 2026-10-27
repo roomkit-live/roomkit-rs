@@ -296,12 +296,14 @@ async fn a_failed_connection_s_error_ends_with_the_server_s_last_stderr_lines() 
         ("stderr-listing-error", waiting.clone()),
         ("stderr-hang", waiting),
     ] {
-        let refused = fake(mode)
-            .connect_timeout(Duration::from_millis(300))
-            .connect()
-            .await
-            .err()
-            .unwrap();
+        // The connect bound cuts the server that hangs alone; the others
+        // keep the fixture's 10 seconds, so that a loaded machine never
+        // turns their failure into a timeout.
+        let mut command = fake(mode);
+        if mode == "stderr-hang" {
+            command = command.connect_timeout(Duration::from_millis(300));
+        }
+        let refused = command.connect().await.err().unwrap();
         let failed_as = match (mode, &refused) {
             ("stderr-exit", McpError::Handshake { .. })
             | ("stderr-listing-error", McpError::Listing { .. }) => true,
@@ -345,7 +347,16 @@ async fn a_server_s_words_in_an_error_cannot_forge_a_log_line() {
     };
     let forbidden = |c: char| {
         (c.is_control() && c != '\n')
-            || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            || matches!(
+                c,
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{2028}'
+                    | '\u{2029}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
     };
     assert!(
         message.contains("FORGED")

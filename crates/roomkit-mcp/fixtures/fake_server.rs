@@ -229,7 +229,7 @@ fn serve(options: &Options) {
 /// An error message that, written as it is, would set a terminal's title,
 /// clear its screen, start a log line of its own, reverse what follows and
 /// split a line where a terminal does not.
-const FORGING: &str = "\u{1b}]0;title\u{7}\u{1b}[2Jcleared\nFORGED 2026-10-27T08:00:00Z ERROR roomkit: forged line \u{202e}desrever\u{2028}split";
+const FORGING: &str = "\u{1b}]0;title\u{7}\u{1b}[2Jcleared\nFORGED 2026-10-27T08:00:00Z ERROR roomkit: forged line \u{202e}desrever\u{2028}split\u{200f}marked";
 
 /// Answers the request `id` with an error saying `message`.
 fn answer_error(id: &Value, message: &str) -> io::Result<()> {
