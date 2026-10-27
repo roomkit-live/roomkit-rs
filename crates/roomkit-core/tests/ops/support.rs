@@ -1945,6 +1945,7 @@ pub(crate) fn describe(event: &RoomEvent) -> String {
         EventStatus::Read => "read",
         EventStatus::Failed => "failed",
         EventStatus::Blocked => "blocked",
+        _ => "other",
     };
     let text = text_of(&event.content);
     match &event.blocked_by {

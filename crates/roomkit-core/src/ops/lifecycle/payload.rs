@@ -27,6 +27,7 @@ const REASON: &str = "reason";
 /// A change a lifecycle hook's payload reports, which its `code` names (RFC
 /// §9.2, §26.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum LifecycleChange {
     /// `room_created`, the payload of `ON_ROOM_CREATED`.
     RoomCreated,

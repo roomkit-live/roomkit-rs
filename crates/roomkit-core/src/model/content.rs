@@ -93,6 +93,7 @@ impl TextContent {
 /// The markup of a rich content's body.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RichFormat {
     /// HTML.
     Html,
@@ -481,6 +482,7 @@ fn default_template_language() -> String {
 /// Who made an edit (RFC §5.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum EditSource {
     /// The message's sender.
     Sender,
@@ -523,6 +525,7 @@ impl EditContent {
 /// Who deleted a message (RFC §5.3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum DeleteType {
     /// The message's author deleted it.
     #[default]
@@ -569,6 +572,7 @@ impl DeleteContent {
 /// Where a tool call stands (RFC §5.3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ToolCallStatus {
     /// On the start row.
     #[default]
@@ -582,6 +586,7 @@ pub enum ToolCallStatus {
 /// How a tool call ended (RFC §5.3, §6.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ToolCallOutcome {
     /// A handler served the call.
     Served,

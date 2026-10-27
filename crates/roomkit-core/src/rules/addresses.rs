@@ -74,6 +74,7 @@ const MAX_NATIONAL_DIGITS: usize = 10;
 
 /// How a channel's senders are addressed (RFC §5.7, gap G-051).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Addressing {
     /// By phone number, compared and stored in E.164 (`+15550000001`).
     PhoneNumber,

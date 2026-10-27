@@ -11,6 +11,7 @@ use super::{ChannelId, Metadata, ModelError, ObservationId, RoomId, TaskId, Time
 /// Where a task stands (RFC §5.10).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum TaskStatus {
     /// Not started.
     #[default]

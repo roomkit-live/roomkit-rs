@@ -192,6 +192,7 @@ impl ChannelDirection {
 /// A category of content a channel carries (RFC §5.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ChannelMediaType {
     /// Plain text messages.
     Text,

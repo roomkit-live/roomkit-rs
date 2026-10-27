@@ -445,6 +445,7 @@ impl FrameworkEvent {
 /// `room_closed`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum TransitionReason {
     /// The room's timer fell due (RFC §5.1).
     Timer,
@@ -453,6 +454,7 @@ pub enum TransitionReason {
 /// The path a refused event took (RFC §8.2, `room_refused_event`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RefusedOperation {
     /// An inbound message or a direct injection.
     Inbound,

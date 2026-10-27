@@ -7,6 +7,7 @@ use super::{ChannelId, IdentityId, Metadata, ParticipantId, RoomId, Timestamp};
 /// A participant's role in a room (RFC §5.5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ParticipantRole {
     /// The room's creator or primary responsible party.
     Owner,
@@ -24,6 +25,7 @@ pub enum ParticipantRole {
 /// Whether a participant is still taking part (RFC §5.5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ParticipantStatus {
     /// Currently participating.
     #[default]
@@ -39,6 +41,7 @@ pub enum ParticipantStatus {
 /// Where a participant's identity resolution stands (RFC §5.5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum IdentificationStatus {
     /// Identity confirmed: the identity id is set.
     Identified,
@@ -58,6 +61,7 @@ pub enum IdentificationStatus {
 /// Whether an identified sender has proven who they are (RFC §5.5, §11.7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum VerificationStatus {
     /// Identified, not proven.
     Unverified,

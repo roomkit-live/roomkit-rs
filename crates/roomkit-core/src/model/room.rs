@@ -8,6 +8,7 @@ use super::{Metadata, RoomId, Timestamp};
 /// Where a room is in its lifecycle (RFC §5.1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RoomStatus {
     /// Channels send and receive.
     #[default]
@@ -34,6 +35,7 @@ impl RoomStatus {
 /// What an agent's own output solicits (RFC §19.3.1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AgentResponsePolicy {
     /// Every eligible intelligence channel, the default.
     #[default]

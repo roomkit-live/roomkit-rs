@@ -7,6 +7,7 @@ use super::{ChannelId, Metadata, Timestamp};
 /// Where a delivery stands (RFC §5.13).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum DeliveryStatus {
     /// Handed to the provider.
     Sent,

@@ -14,6 +14,7 @@ use super::{
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum EventType {
     /// A text, media or rich message.
     #[default]
@@ -77,6 +78,7 @@ pub enum EventType {
 /// What became of an event (RFC §5.2).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum EventStatus {
     /// Created, not yet processed.
     #[default]
@@ -156,6 +158,7 @@ impl EventSource {
 /// How much of a response the people it reached took in (RFC §8.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ConsumptionState {
     /// Taken in whole.
     Consumed,

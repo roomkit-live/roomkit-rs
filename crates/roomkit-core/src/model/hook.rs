@@ -44,6 +44,7 @@ pub struct HookResult<P = RoomEvent> {
 
 /// A SYNC hook's decision on its payload (RFC §9.4).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum HookDecision<P> {
     /// Let the payload through unchanged.
     Allow,

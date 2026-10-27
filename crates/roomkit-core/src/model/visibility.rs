@@ -24,6 +24,7 @@ use super::{ChannelCategory, ChannelId, ModelError};
 /// # Ok::<(), roomkit_core::model::ModelError>(())
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Visibility {
     /// Every channel of the room.
     #[default]
