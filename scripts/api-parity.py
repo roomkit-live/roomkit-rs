@@ -47,7 +47,10 @@ What a rule does not give, an entry of `api/mapping.toml` does: `[[map]]`
 names the Python counterpart, `[[exception]]` an approved Rust form,
 `[[missing]]` a Python name of a class in scope that Rust lacks, and
 `[[pending]]` a known difference a lot of step 5 removes. A Python class is
-in scope once a Rust item maps to it.
+in scope once a Rust item maps to it. An entry naming a whole Rust item
+covers that item's own finding alone, so it goes dead once the item maps; an
+exception's `until` names the Python name whose arrival ends it, and the
+report lists it as due once the snapshot holds that name.
 
 The report exits 0 whatever it finds (step 5, lot 0); an input it cannot
 read whole (the surface, the snapshot, its fingerprint, the mapping) exits 2.

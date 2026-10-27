@@ -28,6 +28,7 @@ class Report:
     dead: list[Dead]
     moved: list[Entry]
     pending: dict[str, list[Entry]]
+    due: list[Entry]
 
 
 def compare(surface: Surface, python: Python, mapping: Mapping) -> Report:
@@ -45,7 +46,8 @@ def compare(surface: Surface, python: Python, mapping: Mapping) -> Report:
     pending: dict[str, list[Entry]] = {}
     for entry in mapping.of("pending"):
         pending.setdefault(entry.lot, []).append(entry)
-    return Report(surface, python, mapping, items, findings, uncovered, dead, moved, pending)
+    due = [entry for entry in mapping.of("exception") if entry.until and python.exists(entry.until)]
+    return Report(surface, python, mapping, items, findings, uncovered, dead, moved, pending, due)
 
 
 def _settle(items: dict[str, ItemResult], comparison: Comparison, mapping: Mapping) -> None:
@@ -56,7 +58,7 @@ def _settle(items: dict[str, ItemResult], comparison: Comparison, mapping: Mappi
         if path in comparison.options_used and result.python is None:
             comparison.findings = [f for f in comparison.findings if not (f.path == path and f.detail == "no Python name")]
             result.findings, result.status = comparison.own_members(path), "options"
-        elif path in exceptions:
+        elif path in exceptions and any(finding.path == path for finding in result.findings):
             result.status = "exception"
         elif result.python is None:
             result.status = "unmapped"
@@ -79,22 +81,13 @@ def _cover(findings: list[Finding], mapping: Mapping) -> list[Finding]:
 
 
 def _covers(entry: Entry, finding: Finding) -> bool:
-    """An entry covers what it names; one naming a whole item, everything of
-    that item on its side, and an exception, on both sides."""
-    for side, path in entry.paths():
-        if entry.whole:
-            if entry.table == "exception" and path in (finding.rust_item, finding.python_item):
-                return True
-            if side == finding.side and _within(path, finding.path, side):
-                return True
-        elif side == finding.side and path == finding.path:
-            return True
-    return False
-
-
-def _within(base: str, path: str, side: str) -> bool:
-    joint = "::" if side == "rust" else "."
-    return path == base or path.startswith(base + joint) or path.startswith(base + "(")
+    """An entry covers what it names. One naming a whole Rust item covers
+    the item's own finding alone ("no Python name", or the alias named as a
+    class), never its members: it goes dead once the item maps."""
+    if entry.whole:
+        side, path = entry.paths()[0]
+        return side == finding.side == "rust" and finding.path == path
+    return any(side == finding.side and path == finding.path for side, path in entry.paths())
 
 
 def _dead(surface: Surface, python: Python, mapping: Mapping, applied: set[int]) -> list[Dead]:

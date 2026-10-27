@@ -9,14 +9,16 @@
 #   parameters' Python names, `py_spec` the hash of the Python spec it was
 #   written against (`scripts/api-parity.py --spec NAME`);
 # - [[exception]]: a Rust form the architecture table approves, with its date
-#   and reason, `until` for one dated until a Python release;
+#   and reason; a dated one names in `until` the Python name whose arrival
+#   ends it, and the report lists it as due once the snapshot holds it;
 # - [[missing]]: a Python name of a class in scope that Rust lacks, not in
 #   0.x, with its reason;
 # - [[pending]]: a known difference not removed yet, with the lot of step 5
 #   that removes it ("?" while the plan names none). Lot 6 requires none left.
-# An entry names a `rust` or a `python` path, and some of its `members` or
-# `params`, or the whole item: `roomkit::RoomKit::attach`,
-# `roomkit.RoomKit.attach_channel(category)`.
+# An entry names a `rust` or a `python` path and some of its `members` or
+# `params` (`roomkit::RoomKit::attach`, `roomkit.RoomKit.attach_channel(category)`),
+# or a whole Rust item, which covers that item's own finding alone ("no Python
+# name") and goes dead once the item maps. A whole Python class is no entry.
 
 [rules]
 # Rust's casing of an acronym in a type's name (rust-lang RFC 430).
@@ -116,19 +118,19 @@ reason = "a serialized model holds no live error"
 [[exception]]
 rust = "roomkit::testing::Delivery"
 approved = "2026-10-27"
-until = "the Python release that adds roomkit.testing"
+until = "roomkit.testing.RecordingTransport"
 reason = "Python first (decision 17): roomkit.testing is a Python item; 22 and 6 examples use them"
 
 [[exception]]
 rust = "roomkit::testing::EchoAgent"
 approved = "2026-10-27"
-until = "the Python release that adds roomkit.testing"
+until = "roomkit.testing.EchoAgent"
 reason = "Python first (decision 17): roomkit.testing is a Python item; 22 and 6 examples use them"
 
 [[exception]]
 rust = "roomkit::testing::RecordingTransport"
 approved = "2026-10-27"
-until = "the Python release that adds roomkit.testing"
+until = "roomkit.testing.RecordingTransport"
 reason = "Python first (decision 17): roomkit.testing is a Python item; 22 and 6 examples use them"
 
 [[exception]]

@@ -33,6 +33,7 @@ RULES = {
     "packages": {
         "roomkit": ["roomkit"],
         "roomkit::model": ["roomkit", "roomkit.models"],
+        "roomkit::testing": ["roomkit.testing"],
         "roomkit_ai": ["roomkit.providers.ai", "roomkit"],
     },
 }
@@ -503,6 +504,55 @@ class Entries(unittest.TestCase):
         self.assertEqual([dead.path for dead in report.dead], ["roomkit.RoomKit.attach_channel"])
         self.assertIn("covers nothing", report.dead[0].why)
 
+    def test_a_whole_entry_covers_its_item_s_own_finding_alone(self) -> None:
+        report = run(
+            [struct("roomkit::testing::RecordingTransport", methods=["pub fn deliveries(&self) -> Vec<Delivery>"])],
+            {"roomkit.testing.RecordingTransport": {"sent": ["property"]}},
+            entries={
+                "exception": [
+                    {"rust": "roomkit::testing::RecordingTransport", "approved": "2026-10-27", "reason": "Python first"}
+                ]
+            },
+        )
+        self.assertEqual(
+            sorted((f.side, f.path) for f in report.uncovered),
+            [("python", "roomkit.testing.RecordingTransport.sent"), ("rust", "roomkit::testing::RecordingTransport::deliveries")],
+        )
+        self.assertEqual([dead.path for dead in report.dead], ["roomkit::testing::RecordingTransport"])
+        self.assertEqual(report.items["roomkit::testing::RecordingTransport"].status, "differs")
+
+    def test_a_whole_entry_covers_an_alias_named_as_a_class(self) -> None:
+        report = run(
+            [{"path": "roomkit_ai::ProviderError", "kind": "type", "aliased": "Box<dyn Error>"}],
+            {"roomkit.providers.ai.ProviderError": {"__init__": ["def", "message"]}},
+            entries={"pending": [{"rust": "roomkit_ai::ProviderError", "lot": 5, "reason": "decision 11"}]},
+        )
+        self.assertEqual((report.uncovered, report.dead), ([], []))
+
+    def test_an_exception_whose_python_name_arrived_is_due(self) -> None:
+        entries = {
+            "exception": [
+                {
+                    "rust": "roomkit::testing::EchoAgent",
+                    "approved": "2026-10-27",
+                    "reason": "Python first",
+                    "until": "roomkit.testing.EchoAgent",
+                },
+                {
+                    "rust": "roomkit::testing::Delivery",
+                    "approved": "2026-10-27",
+                    "reason": "Python first",
+                    "until": "roomkit.testing.RecordingTransport",
+                },
+            ]
+        }
+        report = run(
+            [struct("roomkit::testing::EchoAgent"), struct("roomkit::testing::Delivery")],
+            {"roomkit.testing.EchoAgent": {}},
+            entries=entries,
+        )
+        self.assertEqual([entry.rust for entry in report.due], ["roomkit::testing::EchoAgent"])
+
     def test_a_map_entry_names_the_python_counterpart(self) -> None:
         spec = {"close": ["async def"], "__init__": ["def"]}
         report = run(
@@ -538,6 +588,13 @@ class Entries(unittest.TestCase):
             {"map": [{"rust": "roomkit::A", "python": "roomkit.A"}]},
             {"unknown": []},
         ]
+        whole_python = [
+            {"missing": [{"python": "roomkit.RoomKit", "reason": "a whole class"}]},
+            {"pending": [{"python": "roomkit.RoomKit", "lot": 1, "reason": "a whole class"}]},
+            {"exception": [{"python": "roomkit.RoomKit", "approved": "2026-10-27", "reason": "a whole class"}]},
+        ]
+        until = [{"exception": [{"rust": "roomkit::A", "approved": "2026-10-27", "reason": "x", "until": "the next release"}]}]
+        cases += whole_python + until
         for entries in cases:
             with self.subTest(entries=entries):
                 with self.assertRaises(parity.ParityError):

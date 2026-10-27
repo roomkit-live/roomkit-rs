@@ -11,6 +11,7 @@ from api_parity import ParityError
 
 LOTS = ("1", "2", "3", "4", "5", "6", "?")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_PYTHON_NAME = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?:\([A-Za-z_]\w*\))?")
 _TOKEN = re.compile(r"[A-Z][a-z0-9]*|[a-z0-9]+")
 # Each table's keys: those it requires, and those it may hold.
 _KEYS = {
@@ -135,6 +136,10 @@ def entry(table: str, index: int, raw: dict) -> Entry:
         raise ParityError(f"{where}: names either rust or python")
     if "members" in raw and "params" in raw:
         raise ParityError(f"{where}: lists either members or params")
+    if table != "map" and "python" in raw and not raw.get("members") and not raw.get("params"):
+        raise ParityError(f"{where}: names a whole Python class: an entry names its members or params")
+    if "until" in raw and not _PYTHON_NAME.fullmatch(str(raw["until"])):
+        raise ParityError(f"{where}: until is the Python name whose arrival ends the exception")
     if table == "exception" and not _DATE.fullmatch(str(raw["approved"])):
         raise ParityError(f"{where}: approved is a date, YYYY-MM-DD")
     if table == "pending" and str(raw["lot"]) not in LOTS:

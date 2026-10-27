@@ -17,6 +17,7 @@ def render(report: Report, rules_only: bool) -> str:
     _one_sided(lines.append, [f for f in report.uncovered if f.detail != "no Python name"])
     _section(lines.append, "Python specs moved since their [[map]] entry", [f"{e.name}: {e.python}" for e in report.moved])
     _section(lines.append, "Dead entries", [f"{d.entry}: {d.path}: {d.why}" for d in report.dead])
+    _section(lines.append, "Exceptions due, their Python name now in the snapshot", [f"{e.name}: {e.until}" for e in report.due])
     if not rules_only:
         _pending(lines.append, report)
         for table in ("exception", "missing"):
@@ -97,6 +98,7 @@ def as_json(report: Report) -> dict:
         "uncovered": [finding(f) for f in report.uncovered],
         "dead": [{"entry": d.entry, "path": d.path, "why": d.why} for d in report.dead],
         "moved": [entry.name for entry in report.moved],
+        "due": [entry.name for entry in report.due],
         "pending": {
             lot: [{"entry": e.name, "reason": e.reason, "covered": [finding(f) for f in e.covered]} for e in entries]
             for lot, entries in report.pending.items()
