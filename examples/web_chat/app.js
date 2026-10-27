@@ -223,12 +223,14 @@ function end(streamId) {
 }
 
 // Puts an item of the conversation at its index: before the first item with
-// a higher one, else where it is, or at the end when it is new.
+// a higher one or an answer still streaming, which is stored after every row
+// shown, else where it is, or at the end when it is new.
 function place(item, index) {
   indexes.add(index);
   item.dataset.index = String(index);
   for (const other of page.messages.children) {
-    if (other !== item && Number(other.dataset.index) > index) {
+    const later = other.classList.contains("streaming") || Number(other.dataset.index) > index;
+    if (other !== item && later) {
       page.messages.insertBefore(item, other);
       return;
     }

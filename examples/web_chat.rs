@@ -26,7 +26,8 @@
 //!     participant's `name`; a message whose `participant_id` is the
 //!     person's own is shown as theirs, and an event the page shows
 //!     already, which a delivery made meanwhile brought too, is shown once,
-//!     told by its `index`;
+//!     told by its `index`; an answer still streaming, whose first pieces
+//!     may come before the history, stays below every stored event;
 //!   - `{"type": "delta", "stream_id", "from", "text"}`, a piece of the
 //!     agent's answer: it grows a bubble of its own for each `stream_id`;
 //!   - `{"type": "message", "id", "index", "from", "participant_id",
@@ -88,8 +89,10 @@
 //! from the page's own reads an answer as it is written, the lookup's call
 //! between its two rounds, and a second page that joins then is sent that
 //! conversation's past, the first page's message included, in order, each
-//! event once. `node --check` reads the page's script when `node` is on the
-//! PATH; that check is skipped otherwise.
+//! event once. When `node` is on the PATH, it reads the page's script
+//! (`node --check`) and runs it on a stub of the DOM (`web_chat/page_check.js`),
+//! fed frames, to check the order the page shows them in; those checks are
+//! skipped otherwise.
 //!
 //! With `--serve`, it stays up on 127.0.0.1:8080, or the address given
 //! after the flag, its rooms in `web_chat.db`, until Ctrl+C: open the URL
@@ -137,6 +140,10 @@ use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, TempDatabase};
 const PAGE: &str = include_str!("web_chat/index.html");
 const SCRIPT: &str = include_str!("web_chat/app.js");
 const STYLE: &str = include_str!("web_chat/app.css");
+
+/// The check of the page's order: the script run on a stub of the DOM,
+/// never served.
+const PAGE_CHECK: &str = include_str!("web_chat/page_check.js");
 
 /// What every response allows the page: its own files only, its socket to
 /// the same host (`'self'` takes in `ws:` there), no inline script nor
@@ -284,6 +291,7 @@ async fn check() -> Result<ExitCode, Box<dyn Error>> {
     another_page_reads_the_conversation_s_past(&mut checks, server.address(), &read).await?;
     tokio::time::timeout(PATIENCE, server.stop()).await??;
     the_script_parses(&mut checks).await?;
+    the_page_orders_what_it_is_sent(&mut checks).await?;
     the_page_holds_what_the_script_finds(&mut checks);
     Ok(checks.finish())
 }
@@ -550,19 +558,63 @@ fn print_frames(who: &str, frames: &[Value]) {
 /// is on the PATH.
 async fn the_script_parses(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     const WHAT: &str = "the page's script parses (node --check)";
+    match node(&["--check"]).await? {
+        None => checks.skip(WHAT, "node is not on the PATH"),
+        Some(output) => checks.expect(WHAT, output.status.success()),
+    }
+    Ok(())
+}
+
+/// The script, run by node on a stub of the DOM (`web_chat/page_check.js`)
+/// and fed frames, puts the conversation in index order: the history after
+/// a piece of an answer that came first, an event both the history and a
+/// delivery brought once, the row of an answer before one still streaming.
+async fn the_page_orders_what_it_is_sent(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    const WHAT: &str = "the page shows what it is sent in index order, each event once, an \
+                        answer still streaming below every stored event";
+    let Some(output) = node(&["-e", PAGE_CHECK]).await? else {
+        checks.skip(WHAT, "node is not on the PATH");
+        return Ok(());
+    };
+    let shown: Value = serde_json::from_slice(&output.stdout).unwrap_or_default();
+    for (scenario, items) in shown.as_object().into_iter().flatten() {
+        println!("  {scenario}: {items}");
+    }
+    let expected = serde_json::json!({
+        "delta before history": [
+            "message theirs#0: AliceHi",
+            "message theirs#1: assistantHello Alice",
+            "message theirs#2: AliceIs my order 42 ready?",
+            "message theirs#3: assistantYes, order 42 is ready.",
+        ],
+        "row before history": [
+            "message mine#1: BobQ one",
+            "message theirs#2: assistantAnswer two",
+            "message theirs#3: assistantAnswer three",
+        ],
+        "two streams": [
+            "message mine#1: BobQ",
+            "message theirs#2: bB done",
+            "message theirs#3: aA done",
+        ],
+    });
+    checks.expect(WHAT, output.status.success() && shown == expected);
+    Ok(())
+}
+
+/// What `node` with `args` does with the script as its input, `None` when
+/// it is not on the PATH; what it says on its error output is printed.
+async fn node(args: &[&str]) -> Result<Option<std::process::Output>, Box<dyn Error>> {
     let node = Command::new("node")
-        .arg("--check")
+        .args(args)
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn();
     let mut node = match node {
         Ok(node) => node,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            checks.skip(WHAT, "node is not on the PATH");
-            return Ok(());
-        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     if let Some(mut input) = node.stdin.take() {
@@ -572,8 +624,7 @@ async fn the_script_parses(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
     if !output.status.success() {
         println!("{}", String::from_utf8_lossy(&output.stderr));
     }
-    checks.expect(WHAT, output.status.success());
-    Ok(())
+    Ok(Some(output))
 }
 
 /// Every element the script finds by its id, `byId("...")`, is on the
