@@ -25,7 +25,8 @@ tokio = { workspace = true, features = ["net", "io-util"] }
 
 # The server example's (server_agent.rs), which the shared library does not
 # use: its store, its WebSocket server and the client its checks connect
-# with, and the signal that stops it when it serves.
+# with, and the signal that stops it when it serves. The skills example
+# (agent_skills.rs) restarts on the same store.
 [dev-dependencies]
 axum.workspace = true
 futures-util.workspace = true
@@ -139,6 +140,10 @@ path = "openai_agent.rs"
 [[example]]
 name = "agent_tools"
 path = "agent_tools.rs"
+
+[[example]]
+name = "agent_skills"
+path = "agent_skills.rs"
 
 # A server: an agent over WebSocket, kept in SQLite.
 
