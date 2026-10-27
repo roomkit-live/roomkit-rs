@@ -160,6 +160,28 @@ class Members(unittest.TestCase):
         self.assertEqual(report.items["roomkit::RoomKit"].status, "matches")
         self.assertEqual(report.items["roomkit::SendEventOptions"].status, "options")
 
+    def test_an_options_struct_s_own_members_have_no_python_counterpart(self) -> None:
+        report = run(
+            [
+                struct(
+                    "roomkit::RoomKit",
+                    methods=["pub async fn attach_channel(&self, room_id: &RoomId, options: AttachChannelOptions)"],
+                ),
+                struct(
+                    "roomkit::AttachChannelOptions",
+                    fields=[("access", "Access")],
+                    methods=["pub fn with_magic(self, magic: u8) -> Self"],
+                    constants=["MAGIC"],
+                ),
+            ],
+            {"roomkit.RoomKit": {"attach_channel": ["async def", "room_id", "access=<Access.READ_WRITE>"]}},
+        )
+        self.assertEqual(
+            found(report),
+            [("rust", "roomkit::AttachChannelOptions::MAGIC"), ("rust", "roomkit::AttachChannelOptions::with_magic")],
+        )
+        self.assertEqual(report.items["roomkit::AttachChannelOptions"].status, "options")
+
     def test_parameters_on_one_side_only(self) -> None:
         report = run(
             [

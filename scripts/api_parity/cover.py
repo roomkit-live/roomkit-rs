@@ -55,7 +55,7 @@ def _settle(items: dict[str, ItemResult], comparison: Comparison, mapping: Mappi
     for path, result in items.items():
         if path in comparison.options_used and result.python is None:
             comparison.findings = [f for f in comparison.findings if not (f.path == path and f.detail == "no Python name")]
-            result.findings, result.status = [], "options"
+            result.findings, result.status = comparison.own_members(path), "options"
         elif path in exceptions:
             result.status = "exception"
         elif result.python is None:

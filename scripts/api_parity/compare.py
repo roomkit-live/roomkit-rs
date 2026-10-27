@@ -93,6 +93,14 @@ class Comparison:
         wanted = name if item["kind"] in ("fn", "constant") else self.rules.python_type_name(name)
         return self.python.find(self.rules.packages_for(module), wanted)
 
+    def own_members(self, path: str) -> list[Finding]:
+        """An options struct's own methods and constants: its fields stand
+        for Python's parameters, and nothing in Python stands for these."""
+        item, before = self.surface.items[path], len(self.findings)
+        for member in item.get("methods", []) + item.get("constants", []):
+            self._find("rust", f"{path}::{member['name']}", "an options struct's own member: no Python member", path, None)
+        return self.findings[before:]
+
     def _find(self, side: str, path: str, detail: str, rust_item: str, python_item: str | None) -> None:
         self.findings.append(Finding(side, path, detail, rust_item, python_item))
 
