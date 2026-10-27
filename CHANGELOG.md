@@ -170,7 +170,15 @@ as it stands.
   frames text from outside in such a block (RFC §6.4). `Channel::close`
   (RFC §6.1) and `Toolset::close`, each with a default that releases
   nothing: the kit's shutdown closes each channel once, and an AI agent
-  closes its toolsets. The example `mcp_tools` shows them.
+  closes its toolsets. The example `mcp_tools` shows them. rmcp's response
+  cache is disabled, so no page of the listing stays resident.
+- **A tool name OpenAI refuses fails `OpenAiAgent::with_tools`** (RFC
+  §6.7). On OpenAI's own endpoint (`https://api.openai.com/v1`), a tool
+  whose name is not `[A-Za-z0-9_-]{1,128}`, the names OpenAI accepts as the
+  reference implementation measured them, is refused when the agent takes
+  its toolset (`AiError::ToolName`, naming the tool and the rule), where it
+  failed every turn's request at the vendor: an MCP server's `files.read`,
+  say. A server behind another base URL decides itself.
 - **Skills from the host's directories** (step 4, milestone 8, RFC §24,
   §6.4, §21.1). `roomkit_ai::SkillRegistry` discovers the skills of
   directories (`discover(&[dir])`, a slice) or registers one (`register`), strictly and
