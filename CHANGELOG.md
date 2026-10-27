@@ -138,6 +138,39 @@ as it stands.
 
 ### Added
 
+- **MCP servers over stdio** (step 4, milestone 9, RFC §21.2, §21.1, §6.4).
+  The new crate `roomkit-mcp`, on `rmcp` 3.8 (its minor version pinned):
+  `McpCommand` starts a server, a program and its arguments as a list,
+  never through a shell, its environment cleared but for `HOME`, `LOGNAME`,
+  `PATH`, `SHELL`, `TERM`, `USER` and the variables it is given, its
+  standard error read and logged at debug level so it never blocks;
+  `McpServer::connect` runs the MCP handshake and lists the server's tools
+  once, following the cursor, within 60 seconds by default
+  (`connect_timeout`), and a connection that fails part-way kills the
+  process and waits for it before the error (`McpError`) is returned. An
+  `McpServer` is a `Toolset`: an agent serves its tools under their bare
+  names, a name another of its toolsets serves (a host tool, a skill's
+  tool) refused when the agent takes it (`AiError::DuplicateTool`), its
+  tool policy and its bound per call applying as to any tool. A call
+  answers the result's text, a note for what is not text, and a result
+  that says `isError` is a failed call whose words the model reads. What a
+  server sends is bounded: a message at 4 MiB, the listing at 1,000 pages
+  and 512 tools, a name at 128 characters, a description at 4,096, a
+  schema at 32 KiB, a result at 100,000 characters. The process stops at
+  `close()` (its input closed, 2 seconds of grace by default, then a kill),
+  when the kit of the agent serving its tools shuts down, and when its last
+  handle is dropped; one that exits on its own is waited for at once.
+  `AiAgent::with_server_instructions` and
+  `OpenAiAgent::with_server_instructions` carry what a server published
+  (`McpServer::instructions`) in every system prompt, after the agent's
+  own and before the skills, under the host's label for the server, in a
+  `<server_instructions>` block whose forged closing tag is neutralised,
+  cut at 8,192 characters (`AiError::ServerLabel`, `AiError::DuplicateServer`).
+  The core's `rules::transcript::fence` (`roomkit::transcript::fence`)
+  frames text from outside in such a block (RFC §6.4). `Channel::close`
+  (RFC §6.1) and `Toolset::close`, each with a default that releases
+  nothing: the kit's shutdown closes each channel once, and an AI agent
+  closes its toolsets. The example `mcp_tools` shows them.
 - **Skills from the host's directories** (step 4, milestone 8, RFC §24,
   §6.4, §21.1). `roomkit_ai::SkillRegistry` discovers the skills of
   directories (`discover(&[dir])`, a slice) or registers one (`register`), strictly and
