@@ -52,5 +52,4 @@ mod side_effects;
 mod store;
 
 pub use self::error::OpenError;
-pub use self::schema::SCHEMA_VERSION;
 pub use self::store::SqliteStore;

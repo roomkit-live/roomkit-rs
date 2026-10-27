@@ -9,7 +9,7 @@ use crate::error::OpenError;
 
 /// The schema version this crate reads and writes: the Python
 /// implementation's `SQLiteStore` at its version 12.
-pub const SCHEMA_VERSION: i64 = 12;
+pub(crate) const SCHEMA_VERSION: i64 = 12;
 
 /// The tables and indexes, as the Python implementation writes them
 /// (roomkit `store/sqlite.py`, `_SCHEMA`), byte for byte: SQLite keeps each
