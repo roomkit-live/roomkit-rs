@@ -338,10 +338,10 @@ mod linked_directories {
         );
     }
 
-    /// RFC §24.6: a `SKILL.md` swapped for a link out between the check
-    /// and the read is never read out of its directory.
+    /// RFC §24.6: a `SKILL.md` replaced by a link out (a rename over it)
+    /// between the check and the read is never read out of its directory.
     #[test]
-    fn a_skill_file_swapped_for_a_link_out_while_it_is_read_is_never_read_out() {
+    fn a_skill_file_renamed_over_by_a_link_out_while_it_is_read_is_never_read_out() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 

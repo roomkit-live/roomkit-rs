@@ -300,6 +300,9 @@ fn skill_file(directory: &Path, label: &str) -> Result<String, SkillError> {
                 OpenFailure::Escapes => "SKILL.md escapes its skill directory".to_owned(),
                 OpenFailure::NotAFile => "SKILL.md is not a regular file".to_owned(),
                 OpenFailure::Changed => "SKILL.md changed while it was read".to_owned(),
+                OpenFailure::Unverified(error) => {
+                    format!("SKILL.md cannot be verified (/proc/self/fd unreadable): {error}")
+                }
                 OpenFailure::Failed(error) => format!("Unable to read SKILL.md: {error}"),
             })
         },

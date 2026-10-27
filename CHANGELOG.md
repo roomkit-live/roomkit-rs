@@ -160,9 +160,11 @@ as it stands.
   acknowledgement after, and `read_skill_reference`, which reads a file of
   the skill's `references/` by a name of `[A-Za-z0-9._-]`, resolved with
   its links followed and inside that directory, 256 KiB at most; each
-  file is opened, then checked through its handle (the path resolved anew
-  names the very file opened), so one swapped for a link out meanwhile is
-  never read. The two
+  file is opened, then checked through its handle: on Linux the path the
+  kernel gives the open file (`/proc/self/fd`) must be inside, so one
+  swapped for a link out meanwhile, even by an atomic exchange, is never
+  read, and an unreadable `/proc` refuses it; on other Unix systems the
+  path resolved anew must name the handle's device and inode. The two
   tools escape the agent's tool policy, as RFC §21.1 lists them. An
   activation counts once its call is served, for the room, four skills at
   most; a restarted agent reads the room's served activations again from

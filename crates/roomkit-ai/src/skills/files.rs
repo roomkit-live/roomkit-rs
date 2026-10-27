@@ -8,10 +8,12 @@
 //! separator does), then the directory and the file are resolved with
 //! their links followed, and each must still be inside the one above it.
 //! A file is opened once it is checked, then checked again through its
-//! handle: the path, resolved anew, must still be inside and name the very
-//! file the handle holds, so a file swapped for a link between the check
-//! and the read is never read. These are blocking calls: an agent runs
-//! them off its turn's task.
+//! handle: on Linux the path the kernel gives the open file must be inside,
+//! so a file swapped for a link out between the check and the read, even
+//! by an atomic exchange, is never read; on other Unix systems the path
+//! resolved anew must name the device and inode the handle holds, which an
+//! atomic exchange can still pass (one gap line). These are blocking
+//! calls: an agent runs them off its turn's task.
 
 use std::fs::{self, File, Metadata};
 use std::io::{self, Read as _};
@@ -53,20 +55,26 @@ pub(crate) enum OpenFailure {
     Escapes,
     /// It resolves to no regular file.
     NotAFile,
-    /// Once opened, it resolves elsewhere or names another file: it
-    /// changed while it was opened.
+    /// Once opened, it resolves elsewhere or names another file, or the
+    /// handle holds a file elsewhere: it changed while it was opened.
     Changed,
+    /// The handle's path could not be read (`/proc/self/fd`, on Linux):
+    /// the file is refused, its place unknown.
+    Unverified(io::Error),
     /// It could not be resolved or opened.
     Failed(io::Error),
 }
 
 /// The regular file `path` resolves to, open, when `inside` takes where it
 /// resolves. The path is resolved with its links followed and checked,
-/// then the file is opened, then the path is resolved again: it must
-/// resolve to the same place, still inside, and name the very file the
-/// handle holds (its device and inode, on Unix). A file swapped for a link
-/// out between the check and the open is so never handed over. A FIFO
-/// found there is refused before the open, which it would block.
+/// then the file is opened and the handle checked: on Linux, the path the
+/// kernel gives the open file (`/proc/self/fd`) must be inside, so a file
+/// or a directory exchanged for a link out, even atomically, between the
+/// check and the open is never handed over, and a `/proc` that cannot be
+/// read refuses the file; on every platform, the path resolved anew must
+/// resolve to the same place, still inside, and name the file the handle
+/// holds (its device and inode on Unix), the one check left elsewhere. A
+/// FIFO found there is refused before the open, which it would block.
 pub(crate) fn open_inside(
     path: &Path,
     inside: impl Fn(&Path) -> bool,
@@ -83,10 +91,54 @@ pub(crate) fn open_inside(
     if !opened.is_file() {
         return Err(OpenFailure::NotAFile);
     }
-    if !still_names(path, &resolved, &opened, &inside) {
-        return Err(OpenFailure::Changed);
+    match holds_inside(&file, &opened, path, &resolved, &inside) {
+        Ok(true) => Ok(file),
+        Ok(false) => Err(OpenFailure::Changed),
+        Err(error) => Err(OpenFailure::Unverified(error)),
     }
-    Ok(file)
+}
+
+/// Whether `file`, opened from `resolved`, holds a file inside: the path
+/// still names it, and on Linux the handle's own path is inside.
+///
+/// # Errors
+///
+/// Returns the error reading the handle's path failed with.
+fn holds_inside(
+    file: &File,
+    opened: &Metadata,
+    path: &Path,
+    resolved: &Path,
+    inside: impl Fn(&Path) -> bool,
+) -> io::Result<bool> {
+    if !still_names(path, resolved, opened, &inside) {
+        return Ok(false);
+    }
+    handle_inside(file, &inside)
+}
+
+/// Whether the path the kernel gives the open `file` is inside: what was
+/// opened, whatever the path names now.
+///
+/// # Errors
+///
+/// Returns the error reading `/proc/self/fd` failed with.
+#[cfg(target_os = "linux")]
+fn handle_inside(file: &File, inside: impl Fn(&Path) -> bool) -> io::Result<bool> {
+    use std::os::fd::AsRawFd as _;
+    let held = fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))?;
+    Ok(inside(&held))
+}
+
+/// No path of an open file to read without a dependency: the device and
+/// inode the path names are the check (one gap line).
+#[cfg(not(target_os = "linux"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the same signature as Linux's, which reads /proc"
+)]
+fn handle_inside(_file: &File, _inside: impl Fn(&Path) -> bool) -> io::Result<bool> {
+    Ok(true)
 }
 
 /// Whether `path`, resolved anew, still resolves to `resolved`, inside,
@@ -205,6 +257,12 @@ pub(crate) fn read_reference(skill: &Path, name: &str) -> Result<String, String>
         // Resolved, links followed: a link out is caught here.
         Err(OpenFailure::Escapes) => return Err(invalid(name, &format!(" escapes {REFERENCES}/"))),
         Err(OpenFailure::Changed) => return Err(invalid(name, " changed while it was read")),
+        Err(OpenFailure::Unverified(_)) => {
+            return Err(invalid(
+                name,
+                " cannot be verified (/proc/self/fd unreadable)",
+            ));
+        }
         Err(OpenFailure::Failed(_)) => return Err(invalid(name, " cannot be resolved")),
     };
     read_bounded(file, REFERENCE_MAX).map_err(|failure| match failure {
@@ -364,11 +422,38 @@ mod tests {
         assert!(!still_names(&path, &resolved, &opened, inside));
     }
 
-    /// RFC §24.6: a reference swapped for a link out between the check and
-    /// the read is never read out of `references/`.
+    /// RFC §24.6: a handle opened on a file out of the directory is refused,
+    /// though the path, resolved, names that very file: what an atomic
+    /// exchange of the path with a link out shows a check that reads the
+    /// path after the open. A hard link stands for the exchange here, so
+    /// that the path names the outside file's device and inode
+    /// deterministically.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_handle_opened_out_of_the_directory_is_refused_though_the_path_names_its_file() {
+        let tree = Tree::new("handle");
+        let (references, outside) = (tree.0.join("references"), tree.0.join("outside"));
+        fs::create_dir_all(&references).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.md"), "SECRET").unwrap();
+        fs::hard_link(outside.join("secret.md"), references.join("a.md")).unwrap();
+        let path = references.join("a.md");
+        let resolved = path.canonicalize().unwrap();
+        let inside = |target: &Path| target.starts_with(&references);
+        let out = File::open(outside.join("secret.md")).unwrap();
+        let opened = out.metadata().unwrap();
+        assert!(!holds_inside(&out, &opened, &path, &resolved, inside).unwrap());
+        let within = File::open(&resolved).unwrap();
+        let opened = within.metadata().unwrap();
+        assert!(holds_inside(&within, &opened, &path, &resolved, inside).unwrap());
+    }
+
+    /// RFC §24.6: a reference replaced by a link out (a rename over it)
+    /// between the check and the read is never read out of `references/`.
+    /// An atomic exchange is the handle test's above, on Linux.
     #[cfg(unix)]
     #[test]
-    fn a_reference_swapped_for_a_link_out_while_it_is_read_is_never_read_out() {
+    fn a_reference_renamed_over_by_a_link_out_while_it_is_read_is_never_read_out() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
