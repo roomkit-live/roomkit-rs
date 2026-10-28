@@ -7,10 +7,12 @@
 //!
 //! - [`Channel`]: implement it for a transport or an intelligence channel.
 //! - [`RoomKit`], built with [`RoomKitOptions`], the Python
-//!   implementation's constructor keywords: register channels and hooks, run rooms through their
-//!   lifecycle and timers, process messages into the room they name or the
-//!   room their router finds, inject events and commit records directly,
-//!   wait for the work the kit runs in the background or end it. A
+//!   implementation's constructor keywords: register channels and hooks,
+//!   run rooms through their lifecycle and timers, process messages into
+//!   the room they name or the room their router finds, deferring their
+//!   delivery if asked ([`DeliveryHandle`]), inject events and commit
+//!   records directly, and close, which drains the work the kit runs in
+//!   the background before it ends it. A
 //!   hook, a turn or a delivery that calls into its own room never waits for
 //!   itself: the room lock is reentrant within the call's execution context,
 //!   a call made under the lock or in the room's admission order is adopted

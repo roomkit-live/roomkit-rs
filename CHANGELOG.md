@@ -38,7 +38,9 @@ kit, its construction and its calls).
   its timers a `RoomTimers`; `attach_channel` (for `attach` and
   `attach_with`), `detach_channel`, `mute`, `unmute`; `send_event(room_id,
   channel_id, content, SendEventOptions)`, which gains `provider` and
-  `created_at`; `post(room_id, content, PostOptions)`; `commit_event`,
+  `created_at` (`DirectEvent` gains them as public fields too, so a
+  literal of it without `..` no longer compiles); `post(room_id, content,
+  PostOptions)`; `commit_event`,
   `update_event(UpdateEventOptions)`, `delete_event(DeleteEventOptions)`,
   `get_timeline(GetTimelineOptions)` (for `TimelineQuery`);
   `check_all_timers` (for `check_timers`) and the five transitions.
@@ -47,8 +49,14 @@ kit, its construction and its calls).
 - `ProcessInboundOptions { defer_delivery: true, .. }` returns at the
   commit, its blocking decisions made (RFC §10.1 step 18, detached
   completion): the result's `delivery`, a `DeliveryHandle`, has `done()`
-  and `wait()`, which reports the call as one that waited would have.
-  `InboundResult` is now `roomkit`'s, converted from the core's.
+  and `wait(&self)`, which reports the call as one that waited would have
+  and may be called again, the result keeping the handle, as Python's. The
+  handle is cheap to clone. A deferred call refused before the locked
+  region gets none. A wait from the room's own work returns unwaited while
+  the delivery is not done; one from admission work on a call that work
+  adopted returns its delivery results (gap G-082). `InboundResult` is now
+  `roomkit`'s, converted from the core's, and gains Python's
+  `cancellation_reason`.
 - Every call takes the organization it acts for in its options,
   `organization_id`; `for_organization` and `OrganizationKit` go. A room of
   another organization reads as not found, as Python reads it: `None` from
@@ -60,9 +68,12 @@ kit, its construction and its calls).
   `update_binding_metadata`, which merges key by key; `update_binding`
   goes.
 - `detach_channel` returns whether the room bound the channel, `false`
-  rather than an error for one it does not; `unregister_channel` of an
-  unknown channel is `Ok`; `get_timeline` reads the room before it checks
-  the query, a missing room `RoomNotFound` whatever the query.
+  rather than an error for one it does not; `unregister_channel` hands the
+  channel back, not closed, for its caller to close
+  (`Option<Arc<dyn RegisteredChannel>>`, `None` for an unknown channel), as
+  Python's; `attach_channel` reads the room before the channel's
+  registration; `get_timeline` reads the room before it checks the query, a
+  missing room `RoomNotFound` whatever the query.
 - `RoomOptions`, `BindingOptions`, `BindingUpdate` and `Post` leave
   `roomkit::model`.
 - A message into a room of another organization, named or routed, fails
@@ -72,11 +83,24 @@ kit, its construction and its calls).
   `roomkit:`, or of the room's private state) with a warning and writes the
   rest (RFC §5.1); it was refused.
 - `RoomKit::close` replaces `shutdown` and drains as Python's `close`
-  does: the calls are refused at once and a second `close` returns at
-  once; the inbound runs, their deliveries and turns, get up to 5 seconds
-  to end, one ending then reporting its result; the turns still running
-  are cut; the observers still running finish within their hook's timeout;
-  what is left is aborted; the channels close once.
+  does: a second `close` returns at once; calls are taken while the work
+  drains, a delivery that would start then dropped (`cancellation_reason`
+  `kit_closed`), and refused once the kit is sealed; the inbound runs,
+  their deliveries, turns and the observers their deliveries fire, get up
+  to 5 seconds to end, one ending then reporting its result; the turns
+  still running are cut and the rest of the work aborted, its callers
+  receiving their result (`lane_cancelled` or `kit_closed`) rather than
+  `ShutDown`; the other observers finish within their hook's timeout; the
+  channels close once; the store's writes run to their end, and the close
+  waits for them.
+- A channel's output and a stream target's `metadata_updates` refuse the
+  keys of the room's private state too (`author_register`,
+  `_speak_queue_results`), as Python's writers do: a channel could forge
+  the register of authors.
+- A call from a room's own work naming another organization reads the room
+  first and draws nothing on the work's reentry budget; a call back from
+  another room's delivery waits for its delivery once the first delivery
+  is over.
 - `idle` leaves the public API for the hidden test seam
   `roomkit::testing::idle(&kit)`. `run_timers`, `TimerSweeper`,
   `KitError::NoRuntime` and `KitError::ZeroPeriod` go: the host calls
