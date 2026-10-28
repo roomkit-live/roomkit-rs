@@ -225,6 +225,10 @@ pub(crate) struct Sim {
     /// The label of every effect made under a room's lock
     /// (`Effect::locked`), with the room, in order: `commit under room_1`.
     pub(crate) under_lock: Vec<String>,
+    /// Every commit that decides its call (`Effect::decides`), in order, as
+    /// the text it commits and the result it decides: `Bonjour: blocked
+    /// "not now"`.
+    pub(crate) deciding: Vec<String>,
     /// The start of the label of the effect before which the call's caller
     /// stops waiting, until it does: the call is expired then
     /// (`Operation::expire`), the trace reads `caller gone`, and the effects
@@ -353,6 +357,7 @@ impl Sim {
             bounded: Vec::new(),
             in_admission_order: Vec::new(),
             under_lock: Vec::new(),
+            deciding: Vec::new(),
             leaves_before: None,
             hook_contexts: Vec::new(),
             identities: Vec::new(),

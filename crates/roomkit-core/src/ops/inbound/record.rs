@@ -18,7 +18,7 @@
 //! is stored (gap G-069).
 
 use super::direct::DirectCall;
-use super::{commit, report};
+use super::{cascade, commit, report};
 use crate::model::{ChannelId, ErrorRecord, EventStatus, Room, RoomContext, RoomEvent, RoomId};
 use crate::ops::protocol::{EffectId, Outcome, RoomCounters, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
@@ -66,6 +66,9 @@ struct RecordWork {
     /// What a direct injection's record is checked for at the gate (gap
     /// G-069).
     direct: Option<DirectCall>,
+    /// Whether the record is the call's own event, whose commit decides the
+    /// call (`Effect::decides`).
+    decides: bool,
     /// The request outstanding.
     waiting: Waiting,
 }
@@ -121,6 +124,7 @@ impl RecordPass {
             refused_as,
             narrowing: Narrowing::SourceBinding,
             direct: None,
+            decides: false,
             waiting: Waiting::Nothing,
         };
         Self {
@@ -133,6 +137,12 @@ impl RecordPass {
     /// for any other record.
     pub(super) fn checking(mut self, direct: Option<DirectCall>) -> Self {
         self.section.work_mut().direct = direct;
+        self
+    }
+
+    /// The record of the call's own event, whose commit decides the call.
+    pub(super) fn deciding(mut self) -> Self {
+        self.section.work_mut().decides = true;
         self
     }
 
@@ -198,7 +208,12 @@ impl RecordWork {
             counters,
             target: None,
         };
-        self.waiting = Waiting::Commit(cx.io.issue_locked(request, self.record.room_id.clone()));
+        let effect = cx.io.issue_locked(request, self.record.room_id.clone());
+        if self.decides {
+            cx.io
+                .decides(effect, cascade::stored_record(self.record.clone()));
+        }
+        self.waiting = Waiting::Commit(effect);
     }
 }
 

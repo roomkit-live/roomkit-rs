@@ -235,7 +235,10 @@ mod an_allowed_message {
 /// RFC Appendix B.2: a hook blocks, injects and observes.
 mod a_blocked_message {
     use super::*;
+    use crate::support::{Answer, Reentry, calling};
     use pretty_assertions::assert_eq;
+    use roomkit_core::model::{DirectEvent, EventContent};
+    use roomkit_core::ops::Entry;
 
     fn scanning_room() -> Sim {
         let mut sim = Sim::new();
@@ -281,6 +284,54 @@ mod a_blocked_message {
         sim.send(Sim::message("sms", "Mon NAS est 123-456-789"))
             .unwrap();
         assert_eq!(sim.commits_under_lock(), (3, 3));
+    }
+
+    /// `Effect::decides`: of the three commits, the message's record alone
+    /// decides the call, as its result reads it, the hook's reason its
+    /// reason; the events the hook injected decide nothing.
+    #[test]
+    fn decides_the_call_by_its_own_record_s_commit_only() {
+        let mut sim = scanning_room();
+        sim.send(Sim::message("sms", "Mon NAS est 123-456-789"))
+            .unwrap();
+        assert_eq!(
+            sim.deciding,
+            [r#"Mon NAS est 123-456-789: blocked "SIN detected""#]
+        );
+    }
+
+    /// `Effect::decides`, RMK-1010 item 41: an entry a locked hook adopted
+    /// into the room is committed ahead of the message, and decides
+    /// nothing; the message's commit decides the call.
+    #[test]
+    fn an_entry_committed_ahead_of_it_decides_nothing() {
+        let mut sim = Sim::new();
+        sim.transport("sms");
+        sim.reentrant_hook(
+            "notes",
+            true,
+            Reentry {
+                entries: calling(|event| {
+                    let text = roomkit_core::rules::transcoding::text_of(&event.content);
+                    (text == "Bonjour").then(|| Entry::Direct {
+                        room_id: room_id(),
+                        organization_id: None,
+                        event: Box::new(DirectEvent::new(
+                            channel("sms"),
+                            EventContent::text("Noted"),
+                        )),
+                    })
+                }),
+                answer: Answer::Awaits(Box::new(|_| {
+                    HookOutcome::Returned(HookResult::block("not now"))
+                })),
+            },
+        );
+        sim.send(Sim::message("sms", "Bonjour")).unwrap();
+        assert_eq!(
+            (sim.traced("commit").len(), sim.deciding),
+            (2, vec![r#"Bonjour: blocked "not now""#.to_owned()])
+        );
     }
 
     #[test]
@@ -384,7 +435,7 @@ mod a_blocked_message {
             "redact",
             Box::new(|event| {
                 let mut redacted = event.clone();
-                redacted.content = roomkit_core::model::EventContent::text("[redacted]");
+                redacted.content = EventContent::text("[redacted]");
                 HookOutcome::Returned(HookResult::modify(redacted))
             }),
         );

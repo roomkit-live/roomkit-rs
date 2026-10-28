@@ -322,7 +322,8 @@ mod a_hook_s_body {
 
     /// A call a hook's body makes into the room draws one of the cascade's
     /// hook calls, never one of its passes: past the hook calls it is
-    /// stored capped, whatever passes are left.
+    /// stored capped, whatever passes are left, its record's commit the one
+    /// that decides it (`Effect::decides`).
     #[test]
     fn draws_a_hook_call_past_which_its_call_is_capped() {
         let mut sim = room();
@@ -343,8 +344,20 @@ mod a_hook_s_body {
         let mut expected = vec![None; 10];
         expected.push(Some("reentry_loop_cap".to_owned()));
         assert_eq!(
-            (drawn, budget.remaining(), budget.hook_calls_left()),
-            (expected, 10, 0)
+            (
+                drawn,
+                budget.remaining(),
+                budget.hook_calls_left(),
+                sim.deciding.len(),
+                sim.deciding.last().map(String::as_str)
+            ),
+            (
+                expected,
+                10,
+                0,
+                11,
+                Some(r#"Noted 10.: blocked "reentry_loop_cap""#)
+            )
         );
     }
 }

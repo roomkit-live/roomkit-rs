@@ -245,6 +245,7 @@ impl Io {
             locked,
             admitted: self.admitted.clone(),
             budget,
+            decides: None,
         };
         if let Some(effect) = self.locks.admit(effect) {
             self.issued.push(effect);
@@ -286,6 +287,19 @@ impl Io {
     /// returns what it replaces, which its caller puts back.
     pub(crate) fn admit(&mut self, room_id: Option<RoomId>) -> Option<RoomId> {
         std::mem::replace(&mut self.admitted, room_id)
+    }
+
+    /// Marks `effect`, a commit issued for the next step, as the one that
+    /// decides the call as `result` once it is stored (`Effect::decides`).
+    pub(crate) fn decides(&mut self, effect: EffectId, result: InboundResult) {
+        let issued = self.issued.iter_mut().find(|issued| issued.id == effect);
+        debug_assert!(
+            issued.is_some(),
+            "a call's deciding commit goes out on the next step"
+        );
+        if let Some(issued) = issued {
+            issued.decides = Some(Box::new(result));
+        }
     }
 
     /// Emits `notice` on the next step.

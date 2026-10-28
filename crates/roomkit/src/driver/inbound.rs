@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
-use roomkit_core::model::{EventId, EventStatus, RoomEvent, RoomId};
+use roomkit_core::model::{EventId, RoomId};
 use roomkit_core::ops::{
     Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED, Outcome,
     StoreOutcome,
@@ -82,9 +82,9 @@ impl Ran {
 pub(crate) struct Record {
     decided: Mutex<Option<InboundResult>>,
     delivering: AtomicBool,
-    /// The call's own event, while its commit, asked for before the call's
-    /// decision, runs, and what that write came to.
-    committing: Mutex<Option<(RoomEvent, Written)>>,
+    /// The call's result once its own event's commit, the one that decides
+    /// it, is stored, and what that write came to.
+    committing: Mutex<Option<(InboundResult, Written)>>,
 }
 
 impl Record {
@@ -105,12 +105,13 @@ impl Record {
         }
     }
 
-    /// The call's own event's commit runs, its outcome told by `written`.
-    fn commits(&self, event: RoomEvent, written: Written) {
+    /// The commit that decides the call as `result` runs, its outcome told
+    /// by `written`.
+    fn commits(&self, result: InboundResult, written: Written) {
         *self
             .committing
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((event, written));
+            .unwrap_or_else(PoisonError::into_inner) = Some((result, written));
     }
 
     /// What a run the kit's close aborted reports, as the Python
@@ -141,29 +142,26 @@ impl Record {
         Ok(Ok(result))
     }
 
-    /// The result of a call aborted while its own commit ran: once the
-    /// write ended, its event, never delivered; `ShutDown` for a commit
-    /// that failed, or none.
+    /// The result of a call aborted while the commit that decides it ran:
+    /// once the write ended, the call as that commit decides it, its event
+    /// never delivered; `ShutDown` for a call that never reached that
+    /// commit.
     async fn committed(&self) -> InboundOutput {
         let committing = self
             .committing
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let Some((event, mut written)) = committing else {
+        let Some((mut result, mut written)) = committing else {
             return Err(KitError::ShutDown);
         };
         if calls::outcome_of(&mut written).await != Outcome::Store(StoreOutcome::Committed) {
             return Err(KitError::ShutDown);
         }
-        let blocked = event.status == EventStatus::Blocked;
-        Ok(Ok(InboundResult {
-            reason: event.blocked_by.clone().filter(|_| blocked),
-            blocked,
-            cancellation_reason: (!blocked).then(|| KIT_CLOSED.to_owned()),
-            event: Some(event),
-            ..InboundResult::default()
-        }))
+        if !result.blocked {
+            result.cancellation_reason = Some(KIT_CLOSED.to_owned());
+        }
+        Ok(Ok(result))
     }
 }
 
@@ -220,14 +218,10 @@ impl Caller {
         self.record.turn_came(event_id);
     }
 
-    /// Whether the call is decided.
-    pub(super) fn is_decided(&self) -> bool {
-        self.decided
-    }
-
-    /// The call's own `event`'s commit runs, its outcome told by `written`.
-    pub(super) fn commits(&self, event: RoomEvent, written: Written) {
-        self.record.commits(event, written);
+    /// The commit that decides the call as `result` runs, its outcome told
+    /// by `written`.
+    pub(super) fn commits(&self, result: InboundResult, written: Written) {
+        self.record.commits(result, written);
     }
 
     /// Takes the call's decision, `decided`: the caller is answered with

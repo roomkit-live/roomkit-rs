@@ -159,6 +159,7 @@ mod tests {
             locked: None,
             admitted: None,
             budget: None,
+            decides: None,
         }
     }
 

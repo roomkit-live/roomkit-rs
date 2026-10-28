@@ -22,9 +22,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use roomkit_core::model::{EventId, RoomId, Timestamp};
 use roomkit_core::ops::{
     ChannelRequest, Decided, Effect, EffectId, Entry, EntryId, Environment, HoldOutcome, Inbound,
-    InboundTarget, Next, Notice, Operation, Outcome, Request, Settled,
+    InboundTarget, Next, Notice, Operation, Outcome, Request, Settled, StoreRequest,
 };
 use roomkit_core::rules::chain_depth::{Draw, ReentryBudget};
+use roomkit_core::rules::transcoding::text_of;
 
 use super::{Called, Caller, Sim, Then, journal_line};
 
@@ -899,6 +900,30 @@ impl Sim {
         self.post(wait.run, wait.effect, Outcome::DeadlinePassed);
     }
 
+    /// Notes `effect` when it is a commit that decides its call: the text
+    /// it commits, whether the result it decides is that event's, blocked
+    /// or not, and its reason.
+    fn note_deciding(&mut self, effect: &Effect) {
+        let (Request::Store(StoreRequest::Commit { event, .. }), Some(result)) =
+            (&effect.request, &effect.decides)
+        else {
+            return;
+        };
+        let own = result.event.as_ref() == Some(&**event);
+        let decided = if result.blocked {
+            "blocked"
+        } else {
+            "delivered"
+        };
+        let line = format!(
+            "{}: {decided} {:?}{}",
+            text_of(&event.content),
+            result.reason.as_deref().unwrap_or_default(),
+            if own { "" } else { " for another event" }
+        );
+        self.deciding.push(line);
+    }
+
     /// Executes `effect` for the current run, or, for a hook or a channel
     /// that calls into its room, hands the call on and keeps the effect
     /// outstanding until its caller is answered.
@@ -916,6 +941,7 @@ impl Sim {
             let line = format!("{} in {room}", self.label(&effect.request));
             self.in_admission_order.push(line);
         }
+        self.note_deciding(&effect);
         let traced = self.trace.len();
         if let Some((caller, entries)) = self.reentry(&effect) {
             self.make_calls(&effect, &caller, entries);

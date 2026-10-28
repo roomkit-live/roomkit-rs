@@ -12,6 +12,7 @@
 //! saw provisionally, and its source is checked against the bindings as the
 //! hooks left them (RFC §7.5 rule 2).
 
+use super::super::cascade::entry_result;
 use super::super::commit::{self, Committing};
 use super::super::delivery::Placement;
 use super::super::stamp;
@@ -450,15 +451,19 @@ impl CommitPass {
         Ok(plan)
     }
 
-    /// Waits for the commit to be durable; an instruction, which writes
-    /// nothing, goes on at once (RFC §10.1.1 rule 5).
+    /// Waits for the commit to be durable, the trigger's marked as the one
+    /// that decides the call (`Effect::decides`); an instruction, which
+    /// writes nothing, goes on at once (RFC §10.1.1 rule 5).
     fn committing(&mut self, cx: &mut Cx<'_>, committing: Committing) -> State {
-        match committing.effect {
-            Some(effect) => State::Committing {
-                effect,
-                result: committing.result,
-            },
-            None => self.place(cx, committing.result),
+        let Some(effect) = committing.effect else {
+            return self.place(cx, committing.result);
+        };
+        if self.origin == PassOrigin::Trigger {
+            cx.io.decides(effect, entry_result(&committing.result));
+        }
+        State::Committing {
+            effect,
+            result: committing.result,
         }
     }
 

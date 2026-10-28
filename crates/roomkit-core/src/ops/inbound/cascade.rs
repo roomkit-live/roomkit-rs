@@ -480,11 +480,8 @@ fn delivered(outcome: &SetOutcome) -> InboundResult {
 pub(super) fn record_result(report: RecordReport) -> InboundResult {
     match report.result {
         RecordResult::Committed(record) => InboundResult {
-            blocked: true,
-            reason: record.blocked_by.clone(),
-            event: Some(*record),
             error: report.release_error,
-            ..InboundResult::default()
+            ..stored_record(*record)
         },
         RecordResult::Replayed(original) => replay_result(&original),
         RecordResult::Refused => InboundResult {
@@ -492,6 +489,17 @@ pub(super) fn record_result(report: RecordReport) -> InboundResult {
             reason: Some("room_closed".to_owned()),
             ..InboundResult::default()
         },
+    }
+}
+
+/// A record stored `BLOCKED`, as its caller's result reads it: its
+/// `blocked_by` as its reason.
+pub(super) fn stored_record(record: RoomEvent) -> InboundResult {
+    InboundResult {
+        blocked: true,
+        reason: record.blocked_by.clone(),
+        event: Some(record),
+        ..InboundResult::default()
     }
 }
 

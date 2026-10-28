@@ -91,6 +91,14 @@ pub struct Effect {
     /// makes is that cascade's work, its triggers' bodies drawing on its hook
     /// calls. `None` for any other request.
     pub budget: Option<ReentryBudget>,
+    /// The call's result once this request, the commit of the call's own
+    /// event, is stored: the commit at which the call is decided (RFC §10.1
+    /// step 18). A driver whose run ends before the decision, the kit's
+    /// close aborting it, answers the call's caller with it once that write
+    /// ended. `None` for any other request, a commit the call makes for
+    /// another event among them: an entry it adopted, a channel's lifecycle
+    /// record.
+    pub decides: Option<Box<InboundResult>>,
 }
 
 /// The error type of a [`ChannelRequest::OnEvent`] or [`ChannelRequest::Deliver`]

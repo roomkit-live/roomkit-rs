@@ -13,14 +13,14 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventContent, EventId, EventStatus, EventUpdates,
-    Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId, Room,
-    RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    HookResult, Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId,
+    Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, EventFilter, EventQuery,
-    FrameworkEvent, InMemoryStore, ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit,
-    RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
+    FrameworkEvent, InMemoryStore, KitError, ProcessInboundOptions, RoomCounters, RoomFilter,
+    RoomKit, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -37,13 +37,15 @@ fn room_id() -> RoomId {
 
 /// An in-memory store whose first commit of an event that is not the
 /// framework's own lifecycle record (gap G-046) tells `committing` it
-/// started, then waits for `go`, as a slow database does.
+/// started, then waits for `go`, as a slow database does; that commit then
+/// fails when `fails` is set, as a database gone does.
 #[derive(Debug, Default)]
 struct GatedStore {
     store: InMemoryStore,
     started: AtomicBool,
     committing: Arc<Notify>,
     go: Arc<Notify>,
+    fails: AtomicBool,
 }
 
 impl ConversationStore for GatedStore {
@@ -218,6 +220,9 @@ impl ConversationStore for GatedStore {
         if !records && !self.started.swap(true, Ordering::SeqCst) {
             self.committing.notify_one();
             self.go.notified().await;
+            if self.fails.load(Ordering::SeqCst) {
+                return Err(StoreError::InvalidArgument("the database is gone"));
+            }
         }
         self.store.commit(event, counters, target).await
     }
@@ -411,7 +416,7 @@ fn every_row() -> EventQuery {
 async fn slow_commit(
     kit: &RoomKit<GatedStore>,
     after: Duration,
-) -> tokio::task::JoinHandle<Result<roomkit::InboundResult, roomkit::KitError>> {
+) -> tokio::task::JoinHandle<Result<roomkit::InboundResult, KitError>> {
     let call = {
         let kit = kit.clone();
         tokio::spawn(async move {
@@ -435,14 +440,14 @@ async fn slow_commit(
     call
 }
 
-/// Whether the room holds `Slow`.
-async fn stored(kit: &RoomKit<GatedStore>) -> bool {
+/// Whether the room holds `text`.
+async fn stored(kit: &RoomKit<GatedStore>, text: &str) -> bool {
     kit.store()
         .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .iter()
-        .any(|event| roomkit::text_of(&event.content) == "Slow")
+        .any(|event| roomkit::text_of(&event.content) == text)
 }
 
 /// The time `kit`'s close takes.
@@ -468,7 +473,7 @@ async fn a_commit_ending_within_the_close_s_bounds_is_stored() {
     assert_eq!(
         (
             took >= Duration::from_secs(7) && took < Duration::from_secs(8),
-            stored(&kit).await
+            stored(&kit, "Slow").await
         ),
         (true, true)
     );
@@ -484,13 +489,13 @@ async fn a_commit_past_the_close_s_bounds_does_not_hold_it() {
     let call = slow_commit(&kit, Duration::from_secs(20)).await;
     call.abort();
     let took = closing(&kit).await;
-    let at_close = stored(&kit).await;
+    let at_close = stored(&kit, "Slow").await;
     tokio::time::sleep(Duration::from_secs(15)).await;
     assert_eq!(
         (
             took >= Duration::from_secs(10) && took < Duration::from_secs(11),
             at_close,
-            stored(&kit).await
+            stored(&kit, "Slow").await
         ),
         (true, false, true)
     );
@@ -499,29 +504,150 @@ async fn a_commit_past_the_close_s_bounds_does_not_hold_it() {
 /// A caller still waiting for a call whose commit outlives the close reads
 /// what the write came to once it ends: its event, stored and never
 /// delivered, `kit_closed`, as Python's caller does (`close_writes.out`: a
-/// write of 12 s, the caller answered at 12.0 s, `kit_closed`).
+/// write of 12 s, the caller answered at 12.0 s, `kit_closed`); its record
+/// stored `BLOCKED`, with the hook's reason, as the call decided reads it
+/// (`lr2_probe_blocked_rs.out`: the hook's name before RMK-1010's third
+/// pass).
 #[tokio::test(start_paused = true)]
 async fn a_caller_waiting_on_a_commit_past_the_close_reads_its_event() {
-    let (kit, ws) = gated_room().await;
-    let call = slow_commit(&kit, Duration::from_secs(12)).await;
-    let took = closing(&kit).await;
-    let ended = tokio::time::timeout(Duration::from_secs(30), call)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        (
+    let mut read = Vec::new();
+    for blocks in [false, true] {
+        let (kit, ws) = gated_room().await;
+        if blocks {
+            kit.before_broadcast("moderator", |_, _| async {
+                Ok(HookResult::block("spam detected"))
+            })
+            .unwrap();
+        }
+        let call = slow_commit(&kit, Duration::from_secs(12)).await;
+        let took = closing(&kit).await;
+        let ended = tokio::time::timeout(Duration::from_secs(30), call)
+            .await
+            .unwrap()
+            .unwrap();
+        read.push((
             took < Duration::from_secs(11),
-            ended.map(|result| (
-                result.event.map(|event| roomkit::text_of(&event.content)),
-                result.cancellation_reason
-            )),
-            ws.texts().is_empty()
-        ),
-        (
-            true,
-            Ok((Some("Slow".to_owned()), Some("kit_closed".to_owned()))),
-            true
-        )
+            ended.map(|result| {
+                (
+                    result.event.map(|event| roomkit::text_of(&event.content)),
+                    result.reason,
+                    result.cancellation_reason,
+                )
+            }),
+            ws.texts().is_empty(),
+        ));
+    }
+    let slow = Some("Slow".to_owned());
+    assert_eq!(
+        read,
+        [
+            (
+                true,
+                Ok((slow.clone(), None, Some("kit_closed".to_owned()))),
+                true
+            ),
+            (
+                true,
+                Ok((slow, Some("spam detected".to_owned()), None)),
+                true
+            )
+        ]
     );
+}
+
+/// `Bonjour` into `room_1` once `kit`'s `BEFORE_BROADCAST` hook is one that
+/// signals `hanging` and never answers, then the kit's close: whether the
+/// caller reads `ShutDown`, and whether the room holds `Bonjour`.
+async fn closed_while_its_hook_hangs(kit: &RoomKit<GatedStore>, hanging: &Notify) -> (bool, bool) {
+    let call = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            let message = InboundMessage::new(
+                channel("sms"),
+                "+15551234567",
+                EventContent::text("Bonjour"),
+            );
+            let options = ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            };
+            kit.process_inbound(message, options).await
+        })
+    };
+    tokio::time::timeout(BOUND, hanging.notified())
+        .await
+        .unwrap();
+    closing(kit).await;
+    let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
+    (
+        matches!(ended, Err(KitError::ShutDown)),
+        stored(kit, "Bonjour").await,
+    )
+}
+
+/// RMK-1010 item 41: a call the close cuts before its own commit reads
+/// `ShutDown`, nothing of it stored, though its run committed another
+/// event first: here an entry its hook injected into the room, adopted and
+/// committed ahead of the call's event. The caller never reads that event
+/// as its own.
+#[tokio::test(start_paused = true)]
+async fn a_call_cut_before_its_commit_does_not_read_an_adopted_entry_s() {
+    let (kit, _ws) = gated_room().await;
+    kit.store().started.store(true, Ordering::SeqCst);
+    let hanging = Arc::new(Notify::new());
+    let hook_kit = kit.clone();
+    let signal = Arc::clone(&hanging);
+    kit.before_broadcast("inject_then_hang", move |event, _| {
+        let kit = hook_kit.clone();
+        let hanging = Arc::clone(&signal);
+        async move {
+            if event.source.channel_id == channel("sms") {
+                let injected = EventContent::text("Heads up");
+                let options = SendEventOptions::default();
+                kit.send_event(&room_id(), &channel("ws"), injected, options)
+                    .await
+                    .unwrap();
+                hanging.notify_one();
+                std::future::pending::<()>().await;
+            }
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    let ended = closed_while_its_hook_hangs(&kit, &hanging).await;
+    assert_eq!(
+        (ended, stored(&kit, "Heads up").await),
+        ((true, false), true)
+    );
+}
+
+/// Item 41 again: the run's step 2 attached the message's channel, which
+/// commits the binding's lifecycle record (gap G-046), before the hook
+/// that never answers; the caller does not read that record as its event.
+#[tokio::test(start_paused = true)]
+async fn a_call_cut_before_its_commit_does_not_read_its_channel_s_record() {
+    let kit = RoomKit::new(RoomKitOptions::with_store(GatedStore::default()));
+    kit.store().started.store(true, Ordering::SeqCst);
+    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
+        .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let hanging = Arc::new(Notify::new());
+    let signal = Arc::clone(&hanging);
+    kit.before_broadcast("hang", move |_, _| {
+        let hanging = Arc::clone(&signal);
+        async move {
+            hanging.notify_one();
+            std::future::pending::<()>().await;
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    let ended = closed_while_its_hook_hangs(&kit, &hanging).await;
+    let attached = kit.store().list_bindings(&room_id()).await.unwrap().len();
+    assert_eq!((ended, attached), ((true, false), 1));
 }

@@ -343,7 +343,9 @@ impl Machine {
     /// with no hook run for it (RFC §8.3, gap G-070).
     pub(super) fn start_capped_trigger(&mut self, mut event: RoomEvent, direct: DirectCall) {
         event.blocked_by = Some(chain_depth::REENTRY_LOOP_CAP.to_owned());
-        let record = RecordPass::refusing(event, RefusedOperation::Inbound).checking(Some(direct));
+        let record = RecordPass::refusing(event, RefusedOperation::Inbound)
+            .checking(Some(direct))
+            .deciding();
         self.cascade
             .lead(Job::Record(Box::new(record), RecordNote::Trigger));
         self.stage.enter(Stage::Cascade);
