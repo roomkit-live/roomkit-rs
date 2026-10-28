@@ -260,7 +260,13 @@ impl App {
 /// `outcome`, a delivery's that ended once the kit's close began: one that
 /// failed or was cancelled as it came; one that ran to its end with no
 /// error as cut, since the close cuts a turn still running at once, with no
-/// reason (RFC §12.10.4), and the answer never came.
+/// reason (RFC §10.6.8, §12.10.4), and the answer never came.
+///
+/// The outcome cannot tell the two apart: a turn the close cut ends its
+/// delivery with no reason and no error, as one that answered does, as the
+/// Python implementation's does. So a delivery whose answer went out just
+/// before the close began, its outcome read only once `closing` was set, is
+/// told as cut too, its client receiving the answer and then the error.
 fn cut_by_the_close(outcome: Told) -> Told {
     match outcome {
         Ok(mut result)
