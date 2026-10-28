@@ -44,7 +44,8 @@ use crate::channel::ChannelError;
 use crate::context::{self, Adopting};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::turns::{Cut, OwnerTurn, RemoteItem, TurnUnits, record_of};
+use crate::tasks::Unit;
+use crate::turns::{Cut, OwnerTurn, RemoteItem, TurnStage, record_of};
 
 /// The error of a call a stream's reader stopped before it ended.
 const CANCELLED: &str = "cancelled";
@@ -175,9 +176,9 @@ pub(crate) struct Stops {
     pub(crate) read: watch::Receiver<bool>,
     /// The kit's cut of its turns, once it shuts down.
     pub(crate) kit: watch::Receiver<Cut>,
-    /// The units of the turn read, which the cut may spare (RFC
+    /// The unit of the turn read, which the cut may spare (RFC
     /// §12.10.4).
-    pub(crate) turn: Option<TurnUnits>,
+    pub(crate) turn: Option<Unit>,
 }
 
 impl Stops {
@@ -185,7 +186,12 @@ impl Stops {
     async fn stopped(&mut self) -> &'static str {
         let read = async { self.read.wait_for(|stopped| *stopped).await.is_ok() };
         let turn = self.turn;
-        let kit = async { self.kit.wait_for(|cut| cut.cuts(turn)).await.is_ok() };
+        let kit = async {
+            self.kit
+                .wait_for(|cut| cut.cuts(turn, TurnStage::Stream))
+                .await
+                .is_ok()
+        };
         tokio::select! {
             true = read => CALLER_CANCELLED,
             true = kit => KIT_CLOSED,

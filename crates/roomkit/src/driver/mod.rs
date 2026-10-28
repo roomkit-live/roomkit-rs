@@ -58,7 +58,7 @@ use crate::error::KitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::tasks::Marks;
-use crate::turns::{Canceller, Working};
+use crate::turns::Canceller;
 
 /// The kit's clock and the runtime's, read together at a run's start: a
 /// deadline the core set on the kit's clock is waited for on the runtime's,
@@ -160,7 +160,6 @@ async fn drive<S: ConversationStore, O: Operation>(
         cut: Vec::new(),
         writing: HashMap::new(),
         written: Vec::new(),
-        read: Vec::new(),
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -220,10 +219,6 @@ struct Driver<'kit, S> {
     /// The holds on the writes whose outcome the operation took, until what
     /// that outcome led to is started.
     written: Vec<WentOn>,
-    /// The owner's work on the turns whose streams the operation read, until
-    /// what the read led to is started, the commit of what it read: the
-    /// kit's close waits for it (RFC §12.10.4).
-    read: Vec<Working>,
 }
 
 impl<S> Drop for Driver<'_, S> {
@@ -296,7 +291,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
         }
         self.written.clear();
-        self.read.clear();
         Ok(answered)
     }
 
@@ -470,13 +464,25 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             // The kit's close drops a delivery set that would take its place
             // now, as the Python implementation's sealed lanes drop it: its
             // index has no place, its turn over at the lock's release.
-            if let Some(caller) = self.caller.as_deref() {
-                caller.lane_closed();
-            }
             return Some((id, HoldOutcome::LaneClosed.into()));
         }
+        if let (HoldRequest::LeaveLane { event_id, .. }, Some(caller)) =
+            (&request, self.caller.as_deref())
+        {
+            caller.left(event_id);
+        }
+        let behind = self.waits_behind(&request);
         let over = self.turns_over(&request);
         match self.held.hold(rooms, &self.context, id, request, deadline) {
+            Hold::Wait(wait) if behind => {
+                // Stuck behind work the kit's close spares, which moves on
+                // only once the close returned: the run is dropped at once,
+                // as those the close's drain found there (RFC §12.10.4).
+                self.waits.push((id, wait));
+                let own = self.marks.innermost().into_iter().collect();
+                self.inner.tasks.drop_work_of(&own);
+                None
+            }
             Hold::Now(outcome) => self.after_the_cursor(id, outcome, over),
             Hold::Refused(room_id) => {
                 tracing::warn!(
@@ -493,6 +499,28 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 self.waits.push((id, wait));
                 None
             }
+        }
+    }
+
+    /// Whether `request`, a wait for a room's lock or admission ticket an
+    /// inbound run makes while the kit's close drains, would wait behind
+    /// work the close spares, which holds them until the close returned.
+    fn waits_behind(&self, request: &HoldRequest) -> bool {
+        if self.caller.is_none() || !self.inner.tasks.is_draining() {
+            return false;
+        }
+        let spared = self.inner.tasks.spared();
+        match request {
+            HoldRequest::AcquireLock { room_id } => {
+                self.context.lease(room_id).is_none() && self.inner.locks.held_by(room_id, &spared)
+            }
+            HoldRequest::AwaitTicket { room_id } => self.inner.tickets.led_by(room_id, &spared),
+            HoldRequest::ReleaseLock { .. }
+            | HoldRequest::EnterLane { .. }
+            | HoldRequest::AwaitLane { .. }
+            | HoldRequest::LeaveLane { .. }
+            | HoldRequest::TakeTicket { .. }
+            | HoldRequest::ReleaseTicket { .. } => false,
         }
     }
 
@@ -628,7 +656,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let effect = self.effect_of_task.remove(&task)?;
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));
-        self.read.extend(self.shared.take_reading(effect));
         self.shared.answered(effect);
         self.indexes.answered(effect, &outcome);
         Some((effect, outcome))

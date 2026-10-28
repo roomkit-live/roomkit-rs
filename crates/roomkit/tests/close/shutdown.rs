@@ -167,6 +167,61 @@ async fn a_close_after_a_failed_one_returns_the_same_failure() {
     );
 }
 
+/// A channel whose `close` panics in the call itself, before it returns
+/// its future, or notes that it closed.
+#[derive(Clone)]
+struct EagerPanic {
+    declaration: ChannelDeclaration,
+    panics: bool,
+    closed: Arc<AtomicBool>,
+}
+
+impl Channel for EagerPanic {
+    fn declaration(&self) -> ChannelDeclaration {
+        self.declaration.clone()
+    }
+
+    fn close(&self) -> impl Future<Output = ()> + Send {
+        assert!(
+            !self.panics,
+            "this channel's close panics before its future"
+        );
+        let closed = Arc::clone(&self.closed);
+        async move { closed.store(true, Ordering::SeqCst) }
+    }
+}
+
+/// RFC §12.10.4: a channel whose `close` panics before it returns its
+/// future fails as one whose future panics: the channels after it close,
+/// and every close returns the failure. On 9dfe09b the panic came before
+/// the catch, killing the shutdown's task: channel `b` was never closed and
+/// both closes read `ShutdownCancelled` (`rmk1017-lightreview/
+/// lr_probe_p7_head.out`).
+#[tokio::test]
+async fn a_channel_close_that_panics_before_its_future_fails_the_same_way() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let channel_of = |id, panics| EagerPanic {
+        declaration: transport(id),
+        panics,
+        closed: Arc::default(),
+    };
+    let b = channel_of("b", false);
+    kit.register_channel(channel_of("a", true)).unwrap();
+    kit.register_channel(b.clone()).unwrap();
+    let first = tokio::time::timeout(BOUND, kit.close()).await.unwrap();
+    let later = tokio::time::timeout(BOUND, kit.close()).await.unwrap();
+    let failed = || KitError::ChannelsFailedToClose {
+        failures: vec![(
+            channel("a"),
+            "this channel's close panics before its future".to_owned(),
+        )],
+    };
+    assert_eq!(
+        (first, later, b.closed.load(Ordering::SeqCst)),
+        (Err(failed()), Err(failed()), true)
+    );
+}
+
 /// A channel whose close never ends, saying when it began.
 #[derive(Clone, Default)]
 struct HangingClose {

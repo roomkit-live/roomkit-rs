@@ -100,6 +100,15 @@ impl RoomMutexes {
             .collect()
     }
 
+    /// Whether a unit in `spared` holds `room_id`'s lock.
+    pub(crate) fn held_by(&self, room_id: &RoomId, spared: &HashSet<Unit>) -> bool {
+        self.takers().rooms.get(room_id).is_some_and(|takers| {
+            takers
+                .iter()
+                .any(|taker| taker.holds && taker.unit.is_some_and(|unit| spared.contains(&unit)))
+        })
+    }
+
     /// Records a taker of `room_id`'s lock in `unit`, waiting.
     fn takes(&self, room_id: &RoomId, unit: Option<Unit>) -> u64 {
         let mut takers = self.takers();

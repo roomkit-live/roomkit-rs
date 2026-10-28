@@ -10,9 +10,10 @@
 //! - `doors`: a `close` from the kit's own work neither waits for that work
 //!   nor cuts it, whether it started the shutdown or joined one under way,
 //!   and the work stores and delivers nothing once the kit is sealed;
-//! - `stuck`: what waits behind spared work is dropped at once, and a turn
-//!   the close cuts is waited for only until its reader's read is
-//!   committed.
+//! - `join`: a close from a tool call joins a close still waiting for the
+//!   store's writes, and spares its turn (RMK-1019);
+//! - `stuck`: what waits behind spared work is dropped at once, and a
+//!   turn's work is cut with no grace.
 //!
 //! The kit's own work here is what roomkit-rs has of Python's doors: a
 //! SYNC hook's body, an ASYNC hook a delivery fires, a transport's
@@ -25,6 +26,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod doors;
+mod join;
 mod shutdown;
 mod stuck;
 mod support;

@@ -125,6 +125,14 @@ impl<K: Clone + PartialEq> RoomQueues<K> {
             .is_none_or(|(first, _)| *first == slot.key)
     }
 
+    /// Whether the front of `room_id`'s queue is a unit's in `spared`.
+    pub(crate) fn led_by(&self, room_id: &RoomId, spared: &HashSet<Unit>) -> bool {
+        self.rooms()
+            .get(room_id)
+            .and_then(|queue| queue.held.front())
+            .is_some_and(|(_, unit)| unit.is_some_and(|unit| spared.contains(&unit)))
+    }
+
     /// The units of the work queued behind a place of a unit in `spared`,
     /// at the front of its room's queue, but those `spared` holds: their
     /// turn comes only once that unit lets its place go.
@@ -181,6 +189,11 @@ impl RoomTickets {
     /// released. Cancelled, it leaves the ticket where it stands.
     pub(crate) async fn turn(&self, ticket: &Ticket<'_>) {
         self.queues.turn(ticket).await;
+    }
+
+    /// Whether the room's first ticket is a unit's in `spared`.
+    pub(crate) fn led_by(&self, room_id: &RoomId, spared: &HashSet<Unit>) -> bool {
+        self.queues.led_by(room_id, spared)
     }
 
     /// The units of the work whose tickets wait behind a ticket of a unit

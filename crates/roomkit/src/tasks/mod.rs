@@ -158,8 +158,8 @@ impl Tasks {
     /// `None`, nothing spawned, once the kit is sealed, but for a write of
     /// the store, which runs whatever the kit's state unless a unit the
     /// close spares asks it (RFC §12.10.4: the spared work's writes are
-    /// refused once the kit is sealed, as Python's sealed store refuses
-    /// them).
+    /// refused from the kit's seal, before the channels close, where the
+    /// Python implementation's store is sealed last).
     pub(crate) fn spawn<F>(self: &Arc<Self>, kind: Kind, future: F) -> Option<JoinHandle<F::Output>>
     where
         F: Future + Send + 'static,
@@ -368,20 +368,6 @@ impl Tasks {
     pub(crate) async fn idle_of_kind(&self, kind: Kind) {
         self.wait_until(|state| state.unspared(|running| running == kind).next().is_none())
             .await;
-    }
-
-    /// Waits until no tracked task of `kind` that the work of one of
-    /// `parents` started runs: the writes of the runs whose turns the
-    /// close cut, which commit what the turns' readers read.
-    pub(crate) async fn idle_of_children(&self, kind: Kind, parents: &HashSet<Unit>) {
-        self.wait_until(|state| {
-            state.unspared(|running| running == kind).all(|running| {
-                running
-                    .parent
-                    .is_none_or(|parent| !parents.contains(&parent))
-            })
-        })
-        .await;
     }
 
     /// Waits until no tracked task of `kind` the close does not spare

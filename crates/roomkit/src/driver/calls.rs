@@ -27,7 +27,7 @@ use crate::store::ConversationStore;
 use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks};
 use crate::turn::TurnKit;
-use crate::turns::Answer;
+use crate::turns::{self, Answer, TurnStage};
 use crate::unwind::unwinding;
 
 /// Carries out a request on the store (RFC §14).
@@ -120,8 +120,9 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
 /// a turn's stream; a parse drafts its event at `environment`'s instant,
 /// the run's. A turn that answers with a stream leaves it with its run,
 /// `shared`, by its effect, `effect`, until it is read. Work a close spared
-/// calls no channel once the kit is sealed, its channels closed (RFC
-/// §12.10.4).
+/// calls no channel once the kit is sealed, its channels closed, the call
+/// refused with an error naming the shutdown (RFC §12.10.4): a turn with
+/// its link's `backend_closed` (RFC §10.6.8), any other call as a write is.
 pub(super) async fn channel<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     environment: &(dyn Environment + Send + Sync),
@@ -130,7 +131,7 @@ pub(super) async fn channel<S: ConversationStore>(
     request: ChannelRequest,
 ) -> Outcome {
     if inner.tasks.refuses(&Marks::current()) {
-        return Outcome::Failed(ErrorRecord::new(SHUT_DOWN, "the kit is closed"));
+        return Outcome::Failed(refused_once_sealed(&request));
     }
     match request {
         ChannelRequest::HandleInbound {
@@ -194,23 +195,17 @@ pub(super) async fn channel<S: ConversationStore>(
             target,
         } => {
             let kept = shared.take_stream(turn);
-            let units = kept.as_ref().map(|kept| kept.turn.units());
-            let working = units.map(|units| inner.turns.working(units));
+            let unit = kept.as_ref().map(|kept| kept.turn.unit());
+            let _working = unit.map(|unit| inner.turns.working(unit, TurnStage::Stream));
             let stops = Stops {
                 read: shared.stop_signal(effect),
                 kit: inner.turns.cutting(),
-                turn: units,
+                turn: unit,
             };
-            let read = Box::pin(stream::read(
+            Box::pin(stream::read(
                 inner, kept, stops, responder, *answers, target,
             ))
-            .await;
-            // The owner works on the turn until its run committed what it
-            // read: the kit's close waits for that (RFC §12.10.4).
-            if let Some(working) = working {
-                shared.keep_reading(effect, working);
-            }
-            read
+            .await
         }
     }
 }
@@ -270,6 +265,24 @@ pub(super) async fn route<S: ConversationStore>(
 /// close spared asked it once the close sealed the kit (RFC §12.10.4).
 pub(super) const SHUT_DOWN: &str = "ShutDown";
 
+/// The refusal of `request`, a channel's call work a close spared made
+/// once the kit was sealed: a turn's, its submission or the read of its
+/// stream, its link's `backend_closed`, the turn still open as its owner
+/// closed (RFC §10.6.8); any other, the seal's.
+fn refused_once_sealed(request: &ChannelRequest) -> ErrorRecord {
+    match request {
+        ChannelRequest::OnEvent { binding, .. }
+            if binding.category == ChannelCategory::Intelligence =>
+        {
+            turns::closed()
+        }
+        ChannelRequest::ReadStream { .. } => turns::closed(),
+        ChannelRequest::HandleInbound { .. }
+        | ChannelRequest::OnEvent { .. }
+        | ChannelRequest::Deliver { .. } => ErrorRecord::new(SHUT_DOWN, "the kit is shut down"),
+    }
+}
+
 /// What a write of the store came to, once it ended; nothing while it runs.
 pub(crate) type Written = watch::Receiver<Option<Outcome>>;
 
@@ -319,7 +332,7 @@ pub(super) fn write<S: ConversationStore>(
     let mut read = written.clone();
     let call = async move {
         if !spawned {
-            return Outcome::Failed(ErrorRecord::new(SHUT_DOWN, "the kit is closed"));
+            return Outcome::Failed(ErrorRecord::new(SHUT_DOWN, "the kit is shut down"));
         }
         outcome_of(&mut read).await
     };

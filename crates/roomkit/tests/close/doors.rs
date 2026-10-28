@@ -20,7 +20,7 @@ use tokio::sync::Barrier;
 use tokio::time::Instant;
 
 use crate::support::{
-    AT_ONCE, BOUND, Closer, DOORS, Door, Witness, attach_agent, channel, ended, kit_with, open,
+    AT_ONCE, BOUND, Closer, DOORS, Door, Witness, attach_agent, channel, ended, kit_with, ok, open,
     room_id, sealed, spawn_message, stored, transport,
 };
 
@@ -59,15 +59,24 @@ async fn a_close_from_the_kit_s_own_work_returns_and_closes_the_kit() {
     assert_eq!(doors, expected);
 }
 
+/// The doors a close can join another from as it drains: a tool's call is
+/// cut by the running close, with no grace, before it could (RFC §10.6.8),
+/// as Python's turn is; `join` has a tool join a close still waiting for
+/// the store's writes.
+const JOINING: [Door; 4] = [
+    Door::SyncHook,
+    Door::DeliveryHook,
+    Door::Delivery,
+    Door::Observer,
+];
+
 /// RFC §12.10.4: another close runs, and waits for the work (the drain),
 /// when that work closes the kit too: from then on it is spared, and both
-/// closes return once the kit is closed. The tool's door is RMK-1019's:
-/// the close that joins spares its own caller's work, not only the first
-/// caller's.
+/// closes return once the kit is closed.
 #[tokio::test(start_paused = true)]
 async fn a_close_from_the_kit_s_own_work_joining_another_spares_that_work() {
     let mut doors = Vec::new();
-    for door in DOORS {
+    for door in JOINING {
         let witness = Witness::new();
         let (kit, closer, call) = open(door, &witness, true).await;
         tokio::time::timeout(BOUND, closer.entered.notified())
@@ -88,7 +97,7 @@ async fn a_close_from_the_kit_s_own_work_joining_another_spares_that_work() {
         roomkit::testing::idle(&kit).await;
         doors.push((door, (returned, first, at_once), call, stored(&kit).await));
     }
-    let expected = DOORS.map(|door| {
+    let expected = JOINING.map(|door| {
         (
             door,
             (Some(true), Ok(()), true),
@@ -233,7 +242,7 @@ async fn a_close_from_a_task_kept_in_its_context_does_not_wait_for_its_work() {
     let at_once = started.elapsed() < AT_ONCE;
     assert_eq!(
         (returned, at_once, ended(call).await, sealed(&kit).await),
-        (Some(true), true, Some(Ok(None)), true)
+        (Some(true), true, Some(ok(None, None)), true)
     );
 }
 
@@ -271,16 +280,24 @@ async fn a_close_from_an_observer_waits_for_the_run_that_fired_it() {
             ended(call).await,
             witness.delivered()
         ),
-        (Some(true), true, Some(Ok(None)), vec!["Bye.".to_owned()])
+        (
+            Some(true),
+            true,
+            Some(ok(None, None)),
+            vec!["Bye.".to_owned()]
+        )
     );
 }
 
 /// RFC §12.10.4: a tool call's observer closes while the turn goes on to a
 /// tool of 8 s: the close spares the observer alone, so it cuts the turn
-/// as a close from outside does, at the drain's grace, the slow tool never
-/// ending and no answer stored; on 1d8796c the observer's close spared the
-/// turn, whose slow tool ran to its end and whose answer was committed
-/// after the seal (`review_probe_1d8796c.out`, leak tool observer).
+/// as a close from outside does, at once (RFC §10.6.8), the slow tool
+/// never ending and no answer stored; on 1d8796c the observer's close
+/// spared the turn, whose slow tool ran to its end and whose answer was
+/// committed after the seal (`review_probe_1d8796c.out`, leak tool
+/// observer). The call reads no reason, its own delivery over; Python's
+/// reads `kit_closed`, from how its lane meets the close
+/// (`rmk1017-lightreview/lr_probe_py.out` c2).
 #[tokio::test(start_paused = true)]
 async fn a_close_from_a_tool_s_observer_cuts_its_turn() {
     let witness = Witness::new();
@@ -333,11 +350,6 @@ async fn a_close_from_a_tool_s_observer_cuts_its_turn() {
             slow_ended.load(Ordering::SeqCst),
             stored.iter().any(|text| text == "Done.")
         ),
-        (
-            Some(true),
-            Some(Ok(Some("kit_closed".to_owned()))),
-            0,
-            false
-        )
+        (Some(true), Some(ok(None, None)), 0, false)
     );
 }

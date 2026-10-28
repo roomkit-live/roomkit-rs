@@ -65,6 +65,8 @@ pub(crate) fn transport(id: &str) -> ChannelDeclaration {
 /// of the text `slow` names takes its time.
 #[derive(Clone, Default)]
 pub(crate) struct Witness {
+    /// Its id, `witness` unless named.
+    id: Option<&'static str>,
     pub(crate) closed: Arc<AtomicBool>,
     delivered: Arc<Mutex<Vec<String>>>,
     pub(crate) closes_on_delivery: Arc<Mutex<Option<Closer>>>,
@@ -81,6 +83,14 @@ impl Witness {
         Self {
             slow: Some((text, delay)),
             ..Self::default()
+        }
+    }
+
+    /// The same witness, under the id `id`.
+    pub(crate) fn named(self, id: &'static str) -> Self {
+        Self {
+            id: Some(id),
+            ..self
         }
     }
 
@@ -105,7 +115,7 @@ impl Witness {
 
 impl Channel for Witness {
     fn declaration(&self) -> ChannelDeclaration {
-        transport("witness")
+        transport(self.id.unwrap_or("witness"))
     }
 
     fn deliver(
@@ -254,11 +264,26 @@ pub(crate) fn spawn_message(kit: &RoomKit, text: &str, room_id: RoomId) -> Call 
     tokio::spawn(async move { kit.process_inbound(message, into(room_id)).await })
 }
 
-/// What a call came to, within the bound: its error, or its result's
-/// `cancellation_reason`, `None` for one that did not end.
-pub(crate) async fn ended(call: Call) -> Option<Result<Option<String>, KitError>> {
+/// What a call came to: its error, or its result's `cancellation_reason`
+/// and the type of its result's error.
+pub(crate) type Answered = Result<(Option<String>, Option<String>), KitError>;
+
+/// A call's result, its `cancellation_reason` and its error's type.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the `Ok` arm of what a call came to, compared with `ended`'s"
+)]
+pub(crate) fn ok(reason: Option<&str>, error: Option<&str>) -> Answered {
+    Ok((reason.map(str::to_owned), error.map(str::to_owned)))
+}
+
+/// What a call came to, within the bound; `None` for one that did not end.
+pub(crate) async fn ended(call: Call) -> Option<Answered> {
     let joined = tokio::time::timeout(BOUND, call).await.ok()?.unwrap();
-    Some(joined.map(|result| result.cancellation_reason))
+    Some(joined.map(|result| {
+        let error = result.error.map(|error| error.error_type);
+        (result.cancellation_reason, error)
+    }))
 }
 
 /// Where the kit's own work closes the kit.
@@ -291,11 +316,11 @@ impl Door {
     /// of it stored, as Python raises `RoomKitError`; the turn's run reads
     /// as one whose delivery the close dropped, its answer refused; the
     /// others end as they would have.
-    pub(crate) fn call_ends(self) -> Result<Option<String>, KitError> {
+    pub(crate) fn call_ends(self) -> Answered {
         match self {
             Self::SyncHook => Err(KitError::ShutDown),
-            Self::ToolCall => Ok(Some("kit_closed".to_owned())),
-            Self::DeliveryHook | Self::Delivery | Self::Observer => Ok(None),
+            Self::ToolCall => ok(Some("kit_closed"), None),
+            Self::DeliveryHook | Self::Delivery | Self::Observer => ok(None, None),
         }
     }
 

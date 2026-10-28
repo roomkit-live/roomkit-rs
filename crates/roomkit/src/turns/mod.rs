@@ -48,7 +48,6 @@ use roomkit_core::model::{
 };
 use serde::Serialize;
 use tokio::sync::{Notify, watch};
-use tokio::time::Instant;
 use uuid::Uuid;
 
 pub(crate) use self::codec::send_event_arguments;
@@ -94,50 +93,50 @@ pub(crate) struct Turns {
     closed: AtomicBool,
     /// Each room's last turn of each channel the owner submitted.
     records: Mutex<RoomRecords>,
-    /// The turns the owner is working on, by their unit: how many times,
-    /// awaiting their output or reading their stream, and the unit of the
-    /// run that works on them.
-    working: Mutex<HashMap<Unit, (usize, Option<Unit>)>>,
+    /// The turns the owner is working on, by their unit, and how many
+    /// times: awaiting their output, then reading their stream.
+    working: Mutex<HashMap<(Unit, TurnStage), usize>>,
     idle: Notify,
-    /// Set as the kit shuts down: every turn is cut but the spared ones.
+    /// Set as the kit shuts down: the streams first, then every turn, but
+    /// the spared ones.
     cut: watch::Sender<Cut>,
 }
 
-/// The units of the kit's work a turn is: its own, which its tasks run
-/// in, and the run's whose delivery set runs it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TurnUnits {
-    pub(crate) turn: Unit,
-    pub(crate) run: Option<Unit>,
+/// Where the owner works on a turn: awaiting its output, the channel's
+/// `on_event()`, or reading its stream, the model's rounds and the tools'
+/// calls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum TurnStage {
+    /// The owner awaits the turn's output.
+    Output,
+    /// The owner reads the turn's stream.
+    Stream,
 }
 
-impl TurnUnits {
-    /// Whether the kit's close spares the turn, whose units are in
-    /// `spared`: a close called from inside it, or from inside the run
-    /// that waits for it (RFC §12.10.4).
-    fn spared_by(&self, spared: &HashSet<Unit>) -> bool {
-        spared.contains(&self.turn) || self.run.is_some_and(|run| spared.contains(&run))
-    }
-}
-
-/// The kit's cut of its turns (RFC §10.6.8): none until the kit shuts
-/// down, then every turn but those of the units a caller of the kit's
-/// close runs within, which the shutdown spares (RFC §12.10.4).
+/// The kit's cut of its turns (RFC §10.6.8), but those of the units a
+/// caller of the kit's close runs within, which the shutdown spares (RFC
+/// §12.10.4): none until the kit shuts down; then, at once, the turns read
+/// as streams, their work cut with no grace, as the Python implementation
+/// cuts its stream readers; then, past the drain's grace, every turn.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Cut(Option<Arc<HashSet<Unit>>>);
+pub(crate) struct Cut {
+    /// The stages cut: the streams, then every stage.
+    stage: Option<TurnStage>,
+    spared: Arc<HashSet<Unit>>,
+}
 
 impl Cut {
     /// Whether the kit's shutdown began cutting its turns.
     fn began(&self) -> bool {
-        self.0.is_some()
+        self.stage.is_some()
     }
 
-    /// Whether the kit's shutdown cuts the turn of `units`; `None`, a turn
-    /// whose units are not known, is cut.
-    pub(crate) fn cuts(&self, units: Option<TurnUnits>) -> bool {
-        self.0
-            .as_ref()
-            .is_some_and(|spared| units.is_none_or(|units| !units.spared_by(spared)))
+    /// Whether the kit's shutdown cuts the turn of `unit` where the owner
+    /// works on it at `stage`; `None`, a turn whose unit is not known, is
+    /// cut.
+    pub(crate) fn cuts(&self, unit: Option<Unit>, stage: TurnStage) -> bool {
+        self.stage.is_some_and(|cut| cut <= stage)
+            && unit.is_none_or(|unit| !self.spared.contains(&unit))
     }
 }
 
@@ -156,14 +155,15 @@ impl Default for Turns {
     }
 }
 
-/// The owner's work on the turn of a unit, counted while it lasts.
+/// The owner's work on the turn of a unit at a stage, counted while it
+/// lasts.
 #[derive(Debug)]
-pub(crate) struct Working(Arc<Turns>, Unit);
+pub(crate) struct Working(Arc<Turns>, (Unit, TurnStage));
 
 impl Drop for Working {
     fn drop(&mut self) {
         let mut working = lock(&self.0.working);
-        if let Some((count, _)) = working.get_mut(&self.1) {
+        if let Some(count) = working.get_mut(&self.1) {
             *count = count.saturating_sub(1);
             if *count == 0 {
                 working.remove(&self.1);
@@ -172,15 +172,6 @@ impl Drop for Working {
         drop(working);
         self.0.idle.notify_waiters();
     }
-}
-
-/// What the kit's shutdown cut of its turns: the units of the runs that
-/// worked on them, which commit what their readers read, and until when
-/// they may.
-#[derive(Debug)]
-pub(crate) struct CutTurns {
-    pub(crate) runs: HashSet<Unit>,
-    pub(crate) until: Instant,
 }
 
 impl Turns {
@@ -219,13 +210,11 @@ impl Turns {
             .clone()
     }
 
-    /// Counts the owner's work on the turn of `units` until the guard
-    /// drops.
-    pub(crate) fn working(self: &Arc<Self>, units: TurnUnits) -> Working {
-        let mut working = lock(&self.working);
-        working.entry(units.turn).or_insert((0, units.run)).0 += 1;
-        drop(working);
-        Working(Arc::clone(self), units.turn)
+    /// Counts the owner's work on the turn of `unit` at `stage` until the
+    /// guard drops.
+    pub(crate) fn working(self: &Arc<Self>, unit: Unit, stage: TurnStage) -> Working {
+        *lock(&self.working).entry((unit, stage)).or_default() += 1;
+        Working(Arc::clone(self), (unit, stage))
     }
 
     /// The signal every turn's reader cuts its turn on, once the kit shuts
@@ -234,48 +223,50 @@ impl Turns {
         self.cut.subscribe()
     }
 
-    /// Cuts every turn but those of the units in `spared`, which a caller
-    /// of the kit's close runs within (the kit's shutdown, RFC §10.6.8:
-    /// the turn's cascade cancelled; RFC §12.10.4): each crosses as
-    /// `cancel`, and its reader stores what it read; returns once the owner
-    /// works on no turn it cut, or after twice the cancel bound, with the
-    /// runs that worked on them and the end of that bound.
-    pub(crate) async fn cut_all(&self, spared: HashSet<Unit>) -> CutTurns {
-        let spared = Arc::new(spared);
-        self.cut.send_replace(Cut(Some(Arc::clone(&spared))));
+    /// Cuts the turns read as streams at once, but those of the units in
+    /// `spared`, which a caller of the kit's close runs within (the kit's
+    /// shutdown, RFC §10.6.8: the turn's cascade cancelled; RFC §12.10.4):
+    /// each crosses as `cancel`, and its reader stores what it read;
+    /// returns once the owner reads no stream it cut, or after twice the
+    /// cancel bound. A turn whose output the owner still awaits, the
+    /// channel's `on_event()`, runs on as part of its delivery set.
+    pub(crate) async fn cut_streams(&self, spared: HashSet<Unit>) {
+        self.cut_from(TurnStage::Stream, spared).await;
+    }
+
+    /// Cuts every turn, but those of the units in `spared`, as
+    /// [`cut_streams`](Self::cut_streams) does.
+    pub(crate) async fn cut_all(&self, spared: HashSet<Unit>) {
+        self.cut_from(TurnStage::Output, spared).await;
+    }
+
+    async fn cut_from(&self, stage: TurnStage, spared: HashSet<Unit>) {
+        let cut = Cut {
+            stage: Some(stage),
+            spared: Arc::new(spared),
+        };
+        self.cut.send_replace(cut.clone());
         let bound = self.timeouts().cancel.saturating_mul(2);
-        let cut_turns = || {
-            lock(&self.working)
-                .iter()
-                .map(|(&turn, &(_, run))| TurnUnits { turn, run })
-                .filter(|units| !units.spared_by(&spared))
-                .collect::<Vec<_>>()
-        };
-        let cut = CutTurns {
-            runs: cut_turns()
-                .into_iter()
-                .filter_map(|units| units.run)
-                .collect(),
-            until: Instant::now() + bound,
-        };
         let settled = async {
             loop {
                 let mut idle = std::pin::pin!(self.idle.notified());
                 idle.as_mut().enable();
-                if cut_turns().is_empty() {
+                let cutting = lock(&self.working)
+                    .keys()
+                    .any(|&(unit, at)| cut.cuts(Some(unit), at));
+                if !cutting {
                     return;
                 }
                 idle.await;
             }
         };
-        if tokio::time::timeout_at(cut.until, settled).await.is_err() {
+        if tokio::time::timeout(bound, settled).await.is_err() {
             tracing::warn!(
                 target: "roomkit::turns",
                 bound_s = bound.as_secs_f64(),
                 "turns still ran when the kit shut down: their work is dropped"
             );
         }
-        cut
     }
 
     /// Takes no more turns: one submitted from now on fails `backend_closed`.
@@ -307,17 +298,13 @@ impl Turns {
         submitted: impl FnOnce(Canceller),
     ) -> Result<Answer, ErrorRecord> {
         // The turn's tasks run in a unit of their own, within the call's
-        // run's: a close from the turn's work, or from its run's, spares
-        // them all (RFC §12.10.4).
-        let marks = Marks::current();
-        let units = TurnUnits {
-            turn: Unit::new(),
-            run: marks.innermost(),
-        };
-        let _working = self.working(units);
-        let mut turn = marks
-            .with(units.turn)
-            .sync_scope(|| self.submit(kit, binding, event, context, units))?;
+        // run's: a close from the turn's work spares them all (RFC
+        // §12.10.4).
+        let unit = Unit::new();
+        let _working = self.working(unit, TurnStage::Output);
+        let mut turn = Marks::current()
+            .with(unit)
+            .sync_scope(|| self.submit(kit, binding, event, context, unit))?;
         submitted(turn.canceller());
         let (output, streams) = turn.output(self.cutting()).await?;
         Ok(if streams {
@@ -328,15 +315,14 @@ impl Turns {
     }
 
     /// Hands a turn to the kit's own executor, and opens its owner's side,
-    /// the turn's tasks in its `units`' own, the one the current code runs
-    /// in.
+    /// the turn's tasks in `unit`, the one the current code runs in.
     fn submit(
         self: &Arc<Self>,
         kit: &Arc<dyn TurnKit>,
         binding: &ChannelBinding,
         event: RoomEvent,
         mut context: RoomContext,
-        units: TurnUnits,
+        unit: Unit,
     ) -> Result<OwnerTurn, ErrorRecord> {
         if self.closed.load(Ordering::Acquire) || self.cut.borrow().began() {
             return Err(closed());
@@ -372,7 +358,7 @@ impl Turns {
             facts,
             Arc::clone(kit),
             Arc::clone(self),
-            units,
+            unit,
         );
         let carried = CarriedRequest {
             rest,
@@ -502,7 +488,9 @@ fn executor_id() -> String {
 }
 
 /// A turn the backend no longer takes (RFC §10.6.8 `backend_closed`).
-fn closed() -> ErrorRecord {
+/// The refusal of a turn the backend no longer takes, its link's error
+/// naming the backend's close (RFC §10.6.8 `backend_closed`).
+pub(crate) fn closed() -> ErrorRecord {
     TurnError::new("backend_closed", "the turn backend closed").to_record()
 }
 

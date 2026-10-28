@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::adoption::Adoption;
 use crate::stream::KeptStream;
-use crate::turns::{Canceller, Working};
+use crate::turns::Canceller;
 
 /// What a run holds now, as the calls it makes read it.
 #[derive(Debug, Default)]
@@ -51,10 +51,6 @@ pub(crate) struct RunShared {
     /// The turns the run's calls submitted and await the output of, by
     /// their effect: a call given up cuts its turn at once.
     turns: Mutex<HashMap<EffectId, Canceller>>,
-    /// The owner's work on a turn whose stream a call read, by its effect,
-    /// kept past the call's end until the run started what the read led
-    /// to: the commit of what it read (RFC §12.10.4).
-    reads: Mutex<HashMap<EffectId, Working>>,
 }
 
 /// A claim on one tenure of a room's lock, which code run under that lock
@@ -77,7 +73,6 @@ impl RunShared {
             streams: Mutex::new(HashMap::new()),
             stops: Mutex::new(HashMap::new()),
             turns: Mutex::new(HashMap::new()),
-            reads: Mutex::new(HashMap::new()),
         });
         (shared, received)
     }
@@ -205,23 +200,6 @@ impl RunShared {
     /// The stream the turn of `effect` answered with, taken to be read.
     pub(crate) fn take_stream(&self, effect: EffectId) -> Option<KeptStream> {
         self.streams
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&effect)
-    }
-
-    /// Keeps `working`, the owner's work on the turn the read of `effect`
-    /// read, past the read's end, for the run's driver to let go.
-    pub(crate) fn keep_reading(&self, effect: EffectId, working: Working) {
-        self.reads
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(effect, working);
-    }
-
-    /// The owner's work kept past the end of the read of `effect`.
-    pub(crate) fn take_reading(&self, effect: EffectId) -> Option<Working> {
-        self.reads
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&effect)

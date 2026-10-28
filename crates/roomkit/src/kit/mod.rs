@@ -404,7 +404,10 @@ impl<S> Inner<S> {
             channels.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
             let mut failures = Vec::new();
             for (channel_id, channel) in channels {
-                if let Err(panic) = unwind::unwinding(channel.close()).await {
+                // The call itself within the catch: a close that panics
+                // before it returns its future is caught too.
+                let closing = async { channel.close().await };
+                if let Err(panic) = unwind::unwinding(closing).await {
                     let message = unwind::message(&*panic);
                     tracing::error!(
                         target: "roomkit::kit",

@@ -40,19 +40,21 @@ impl<S: ConversationStore> RoomKit<S> {
     /// channel's delivery, a hook a delivery fired or a task spawned with
     /// [`keep_context`](crate::keep_context), neither waits for that work
     /// nor cuts it, whether it started the shutdown or joined one under
-    /// way: the work it runs within is spared, with the turns of a spared
-    /// run's delivery set, the shutdown closes everything else, and the
-    /// work ends on its own once the call returns, storing and delivering
-    /// nothing once the kit is sealed: its writes and its channel calls are
+    /// way: the work it runs within is spared, the shutdown closes
+    /// everything else, and the work ends on its own once the call returns,
+    /// storing and delivering nothing once the kit is sealed, at step 6,
+    /// before the channels close: its writes and its channel calls are
     /// refused, a message whose commit is so refused failing
     /// [`KitError::ShutDown`], nothing of it stored, one refused past its
-    /// commit reading `cancellation_reason` `kit_closed`. A `close` from an
-    /// observer the kit fires and forgets spares that observer alone. What
-    /// waits behind spared work is dropped at once: the deliveries queued
-    /// behind its place in its room's lane, `kit_closed`, and the messages
-    /// waiting for the room's lock or admission ticket it holds, refused
-    /// [`KitError::ShutDown`]. A `close` from the shutdown's own work, a
-    /// channel's close, returns at once.
+    /// commit reading `cancellation_reason` `kit_closed`, and one whose
+    /// turn is refused carrying the turn link's `backend_closed` in its
+    /// result's `error` (RFC §10.6.8). A `close` from an observer the kit
+    /// fires and forgets spares that observer alone. What waits behind
+    /// spared work is dropped at once: the deliveries queued behind its
+    /// place in its room's lane, `kit_closed`, and the messages waiting, or
+    /// starting to wait as the close drains, for the room's lock or
+    /// admission ticket it holds, refused [`KitError::ShutDown`]. A `close`
+    /// from the shutdown's own work, a channel's close, returns at once.
     ///
     /// # Errors
     ///
@@ -75,10 +77,19 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    and counted in a warning: a caller still waiting for its call
     ///    reads what the write came to, its event or the store's error; a
     ///    write that fails once its caller is gone is logged as an error.
+    ///    The turns read as streams are then cut at once, with no grace
+    ///    (RFC §10.6.8), as the Python implementation cuts its stream
+    ///    readers: each crosses its turn backend as `cancel`, its executor
+    ///    cuts the tool calls it runs, reported `cancelled` to the kit's
+    ///    observers, and the reader stores what it read, the text it was
+    ///    handed marked `cancelled` and each call it opened ended
+    ///    `cancelled`, delivered as the lanes drain. The close waits for
+    ///    that within twice the turns' cancel bound, 10 seconds by default.
     /// 3. The inbound calls running then drain for up to 5 seconds, whether
     ///    their caller waits for them, was answered at the decision (RFC
     ///    §10.1 step 18) or left: each room's deliveries in its lane, the
-    ///    turns they run, the observers their deliveries fire, and a call
+    ///    turns whose output they await (a channel's `on_event()`), the
+    ///    observers their deliveries fire, and a call
     ///    until it is committed, whatever holds it, a hook or its own
     ///    commit's write (RMK-1010 item 41; Python's drain waits for
     ///    neither, and aligns). An inbound call whose commit runs past 10 s
@@ -89,14 +100,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    the call's result reading `cancellation_reason` `kit_closed`, as
     ///    Python's sealed lanes drop it.
     /// 4. The turns still running are then cut (RFC §10.6.8: the kit
-    ///    closing cancels their cascades): each crosses its turn backend as
-    ///    `cancel`, its executor cuts the tool calls it runs, reported
-    ///    `cancelled` to the kit's observers, and the reader of a stream
-    ///    stores what it read, the text it was handed marked `cancelled`
-    ///    and each call it opened ended `cancelled`. The close waits for
-    ///    that, then for the inbound calls whose turns it cut to commit what
-    ///    their readers read, and no longer, within twice the turns' cancel
-    ///    bound, 10 seconds by default. A turn the close spares is not cut.
+    ///    closing cancels their cascades), as the streams were, within the
+    ///    same bound. A turn the close spares, one it was called from
+    ///    inside, is not cut, in either step.
     ///    What is left of the inbound calls is then aborted at its next
     ///    wait, letting go of what it holds, its room lock, its places in
     ///    the room's lane and its admission ticket: an event committed and
@@ -104,8 +110,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    there. A caller still waiting receives its result, its
     ///    `cancellation_reason` `lane_cancelled` for a delivery cut
     ///    running and `kit_closed` for one still queued or a commit that
-    ///    ended after the abort or whose set the close dropped first, as
-    ///    Python's lanes report them, the
+    ///    ended after the abort, as Python's lanes report them, no reason
+    ///    once its own delivery was over, as Python's caller reads, the
     ///    store's error for such a commit that failed, or
     ///    [`KitError::ShutDown`](crate::KitError::ShutDown) for a call cut
     ///    before its own commit, whatever its run committed for other
@@ -158,14 +164,14 @@ impl<S: ConversationStore> RoomKit<S> {
         let tasks = &self.inner.tasks;
         let writes = Instant::now() + CLOSE_WAIT;
         wait_for_writes(tasks, writes).await;
+        // A turn's work, its model's rounds and its tools' calls, is cut
+        // with no grace (RFC §10.6.8), as the Python implementation cuts its
+        // stream readers before its lanes drain; what its reader read is
+        // stored, and delivered as the lanes drain.
+        self.inner.turns.cut_streams(tasks.spared()).await;
         self.drain().await;
         tasks.cut();
-        let cut = self.inner.turns.cut_all(tasks.spared()).await;
-        // A run whose turn was cut commits what its reader read before the
-        // rest of the work is aborted, within the same bound: the commit's
-        // write, which ends once the run went on from it.
-        let commits = tasks.idle_of_children(Kind::Write, &cut.runs);
-        let _committed = tokio::time::timeout_at(cut.until, commits).await;
+        self.inner.turns.cut_all(tasks.spared()).await;
         tasks.abort(Kind::Work).await;
         tasks.idle_of_kind(Kind::Observer).await;
         tasks.shut_down().await;
