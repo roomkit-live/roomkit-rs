@@ -22,7 +22,7 @@ use tokio::task::{AbortHandle, JoinHandle};
 pub(crate) enum Kind {
     /// An inbound run, its deliveries and its turns, or a task a turn runs:
     /// drained within the close's grace, but a run whose deciding commit is
-    /// in flight, which the waits for the writes cover.
+    /// all of it in flight, which the waits for the writes cover.
     Work,
     /// An observer hook running after the fact (RFC §9.3) that no delivery
     /// fired, bounded by its hook's timeout: waited for once the work is
@@ -42,8 +42,8 @@ pub(crate) enum Kind {
 pub(crate) struct Tasks {
     state: Mutex<State>,
     /// Woken whenever the last task of a kind ends, a task of the work ends
-    /// while a run's deciding commit is in flight, such a commit's mark
-    /// comes or goes, and when the kit shuts down.
+    /// while a run is marked a decided write, such a mark comes or goes,
+    /// and when the kit shuts down.
     changed: Notify,
 }
 
@@ -74,7 +74,7 @@ struct State {
     /// aborts it once its spawn returned it.
     running: HashMap<u64, (Kind, Option<AbortHandle>)>,
     /// The inbound runs, each a task of the work, whose commit that decides
-    /// their call is in flight ([`Tasks::deciding`]).
+    /// their call is all of them in flight ([`Tasks::deciding`]).
     deciding: usize,
 }
 
@@ -92,8 +92,8 @@ struct Tracked {
     key: u64,
 }
 
-/// The mark of an inbound run whose commit that decides its call is in
-/// flight, while it lives ([`Tasks::deciding`]).
+/// The mark of an inbound run whose commit that decides its call is all of
+/// it in flight, while it lives ([`Tasks::deciding`]).
 #[derive(Debug)]
 pub(crate) struct Deciding {
     tasks: Arc<Tasks>,
@@ -163,11 +163,12 @@ impl Tasks {
     }
 
     /// Marks the inbound run that calls it as a decided write while the
-    /// mark lives: its commit that decides its call is in flight, and the
-    /// drain no longer waits for it ([`drained`](Self::drained)); the
-    /// close's waits for the writes do, as Python's held write covers the
-    /// commit and the lane's enqueue (`_write_decision`). Only such a run,
-    /// a task of the work, takes one.
+    /// mark lives: its commit that decides its call is all of it in flight,
+    /// and the drain no longer waits for it ([`drained`](Self::drained));
+    /// the close's waits for the writes do, as Python's held write covers
+    /// the commit and the lane's enqueue (`_write_decision`). Only such a
+    /// run, a task of the work, takes one, and only while no delivery set
+    /// it runs is running or waiting for its turn.
     pub(crate) fn deciding(self: &Arc<Self>) -> Deciding {
         self.state().deciding += 1;
         self.changed.notify_waiters();

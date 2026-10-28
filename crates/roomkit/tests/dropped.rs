@@ -21,9 +21,9 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
-    ConversationStore, CreateRoomOptions, EventFilter, EventQuery, FrameworkEvent, InMemoryStore,
-    InboundError, KitError, ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit,
-    RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
+    ConversationStore, CreateRoomOptions, EventFilter, EventQuery, FrameworkEvent, HookExecution,
+    HookSpec, HookTrigger, InMemoryStore, InboundError, KitError, ProcessInboundOptions,
+    RoomCounters, RoomFilter, RoomKit, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -43,9 +43,10 @@ fn room_id() -> RoomId {
     RoomId::new("room_1").unwrap()
 }
 
-/// An in-memory store whose first commit of an event that is not the
-/// framework's own lifecycle record (gap G-046) tells `committing` it
-/// started, then waits for `go`, as a slow database does; that commit then
+/// An in-memory store whose first commit of an event that is neither the
+/// framework's own lifecycle record (gap G-046) nor `First`, the work the
+/// close tests run beside it, tells `committing` it started, then waits for
+/// `go`, as a slow database does; that commit then
 /// fails when `fails` is set, as a database gone does, or panics when
 /// `panics` is, as a broken driver does.
 #[derive(Debug, Default)]
@@ -226,8 +227,9 @@ impl ConversationStore for GatedStore {
         counters: RoomCounters,
         target: Option<TargetUpdate>,
     ) -> Result<(), StoreError> {
-        let records = event.source.channel_type == ChannelType::SYSTEM;
-        if !records && !self.started.swap(true, Ordering::SeqCst) {
+        let ungated = event.source.channel_type == ChannelType::SYSTEM
+            || roomkit::text_of(&event.content) == "First";
+        if !ungated && !self.started.swap(true, Ordering::SeqCst) {
             self.committing.notify_one();
             self.go.notified().await;
             if self.fails.load(Ordering::SeqCst) {
@@ -704,9 +706,36 @@ async fn a_commit_event_ending_within_the_close_s_third_wait_is_stored() {
     );
 }
 
-/// A transport whose delivery of `First` takes 8 s, which keeps its room's
-/// lane busy past the close's first wait.
-struct Busy;
+/// A transport whose delivery of `First` takes `delivery`, which keeps its
+/// room's lane busy, and whose close takes `close`; it keeps the texts it
+/// delivered.
+struct Busy {
+    delivery: Duration,
+    close: Duration,
+    delivered: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Busy {
+    /// Bound to `room_1` on `kit`; the texts it will have delivered.
+    async fn bound(
+        kit: &RoomKit<GatedStore>,
+        delivery: Duration,
+        close: Duration,
+    ) -> Arc<std::sync::Mutex<Vec<String>>> {
+        let delivered = Arc::default();
+        let busy = Self {
+            delivery,
+            close,
+            delivered: Arc::clone(&delivered),
+        };
+        kit.register_channel(busy).unwrap();
+        let options = AttachChannelOptions::default();
+        kit.attach_channel(&room_id(), &channel("busy"), options)
+            .await
+            .unwrap();
+        delivered
+    }
+}
 
 impl Channel for Busy {
     fn declaration(&self) -> ChannelDeclaration {
@@ -724,30 +753,30 @@ impl Channel for Busy {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
-        if roomkit::text_of(&event.content) == "First" {
-            tokio::time::sleep(Duration::from_secs(8)).await;
+        let text = roomkit::text_of(&event.content);
+        if text == "First" {
+            tokio::time::sleep(self.delivery).await;
         }
+        self.delivered.lock().unwrap().push(text);
         Ok(ChannelOutput::default())
+    }
+
+    async fn close(&self) {
+        tokio::time::sleep(self.close).await;
     }
 }
 
-/// The third wait's 5 s count from the channels' close, as Python's: a
-/// delivery keeps the lane busy 8 s into the close, so the channels close
-/// at 8 s, and a `commit_event` whose write takes 12 s is stored when the
-/// close returns, at 12 s (`fixpass4/py_busy_lane_commit_event.out`:
-/// 11.8 s, stored; 10 s and not stored counted from the close's start).
+/// The third wait's 5 s count from the end of the channels' close, as
+/// Python's: a delivery keeps the lane busy 8 s into the close and the
+/// channel's close takes 3 s, so the channels are closed at 11 s, and a
+/// `commit_event` whose write takes 14 s is stored when the close returns,
+/// at 14 s (`fixpass5/py_slow_channel_close.out`: 13.8 s, stored; counted
+/// from the close's start, 10 s, or from before the channels' close, 13 s,
+/// the record not stored).
 #[tokio::test(start_paused = true)]
 async fn the_third_wait_counts_from_the_channels_close() {
     let (kit, _ws) = gated_room().await;
-    kit.register_channel(Busy).unwrap();
-    kit.attach_channel(
-        &room_id(),
-        &channel("busy"),
-        AttachChannelOptions::default(),
-    )
-    .await
-    .unwrap();
-    kit.store().started.store(true, Ordering::SeqCst);
+    Busy::bound(&kit, Duration::from_secs(8), Duration::from_secs(3)).await;
     let first = {
         let kit = kit.clone();
         tokio::spawn(async move {
@@ -761,8 +790,6 @@ async fn the_third_wait_counts_from_the_channels_close() {
         })
     };
     tokio::time::sleep(Duration::from_millis(100)).await;
-    // The gate again, for the record's commit.
-    kit.store().started.store(false, Ordering::SeqCst);
     let call = {
         let kit = kit.clone();
         tokio::spawn(async move {
@@ -775,7 +802,7 @@ async fn the_third_wait_counts_from_the_channels_close() {
         .unwrap();
     let go = Arc::clone(&kit.store().go);
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(12)).await;
+        tokio::time::sleep(Duration::from_secs(14)).await;
         go.notify_one();
     });
     let took = closing(&kit).await;
@@ -784,12 +811,201 @@ async fn the_third_wait_counts_from_the_channels_close() {
     let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
     assert_eq!(
         (
-            took >= Duration::from_secs(12) && took < Duration::from_secs(13),
+            took >= Duration::from_secs(14) && took < Duration::from_secs(15),
             at_close,
             first.map(|result| result.cancellation_reason),
             ended.is_ok()
         ),
         (true, true, Ok(None), true)
+    );
+}
+
+/// `text` from the SMS sender into `room`.
+fn sms_into(room: RoomId, text: &str) -> (InboundMessage, ProcessInboundOptions) {
+    let message = InboundMessage::new(channel("sms"), "+15551234567", EventContent::text(text));
+    let options = ProcessInboundOptions {
+        room_id: Some(room),
+        ..Default::default()
+    };
+    (message, options)
+}
+
+/// `Slow` into `room_1` on a task of its own, its commit gated and the gate
+/// opened `after` it starts, whenever that is: the close may begin first.
+fn slow_into_room_1(
+    kit: &RoomKit<GatedStore>,
+    after: Duration,
+) -> tokio::task::JoinHandle<Result<roomkit::InboundResult, KitError>> {
+    let (committing, go) = (
+        Arc::clone(&kit.store().committing),
+        Arc::clone(&kit.store().go),
+    );
+    tokio::spawn(async move {
+        committing.notified().await;
+        tokio::time::sleep(after).await;
+        go.notify_one();
+    });
+    let kit = kit.clone();
+    tokio::spawn(async move {
+        let (message, options) = sms_into(room_id(), "Slow");
+        kit.process_inbound(message, options).await
+    })
+}
+
+/// A run whose commit that decides its call is in flight still runs the
+/// delivery set of an entry it adopted: the drain waits for that set, with
+/// its grace, as Python's lane drains it, then for the commit no more.
+/// Each row: what `Slow`'s hook does, how long `First`'s delivery and
+/// `Slow`'s commit take; the close begins while the hook runs, or once the
+/// commit runs. The close's length, whether `First` was delivered when it
+/// returned, and `Slow`'s `cancellation_reason` (light review 4, rows c3,
+/// c2 and c: on f7ef360 the set was cut at the drain, at 3.1 s, 2.9 s and
+/// 5 s; Python `py_lr4_c3.out`, `py_lr4_c2.out`, `py_lr4_rows.out`: 3.8 s,
+/// 3.8 s and 6.8 s, delivered, `kit_closed`). Row c12, the commit of 12 s:
+/// the drain is over when the set ends, at 6 s, the run's commit then all
+/// of it in flight, and the third wait 5 s later (`fixpass5/py_lr4_c12.out`:
+/// 10.8 s; 11.8 s if the drain is not woken when the run is left with its
+/// commit alone).
+#[tokio::test(start_paused = true)]
+async fn a_set_a_deciding_run_runs_keeps_the_drain_s_grace() {
+    let mut read = Vec::new();
+    for (row, locked, delivery, hook, commit) in [
+        ("c3", true, 4_000, 3_000, 100),
+        ("c2", false, 4_000, 3_000, 100),
+        ("c", false, 6_000, 0, 7_000),
+        ("c12", false, 6_000, 0, 12_000),
+    ] {
+        let (kit, _ws) = gated_room().await;
+        let delivered = Busy::bound(&kit, Duration::from_millis(delivery), Duration::ZERO).await;
+        side_entry_hook(&kit, locked, Duration::from_millis(hook));
+        let call = slow_into_room_1(&kit, Duration::from_millis(commit));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let took = closing(&kit).await;
+        let first = delivered.lock().unwrap().contains(&"First".to_owned());
+        let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
+        read.push((
+            row,
+            took.as_millis() / 100,
+            first,
+            ended.ok().map(|result| result.cancellation_reason),
+        ));
+    }
+    let kit_closed = Some(Some("kit_closed".to_owned()));
+    assert_eq!(
+        read,
+        [
+            ("c3", 38, true, kit_closed.clone()),
+            ("c2", 38, true, kit_closed.clone()),
+            ("c", 68, true, kit_closed.clone()),
+            ("c12", 108, true, kit_closed),
+        ]
+    );
+}
+
+/// A `BEFORE_BROADCAST` hook of `Slow` that makes an entry `First` into
+/// its own room, a `send_event` under the lock when `locked`, else an
+/// off-lock deferred `process_inbound`, then runs `more`.
+fn side_entry_hook(kit: &RoomKit<GatedStore>, locked: bool, more: Duration) {
+    let mut spec = HookSpec::new("side", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    spec.needs_lock = locked;
+    let hook_kit = kit.clone();
+    kit.hook(spec, move |event: RoomEvent, _| {
+        let kit = hook_kit.clone();
+        async move {
+            if roomkit::text_of(&event.content) != "Slow" {
+                return Ok(HookResult::allow());
+            }
+            if locked {
+                let options = SendEventOptions::default();
+                kit.send_event(
+                    &room_id(),
+                    &channel("sms"),
+                    EventContent::text("First"),
+                    options,
+                )
+                .await?;
+            } else {
+                let (message, mut options) = sms_into(room_id(), "First");
+                options.defer_delivery = true;
+                kit.process_inbound(message, options).await?;
+            }
+            tokio::time::sleep(more).await;
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+}
+
+/// The drain is over once the only work left is runs whose deciding commit
+/// is in flight, however many other tasks of the work ended before: a
+/// delivery of 6 s in `room_1`, a commit of 12 s in `room_2`; the drain
+/// ends with the delivery, at 6 s, and the third wait 5 s later, the close
+/// taking 10.9 s, the record stored after, three warnings (light review 4,
+/// row b12, Python
+/// `py_lr4_b12.out`: 10.7 s, not stored, three warnings; with the drain
+/// waking only when the last task of the work ends, 12.0 s, stored, two).
+#[tokio::test(start_paused = true)]
+async fn the_drain_ends_with_the_last_work_but_deciding_runs() {
+    let (kit, _ws) = gated_room().await;
+    Busy::bound(&kit, Duration::from_secs(6), Duration::ZERO).await;
+    let room_2 = RoomId::new("room_2").unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_2.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    kit.store().started.store(true, Ordering::SeqCst);
+    let first = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            let (message, options) = sms_into(room_id(), "First");
+            kit.process_inbound(message, options).await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    kit.store().started.store(false, Ordering::SeqCst);
+    let slow = {
+        let (kit, room) = (kit.clone(), room_2.clone());
+        tokio::spawn(async move {
+            let (message, options) = sms_into(room, "Slow");
+            kit.process_inbound(message, options).await
+        })
+    };
+    tokio::time::timeout(BOUND, kit.store().committing.notified())
+        .await
+        .unwrap();
+    let go = Arc::clone(&kit.store().go);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(12)).await;
+        go.notify_one();
+    });
+    let (lines, guard) = Warnings::capture();
+    let took = closing(&kit).await;
+    drop(guard);
+    let slow_at_close = kit
+        .store()
+        .list_events(&room_2, &every_row())
+        .await
+        .unwrap()
+        .iter()
+        .any(|event| roomkit::text_of(&event.content) == "Slow");
+    let first = tokio::time::timeout(BOUND, first).await.unwrap().unwrap();
+    let slow = tokio::time::timeout(Duration::from_secs(30), slow)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (
+            took.as_millis() / 100,
+            slow_at_close,
+            lines
+                .containing("closing with decided writes still running")
+                .len(),
+            first.map(|result| result.cancellation_reason),
+            slow.map(|result| result.cancellation_reason),
+        ),
+        (109, false, 3, Ok(None), Ok(Some("kit_closed".to_owned())))
     );
 }
 

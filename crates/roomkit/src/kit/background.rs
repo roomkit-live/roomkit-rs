@@ -42,11 +42,14 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    §10.1 step 18) or left: each room's deliveries in its lane, the
     ///    turns they run, the observers their deliveries fire, and a call
     ///    still before its own commit. A call whose commit that decides it
-    ///    is in flight is a decided write, which the drain does not wait
-    ///    for: the waits for the writes do, as they do Python's. One that
-    ///    ends meanwhile reports its result, as it would have. A delivery
-    ///    set that would take its place in a room's lane from now on is
-    ///    dropped, its event stored, the call's result reading
+    ///    is in flight still runs the delivery sets of the entries it
+    ///    adopted: the drain waits for it while one runs or waits for its
+    ///    turn, the set getting the grace. Once that commit is all of it in
+    ///    flight, the call is a decided write, which the drain no longer
+    ///    waits for: the waits for the writes do, as they do Python's. One
+    ///    that ends meanwhile reports its result, as it would have. A
+    ///    delivery set that would take its place in a room's lane from now
+    ///    on is dropped, its event stored, the call's result reading
     ///    `cancellation_reason` `kit_closed`, as Python's sealed lanes drop
     ///    it.
     /// 4. The turns still running are then cut (RFC §10.6.8: the kit
