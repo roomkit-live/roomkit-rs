@@ -144,11 +144,13 @@ impl Pump<'_> {
     async fn read(&self, stream: &mut ResponseStream) -> (Read, bool) {
         lock(&self.flow.gate).start_read();
         let next = crate::stream::next_item(stream);
+        self.turn.wait_on_channel(true);
         let read = self
             .turn
             .stream_context()
             .scope(self.host.clone().scope(next))
             .await;
+        self.turn.wait_on_channel(false);
         let mut gate = lock(&self.flow.gate);
         gate.end_read();
         match &read {

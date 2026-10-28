@@ -18,6 +18,16 @@ use crate::tasks::{Kind, Tasks, Unit};
 /// cuts it: the Python implementation's lane `close_grace`.
 const CLOSE_GRACE: Duration = Duration::from_secs(5);
 
+/// What the close's drain waits for.
+#[derive(Clone, Copy, Debug)]
+enum Drained {
+    /// The rooms' lanes idle: no work runs but the turns' (`Tasks::
+    /// lanes_idle_or_spared`).
+    Lanes,
+    /// The work over, the turns' included.
+    Work,
+}
+
 /// How long the kit's close waits for the store's writes decided for a
 /// caller, from its start and once more from the channels' close: the
 /// Python implementation's `CLOSE_WAIT_S`. A write still running then is
@@ -84,28 +94,39 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    kit's observers, and the reader stores what it read, the text it
     ///    was handed marked `cancelled` and each call it opened ended
     ///    `cancelled`, delivered as the lanes drain. The close waits for
-    ///    that within twice the turns' cancel bound, 10 seconds by default.
+    ///    that, then cuts in turn the streams whose read began meanwhile,
+    ///    until none is read, as Python's close cuts its stream readers
+    ///    again until none is left, all within twice the turns' cancel
+    ///    bound, 10 seconds by default.
     /// 3. The inbound calls running then drain for up to 5 seconds, whether
     ///    their caller waits for them, was answered at the decision (RFC
     ///    §10.1 step 18) or left: each room's deliveries in its lane, the
     ///    turns whose output they await (a channel's `on_event()`) and the
-    ///    turns they ask meanwhile, as Python's turn backend stays open
+    ///    turns they ask meanwhile, as Python's turn backend takes turns
     ///    until its lanes are done, the observers their deliveries fire,
-    ///    and a call
-    ///    until it is committed, whatever holds it, a hook or its own
-    ///    commit's write (RMK-1010 item 41; Python's drain waits for
+    ///    and a call until it is committed, whatever holds it, a hook or
+    ///    its own commit's write (RMK-1010 item 41; Python's drain waits for
     ///    neither, and aligns). An inbound call whose commit runs past 10 s
     ///    so holds the close up to 15 s, its write's third wait ending 5 s
     ///    after the channels' close. One that ends meanwhile reports its
     ///    result, as it would have. A delivery set that would take its
     ///    place in a room's lane from now on is dropped, its event stored,
     ///    the call's result reading `cancellation_reason` `kit_closed`, as
-    ///    Python's sealed lanes drop it.
+    ///    Python's sealed lanes drop it. Once the lanes are idle, no
+    ///    delivery set running or waiting and every run out of them only
+    ///    reading turns that wait on their channel, those turns have
+    ///    nothing left to deliver into and are cut then, not at the grace,
+    ///    as Python's `turns.close` follows its `lanes.aclose` (RFC
+    ///    §10.6.8): each crosses as `cancel`, what it sent before is read
+    ///    and stored, its delivery dropped, the call reading `kit_closed`,
+    ///    and one that said nothing has its stream end in its middle, the
+    ///    call carrying the turn link's `executor_lost`, as Python's; what
+    ///    they leave drains for the rest of the 5 seconds.
     /// 4. The turns still running are then cut (RFC §10.6.8: the kit
     ///    closing cancels their cascades), as the streams were, within the
     ///    same bound, and a turn asked from then on fails the turn link's
     ///    `backend_closed`. A turn the close spares, one it was called
-    ///    from inside, is not cut, in either step.
+    ///    from inside, is not cut, in any step.
     ///    What is left of the inbound calls is then aborted at its next
     ///    wait, letting go of what it holds, its room lock, its places in
     ///    the room's lane and its admission ticket: an event committed and
@@ -114,7 +135,10 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    `cancellation_reason` `lane_cancelled` for a delivery cut
     ///    running and `kit_closed` for one still queued or a commit that
     ///    ended after the abort, as Python's lanes report them, no reason
-    ///    once its own delivery was over, as Python's caller reads, the
+    ///    once its own delivery was over, as Python's caller reads, but
+    ///    `kit_closed` when a commit of its cascade still ran, its event
+    ///    stored and never delivered, as Python's caller reads its close's
+    ///    refusal of that delivery, the
     ///    store's error for such a commit that failed, or
     ///    [`KitError::ShutDown`](crate::KitError::ShutDown) for a call cut
     ///    before its own commit, whatever its run committed for other
@@ -173,8 +197,18 @@ impl<S: ConversationStore> RoomKit<S> {
         // is stored, and delivered as the lanes drain. A turn asked as they
         // drain runs within their grace.
         self.inner.turns.cut_streams(tasks.spared()).await;
-        self.drain().await;
+        // The lanes drain; once they are idle, the turns still running have
+        // nothing left to deliver into and are cut (RFC §10.6.8), as the
+        // Python implementation's `turns.close` follows its
+        // `lanes.aclose`, and what they leave, their readers' commits,
+        // drains within the rest of the grace.
+        let grace = Instant::now() + CLOSE_GRACE;
+        if self.drain(Drained::Lanes, grace).await {
+            self.inner.turns.cut_all(tasks.spared()).await;
+            self.drain(Drained::Work, grace).await;
+        }
         tasks.cut();
+        // The turns still running once the grace ran out.
         self.inner.turns.cut_all(tasks.spared()).await;
         tasks.abort(Kind::Work).await;
         tasks.idle_of_kind(Kind::Observer).await;
@@ -186,23 +220,34 @@ impl<S: ConversationStore> RoomKit<S> {
         failures
     }
 
-    /// Drains the work under way for up to the close's grace, but the work
-    /// a caller of the close runs within: the work stuck behind spared
-    /// work is dropped then, and again each time a caller joins (RFC
-    /// §12.10.4), as it would move on only once the close returned.
-    async fn drain(&self) {
+    /// Drains the work under way until `drained` is so, by `grace`,
+    /// whether it was, but the work a caller of the close runs within: the
+    /// work stuck behind spared work is dropped then, and again each time a
+    /// caller joins (RFC §12.10.4), as it would move on only once the close
+    /// returned.
+    async fn drain(&self, drained: Drained, grace: Instant) -> bool {
         let tasks = &self.inner.tasks;
         tasks.drain();
         let draining = async {
             loop {
                 let seen = tasks.spared_changes();
                 tasks.drop_work_of(&self.stuck_behind(&tasks.spared()));
-                if tasks.idle_or_spared(Kind::Work, seen).await {
+                let idle = match drained {
+                    Drained::Lanes => {
+                        let turns = &self.inner.turns;
+                        let reads_wait = |run| turns.reads_wait(run);
+                        tasks
+                            .lanes_idle_or_spared(seen, reads_wait, turns.reads_changed())
+                            .await
+                    }
+                    Drained::Work => tasks.idle_or_spared(Kind::Work, seen).await,
+                };
+                if idle {
                     return;
                 }
             }
         };
-        let _drained = tokio::time::timeout(CLOSE_GRACE, draining).await;
+        tokio::time::timeout_at(grace, draining).await.is_ok()
     }
 
     /// The units of the work stuck behind work in `spared`: the runs whose

@@ -27,7 +27,7 @@ use crate::store::ConversationStore;
 use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks};
 use crate::turn::TurnKit;
-use crate::turns::{self, Answer, TurnStage};
+use crate::turns::{self, Answer};
 use crate::unwind::unwinding;
 
 /// Carries out a request on the store (RFC §14).
@@ -196,7 +196,7 @@ pub(super) async fn channel<S: ConversationStore>(
         } => {
             let kept = shared.take_stream(turn);
             let unit = kept.as_ref().map(|kept| kept.turn.unit());
-            let _working = unit.map(|unit| inner.turns.working(unit, TurnStage::Stream));
+            let _reading = kept.as_ref().map(|kept| inner.turns.reading(&kept.turn));
             let stops = Stops {
                 read: shared.stop_signal(effect),
                 kit: inner.turns.cutting(),

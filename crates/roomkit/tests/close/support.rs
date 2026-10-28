@@ -18,7 +18,7 @@ use roomkit::{
     InboundResult, KitError, ProcessInboundOptions, RoomKit, RoomKitOptions, text_of,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
-use roomkit_ai::{AiAgent, ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{AiAgent, AiProvider, ToolDefinition, ToolOutput, Tools};
 use serde_json::json;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -211,7 +211,11 @@ impl Closer {
 
 /// A kit with an SMS transport and `witness` attached to `room_1`.
 pub(crate) async fn kit_with(witness: &Witness) -> RoomKit {
-    let kit = RoomKit::new(RoomKitOptions::default());
+    kit_on(RoomKit::new(RoomKitOptions::default()), witness).await
+}
+
+/// `kit`, with an SMS transport and `witness` attached to `room_1`.
+pub(crate) async fn kit_on<S: ConversationStore>(kit: RoomKit<S>, witness: &Witness) -> RoomKit<S> {
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
         .unwrap();
     kit.register_channel(witness.clone()).unwrap();
@@ -239,7 +243,15 @@ pub(crate) async fn sealed(kit: &RoomKit) -> bool {
 }
 
 /// The texts `room_1` stores, its lifecycle records aside.
-pub(crate) async fn stored(kit: &RoomKit) -> Vec<String> {
+pub(crate) async fn stored<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<String> {
+    stored_in(kit, &room_id()).await
+}
+
+/// The texts `room_id` stores, its lifecycle records aside.
+pub(crate) async fn stored_in<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    room_id: &RoomId,
+) -> Vec<String> {
     let query = EventQuery {
         limit: u64::MAX,
         event_filter: Some(EventFilter {
@@ -248,7 +260,7 @@ pub(crate) async fn stored(kit: &RoomKit) -> Vec<String> {
         }),
         ..EventQuery::default()
     };
-    let events = kit.store().list_events(&room_id(), &query).await.unwrap();
+    let events = kit.store().list_events(room_id, &query).await.unwrap();
     events
         .iter()
         .filter(|event| event.source.channel_type != ChannelType::SYSTEM)
@@ -258,7 +270,11 @@ pub(crate) async fn stored(kit: &RoomKit) -> Vec<String> {
 
 pub(crate) type Call = JoinHandle<Result<InboundResult, KitError>>;
 
-pub(crate) fn spawn_message(kit: &RoomKit, text: &str, room_id: RoomId) -> Call {
+pub(crate) fn spawn_message<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    text: &str,
+    room_id: RoomId,
+) -> Call {
     let kit = kit.clone();
     let message = message(text);
     tokio::spawn(async move { kit.process_inbound(message, into(room_id)).await })
@@ -386,7 +402,11 @@ async fn closing_agent(kit: &RoomKit, closer: &Closer) {
 }
 
 /// `model`'s agent, with `tools`, attached to `room_1`.
-pub(crate) async fn attach_agent(kit: &RoomKit, model: ScriptedProvider, tools: Tools) {
+pub(crate) async fn attach_agent<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    model: impl AiProvider,
+    tools: Tools,
+) {
     let agent = AiAgent::new(channel("agent"), model)
         .with_tools(tools)
         .unwrap();

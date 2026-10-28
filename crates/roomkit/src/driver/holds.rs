@@ -124,6 +124,12 @@ impl<'kit> Held<'kit> {
         }
     }
 
+    /// Whether the run holds anything of a room: a lock, a place in its
+    /// lane, its turn come or awaited, or an admission ticket.
+    pub(super) fn holds_any(&self) -> bool {
+        !(self.locks.is_empty() && self.places.is_empty() && self.tickets.is_empty())
+    }
+
     /// Carries out `request` for `effect`: a release, a place or a ticket at
     /// once, a wait as a future, within `deadline`.
     pub(super) fn hold(

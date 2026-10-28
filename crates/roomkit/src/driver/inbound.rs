@@ -34,7 +34,7 @@ use std::task::{Context, Poll};
 
 use roomkit_core::model::{ErrorRecord, EventId, RoomId};
 use roomkit_core::ops::{
-    Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED, Outcome,
+    Decided, EffectId, Inbound, InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED, Outcome,
     StoreOutcome,
 };
 use tokio::sync::oneshot;
@@ -88,6 +88,10 @@ pub(crate) struct Record {
     /// The call's result once its own event's commit, the one that decides
     /// it, is stored, and what that write came to.
     committing: Mutex<Option<(InboundResult, Written)>>,
+    /// The commits of the call's cascade past the one that decides it
+    /// whose outcome the run has not taken, by their effect, each with
+    /// what its write came to.
+    cascade: Mutex<Vec<(EffectId, Written)>>,
 }
 
 impl Record {
@@ -129,12 +133,55 @@ impl Record {
             .unwrap_or_else(PoisonError::into_inner) = Some((result, written));
     }
 
+    /// A commit of the call's cascade runs for `effect`, its outcome told
+    /// by `written`, until the run takes it ([`went_on`](Self::went_on)).
+    fn cascade_commits(&self, effect: EffectId, written: Written) {
+        self.cascade
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((effect, written));
+    }
+
+    /// The run took the outcome of `effect`'s write, or gave it up. One it
+    /// took once the kit's close cut the work, `past_the_cut`, stays: the
+    /// run is aborted before the event's delivery set starts.
+    fn went_on(&self, effect: EffectId, past_the_cut: bool) {
+        if past_the_cut {
+            return;
+        }
+        self.cascade
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(running, _)| *running != effect);
+    }
+
+    /// Whether a commit of the call's cascade the run had not gone on from
+    /// before the close cut it stored its event, once its write ended.
+    async fn cascade_stored(&self) -> bool {
+        let running: Vec<Written> = self
+            .cascade
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(_, written)| written.clone())
+            .collect();
+        for mut written in running {
+            if calls::outcome_of(&mut written).await == Outcome::Store(StoreOutcome::Committed) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// What a run the kit's close aborted reports, as the Python
     /// implementation's lane reports a delivery it dropped: the call as it
     /// was decided, its delivery cancelled [`LANE_CANCELLED`] when its set
     /// delivered, [`KIT_CLOSED`] when it still waited for its turn, and no
     /// reason of the abort's once its set was over, the abort cutting a
-    /// later set of its cascade, as Python's caller reads. A call
+    /// later set of its cascade, as Python's caller reads, but
+    /// [`KIT_CLOSED`] when a commit of its cascade still ran, its event
+    /// stored and never delivered, as Python's caller reads the delivery
+    /// its sealed lanes refuse. A call
     /// whose own commit still ran reads what the write came to, once it
     /// ends, as Python's caller does: its event, stored and never
     /// delivered, `kit_closed`. [`KitError::ShutDown`] for a call nothing of
@@ -152,6 +199,11 @@ impl Record {
         // no reason of the abort's, as Python's caller, whose lane cut a
         // later entry of its cascade.
         if self.delivered.load(Ordering::Acquire) {
+            if self.cascade_stored().await {
+                result
+                    .cancellation_reason
+                    .get_or_insert_with(|| KIT_CLOSED.to_owned());
+            }
             return Ok(Ok(result));
         }
         let reason = if self.delivering.load(Ordering::Acquire) {
@@ -241,6 +293,12 @@ impl Caller {
         }
     }
 
+    /// Whether the call is decided, its event committed or its instruction
+    /// decided.
+    pub(super) fn is_decided(&self) -> bool {
+        self.decided
+    }
+
     /// The lane's turn of `event_id`'s set came.
     pub(super) fn turn_came(&self, event_id: &EventId) {
         self.record.turn_came(event_id);
@@ -255,6 +313,18 @@ impl Caller {
     /// by `written`.
     pub(super) fn commits(&self, result: InboundResult, written: Written) {
         self.record.commits(result, written);
+    }
+
+    /// A commit of the call's cascade runs for `effect`, its outcome told
+    /// by `written`.
+    pub(super) fn cascade_commits(&self, effect: EffectId, written: Written) {
+        self.record.cascade_commits(effect, written);
+    }
+
+    /// The run took the outcome of `effect`, or gave it up; `past_the_cut`
+    /// once the kit's close cut the work.
+    pub(super) fn went_on(&self, effect: EffectId, past_the_cut: bool) {
+        self.record.went_on(effect, past_the_cut);
     }
 
     /// Takes the call's decision, `decided`: the caller is answered with

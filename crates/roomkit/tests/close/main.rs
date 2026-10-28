@@ -12,9 +12,11 @@
 //!   and the work stores and delivers nothing once the kit is sealed;
 //! - `join`: a close from a tool call joins a close still waiting for the
 //!   store's writes, and spares its turn (RMK-1019);
-//! - `stuck`: what waits behind spared work is dropped at once, a turn's
-//!   work is cut with no grace, and a turn asked as the lanes drain runs
-//!   within their grace.
+//! - `stuck`: what waits behind spared work is dropped at once, and a
+//!   turn's work is cut with no grace;
+//! - `drain`: a turn asked as the lanes drain runs within their grace, the
+//!   turns left once the lanes are idle are cut then, and a stream whose
+//!   read begins as the close waits for those it cut is cut in turn.
 //!
 //! The kit's own work here is what roomkit-rs has of Python's doors: a
 //! SYNC hook's body, an ASYNC hook a delivery fires, a transport's
@@ -27,7 +29,9 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod doors;
+mod drain;
 mod join;
 mod shutdown;
+mod store;
 mod stuck;
 mod support;

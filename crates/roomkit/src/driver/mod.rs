@@ -160,6 +160,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         cut: Vec::new(),
         writing: HashMap::new(),
         written: Vec::new(),
+        out_of_lanes: false,
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -219,6 +220,8 @@ struct Driver<'kit, S> {
     /// The holds on the writes whose outcome the operation took, until what
     /// that outcome led to is started.
     written: Vec<WentOn>,
+    /// Whether an inbound run told the kit it is out of its rooms' lanes.
+    out_of_lanes: bool,
 }
 
 impl<S> Drop for Driver<'_, S> {
@@ -269,8 +272,49 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 Next::Effects(effects) => effects,
             };
             if !self.start_all(&mut operation, effects)? {
+                self.note_the_lanes();
                 self.wait(&mut operation).await?;
             }
+        }
+    }
+
+    /// Tells an inbound run's caller of a write it starts, `written` telling
+    /// its outcome: the commit that decides the call, `decides`, or another
+    /// commit, of its cascade, when it `commits`.
+    fn note_the_commit(
+        &self,
+        id: EffectId,
+        decides: Option<Box<InboundResult>>,
+        commits: bool,
+        written: calls::Written,
+    ) {
+        let Some(caller) = self.caller.as_deref() else {
+            return;
+        };
+        match decides {
+            Some(result) => caller.commits(*result, written),
+            None if commits => caller.cascade_commits(id, written),
+            None => {}
+        }
+    }
+
+    /// Tells the kit's close whether an inbound run is out of its rooms'
+    /// lanes as it waits: its call decided, it holds no lock, place in a
+    /// lane or admission ticket, and what it waits for is its turns' work,
+    /// their streams read or what they said committed. The close cuts
+    /// such a run's turns once the lanes are idle (RFC §10.6.8), as the
+    /// Python implementation's `turns.close` follows its `lanes.aclose`.
+    fn note_the_lanes(&mut self) {
+        let Some(caller) = self.caller.as_deref() else {
+            return;
+        };
+        let out = caller.is_decided() && !self.held.holds_any();
+        if out == self.out_of_lanes {
+            return;
+        }
+        self.out_of_lanes = out;
+        if let Some(unit) = self.marks.innermost() {
+            self.inner.tasks.out_of_lanes(unit, out);
         }
     }
 
@@ -392,6 +436,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 self.shared.answered(*effect);
             }
             self.writing.remove(effect);
+            if let Some(caller) = self.caller.as_deref() {
+                caller.went_on(*effect, false);
+            }
         }
     }
 
@@ -408,6 +455,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         } = effect;
         let deadline = deadline.and_then(|deadline| self.clocks.instant_of(deadline));
         let inner = Arc::clone(self.inner);
+        let commits = matches!(&request, Request::Store(StoreRequest::Commit { .. }));
         if let Request::Store(StoreRequest::Commit { event, .. }) = &request {
             self.indexes.committing(id, event);
         }
@@ -415,9 +463,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) if writes(&request) => {
                 let (writing, written, went_on) = calls::write(&inner, request);
-                if let (Some(result), Some(caller)) = (decides, self.caller.as_deref()) {
-                    caller.commits(*result, written);
-                }
+                self.note_the_commit(id, decides, commits, written);
                 // Only an inbound run's commit takes a place in a room's
                 // lane, and its run, a task of its own, is always polled; a
                 // run in its caller's own task may sit unpolled, and its
@@ -656,6 +702,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let effect = self.effect_of_task.remove(&task)?;
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));
+        if let Some(caller) = self.caller.as_deref() {
+            // A write that ends once the close cut the work: the run is
+            // aborted before what its outcome leads to starts.
+            let cut = self.inner.tasks.cuts(self.marks.innermost());
+            caller.went_on(effect, cut);
+        }
         self.shared.answered(effect);
         self.indexes.answered(effect, &outcome);
         Some((effect, outcome))

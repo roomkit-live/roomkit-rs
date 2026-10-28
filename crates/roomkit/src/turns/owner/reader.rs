@@ -18,7 +18,7 @@ use crate::turns::error::{RemoteError, TurnError, to_record};
 use crate::turns::lock;
 use crate::turns::pulls::PullWindow;
 use crate::turns::wire::{Control, Item};
-use crate::turns::{Cut, TurnStage};
+use crate::turns::{Cut, MemoryTurn, TurnStage};
 
 /// Where the reader stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +78,11 @@ impl OwnerTurn {
     /// The unit of the kit's work the turn's tasks run in.
     pub(crate) fn unit(&self) -> Unit {
         self.unit
+    }
+
+    /// The turn as its two sides share it.
+    pub(crate) fn memory(&self) -> &Arc<MemoryTurn> {
+        &self.state.turn
     }
 
     /// The turn's output, and whether its stream follows; at the kit's

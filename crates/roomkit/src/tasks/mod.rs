@@ -91,6 +91,10 @@ struct State {
     /// unit's place in a room's lane: ended by the close as those it cuts
     /// later are.
     dropped: HashSet<task::Id>,
+    /// The units of the inbound runs out of their rooms' lanes: decided,
+    /// and holding no lock, place in a lane or admission ticket, their
+    /// work left their turns' (`Tasks::out_of_lanes`).
+    out_of_lanes: HashSet<Unit>,
 }
 
 /// A task running: its kind, its unit, the unit of the work that started
@@ -383,6 +387,70 @@ impl Tasks {
         idle
     }
 
+    /// Notes whether the inbound run of `unit` is out of its rooms' lanes,
+    /// `out`: its call decided, it holds no lock, place in a lane or
+    /// admission ticket, and what it does is its turns' work, reading their
+    /// streams and committing what they said.
+    pub(crate) fn out_of_lanes(&self, unit: Unit, out: bool) {
+        let mut state = self.state();
+        let changed = if out {
+            state.out_of_lanes.insert(unit)
+        } else {
+            state.out_of_lanes.remove(&unit)
+        };
+        drop(state);
+        if changed {
+            self.changed.notify_waiters();
+        }
+    }
+
+    /// Waits until the rooms' lanes are idle, `true`: no work the close
+    /// does not spare runs but turns' work, a turn's task or an inbound run
+    /// out of the lanes whose turns say nothing more for now, `reads_wait`
+    /// of its unit, as the Python implementation's lanes are idle once no
+    /// delivery set runs or waits; or until the units spared changed since
+    /// the count `seen`, `false`. `reads_changed` is told each time
+    /// `reads_wait` may have changed.
+    pub(crate) async fn lanes_idle_or_spared(
+        &self,
+        seen: u64,
+        reads_wait: impl Fn(Unit) -> bool,
+        reads_changed: &Notify,
+    ) -> bool {
+        loop {
+            // Listening before looking, as `wait_until`.
+            let mut changed = pin!(self.changed.notified());
+            changed.as_mut().enable();
+            let mut read = pin!(reads_changed.notified());
+            read.as_mut().enable();
+            // The runs out of the lanes, read once the state is let go of:
+            // `None` while other work runs.
+            let runs: Option<Vec<Unit>> = {
+                let state = self.state();
+                if state.spared_changes != seen {
+                    return false;
+                }
+                state
+                    .unspared(|kind| kind == Kind::Work)
+                    .filter(|running| !running.with_parent)
+                    .map(|running| {
+                        state
+                            .out_of_lanes
+                            .contains(&running.unit)
+                            .then_some(running.unit)
+                    })
+                    .collect()
+            };
+            if runs.is_some_and(|runs| runs.into_iter().all(&reads_wait)) {
+                return true;
+            }
+            tokio::select! {
+                () = changed => {}
+                () = read => {}
+            }
+        }
+    }
+
     async fn wait_until(&self, mut until: impl FnMut(&State) -> bool) {
         loop {
             // Listening before looking: a task that ends between the look
@@ -478,7 +546,11 @@ impl Tasks {
 
 impl Drop for Tracked {
     fn drop(&mut self) {
-        self.tasks.state().running.remove(&self.key);
+        let mut state = self.tasks.state();
+        if let Some(running) = state.running.remove(&self.key) {
+            state.out_of_lanes.remove(&running.unit);
+        }
+        drop(state);
         self.tasks.changed.notify_waiters();
     }
 }

@@ -2,12 +2,14 @@
 //! two pipes, the owner's execution contexts its work runs in, and its
 //! request, the events as they are and the rest serialized.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use roomkit_core::model::{
     ChannelBinding, ChannelId, Metadata, Participant, Room, RoomContext, RoomEvent, RoomId,
 };
 use serde::Serialize;
+use tokio::sync::Notify;
 
 use super::lock;
 use super::observe::{Carried, Observers};
@@ -30,6 +32,12 @@ pub(crate) struct MemoryTurn {
     /// §10.6.5), the only thing the in-memory backend carries beside the
     /// messages; let go of once the turn is over.
     pub(super) contexts: Mutex<Contexts>,
+    /// Whether the turn's stream waits on its channel for its next item,
+    /// what it read before sent: the kit's close cuts a turn left once its
+    /// lanes are idle only then (`Turns::reads_wait`).
+    waits_on_channel: AtomicBool,
+    /// Told each time `waits_on_channel` changes.
+    waits_changed: Arc<Notify>,
 }
 
 /// The owner's execution contexts a turn's work runs in.
@@ -47,11 +55,14 @@ impl MemoryTurn {
     /// The turn `turn_id` on `frames` and `controls`, keeping `timeouts`,
     /// its work to run in the context of the current call, the owner's that
     /// submits it.
+    /// `waits_changed` is told each time the turn's stream starts or stops
+    /// waiting on its channel.
     pub(super) fn new(
         turn_id: Arc<str>,
         frames: Pipe<Frame>,
         controls: Pipe<Control>,
         timeouts: TurnTimeouts,
+        waits_changed: Arc<Notify>,
     ) -> Self {
         Self {
             turn_id,
@@ -62,7 +73,22 @@ impl MemoryTurn {
                 turn: ExecutionContext::current(),
                 stream: None,
             }),
+            waits_on_channel: AtomicBool::new(false),
+            waits_changed,
         }
+    }
+
+    /// The turn's stream starts, `true`, or stops waiting on its channel
+    /// for its next item.
+    pub(crate) fn wait_on_channel(&self, waits: bool) {
+        if self.waits_on_channel.swap(waits, Ordering::AcqRel) != waits {
+            self.waits_changed.notify_waiters();
+        }
+    }
+
+    /// Whether the turn's stream waits on its channel for its next item.
+    pub(crate) fn waits_on_channel(&self) -> bool {
+        self.waits_on_channel.load(Ordering::Acquire)
     }
 
     /// The context the turn's `on_event()` runs in.
