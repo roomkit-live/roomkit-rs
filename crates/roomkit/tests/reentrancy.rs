@@ -731,7 +731,9 @@ async fn a_task_a_delivery_spawns_with_its_context_waits_on_its_room_and_returns
                         }
                     };
                     let task = tokio::spawn(keep_context(work));
-                    let waited = tokio::time::timeout(BOUND, task).await;
+                    // Within half of `send`'s bound: a task that blocks fails
+                    // the assertion below, not `send`.
+                    let waited = tokio::time::timeout(BOUND / 2, task).await;
                     *seen.lock().unwrap() = Some(matches!(waited, Ok(Ok(Ok(true)))));
                     Ok(ChannelOutput::default())
                 })
