@@ -211,6 +211,11 @@ impl App {
         // A client gone is told nothing; its deliveries run on, unwatched.
         if matches!(ending, Ending::Stopping) {
             while let Some(outcome) = answering.next().await {
+                let outcome = if *self.closing.borrow() {
+                    cut_by_the_close(outcome)
+                } else {
+                    outcome
+                };
                 tell(registration, user, outcome);
             }
         }
@@ -249,6 +254,24 @@ impl App {
                 None
             }
         }
+    }
+}
+
+/// `outcome`, a delivery's that ended once the kit's close began: one that
+/// failed or was cancelled as it came; one that ran to its end with no
+/// error as cut, since the close cuts a turn still running at once, with no
+/// reason (RFC §12.10.4), and the answer never came.
+fn cut_by_the_close(outcome: Told) -> Told {
+    match outcome {
+        Ok(mut result)
+            if !result.blocked
+                && result.error.is_none()
+                && result.cancellation_reason.is_none() =>
+        {
+            result.cancellation_reason = Some("kit_closed".to_owned());
+            Ok(result)
+        }
+        outcome => outcome,
     }
 }
 

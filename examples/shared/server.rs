@@ -13,6 +13,7 @@ use std::error::Error;
 use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -91,6 +92,7 @@ pub struct AgentServer {
     address: SocketAddr,
     kit: RoomKit<SqliteStore>,
     stop: watch::Sender<bool>,
+    closing: watch::Sender<bool>,
     serving: JoinHandle<io::Result<()>>,
     websocket: WebSocketChannel,
     live: Live,
@@ -106,6 +108,9 @@ struct App {
     /// One join at a time, so that a conversation's room is created once.
     joining: Arc<Mutex<()>>,
     stopping: watch::Receiver<bool>,
+    /// Whether the stop began the kit's close, which cuts the turns still
+    /// running.
+    closing: watch::Receiver<bool>,
     live: Live,
     patience: Patience,
     /// How many past events a connection is sent as it opens.
@@ -188,6 +193,7 @@ impl AgentServer {
         kit.register_channel(agent)?;
 
         let (stop, stopping) = watch::channel(false);
+        let (closing, closed) = watch::channel(false);
         let live = Live::new();
         let app = App {
             kit: kit.clone(),
@@ -195,6 +201,7 @@ impl AgentServer {
             agent: agent_id,
             joining: Arc::default(),
             stopping: stopping.clone(),
+            closing: closed,
             live: live.clone(),
             patience,
             history: site.history,
@@ -209,6 +216,7 @@ impl AgentServer {
             address,
             kit,
             stop,
+            closing,
             serving,
             websocket,
             live,
@@ -239,9 +247,11 @@ impl AgentServer {
 
     /// Stops the server: it accepts no more connections and closes the
     /// ones open, which get the grace of its patience to end. The kit is
-    /// then closed (`RoomKit::close`): what still runs drains for up to 5
-    /// seconds, then is cut, and the file is closed once the last
-    /// connection let go of it.
+    /// then closed (`RoomKit::close`): a turn still running is cut at once,
+    /// what else still runs drains for up to 5 seconds, then is cut, and
+    /// the connections still open get the grace once more, to tell their
+    /// clients whose answer the close cut and close; the file is closed
+    /// once the last connection let go of it.
     ///
     /// # Errors
     ///
@@ -250,25 +260,42 @@ impl AgentServer {
         let Self {
             kit,
             stop,
+            closing,
             mut serving,
             live,
             patience,
             ..
         } = self;
         stop.send_replace(true);
-        let ended = async {
-            let served = (&mut serving).await;
-            live.down_to(0).await;
-            served
+        let ended = {
+            let mut ending = pin!(served(&mut serving, &live));
+            let mut ended = tokio::time::timeout(patience.grace, &mut ending).await;
+            closing.send_replace(true);
+            kit.close().await?;
+            if ended.is_err() {
+                // The close ended what held the connections: they tell
+                // their clients and close.
+                ended = tokio::time::timeout(patience.grace, &mut ending).await;
+            }
+            ended
         };
-        let ended = tokio::time::timeout(patience.grace, ended).await;
-        kit.close().await?;
         let Ok(served) = ended else {
             serving.abort();
             return Err("the server's work outlived its grace".into());
         };
         Ok(served??)
     }
+}
+
+/// What `serving` came to once it ended and the connections `live` counts
+/// ended too.
+async fn served(
+    serving: &mut JoinHandle<io::Result<()>>,
+    live: &Live,
+) -> Result<io::Result<()>, tokio::task::JoinError> {
+    let served = serving.await;
+    live.down_to(0).await;
+    served
 }
 
 /// Serves `router` on `listener` until `stopping` says to stop, then waits
