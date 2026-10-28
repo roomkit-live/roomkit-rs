@@ -159,5 +159,6 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "an instruction addressed to no agent is refused instruction_unaddressed",
         unaddressed.blocked && unaddressed.reason.as_deref() == Some("instruction_unaddressed"),
     );
+    kit.close().await;
     Ok(checks.finish())
 }

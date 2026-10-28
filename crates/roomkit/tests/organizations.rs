@@ -361,12 +361,15 @@ async fn another_organizations_room_is_not_found() {
             .iter()
             .map(|(name, _)| (*name, python(name)))
             .collect();
+        // The event update_event and delete_event named, as it was stored.
+        let kept = kit.store().get_event(&committed.id).await.unwrap();
         assert_eq!(
-            (called, as_stored(&kit).await),
+            (called, as_stored(&kit).await, kept),
             (
                 expected,
                 // The attach's record and the one record the test commits.
-                (RoomStatus::Active, 2, vec![("sms".to_owned(), false)])
+                (RoomStatus::Active, 2, vec![("sms".to_owned(), false)]),
+                Some(committed)
             ),
             "a room of {owner:?}"
         );
@@ -481,8 +484,41 @@ async fn an_organization_s_calls_reach_its_own_rooms() {
         ..Default::default()
     };
     let timeline = kit.get_timeline(&room_id(), read).await.unwrap();
+    let bindings = kit
+        .list_bindings(
+            &room_id(),
+            ListBindingsOptions {
+                organization_id: bank(),
+            },
+        )
+        .await
+        .map(|bindings| bindings.len());
+    let members = kit
+        .list_members(
+            &room_id(),
+            ListMembersOptions {
+                organization_id: bank(),
+                ..ListMembersOptions::default()
+            },
+        )
+        .await
+        .map(|members| members.len());
+    let binding = kit
+        .get_binding(
+            &room_id(),
+            &channel("ws"),
+            GetBindingOptions {
+                organization_id: bank(),
+            },
+        )
+        .await
+        .map(|binding| binding.channel_id);
     assert_eq!(
-        (as_stored(&kit).await, timeline.len()),
+        (
+            as_stored(&kit).await,
+            timeline.len(),
+            (bindings, members, binding)
+        ),
         // Three lifecycle records and the record; the pause writes none.
         (
             (
@@ -490,7 +526,8 @@ async fn an_organization_s_calls_reach_its_own_rooms() {
                 4,
                 vec![("sms".to_owned(), true), ("ws".to_owned(), false)]
             ),
-            4
+            4,
+            (Ok(2), Ok(0), Ok(channel("ws")))
         )
     );
 }
