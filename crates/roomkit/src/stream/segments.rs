@@ -7,12 +7,19 @@
 //! the turn wrote, which is updated once the response is over. A response
 //! its reader stopped once it began ends `cancelled`, its text kept and
 //! marked so; a call it opened and did not end gets its end, `failed`.
+//!
+//! Every row of the response carries the turn's own `correlation_id`, a
+//! fresh one per response, as the Python implementation stamps a streamed
+//! response (`uuid4().hex`), whatever the event it answers carries: what
+//! the response's rows have in common, which a later turn's history pairs
+//! a call's start and end by (RFC §6.4).
 
 use roomkit_core::model::{
     EventContent, EventId, EventSource, EventType, Metadata, RoomEvent, ToolCallContent,
     ToolCallOutcome, ToolCallStatus,
 };
 use serde_json::Value;
+use uuid::Uuid;
 
 /// The record's key that says how the turn ended (RFC §6.4).
 const LOOP_END_REASON: &str = "loop_end_reason";
@@ -35,6 +42,8 @@ pub(super) struct Segments {
     /// The event the response answers, whose id, room and instant the
     /// drafts carry until the pipeline stamps them.
     answers: RoomEvent,
+    /// The response's own id, which each of its rows carries.
+    correlation_id: String,
     /// The text of the segment the reader is reading.
     text: String,
     /// The turn's record, once its end was read.
@@ -55,6 +64,7 @@ impl Segments {
         Self {
             source,
             answers,
+            correlation_id: Uuid::new_v4().simple().to_string(),
             text: String::new(),
             record: None,
             owed: false,
@@ -218,18 +228,20 @@ impl Segments {
         Some(row)
     }
 
-    /// A row of `event_type` saying `content`, as the response wrote it:
-    /// the pipeline gives it its id, its depth and its instant, and makes it
-    /// answer the event the response answers.
+    /// A row of `event_type` saying `content`, as the response wrote it,
+    /// with the response's id: the pipeline gives it its id, its depth and
+    /// its instant, and makes it answer the event the response answers.
     fn draft(&self, event_type: EventType, content: EventContent) -> RoomEvent {
-        RoomEvent::new(
+        let mut row = RoomEvent::new(
             self.answers.id.clone(),
             self.answers.room_id.clone(),
             event_type,
             self.source.clone(),
             content,
             self.answers.created_at,
-        )
+        );
+        row.correlation_id = Some(self.correlation_id.clone());
+        row
     }
 }
 

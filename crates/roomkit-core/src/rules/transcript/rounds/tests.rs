@@ -4,7 +4,7 @@
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 
-use super::{KEPT_CHARS, REPLAYED_CALLS, ToolRound, WHOLE_RESULTS, tool_rounds};
+use super::{ToolRound, tool_rounds};
 use crate::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource, EventType,
     RoomEvent, RoomId, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
@@ -14,7 +14,8 @@ use crate::rules::transcript::Role;
 const AGENT: &str = "assistant";
 
 /// A row of `kind` the agent wrote at `index` for the call `id` of
-/// `tool`, in the turn answering `turn`.
+/// `tool`, in the turn `turn`: its `correlation_id`, and the trigger it
+/// answers.
 fn row(kind: EventType, index: u64, id: &str, tool: &str, turn: &str) -> RoomEvent {
     let source = EventSource::new(
         ChannelId::new(AGENT).unwrap(),
@@ -30,7 +31,15 @@ fn row(kind: EventType, index: u64, id: &str, tool: &str, turn: &str) -> RoomEve
         Timestamp::UNIX_EPOCH,
     );
     event.index = index;
+    event.correlation_id = Some(turn.to_owned());
     event.responds_to = Some(EventId::new(turn).unwrap());
+    event
+}
+
+/// `event`, in the turn `turn` answering the trigger `trigger`.
+fn in_turn(mut event: RoomEvent, turn: &str, trigger: &str) -> RoomEvent {
+    event.correlation_id = Some(turn.to_owned());
+    event.responds_to = Some(EventId::new(trigger).unwrap());
     event
 }
 
@@ -173,11 +182,7 @@ fn calls_started_together_are_one_round_and_turns_their_own() {
         third,
         third_end,
     ];
-    let mut reused = served(7, "c1", "d");
-    for row in &mut reused {
-        row.responds_to = Some(EventId::new("t2").unwrap());
-    }
-    rows.extend(reused);
+    rows.extend(served(7, "c1", "d").map(|row| in_turn(row, "t2", "t2")));
     let rounds = rounds(&rows);
     assert_eq!(ids(&rounds), [vec!["c1", "c2"], vec!["c3"], vec!["c1_7"]]);
     assert_eq!(
@@ -188,17 +193,22 @@ fn calls_started_together_are_one_round_and_turns_their_own() {
 }
 
 /// The last 8 calls are replayed, the 3 most recent with their result
-/// whole, the older ones as a preview that says the rest is not shown.
+/// whole, the older ones as a preview that says the rest is not shown: the
+/// reference implementation's bounds, written as numbers.
 #[test]
 fn the_last_calls_are_replayed_the_most_recent_whole() {
     let long = "x".repeat(200);
-    let rows: Vec<RoomEvent> = (0..REPLAYED_CALLS + 2)
-        .flat_map(|n| served(2 * u64::try_from(n).unwrap() + 1, &format!("c{n}"), &long))
+    let rows: Vec<RoomEvent> = (0..10)
+        .flat_map(|n| served(2 * n + 1, &format!("c{n}"), &long))
         .collect();
-    let results = results(&rounds(&rows));
-    assert_eq!(results.len(), REPLAYED_CALLS);
-    let (older, recent) = results.split_at(REPLAYED_CALLS - WHOLE_RESULTS);
-    assert_eq!(recent, vec![long; WHOLE_RESULTS]);
+    let replayed = rounds(&rows);
+    assert_eq!(
+        ids(&replayed).concat(),
+        ["c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"]
+    );
+    let results = results(&replayed);
+    let (older, recent) = results.split_at(5);
+    assert_eq!(recent, vec![long; 3]);
     let preview = format!(
         "{}… [the rest is not shown here: call the tool again for it]",
         "x".repeat(120)
@@ -211,27 +221,89 @@ fn the_last_calls_are_replayed_the_most_recent_whole() {
 #[test]
 fn a_preview_reads_its_result_on_one_line() {
     let mut rows: Vec<RoomEvent> = served(1, "c0", "Order 42:\n  shipped\tMonday\u{1f}").into();
-    for n in 1..=WHOLE_RESULTS {
-        let index = 2 * u64::try_from(n).unwrap() + 1;
-        rows.extend(served(index, &format!("c{n}"), "ok"));
+    for n in 1..=3 {
+        rows.extend(served(2 * n + 1, &format!("c{n}"), "ok"));
     }
     assert_eq!(results(&rounds(&rows))[0], "Order 42: shipped Monday");
 }
 
+/// A recent result over 6,000 characters is cut there, saying how long it
+/// is; one of 6,000 is whole. The characters are Unicode's, not bytes.
 #[test]
 fn a_long_result_is_cut_at_the_kept_size_and_says_so() {
-    let result = "y".repeat(KEPT_CHARS + 500);
+    let result = "é".repeat(6500);
     let [shown] = results(&rounds(&served(1, "c1", &result)))
         .try_into()
         .unwrap();
     assert_eq!(
         shown,
         format!(
-            "{}\n[first {KEPT_CHARS} of {} characters; the rest is not shown here: call the \
-             tool again for it]",
-            "y".repeat(KEPT_CHARS),
-            KEPT_CHARS + 500
+            "{}\n[first 6000 of 6500 characters; the rest is not shown here: call the tool \
+             again for it]",
+            "é".repeat(6000)
         )
+    );
+    let exact = "é".repeat(6000);
+    assert_eq!(results(&rounds(&served(1, "c1", &exact))), [exact]);
+}
+
+/// Two turns overlap, the model reusing its id: each end pairs with the
+/// start of its own turn, its `correlation_id`, whether they answer one
+/// trigger or two, as the reference implementation pairs them (review
+/// probe `py_turn_key.out`).
+#[test]
+fn overlapping_turns_pair_each_end_with_the_start_of_its_own_turn() {
+    for (first, second) in [("t1", "t1"), ("t1", "t2")] {
+        let ended = |index, turn, trigger, answer: &str| {
+            let served = end(index, "c1", json!(answer), Some(ToolCallOutcome::Served));
+            in_turn(served, turn, trigger)
+        };
+        let rows = [
+            in_turn(start(1, "c1"), "A", first),
+            in_turn(start(2, "c1"), "B", second),
+            ended(3, "A", first, "A's"),
+            ended(4, "B", second, "B's"),
+        ];
+        let replayed = rounds(&rows);
+        assert_eq!(
+            ids(&replayed),
+            [vec!["c1"], vec!["c1_2"]],
+            "{first}, {second}"
+        );
+        assert_eq!(results(&replayed), ["A's", "B's"], "{first}, {second}");
+    }
+}
+
+/// A deleted start row ends the round it stood in, its call left out, as
+/// the reference implementation's withheld row does (probe
+/// `py_deleted_start.out`).
+#[test]
+fn a_deleted_start_row_ends_its_round() {
+    let mut deleted = start(2, "c2");
+    deleted
+        .metadata
+        .insert("deleted".to_owned(), Value::Bool(true));
+    let answered = |index, id: &str| {
+        end(
+            index,
+            id,
+            json!(format!("{id}'s")),
+            Some(ToolCallOutcome::Served),
+        )
+    };
+    let rows = [
+        start(1, "c1"),
+        deleted,
+        start(3, "c3"),
+        answered(4, "c1"),
+        answered(5, "c2"),
+        answered(6, "c3"),
+    ];
+    let replayed = rounds(&rows);
+    assert_eq!(ids(&replayed), [vec!["c1"], vec!["c3"]]);
+    assert_eq!(
+        replayed.iter().map(|round| round.index).collect::<Vec<_>>(),
+        [1, 3]
     );
 }
 

@@ -19,14 +19,15 @@
 //! implementation bounds them: the last 8 calls, the 3 most recent with
 //! their result whole up to 6,000 characters, the older ones a preview.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
 use super::Message;
 use crate::model::{
-    ChannelId, EventContent, EventDirection, EventId, EventType, RoomEvent, ToolCall,
-    ToolCallContent, ToolCallOutcome,
+    ChannelId, EventContent, EventDirection, EventType, RoomEvent, ToolCall, ToolCallContent,
+    ToolCallOutcome,
 };
 use crate::rules::edits::is_deleted;
 
@@ -113,11 +114,13 @@ type Chosen<'a> = BTreeMap<(usize, usize), (&'a str, bool)>;
 
 /// `channel_id`'s tool rows among `events`, with their content: rows it
 /// wrote (outbound; one that entered the room inbound under its id is no
-/// call it made), none deleted, as from any history (RFC §7.5 rule 8).
+/// call it made). A deleted one keeps its place with its content withheld,
+/// as from any history (RFC §7.5 rule 8): it ends a round, as the
+/// reference implementation's withheld row does.
 fn own_rows<'a>(
     events: &'a [RoomEvent],
     channel_id: &'a ChannelId,
-) -> impl Iterator<Item = (&'a RoomEvent, &'a ToolCallContent)> {
+) -> impl Iterator<Item = (&'a RoomEvent, Option<&'a ToolCallContent>)> {
     events.iter().filter_map(move |event| {
         let EventContent::ToolCall(row) = &event.content else {
             return None;
@@ -128,23 +131,29 @@ fn own_rows<'a>(
         );
         let own = &event.source.channel_id == channel_id
             && event.source.direction == EventDirection::Outbound;
-        (is_tool_row && own && !is_deleted(event)).then_some((event, row))
+        (is_tool_row && own).then_some((event, (!is_deleted(event)).then_some(row)))
     })
 }
 
 /// The calls `rows` hold, round by round: a round is a run of start rows
 /// of one turn, each call completed by the end row of the same turn and
-/// id. A turn's rows all answer its trigger (`responds_to`): a provider
-/// may reuse an id from one turn to the next.
+/// id. A turn's rows all carry its `correlation_id`, as the reference
+/// implementation pairs them: a provider may reuse an id from one turn to
+/// the next, and two turns of a room may run at once. A row whose content
+/// is withheld ends the round it stands in, and pairs with nothing.
 fn rounds<'a>(
-    rows: impl Iterator<Item = (&'a RoomEvent, &'a ToolCallContent)>,
+    rows: impl Iterator<Item = (&'a RoomEvent, Option<&'a ToolCallContent>)>,
 ) -> Vec<Vec<Call<'a>>> {
     let mut rounds: Vec<Vec<Call<'a>>> = Vec::new();
-    let mut started: BTreeMap<(Option<&'a EventId>, &'a str), (usize, usize)> = BTreeMap::new();
-    let mut last_turn: Option<&EventId> = None;
+    let mut started: BTreeMap<(Option<&'a str>, &'a str), (usize, usize)> = BTreeMap::new();
+    let mut last_turn: Option<&str> = None;
     let mut opened = false;
     for (event, row) in rows {
-        let turn = event.responds_to.as_ref();
+        let Some(row) = row else {
+            opened = false;
+            continue;
+        };
+        let turn = event.correlation_id.as_deref();
         let key = (turn, row.tool_id.as_str());
         if event.event_type == EventType::ToolCallStart {
             if !opened || turn != last_turn {
@@ -240,63 +249,71 @@ fn replayed_round(round: usize, calls: &[Call<'_>], chosen: &Chosen<'_>) -> Opti
     messages.extend(shown.iter().map(|(call, id, whole)| {
         let result = call
             .end
-            .map(|end| result_text(&end.result))
-            .unwrap_or_default();
+            .map_or(Cow::Borrowed(""), |end| result_text(&end.result));
         Message::tool_result(*id, shown_result(&result, *whole))
     }));
     Some(ToolRound { index, messages })
 }
 
-/// A stored result's text: a list of parts read as its texts joined, a
-/// part other than text named; `null` reads as nothing.
-fn result_text(result: &Value) -> String {
+/// A stored result's text, borrowed when the row holds it as text: a list
+/// of parts read as its texts joined, a part other than text named; `null`
+/// reads as nothing; another value as its JSON.
+fn result_text(result: &Value) -> Cow<'_, str> {
     match result {
-        Value::String(text) => text.clone(),
-        Value::Null => String::new(),
-        Value::Array(parts) => parts
-            .iter()
-            .map(|part| {
-                part.get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or(NON_TEXT_PART)
-            })
-            .collect::<Vec<_>>()
-            .join(" "),
-        Value::Bool(_) | Value::Number(_) | Value::Object(_) => result.to_string(),
+        Value::String(text) => Cow::Borrowed(text),
+        Value::Null => Cow::Borrowed(""),
+        Value::Array(parts) => Cow::Owned(
+            parts
+                .iter()
+                .map(|part| {
+                    part.get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or(NON_TEXT_PART)
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        Value::Bool(_) | Value::Number(_) | Value::Object(_) => Cow::Owned(result.to_string()),
     }
 }
 
 /// What a replayed result reads as: whole up to [`KEPT_CHARS`] for one of
-/// the most recent, cut there saying so; an older one's preview, its
-/// spacing collapsed, cut at [`PREVIEW_CHARS`] saying so.
+/// the most recent, cut there saying so and how long it is; an older one's
+/// preview.
 fn shown_result(text: &str, whole: bool) -> String {
     if !whole {
-        let flat = text
-            .split(is_python_space)
-            .filter(|word| !word.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-        if flat.chars().count() <= PREVIEW_CHARS {
-            return flat;
-        }
-        return format!("{}… [{NOT_SHOWN}]", head(&flat, PREVIEW_CHARS));
+        return preview(text);
     }
-    let length = text.chars().count();
-    if length <= KEPT_CHARS {
+    let Some((cut, _)) = text.char_indices().nth(KEPT_CHARS) else {
         return text.to_owned();
-    }
-    format!(
-        "{}\n[first {KEPT_CHARS} of {length} characters; {NOT_SHOWN}]",
-        head(text, KEPT_CHARS)
-    )
+    };
+    let (kept, rest) = text.split_at(cut);
+    let length = KEPT_CHARS + rest.chars().count();
+    format!("{kept}\n[first {KEPT_CHARS} of {length} characters; {NOT_SHOWN}]")
 }
 
-/// The first `count` characters of `text`.
-fn head(text: &str, count: usize) -> &str {
-    text.char_indices()
-        .nth(count)
-        .and_then(|(at, _)| text.get(..at))
-        .unwrap_or(text)
+/// An older result's preview, read no further than it shows: its words on
+/// one line, one space between two (the reference implementation's
+/// `" ".join(text.split())`), cut at [`PREVIEW_CHARS`] saying so.
+fn preview(text: &str) -> String {
+    let mut flat = String::new();
+    let mut taken = 0;
+    let mut spaced = false;
+    for c in text.chars() {
+        if is_python_space(c) {
+            spaced = !flat.is_empty();
+            continue;
+        }
+        for c in spaced.then_some(' ').into_iter().chain([c]) {
+            if taken == PREVIEW_CHARS {
+                return format!("{flat}… [{NOT_SHOWN}]");
+            }
+            flat.push(c);
+            taken += 1;
+        }
+        spaced = false;
+    }
+    flat
 }
 
 /// Whether `c` separates words as the reference implementation's preview

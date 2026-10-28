@@ -7,9 +7,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
-use roomkit::ToolVerdict;
-use roomkit::model::Metadata;
+use roomkit::model::{EventType, HookResult, Metadata};
 use roomkit::transcript::{Message, Role};
+use roomkit::{HookExecution, HookSpec, HookTrigger, ToolVerdict};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, Done, ProviderResponse, ProviderStream, ProviderToolCall,
@@ -191,5 +191,104 @@ async fn a_hook_s_rewrite_is_what_is_replayed() {
             vec!["as the hook rewrote it".to_owned()],
             vec!["as the hook rewrote it".to_owned()]
         ]
+    );
+}
+
+/// The Python implementation's stamps (probe `py_turn_correlation.out`): every
+/// row of a turn carries the turn's own `correlation_id`, 32 lowercase
+/// hexadecimal digits, a fresh one per turn, never the one its trigger
+/// carries, which the integrator set.
+#[tokio::test]
+async fn every_row_of_a_turn_carries_the_turn_s_own_correlation_id() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling(
+            "Let me check.",
+            [("c1", "lookup_order", r#"{"order": "1"}"#)],
+        ),
+        ScriptedRound::answering("One."),
+        ScriptedRound::calling("", [("c1", "lookup_order", r#"{"order": "2"}"#)]),
+        ScriptedRound::answering("Two."),
+    ]);
+    let room = Room::new(model, served()).await;
+    let spec = HookSpec::new(
+        "reference",
+        HookTrigger::BeforeBroadcast,
+        HookExecution::Sync,
+    );
+    room.kit
+        .hook(spec, |mut event, _context| async move {
+            if event.source.channel_id != channel("sms") {
+                return Ok(HookResult::allow());
+            }
+            event.correlation_id = Some("integrator-ref".to_owned());
+            Ok(HookResult::modify(event))
+        })
+        .unwrap();
+    room.says("first").await;
+    room.says("second").await;
+    room.kit.close().await;
+    let timeline = room.timeline().await;
+    let triggers: Vec<_> = timeline
+        .iter()
+        .filter(|event| event.source.channel_id == channel("sms"))
+        .collect();
+    let turns: Vec<Vec<Option<String>>> = triggers
+        .iter()
+        .map(|trigger| {
+            timeline
+                .iter()
+                .filter(|row| row.responds_to.as_ref() == Some(&trigger.id))
+                .map(|row| row.correlation_id.clone())
+                .collect()
+        })
+        .collect();
+    let kinds = |trigger: usize| {
+        timeline
+            .iter()
+            .filter(|row| row.responds_to.as_ref() == Some(&triggers[trigger].id))
+            .map(|row| row.event_type)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        (kinds(0), kinds(1)),
+        (
+            vec![
+                EventType::Message,
+                EventType::ToolCallStart,
+                EventType::ToolCallEnd,
+                EventType::Message
+            ],
+            vec![
+                EventType::ToolCallStart,
+                EventType::ToolCallEnd,
+                EventType::Message
+            ]
+        )
+    );
+    let own: Vec<&str> = turns
+        .iter()
+        .map(|rows| {
+            let first = rows[0].as_deref().unwrap();
+            assert!(
+                rows.iter().all(|row| row.as_deref() == Some(first)),
+                "{rows:?}"
+            );
+            first
+        })
+        .collect();
+    assert!(
+        own.iter().all(|id| id.len() == 32
+            && id
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))),
+        "{own:?}"
+    );
+    assert_ne!(own[0], own[1]);
+    assert_eq!(
+        triggers
+            .iter()
+            .map(|trigger| trigger.correlation_id.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("integrator-ref"); 2]
     );
 }
