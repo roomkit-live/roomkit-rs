@@ -151,13 +151,17 @@ kit, its construction and its calls).
   its lanes are done; the turns still running once the lanes are idle are
   cut then, not at the grace, as Python's `turns.close` follows its
   `lanes.aclose`: what a turn sent is stored, its delivery dropped, the
-  call reading `kit_closed`, and a turn that said nothing fails the turn
-  link's `executor_lost`, its stream ended in its middle. An agent writing
-  then running a tool of 30 s, closed from outside, closes at 0.1 s, where
-  it closed at 5.1 s; one asked once a delivery of 1 s ended, at 1 s. A
-  call aborted once its own delivery was over reads no reason, as
+  call reading `kit_closed`, and a turn that said nothing, still open,
+  fails the turn link's `backend_closed`. Once cut, a turn's streaming
+  target that does not read on is cut with it, as Python cancels its
+  readers, and the text it was handed is stored, marked `cancelled`: a
+  stalled target held the close 15 s or more, storing nothing. An agent
+  writing then running a tool of 30 s, closed from outside, closes at 0.1
+  s, where it closed at 5.1 s; one asked once a delivery of 1 s ended, at
+  1 s. A call aborted once its own delivery was over reads no reason, as
   Python's, where it read `lane_cancelled`, but `kit_closed` when a commit
-  of its cascade still ran, its event stored and never delivered.
+  of its cascade, of an event to deliver, still ran, its event stored and
+  never delivered.
   The close's warning counts the writes whose store call still runs.
 - A task the kit's work spawns, that calls the kit and waits on its own
   room, is spawned with `keep_context`, the Rust form of Python's
