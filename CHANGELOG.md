@@ -71,8 +71,9 @@ kit, its construction and its calls).
   rather than an error for one it does not; `unregister_channel` hands the
   channel back, not closed, for its caller to close
   (`Option<Arc<dyn RegisteredChannel>>`, `None` for an unknown channel), as
-  Python's; `attach_channel` reads the room before the channel's
-  registration; `get_timeline` reads the room before it checks the query, a
+  Python's; `attach_channel` refuses in Python's order: the visibility
+  `internal`, then the room, then the channel's registration, then a host
+  channel bound as an intelligence one; `get_timeline` reads the room before it checks the query, a
   missing room `RoomNotFound` whatever the query.
 - `RoomOptions`, `BindingOptions`, `BindingUpdate` and `Post` leave
   `roomkit::model`.
@@ -89,10 +90,16 @@ kit, its construction and its calls).
   their deliveries, turns and the observers their deliveries fire, get up
   to 5 seconds to end, one ending then reporting its result; the turns
   still running are cut and the rest of the work aborted, its callers
-  receiving their result (`lane_cancelled` or `kit_closed`) rather than
-  `ShutDown`; the other observers finish within their hook's timeout; the
-  channels close once; the store's writes run to their end, and the close
-  waits for them.
+  receiving their result (`lane_cancelled` or `kit_closed`, the first
+  reason standing) rather than `ShutDown`; the other observers finish
+  within their hook's timeout; the channels close once. The store's writes
+  are never aborted: the close waits for them on one deadline, 5 s from its
+  start, as Python's `CLOSE_WAIT_S`, then leaves a write still running to
+  end on its own; a caller whose own commit outlived its run reads what the
+  write came to, its event `kit_closed`.
+- A task the kit's work spawns, that calls the kit and waits on its own
+  room, is spawned with `keep_context`, the Rust form of Python's
+  `create_task` copying its context; spawned plainly, it blocks.
 - A channel's output and a stream target's `metadata_updates` refuse the
   keys of the room's private state too (`author_register`,
   `_speak_queue_results`), as Python's writers do: a channel could forge

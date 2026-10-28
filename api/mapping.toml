@@ -221,7 +221,7 @@ reason = "channel_of: Callable[[str], Channel | None]; a trait with async method
 [[exception]]
 rust = "roomkit::RegisteredChannel"
 approved = "2026-10-27"
-reason = "what ChannelOf returns: a registered channel's synchronous members, as an object, since a trait with async methods is not object-safe"
+reason = "what ChannelOf, get_channel and unregister_channel return: a registered channel's synchronous members and its close(), as an object, since a trait with async methods is not object-safe"
 
 [[exception]]
 rust = "roomkit::testing::Environment"
