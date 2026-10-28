@@ -3,16 +3,20 @@
 //! whose work in that room it runs within (RFC §13.5, §10.1 step 18), run
 //! apart otherwise.
 
+use std::sync::Arc;
+
 use roomkit_core::model::{ChannelId, DirectEvent, EventContent, RoomEvent, RoomId};
 use roomkit_core::ops::{CommitRecord, Entry, Inbound, InboundError, InboundResult, InboundTarget};
 use tokio::task::JoinHandle;
 
 use super::RoomKit;
 use super::options::{CommitEventOptions, SendEventOptions};
-use crate::context::{self, Adopting, ExecutionContext};
-use crate::driver::{self, InboundOutput};
+use crate::context::{self, Adopting, Completion, ExecutionContext};
+use crate::driver::{self, InboundOutput, Ran, Record};
 use crate::error::KitError;
+use crate::inbound::DeliveryHandle;
 use crate::store::{ConversationStore, StoreError};
+use crate::tasks::Tasks;
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Injects an event of `content` from the registered channel
@@ -160,7 +164,12 @@ impl<S: ConversationStore> RoomKit<S> {
         let room_id = entry.room_id().clone();
         self.reached_from_its_work(&entry).await?;
         let entry = match context::adopt(entry).await {
-            Adopting::Settled(result) => return Ok(Entered::settled((*result)?)),
+            Adopting::Settled(result, completion) => {
+                return Ok(Entered {
+                    result: (*result)?,
+                    following: Following::Adopted(completion),
+                });
+            }
             // A run the kit's shutdown ended abandons the calls it adopted:
             // their callers are told the kit is shut down.
             Adopting::Abandoned => {
@@ -172,10 +181,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let room_id = entry.room_id().clone();
         let operation = self.operation(entry)?;
         let ran = driver::run_inbound(&self.inner, call, Some(&room_id), operation, defer).await;
-        Ok(Entered {
-            result: ran.output??,
-            run: ran.delivery,
-        })
+        Entered::ran(ran)
     }
 
     /// Checks that the organization `entry` names reaches its room when the
@@ -238,18 +244,54 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 }
 
-/// What a call into a named room comes to: its result, and the run of a
-/// call deferred at its decision, going on.
+/// What a call into a room comes to: its result, and what follows a call
+/// answered at its decision.
 #[derive(Debug)]
 pub(super) struct Entered {
     pub(super) result: InboundResult,
-    pub(super) run: Option<JoinHandle<InboundOutput>>,
+    pub(super) following: Following,
+}
+
+/// What follows a call answered at its decision.
+#[derive(Debug)]
+pub(super) enum Following {
+    /// Its run, going on, with its record.
+    Run(JoinHandle<InboundOutput>, Arc<Record>),
+    /// The end of the delivery set of the call the room's work adopted.
+    Adopted(Completion),
+    /// Nothing: the call ended.
+    Nothing,
 }
 
 impl Entered {
-    /// The result of a call that ended, adopted or run to its end.
-    fn settled(result: InboundResult) -> Self {
-        Self { result, run: None }
+    /// What a run apart came to.
+    pub(super) fn ran(ran: Ran) -> Result<Self, KitError> {
+        let following = match ran.delivery {
+            Some((run, record)) => Following::Run(run, record),
+            None => Following::Nothing,
+        };
+        Ok(Self {
+            result: ran.output??,
+            following,
+        })
+    }
+
+    /// The result of a call that entered so, deferred when `defer`: with
+    /// its completion handle, but for a call refused before the locked
+    /// region, which has no deferred tail (RFC §10.1 step 18).
+    pub(super) fn into_result(self, defer: bool, tasks: &Arc<Tasks>) -> crate::InboundResult {
+        let Self { result, following } = self;
+        if !defer || result.refused_before_the_lock {
+            return result.into();
+        }
+        let decided = result.clone();
+        let tasks = Arc::clone(tasks);
+        let handle = match following {
+            Following::Run(run, record) => DeliveryHandle::of_run(decided, run, record, tasks),
+            Following::Adopted(completion) => DeliveryHandle::adopted(decided, completion, tasks),
+            Following::Nothing => DeliveryHandle::over(decided, tasks),
+        };
+        crate::InboundResult::of(result, Some(handle))
     }
 }
 

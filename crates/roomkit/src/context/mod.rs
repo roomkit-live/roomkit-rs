@@ -85,7 +85,7 @@ use roomkit_core::model::{ChannelCategory, RoomId};
 use roomkit_core::ops::{ChannelRequest, Effect, EffectId, Request};
 use roomkit_core::rules::chain_depth::{self, Draw, ReentryBudget};
 
-pub(crate) use self::adoption::{Adopting, Adoption, Reply, adopt, adopt_by_own_run};
+pub(crate) use self::adoption::{Adopting, Adoption, Completion, Reply, adopt, adopt_by_own_run};
 use self::run::Lease;
 pub(crate) use self::run::RunShared;
 
@@ -372,6 +372,21 @@ impl ExecutionContext {
                 (frame.runs() && frame.work.delivering.as_ref() == Some(room_id))
                     || frame.is_admitted_to(room_id)
             })
+            || self.body_in(room_id).is_some_and(|body| body.detaches)
+    }
+
+    /// Whether a wait in this context on a delivery in `room_id` would wait
+    /// for itself (RFC §10.1 step 18): it holds a live lease on the room's
+    /// lock, a frame whose call still runs delivers in the room, or it runs
+    /// a hook body there whose calls return at their decision. Admission
+    /// work does not: what it adopts delivers ahead of its event (RFC
+    /// §9.5.1).
+    pub(crate) fn waits_for_itself(&self, room_id: &RoomId) -> bool {
+        self.lease(room_id).is_some()
+            || self
+                .frames
+                .iter()
+                .any(|frame| frame.runs() && frame.work.delivering.as_ref() == Some(room_id))
             || self.body_in(room_id).is_some_and(|body| body.detaches)
     }
 

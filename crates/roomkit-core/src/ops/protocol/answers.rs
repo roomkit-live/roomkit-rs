@@ -127,7 +127,10 @@ impl RequestKind {
         match self {
             Self::AcquireLock => matches!(outcome, Outcome::Hold(HoldOutcome::Locked)),
             Self::ReleaseLock => matches!(outcome, Outcome::Hold(HoldOutcome::Released)),
-            Self::EnterLane => matches!(outcome, Outcome::Hold(HoldOutcome::Entered)),
+            Self::EnterLane => matches!(
+                outcome,
+                Outcome::Hold(HoldOutcome::Entered | HoldOutcome::LaneClosed)
+            ),
             Self::AwaitLane => matches!(outcome, Outcome::Hold(HoldOutcome::LaneTurn)),
             Self::LeaveLane => matches!(outcome, Outcome::Hold(HoldOutcome::Left)),
             Self::TakeTicket => matches!(outcome, Outcome::Hold(HoldOutcome::Ticketed)),
@@ -387,6 +390,7 @@ impl Outcome {
                 HoldOutcome::Locked => "Locked",
                 HoldOutcome::Released => "Released",
                 HoldOutcome::Entered => "Entered",
+                HoldOutcome::LaneClosed => "LaneClosed",
                 HoldOutcome::LaneTurn => "LaneTurn",
                 HoldOutcome::Left => "Left",
                 HoldOutcome::Ticketed => "Ticketed",

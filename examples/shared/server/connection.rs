@@ -200,7 +200,7 @@ impl App {
             match received {
                 Some(Ok(Message::Text(text))) => {
                     let said = self.say(registration, room_id, user, text.as_str()).await;
-                    answering.extend(said.map(DeliveryHandle::wait));
+                    answering.extend(said.map(|delivery| async move { delivery.wait().await }));
                 }
                 Some(Ok(Message::Binary(_) | Message::Ping(_) | Message::Pong(_))) => {}
                 Some(Ok(Message::Close(_))) => break Ending::Closed,
@@ -266,6 +266,11 @@ fn tell(registration: &Registration, user: &ParticipantId, outcome: Told) {
             );
             REFUSED
         }
+        // Stored, its delivery cut or dropped by the kit's close.
+        Ok(result) if result.cancellation_reason.is_some() => {
+            println!("  the server stopped before {:?}'s answer", user.as_str());
+            STOPPED
+        }
         Ok(result) => {
             let Some(error) = result.error else {
                 return;
@@ -277,7 +282,7 @@ fn tell(registration: &Registration, user: &ParticipantId, outcome: Told) {
             );
             TURN_FAILED
         }
-        // Stored, its turn cut by the kit's close past its grace.
+        // Refused once the kit is sealed.
         Err(KitError::ShutDown) => {
             println!("  the server stopped before {:?}'s answer", user.as_str());
             STOPPED

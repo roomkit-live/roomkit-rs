@@ -57,12 +57,14 @@ impl Machine {
     /// ticket is released, and the events it committed, an adopted entry's,
     /// are delivered. The pass that held the lock released it already.
     pub(super) fn expire(&mut self, cx: &mut Cx<'_>, locked_event: Option<EventId>) {
+        let before_the_lock = locked_event.is_none();
         self.report_expiry(cx, locked_event);
         // The result as the call left it, an error met already included.
         let refused = InboundResult {
             event: None,
             blocked: true,
             reason: Some(PROCESS_TIMEOUT.to_owned()),
+            refused_before_the_lock: before_the_lock,
             ..std::mem::take(&mut self.trigger.result)
         };
         self.end(cx, Ok(refused));

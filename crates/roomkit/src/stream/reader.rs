@@ -576,7 +576,7 @@ async fn write_record<S: ConversationStore>(
 /// [`ROW_WITHHELD`] withholds the rest of the stream, blocked or refused as
 /// it may be.
 fn settled(adopting: Adopting) -> Settled {
-    let Adopting::Settled(result) = adopting else {
+    let Adopting::Settled(result, _completion) = adopting else {
         return Settled::Nothing;
     };
     let Ok(result) = *result else {

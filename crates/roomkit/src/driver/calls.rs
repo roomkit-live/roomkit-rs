@@ -250,6 +250,33 @@ pub(super) async fn route<S: ConversationStore>(
     }
 }
 
+/// Carries out `request`, a write of the store, as a task of its own the
+/// kit tracks, which the run's abort does not end: a write decided runs to
+/// its end, whatever becomes of its run, and the kit's close waits for it
+/// (RFC §13.6), as the Python implementation waits for its decided writes.
+pub(super) async fn write<S: ConversationStore>(
+    inner: Arc<Inner<S>>,
+    request: StoreRequest,
+) -> Outcome {
+    let writer = Arc::clone(&inner);
+    let writing = async move { store(&*writer.store, request).await };
+    // A write is spawned whatever the kit's state.
+    let Some(writing) = inner.tasks.spawn(Kind::Write, writing) else {
+        return Outcome::Failed(ErrorRecord::new("ShutDown", "the kit is closed"));
+    };
+    writing.await.unwrap_or_else(|failure| {
+        let error_type = if failure.is_panic() {
+            "Panic"
+        } else {
+            "Cancelled"
+        };
+        Outcome::Failed(ErrorRecord::new(
+            error_type,
+            "the store's write did not end",
+        ))
+    })
+}
+
 /// Performs a notice: publishes a framework event, or runs observer hooks in
 /// the background, as tasks the kit tracks, logging what they raise (RFC
 /// §9.3). A background observer runs outside every call's execution
@@ -279,7 +306,15 @@ pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notic
                 };
                 let observing =
                     in_its_work(trigger, &event.room_id, after_delivery.as_ref(), observing);
-                if inner.tasks.spawn(Kind::Observer, observing).is_none() {
+                // The observers a delivery fires are its cascade's work,
+                // drained and cut with it, as the Python implementation's
+                // lane runs them; the others run after the fact.
+                let kind = if trigger == HookTrigger::AfterBroadcast {
+                    Kind::Work
+                } else {
+                    Kind::Observer
+                };
+                if inner.tasks.spawn(kind, observing).is_none() {
                     tracing::debug!(
                         target: "roomkit::hooks",
                         ?trigger,

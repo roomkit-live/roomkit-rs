@@ -1,8 +1,10 @@
 //! The tasks a kit runs in the background, tracked so that the kit can wait
 //! for them and end them (decision 3 of step 2b): the inbound runs (RFC
 //! §10.1), whose caller waits for them or went on, answered at the decision
-//! or gone, with the tasks their turns run, and the observer hooks that run
-//! after the fact (RFC §9.3). The kit's close waits for each kind in turn.
+//! or gone, with the tasks their turns run and the observers their
+//! deliveries fire; the other observer hooks that run after the fact (RFC
+//! §9.3); and the store's writes, which run to their end. The kit's close
+//! waits for each kind in turn.
 //!
 //! A task is tracked from its spawn until its future is dropped: at its end,
 //! aborted, or with the runtime. A task that spawns another one spawns it
@@ -21,9 +23,14 @@ pub(crate) enum Kind {
     /// An inbound run, its deliveries and its turns, or a task a turn runs:
     /// drained first, within the close's grace.
     Work,
-    /// An observer hook running after the fact (RFC §9.3), bounded by its
-    /// hook's timeout: waited for once the work is drained or cut.
+    /// An observer hook running after the fact (RFC §9.3) that no delivery
+    /// fired, bounded by its hook's timeout: waited for once the work is
+    /// drained or cut.
     Observer,
+    /// A write of the store a run asked for: never aborted, so that a write
+    /// decided runs to its end whatever becomes of its run (RFC §13.6), and
+    /// waited for at the close's end.
+    Write,
 }
 
 /// The kit's background tasks.
@@ -37,13 +44,14 @@ pub(crate) struct Tasks {
 
 #[derive(Debug, Default)]
 struct State {
-    /// Whether the kit is closed: no call starts an operation any more,
-    /// while the work under way drains.
+    /// Whether the kit's close began: the work under way drains, and a
+    /// delivery set takes no place in its room's lane any more.
     closed: bool,
     /// Whether the close cut the work under way: a run ending now was ended
     /// by it.
     cut: bool,
-    /// Whether the kit is shut down: no task is spawned any more.
+    /// Whether the kit is sealed, its close past its drain: no call starts
+    /// an operation and no task is spawned any more.
     shut_down: bool,
     /// The key the next task is tracked under.
     next: u64,
@@ -61,7 +69,8 @@ struct Tracked {
 
 impl Tasks {
     /// Runs `future` as a task of `kind` the kit tracks; `None`, nothing
-    /// spawned, once the kit is shut down.
+    /// spawned, once the kit is sealed, but for a write of the store, which
+    /// runs whatever the kit's state.
     pub(crate) fn spawn<F>(self: &Arc<Self>, kind: Kind, future: F) -> Option<JoinHandle<F::Output>>
     where
         F: Future + Send + 'static,
@@ -69,7 +78,7 @@ impl Tasks {
     {
         let key = {
             let mut state = self.state();
-            if state.shut_down {
+            if state.shut_down && kind != Kind::Write {
                 return None;
             }
             let key = state.next;
@@ -94,22 +103,27 @@ impl Tasks {
             }
             state.shut_down
         };
-        if shut_down {
+        if shut_down && kind != Kind::Write {
             task.abort();
         }
         Some(task)
     }
 
-    /// Refuses the calls that would start an operation from now on, the
-    /// tasks running going on, as the kit's close begins; `false` when the
-    /// kit was closed already.
+    /// Begins the kit's close: the tasks running go on, and the calls too,
+    /// until the kit is sealed; `false` when the close began already.
     pub(crate) fn close(&self) -> bool {
         !std::mem::replace(&mut self.state().closed, true)
     }
 
     /// Whether the kit's close began.
-    pub(crate) fn is_closed(&self) -> bool {
+    pub(crate) fn is_closing(&self) -> bool {
         self.state().closed
+    }
+
+    /// Whether the kit is sealed: its close is past its drain, and no call
+    /// starts an operation any more.
+    pub(crate) fn is_sealed(&self) -> bool {
+        self.state().shut_down
     }
 
     /// Marks the work under way cut by the kit's close, once its grace ran
@@ -147,8 +161,24 @@ impl Tasks {
         }
     }
 
-    /// Spawns no task any more, aborts the tasks running, and waits until
-    /// they are gone.
+    /// Aborts the tasks of `kind` running, and waits until they are gone;
+    /// tasks of the kind spawned meanwhile run.
+    pub(crate) async fn abort(&self, kind: Kind) {
+        let running: Vec<AbortHandle> = self
+            .state()
+            .running
+            .values()
+            .filter(|(running, _)| *running == kind)
+            .filter_map(|(_, handle)| handle.clone())
+            .collect();
+        for task in running {
+            task.abort();
+        }
+        self.idle_of_kind(kind).await;
+    }
+
+    /// Seals the kit: spawns no task any more, aborts the tasks running but
+    /// the store's writes, and waits until they are gone.
     pub(crate) async fn shut_down(&self) {
         // A task whose spawn has not returned its handle yet is aborted by
         // its spawn, which finds the kit shut down.
@@ -158,6 +188,7 @@ impl Tasks {
             state
                 .running
                 .values()
+                .filter(|(kind, _)| *kind != Kind::Write)
                 .filter_map(|(_, handle)| handle.clone())
                 .collect()
         };
@@ -165,7 +196,7 @@ impl Tasks {
         for task in running {
             task.abort();
         }
-        self.idle().await;
+        self.idle_of(|kind| kind != Kind::Write).await;
     }
 
     fn state(&self) -> MutexGuard<'_, State> {

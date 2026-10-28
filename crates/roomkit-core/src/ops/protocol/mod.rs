@@ -22,12 +22,12 @@ mod requests;
 mod results;
 
 pub(crate) use answers::RequestKind;
-pub use entries::{Decided, Entry, EntryId, Settled};
+pub use entries::{Decided, Delivered, Entry, EntryId, Settled};
 pub use requests::{
     ChannelOutcome, ChannelRequest, HoldOutcome, HoldRequest, HookAnswer, HookRequest, Outcome,
     Request, StoreOutcome, StoreRequest, StreamTarget,
 };
-pub use results::{InboundError, InboundResult};
+pub use results::{InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED};
 
 use thiserror::Error;
 
@@ -244,6 +244,10 @@ pub struct Step<T> {
     /// The adopted entries decided since the last poll, whose callers the
     /// driver answers now (RFC §10.1 step 18).
     pub settled: Vec<Settled>,
+    /// The adopted entries whose delivery set ran since the last poll,
+    /// whose callers' completion handles the driver resolves now (RFC
+    /// §10.1 step 18).
+    pub delivered: Vec<Delivered>,
     /// An inbound call's decision, published once, on the poll that knows
     /// it: what a caller that does not wait for the call's delivery
     /// receives (RFC §10.1 step 18). `None` on every other poll, and for

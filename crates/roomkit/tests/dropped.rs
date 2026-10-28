@@ -405,3 +405,48 @@ fn every_row() -> EventQuery {
         ..EventQuery::default()
     }
 }
+
+/// RFC §13.6, plan step 3: a commit decided for a caller that left runs to
+/// its end when the kit closes, however long it takes: the close waits for
+/// it and never aborts it, and the event is stored, as Python's close
+/// waits for its decided writes (tasks/probes/step5-lot1/fixpass.out P4).
+#[tokio::test(start_paused = true)]
+async fn a_commit_in_flight_when_the_kit_closes_runs_to_its_end() {
+    let (kit, _ws) = gated_room().await;
+    let call = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            let message =
+                InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("Slow"));
+            let options = ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            };
+            kit.process_inbound(message, options).await
+        })
+    };
+    tokio::time::timeout(BOUND, kit.store().committing.notified())
+        .await
+        .unwrap();
+    // Its caller leaves; the write goes on for 7 s, past the close's grace.
+    call.abort();
+    let store = Arc::clone(&kit.store().go);
+    let releasing = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(7)).await;
+        store.notify_one();
+    });
+    let started = tokio::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(60), kit.close())
+        .await
+        .unwrap();
+    let took = started.elapsed();
+    releasing.await.unwrap();
+    let stored = kit
+        .store()
+        .list_events(&room_id(), &every_row())
+        .await
+        .unwrap()
+        .iter()
+        .any(|event| roomkit::text_of(&event.content) == "Slow");
+    assert_eq!((took >= Duration::from_secs(7), stored), (true, true));
+}

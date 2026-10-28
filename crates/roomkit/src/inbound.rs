@@ -1,23 +1,24 @@
 //! What an inbound call comes to ([`InboundResult`], RFC §10.1), and, for a
-//! call deferred at its commit, the delivery still running
-//! ([`DeliveryHandle`], RFC §10.1 step 18 detached completion).
+//! call deferred at its commit, its completion handle ([`DeliveryHandle`],
+//! RFC §10.1 step 18 detached completion).
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use roomkit_core::model::{ChannelId, DeliveryResult, ErrorRecord, Metadata, RoomEvent};
-use roomkit_core::ops;
-use tokio::task::JoinHandle;
+use roomkit_core::ops::{self, KIT_CLOSED};
+use tokio::sync::{Mutex, OnceCell};
+use tokio::task::{AbortHandle, JoinHandle};
 
-use crate::context::ExecutionContext;
-use crate::driver::{self, InboundOutput};
+use crate::context::{Completion, ExecutionContext};
+use crate::driver::{self, InboundOutput, Record};
 use crate::error::KitError;
 use crate::tasks::Tasks;
 
 /// What became of an inbound message (RFC §10.1 `InboundResult`), as the
 /// Python implementation's `InboundResult` reports it.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct InboundResult {
     /// The committed event: delivered, or the record stored `BLOCKED` when a
     /// hook or the source's permissions refused it (gap G-026). `None` when
@@ -40,14 +41,23 @@ pub struct InboundResult {
     /// later commit's, or the room lock's release (gap G-025). What was
     /// decided stands (RFC §13.6).
     pub error: Option<ErrorRecord>,
+    /// Why the call's delivery was cancelled, the event it committed
+    /// standing: `kit_closed` for a delivery the kit's close dropped before
+    /// it ran, `lane_cancelled` for one it cut running, as the Python
+    /// implementation's `cancellation_reason` reads; `None` for a delivery
+    /// that ran.
+    pub cancellation_reason: Option<String>,
     /// The merged response metadata of the turns the message asked for.
     pub response_metadata: Metadata,
-    /// The deliveries of the event to its transport channels; empty on a
-    /// deferred call's result until its [`DeliveryHandle::wait`].
+    /// The deliveries of the event to its transport channels. A deferred
+    /// call's result returned at its commit holds none, unless its delivery
+    /// ran meanwhile; its [`DeliveryHandle::wait`] reports them.
     pub delivery_results: BTreeMap<ChannelId, DeliveryResult>,
-    /// For a call made with `defer_delivery`, what remains of it once its
-    /// commit returned: its delivery set, the passes it spawns and their
-    /// turns, in the room's lane (RFC §10.1 step 18).
+    /// For a call made with `defer_delivery`, its completion handle: what
+    /// remains of it once its commit returned, its delivery set, the passes
+    /// it spawns and their turns, in the room's lane (RFC §10.1 step 18).
+    /// `None` on the waiting path, and for a deferred call refused before
+    /// the locked region, which has no deferred tail.
     pub delivery: Option<DeliveryHandle>,
 }
 
@@ -61,12 +71,15 @@ impl InboundResult {
             error,
             response_metadata,
             delivery_results,
+            cancellation_reason,
+            refused_before_the_lock: _,
         } = result;
         Self {
             event,
             blocked,
             reason,
             error,
+            cancellation_reason,
             response_metadata,
             delivery_results,
             delivery,
@@ -80,76 +93,218 @@ impl From<ops::InboundResult> for InboundResult {
     }
 }
 
-/// A deferred call's grip on its delivery still running (RFC §10.1 step
-/// 18), the Python implementation's `DeliveryHandle`: the event's delivery
-/// set, the reentry passes it spawns, an agent's answer among them, and
-/// their streamed responses, in the room's lane. Dropping it lets the
+/// A deferred call's completion handle (RFC §10.1 step 18), the Python
+/// implementation's `DeliveryHandle`: what remains of the call once its
+/// commit returned, the event's delivery set, the reentry passes it spawns,
+/// an agent's answer among them, and their streamed responses, in the
+/// room's lane. Cloning it shares it; dropping every clone lets the
 /// delivery run on.
 ///
-/// A call adopted by the room's work that made it, a hook's or a parse's
-/// (RFC §9.5.1 Reentrance), has its delivery run by that work: its handle
-/// is done at once and its wait returns the result unwaited (gap G-082).
+/// A call adopted by the room's admission work that made it, an off-lock
+/// hook's body or a parse (RFC §9.5.1 Reentrance), has its delivery set
+/// run by that work, ahead of the event: a wait from that work, or from
+/// anywhere once it ran, returns with its delivery results.
+#[derive(Clone)]
 pub struct DeliveryHandle {
+    shared: Arc<Shared>,
+}
+
+/// What every clone of a handle shares.
+struct Shared {
     /// The result at the commit, which the call returned.
     decided: ops::InboundResult,
-    /// The call's run, going on past its decision; `None` for a call that
-    /// ended there, adopted by the work it was made from.
-    run: Option<JoinHandle<InboundOutput>>,
+    following: Following,
+    /// What the delivery came to, once a wait saw its end.
+    ended: OnceCell<Ended>,
     tasks: Arc<Tasks>,
 }
 
+/// What a delivery came to, as each wait on it reads it.
+enum Ended {
+    /// The call's result, its delivery over.
+    Over(Box<ops::InboundResult>),
+    /// The run failed past the commit, a defect of this crate: the first
+    /// wait takes the error, the next ones read the result at the commit.
+    Failed(std::sync::Mutex<Option<KitError>>),
+}
+
+/// What a handle waits for.
+enum Following {
+    /// The call's run, going on past its decision, with its record.
+    Run {
+        run: Mutex<Option<JoinHandle<InboundOutput>>>,
+        finished: AbortHandle,
+        record: Arc<Record>,
+    },
+    /// The end of the delivery set of a call the room's work adopted, as
+    /// the adopting run reports it.
+    Adopted(Completion),
+    /// Nothing: the call ended at its decision.
+    Nothing,
+}
+
 impl DeliveryHandle {
-    /// The handle on `run`, the call that returned `decided` at its commit.
-    pub(crate) fn new(
+    /// The handle of the call that returned `decided` at its commit, its
+    /// run going on as `run`.
+    pub(crate) fn of_run(
         decided: ops::InboundResult,
-        run: Option<JoinHandle<InboundOutput>>,
+        run: JoinHandle<InboundOutput>,
+        record: Arc<Record>,
         tasks: Arc<Tasks>,
     ) -> Self {
+        let finished = run.abort_handle();
+        let following = Following::Run {
+            run: Mutex::new(Some(run)),
+            finished,
+            record,
+        };
+        Self::new(decided, following, tasks)
+    }
+
+    /// The handle of the adopted call that returned `decided` at its
+    /// commit, its delivery's end told by `completion`.
+    pub(crate) fn adopted(
+        decided: ops::InboundResult,
+        completion: Completion,
+        tasks: Arc<Tasks>,
+    ) -> Self {
+        Self::new(decided, Following::Adopted(completion), tasks)
+    }
+
+    /// The handle of a call that ended at its decision, `decided`.
+    pub(crate) fn over(decided: ops::InboundResult, tasks: Arc<Tasks>) -> Self {
+        Self::new(decided, Following::Nothing, tasks)
+    }
+
+    fn new(decided: ops::InboundResult, following: Following, tasks: Arc<Tasks>) -> Self {
         Self {
-            decided,
-            run,
-            tasks,
+            shared: Arc::new(Shared {
+                decided,
+                following,
+                ended: OnceCell::new(),
+                tasks,
+            }),
         }
     }
 
     /// Whether the delivery will make no further progress: it ran to its
     /// end, or the kit's close ended it.
     pub fn done(&self) -> bool {
-        self.run.as_ref().is_none_or(JoinHandle::is_finished)
+        let shared = &self.shared;
+        shared.ended.initialized()
+            || match &shared.following {
+                Following::Run { finished, .. } => finished.is_finished(),
+                Following::Adopted(completion) => {
+                    completion.borrow().is_some() || completion.has_changed().is_err()
+                }
+                Following::Nothing => true,
+            }
     }
 
     /// Waits until the delivery is over, then reports the call as one that
-    /// waited for it would have: its `delivery_results`, `error` and
-    /// `response_metadata` filled.
+    /// waited for it would have: its `delivery_results`, `error`,
+    /// `response_metadata` and `cancellation_reason` filled, the handle on
+    /// the result. It may be called again, and from any clone: each reads
+    /// the same end.
     ///
-    /// Called from the room's own work, where a call that waits returns at
-    /// its decision (a delivery or a turn in the room, a hook under its
-    /// lock or in its admission order), it returns the result at once,
-    /// unwaited: the delivery could only wait for this wait (RFC §10.1 step
-    /// 18). It follows in the room's lane.
+    /// Called, the delivery not done, from the room's own work where a call
+    /// that waits returns at its decision, a delivery or a turn in the room
+    /// or a hook under its lock, it returns the result at once, unwaited:
+    /// the delivery could only wait for this wait (RFC §10.1 step 18). It
+    /// follows in the room's lane.
     ///
     /// # Errors
     ///
     /// Returns what a call that waited would have returned past its commit:
-    /// [`KitError::ShutDown`] for a delivery the kit's close cut, what
-    /// was committed standing, or a defect of this crate, as
-    /// [`KitError::Stalled`] is.
-    pub async fn wait(self) -> Result<InboundResult, KitError> {
-        let Some(run) = self.run.filter(|_| !waits_for_itself(&self.decided)) else {
-            return Ok(self.decided.into());
+    /// a defect of this crate, as [`KitError::Stalled`] is, to the first
+    /// wait that reads it; another wait then reads the result the call
+    /// returned at its commit.
+    pub async fn wait(&self) -> Result<InboundResult, KitError> {
+        let shared = &self.shared;
+        if !self.done() && shared.waits_for_itself() {
+            return Ok(self.with_handle(shared.decided.clone()));
+        }
+        let ended = shared.ended.get_or_init(|| shared.end()).await;
+        let result = match ended {
+            Ended::Over(result) => (**result).clone(),
+            Ended::Failed(error) => {
+                let taken = error.lock().unwrap_or_else(PoisonError::into_inner).take();
+                if let Some(error) = taken {
+                    return Err(error);
+                }
+                shared.decided.clone()
+            }
         };
-        Ok(driver::ended(run.await, self.tasks.is_cut())??.into())
+        Ok(self.with_handle(result))
+    }
+
+    fn with_handle(&self, result: ops::InboundResult) -> InboundResult {
+        InboundResult::of(result, Some(self.clone()))
+    }
+}
+
+impl Shared {
+    /// Whether a wait in the current task's context would wait for itself:
+    /// the context is work of the event's room that the delivery waits for.
+    fn waits_for_itself(&self) -> bool {
+        self.decided
+            .event
+            .as_ref()
+            .is_some_and(|event| ExecutionContext::current().waits_for_itself(&event.room_id))
+    }
+
+    /// What the delivery came to, once over.
+    async fn end(&self) -> Ended {
+        match &self.following {
+            Following::Run { run, record, .. } => {
+                let mut run = run.lock().await;
+                let Some(running) = run.as_mut() else {
+                    return Ended::Over(Box::new(self.decided.clone()));
+                };
+                let joined = running.await;
+                *run = None;
+                match driver::ended(joined, record, self.tasks.is_cut()) {
+                    Ok(Ok(result)) => Ended::Over(Box::new(result)),
+                    Ok(Err(error)) => Ended::Failed(std::sync::Mutex::new(Some(error.into()))),
+                    Err(error) => Ended::Failed(std::sync::Mutex::new(Some(error))),
+                }
+            }
+            Following::Adopted(completion) => {
+                let mut completion = completion.clone();
+                let delivered = completion
+                    .wait_for(Option::is_some)
+                    .await
+                    .ok()
+                    .and_then(|delivered| delivered.clone());
+                Ended::Over(Box::new(self.backfilled(delivered)))
+            }
+            Following::Nothing => Ended::Over(Box::new(self.decided.clone())),
+        }
+    }
+
+    /// The decided result, with what an adopted call's delivery set
+    /// reported, `delivered`; with none, the adopting run over without it,
+    /// the delivery reads as one the kit's close dropped, when it closes.
+    fn backfilled(&self, delivered: Option<ops::InboundResult>) -> ops::InboundResult {
+        let mut result = self.decided.clone();
+        let Some(delivered) = delivered else {
+            if self.tasks.is_closing() {
+                result.cancellation_reason = Some(KIT_CLOSED.to_owned());
+            }
+            return result;
+        };
+        result.delivery_results = delivered.delivery_results;
+        result.response_metadata = delivered.response_metadata;
+        result.error = result.error.or(delivered.error);
+        result.cancellation_reason = delivered.cancellation_reason;
+        result
     }
 }
 
 impl PartialEq for DeliveryHandle {
-    /// The same delivery: handles of one call's run.
+    /// The same handle: clones of one.
     fn eq(&self, other: &Self) -> bool {
-        match (&self.run, &other.run) {
-            (Some(own), Some(theirs)) => own.id() == theirs.id(),
-            (None, None) => self.decided == other.decided,
-            _ => false,
-        }
+        Arc::ptr_eq(&self.shared, &other.shared)
     }
 }
 
@@ -160,14 +315,4 @@ impl fmt::Debug for DeliveryHandle {
             .field("done", &self.done())
             .finish_non_exhaustive()
     }
-}
-
-/// Whether a wait, in the current task's context, on the delivery of the
-/// call that returned `decided` would wait for itself: the context works in
-/// the event's room, where the call detached.
-fn waits_for_itself(decided: &ops::InboundResult) -> bool {
-    decided
-        .event
-        .as_ref()
-        .is_some_and(|event| ExecutionContext::current().detaches(&event.room_id))
 }

@@ -111,6 +111,19 @@ pub struct Settled {
     pub result: Result<InboundResult, InboundError>,
 }
 
+/// The delivery set of an adopted entry's event ran (RFC §10.1 step 18):
+/// what a wait on its caller's completion handle reports, the
+/// `delivery_results`, `response_metadata`, `error` and
+/// `cancellation_reason` of its set; the rest of its result is what its
+/// caller received at the commit ([`Settled`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Delivered {
+    /// The entry.
+    pub entry: EntryId,
+    /// What its delivery set reported.
+    pub result: InboundResult,
+}
+
 /// An inbound call decided: what a caller that cannot wait for the call's
 /// delivery receives, at the commit (RFC §10.1 step 18, detached
 /// completion). The result carries no delivery: the event's delivery set,

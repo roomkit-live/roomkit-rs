@@ -44,7 +44,28 @@ pub struct InboundResult {
     pub response_metadata: Metadata,
     /// The deliveries of the event to its transport channels.
     pub delivery_results: BTreeMap<ChannelId, DeliveryResult>,
+    /// Why the call's delivery was cancelled, the event it committed
+    /// standing: [`KIT_CLOSED`] for a delivery the kit's close dropped
+    /// before it ran, [`LANE_CANCELLED`] for one it cut running (RFC §10.1
+    /// step 18), as the Python implementation's `cancellation_reason` reads;
+    /// `None` for a delivery that ran.
+    pub cancellation_reason: Option<String>,
+    /// Whether the call was refused before the locked region (RFC §10.1
+    /// step 18): past the reentry budget it draws on, an instruction that
+    /// cannot be one, or past its `process_timeout` before the room's
+    /// lock. Such a call has no deferred tail: a deferred one gets no
+    /// completion handle.
+    pub refused_before_the_lock: bool,
 }
+
+/// The cancellation reason of a delivery the kit's close dropped before it
+/// ran: taken after the close began, or still queued in its room's lane
+/// once the close's grace ran out.
+pub const KIT_CLOSED: &str = "kit_closed";
+
+/// The cancellation reason of a delivery the kit's close cut while it ran,
+/// once the close's grace ran out.
+pub const LANE_CANCELLED: &str = "lane_cancelled";
 
 /// Why an inbound message could not be processed. Nothing of the message was
 /// committed, unless the error says otherwise.

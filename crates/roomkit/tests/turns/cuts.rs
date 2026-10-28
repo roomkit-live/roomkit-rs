@@ -53,8 +53,9 @@ impl Drop for Cut {
 /// RFC §10.6.8: the kit's close while a tool runs crosses as `cancel`
 /// with its reason; the executor cuts the handler and reports the call
 /// `cancelled` to the kit's observers; the turn's end follows; the reader
-/// stores the call's end `cancelled`. (Milestone 6 left the call's start
-/// with no end, and reported nothing.)
+/// stores the call's end `cancelled`; the caller receives its result, its
+/// delivery `lane_cancelled`. (Milestone 6 left the call's start with no
+/// end, and reported nothing.)
 #[tokio::test(start_paused = true)]
 async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_cancelled() {
     let running = Arc::new(Notify::new());
@@ -120,14 +121,16 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
         });
     assert_eq!(
         (
-            asked.is_err(),
+            asked.map(|result| (result.event.is_some(), result.cancellation_reason)),
             tail,
             log.lock().unwrap().clone(),
             observed.lock().unwrap().clone(),
             end
         ),
         (
-            true,
+            // The caller receives the call it made, as Python's awaited
+            // caller does, its delivery cut.
+            Ok((true, Some("lane_cancelled".to_owned()))),
             vec!["control cancel kit_closed", "frame end"],
             vec!["cut"],
             vec![(

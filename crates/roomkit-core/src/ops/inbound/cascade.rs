@@ -198,13 +198,21 @@ impl Machine {
         }
         let kind = match origin {
             PassOrigin::Trigger => SetKind::Root,
-            PassOrigin::Adopted(_) => SetKind::Adopted,
+            PassOrigin::Adopted(entry) => SetKind::Adopted(*entry),
             PassOrigin::Response { .. } => SetKind::Response,
             PassOrigin::Injected { .. } => SetKind::Injected,
         };
         let budget = self.cascade.budget.clone();
         let lineage = report.lineage;
-        let mut set = DeliverySet::new(kind, *event, plan, context, report.placed, budget, lineage);
+        let mut set = DeliverySet::new(
+            kind,
+            *event,
+            plan,
+            context,
+            report.placement,
+            budget,
+            lineage,
+        );
         if self.cascade.turns_cut && lineage == Lineage::Call {
             set.cut();
         }
@@ -299,11 +307,17 @@ impl Machine {
     /// 14 to 17). The deliveries of an entry's event are reported, the
     /// call's own written into its result too.
     pub(super) fn on_set(&mut self, cx: &mut Cx<'_>, outcome: SetOutcome, set: &DeliverySet) {
+        if let Some(reason) = outcome.cancelled {
+            return self.dropped(cx, reason, set);
+        }
         let event = set.event();
         report::after_broadcast(cx, event, set.context(), &self.cascade.budget);
         match set.kind() {
             SetKind::Root => self.settle_root(cx, event, &outcome),
-            SetKind::Adopted => report::root_deliveries(cx, event, &outcome),
+            SetKind::Adopted(entry) => {
+                report::root_deliveries(cx, event, &outcome);
+                cx.io.delivered(entry, delivered(&outcome));
+            }
             SetKind::Response | SetKind::Injected => {}
         }
         self.side_effects
@@ -324,6 +338,26 @@ impl Machine {
             self.queue_response(cx, response, set);
         }
         self.queue_streams(outcome.streams, set);
+    }
+
+    /// A set that delivered nothing, the room's lane taking no place for it
+    /// as the kit closes (RFC §10.1 step 18): no hook runs for it, and the
+    /// cascade it belongs to reports `reason`, the call's own or an adopted
+    /// entry's.
+    fn dropped(&mut self, cx: &mut Cx<'_>, reason: &'static str, set: &DeliverySet) {
+        let cancelled = InboundResult {
+            cancellation_reason: Some(reason.to_owned()),
+            ..InboundResult::default()
+        };
+        if let SetKind::Adopted(entry) = set.kind() {
+            return cx.io.delivered(entry, cancelled);
+        }
+        if set.lineage() == Lineage::Call {
+            self.trigger
+                .result
+                .cancellation_reason
+                .get_or_insert_with(|| reason.to_owned());
+        }
     }
 
     /// Queues the streams of the turns `set` asked, to be read once the
@@ -427,6 +461,17 @@ impl Machine {
         }
         let error = failure(abort, self.call.room_id.clone());
         self.end(cx, Err(error));
+    }
+}
+
+/// What an adopted entry's delivery set reports to its caller's completion
+/// handle (RFC §10.1 step 18).
+fn delivered(outcome: &SetOutcome) -> InboundResult {
+    InboundResult {
+        delivery_results: outcome.delivery_results.clone(),
+        response_metadata: outcome.response_metadata.clone(),
+        error: outcome.error.clone(),
+        ..InboundResult::default()
     }
 }
 

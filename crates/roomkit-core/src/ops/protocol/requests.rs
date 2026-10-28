@@ -442,6 +442,10 @@ pub enum HoldOutcome {
     Released,
     /// The event's place in the room's delivery lane is taken.
     Entered,
+    /// The room's delivery lane takes no more place, the kit closing (RFC
+    /// §10.1 step 18): the event is not delivered, its cascade cancelled
+    /// [`KIT_CLOSED`](super::KIT_CLOSED).
+    LaneClosed,
     /// Every earlier place of the room's delivery lane is left: the event's
     /// turn.
     LaneTurn,

@@ -13,10 +13,11 @@
 //! hooks left them (RFC §7.5 rule 2).
 
 use super::super::commit::{self, Committing};
+use super::super::delivery::Placement;
 use super::super::stamp;
 use super::{CommitPass, PassOrigin, PassResult, State, Verdict};
 use crate::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, Visibility};
-use crate::ops::protocol::{HoldRequest, Outcome, StoreRequest, TargetUpdate};
+use crate::ops::protocol::{HoldOutcome, HoldRequest, Outcome, StoreRequest, TargetUpdate};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
 use crate::rules::authors;
@@ -501,8 +502,12 @@ impl CommitPass {
         result: PassResult,
         outcome: Outcome,
     ) -> State {
+        if outcome == Outcome::Hold(HoldOutcome::LaneClosed) {
+            self.placement = Placement::Closed;
+            return self.release(cx, Ok(result));
+        }
         match outcome.into_entered() {
-            Ok(()) => self.placed = true,
+            Ok(()) => self.placement = Placement::Taken,
             Err(error) => tracing::warn!(
                 target: "roomkit::core::inbound",
                 room_id = %self.event.room_id,

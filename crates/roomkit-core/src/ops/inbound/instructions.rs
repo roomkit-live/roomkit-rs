@@ -117,6 +117,7 @@ pub(super) fn refused(refusal: InstructionRefusal) -> InboundResult {
     InboundResult {
         blocked: true,
         reason: Some(refusal.reason().to_owned()),
+        refused_before_the_lock: true,
         ..InboundResult::default()
     }
 }

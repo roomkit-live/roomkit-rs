@@ -58,7 +58,7 @@ use crate::driver;
 use crate::environment::SystemEnvironment;
 use crate::error::KitError;
 use crate::hooks::HookHandler;
-use crate::inbound::{DeliveryHandle, InboundResult};
+use crate::inbound::InboundResult;
 use crate::locks::RoomMutexes;
 use crate::queues::{RoomLanes, RoomTickets};
 use crate::registered::{Registered, RegisteredChannel};
@@ -316,16 +316,9 @@ impl<S: ConversationStore> RoomKit<S> {
             let ran =
                 driver::run_inbound(&self.inner, PROCESS_INBOUND, None, routed, defer_delivery)
                     .await;
-            Entered {
-                result: ran.output??,
-                run: ran.delivery,
-            }
+            Entered::ran(ran)?
         };
-        let delivery = defer_delivery.then(|| {
-            let tasks = Arc::clone(&self.inner.tasks);
-            DeliveryHandle::new(entered.result.clone(), entered.run, tasks)
-        });
-        Ok(InboundResult::of(entered.result, delivery))
+        Ok(entered.into_result(defer_delivery, &self.inner.tasks))
     }
 
     fn config(&self) -> Arc<KitConfig> {
@@ -349,13 +342,15 @@ fn default_router<S: ConversationStore>(
 }
 
 impl<S> Inner<S> {
-    /// Refuses a call once the kit's close began.
+    /// Refuses a call once the kit is sealed, its close past its drain: a
+    /// call made while the close drains is taken, as the Python
+    /// implementation takes it until its store is sealed.
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::ShutDown`] once [`RoomKit::close`] was called.
+    /// Returns [`KitError::ShutDown`] once [`RoomKit::close`] sealed the kit.
     pub(crate) fn open(&self) -> Result<(), KitError> {
-        if self.tasks.is_closed() {
+        if self.tasks.is_sealed() {
             return Err(KitError::ShutDown);
         }
         Ok(())

@@ -49,7 +49,7 @@ use super::cascade::{self, entry_result, replay_result};
 use super::deadline::Stopped;
 use super::direct::{self, DirectCall};
 use super::host_post::HostPost;
-use super::pass::{CommitPass, PassOrigin, PassReport};
+use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
 use super::record::{RecordPass, RecordReport};
 use super::work_read::{Read, WorkRead};
 use super::{InboundError, InboundResult, Machine, result};
@@ -513,7 +513,11 @@ impl Machine {
     fn on_adopted_pass(&mut self, cx: &mut Cx<'_>, adopted: &Adopted, mut report: PassReport) {
         let mut result = entry_result(&report.result);
         result.error = report.release_error.take();
-        self.settle_entry(cx, adopted, Ok(result));
+        if matches!(report.result, PassResult::Delivered { .. }) {
+            self.answer_entry(cx, adopted, Ok(result));
+        } else {
+            self.settle_entry(cx, adopted, Ok(result));
+        }
         self.add_to_cascade(cx, report, &PassOrigin::Adopted(adopted.id));
     }
 
@@ -527,6 +531,21 @@ impl Machine {
     /// refusal before its commit raised (RFC §10.5), then hands back the
     /// answer of the hook it was nested under, once no other entry is.
     fn settle_entry(
+        &mut self,
+        cx: &mut Cx<'_>,
+        adopted: &Adopted,
+        result: Result<InboundResult, InboundError>,
+    ) {
+        self.answer_entry(cx, adopted, result);
+        // No delivery set follows: what its completion handle waits for is
+        // over (RFC §10.1 step 18).
+        cx.io.delivered(adopted.id, InboundResult::default());
+    }
+
+    /// Answers the entry's caller with `result`, as
+    /// [`settle_entry`](Self::settle_entry) does, for an entry whose
+    /// delivery set follows: its end is reported once it ran.
+    fn answer_entry(
         &mut self,
         cx: &mut Cx<'_>,
         adopted: &Adopted,

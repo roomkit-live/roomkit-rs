@@ -41,16 +41,16 @@ use std::task::Poll;
 
 use roomkit_core::model::{ErrorRecord, RoomId, Timestamp};
 use roomkit_core::ops::{
-    Effect, EffectId, EntryId, Environment, HoldRequest, Next, Notice, Operation, Outcome, Request,
-    Settled, StoreRequest,
+    Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest, InboundResult,
+    Next, Notice, Operation, Outcome, Request, Settled, StoreRequest,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinSet};
 use tokio::time::Instant;
 
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::inbound::Caller;
-pub(crate) use self::inbound::{InboundOutput, ended, run_inbound};
+pub(crate) use self::inbound::{InboundOutput, Ran, Record, ended, run_inbound};
 use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::KitError;
@@ -149,6 +149,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         effect_of_task: HashMap::new(),
         call_of_effect: HashMap::new(),
         callers: HashMap::new(),
+        deliveries: HashMap::new(),
         clocks: Clocks::read(&*environment),
         environment,
         refused: None,
@@ -188,6 +189,9 @@ struct Driver<'kit, S> {
     call_of_effect: HashMap<EffectId, AbortHandle>,
     /// The callers of the entries the operation adopted, until settled.
     callers: HashMap<EntryId, oneshot::Sender<Reply>>,
+    /// Where the delivery's end of each entry the operation adopted goes,
+    /// until its set ran.
+    deliveries: HashMap<EntryId, watch::Sender<Option<InboundResult>>>,
     clocks: Clocks,
     /// The environment the run started with, which every poll of its
     /// operation and every call it makes read.
@@ -231,6 +235,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
             for settled in step.settled {
                 self.answer(settled);
+            }
+            for delivered in step.delivered {
+                self.delivered(delivered);
             }
             if let Some(decided) = step.decided
                 && let Some(caller) = self.caller.as_deref_mut()
@@ -279,6 +286,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     }
                 }
                 Some(Event::Waited(id, waited)) => {
+                    if let (Waited::Place((_, event_id), _, true), Some(caller)) =
+                        (&waited, self.caller.as_deref())
+                    {
+                        caller.turn_came(event_id);
+                    }
                     let outcome = self.held.settle(waited);
                     return Ok(operation.complete(id, outcome)?);
                 }
@@ -372,6 +384,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         }
         match request {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
+            Request::Store(request) if writes(&request) => {
+                self.spawn(id, work, deadline, calls::write(inner, request));
+            }
             Request::Store(request) => self.spawn(id, work, deadline, async move {
                 calls::store(&*inner.store, request).await
             }),
@@ -405,6 +420,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             lanes: &self.inner.lanes,
             tickets: &self.inner.tickets,
         };
+        if matches!(request, HoldRequest::EnterLane { .. }) && self.inner.tasks.is_closing() {
+            // The kit's close drops a delivery set that would take its place
+            // now, as the Python implementation's sealed lanes drop it: its
+            // index has no place, its turn over at the lock's release.
+            return Some((id, HoldOutcome::LaneClosed.into()));
+        }
         let over = self.turns_over(&request);
         match self.held.hold(rooms, &self.context, id, request, deadline) {
             Hold::Now(outcome) => self.after_the_cursor(id, outcome, over),
@@ -567,10 +588,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             entry,
             origin,
             reply,
+            delivered,
         } = adoption;
         match operation.adopt(entry, origin) {
             Ok(id) => {
                 self.callers.insert(id, reply);
+                self.deliveries.insert(id, delivered);
             }
             Err(entry) => {
                 tracing::debug!(
@@ -581,6 +604,14 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 );
                 drop(reply.send(Reply::Declined(entry)));
             }
+        }
+    }
+
+    /// Tells the caller of an adopted entry its delivery's end (RFC §10.1
+    /// step 18).
+    fn delivered(&mut self, delivered: Delivered) {
+        if let Some(completion) = self.deliveries.remove(&delivered.entry) {
+            completion.send_replace(Some(delivered.result));
         }
     }
 
@@ -612,6 +643,20 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             None => Ok(output),
         }
     }
+}
+
+/// Whether `request` writes the store: a write runs to its end whatever
+/// becomes of its run (RFC §13.6), as the Python implementation runs its
+/// decided writes; a read is the run's own.
+fn writes(request: &StoreRequest) -> bool {
+    !matches!(
+        request,
+        StoreRequest::LoadContext { .. }
+            | StoreRequest::GetEventByIdempotencyKey { .. }
+            | StoreRequest::GetEvent { .. }
+            | StoreRequest::ListEvents { .. }
+            | StoreRequest::ResolveIdentity { .. }
+    )
 }
 
 /// What `future` produces by `deadline`, `None` once it passed, the future

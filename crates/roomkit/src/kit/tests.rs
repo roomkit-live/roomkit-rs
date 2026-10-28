@@ -287,6 +287,7 @@ impl Operation for WaitsForNothing {
         Step {
             notices: Vec::new(),
             settled: Vec::new(),
+            delivered: Vec::new(),
             decided: None,
             next: Next::Waiting,
         }

@@ -11,6 +11,7 @@ pub(super) fn past_the_budget() -> InboundResult {
     InboundResult {
         blocked: true,
         reason: Some(chain_depth::REENTRY_LOOP_CAP.to_owned()),
+        refused_before_the_lock: true,
         ..InboundResult::default()
     }
 }

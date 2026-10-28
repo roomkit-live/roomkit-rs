@@ -554,6 +554,149 @@ async fn an_off_lock_hook_injects_without_a_ticket() {
     );
 }
 
+/// RFC §9.5.1, §10.1 step 18: an off-lock hook's body, the event's
+/// admission work, makes a deferred call into the room, adopted, and waits
+/// its handle: the call's delivery set runs ahead of the event, and the
+/// wait returns with its delivery results; a wait from outside, later,
+/// reads them too, as Python's (tasks/probes/step5-lot1-review-A probe 1).
+/// Under the lock the wait returns unwaited, the delivery following.
+#[tokio::test]
+async fn a_wait_from_admission_work_returns_with_its_delivery_results() {
+    let off_lock = waited_from_a_hook(false).await;
+    let under_lock = waited_from_a_hook(true).await;
+    assert_eq!(
+        (off_lock, under_lock),
+        (
+            (
+                vec!["audit".to_owned(), "ws".to_owned()],
+                vec!["audit".to_owned(), "ws".to_owned()],
+                vec!["side".to_owned(), "hello".to_owned()]
+            ),
+            // Committed ahead of the section's event, it is delivered first
+            // (`a_locked_hook::injects_ahead`).
+            (
+                vec![],
+                vec!["audit".to_owned(), "ws".to_owned()],
+                vec!["side".to_owned(), "hello".to_owned()]
+            )
+        )
+    );
+}
+
+/// What a hook of `hello`, under the lock or off it, read of the delivery
+/// of the deferred `side` it sent and waited for; what a wait from outside
+/// read once the call was over; and what `audit` delivered.
+async fn waited_from_a_hook(needs_lock: bool) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let (kit, audit) = room().await;
+    let handles = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (hook_kit, hook_handles, hook_seen) =
+        (kit.clone(), Arc::clone(&handles), Arc::clone(&seen));
+    kit.hook(before_broadcast("side", needs_lock), move |event, _| {
+        let (kit, handles, seen) = (
+            hook_kit.clone(),
+            Arc::clone(&hook_handles),
+            Arc::clone(&hook_seen),
+        );
+        async move {
+            if text_of(&event.content) == "hello" {
+                let deferred = ProcessInboundOptions {
+                    defer_delivery: true,
+                    ..in_room(room_id())
+                };
+                let side = kit.process_inbound(message("side"), deferred).await?;
+                let handle = side.delivery.unwrap();
+                let waited = handle.wait().await?;
+                *seen.lock().unwrap() = delivered_to(&waited);
+                handles.lock().unwrap().push(handle);
+            }
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    send(&kit, "hello").await.unwrap();
+    let handle = handles.lock().unwrap().pop().unwrap();
+    let later = tokio::time::timeout(BOUND, handle.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    let texts = delivered(&audit, 2).await;
+    let waited = seen.lock().unwrap().clone();
+    (waited, delivered_to(&later), texts)
+}
+
+/// The channels `result` reports a delivery to.
+fn delivered_to(result: &roomkit::InboundResult) -> Vec<String> {
+    result
+        .delivery_results
+        .keys()
+        .map(|id| id.as_str().to_owned())
+        .collect()
+}
+
+/// RFC §10.1 step 18: the own-lane short-circuit holds while the delivery
+/// is not done, as Python's `if not self.done`: a delivery of the room
+/// waiting on the handle of an earlier call, whose delivery ran after its
+/// commit and is over, reads its delivery results.
+#[tokio::test]
+async fn a_wait_from_its_room_s_lane_on_a_delivery_done_reads_its_results() {
+    let (kit, _audit) = room().await;
+    let (gate, handle_slot) = (Arc::new(Notify::new()), Arc::new(Mutex::new(None)));
+    let seen = Arc::new(Mutex::new(None));
+    let (bot_gate, bot_slot, bot_seen) = (
+        Arc::clone(&gate),
+        Arc::clone(&handle_slot),
+        Arc::clone(&seen),
+    );
+    let bot = Scripted::transport(
+        "bot",
+        Arc::new(move |event: RoomEvent| {
+            let (gate, slot, seen) = (
+                Arc::clone(&bot_gate),
+                Arc::clone(&bot_slot),
+                Arc::clone(&bot_seen),
+            );
+            Box::pin(async move {
+                match text_of(&event.content).as_str() {
+                    "first" => gate.notified().await,
+                    "hello" => {
+                        let handle: roomkit::DeliveryHandle = slot.lock().unwrap().clone().unwrap();
+                        let waited = handle.wait().await?;
+                        *seen.lock().unwrap() = Some(delivered_to(&waited));
+                    }
+                    _ => {}
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(bot).unwrap();
+    kit.attach_channel(&room_id(), &channel("bot"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let first = ProcessInboundOptions {
+        defer_delivery: true,
+        ..in_room(room_id())
+    };
+    let first = kit.process_inbound(message("first"), first).await.unwrap();
+    let handle = first.delivery.unwrap();
+    let at_commit = (first.delivery_results.len(), handle.done());
+    gate.notify_one();
+    tokio::time::timeout(BOUND, handle.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    *handle_slot.lock().unwrap() = Some(handle);
+    send(&kit, "hello").await.unwrap();
+    assert_eq!(
+        (at_commit, seen.lock().unwrap().clone()),
+        (
+            (0, false),
+            Some(vec!["audit".to_owned(), "bot".to_owned(), "ws".to_owned()])
+        )
+    );
+}
+
 on_both_runtimes!(
     an_agent_s_turn_injects_into_its_own_room_and_receives_its_event_at_once,
     an_agent_s_turn_injects_into_its_own_room_on_threads,

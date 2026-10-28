@@ -27,8 +27,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use self::locks::RoomLocks;
 use super::protocol::{
-    ChannelRequest, Decided, Effect, EffectId, EntryId, HoldOutcome, HoldRequest, Next, Notice,
-    Outcome, ProtocolError, Request, RequestKind, Settled, Step, TURN_CUT,
+    ChannelRequest, Decided, Delivered, Effect, EffectId, EntryId, HoldOutcome, HoldRequest, Next,
+    Notice, Outcome, ProtocolError, Request, RequestKind, Settled, Step, TURN_CUT,
 };
 use super::{InboundError, InboundResult};
 use crate::model::{ErrorRecord, RoomId, Timestamp};
@@ -84,6 +84,7 @@ pub(crate) struct Io {
     issued: Vec<Effect>,
     notices: Vec<Notice>,
     settled: Vec<Settled>,
+    delivered: Vec<Delivered>,
     /// The call's decision, until the next step publishes it.
     decided: Option<Decided>,
     /// Whether the call's decision is known, published or about to be.
@@ -115,6 +116,7 @@ impl Io {
             issued: Vec::new(),
             notices: Vec::new(),
             settled: Vec::new(),
+            delivered: Vec::new(),
             decided: None,
             has_decided: false,
             inbox: VecDeque::new(),
@@ -318,6 +320,12 @@ impl Io {
         self.settled.push(Settled { entry, result });
     }
 
+    /// Reports what the delivery set of the adopted entry `entry`'s event
+    /// came to, `result`, on the next step.
+    pub(crate) fn delivered(&mut self, entry: EntryId, result: InboundResult) {
+        self.delivered.push(Delivered { entry, result });
+    }
+
     /// Publishes the call's decision on the next step, once: a later one
     /// is a defect of the operation, and is not published.
     pub(crate) fn decide(&mut self, decided: Decided) {
@@ -445,6 +453,7 @@ impl Io {
     pub(crate) fn step<T>(&mut self, result: Option<T>) -> Step<T> {
         let notices = std::mem::take(&mut self.notices);
         let settled = std::mem::take(&mut self.settled);
+        let delivered = std::mem::take(&mut self.delivered);
         let decided = self.decided.take();
         let next = match result {
             Some(result) => Next::Ready(result),
@@ -454,6 +463,7 @@ impl Io {
         Step {
             notices,
             settled,
+            delivered,
             decided,
             next,
         }

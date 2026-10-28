@@ -28,7 +28,8 @@ use crate::model::{
     ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
 };
 use crate::ops::protocol::{
-    CHANNEL_NOT_REGISTERED, ChannelRequest, EffectId, HoldRequest, Outcome, TURN_CUT,
+    CHANNEL_NOT_REGISTERED, ChannelRequest, EffectId, EntryId, HoldRequest, KIT_CLOSED, Outcome,
+    TURN_CUT,
 };
 use crate::ops::{Cx, Progress};
 use crate::rules::chain_depth::ReentryBudget;
@@ -43,10 +44,10 @@ pub(super) enum SetKind {
     /// The call's own event, a message or a direct injection: its
     /// deliveries are reported (RFC §8.2) and written into its result.
     Root,
-    /// The event of an entry the operation adopted (gap G-070): its
+    /// The event of the entry the operation adopted (gap G-070): its
     /// deliveries are reported, and its caller, answered at the commit,
-    /// reads none of them (RFC §10.1 step 18).
-    Adopted,
+    /// reads them through its completion handle (RFC §10.1 step 18).
+    Adopted(EntryId),
     /// A response that re-entered.
     Response,
     /// An event a hook injected. It asks no agent (RFC §9.4); its transport
@@ -97,6 +98,9 @@ pub(super) struct SetOutcome {
     pub(super) metadata_updates: Metadata,
     /// The first error an intelligence target's turn met.
     pub(super) error: Option<ErrorRecord>,
+    /// Why the set delivered nothing: [`KIT_CLOSED`] when the room's lane
+    /// took no place for it, the kit closing.
+    pub(super) cancelled: Option<&'static str>,
 }
 
 #[derive(Debug)]
@@ -124,6 +128,9 @@ enum Call {
 enum Place {
     /// The event took a place: the set waits for its turn first.
     Taken,
+    /// The room's lane took no place, the kit closing: the set delivers
+    /// nothing, its cascade cancelled [`KIT_CLOSED`].
+    Closed,
     /// The event holds no place, its `EnterLane` having failed: the set
     /// runs at once.
     Missing,
@@ -135,6 +142,20 @@ enum Place {
     Leaving(EffectId),
     /// It left its place.
     Left,
+}
+
+/// What became of an event's place in its room's delivery lane, taken
+/// under the lock at its commit (RFC §10.1 step 12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Placement {
+    /// The place is taken: the set waits for its turn.
+    Taken,
+    /// Taking it failed: the set delivers at once, out of the lane's order
+    /// (RFC §13.6: an event stored is delivered).
+    Missing,
+    /// The lane takes no more place, the kit closing (RFC §10.1 step 18):
+    /// the event is not delivered, its cascade cancelled [`KIT_CLOSED`].
+    Closed,
 }
 
 /// The delivery set of one committed event.
@@ -159,14 +180,14 @@ pub(super) struct DeliverySet {
 
 impl DeliverySet {
     /// The set of `event`, planned as `plan`, with the room's whole context;
-    /// `placed` when the event took its place in the room's lane. The calls
+    /// `placement`, what became of the event's place in the room's lane. The calls
     /// its targets make into a room draw on `budget`, the cascade's.
     pub(super) fn new(
         kind: SetKind,
         event: RoomEvent,
         plan: DeliveryPlan,
         context: Box<RoomContext>,
-        placed: bool,
+        placement: Placement,
         budget: ReentryBudget,
         lineage: Lineage,
     ) -> Self {
@@ -181,7 +202,11 @@ impl DeliverySet {
             event,
             context,
             targets,
-            place: if placed { Place::Taken } else { Place::Missing },
+            place: match placement {
+                Placement::Taken => Place::Taken,
+                Placement::Missing => Place::Missing,
+                Placement::Closed => Place::Closed,
+            },
             budget,
             calls: BTreeMap::new(),
             outcome,
@@ -220,6 +245,7 @@ impl DeliverySet {
         match self.place {
             Place::Awaiting(awaited) | Place::Leaving(awaited) if awaited == effect => true,
             Place::Taken
+            | Place::Closed
             | Place::Missing
             | Place::Awaiting(_)
             | Place::Turn
@@ -254,8 +280,15 @@ impl DeliverySet {
     /// waits is committed already (RFC §13.6). A set with no place delivers
     /// at once.
     pub(super) fn start(&mut self, cx: &mut Cx<'_>) -> Progress<SetOutcome> {
-        if self.place != Place::Taken {
-            return self.deliver(cx);
+        match self.place {
+            Place::Taken => {}
+            Place::Closed => {
+                self.outcome.cancelled = Some(KIT_CLOSED);
+                return Progress::Done(std::mem::take(&mut self.outcome));
+            }
+            Place::Missing | Place::Awaiting(_) | Place::Turn | Place::Leaving(_) | Place::Left => {
+                return self.deliver(cx);
+            }
         }
         let request = HoldRequest::AwaitLane {
             room_id: self.event.room_id.clone(),
@@ -301,6 +334,7 @@ impl DeliverySet {
             Place::Awaiting(awaited) if awaited == effect => return self.on_turn(cx, outcome),
             Place::Leaving(awaited) if awaited == effect => return self.on_left(outcome),
             Place::Taken
+            | Place::Closed
             | Place::Missing
             | Place::Awaiting(_)
             | Place::Turn

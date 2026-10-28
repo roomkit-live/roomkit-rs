@@ -33,6 +33,7 @@ mod gates;
 
 use std::mem;
 
+use super::delivery::Placement;
 use super::direct::DirectCall;
 use super::edits::Accepted;
 use super::queues::Lineage;
@@ -165,8 +166,8 @@ pub(super) struct PassReport {
     /// The failure of the lock's release, which changes nothing the pass
     /// decided (gap G-025).
     pub(super) release_error: Option<ErrorRecord>,
-    /// Whether the event delivered took its place in the room's lane.
-    pub(super) placed: bool,
+    /// What became of the delivered event's place in the room's lane.
+    pub(super) placement: Placement,
     /// Whose cascade the pass belongs to.
     pub(super) lineage: Lineage,
 }
@@ -193,8 +194,8 @@ pub(super) struct CommitPass {
     tasks: Vec<Task>,
     observations: Vec<Observation>,
     release_error: Option<ErrorRecord>,
-    /// Whether the event took its place in the room's delivery lane.
-    placed: bool,
+    /// What became of the event's place in the room's delivery lane.
+    placement: Placement,
     /// The hooks of the timer transitions its gate applied, fired once the
     /// lock is released (RFC §5.1 When).
     timer_hooks: TimerHooks,
@@ -331,7 +332,7 @@ impl CommitPass {
             tasks: Vec::new(),
             observations: Vec::new(),
             release_error: None,
-            placed: false,
+            placement: Placement::Missing,
             timer_hooks: TimerHooks::default(),
         }
     }
@@ -451,7 +452,7 @@ impl CommitPass {
             tasks: mem::take(&mut self.tasks),
             observations: mem::take(&mut self.observations),
             release_error: self.release_error.take(),
-            placed: self.placed,
+            placement: self.placement,
             lineage: self.lineage,
         }))
     }

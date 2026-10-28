@@ -28,11 +28,14 @@
 //! its commit was in flight. A room its step 2 created is completed first,
 //! its creation never within the call's bound.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
-use roomkit_core::model::RoomId;
-use roomkit_core::ops::{Decided, Inbound, InboundError, InboundResult};
+use roomkit_core::model::{EventId, RoomId};
+use roomkit_core::ops::{
+    Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED,
+};
 use tokio::sync::oneshot;
 use tokio::task::{JoinError, JoinHandle};
 
@@ -54,8 +57,9 @@ pub(crate) type InboundOutput = Result<Result<InboundResult, InboundError>, KitE
 pub(crate) struct Ran {
     /// The call's output: at its end, or at its decision.
     pub(crate) output: InboundOutput,
-    /// The run of a call deferred at its decision; `None` once it ended.
-    pub(crate) delivery: Option<JoinHandle<InboundOutput>>,
+    /// The run of a call deferred at its decision, with its record; `None`
+    /// once it ended.
+    pub(crate) delivery: Option<(JoinHandle<InboundOutput>, Arc<Record>)>,
 }
 
 impl Ran {
@@ -65,6 +69,56 @@ impl Ran {
             output,
             delivery: None,
         }
+    }
+}
+
+/// What an inbound call's run leaves its caller beside its output: the
+/// call's decision, and whether the delivery set of the call's own event
+/// had its turn in the room's lane, so that a run the kit's close aborts
+/// still reports the call it decided (RFC §10.1 step 18).
+#[derive(Debug, Default)]
+pub(crate) struct Record {
+    decided: Mutex<Option<InboundResult>>,
+    delivering: AtomicBool,
+}
+
+impl Record {
+    fn decide(&self, result: &InboundResult) {
+        *self.decided.lock().unwrap_or_else(PoisonError::into_inner) = Some(result.clone());
+    }
+
+    /// The lane's turn of `event_id`'s set came: the call's own event's
+    /// set delivers from now on.
+    fn turn_came(&self, event_id: &EventId) {
+        let decided = self.decided.lock().unwrap_or_else(PoisonError::into_inner);
+        let own = decided
+            .as_ref()
+            .and_then(|result| result.event.as_ref())
+            .is_some_and(|event| &event.id == event_id);
+        if own {
+            self.delivering.store(true, Ordering::Release);
+        }
+    }
+
+    /// What a run the kit's close aborted reports, as the Python
+    /// implementation's lane reports a delivery it dropped: the call as it
+    /// was decided, its delivery cancelled [`LANE_CANCELLED`] when its set
+    /// delivered, [`KIT_CLOSED`] when it still waited for its turn;
+    /// [`KitError::ShutDown`] for a call not decided yet.
+    pub(crate) fn aborted(&self) -> InboundOutput {
+        let decided = self.decided.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(mut result) = decided.clone() else {
+            return Err(KitError::ShutDown);
+        };
+        let reason = if self.delivering.load(Ordering::Acquire) {
+            LANE_CANCELLED
+        } else {
+            KIT_CLOSED
+        };
+        result
+            .cancellation_reason
+            .get_or_insert_with(|| reason.to_owned());
+        Ok(Ok(result))
     }
 }
 
@@ -86,6 +140,8 @@ pub(super) struct Caller {
     gone: bool,
     /// What the run did once its caller was gone.
     departure: Departure,
+    /// What the run leaves its caller beside its output.
+    record: Arc<Record>,
 }
 
 /// What a run did once its caller was gone: expired its operation before
@@ -103,14 +159,20 @@ enum Departure {
 impl Caller {
     /// The caller answered on `answer` at the decision, when its context
     /// detaches from the call's room or `defer` is set.
-    fn new(answer: oneshot::Sender<InboundOutput>, defer: bool) -> Self {
+    fn new(answer: oneshot::Sender<InboundOutput>, defer: bool, record: Arc<Record>) -> Self {
         Self {
             answer: Some(answer),
             defer,
             decided: false,
             gone: false,
             departure: Departure::Unseen,
+            record,
         }
+    }
+
+    /// The lane's turn of `event_id`'s set came.
+    pub(super) fn turn_came(&self, event_id: &EventId) {
+        self.record.turn_came(event_id);
     }
 
     /// Takes the call's decision, `decided`: the caller is answered with
@@ -124,6 +186,9 @@ impl Caller {
         refused: Option<&RoomId>,
     ) {
         self.decided = true;
+        if let Ok(result) = &decided.result {
+            self.record.decide(result);
+        }
         let detaches = self.defer
             || decided
                 .room_id
@@ -256,9 +321,10 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     let context = ExecutionContext::current();
     let inbound = charged(inbound, room_id, &context);
     let (answer, decided) = oneshot::channel();
+    let record = Arc::new(Record::default());
     let kit = Arc::clone(inner);
+    let mut caller = Caller::new(answer, defer, Arc::clone(&record));
     let run = async move {
-        let mut caller = Caller::new(answer, defer);
         let environment = kit.environment();
         let output = super::drive(
             &kit,
@@ -270,7 +336,7 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
         )
         .await;
         caller.log_unread_end(call, &output);
-        output
+        cut_at_its_end(output, kit.tasks.is_cut(), &caller.record)
     };
     // The kit tracks the run. Dropped, the handle detaches it: the run
     // itself stops when its caller is gone before the call's decision.
@@ -279,12 +345,30 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     };
     tokio::select! {
         biased;
-        joined = &mut task => Ran::ended(ended(joined, inner.tasks.is_cut())),
+        joined = &mut task => Ran::ended(ended(joined, &record, inner.tasks.is_cut())),
         Ok(answer) = decided => Ran {
             output: answer,
-            delivery: defer.then_some(task),
+            delivery: defer.then_some((task, record)),
         },
     }
+}
+
+/// `output`, a run's at its end: once the kit's close cut the work under
+/// way, its turns cut by it (RFC §10.6.8), the delivery of a call whose own
+/// set had its turn reads as cancelled [`LANE_CANCELLED`], as the Python
+/// implementation's lane reports the cascade it cut, whatever the close
+/// dropped of it after. The cut is read here, at the run's end, so that a
+/// run that ended before it reports its result whenever its end is read.
+fn cut_at_its_end(output: InboundOutput, cut: bool, record: &Record) -> InboundOutput {
+    if !cut || !record.delivering.load(Ordering::Acquire) {
+        return output;
+    }
+    output.map(|result| {
+        result.map(|mut result| {
+            result.cancellation_reason = Some(LANE_CANCELLED.to_owned());
+            result
+        })
+    })
 }
 
 /// `inbound`, a call into `room_id` or routed, charged to the reentry
@@ -302,18 +386,21 @@ fn charged(inbound: Inbound, room_id: Option<&RoomId>, context: &ExecutionContex
     }
 }
 
-/// The output of a run's task that ended, cancelled by the kit's close when
-/// `cut`, by the runtime otherwise. A run that ended once the close cut the
-/// work under way, its turns cut by it (RFC §10.6.8), was ended by it too;
-/// one that ended while the close drained it ran to its end.
-pub(crate) fn ended(joined: Result<InboundOutput, JoinError>, cut: bool) -> InboundOutput {
+/// The output of a run's task that ended: its own, the close's cut read at
+/// its end; for one the kit's close aborted, `cut` read then, what its
+/// `record` reports ([`Record::aborted`]); for one the runtime cancelled,
+/// [`KitError::Cancelled`].
+pub(crate) fn ended(
+    joined: Result<InboundOutput, JoinError>,
+    record: &Record,
+    cut: bool,
+) -> InboundOutput {
     match joined {
-        Ok(_ended) if cut => Err(KitError::ShutDown),
         Ok(output) => output,
         // A panic of the driver's own loop is a defect of this crate: the
         // caller receives it as it would from a run it drove itself.
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
-        Err(_cancelled) if cut => Err(KitError::ShutDown),
+        Err(_aborted) if cut => record.aborted(),
         Err(_cancelled) => Err(KitError::Cancelled),
     }
 }

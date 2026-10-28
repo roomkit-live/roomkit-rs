@@ -61,10 +61,11 @@ pub use lifecycle::{
     UpdateBinding,
 };
 pub use protocol::{
-    AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided, Effect,
-    EffectId, Entry, EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest, Next, Notice,
-    Operation, Outcome, ProtocolError, ROW_HIDDEN, ROW_WITHHELD, Request, RoomCounters, Settled,
-    Step, StoreOutcome, StoreRequest, StreamTarget, TargetUpdate,
+    AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, Decided, Delivered,
+    Effect, EffectId, Entry, EntryId, HoldOutcome, HoldRequest, HookAnswer, HookRequest,
+    KIT_CLOSED, LANE_CANCELLED, Next, Notice, Operation, Outcome, ProtocolError, ROW_HIDDEN,
+    ROW_WITHHELD, Request, RoomCounters, Settled, Step, StoreOutcome, StoreRequest, StreamTarget,
+    TargetUpdate,
 };
 
 use crate::model::{ErrorRecord, EventId, RoomContext, RoomEvent, RoomId};
