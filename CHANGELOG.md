@@ -93,10 +93,12 @@ kit, its construction and its calls).
   receiving their result (`lane_cancelled` or `kit_closed`, the first
   reason standing) rather than `ShutDown`; the other observers finish
   within their hook's timeout; the channels close once. The store's writes
-  are never aborted: the close waits for them on one deadline, 5 s from its
-  start, as Python's `CLOSE_WAIT_S`, a commit's write until its event took
-  its place in the room's lane, then leaves a write still running to end on
-  its own, with a warning; a caller whose own commit outlived its run reads
+  are never aborted: the close waits for them three times, as Python's
+  `CLOSE_WAIT_S`, twice until 5 s from its start and once until 5 s from
+  the channels' close, an inbound call's commit until its event took its
+  place in the room's lane and never drained as work, then leaves a write
+  still running to end on its own, with a warning; a caller whose own
+  commit outlived its run reads
   what the write came to, its event `kit_closed`, its record blocked with
   the hook's reason, or the store's error; a call cut before its own commit
   receives `ShutDown`, whatever its run committed first; a write that fails
