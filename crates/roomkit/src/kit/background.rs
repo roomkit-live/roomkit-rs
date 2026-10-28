@@ -14,9 +14,10 @@ use crate::tasks::{Kind, Tasks};
 /// cuts it: the Python implementation's lane `close_grace`.
 const CLOSE_GRACE: Duration = Duration::from_secs(5);
 
-/// How long, from its start, the kit's close waits for the store's writes
-/// decided for a caller: the Python implementation's `CLOSE_WAIT_S`. A
-/// write still running then is left to end on its own, never cancelled.
+/// How long the kit's close waits for the store's writes decided for a
+/// caller, from its start and once more from the channels' close: the
+/// Python implementation's `CLOSE_WAIT_S`. A write still running then is
+/// left to end on its own, never cancelled.
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
 
 impl<S: ConversationStore> RoomKit<S> {
@@ -29,8 +30,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    until its store is.
     /// 2. The store's writes decided for a caller, an event's commit among
     ///    them, get up to 5 seconds from the close's start to end, the work
-    ///    going on meanwhile, as Python's `CLOSE_WAIT_S`; a commit's write
-    ///    ends once its event took its place in the room's lane. A write
+    ///    going on meanwhile, as Python's `CLOSE_WAIT_S`; an inbound call's
+    ///    commit's write ends once its event took its place in the room's
+    ///    lane, as Python's decided write covers the lane's enqueue. A write
     ///    still running then is left to end on its own, never cancelled,
     ///    and counted in a warning: a caller still waiting for its call
     ///    reads what the write came to, its event or the store's error; a
@@ -38,7 +40,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// 3. The inbound calls running then drain for up to 5 seconds, whether
     ///    their caller waits for them, was answered at the decision (RFC
     ///    §10.1 step 18) or left: each room's deliveries in its lane, the
-    ///    turns they run, the observers their deliveries fire. One that
+    ///    turns they run, the observers their deliveries fire, and a call
+    ///    still before its own commit. A call whose commit that decides it
+    ///    is in flight is a decided write, which the drain does not wait
+    ///    for: the waits for the writes do, as they do Python's. One that
     ///    ends meanwhile reports its result, as it would have. A delivery
     ///    set that would take its place in a room's lane from now on is
     ///    dropped, its event stored, the call's result reading
@@ -72,10 +77,12 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    [`check_all_timers`](Self::check_all_timers); registering
     ///    channels and hooks, subscribing and reading the store go on
     ///    working. What is left runs no more, but the store's writes.
-    /// 7. The turn backend takes no more turns, and each channel registered
-    ///    is closed ([`Channel::close`](crate::Channel::close)), one after
-    ///    the other, once; the store's writes get what is left of their 5
-    ///    seconds, those still running counted in a warning again.
+    /// 7. The turn backend takes no more turns, and the store's writes get
+    ///    what is left of their 5 seconds, those still running counted in a
+    ///    warning again. Each channel registered is then closed
+    ///    ([`Channel::close`](crate::Channel::close)), one after the other,
+    ///    once, and the writes get 5 seconds more, counted from the
+    ///    channels' close, as Python's third wait.
     ///
     /// A call that runs in its caller's own task, a lifecycle change, a
     /// direct change of a stored event or `commit_event`, is not ended: it
@@ -93,15 +100,16 @@ impl<S: ConversationStore> RoomKit<S> {
         let writes = Instant::now() + CLOSE_WAIT;
         wait_for_writes(tasks, writes).await;
         tasks.drain();
-        let _drained = tokio::time::timeout(CLOSE_GRACE, tasks.idle_of_kind(Kind::Work)).await;
+        let _drained = tokio::time::timeout(CLOSE_GRACE, tasks.drained()).await;
         tasks.cut();
         self.inner.turns.cut_all().await;
         tasks.abort(Kind::Work).await;
         tasks.idle_of_kind(Kind::Observer).await;
         tasks.shut_down().await;
         self.inner.turns.close();
-        self.inner.close_channels().await;
         wait_for_writes(tasks, writes).await;
+        self.inner.close_channels().await;
+        wait_for_writes(tasks, Instant::now() + CLOSE_WAIT).await;
     }
 }
 

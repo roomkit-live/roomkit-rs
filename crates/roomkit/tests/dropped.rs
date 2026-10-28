@@ -13,16 +13,17 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource,
-    EventStatus, EventType, EventUpdates, HookResult, Identity, IdentityId, InboundMessage,
-    Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
-    Task, Timestamp,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates,
+    HookResult, Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId,
+    Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    AttachChannelOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, EventFilter,
-    EventQuery, FrameworkEvent, InMemoryStore, InboundError, KitError, ProcessInboundOptions,
-    RoomCounters, RoomFilter, RoomKit, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
+    ConversationStore, CreateRoomOptions, EventFilter, EventQuery, FrameworkEvent, InMemoryStore,
+    InboundError, KitError, ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit,
+    RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -618,7 +619,7 @@ async fn a_waiting_caller_whose_commit_fails_reads_the_store_s_error() {
 /// is logged at ERROR, whether its run still runs or the close aborted it,
 /// as Python's `wait_for_held` and `run_to_its_end` log them
 /// (`close_failed_write_py.out`: a failing write of 12 s, the caller gone,
-/// a warning at each of Python's three waits and the error;
+/// a warning at each of the three waits and the error;
 /// `fixpass3/gone_failed_write_py.out`: the error, the kit not closing; a
 /// caller waiting on a failing write of 3 s: nothing logged).
 #[tokio::test(start_paused = true)]
@@ -646,7 +647,7 @@ async fn the_writes_left_running_and_failing_are_logged() {
             at("ERROR", "the writes a gone caller left failed"),
         ));
     }
-    assert_eq!(logged, [(2, 1), (0, 1), (0, 0)]);
+    assert_eq!(logged, [(3, 1), (0, 1), (0, 0)]);
 }
 
 /// A record from the WebSocket channel, for `commit_event`.
@@ -664,6 +665,132 @@ fn record(text: &str) -> RoomEvent {
         EventContent::text(text),
         Timestamp::UNIX_EPOCH,
     )
+}
+
+/// Python's third wait for the writes, 5 s from the channels' close
+/// (`framework.py` `_end_what_the_channels_started` at 6e420487): a
+/// `commit_event` whose write takes 7 s, which no draining run waits on,
+/// is stored when the close returns, the close taking about 7 s
+/// (`step5-lot1-fixpass3-review/py_close_probe_rows.out`: 6.8 s, stored;
+/// on e8c9984, 5.0 s and not stored).
+#[tokio::test(start_paused = true)]
+async fn a_commit_event_ending_within_the_close_s_third_wait_is_stored() {
+    let (kit, _ws) = gated_room().await;
+    let call = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            let options = CommitEventOptions::default();
+            kit.commit_event(&room_id(), record("Slow"), options).await
+        })
+    };
+    tokio::time::timeout(BOUND, kit.store().committing.notified())
+        .await
+        .unwrap();
+    let go = Arc::clone(&kit.store().go);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(7)).await;
+        go.notify_one();
+    });
+    let took = closing(&kit).await;
+    let at_close = stored(&kit, "Slow").await;
+    let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            took >= Duration::from_secs(7) && took < Duration::from_secs(8),
+            at_close,
+            ended.is_ok()
+        ),
+        (true, true, true)
+    );
+}
+
+/// A transport whose delivery of `First` takes 8 s, which keeps its room's
+/// lane busy past the close's first wait.
+struct Busy;
+
+impl Channel for Busy {
+    fn declaration(&self) -> ChannelDeclaration {
+        ChannelDeclaration::new(
+            channel("busy"),
+            ChannelType::WEBSOCKET,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        )
+    }
+
+    async fn deliver(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        if roomkit::text_of(&event.content) == "First" {
+            tokio::time::sleep(Duration::from_secs(8)).await;
+        }
+        Ok(ChannelOutput::default())
+    }
+}
+
+/// The third wait's 5 s count from the channels' close, as Python's: a
+/// delivery keeps the lane busy 8 s into the close, so the channels close
+/// at 8 s, and a `commit_event` whose write takes 12 s is stored when the
+/// close returns, at 12 s (`fixpass4/py_busy_lane_commit_event.out`:
+/// 11.8 s, stored; 10 s and not stored counted from the close's start).
+#[tokio::test(start_paused = true)]
+async fn the_third_wait_counts_from_the_channels_close() {
+    let (kit, _ws) = gated_room().await;
+    kit.register_channel(Busy).unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("busy"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    kit.store().started.store(true, Ordering::SeqCst);
+    let first = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            let message =
+                InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("First"));
+            let options = ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            };
+            kit.process_inbound(message, options).await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The gate again, for the record's commit.
+    kit.store().started.store(false, Ordering::SeqCst);
+    let call = {
+        let kit = kit.clone();
+        tokio::spawn(async move {
+            let options = CommitEventOptions::default();
+            kit.commit_event(&room_id(), record("Slow"), options).await
+        })
+    };
+    tokio::time::timeout(BOUND, kit.store().committing.notified())
+        .await
+        .unwrap();
+    let go = Arc::clone(&kit.store().go);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(12)).await;
+        go.notify_one();
+    });
+    let took = closing(&kit).await;
+    let at_close = stored(&kit, "Slow").await;
+    let first = tokio::time::timeout(BOUND, first).await.unwrap().unwrap();
+    let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            took >= Duration::from_secs(12) && took < Duration::from_secs(13),
+            at_close,
+            first.map(|result| result.cancellation_reason),
+            ended.is_ok()
+        ),
+        (true, true, Ok(None), true)
+    );
 }
 
 /// A run in its caller's own task, which the caller keeps but stops

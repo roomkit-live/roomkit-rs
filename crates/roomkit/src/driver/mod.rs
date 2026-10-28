@@ -48,7 +48,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinSet};
 use tokio::time::Instant;
 
-use self::calls::WentOn;
+use self::calls::{WentOn, Written};
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::inbound::Caller;
 pub(crate) use self::inbound::{InboundOutput, Ran, Record, ended, run_inbound};
@@ -57,6 +57,7 @@ use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::KitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
+use crate::tasks::Deciding;
 use crate::turns::Canceller;
 
 /// The kit's clock and the runtime's, read together at a run's start: a
@@ -210,10 +211,18 @@ struct Driver<'kit, S> {
     cut: Vec<Canceller>,
     /// An inbound run's hold on each write it asked for, by its effect,
     /// until the operation takes the write's outcome.
-    writing: HashMap<EffectId, WentOn>,
+    writing: HashMap<EffectId, WriteHold>,
     /// The holds on the writes whose outcome the operation took, until what
     /// that outcome led to is started.
-    written: Vec<WentOn>,
+    written: Vec<WriteHold>,
+}
+
+/// An inbound run's hold on a write it asked for: the write's task lasts
+/// while it lives, and, for the commit that decides the call, the kit's
+/// drain does not wait for the run.
+struct WriteHold {
+    _went_on: WentOn,
+    _deciding: Option<Deciding>,
 }
 
 impl<S> Drop for Driver<'_, S> {
@@ -410,16 +419,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) if writes(&request) => {
                 let (writing, written, went_on) = calls::write(&inner, request);
-                if let (Some(result), Some(caller)) = (decides, self.caller.as_deref()) {
-                    caller.commits(*result, written);
-                }
-                // Only an inbound run's commit takes a place in a room's
-                // lane, and its run, a task of its own, is always polled; a
-                // run in its caller's own task may sit unpolled, and its
-                // writes end with their write.
-                if self.caller.is_some() {
-                    self.writing.insert(id, went_on);
-                }
+                self.hold_write(id, decides, written, went_on);
                 self.spawn(id, work, deadline, writing);
             }
             Request::Store(request) => self.spawn(id, work, deadline, async move {
@@ -440,6 +440,35 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }),
         }
         None
+    }
+
+    /// Keeps an inbound run's hold on its write `id`, whose outcome
+    /// `written` tells, until the operation takes that outcome: the
+    /// commit that decides the call, `decides`, is told to the call's
+    /// caller, and marks the run a decided write meanwhile, which the kit's
+    /// drain does not wait for. Only an inbound run's commit takes a place
+    /// in a room's lane, and its run, a task of its own, is always polled;
+    /// a run in its caller's own task may sit unpolled, and its writes end
+    /// with their write.
+    fn hold_write(
+        &mut self,
+        id: EffectId,
+        decides: Option<Box<InboundResult>>,
+        written: Written,
+        went_on: WentOn,
+    ) {
+        let Some(caller) = self.caller.as_deref() else {
+            return;
+        };
+        let deciding = decides.map(|result| {
+            caller.commits(*result, written);
+            self.inner.tasks.deciding()
+        });
+        let held = WriteHold {
+            _went_on: went_on,
+            _deciding: deciding,
+        };
+        self.writing.insert(id, held);
     }
 
     /// Carries out the hold `request` for `effect`, within `deadline`: at
