@@ -34,9 +34,13 @@ pub(crate) struct MemoryTurn {
     pub(super) contexts: Mutex<Contexts>,
     /// Whether the turn's stream waits on its channel for its next item,
     /// what it read before sent: the kit's close cuts a turn left once its
-    /// lanes are idle only then (`Turns::reads_wait`).
+    /// lanes are idle only then, or when it waits on its reader
+    /// (`Turns::reads_wait`).
     waits_on_channel: AtomicBool,
-    /// Told each time `waits_on_channel` changes.
+    /// Whether the turn's stream, having sent an item, waits for its
+    /// reader's pull to read on: the reader has what it sent.
+    waits_on_reader: AtomicBool,
+    /// Told each time either changes.
     waits_changed: Arc<Notify>,
 }
 
@@ -74,6 +78,7 @@ impl MemoryTurn {
                 stream: None,
             }),
             waits_on_channel: AtomicBool::new(false),
+            waits_on_reader: AtomicBool::new(false),
             waits_changed,
         }
     }
@@ -86,9 +91,19 @@ impl MemoryTurn {
         }
     }
 
-    /// Whether the turn's stream waits on its channel for its next item.
-    pub(crate) fn waits_on_channel(&self) -> bool {
+    /// The turn's stream, having sent an item, starts, `true`, or stops
+    /// waiting for its reader's pull.
+    pub(crate) fn wait_on_reader(&self, waits: bool) {
+        if self.waits_on_reader.swap(waits, Ordering::AcqRel) != waits {
+            self.waits_changed.notify_waiters();
+        }
+    }
+
+    /// Whether the turn says nothing more for now: its stream waits on its
+    /// channel, or on its reader, which has what it sent.
+    pub(crate) fn waits(&self) -> bool {
         self.waits_on_channel.load(Ordering::Acquire)
+            || self.waits_on_reader.load(Ordering::Acquire)
     }
 
     /// The context the turn's `on_event()` runs in.

@@ -93,6 +93,7 @@ pub(super) async fn work(
             flow: &flow,
             rounds: 0,
             starting: false,
+            sent: false,
         };
         Box::pin(pump.serve(stream)).await;
     }
@@ -111,13 +112,18 @@ struct Pump<'a> {
     /// rounds.
     rounds: u64,
     starting: bool,
+    /// Whether the stream sent an item: a wait for a pull is then a wait
+    /// on the reader, which has it.
+    sent: bool,
 }
 
 impl Pump<'_> {
     /// Advances `stream` until its end, a failure or a close.
     async fn serve(&mut self, mut stream: ResponseStream) {
         loop {
+            self.turn.wait_on_reader(self.sent);
             self.flow.granted().await;
+            self.turn.wait_on_reader(false);
             if self.flow.closing() {
                 return;
             }
@@ -136,6 +142,7 @@ impl Pump<'_> {
             if !self.send(read) {
                 return;
             }
+            self.sent = true;
         }
     }
 

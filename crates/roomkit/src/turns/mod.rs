@@ -284,9 +284,9 @@ impl Turns {
         }
     }
 
-    /// Whether the run of `run` reads streams, and each of them waits on
-    /// its channel, what it sent before read or on its way: the run's turns
-    /// say nothing more for now, and the kit's close may cut them (RFC
+    /// Whether the run of `run` reads streams, and each of their turns says
+    /// nothing more for now, its stream waiting on its channel, or on its
+    /// reader for what it sent: the kit's close may cut them (RFC
     /// §10.6.8).
     pub(crate) fn reads_wait(&self, run: Unit) -> bool {
         let reads = lock(&self.reads);
@@ -294,7 +294,7 @@ impl Turns {
             .values()
             .filter(|read| read.run == Some(run))
             .peekable();
-        of_run.peek().is_some() && of_run.all(|read| read.turn.waits_on_channel())
+        of_run.peek().is_some() && of_run.all(|read| read.turn.waits())
     }
 
     /// What is told each time a read starts or ends, and each time a
@@ -350,15 +350,23 @@ impl Turns {
     }
 
     /// Cuts every turn, but those of the units in `spared`, as
-    /// [`cut_streams`](Self::cut_streams) does, within twice the cancel
-    /// bound; a turn submitted from now on fails `backend_closed`.
-    pub(crate) async fn cut_all(&self, spared: HashSet<Unit>) {
+    /// [`cut_streams`](Self::cut_streams) does, waiting for them by `by`,
+    /// within twice the cancel bound when `None`; a turn submitted from now
+    /// on fails `backend_closed`. Once every turn is cut, a later call
+    /// spares `spared` and waits for no turn again.
+    pub(crate) async fn cut_all(&self, spared: HashSet<Unit>, by: Option<Instant>) {
+        let again = self.cut.borrow().all;
         let cut = Cut {
             streams: Arc::default(),
             all: true,
             spared: Arc::new(spared),
         };
-        self.cut_with(cut, Instant::now() + self.cut_bound()).await;
+        if again {
+            self.cut.send_replace(cut);
+            return;
+        }
+        let deadline = by.unwrap_or_else(|| Instant::now() + self.cut_bound());
+        self.cut_with(cut, deadline).await;
     }
 
     /// How long the close waits for the turns it cut: twice the cancel
@@ -619,22 +627,11 @@ fn executor_id() -> String {
     format!("executor-{}", drawn.get(..12).unwrap_or(&drawn))
 }
 
-/// A turn the backend no longer takes (RFC §10.6.8 `backend_closed`).
-/// The refusal of a turn the backend no longer takes, its link's error
-/// naming the backend's close (RFC §10.6.8 `backend_closed`).
+/// The error of a turn the backend no longer takes, or still open as the
+/// kit closes: the turn link's `backend_closed`, naming the backend's
+/// close (RFC §10.6.8).
 pub(crate) fn closed() -> ErrorRecord {
     TurnError::new("backend_closed", "the turn backend closed").to_record()
-}
-
-/// A turn whose stream ended before it said anything: the owner let go of
-/// it, the kit closing (RFC §10.6.8), as the Python implementation's
-/// `turns.close` abandons it.
-pub(crate) fn ended_mid_stream() -> ErrorRecord {
-    TurnError::new(
-        "executor_lost",
-        "the turn ended in the middle of its stream",
-    )
-    .to_record()
 }
 
 /// A request that cannot cross.

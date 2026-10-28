@@ -28,6 +28,7 @@
 //! a direct update (`ON_EVENT_UPDATED` fires) made in the room's work.
 
 use std::collections::VecDeque;
+use std::pin::pin;
 use std::sync::Arc;
 
 use roomkit_core::model::{
@@ -35,6 +36,7 @@ use roomkit_core::model::{
     EventUpdates, Metadata, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_HIDDEN, ROW_WITHHELD, StreamTarget};
+use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::segments::Segments;
@@ -154,7 +156,30 @@ pub(crate) async fn read<S: ConversationStore>(
         let _signalled = done.send(());
         read
     };
-    let (read, ()) = tokio::join!(reader, producer.serve(pulled, reader_done, stops));
+    let mut reader = Box::pin(reader);
+    let mut read = None;
+    {
+        let mut serving = pin!(producer.serve(pulled, reader_done, stops));
+        tokio::select! {
+            done = &mut reader => {
+                read = Some(done);
+                serving.await;
+            }
+            () = &mut serving => {}
+        }
+    }
+    let read = match read {
+        Some(read) => read,
+        // The kit's close cuts the reader with the turn, as the Python
+        // implementation cancels its stream readers: a streaming target
+        // that reads on no more holds nothing, and what it was handed is
+        // stored (RFC §12.2 step 13s).
+        None if producer.cut == Some(KIT_CLOSED) => {
+            drop(reader);
+            Ok(ChannelOutput::default())
+        }
+        None => reader.await,
+    };
     let output = producer.finish(read).await;
     if let Some((event_id, metadata)) = producer.segments.owed_record() {
         write_record(inner, &producer.room_id, &event_id, metadata).await;
@@ -256,6 +281,23 @@ impl Producer {
         mut stops: Stops,
     ) {
         loop {
+            if self.draining.is_some() {
+                // A read the close drains goes on only as its reader pulls,
+                // the reader polled once first: one that does not, a
+                // streaming target that stalls, holds the close no longer.
+                tokio::task::yield_now().await;
+                if !matches!(reader_done.try_recv(), Err(TryRecvError::Empty)) {
+                    return;
+                }
+                let Ok(pull) = pulls.try_recv() else {
+                    self.cut = self.draining;
+                    return;
+                };
+                if !self.answer(pull, &mut stops).await {
+                    return;
+                }
+                continue;
+            }
             let pull = tokio::select! {
                 biased;
                 _ = &mut reader_done => return,
@@ -441,14 +483,14 @@ impl Producer {
         output
     }
 
-    /// The error of a turn the kit's close let go of once its lanes were
-    /// idle, before the turn said anything: its stream ended in its middle,
-    /// as the Python implementation's reader of a turn `turns.close`
-    /// abandons reads it. One that said something stores it, its delivery
-    /// dropped, the call reading `kit_closed`, as Python's.
+    /// The error of a turn the kit's close cut once its lanes were idle,
+    /// before the turn said anything: still open as the kit closes, it
+    /// fails the turn link's `backend_closed`, never `executor_lost` (RFC
+    /// §10.6.8; decided 2026-10-28, the Python implementation aligns). One
+    /// that said something stores it, its delivery dropped, the call
+    /// reading `kit_closed`, as Python's.
     fn abandoned_unsaid(&self) -> Option<ErrorRecord> {
-        (self.draining.is_some() && self.cut == self.draining && !self.took)
-            .then(turns::ended_mid_stream)
+        (self.draining.is_some() && self.cut == self.draining && !self.took).then(turns::closed)
     }
 
     /// The reader stopped before the end (RFC §12.2 step 13s): the round

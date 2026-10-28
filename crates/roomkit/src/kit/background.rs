@@ -114,18 +114,23 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    the call's result reading `cancellation_reason` `kit_closed`, as
     ///    Python's sealed lanes drop it. Once the lanes are idle, no
     ///    delivery set running or waiting and every run out of them only
-    ///    reading turns that wait on their channel, those turns have
-    ///    nothing left to deliver into and are cut then, not at the grace,
-    ///    as Python's `turns.close` follows its `lanes.aclose` (RFC
-    ///    §10.6.8): each crosses as `cancel`, what it sent before is read
-    ///    and stored, its delivery dropped, the call reading `kit_closed`,
-    ///    and one that said nothing has its stream end in its middle, the
-    ///    call carrying the turn link's `executor_lost`, as Python's; what
-    ///    they leave drains for the rest of the 5 seconds.
+    ///    reading turns that say nothing more for now, each waiting on its
+    ///    channel or on its reader, those turns have nothing left to
+    ///    deliver into and are cut then, not at the grace, as Python's
+    ///    `turns.close` follows its `lanes.aclose` (RFC §10.6.8): each
+    ///    crosses as `cancel`, what it sent before is read while its
+    ///    reader pulls, a streaming target that does not cut with it, as
+    ///    Python cancels its readers, and the text the reader was handed
+    ///    is stored, marked `cancelled` (RFC §12.2 step 13s), its delivery
+    ///    dropped, the call reading `kit_closed`; one that said nothing,
+    ///    still open, fails the turn link's `backend_closed` (RFC
+    ///    §10.6.8). That cut and what it leaves drain for the rest of the
+    ///    5 seconds.
     /// 4. The turns still running are then cut (RFC §10.6.8: the kit
     ///    closing cancels their cascades), as the streams were, within the
     ///    same bound, and a turn asked from then on fails the turn link's
-    ///    `backend_closed`. A turn the close spares, one it was called
+    ///    `backend_closed`; those cut once the lanes were idle are not
+    ///    waited for again. A turn the close spares, one it was called
     ///    from inside, is not cut, in any step.
     ///    What is left of the inbound calls is then aborted at its next
     ///    wait, letting go of what it holds, its room lock, its places in
@@ -136,10 +141,11 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    running and `kit_closed` for one still queued or a commit that
     ///    ended after the abort, as Python's lanes report them, no reason
     ///    once its own delivery was over, as Python's caller reads, but
-    ///    `kit_closed` when a commit of its cascade still ran, its event
-    ///    stored and never delivered, as Python's caller reads its close's
-    ///    refusal of that delivery, the
-    ///    store's error for such a commit that failed, or
+    ///    `kit_closed` when a commit of its cascade, of an event to
+    ///    deliver, not one stored `BLOCKED`, still ran, its event stored
+    ///    and never delivered, as Python's caller reads its close's
+    ///    refusal of that delivery, the store's error for such a commit
+    ///    that failed, or
     ///    [`KitError::ShutDown`](crate::KitError::ShutDown) for a call cut
     ///    before its own commit, whatever its run committed for other
     ///    events first (RMK-1010 item 41).
@@ -204,12 +210,13 @@ impl<S: ConversationStore> RoomKit<S> {
         // drains within the rest of the grace.
         let grace = Instant::now() + CLOSE_GRACE;
         if self.drain(Drained::Lanes, grace).await {
-            self.inner.turns.cut_all(tasks.spared()).await;
+            self.inner.turns.cut_all(tasks.spared(), Some(grace)).await;
             self.drain(Drained::Work, grace).await;
         }
         tasks.cut();
-        // The turns still running once the grace ran out.
-        self.inner.turns.cut_all(tasks.spared()).await;
+        // The turns still running once the grace ran out; those cut once
+        // the lanes were idle are not waited for again.
+        self.inner.turns.cut_all(tasks.spared(), None).await;
         tasks.abort(Kind::Work).await;
         tasks.idle_of_kind(Kind::Observer).await;
         tasks.shut_down().await;

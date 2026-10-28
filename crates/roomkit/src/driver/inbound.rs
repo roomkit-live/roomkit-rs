@@ -88,9 +88,11 @@ pub(crate) struct Record {
     /// The call's result once its own event's commit, the one that decides
     /// it, is stored, and what that write came to.
     committing: Mutex<Option<(InboundResult, Written)>>,
-    /// The commits of the call's cascade past the one that decides it
-    /// whose outcome the run has not taken, by their effect, each with
-    /// what its write came to.
+    /// The commits of the call's cascade past the one that decides it, of
+    /// events to deliver, whose outcome the run has not taken, by their
+    /// effect, each with what its write came to: one stored BLOCKED is not
+    /// among them, as [`committed`](Self::committed) reads a blocked call
+    /// with no reason.
     cascade: Mutex<Vec<(EffectId, Written)>>,
 }
 

@@ -12,8 +12,12 @@ use std::time::Duration;
 
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
-use roomkit::model::RoomId;
-use roomkit::{AttachChannelOptions, CreateRoomOptions, RoomKit, RoomKitOptions};
+use roomkit::model::{ChannelBinding, ChannelOutput, ChannelType, HookResult, RoomContext, RoomId};
+use roomkit::{
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
+    CreateRoomOptions, DeliveryStream, EventQuery, HookExecution, HookSpec, HookTrigger, RoomKit,
+    RoomKitOptions, text_of,
+};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderStream, ToolDefinition,
@@ -24,8 +28,8 @@ use tokio::time::{Instant, Sleep};
 
 use crate::store::SlowCommits;
 use crate::support::{
-    Call, Witness, attach_agent, channel, ended, kit_on, kit_with, ok, room_id, spawn_message,
-    stored, stored_in,
+    Answered, Call, Witness, attach_agent, channel, ended, kit_on, kit_with, ok, room_id,
+    spawn_message, stored, stored_in, transport,
 };
 
 /// RFC §10.6.8, §12.10.4: the close cuts at once only the turns whose
@@ -144,15 +148,53 @@ impl AiProvider for Pausing {
     }
 }
 
-/// What the turn the drain leaves does in [`the_turns_left_once_the_lanes_are_idle_are_cut_then`].
+/// What the turn the drain leaves does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Left {
     /// It writes "Think", then waits 30 s.
     Stream,
+    /// It writes 100 deltas at once.
+    Deltas,
     /// It writes "Thinking", then calls a tool of 30 s.
     Tool,
     /// It says nothing for 30 s.
     Output,
+}
+
+/// The agent whose turn does what `left` says, attached to `room_1`.
+async fn attach_left(kit: &RoomKit, left: Left) {
+    let first = match left {
+        Left::Stream => Some("Think"),
+        Left::Output => None,
+        Left::Deltas | Left::Tool => return attach_scripted(kit, left).await,
+    };
+    attach_agent(kit, Pausing { first }, Tools::new()).await;
+}
+
+/// The scripted agent whose turn writes deltas or calls a slow tool.
+async fn attach_scripted(kit: &RoomKit, left: Left) {
+    match left {
+        Left::Stream | Left::Output => {}
+        Left::Deltas => {
+            let words: Vec<String> = (0..100).map(|n| format!("w{n} ")).collect();
+            let round = ScriptedRound::writing(words.iter().map(String::as_str));
+            attach_agent(kit, ScriptedProvider::new([round]), Tools::new()).await;
+        }
+        Left::Tool => {
+            let tools = Tools::new().tool(
+                ToolDefinition::new("slow", "Slow.", json!({ "type": "object" })),
+                |_call, _context| async {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    Ok(ToolOutput::Text("slow".to_owned()))
+                },
+            );
+            let model = ScriptedProvider::new([
+                ScriptedRound::calling("Thinking", [("c1", "slow", "{}")]),
+                ScriptedRound::answering("Done."),
+            ]);
+            attach_agent(kit, model, tools).await;
+        }
+    }
 }
 
 /// A call's result, as `(cancellation_reason, "type: message")` of its
@@ -180,38 +222,20 @@ fn texts(texts: &[&str]) -> Vec<String> {
 /// writes "Think" then waits 30 s, writes "Thinking" and calls a tool of
 /// 30 s, or says nothing for 30 s; the kit is closed from outside at 0.1
 /// s. The close returns at 1 s, as Python's. What the turn said is
-/// stored, its delivery dropped, the call reading `kit_closed`; a turn
-/// that said nothing has its stream end in its middle, the call carrying
-/// `TurnLinkError`, as Python's (`rmk1017-lightreview3/lr3_probe_py.out`
-/// N1, `rmk1017-fix4/n1_errors_py.out`). On 181eaa5 the close returned
-/// at 5.1 s, nothing of the turn stored but the tool's rows, and the
-/// call read no reason.
+/// stored, its delivery dropped, the call reading `kit_closed`, as
+/// Python's (`rmk1017-lightreview3/lr3_probe_py.out` N1); a turn that
+/// said nothing, still open as the kit closes, fails the turn link's
+/// `backend_closed` (RFC §10.6.8, decided 2026-10-28; on e569601 it
+/// read `executor_lost`, as Python's still does). On 181eaa5 the close
+/// returned at 5.1 s, nothing of the turn stored but the tool's rows, and
+/// the call read no reason.
 #[tokio::test(start_paused = true)]
 async fn the_turns_left_once_the_lanes_are_idle_are_cut_then() {
     let mut rows = Vec::new();
     for left in [Left::Stream, Left::Tool, Left::Output] {
         let witness = Witness::slow("One.", Duration::from_secs(1));
         let kit = kit_with(&witness).await;
-        match left {
-            Left::Stream | Left::Output => {
-                let first = (left == Left::Stream).then_some("Think");
-                attach_agent(&kit, Pausing { first }, Tools::new()).await;
-            }
-            Left::Tool => {
-                let tools = Tools::new().tool(
-                    ToolDefinition::new("slow", "Slow.", json!({ "type": "object" })),
-                    |_call, _context| async {
-                        tokio::time::sleep(Duration::from_secs(30)).await;
-                        Ok(ToolOutput::Text("slow".to_owned()))
-                    },
-                );
-                let model = ScriptedProvider::new([
-                    ScriptedRound::calling("Thinking", [("c1", "slow", "{}")]),
-                    ScriptedRound::answering("Done."),
-                ]);
-                attach_agent(&kit, model, tools).await;
-            }
-        }
+        attach_left(&kit, left).await;
         let call = spawn_message(&kit, "One.", room_id());
         tokio::time::sleep(Duration::from_millis(100)).await;
         let started = Instant::now();
@@ -223,9 +247,9 @@ async fn the_turns_left_once_the_lanes_are_idle_are_cut_then() {
         rows.push((left, took, told(call).await, stored(&kit).await));
     }
     let kit_closed = Some((Some("kit_closed".to_owned()), None));
-    let ended_mid_stream = Some((
+    let backend_closed = Some((
         None,
-        Some("TurnLinkError: executor_lost: the turn ended in the middle of its stream".to_owned()),
+        Some("TurnLinkError: backend_closed: the turn backend closed".to_owned()),
     ));
     assert_eq!(
         rows,
@@ -242,7 +266,7 @@ async fn the_turns_left_once_the_lanes_are_idle_are_cut_then() {
                 kit_closed,
                 texts(&["One.", "Thinking", "[Tool call: slow]", "[Tool call: slow]"])
             ),
-            (Left::Output, 9, ended_mid_stream, texts(&["One."])),
+            (Left::Output, 9, backend_closed, texts(&["One."])),
         ]
     );
 }
@@ -345,4 +369,167 @@ async fn an_answer_committed_past_the_grace_reads_as_dropped() {
         )
     };
     assert_eq!(rows, [row(3, 39), row(6, 69)]);
+}
+
+/// RFC §12.10.4 (RMK-1017, light review 4, nit 3): N2's shape, a SYNC hook
+/// blocking "A.", whose commit, stored `BLOCKED`, takes 0 s or 6 s: an
+/// event stored `BLOCKED` is never delivered, so a run aborted past the
+/// grace while that commit runs reads no reason, as Python's
+/// (`rmk1017-fix5/py_n2_blocked.out`). On 463c245 the 6 s row read
+/// `kit_closed`.
+#[tokio::test(start_paused = true)]
+async fn a_blocked_answer_committed_past_the_grace_reads_no_reason() {
+    let mut rows = Vec::new();
+    for commit in [0, 6] {
+        let store = SlowCommits::delaying("A.", room_id(), Duration::from_secs(commit));
+        let witness = Witness::slow("One.", Duration::from_secs(1));
+        let kit = kit_on(RoomKit::new(RoomKitOptions::with_store(store)), &witness).await;
+        let spec = HookSpec::new("block", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+        kit.hook(spec, |event, _context| {
+            let is_answer = text_of(&event.content) == "A.";
+            async move {
+                Ok(if is_answer {
+                    HookResult::block("no")
+                } else {
+                    HookResult::allow()
+                })
+            }
+        })
+        .unwrap();
+        let model = ScriptedProvider::new([ScriptedRound::answering("A.")]);
+        attach_agent(&kit, model, Tools::new()).await;
+        let one = spawn_message(&kit, "One.", room_id());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let started = Instant::now();
+        tokio::time::timeout(Duration::from_secs(60), kit.close())
+            .await
+            .unwrap()
+            .unwrap();
+        let took = started.elapsed().as_millis() / 100;
+        rows.push((commit, took, ended(one).await, stored(&kit).await));
+    }
+    let row = |commit, took| (commit, took, Some(ok(None, None)), texts(&["One.", "A."]));
+    assert_eq!(rows, [row(0, 9), row(6, 69)]);
+}
+
+/// A streaming WebSocket target that reads the first item of a stream,
+/// then stalls 30 s before it reads the rest.
+#[derive(Clone)]
+struct Stalling;
+
+impl Channel for Stalling {
+    fn declaration(&self) -> ChannelDeclaration {
+        let mut declaration = transport("ws");
+        declaration.supports_streaming_delivery = true;
+        declaration.recipient_key = None;
+        declaration
+    }
+
+    async fn deliver_stream(
+        &self,
+        mut stream: DeliveryStream,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        drop(stream.next().await);
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        while stream.next().await.is_some() {}
+        Ok(ChannelOutput::default())
+    }
+}
+
+/// The texts `room_1` stores past its first event, each with whether it
+/// is marked `cancelled`.
+async fn answers(kit: &RoomKit) -> Vec<(String, bool)> {
+    let query = EventQuery {
+        limit: u64::MAX,
+        ..EventQuery::default()
+    };
+    let events = kit.store().list_events(&room_id(), &query).await.unwrap();
+    events
+        .iter()
+        .filter(|event| event.source.channel_type != ChannelType::SYSTEM)
+        .skip(1)
+        .map(|event| {
+            let cancelled = event.metadata.get("cancelled") == Some(&json!(true));
+            (text_of(&event.content), cancelled)
+        })
+        .collect()
+}
+
+/// N6, N1's shape: the witness takes `before` to deliver "One.", the
+/// agent asked after it, its answer streamed to a target that reads its
+/// first item, then stalls 30 s; the kit is closed from outside at 0.1 s.
+/// What the close took, in tenths of a second, the call, and the answers
+/// stored, for each of what the turn does.
+async fn stalled(before: Duration) -> Vec<Stalled> {
+    let mut rows = Vec::new();
+    for left in [Left::Stream, Left::Deltas, Left::Tool] {
+        let witness = Witness::slow("One.", before);
+        let kit = kit_with(&witness).await;
+        kit.register_channel(Stalling).unwrap();
+        kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        attach_left(&kit, left).await;
+        let call = spawn_message(&kit, "One.", room_id());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let started = Instant::now();
+        tokio::time::timeout(Duration::from_secs(60), kit.close())
+            .await
+            .unwrap()
+            .unwrap();
+        let took = started.elapsed().as_millis() / 100;
+        let call = ended(call).await.unwrap();
+        rows.push((left, took, call, answers(&kit).await));
+    }
+    rows
+}
+
+/// What a stalled target's scenario came to: what the turn did, what the
+/// close took, the call, and the answers stored, each with whether it is
+/// marked `cancelled`.
+type Stalled = (Left, u128, Answered, Vec<(String, bool)>);
+
+/// What the stalled target's rows read: the text it was handed stored,
+/// marked `cancelled`, the call `kit_closed`.
+fn stalled_rows(took: u128) -> Vec<Stalled> {
+    let row = |left, handed: &str| {
+        (
+            left,
+            took,
+            ok(Some("kit_closed"), None),
+            vec![(handed.to_owned(), true)],
+        )
+    };
+    vec![
+        row(Left::Stream, "Think"),
+        row(Left::Deltas, "w0 "),
+        row(Left::Tool, "Thinking"),
+    ]
+}
+
+/// RFC §10.6.8, §12.2 step 13s (RMK-1017, light review 4, N6): the turn
+/// left once the lanes are idle streams to a target that stalls; once
+/// cut, the turn's reader holds the close no longer: the target is cut
+/// with it, as Python cancels its readers, and the text it was handed is
+/// stored, marked `cancelled`, its delivery dropped, the call reading
+/// `kit_closed`, as Python's at 0.9 s (`rmk1017-lightreview4/n6_py.out`).
+/// On 463c245 the close took 21 s or 15.1 s, nothing of the turn stored,
+/// the call reading no reason (`lr4_probe_n6_head.out`).
+#[tokio::test(start_paused = true)]
+async fn a_cut_turn_s_stalled_target_holds_the_close_no_longer() {
+    assert_eq!(stalled(Duration::from_secs(1)).await, stalled_rows(9));
+}
+
+/// The same, on a multi-thread runtime, the witness taking 0.1 s: the
+/// close returns within a second.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cut_turn_s_stalled_target_holds_the_close_no_longer_on_threads() {
+    let rows: Vec<_> = stalled(Duration::from_millis(100))
+        .await
+        .into_iter()
+        .map(|(left, took, call, answers)| (left, u128::from(took < 10), call, answers))
+        .collect();
+    assert_eq!(rows, stalled_rows(1));
 }

@@ -39,7 +39,7 @@ use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::Poll;
 
-use roomkit_core::model::{ErrorRecord, RoomId, Timestamp};
+use roomkit_core::model::{ErrorRecord, EventStatus, RoomId, Timestamp};
 use roomkit_core::ops::{
     Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest, InboundResult,
     Next, Notice, Operation, Outcome, Request, Settled, StoreRequest,
@@ -280,7 +280,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
 
     /// Tells an inbound run's caller of a write it starts, `written` telling
     /// its outcome: the commit that decides the call, `decides`, or another
-    /// commit, of its cascade, when it `commits`.
+    /// commit, of its cascade, of an event to deliver, when it `commits`.
     fn note_the_commit(
         &self,
         id: EffectId,
@@ -455,8 +455,10 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         } = effect;
         let deadline = deadline.and_then(|deadline| self.clocks.instant_of(deadline));
         let inner = Arc::clone(self.inner);
-        let commits = matches!(&request, Request::Store(StoreRequest::Commit { .. }));
+        // A commit of an event to deliver: one stored BLOCKED never is.
+        let mut commits = false;
         if let Request::Store(StoreRequest::Commit { event, .. }) = &request {
+            commits = event.status != EventStatus::Blocked;
             self.indexes.committing(id, event);
         }
         match request {
