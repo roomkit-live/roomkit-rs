@@ -1,27 +1,45 @@
-//! The warnings `tracing` emits while a test runs, for a test that checks
-//! one is logged. A test crate includes it with `#[path]`.
+//! The warnings and errors `tracing` emits while a test runs, for a test
+//! that checks one is logged. A test crate includes it with `#[path]`.
+//!
+//! One subscriber is the test binary's global default, installed by the
+//! first capture, and keeps the lines of the thread that captures, while
+//! its guard lives. A subscriber set for one thread misses events: the
+//! interest a callsite caches is computed again whenever one comes or goes,
+//! and races the same callsite firing in another test's thread.
 
+use std::cell::RefCell;
 use std::fmt::{Debug, Write as _};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, Once, PoisonError};
 
 use tracing::field::{Field, Visit};
+use tracing::level_filters::LevelFilter;
 use tracing::span::{Attributes, Id, Record};
-use tracing::subscriber::{DefaultGuard, Interest};
+use tracing::subscriber::Interest;
 use tracing::{Event, Level, Metadata as Callsite, Subscriber};
 
-/// The warnings `tracing` emits on this thread while the guard lives, each
-/// as its message and fields written out.
+thread_local! {
+    /// Where the lines of this thread go while it captures.
+    static CAPTURING: RefCell<Option<Warnings>> = const { RefCell::new(None) };
+}
+
+/// The warnings and errors `tracing` emits on this thread while the guard
+/// lives, each as its level, then its message and fields written out.
 #[derive(Clone, Default)]
 pub(crate) struct Warnings(Arc<Mutex<Vec<String>>>);
 
+/// Captures this thread's lines while it lives.
+pub(crate) struct Capturing(());
+
 impl Warnings {
-    pub(crate) fn capture() -> (Self, DefaultGuard) {
+    pub(crate) fn capture() -> (Self, Capturing) {
+        static INSTALLED: Once = Once::new();
+        INSTALLED.call_once(|| tracing::subscriber::set_global_default(Sink).unwrap());
         let warnings = Self::default();
-        let guard = tracing::subscriber::set_default(warnings.clone());
-        (warnings, guard)
+        CAPTURING.with(|capturing| *capturing.borrow_mut() = Some(warnings.clone()));
+        (warnings, Capturing(()))
     }
 
-    /// The warnings that contain `text`.
+    /// The lines that contain `text`.
     pub(crate) fn containing(&self, text: &str) -> Vec<String> {
         self.0
             .lock()
@@ -33,6 +51,12 @@ impl Warnings {
     }
 }
 
+impl Drop for Capturing {
+    fn drop(&mut self) {
+        CAPTURING.with(|capturing| capturing.borrow_mut().take());
+    }
+}
+
 struct Line<'line>(&'line mut String);
 
 impl Visit for Line<'_> {
@@ -41,13 +65,25 @@ impl Visit for Line<'_> {
     }
 }
 
-impl Subscriber for Warnings {
-    fn register_callsite(&self, _callsite: &'static Callsite<'static>) -> Interest {
-        Interest::sometimes()
+/// The binary's subscriber: every warning and error, kept by the thread
+/// that emits it when it captures.
+struct Sink;
+
+impl Subscriber for Sink {
+    fn register_callsite(&self, callsite: &'static Callsite<'static>) -> Interest {
+        if *callsite.level() <= Level::WARN {
+            Interest::always()
+        } else {
+            Interest::never()
+        }
+    }
+
+    fn max_level_hint(&self) -> Option<LevelFilter> {
+        Some(LevelFilter::WARN)
     }
 
     fn enabled(&self, callsite: &Callsite<'_>) -> bool {
-        *callsite.level() == Level::WARN
+        *callsite.level() <= Level::WARN
     }
 
     fn new_span(&self, _span: &Attributes<'_>) -> Id {
@@ -59,12 +95,18 @@ impl Subscriber for Warnings {
     fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
 
     fn event(&self, event: &Event<'_>) {
-        let mut line = String::new();
-        event.record(&mut Line(&mut line));
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(line);
+        CAPTURING.with(|capturing| {
+            let Some(warnings) = &*capturing.borrow() else {
+                return;
+            };
+            let mut line = format!("{} ", event.metadata().level());
+            event.record(&mut Line(&mut line));
+            warnings
+                .0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(line);
+        });
     }
 
     fn enter(&self, _span: &Id) {}

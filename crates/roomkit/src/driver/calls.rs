@@ -289,6 +289,12 @@ pub(super) fn write<S: ConversationStore>(
         let outcome = unwinding(store(&*writer.store, request))
             .await
             .unwrap_or_else(|_panic| Outcome::Failed(panicked()));
+        if let Outcome::Failed(error) = &outcome
+            && ended.is_closed()
+        {
+            // Nobody reads it: its run was aborted, its caller gone.
+            log_left_failed(error);
+        }
         ended.send_replace(Some(outcome));
         let Err(_went_on) = run_going_on.await;
     };
@@ -317,6 +323,17 @@ async fn unwinding<F: Future>(future: F) -> thread::Result<F::Output> {
         },
     )
     .await
+}
+
+/// Logs `error`, a write's that failed once its caller was gone, as
+/// Python's `run_to_its_end` logs it: nobody else learns of it.
+pub(super) fn log_left_failed(error: &ErrorRecord) {
+    tracing::error!(
+        target: "roomkit::driver",
+        error_type = %error.error_type,
+        message = %error.message,
+        "the writes a gone caller left failed"
+    );
 }
 
 /// The failure of a call that panicked.

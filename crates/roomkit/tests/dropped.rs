@@ -24,6 +24,11 @@ use roomkit::{
 };
 use tokio::sync::{Notify, broadcast};
 
+#[path = "support/warnings.rs"]
+mod warnings;
+
+use warnings::Warnings;
+
 /// How long a call that should not wait may take before the test fails it.
 const BOUND: Duration = Duration::from_secs(5);
 
@@ -604,6 +609,42 @@ async fn a_waiting_caller_whose_commit_fails_reads_the_store_s_error() {
         });
     }
     assert_eq!(read, vec![Some("InvalidArgument".to_owned()); 2]);
+}
+
+/// RMK-1010 item 4: the close names the writes it leaves running at each
+/// of its waits, at WARN, and a write that fails once its caller is gone
+/// is logged at ERROR, whether its run still runs or the close aborted it,
+/// as Python's `wait_for_held` and `run_to_its_end` log them
+/// (`close_failed_write_py.out`: a failing write of 12 s, the caller gone,
+/// a warning at each of Python's three waits and the error;
+/// `fixpass3/gone_failed_write_py.out`: the error, the kit not closing; a
+/// caller waiting on a failing write of 3 s: nothing logged).
+#[tokio::test(start_paused = true)]
+async fn the_writes_left_running_and_failing_are_logged() {
+    let mut logged = Vec::new();
+    for (seconds, waiting, closes) in [(12, false, true), (1, false, false), (3, true, true)] {
+        let (kit, _ws) = gated_room().await;
+        kit.store().fails.store(true, Ordering::SeqCst);
+        let (lines, guard) = Warnings::capture();
+        let call = slow_commit(&kit, Duration::from_secs(seconds)).await;
+        if !waiting {
+            call.abort();
+        }
+        if closes {
+            closing(&kit).await;
+        }
+        tokio::time::sleep(Duration::from_secs(seconds + 1)).await;
+        drop(guard);
+        let at = |level: &str, text: &str| {
+            let lines = lines.containing(text);
+            lines.iter().filter(|line| line.starts_with(level)).count()
+        };
+        logged.push((
+            at("WARN", "closing with decided writes still running"),
+            at("ERROR", "the writes a gone caller left failed"),
+        ));
+    }
+    assert_eq!(logged, [(2, 1), (0, 1), (0, 0)]);
 }
 
 /// A commit whose write panics is answered as any call that panicked: the

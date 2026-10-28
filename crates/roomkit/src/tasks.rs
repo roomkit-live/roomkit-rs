@@ -230,6 +230,15 @@ impl Tasks {
         self.idle_of(|kind| kind != Kind::Write).await;
     }
 
+    /// How many tasks of `kind` run.
+    pub(crate) fn running_of(&self, kind: Kind) -> usize {
+        self.state()
+            .running
+            .values()
+            .filter(|(running, _)| *running == kind)
+            .count()
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }

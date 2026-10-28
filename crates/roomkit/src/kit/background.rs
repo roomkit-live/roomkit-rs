@@ -7,7 +7,7 @@ use tokio::time::Instant;
 
 use super::RoomKit;
 use crate::store::ConversationStore;
-use crate::tasks::Kind;
+use crate::tasks::{Kind, Tasks};
 
 /// How long the kit's close lets the work under way run to its end, each
 /// room's deliveries and the turns they run, once it drains them, before it
@@ -29,9 +29,12 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    until its store is.
     /// 2. The store's writes decided for a caller, an event's commit among
     ///    them, get up to 5 seconds from the close's start to end, the work
-    ///    going on meanwhile, as Python's `CLOSE_WAIT_S`. A write still
-    ///    running then is left to end on its own, never cancelled: a caller
-    ///    still waiting for its call reads what the write came to.
+    ///    going on meanwhile, as Python's `CLOSE_WAIT_S`; a commit's write
+    ///    ends once its event took its place in the room's lane. A write
+    ///    still running then is left to end on its own, never cancelled,
+    ///    and counted in a warning: a caller still waiting for its call
+    ///    reads what the write came to, its event or the store's error; a
+    ///    write that fails once its caller is gone is logged as an error.
     /// 3. The inbound calls running then drain for up to 5 seconds, whether
     ///    their caller waits for them, was answered at the decision (RFC
     ///    §10.1 step 18) or left: each room's deliveries in its lane, the
@@ -55,9 +58,11 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    there. A caller still waiting receives its result, its
     ///    `cancellation_reason` `lane_cancelled` for a delivery cut
     ///    running and `kit_closed` for one still queued or a commit that
-    ///    ended after the abort, as Python's lanes report them, or
-    ///    [`KitError::ShutDown`](crate::KitError::ShutDown) for a call
-    ///    nothing of which was stored.
+    ///    ended after the abort, as Python's lanes report them, the
+    ///    store's error for such a commit that failed, or
+    ///    [`KitError::ShutDown`](crate::KitError::ShutDown) for a call cut
+    ///    before its own commit, whatever its run committed for other
+    ///    events first (RMK-1010 item 41).
     /// 5. The other observer hooks still running after the fact (RFC §9.3)
     ///    finish, each within its hook's timeout.
     /// 6. The kit is sealed: every call that runs an operation fails from
@@ -70,7 +75,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// 7. The turn backend takes no more turns, and each channel registered
     ///    is closed ([`Channel::close`](crate::Channel::close)), one after
     ///    the other, once; the store's writes get what is left of their 5
-    ///    seconds.
+    ///    seconds, those still running counted in a warning again.
     ///
     /// A call that runs in its caller's own task, a lifecycle change, a
     /// direct change of a stored event or `commit_event`, is not ended: it
@@ -86,7 +91,7 @@ impl<S: ConversationStore> RoomKit<S> {
             return;
         }
         let writes = Instant::now() + CLOSE_WAIT;
-        let _written = tokio::time::timeout_at(writes, tasks.idle_of_kind(Kind::Write)).await;
+        wait_for_writes(tasks, writes).await;
         tasks.drain();
         let _drained = tokio::time::timeout(CLOSE_GRACE, tasks.idle_of_kind(Kind::Work)).await;
         tasks.cut();
@@ -96,6 +101,21 @@ impl<S: ConversationStore> RoomKit<S> {
         tasks.shut_down().await;
         self.inner.turns.close();
         self.inner.close_channels().await;
-        let _written = tokio::time::timeout_at(writes, tasks.idle_of_kind(Kind::Write)).await;
+        wait_for_writes(tasks, writes).await;
+    }
+}
+
+/// Waits for the store's writes running until `deadline` at most, never
+/// cutting one: those still running then are counted in the log and left
+/// to end on their own, as Python's `wait_for_held` names them.
+async fn wait_for_writes(tasks: &Tasks, deadline: Instant) {
+    let ended = tokio::time::timeout_at(deadline, tasks.idle_of_kind(Kind::Write)).await;
+    let running = tasks.running_of(Kind::Write);
+    if ended.is_err() && running > 0 {
+        tracing::warn!(
+            target: "roomkit::kit",
+            writes = running,
+            "closing with decided writes still running, left to end on their own"
+        );
     }
 }

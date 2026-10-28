@@ -323,6 +323,8 @@ impl Caller {
                 error = ?result.error,
                 "a call nobody waits for any more is over"
             ),
+            // Its commit failed: the writes its caller left (RFC §13.6).
+            Ok(Err(InboundError::Store(error))) if self.gone => calls::log_left_failed(error),
             Ok(Err(error)) => tracing::warn!(
                 target: "roomkit::driver",
                 call,
