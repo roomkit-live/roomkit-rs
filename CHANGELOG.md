@@ -128,7 +128,8 @@ kit, its construction and its calls).
   channel is closed, where it waited for the close's 5 s grace and was then
   cut with its work, leaving the channels open and the kit unsealed. A
   `close` from an observer the kit fires and forgets, an ASYNC hook or a
-  tool call's observer, spares that observer alone. What waits behind
+  tool call's observer, which starts with fresh marks, spares that
+  observer alone, and so cuts the turn that fired it. What waits behind
   spared work is dropped at once rather than at the grace: the deliveries
   queued behind its place in the room's lane, `kit_closed`, and the
   messages waiting, or starting to wait as the close drains, for the
@@ -141,13 +142,15 @@ kit, its construction and its calls).
   result's `error` (RFC §10.6.8).
 - A turn's work, its model's rounds and its tools' calls, is cut at once
   when the kit closes, with no grace, as Python's (RFC §10.6.8): a turn
-  read as a stream is cut once the close's first wait for the store's
-  writes is over, before the drain, what its reader read delivered as the
-  lanes drain; a turn whose output is still awaited, the channel's
-  `on_event()`, is drained with its delivery set and cut at the grace. An
-  agent writing then running a tool of 30 s, closed from outside, closes at
-  0.1 s, where it closed at 5.1 s. A call aborted once its own delivery
-  was over reads no reason, as Python's, where it read `lane_cancelled`.
+  whose stream is read as the close's first wait for the store's writes
+  ends is cut then, before the drain, what its reader read delivered as
+  the lanes drain; a turn whose output is still awaited, the channel's
+  `on_event()`, and one asked as the lanes drain, are drained with their
+  delivery set and cut at the grace, as Python's turn backend stays open
+  until its lanes are done. An agent writing then running a tool of 30 s,
+  closed from outside, closes at 0.1 s, where it closed at 5.1 s. A call
+  aborted once its own delivery was over reads no reason, as Python's,
+  where it read `lane_cancelled`.
   The close's warning counts the writes whose store call still runs.
 - A task the kit's work spawns, that calls the kit and waits on its own
   room, is spawned with `keep_context`, the Rust form of Python's
