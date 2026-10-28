@@ -91,9 +91,8 @@ struct State {
     /// unit's place in a room's lane: ended by the close as those it cuts
     /// later are.
     dropped: HashSet<task::Id>,
-    /// The units of the inbound runs out of their rooms' lanes: decided,
-    /// and holding no lock, place in a lane or admission ticket, their
-    /// work left their turns' (`Tasks::out_of_lanes`).
+    /// The units of the inbound runs out of their rooms' lanes, holding no
+    /// lock, place in a lane or admission ticket (`Tasks::out_of_lanes`).
     out_of_lanes: HashSet<Unit>,
 }
 
@@ -388,9 +387,7 @@ impl Tasks {
     }
 
     /// Notes whether the inbound run of `unit` is out of its rooms' lanes,
-    /// `out`: its call decided, it holds no lock, place in a lane or
-    /// admission ticket, and what it does is its turns' work, reading their
-    /// streams and committing what they said.
+    /// `out`: it holds no lock, place in a lane or admission ticket.
     pub(crate) fn out_of_lanes(&self, unit: Unit, out: bool) {
         let mut state = self.state();
         let changed = if out {
@@ -548,6 +545,8 @@ impl Drop for Tracked {
     fn drop(&mut self) {
         let mut state = self.tasks.state();
         if let Some(running) = state.running.remove(&self.key) {
+            // Not for the close's wait, which reads running tasks only: the
+            // set would otherwise keep the unit of every run that ended.
             state.out_of_lanes.remove(&running.unit);
         }
         drop(state);

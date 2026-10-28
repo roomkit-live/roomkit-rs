@@ -299,16 +299,19 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// Tells the kit's close whether an inbound run is out of its rooms'
-    /// lanes as it waits: its call decided, it holds no lock, place in a
-    /// lane or admission ticket, and what it waits for is its turns' work,
-    /// their streams read or what they said committed. The close cuts
-    /// such a run's turns once the lanes are idle (RFC §10.6.8), as the
-    /// Python implementation's `turns.close` follows its `lanes.aclose`.
+    /// lanes as it waits: it holds no lock, place in a lane or admission
+    /// ticket. The close cuts such a run's turns once the lanes are idle,
+    /// each of the streams it reads waiting (RFC §10.6.8), as the Python
+    /// implementation's `turns.close` follows its `lanes.aclose`; a run
+    /// not decided yet reads none.
     fn note_the_lanes(&mut self) {
-        let Some(caller) = self.caller.as_deref() else {
+        if self.caller.is_none() {
             return;
-        };
-        let out = caller.is_decided() && !self.held.holds_any();
+        }
+        // A guard: a run reads its turns' streams once its sets left their
+        // places, so a run reading holds none; were it to, a delivery set
+        // of it would still run, and its lanes would not be idle.
+        let out = !self.held.holds_any();
         if out == self.out_of_lanes {
             return;
         }

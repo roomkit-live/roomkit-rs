@@ -295,12 +295,6 @@ impl Caller {
         }
     }
 
-    /// Whether the call is decided, its event committed or its instruction
-    /// decided.
-    pub(super) fn is_decided(&self) -> bool {
-        self.decided
-    }
-
     /// The lane's turn of `event_id`'s set came.
     pub(super) fn turn_came(&self, event_id: &EventId) {
         self.record.turn_came(event_id);
