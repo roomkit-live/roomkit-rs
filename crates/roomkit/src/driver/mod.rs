@@ -39,7 +39,7 @@ use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::Poll;
 
-use roomkit_core::model::{ErrorRecord, RoomId, Timestamp};
+use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
     Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest, InboundResult,
     Next, Notice, Operation, Outcome, Request, Settled, StoreRequest,
@@ -385,7 +385,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         match request {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) if writes(&request) => {
-                self.spawn(id, work, deadline, calls::write(inner, request));
+                let own = self.own_commit(&request);
+                let (writing, written) = calls::write(&inner, request);
+                if let (Some(event), Some(caller)) = (own, self.caller.as_deref()) {
+                    caller.commits(event, written);
+                }
+                self.spawn(id, work, deadline, writing);
             }
             Request::Store(request) => self.spawn(id, work, deadline, async move {
                 calls::store(&*inner.store, request).await
@@ -407,6 +412,17 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         None
     }
 
+    /// The event `request` commits when it is the call's own commit, made
+    /// before the call is decided: what a caller whose run the kit's close
+    /// aborts reads the outcome of.
+    fn own_commit(&self, request: &StoreRequest) -> Option<RoomEvent> {
+        let StoreRequest::Commit { event, .. } = request else {
+            return None;
+        };
+        let caller = self.caller.as_deref()?;
+        (!caller.is_decided()).then(|| (**event).clone())
+    }
+
     /// Carries out the hold `request` for `effect`, within `deadline`: at
     /// once, refused, or as a wait the run polls.
     fn hold(
@@ -420,7 +436,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             lanes: &self.inner.lanes,
             tickets: &self.inner.tickets,
         };
-        if matches!(request, HoldRequest::EnterLane { .. }) && self.inner.tasks.is_closing() {
+        if matches!(request, HoldRequest::EnterLane { .. }) && self.inner.tasks.is_draining() {
             // The kit's close drops a delivery set that would take its place
             // now, as the Python implementation's sealed lanes drop it: its
             // index has no place, its turn over at the lock's release.

@@ -263,7 +263,7 @@ impl Shared {
                 };
                 let joined = running.await;
                 *run = None;
-                match driver::ended(joined, record, self.tasks.is_cut()) {
+                match driver::ended(joined, record, self.tasks.is_cut()).await {
                     Ok(Ok(result)) => Ended::Over(Box::new(result)),
                     Ok(Err(error)) => Ended::Failed(std::sync::Mutex::new(Some(error.into()))),
                     Err(error) => Ended::Failed(std::sync::Mutex::new(Some(error))),

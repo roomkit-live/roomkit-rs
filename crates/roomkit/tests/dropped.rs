@@ -406,13 +406,12 @@ fn every_row() -> EventQuery {
     }
 }
 
-/// RFC §13.6, plan step 3: a commit decided for a caller that left runs to
-/// its end when the kit closes, however long it takes: the close waits for
-/// it and never aborts it, and the event is stored, as Python's close
-/// waits for its decided writes (tasks/probes/step5-lot1/fixpass.out P4).
-#[tokio::test(start_paused = true)]
-async fn a_commit_in_flight_when_the_kit_closes_runs_to_its_end() {
-    let (kit, _ws) = gated_room().await;
+/// `Slow` into `room_1`, its commit at the store's gate, on a task of its
+/// own, and the gate opened `after` it.
+async fn slow_commit(
+    kit: &RoomKit<GatedStore>,
+    after: Duration,
+) -> tokio::task::JoinHandle<Result<roomkit::InboundResult, roomkit::KitError>> {
     let call = {
         let kit = kit.clone();
         tokio::spawn(async move {
@@ -428,25 +427,101 @@ async fn a_commit_in_flight_when_the_kit_closes_runs_to_its_end() {
     tokio::time::timeout(BOUND, kit.store().committing.notified())
         .await
         .unwrap();
-    // Its caller leaves; the write goes on for 7 s, past the close's grace.
-    call.abort();
-    let store = Arc::clone(&kit.store().go);
-    let releasing = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(7)).await;
-        store.notify_one();
+    let go = Arc::clone(&kit.store().go);
+    tokio::spawn(async move {
+        tokio::time::sleep(after).await;
+        go.notify_one();
     });
-    let started = tokio::time::Instant::now();
-    tokio::time::timeout(Duration::from_secs(60), kit.close())
-        .await
-        .unwrap();
-    let took = started.elapsed();
-    releasing.await.unwrap();
-    let stored = kit
-        .store()
+    call
+}
+
+/// Whether the room holds `Slow`.
+async fn stored(kit: &RoomKit<GatedStore>) -> bool {
+    kit.store()
         .list_events(&room_id(), &every_row())
         .await
         .unwrap()
         .iter()
-        .any(|event| roomkit::text_of(&event.content) == "Slow");
-    assert_eq!((took >= Duration::from_secs(7), stored), (true, true));
+        .any(|event| roomkit::text_of(&event.content) == "Slow")
+}
+
+/// The time `kit`'s close takes.
+async fn closing(kit: &RoomKit<GatedStore>) -> Duration {
+    let started = tokio::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(60), kit.close())
+        .await
+        .unwrap();
+    started.elapsed()
+}
+
+/// RFC §13.6, plan step 3: a commit decided for a caller that left ends
+/// within the close's bounds, 5 s for the writes, then 5 s of drain, and is
+/// stored; the close waits for it, as Python's does
+/// (`tasks/probes/step5-lot1/close_writes.out`: a write of 7 s, the close
+/// 6.8 s, stored).
+#[tokio::test(start_paused = true)]
+async fn a_commit_ending_within_the_close_s_bounds_is_stored() {
+    let (kit, _ws) = gated_room().await;
+    let call = slow_commit(&kit, Duration::from_secs(7)).await;
+    call.abort();
+    let took = closing(&kit).await;
+    assert_eq!(
+        (
+            took >= Duration::from_secs(7) && took < Duration::from_secs(8),
+            stored(&kit).await
+        ),
+        (true, true)
+    );
+}
+
+/// Plan step 3: a commit longer than the close's bounds does not hold the
+/// close, which returns at 10 s, and is never cancelled: it lands after,
+/// as Python's (`close_writes.out`: a write of 20 s, the close 10.0 s,
+/// stored later).
+#[tokio::test(start_paused = true)]
+async fn a_commit_past_the_close_s_bounds_does_not_hold_it() {
+    let (kit, _ws) = gated_room().await;
+    let call = slow_commit(&kit, Duration::from_secs(20)).await;
+    call.abort();
+    let took = closing(&kit).await;
+    let at_close = stored(&kit).await;
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    assert_eq!(
+        (
+            took >= Duration::from_secs(10) && took < Duration::from_secs(11),
+            at_close,
+            stored(&kit).await
+        ),
+        (true, false, true)
+    );
+}
+
+/// A caller still waiting for a call whose commit outlives the close reads
+/// what the write came to once it ends: its event, stored and never
+/// delivered, `kit_closed`, as Python's caller does (`close_writes.out`: a
+/// write of 12 s, the caller answered at 12.0 s, `kit_closed`).
+#[tokio::test(start_paused = true)]
+async fn a_caller_waiting_on_a_commit_past_the_close_reads_its_event() {
+    let (kit, ws) = gated_room().await;
+    let call = slow_commit(&kit, Duration::from_secs(12)).await;
+    let took = closing(&kit).await;
+    let ended = tokio::time::timeout(Duration::from_secs(30), call)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (
+            took < Duration::from_secs(11),
+            ended.map(|result| (
+                result.event.map(|event| roomkit::text_of(&event.content)),
+                result.cancellation_reason
+            )),
+            ws.texts().is_empty()
+        ),
+        (
+            true,
+            Ok((Some("Slow".to_owned()), Some("kit_closed".to_owned()))),
+            true
+        )
+    );
 }

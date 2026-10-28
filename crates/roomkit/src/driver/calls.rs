@@ -14,6 +14,7 @@ use roomkit_core::ops::{
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
 use roomkit_core::rules::routing::RouteQuery;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::channel::{ChannelError, EventDraft};
@@ -250,31 +251,46 @@ pub(super) async fn route<S: ConversationStore>(
     }
 }
 
+/// What a write of the store came to, once it ended; nothing while it runs.
+pub(crate) type Written = watch::Receiver<Option<Outcome>>;
+
 /// Carries out `request`, a write of the store, as a task of its own the
 /// kit tracks, which the run's abort does not end: a write decided runs to
-/// its end, whatever becomes of its run, and the kit's close waits for it
-/// (RFC §13.6), as the Python implementation waits for its decided writes.
-pub(super) async fn write<S: ConversationStore>(
-    inner: Arc<Inner<S>>,
+/// its end, whatever becomes of its run, as the Python implementation runs
+/// its decided writes (RFC §13.6). Returns the run's call, which answers
+/// the write's outcome, and where anyone else reads it.
+pub(super) fn write<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
     request: StoreRequest,
-) -> Outcome {
-    let writer = Arc::clone(&inner);
-    let writing = async move { store(&*writer.store, request).await };
-    // A write is spawned whatever the kit's state.
-    let Some(writing) = inner.tasks.spawn(Kind::Write, writing) else {
-        return Outcome::Failed(ErrorRecord::new("ShutDown", "the kit is closed"));
+) -> (impl Future<Output = Outcome> + Send + 'static, Written) {
+    let (ended, written) = watch::channel(None);
+    let writer = Arc::clone(inner);
+    let writing = async move {
+        let outcome = store(&*writer.store, request).await;
+        ended.send_replace(Some(outcome));
     };
-    writing.await.unwrap_or_else(|failure| {
-        let error_type = if failure.is_panic() {
-            "Panic"
-        } else {
-            "Cancelled"
-        };
-        Outcome::Failed(ErrorRecord::new(
-            error_type,
+    // A write is spawned whatever the kit's state.
+    let spawned = inner.tasks.spawn(Kind::Write, writing).is_some();
+    let mut read = written.clone();
+    let call = async move {
+        if !spawned {
+            return Outcome::Failed(ErrorRecord::new("ShutDown", "the kit is closed"));
+        }
+        outcome_of(&mut read).await
+    };
+    (call, written)
+}
+
+/// What the write `written` tells came to, once it ended: a failure for one
+/// that never ended, its task dropped with the runtime.
+pub(crate) async fn outcome_of(written: &mut Written) -> Outcome {
+    match written.wait_for(Option::is_some).await {
+        Ok(outcome) => outcome.clone().unwrap_or(Outcome::DeadlinePassed),
+        Err(_dropped) => Outcome::Failed(ErrorRecord::new(
+            "Cancelled",
             "the store's write did not end",
-        ))
-    })
+        )),
+    }
 }
 
 /// Performs a notice: publishes a framework event, or runs observer hooks in

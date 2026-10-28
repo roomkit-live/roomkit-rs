@@ -42,22 +42,39 @@ pub(crate) struct Tasks {
     changed: Notify,
 }
 
+/// Where the kit's close is, in the order it goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum Phase {
+    /// No close began.
+    #[default]
+    Open,
+    /// The close began: the store's writes get their wait.
+    Closing,
+    /// The close drains the work under way: a delivery set takes no place
+    /// in its room's lane any more.
+    Draining,
+    /// The close cut the work under way: a run ending now was ended by it.
+    Cut,
+    /// The kit is sealed, its close past its drain: no call starts an
+    /// operation and no task is spawned any more, but a write.
+    Sealed,
+}
+
 #[derive(Debug, Default)]
 struct State {
-    /// Whether the kit's close began: the work under way drains, and a
-    /// delivery set takes no place in its room's lane any more.
-    closed: bool,
-    /// Whether the close cut the work under way: a run ending now was ended
-    /// by it.
-    cut: bool,
-    /// Whether the kit is sealed, its close past its drain: no call starts
-    /// an operation and no task is spawned any more.
-    shut_down: bool,
+    phase: Phase,
     /// The key the next task is tracked under.
     next: u64,
     /// The tasks running, each by its key, with its kind and the handle that
     /// aborts it once its spawn returned it.
     running: HashMap<u64, (Kind, Option<AbortHandle>)>,
+}
+
+impl State {
+    /// Moves the close on to `phase`, never back.
+    fn reach(&mut self, phase: Phase) {
+        self.phase = self.phase.max(phase);
+    }
 }
 
 /// The mark of a tracked task, carried by its future: dropped with it, it
@@ -78,7 +95,7 @@ impl Tasks {
     {
         let key = {
             let mut state = self.state();
-            if state.shut_down && kind != Kind::Write {
+            if state.phase == Phase::Sealed && kind != Kind::Write {
                 return None;
             }
             let key = state.next;
@@ -101,7 +118,7 @@ impl Tasks {
             if let Some((_, handle)) = state.running.get_mut(&key) {
                 *handle = Some(task.abort_handle());
             }
-            state.shut_down
+            state.phase == Phase::Sealed
         };
         if shut_down && kind != Kind::Write {
             task.abort();
@@ -112,30 +129,44 @@ impl Tasks {
     /// Begins the kit's close: the tasks running go on, and the calls too,
     /// until the kit is sealed; `false` when the close began already.
     pub(crate) fn close(&self) -> bool {
-        !std::mem::replace(&mut self.state().closed, true)
+        let mut state = self.state();
+        let began = state.phase == Phase::Open;
+        state.reach(Phase::Closing);
+        began
     }
 
     /// Whether the kit's close began.
     pub(crate) fn is_closing(&self) -> bool {
-        self.state().closed
+        self.state().phase >= Phase::Closing
+    }
+
+    /// Marks the work under way drained by the kit's close: a delivery set
+    /// takes no place in its room's lane from now on, as the Python
+    /// implementation's lanes are sealed when they drain.
+    pub(crate) fn drain(&self) {
+        self.state().reach(Phase::Draining);
+    }
+
+    /// Whether the kit's close drains the work under way.
+    pub(crate) fn is_draining(&self) -> bool {
+        self.state().phase >= Phase::Draining
     }
 
     /// Whether the kit is sealed: its close is past its drain, and no call
     /// starts an operation any more.
     pub(crate) fn is_sealed(&self) -> bool {
-        self.state().shut_down
+        self.state().phase == Phase::Sealed
     }
 
     /// Marks the work under way cut by the kit's close, once its grace ran
     /// out.
     pub(crate) fn cut(&self) {
-        self.state().cut = true;
+        self.state().reach(Phase::Cut);
     }
 
     /// Whether the kit's close cut the work under way, or shut it down.
     pub(crate) fn is_cut(&self) -> bool {
-        let state = self.state();
-        state.cut || state.shut_down
+        self.state().phase >= Phase::Cut
     }
 
     /// Waits until no tracked task runs.
@@ -184,7 +215,7 @@ impl Tasks {
         // its spawn, which finds the kit shut down.
         let running: Vec<AbortHandle> = {
             let mut state = self.state();
-            state.shut_down = true;
+            state.reach(Phase::Sealed);
             state
                 .running
                 .values()

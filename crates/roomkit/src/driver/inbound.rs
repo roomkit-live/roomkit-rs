@@ -32,14 +32,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
-use roomkit_core::model::{EventId, RoomId};
+use roomkit_core::model::{EventId, EventStatus, RoomEvent, RoomId};
 use roomkit_core::ops::{
-    Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED,
+    Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED, Outcome,
+    StoreOutcome,
 };
 use tokio::sync::oneshot;
 use tokio::task::{JoinError, JoinHandle};
 
 use super::Leases;
+use super::calls::{self, Written};
 use crate::context::ExecutionContext;
 use crate::error::{KitError, with_causes};
 use crate::kit::Inner;
@@ -80,6 +82,9 @@ impl Ran {
 pub(crate) struct Record {
     decided: Mutex<Option<InboundResult>>,
     delivering: AtomicBool,
+    /// The call's own event, while its commit, asked for before the call's
+    /// decision, runs, and what that write came to.
+    committing: Mutex<Option<(RoomEvent, Written)>>,
 }
 
 impl Record {
@@ -100,15 +105,30 @@ impl Record {
         }
     }
 
+    /// The call's own event's commit runs, its outcome told by `written`.
+    fn commits(&self, event: RoomEvent, written: Written) {
+        *self
+            .committing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((event, written));
+    }
+
     /// What a run the kit's close aborted reports, as the Python
     /// implementation's lane reports a delivery it dropped: the call as it
     /// was decided, its delivery cancelled [`LANE_CANCELLED`] when its set
-    /// delivered, [`KIT_CLOSED`] when it still waited for its turn;
-    /// [`KitError::ShutDown`] for a call not decided yet.
-    pub(crate) fn aborted(&self) -> InboundOutput {
-        let decided = self.decided.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(mut result) = decided.clone() else {
-            return Err(KitError::ShutDown);
+    /// delivered, [`KIT_CLOSED`] when it still waited for its turn. A call
+    /// whose own commit still ran reads what the write came to, once it
+    /// ends, as Python's caller does: its event, stored and never
+    /// delivered, `kit_closed`. [`KitError::ShutDown`] for a call nothing of
+    /// which was stored.
+    pub(crate) async fn aborted(&self) -> InboundOutput {
+        let decided = self
+            .decided
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let Some(mut result) = decided else {
+            return self.committed().await;
         };
         let reason = if self.delivering.load(Ordering::Acquire) {
             LANE_CANCELLED
@@ -119,6 +139,31 @@ impl Record {
             .cancellation_reason
             .get_or_insert_with(|| reason.to_owned());
         Ok(Ok(result))
+    }
+
+    /// The result of a call aborted while its own commit ran: once the
+    /// write ended, its event, never delivered; `ShutDown` for a commit
+    /// that failed, or none.
+    async fn committed(&self) -> InboundOutput {
+        let committing = self
+            .committing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let Some((event, mut written)) = committing else {
+            return Err(KitError::ShutDown);
+        };
+        if calls::outcome_of(&mut written).await != Outcome::Store(StoreOutcome::Committed) {
+            return Err(KitError::ShutDown);
+        }
+        let blocked = event.status == EventStatus::Blocked;
+        Ok(Ok(InboundResult {
+            reason: event.blocked_by.clone().filter(|_| blocked),
+            blocked,
+            cancellation_reason: (!blocked).then(|| KIT_CLOSED.to_owned()),
+            event: Some(event),
+            ..InboundResult::default()
+        }))
     }
 }
 
@@ -173,6 +218,16 @@ impl Caller {
     /// The lane's turn of `event_id`'s set came.
     pub(super) fn turn_came(&self, event_id: &EventId) {
         self.record.turn_came(event_id);
+    }
+
+    /// Whether the call is decided.
+    pub(super) fn is_decided(&self) -> bool {
+        self.decided
+    }
+
+    /// The call's own `event`'s commit runs, its outcome told by `written`.
+    pub(super) fn commits(&self, event: RoomEvent, written: Written) {
+        self.record.commits(event, written);
     }
 
     /// Takes the call's decision, `decided`: the caller is answered with
@@ -345,7 +400,9 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     };
     tokio::select! {
         biased;
-        joined = &mut task => Ran::ended(ended(joined, &record, inner.tasks.is_cut())),
+        // Boxed: what an aborted run's caller waits for, its commit's end,
+        // would make every caller's future large.
+        joined = &mut task => Ran::ended(Box::pin(ended(joined, &record, inner.tasks.is_cut())).await),
         Ok(answer) = decided => Ran {
             output: answer,
             delivery: defer.then_some((task, record)),
@@ -390,7 +447,7 @@ fn charged(inbound: Inbound, room_id: Option<&RoomId>, context: &ExecutionContex
 /// its end; for one the kit's close aborted, `cut` read then, what its
 /// `record` reports ([`Record::aborted`]); for one the runtime cancelled,
 /// [`KitError::Cancelled`].
-pub(crate) fn ended(
+pub(crate) async fn ended(
     joined: Result<InboundOutput, JoinError>,
     record: &Record,
     cut: bool,
@@ -400,7 +457,7 @@ pub(crate) fn ended(
         // A panic of the driver's own loop is a defect of this crate: the
         // caller receives it as it would from a run it drove itself.
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
-        Err(_aborted) if cut => record.aborted(),
+        Err(_aborted) if cut => record.aborted().await,
         Err(_cancelled) => Err(KitError::Cancelled),
     }
 }
