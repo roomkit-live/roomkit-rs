@@ -97,15 +97,15 @@ pub(crate) struct Turns {
     /// times: awaiting their output, then reading their stream.
     working: Mutex<HashMap<(Unit, TurnStage), usize>>,
     idle: Notify,
-    /// Set as the kit shuts down: the streams first, then every turn, but
-    /// the spared ones.
+    /// Set as the kit shuts down: the streams read then first, then every
+    /// turn, but the spared ones.
     cut: watch::Sender<Cut>,
 }
 
 /// Where the owner works on a turn: awaiting its output, the channel's
 /// `on_event()`, or reading its stream, the model's rounds and the tools'
 /// calls.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TurnStage {
     /// The owner awaits the turn's output.
     Output,
@@ -115,28 +115,30 @@ pub(crate) enum TurnStage {
 
 /// The kit's cut of its turns (RFC §10.6.8), but those of the units a
 /// caller of the kit's close runs within, which the shutdown spares (RFC
-/// §12.10.4): none until the kit shuts down; then, at once, the turns read
-/// as streams, their work cut with no grace, as the Python implementation
-/// cuts its stream readers; then, past the drain's grace, every turn.
+/// §12.10.4): none until the kit shuts down; then, at once, the turns whose
+/// streams are read as the close starts, their work cut with no grace, as
+/// the Python implementation cuts the stream readers it has then; then,
+/// once the lanes drained, every turn.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Cut {
-    /// The stages cut: the streams, then every stage.
-    stage: Option<TurnStage>,
+    /// The units of the turns whose streams were read as the close
+    /// started: a turn submitted, or a stream read, from then on runs on.
+    streams: Arc<HashSet<Unit>>,
+    /// Whether every turn is cut, the lanes drained.
+    all: bool,
     spared: Arc<HashSet<Unit>>,
 }
 
 impl Cut {
-    /// Whether the kit's shutdown began cutting its turns.
-    fn began(&self) -> bool {
-        self.stage.is_some()
-    }
-
     /// Whether the kit's shutdown cuts the turn of `unit` where the owner
     /// works on it at `stage`; `None`, a turn whose unit is not known, is
-    /// cut.
+    /// cut with every turn.
     pub(crate) fn cuts(&self, unit: Option<Unit>, stage: TurnStage) -> bool {
-        self.stage.is_some_and(|cut| cut <= stage)
-            && unit.is_none_or(|unit| !self.spared.contains(&unit))
+        let Some(unit) = unit else {
+            return self.all;
+        };
+        !self.spared.contains(&unit)
+            && (self.all || (stage == TurnStage::Stream && self.streams.contains(&unit)))
     }
 }
 
@@ -223,28 +225,41 @@ impl Turns {
         self.cut.subscribe()
     }
 
-    /// Cuts the turns read as streams at once, but those of the units in
-    /// `spared`, which a caller of the kit's close runs within (the kit's
-    /// shutdown, RFC §10.6.8: the turn's cascade cancelled; RFC §12.10.4):
-    /// each crosses as `cancel`, and its reader stores what it read;
-    /// returns once the owner reads no stream it cut, or after twice the
-    /// cancel bound. A turn whose output the owner still awaits, the
-    /// channel's `on_event()`, runs on as part of its delivery set.
+    /// Cuts at once the turns whose streams the owner reads now, but those
+    /// of the units in `spared`, which a caller of the kit's close runs
+    /// within (the kit's shutdown, RFC §10.6.8: the turn's cascade
+    /// cancelled; RFC §12.10.4): each crosses as `cancel`, and its reader
+    /// stores what it read; returns once the owner reads no stream it cut,
+    /// or after twice the cancel bound. A turn whose output the owner still
+    /// awaits, the channel's `on_event()`, a turn submitted and a stream
+    /// read from now on run on, as part of their delivery set.
     pub(crate) async fn cut_streams(&self, spared: HashSet<Unit>) {
-        self.cut_from(TurnStage::Stream, spared).await;
+        let streams = lock(&self.working)
+            .keys()
+            .filter(|&&(unit, stage)| stage == TurnStage::Stream && !spared.contains(&unit))
+            .map(|&(unit, _)| unit)
+            .collect();
+        self.cut_with(Cut {
+            streams: Arc::new(streams),
+            all: false,
+            spared: Arc::new(spared),
+        })
+        .await;
     }
 
     /// Cuts every turn, but those of the units in `spared`, as
-    /// [`cut_streams`](Self::cut_streams) does.
+    /// [`cut_streams`](Self::cut_streams) does; a turn submitted from now
+    /// on fails `backend_closed`.
     pub(crate) async fn cut_all(&self, spared: HashSet<Unit>) {
-        self.cut_from(TurnStage::Output, spared).await;
+        self.cut_with(Cut {
+            streams: Arc::default(),
+            all: true,
+            spared: Arc::new(spared),
+        })
+        .await;
     }
 
-    async fn cut_from(&self, stage: TurnStage, spared: HashSet<Unit>) {
-        let cut = Cut {
-            stage: Some(stage),
-            spared: Arc::new(spared),
-        };
+    async fn cut_with(&self, cut: Cut) {
         self.cut.send_replace(cut.clone());
         let bound = self.timeouts().cancel.saturating_mul(2);
         let settled = async {
@@ -324,7 +339,7 @@ impl Turns {
         mut context: RoomContext,
         unit: Unit,
     ) -> Result<OwnerTurn, ErrorRecord> {
-        if self.closed.load(Ordering::Acquire) || self.cut.borrow().began() {
+        if self.closed.load(Ordering::Acquire) || self.cut.borrow().all {
             return Err(closed());
         }
         let turn_id: Arc<str> = Arc::from(format!("turn-{}", Uuid::new_v4().simple()));

@@ -77,19 +77,21 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    and counted in a warning: a caller still waiting for its call
     ///    reads what the write came to, its event or the store's error; a
     ///    write that fails once its caller is gone is logged as an error.
-    ///    The turns read as streams are then cut at once, with no grace
-    ///    (RFC §10.6.8), as the Python implementation cuts its stream
-    ///    readers: each crosses its turn backend as `cancel`, its executor
-    ///    cuts the tool calls it runs, reported `cancelled` to the kit's
-    ///    observers, and the reader stores what it read, the text it was
-    ///    handed marked `cancelled` and each call it opened ended
+    ///    The turns whose streams are read then are cut at once, with no
+    ///    grace (RFC §10.6.8), as the Python implementation cuts the stream
+    ///    readers it has: each crosses its turn backend as `cancel`, its
+    ///    executor cuts the tool calls it runs, reported `cancelled` to the
+    ///    kit's observers, and the reader stores what it read, the text it
+    ///    was handed marked `cancelled` and each call it opened ended
     ///    `cancelled`, delivered as the lanes drain. The close waits for
     ///    that within twice the turns' cancel bound, 10 seconds by default.
     /// 3. The inbound calls running then drain for up to 5 seconds, whether
     ///    their caller waits for them, was answered at the decision (RFC
     ///    §10.1 step 18) or left: each room's deliveries in its lane, the
-    ///    turns whose output they await (a channel's `on_event()`), the
-    ///    observers their deliveries fire, and a call
+    ///    turns whose output they await (a channel's `on_event()`) and the
+    ///    turns they ask meanwhile, as Python's turn backend stays open
+    ///    until its lanes are done, the observers their deliveries fire,
+    ///    and a call
     ///    until it is committed, whatever holds it, a hook or its own
     ///    commit's write (RMK-1010 item 41; Python's drain waits for
     ///    neither, and aligns). An inbound call whose commit runs past 10 s
@@ -101,8 +103,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    Python's sealed lanes drop it.
     /// 4. The turns still running are then cut (RFC §10.6.8: the kit
     ///    closing cancels their cascades), as the streams were, within the
-    ///    same bound. A turn the close spares, one it was called from
-    ///    inside, is not cut, in either step.
+    ///    same bound, and a turn asked from then on fails the turn link's
+    ///    `backend_closed`. A turn the close spares, one it was called
+    ///    from inside, is not cut, in either step.
     ///    What is left of the inbound calls is then aborted at its next
     ///    wait, letting go of what it holds, its room lock, its places in
     ///    the room's lane and its admission ticket: an event committed and
@@ -165,9 +168,10 @@ impl<S: ConversationStore> RoomKit<S> {
         let writes = Instant::now() + CLOSE_WAIT;
         wait_for_writes(tasks, writes).await;
         // A turn's work, its model's rounds and its tools' calls, is cut
-        // with no grace (RFC §10.6.8), as the Python implementation cuts its
-        // stream readers before its lanes drain; what its reader read is
-        // stored, and delivered as the lanes drain.
+        // with no grace (RFC §10.6.8), as the Python implementation cuts the
+        // stream readers it has before its lanes drain; what its reader read
+        // is stored, and delivered as the lanes drain. A turn asked as they
+        // drain runs within their grace.
         self.inner.turns.cut_streams(tasks.spared()).await;
         self.drain().await;
         tasks.cut();

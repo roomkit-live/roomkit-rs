@@ -218,6 +218,84 @@ async fn a_turn_is_cut_at_once_when_the_kit_closes() {
     );
 }
 
+/// RFC §10.6.8, §12.10.4: the close cuts at once only the turns whose
+/// streams are read as it starts; a turn asked as the lanes drain runs,
+/// within their grace, as Python's, whose turn backend stays open until
+/// its lanes are done. The witness takes 1 s to deliver "One.", the agent
+/// asked after it, answering "A."; in the second row "Two." comes at 50
+/// ms, its delivery set queued behind One's, the agent answering "B." to
+/// it; the kit is closed from outside at 0.1 s. Each turn runs as the
+/// lanes drain, its answer stored, and the answer's delivery set, which
+/// would take its place in the lane once the close began, is dropped, so
+/// each call reads `kit_closed`, as Python's (`rmk1017-fix3/py_p9.out` P9,
+/// P9b). On 94c751f the turns were refused: the model was never asked, and
+/// Two's call carried `TurnLinkError`.
+#[tokio::test(start_paused = true)]
+async fn a_turn_asked_as_the_lanes_drain_runs_within_their_grace() {
+    let mut rows = Vec::new();
+    for queued in [false, true] {
+        let witness = Witness::slow("One.", Duration::from_secs(1));
+        let kit = kit_with(&witness).await;
+        let model = ScriptedProvider::new([
+            ScriptedRound::answering("A."),
+            ScriptedRound::answering("B."),
+        ]);
+        let asked = model.clone();
+        attach_agent(&kit, model, Tools::new()).await;
+        let one = spawn_message(&kit, "One.", room_id());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let two = queued.then(|| spawn_message(&kit, "Two.", room_id()));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let started = Instant::now();
+        tokio::time::timeout(Duration::from_secs(60), kit.close())
+            .await
+            .unwrap()
+            .unwrap();
+        let took = started.elapsed().as_millis() / 100;
+        let one = ended(one).await;
+        let two = match two {
+            Some(two) => ended(two).await,
+            None => None,
+        };
+        rows.push((
+            queued,
+            took,
+            (one, two),
+            asked.requests().len(),
+            stored(&kit).await,
+            witness.delivered(),
+        ));
+    }
+    let kit_closed = || Some(ok(Some("kit_closed"), None));
+    let texts = |texts: &[&str]| {
+        texts
+            .iter()
+            .map(|&text| text.to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rows,
+        [
+            (
+                false,
+                9,
+                (kit_closed(), None),
+                1,
+                texts(&["One.", "A."]),
+                texts(&["One."])
+            ),
+            (
+                true,
+                9,
+                (kit_closed(), kit_closed()),
+                2,
+                texts(&["One.", "Two.", "A.", "B."]),
+                texts(&["One.", "Two."])
+            ),
+        ]
+    );
+}
+
 /// A SYNC `BEFORE_BROADCAST` hook whose body runs `closer` for "One.",
 /// under the room's lock, or before it, in the room's admission order, when
 /// it does not need the lock (RFC §9.5.1).

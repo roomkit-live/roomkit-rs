@@ -12,8 +12,9 @@
 //!   and the work stores and delivers nothing once the kit is sealed;
 //! - `join`: a close from a tool call joins a close still waiting for the
 //!   store's writes, and spares its turn (RMK-1019);
-//! - `stuck`: what waits behind spared work is dropped at once, and a
-//!   turn's work is cut with no grace.
+//! - `stuck`: what waits behind spared work is dropped at once, a turn's
+//!   work is cut with no grace, and a turn asked as the lanes drain runs
+//!   within their grace.
 //!
 //! The kit's own work here is what roomkit-rs has of Python's doors: a
 //! SYNC hook's body, an ASYNC hook a delivery fires, a transport's
