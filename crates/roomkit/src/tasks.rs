@@ -21,8 +21,9 @@ use tokio::task::{AbortHandle, JoinHandle};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
     /// An inbound run, its deliveries and its turns, or a task a turn runs:
-    /// drained within the close's grace, but a run whose deciding commit is
-    /// all of it in flight, which the waits for the writes cover.
+    /// drained first, within the close's grace. An inbound run is the
+    /// drain's until it is committed, whatever holds it, a hook or its own
+    /// commit's write (RMK-1010 item 41).
     Work,
     /// An observer hook running after the fact (RFC §9.3) that no delivery
     /// fired, bounded by its hook's timeout: waited for once the work is
@@ -41,9 +42,8 @@ pub(crate) enum Kind {
 #[derive(Debug, Default)]
 pub(crate) struct Tasks {
     state: Mutex<State>,
-    /// Woken whenever the last task of a kind ends, a task of the work ends
-    /// while a run is marked a decided write, such a mark comes or goes,
-    /// and when the kit shuts down.
+    /// Woken whenever the last task of a kind ends, and when the kit shuts
+    /// down.
     changed: Notify,
 }
 
@@ -73,9 +73,6 @@ struct State {
     /// The tasks running, each by its key, with its kind and the handle that
     /// aborts it once its spawn returned it.
     running: HashMap<u64, (Kind, Option<AbortHandle>)>,
-    /// The inbound runs, each a task of the work, whose commit that decides
-    /// their call is all of them in flight ([`Tasks::deciding`]).
-    deciding: usize,
 }
 
 impl State {
@@ -90,13 +87,6 @@ impl State {
 struct Tracked {
     tasks: Arc<Tasks>,
     key: u64,
-}
-
-/// The mark of an inbound run whose commit that decides its call is all of
-/// it in flight, while it lives ([`Tasks::deciding`]).
-#[derive(Debug)]
-pub(crate) struct Deciding {
-    tasks: Arc<Tasks>,
 }
 
 impl Tasks {
@@ -160,47 +150,6 @@ impl Tasks {
     /// implementation's lanes are sealed when they drain.
     pub(crate) fn drain(&self) {
         self.state().reach(Phase::Draining);
-    }
-
-    /// Marks the inbound run that calls it as a decided write while the
-    /// mark lives: its commit that decides its call is all of it in flight,
-    /// and the drain no longer waits for it ([`drained`](Self::drained));
-    /// the close's waits for the writes do, as Python's held write covers
-    /// the commit and the lane's enqueue (`_write_decision`). Only such a
-    /// run, a task of the work, takes one, and only while no delivery set
-    /// it runs is running or waiting for its turn.
-    pub(crate) fn deciding(self: &Arc<Self>) -> Deciding {
-        self.state().deciding += 1;
-        self.changed.notify_waiters();
-        Deciding {
-            tasks: Arc::clone(self),
-        }
-    }
-
-    /// Waits until the work under way is over but the inbound runs whose
-    /// deciding commit is in flight: what the kit's drain waits for.
-    pub(crate) async fn drained(&self) {
-        loop {
-            // Listening before looking, as `idle_of` does.
-            let mut changed = pin!(self.changed.notified());
-            changed.as_mut().enable();
-            if self.only_deciding_work() {
-                return;
-            }
-            changed.await;
-        }
-    }
-
-    /// Whether the only tasks of the work running are inbound runs whose
-    /// deciding commit is in flight.
-    fn only_deciding_work(&self) -> bool {
-        let state = self.state();
-        let work = state
-            .running
-            .values()
-            .filter(|(kind, _)| *kind == Kind::Work)
-            .count();
-        work <= state.deciding
     }
 
     /// Whether the kit's close drains the work under way.
@@ -306,26 +255,16 @@ impl Tasks {
     }
 }
 
-impl Drop for Deciding {
-    fn drop(&mut self) {
-        let mut state = self.tasks.state();
-        state.deciding = state.deciding.saturating_sub(1);
-        drop(state);
-        self.tasks.changed.notify_waiters();
-    }
-}
-
 impl Drop for Tracked {
     fn drop(&mut self) {
-        let tells = {
+        let last_of_its_kind = {
             let mut state = self.tasks.state();
-            state.running.remove(&self.key).is_some_and(|(ended, _)| {
-                let last_of_its_kind = !state.running.values().any(|(kind, _)| *kind == ended);
-                // The drain may be over with the work but deciding runs.
-                last_of_its_kind || (ended == Kind::Work && state.deciding > 0)
-            })
+            state
+                .running
+                .remove(&self.key)
+                .is_some_and(|(ended, _)| !state.running.values().any(|(kind, _)| *kind == ended))
         };
-        if tells {
+        if last_of_its_kind {
             self.tasks.changed.notify_waiters();
         }
     }

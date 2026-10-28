@@ -41,17 +41,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    their caller waits for them, was answered at the decision (RFC
     ///    §10.1 step 18) or left: each room's deliveries in its lane, the
     ///    turns they run, the observers their deliveries fire, and a call
-    ///    still before its own commit. A call whose commit that decides it
-    ///    is in flight still runs the delivery sets of the entries it
-    ///    adopted: the drain waits for it while one runs or waits for its
-    ///    turn, the set getting the grace. Once that commit is all of it in
-    ///    flight, the call is a decided write, which the drain no longer
-    ///    waits for: the waits for the writes do, as they do Python's. One
-    ///    that ends meanwhile reports its result, as it would have. A
-    ///    delivery set that would take its place in a room's lane from now
-    ///    on is dropped, its event stored, the call's result reading
-    ///    `cancellation_reason` `kit_closed`, as Python's sealed lanes drop
-    ///    it.
+    ///    until it is committed, whatever holds it, a hook or its own
+    ///    commit's write (RMK-1010 item 41; Python's drain waits for
+    ///    neither, and aligns). An inbound call whose commit runs past 10 s
+    ///    so holds the close up to 15 s, its write's third wait ending 5 s
+    ///    after the channels' close. One that ends meanwhile reports its
+    ///    result, as it would have. A delivery set that would take its
+    ///    place in a room's lane from now on is dropped, its event stored,
+    ///    the call's result reading `cancellation_reason` `kit_closed`, as
+    ///    Python's sealed lanes drop it.
     /// 4. The turns still running are then cut (RFC §10.6.8: the kit
     ///    closing cancels their cascades): each crosses its turn backend as
     ///    `cancel`, its executor cuts the tool calls it runs, reported
@@ -103,7 +101,7 @@ impl<S: ConversationStore> RoomKit<S> {
         let writes = Instant::now() + CLOSE_WAIT;
         wait_for_writes(tasks, writes).await;
         tasks.drain();
-        let _drained = tokio::time::timeout(CLOSE_GRACE, tasks.drained()).await;
+        let _drained = tokio::time::timeout(CLOSE_GRACE, tasks.idle_of_kind(Kind::Work)).await;
         tasks.cut();
         self.inner.turns.cut_all().await;
         tasks.abort(Kind::Work).await;

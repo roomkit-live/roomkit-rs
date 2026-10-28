@@ -517,9 +517,11 @@ async fn a_commit_ending_within_the_first_wait_is_delivered() {
 }
 
 /// Plan step 3: a commit longer than the close's bounds does not hold the
-/// close, which returns at 10 s, and is never cancelled: it lands after,
-/// as Python's (`close_writes.out`: a write of 20 s, the close 10.0 s,
-/// stored later).
+/// close past them, and is never cancelled: it lands after. Its run is the
+/// drain's work until it is committed (RMK-1010 item 41, broadened), so the
+/// channels close at 10 s and the third wait ends at 15 s, the close's cap
+/// for an inbound commit (Python's drain does not wait for the run, and
+/// its close returns at 10.0 s, `close_writes.out`; it aligns).
 #[tokio::test(start_paused = true)]
 async fn a_commit_past_the_close_s_bounds_does_not_hold_it() {
     let (kit, _ws) = gated_room().await;
@@ -530,7 +532,7 @@ async fn a_commit_past_the_close_s_bounds_does_not_hold_it() {
     tokio::time::sleep(Duration::from_secs(15)).await;
     assert_eq!(
         (
-            took >= Duration::from_secs(10) && took < Duration::from_secs(11),
+            took >= Duration::from_secs(15) && took < Duration::from_secs(16),
             at_close,
             stored(&kit, "Slow").await
         ),
@@ -538,13 +540,15 @@ async fn a_commit_past_the_close_s_bounds_does_not_hold_it() {
     );
 }
 
-/// A caller still waiting for a call whose commit outlives the close reads
+/// A caller still waiting for a call whose commit outlives the drain reads
 /// what the write came to once it ends: its event, stored and never
 /// delivered, `kit_closed`, as Python's caller does (`close_writes.out`: a
 /// write of 12 s, the caller answered at 12.0 s, `kit_closed`); its record
 /// stored `BLOCKED`, with the hook's reason, as the call decided reads it
 /// (`lr2_probe_blocked_rs.out`: the hook's name before RMK-1010's third
-/// pass).
+/// pass). The run is the drain's until it is committed (RMK-1010 item 41,
+/// broadened): it is cut at 10 s, and the close's third wait sees the
+/// write end, at 12 s, where Python's close returns at 10.0 s.
 #[tokio::test(start_paused = true)]
 async fn a_caller_waiting_on_a_commit_past_the_close_reads_its_event() {
     let mut read = Vec::new();
@@ -563,7 +567,7 @@ async fn a_caller_waiting_on_a_commit_past_the_close_reads_its_event() {
             .unwrap()
             .unwrap();
         read.push((
-            took < Duration::from_secs(11),
+            took >= Duration::from_secs(12) && took < Duration::from_secs(13),
             ended.map(|result| {
                 (
                     result.event.map(|event| roomkit::text_of(&event.content)),
@@ -621,7 +625,9 @@ async fn a_waiting_caller_whose_commit_fails_reads_the_store_s_error() {
 /// is logged at ERROR, whether its run still runs or the close aborted it,
 /// as Python's `wait_for_held` and `run_to_its_end` log them
 /// (`close_failed_write_py.out`: a failing write of 12 s, the caller gone,
-/// a warning at each of the three waits and the error;
+/// a warning at each of Python's three waits and the error; Rust's drain
+/// waits for the run until it is cut at 10 s, RMK-1010 item 41 broadened,
+/// so its third wait sees the write fail, two warnings;
 /// `fixpass3/gone_failed_write_py.out`: the error, the kit not closing; a
 /// caller waiting on a failing write of 3 s: nothing logged).
 #[tokio::test(start_paused = true)]
@@ -649,7 +655,7 @@ async fn the_writes_left_running_and_failing_are_logged() {
             at("ERROR", "the writes a gone caller left failed"),
         ));
     }
-    assert_eq!(logged, [(3, 1), (0, 1), (0, 0)]);
+    assert_eq!(logged, [(2, 1), (0, 1), (0, 0)]);
 }
 
 /// A record from the WebSocket channel, for `commit_event`.
@@ -852,9 +858,9 @@ fn slow_into_room_1(
     })
 }
 
-/// A run whose commit that decides its call is in flight still runs the
-/// delivery set of an entry it adopted: the drain waits for that set, with
-/// its grace, as Python's lane drains it, then for the commit no more.
+/// A run that commits still runs the delivery set of an entry it adopted:
+/// the drain waits for the run, that set getting its grace, as Python's
+/// lane drains it.
 /// Each row: what `Slow`'s hook does, how long `First`'s delivery and
 /// `Slow`'s commit take; the close begins while the hook runs, or once the
 /// commit runs. The close's length, whether `First` was delivered when it
@@ -862,12 +868,12 @@ fn slow_into_room_1(
 /// c2 and c: on f7ef360 the set was cut at the drain, at 3.1 s, 2.9 s and
 /// 5 s; Python `py_lr4_c3.out`, `py_lr4_c2.out`, `py_lr4_rows.out`: 3.8 s,
 /// 3.8 s and 6.8 s, delivered, `kit_closed`). Row c12, the commit of 12 s:
-/// the drain is over when the set ends, at 6 s, the run's commit then all
-/// of it in flight, and the third wait 5 s later (`fixpass5/py_lr4_c12.out`:
-/// 10.8 s; 11.8 s if the drain is not woken when the run is left with its
-/// commit alone).
+/// the run is the drain's until it is cut, at 10 s (RMK-1010 item 41,
+/// broadened), and the third wait sees the write end, the close taking
+/// 11.8 s; Python's drain does not wait for the run, 10.8 s
+/// (`fixpass5/py_lr4_c12.out`).
 #[tokio::test(start_paused = true)]
-async fn a_set_a_deciding_run_runs_keeps_the_drain_s_grace() {
+async fn an_adopted_set_keeps_the_drain_s_grace_while_its_run_commits() {
     let mut read = Vec::new();
     for (row, locked, delivery, hook, commit) in [
         ("c3", true, 4_000, 3_000, 100),
@@ -897,7 +903,89 @@ async fn a_set_a_deciding_run_runs_keeps_the_drain_s_grace() {
             ("c3", 38, true, kit_closed.clone()),
             ("c2", 38, true, kit_closed.clone()),
             ("c", 68, true, kit_closed.clone()),
-            ("c12", 108, true, kit_closed),
+            ("c12", 118, true, kit_closed),
+        ]
+    );
+}
+
+/// An agent whose turn on `First` answers `Answer` after `turn`.
+struct Agent {
+    turn: Duration,
+}
+
+impl Channel for Agent {
+    fn declaration(&self) -> ChannelDeclaration {
+        ChannelDeclaration::new(
+            channel("agent"),
+            ChannelType::AI,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+        )
+    }
+
+    async fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        if roomkit::text_of(&event.content) != "First" {
+            return Ok(ChannelOutput::default());
+        }
+        tokio::time::sleep(self.turn).await;
+        let source = EventSource::new(channel("agent"), ChannelType::AI, EventDirection::Outbound);
+        let answer = RoomEvent::new(
+            event.id.clone(),
+            event.room_id.clone(),
+            EventType::Message,
+            source,
+            EventContent::text("Answer"),
+            event.created_at,
+        );
+        Ok(ChannelOutput::respond(vec![answer]))
+    }
+}
+
+/// RMK-1010 item 41, broadened: an inbound run is the drain's work until
+/// it is committed, whatever holds it. `Slow`'s hook makes `First`, under
+/// the lock or off it; an agent's turn on `First` answers after 3 s, and
+/// the answer waits for the room's lock behind `Slow`'s section, which
+/// commits for 9 s: the answer is stored when the close returns, at 9 s,
+/// as Python stores it (light review 5, row r, `py_lr5_r.out`: 8.9 s,
+/// `Answer` stored; on f9f285c the drain cut it). With a commit of 12 s,
+/// past the drain's grace, neither stores it (Python 11.9 s).
+#[tokio::test(start_paused = true)]
+async fn an_answer_behind_a_committing_run_is_stored() {
+    let mut read = Vec::new();
+    for (locked, commit) in [(true, 9_000), (false, 9_000), (true, 12_000)] {
+        let (kit, _ws) = gated_room().await;
+        let agent = Agent {
+            turn: Duration::from_secs(3),
+        };
+        kit.register_channel(agent).unwrap();
+        let options = AttachChannelOptions::default();
+        kit.attach_channel(&room_id(), &channel("agent"), options)
+            .await
+            .unwrap();
+        side_entry_hook(&kit, locked, Duration::ZERO);
+        let call = slow_into_room_1(&kit, Duration::from_millis(commit));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let took = closing(&kit).await;
+        let answered = stored(&kit, "Answer").await;
+        let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
+        read.push((
+            took.as_millis() / 100,
+            answered,
+            ended.ok().map(|result| result.cancellation_reason),
+        ));
+    }
+    let kit_closed = Some(Some("kit_closed".to_owned()));
+    assert_eq!(
+        read,
+        [
+            (89, true, kit_closed.clone()),
+            (89, true, kit_closed.clone()),
+            (119, false, kit_closed),
         ]
     );
 }
@@ -934,79 +1022,6 @@ fn side_entry_hook(kit: &RoomKit<GatedStore>, locked: bool, more: Duration) {
         }
     })
     .unwrap();
-}
-
-/// The drain is over once the only work left is runs whose deciding commit
-/// is in flight, however many other tasks of the work ended before: a
-/// delivery of 6 s in `room_1`, a commit of 12 s in `room_2`; the drain
-/// ends with the delivery, at 6 s, and the third wait 5 s later, the close
-/// taking 10.9 s, the record stored after, three warnings (light review 4,
-/// row b12, Python
-/// `py_lr4_b12.out`: 10.7 s, not stored, three warnings; with the drain
-/// waking only when the last task of the work ends, 12.0 s, stored, two).
-#[tokio::test(start_paused = true)]
-async fn the_drain_ends_with_the_last_work_but_deciding_runs() {
-    let (kit, _ws) = gated_room().await;
-    Busy::bound(&kit, Duration::from_secs(6), Duration::ZERO).await;
-    let room_2 = RoomId::new("room_2").unwrap();
-    kit.create_room(CreateRoomOptions {
-        room_id: Some(room_2.clone()),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    kit.store().started.store(true, Ordering::SeqCst);
-    let first = {
-        let kit = kit.clone();
-        tokio::spawn(async move {
-            let (message, options) = sms_into(room_id(), "First");
-            kit.process_inbound(message, options).await
-        })
-    };
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    kit.store().started.store(false, Ordering::SeqCst);
-    let slow = {
-        let (kit, room) = (kit.clone(), room_2.clone());
-        tokio::spawn(async move {
-            let (message, options) = sms_into(room, "Slow");
-            kit.process_inbound(message, options).await
-        })
-    };
-    tokio::time::timeout(BOUND, kit.store().committing.notified())
-        .await
-        .unwrap();
-    let go = Arc::clone(&kit.store().go);
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(12)).await;
-        go.notify_one();
-    });
-    let (lines, guard) = Warnings::capture();
-    let took = closing(&kit).await;
-    drop(guard);
-    let slow_at_close = kit
-        .store()
-        .list_events(&room_2, &every_row())
-        .await
-        .unwrap()
-        .iter()
-        .any(|event| roomkit::text_of(&event.content) == "Slow");
-    let first = tokio::time::timeout(BOUND, first).await.unwrap().unwrap();
-    let slow = tokio::time::timeout(Duration::from_secs(30), slow)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        (
-            took.as_millis() / 100,
-            slow_at_close,
-            lines
-                .containing("closing with decided writes still running")
-                .len(),
-            first.map(|result| result.cancellation_reason),
-            slow.map(|result| result.cancellation_reason),
-        ),
-        (109, false, 3, Ok(None), Ok(Some("kit_closed".to_owned())))
-    );
 }
 
 /// A run in its caller's own task, which the caller keeps but stops

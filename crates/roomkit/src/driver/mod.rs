@@ -48,7 +48,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinSet};
 use tokio::time::Instant;
 
-use self::calls::{WentOn, Written};
+use self::calls::WentOn;
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::inbound::Caller;
 pub(crate) use self::inbound::{InboundOutput, Ran, Record, ended, run_inbound};
@@ -57,7 +57,6 @@ use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::KitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::tasks::Deciding;
 use crate::turns::Canceller;
 
 /// The kit's clock and the runtime's, read together at a run's start: a
@@ -159,8 +158,6 @@ async fn drive<S: ConversationStore, O: Operation>(
         cut: Vec::new(),
         writing: HashMap::new(),
         written: Vec::new(),
-        deciding: None,
-        decided_write: None,
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -217,12 +214,6 @@ struct Driver<'kit, S> {
     /// The holds on the writes whose outcome the operation took, until what
     /// that outcome led to is started.
     written: Vec<WentOn>,
-    /// An inbound run's commit that decides its call, until the operation
-    /// takes its outcome.
-    deciding: Option<EffectId>,
-    /// The run's mark as a decided write (`Tasks::deciding`), while that
-    /// commit is all of it in flight.
-    decided_write: Option<Deciding>,
 }
 
 impl<S> Drop for Driver<'_, S> {
@@ -281,18 +272,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// Starts `effects`, handing `operation` the answers carried out at
     /// once; whether there was one. The writes whose outcome the operation
     /// took on its previous poll are let go then: what their outcome led
-    /// to is started, a commit's place in its room's lane taken. The run is
-    /// marked a decided write again once what it started leaves its
-    /// deciding commit alone in flight.
+    /// to is started, a commit's place in its room's lane taken.
     fn start_all<O: Operation>(
         &mut self,
         operation: &mut O,
         effects: Vec<Effect>,
     ) -> Result<bool, KitError> {
-        if !effects.is_empty() {
-            // What starts is the run's work: the drain waits for the run.
-            self.decided_write = None;
-        }
         let mut answered = false;
         for effect in effects {
             if let Some((id, outcome)) = self.start(effect) {
@@ -301,25 +286,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
         }
         self.written.clear();
-        self.mark_decided_write();
         Ok(answered)
-    }
-
-    /// Marks the run a decided write while the commit that decides its
-    /// call is all of it in flight, no other call and no wait: the kit's
-    /// drain then no longer waits for the run, the close's waits for the
-    /// writes do, as Python's held write. While a delivery set of an entry
-    /// it adopted runs or waits for its turn, the drain waits for the run,
-    /// the set getting the lanes' grace, as Python's lane drains it.
-    fn mark_decided_write(&mut self) {
-        let alone = self.deciding.is_some_and(|commit| {
-            self.waits.is_empty()
-                && self.call_of_effect.len() == 1
-                && self.call_of_effect.contains_key(&commit)
-        });
-        if alone != self.decided_write.is_some() {
-            self.decided_write = alone.then(|| self.inner.tasks.deciding());
-        }
     }
 
     /// Waits for the next wait over, call finished or call into the room
@@ -420,7 +387,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 self.shared.answered(*effect);
             }
             self.writing.remove(effect);
-            self.decided(*effect);
         }
     }
 
@@ -444,7 +410,16 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) if writes(&request) => {
                 let (writing, written, went_on) = calls::write(&inner, request);
-                self.hold_write(id, decides, written, went_on);
+                if let (Some(result), Some(caller)) = (decides, self.caller.as_deref()) {
+                    caller.commits(*result, written);
+                }
+                // Only an inbound run's commit takes a place in a room's
+                // lane, and its run, a task of its own, is always polled; a
+                // run in its caller's own task may sit unpolled, and its
+                // writes end with their write.
+                if self.caller.is_some() {
+                    self.writing.insert(id, went_on);
+                }
                 self.spawn(id, work, deadline, writing);
             }
             Request::Store(request) => self.spawn(id, work, deadline, async move {
@@ -465,31 +440,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }),
         }
         None
-    }
-
-    /// Keeps an inbound run's hold on its write `id`, whose outcome
-    /// `written` tells, until the operation takes that outcome: the
-    /// commit that decides the call, `decides`, is told to the call's
-    /// caller, and followed while it is in flight
-    /// ([`mark_decided_write`](Self::mark_decided_write)). Only an inbound
-    /// run's commit takes a place in a room's lane, and its run, a task of
-    /// its own, is always polled; a run in its caller's own task may sit
-    /// unpolled, and its writes end with their write.
-    fn hold_write(
-        &mut self,
-        id: EffectId,
-        decides: Option<Box<InboundResult>>,
-        written: Written,
-        went_on: WentOn,
-    ) {
-        let Some(caller) = self.caller.as_deref() else {
-            return;
-        };
-        if let Some(result) = decides {
-            caller.commits(*result, written);
-            self.deciding = Some(id);
-        }
-        self.writing.insert(id, went_on);
     }
 
     /// Carries out the hold `request` for `effect`, within `deadline`: at
@@ -661,22 +611,10 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         };
         let effect = self.effect_of_task.remove(&task)?;
         self.call_of_effect.remove(&effect);
-        self.decided(effect);
         self.written.extend(self.writing.remove(&effect));
         self.shared.answered(effect);
         self.indexes.answered(effect, &outcome);
         Some((effect, outcome))
-    }
-
-    /// Ends the run's decided write once `effect`, its deciding commit, is
-    /// answered or given up on, before its outcome reaches the operation:
-    /// what the outcome leads to, the event's place in the room's lane,
-    /// is the run's work, which the drain waits for.
-    fn decided(&mut self, effect: EffectId) {
-        if self.deciding == Some(effect) {
-            self.deciding = None;
-            self.decided_write = None;
-        }
     }
 
     /// Hands the operation a call into its room made by one of its calls;
