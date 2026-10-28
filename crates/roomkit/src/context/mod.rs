@@ -514,6 +514,14 @@ pub(crate) fn as_deep_as_its_turn(chain_depth: &mut u32) {
 /// lock the task's call waits for (decided in step 3 milestone 2). A task
 /// spawned without it acts for nothing from its start.
 ///
+/// It is the Rust form of the Python implementation's `create_task`,
+/// which copies its caller's context. A task spawned in the kit's work, a
+/// delivery, a turn or a hook, that calls the kit and waits on its own
+/// room must be wrapped: unwrapped, its call is a stranger's, and its wait,
+/// on the call or on the call's [`DeliveryHandle`](crate::DeliveryHandle),
+/// blocks behind the very delivery that awaits the task, whatever the
+/// kit's `process_timeout`.
+///
 /// ```no_run
 /// # use roomkit::model::{ChannelId, EventContent, RoomId};
 /// # async fn turn(kit: roomkit::RoomKit, room: RoomId, agent: ChannelId) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

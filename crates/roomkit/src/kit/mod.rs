@@ -272,6 +272,14 @@ impl<S: ConversationStore> RoomKit<S> {
     /// waits for the rest: the event's delivery set and the passes it
     /// spawns, in the room's lane (RFC §10.1 step 18, detached completion).
     ///
+    /// The call reads its caller's execution context. A task the kit's work
+    /// spawns, a delivery's, a turn's or a hook's, that makes this call
+    /// into its own room and waits must be spawned with
+    /// [`keep_context`](crate::keep_context), as Python's `create_task`
+    /// copies its context: spawned plainly, its call waits behind the
+    /// delivery that awaits the task, blocked, `process_timeout` bounding
+    /// none of it.
+    ///
     /// Dropped before it returns, by a `tokio::time::timeout` for instance,
     /// the call goes on, detached. Decided, its event is delivered and its
     /// cascade runs. Before its decision it expires as one past its

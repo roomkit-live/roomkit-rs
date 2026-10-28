@@ -31,7 +31,7 @@ use roomkit::{
     FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundError, InboundRoomRouter,
     KitError, MutationError, MuteOptions, ProcessInboundOptions, RoomFilter, RoomKit,
     RoomKitOptions, RouteOptions, RouterFuture, SendEventOptions, UpdateEventOptions,
-    default_inbound_event, text_of,
+    default_inbound_event, keep_context, text_of,
 };
 use tokio::sync::Notify;
 
@@ -695,6 +695,60 @@ async fn a_wait_from_its_room_s_lane_on_a_delivery_done_reads_its_results() {
             Some(vec!["audit".to_owned(), "bot".to_owned(), "ws".to_owned()])
         )
     );
+}
+
+/// Decided on 2026-10-28 (F10): a task a delivery spawns and awaits, that
+/// calls into the delivery's room and waits, deferred or not, returns when
+/// it is spawned with `keep_context`, the Rust form of Python's
+/// `create_task`, which copies its context: the call returns at its
+/// decision, the wait unwaited. Spawned plainly it blocks, the documented
+/// case (`tasks/probes/step5-lot1/plain_spawn_rs.out`).
+#[tokio::test]
+async fn a_task_a_delivery_spawns_with_its_context_waits_on_its_room_and_returns() {
+    for defer in [true, false] {
+        let (kit, audit) = room().await;
+        let seen = Arc::new(Mutex::new(None));
+        let (bot_kit, bot_seen) = (kit.clone(), Arc::clone(&seen));
+        let bot = Scripted::transport(
+            "bot",
+            Arc::new(move |event: RoomEvent| {
+                let (kit, seen) = (bot_kit.clone(), Arc::clone(&bot_seen));
+                Box::pin(async move {
+                    if text_of(&event.content) != "hello" {
+                        return Ok(ChannelOutput::default());
+                    }
+                    let work = async move {
+                        let options = ProcessInboundOptions {
+                            defer_delivery: defer,
+                            ..in_room(room_id())
+                        };
+                        let result = kit.process_inbound(message("side"), options).await?;
+                        match result.delivery {
+                            Some(handle) => {
+                                handle.wait().await.map(|result| result.event.is_some())
+                            }
+                            None => Ok(result.event.is_some()),
+                        }
+                    };
+                    let task = tokio::spawn(keep_context(work));
+                    let waited = tokio::time::timeout(BOUND, task).await;
+                    *seen.lock().unwrap() = Some(matches!(waited, Ok(Ok(Ok(true)))));
+                    Ok(ChannelOutput::default())
+                })
+            }),
+        );
+        kit.register_channel(bot).unwrap();
+        kit.attach_channel(&room_id(), &channel("bot"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        send(&kit, "hello").await.unwrap();
+        let texts = delivered(&audit, 2).await;
+        assert_eq!(
+            (*seen.lock().unwrap(), texts),
+            (Some(true), vec!["hello".to_owned(), "side".to_owned()]),
+            "deferred: {defer}"
+        );
+    }
 }
 
 on_both_runtimes!(
@@ -1374,7 +1428,7 @@ async fn a_task_a_turn_awaits_as_its_own_keeps_the_turn_s_context() {
                 if event.source.channel_id != channel("sms") {
                     return Ok(ChannelOutput::default());
                 }
-                let tool = tokio::spawn(roomkit::keep_context(async move {
+                let tool = tokio::spawn(keep_context(async move {
                     let thought = SendEventOptions::default();
                     kit.send_event(
                         &room_id(),
@@ -1444,7 +1498,7 @@ async fn a_task_a_locked_hook_spawns_in_its_context_acts_for_it_while_it_runs() 
                     };
                     // Fired and not awaited; the hook runs on meanwhile.
                     if kept {
-                        drop(tokio::spawn(roomkit::keep_context(call)));
+                        drop(tokio::spawn(keep_context(call)));
                     } else {
                         drop(tokio::spawn(call));
                     }
@@ -1492,7 +1546,7 @@ async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_ove
         async move {
             if event.source.channel_id == channel("sms") {
                 let task_over = Arc::clone(&over);
-                drop(tokio::spawn(roomkit::keep_context(async move {
+                drop(tokio::spawn(keep_context(async move {
                     task_over.notified().await;
                     calling.notify_one();
                     let result = kit
@@ -1557,7 +1611,7 @@ async fn a_later_hook_awaiting_a_task_an_earlier_one_left_waits_until_its_timeou
         let (kit, put, over) = (hook_kit.clone(), Arc::clone(&put), Arc::clone(&over));
         async move {
             if event.source.channel_id == channel("sms") {
-                let task = tokio::spawn(roomkit::keep_context(async move {
+                let task = tokio::spawn(keep_context(async move {
                     over.notified().await;
                     let sent = kit
                         .send_event(
@@ -1764,7 +1818,7 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
         async move {
             if event.source.channel_id == channel("sms") {
                 // Fired and not awaited: the entry runs beside the check.
-                drop(tokio::spawn(roomkit::keep_context(async move {
+                drop(tokio::spawn(keep_context(async move {
                     kit.send_event(
                         &room_id(),
                         &channel("ws"),
@@ -2721,7 +2775,7 @@ async fn work_a_turn_began_starts_fresh_once_the_turn_is_over() {
             Box::pin(async move {
                 if text_of(&event.content) == "hello" {
                     // Left running past the turn, within the turn's context.
-                    drop(tokio::spawn(roomkit::keep_context(async move {
+                    drop(tokio::spawn(keep_context(async move {
                         over.notified().await;
                         send_through_console(&kit, &room_id(), LIMIT * 10 + 1, &sent).await;
                     })));

@@ -211,7 +211,10 @@ impl DeliveryHandle {
     /// that waits returns at its decision, a delivery or a turn in the room
     /// or a hook under its lock, it returns the result at once, unwaited:
     /// the delivery could only wait for this wait (RFC §10.1 step 18). It
-    /// follows in the room's lane.
+    /// follows in the room's lane. That work is read from the caller's
+    /// execution context: a task the room's work spawned and awaits must be
+    /// spawned with [`keep_context`](crate::keep_context), or this wait
+    /// blocks behind the delivery that awaits the task.
     ///
     /// # Errors
     ///
