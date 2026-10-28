@@ -198,6 +198,21 @@ kit, its construction and its calls).
   `roomkit::testing::idle(&kit)`. `run_timers`, `TimerSweeper`,
   `KitError::NoRuntime` and `KitError::ZeroPeriod` go: the host calls
   `check_all_timers` on the period it chooses, as with Python.
+- An AI agent's history replays its earlier rounds of tool calls (RFC
+  §6.4 "The tools of earlier turns", RMK-1023), as Python's does since
+  roomkit 09e9a4ec: each round at its place, after the input of the turn
+  that made it and before its answer, as the assistant's calls then a tool
+  message per result, the way the turn sent them. The arguments are the
+  model's, the result what it read (an `ON_TOOL_CALL` rewrite included);
+  only the calls a tool answered (served, failed, blocked), never a
+  refusal, a call nothing served or one cancelled, nor a call to the
+  agent's skills' tools; the last 8 of them, the 3 most recent with their
+  result whole up to 6,000 characters, the older ones a 120-character
+  preview. A round older than the history's first message is left out,
+  and an instruction that stands alone replays none. A later turn used to
+  read each round's text alone, so a follow-up about a result the answer
+  left out found nothing. `transcript::conversation` takes the predicate
+  saying which tools' calls are replayed (`replayed`).
 
 ## [0.1.0] — 2026-10-27
 

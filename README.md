@@ -199,6 +199,7 @@ Agents:
 - `openai_agent`: an AI agent answers through an OpenAI-compatible endpoint, reading the conversation labelled by speaker; a local fake of the OpenAI wire stands in unless `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODEL` are set.
 - `agent_tools`: five tool calls in one round, one served, one the tool policy refuses, one an approval hook blocks, one that fails, one cut at its bound.
 - `close_from_a_tool`: an agent's tool closes the kit from inside its own turn, which the shutdown spares: the close returns at once with every channel closed, and the service's own close joins the same shutdown.
+- `agent_tool_history`: a booking made through a tool, then a follow-up the model answers from the earlier call's result, which the next turn's history replays as the assistant's call and the tool's result.
 - `streamed_answer`: an answer read as it is written by a streaming channel beside a buffered one, a tool call between two segments, a reader that stops.
 - `agent_skills`: skills from `examples/skills/`, a strict discovery, an activation, a reference read, the paths that are refused, and the activation read again after a restart.
 - `mcp_tools`: an MCP server's tools over stdio, a served call, an `isError` call, a tool the policy denies, the server's instructions, and connections that fail and leave no process.

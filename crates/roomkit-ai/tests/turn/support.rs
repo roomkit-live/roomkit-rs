@@ -73,10 +73,15 @@ impl Room {
         let agent = AiAgent::new(channel("assistant"), model)
             .with_tools(tools)
             .unwrap();
+        Self::with_agent(adjust(agent)).await
+    }
+
+    /// The room, its agent `agent`, on any provider.
+    pub(crate) async fn with_agent<P: AiProvider>(agent: AiAgent<P>) -> Self {
         let kit = RoomKit::new(RoomKitOptions::default());
         let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
         kit.register_channel(sms.clone()).unwrap();
-        kit.register_channel(adjust(agent)).unwrap();
+        kit.register_channel(agent).unwrap();
         kit.create_room(CreateRoomOptions {
             room_id: Some(room_id()),
             ..Default::default()

@@ -11,7 +11,9 @@
 //! then the room's recent messages as the conversation RFC §6.4 requires
 //! ([`roomkit::transcript`]): each in the role of whoever wrote it, labelled
 //! by its speaker once several speak, an instruction marked as the
-//! application's. It declares the tools the agent serves
+//! application's, the agent's earlier rounds of tool calls replayed at
+//! their place as the assistant's calls and their results. It declares the
+//! tools the agent serves
 //! ([`OpenAiAgent::with_tools`]), runs the calls the model makes and sends
 //! their results back, and the room stores each row of the turn as it
 //! ends: each round's text, each call's start and end. A provider error

@@ -20,23 +20,33 @@
 //!   the instructions an MCP server publishes, is framed by [`fence`], so
 //!   that it cannot close its block.
 //!
+//! - The channel's earlier rounds of tool calls are replayed at their
+//!   place, after the input of the turn that made them and before its
+//!   answer (RFC §6.4 "The tools of earlier turns"): the assistant's
+//!   message making the calls, then a tool message per result, as the turn
+//!   itself sent them, read from the channel's stored rows. A round older
+//!   than the history's first message is left out, so that the history
+//!   never opens on the assistant's calls.
+//!
 //! Only what §6.4 requires of every AI channel is built: no note of who
 //! takes part, no memory, no tool notes, no images, no cut answers.
 //!
 //! Within a turn, the tool loop extends the conversation with its rounds
 //! (RFC §6.4, Appendix A.9 `ai_message_parts`): the assistant's message that
 //! made calls ([`Message::assistant_calls`]), then a tool message per result
-//! ([`Message::tool_result`]). The history replays none: a later turn reads
-//! what each round said, never its calls.
+//! ([`Message::tool_result`]). A later turn's history replays them the same
+//! way.
 
 mod fence;
 mod marks;
+mod rounds;
 mod speakers;
 #[cfg(test)]
 mod tests;
 
 pub use self::fence::fence;
 use self::marks::{INSTRUCTION_MARK, NOTES_HEADER, SPEAKER_NOTE, without_copies};
+use self::rounds::{ToolRound, tool_rounds};
 use self::speakers::{
     Speaker, labelled_lines, labels_turns, people_taking_part, speaker, tell_apart,
 };
@@ -54,10 +64,11 @@ pub enum Role {
     /// Someone other than the channel: a participant, another channel, or
     /// the application through an instruction.
     User,
-    /// The channel itself: what it answered on earlier turns, and, within a
-    /// turn, the calls a round made.
+    /// The channel itself: what it answered on earlier turns, and the calls
+    /// a round made, within its turn and replayed in later turns' history.
     Assistant,
-    /// A tool's result, within the turn whose round called it.
+    /// A tool's result, within the turn whose round called it and replayed
+    /// in later turns' history.
     Tool,
 }
 
@@ -128,7 +139,8 @@ impl Message {
 
 /// The conversation the turn of the channel `channel_id` on `event` reads
 /// (RFC §6.4, §10.1.1 rules 6 and 7): the room's latest `history` messages
-/// before `event` that the channel may read, then `event` itself as the
+/// before `event` that the channel may read, the channel's earlier rounds
+/// of tool calls at their place among them, then `event` itself as the
 /// turn's input, then the turn's notes when it has any.
 ///
 /// `context` is the one the channel was handed with `event`: the pipeline
@@ -136,14 +148,30 @@ impl Message {
 /// content of what was deleted. The history holds the room's MESSAGE events,
 /// as edited, and none deleted, blocked or empty; `event` is never the
 /// channel's own.
+///
+/// The rounds replayed are read from the channel's own tool rows among the
+/// context's events (RFC §6.4 "The tools of earlier turns"): each call's
+/// arguments as the model wrote them (its start row's) and the result it
+/// read (its end row's), for the calls a tool answered (served, failed or
+/// blocked) to a tool `replayed` says is work the agent did, never a
+/// housekeeping tool of its own. The last 8 such calls are replayed, the 3
+/// most recent with their result whole up to 6,000 characters, the older
+/// ones a preview. A round at or after `event`'s place, or before the
+/// history's first message, is left out; an instruction that stands alone
+/// replays none.
 pub fn conversation(
     channel_id: &ChannelId,
     event: &RoomEvent,
     context: &RoomContext,
     history: usize,
+    replayed: impl Fn(&str) -> bool,
 ) -> Vec<Message> {
     let mut authors = Authors::new(context);
     let mut turns = past_turns(channel_id, event, context, history, &mut authors);
+    if !turns.is_empty() {
+        let rounds = tool_rounds(&context.recent_events, channel_id, &replayed);
+        place(&mut turns, rounds, rounds_before(event));
+    }
     turns.push(Turn::input(event, &mut authors));
     tell_apart(turns.iter_mut().filter_map(|turn| turn.speaker.as_mut()));
     let sources = turns
@@ -165,7 +193,8 @@ pub fn conversation(
 
 /// A turn of the conversation before it is rendered: its role, the text
 /// its event brings, who said it, whether it is the application's
-/// instruction, and whether it is the turn's input.
+/// instruction, whether it is the turn's input, its event's place in the
+/// timeline, and the rounds of tool calls read after it.
 #[derive(Clone, Debug)]
 struct Turn {
     role: Role,
@@ -173,6 +202,8 @@ struct Turn {
     speaker: Option<Speaker>,
     instruction: bool,
     input: bool,
+    index: u64,
+    rounds: Vec<ToolRound>,
 }
 
 impl Turn {
@@ -185,6 +216,8 @@ impl Turn {
             speaker: if own { None } else { speaker(event, authors) },
             instruction: false,
             input: false,
+            index: event.index,
+            rounds: Vec::new(),
         }
     }
 
@@ -202,6 +235,8 @@ impl Turn {
             },
             instruction,
             input: true,
+            index: event.index,
+            rounds: Vec::new(),
         }
     }
 
@@ -237,6 +272,26 @@ fn past_turns(
     turns.into_iter().skip(skip).collect()
 }
 
+/// Where the rounds a turn on `event` replays end: before its event. Index
+/// 0 is an event the store never numbered: nothing came before it.
+fn rounds_before(event: &RoomEvent) -> Option<u64> {
+    (event.index > 0).then_some(event.index)
+}
+
+/// `rounds`, each read after the last of `turns`, oldest first, that came
+/// before it: none older than the first turn, so that the history never
+/// opens on the assistant's calls, nor at or after `before`.
+fn place(turns: &mut [Turn], rounds: Vec<ToolRound>, before: Option<u64>) {
+    for round in rounds {
+        if before.is_some_and(|before| round.index >= before) {
+            continue;
+        }
+        if let Some(turn) = turns.iter_mut().rev().find(|turn| turn.index < round.index) {
+            turn.rounds.push(round);
+        }
+    }
+}
+
 /// Whether `event` is a message of the conversation: a MESSAGE event the
 /// room accepted and has not deleted. An edit is read on the message it
 /// changed; a lifecycle record, a receipt or a reaction is no turn.
@@ -248,17 +303,19 @@ fn is_conversation(event: &RoomEvent) -> bool {
 
 /// `turns` with each copy of a runtime mark replaced (RFC §6.4): in each
 /// turn, and over each run of consecutive user turns the runtime does not
-/// label, which an API may merge into one message. A turn a copy wholly
-/// held is left out.
+/// label, which an API may merge into one message; a replayed round ends a
+/// run, and is never rewritten. A turn a copy wholly held is left out, the
+/// rounds read after it then read after the turn before it.
 fn cleaned(mut turns: Vec<Turn>, labelled: bool) -> Vec<Turn> {
     let mut start = 0;
     while start < turns.len() {
-        let run = turns
-            .get(start..)
-            .unwrap_or_default()
-            .iter()
-            .take_while(|turn| turn.is_piece(labelled))
-            .count()
+        let rest = turns.get(start..).unwrap_or_default();
+        let pieces = rest.iter().take_while(|turn| turn.is_piece(labelled));
+        // A run ends with the first of its turns a round is read after.
+        let run = pieces
+            .clone()
+            .position(|turn| !turn.rounds.is_empty())
+            .map_or_else(|| pieces.count(), |last| last + 1)
             .max(1);
         let end = start + run;
         if let Some(group) = turns.get_mut(start..end) {
@@ -269,28 +326,35 @@ fn cleaned(mut turns: Vec<Turn>, labelled: bool) -> Vec<Turn> {
         }
         start = end;
     }
-    turns.retain(|turn| !turn.text.trim().is_empty());
-    turns
+    let mut kept: Vec<Turn> = Vec::with_capacity(turns.len());
+    for turn in turns {
+        if !turn.text.trim().is_empty() {
+            kept.push(turn);
+        } else if let Some(before) = kept.last_mut() {
+            before.rounds.extend(turn.rounds);
+        }
+    }
+    kept
 }
 
 /// The conversation's messages: each turn in its role, a participant's
 /// turn labelled when the conversation labels them, the instruction marked
-/// as the application's, then the turn's notes after its input.
+/// as the application's, the rounds read after a turn following it, then
+/// the turn's notes after its input.
 fn rendered(turns: Vec<Turn>, labelled: bool) -> Vec<Message> {
     let ends_on_input = turns.last().is_some_and(|turn| turn.input);
-    let mut messages: Vec<Message> = turns
-        .into_iter()
-        .map(|turn| {
-            let text = match (&turn.speaker, turn.instruction) {
-                (_, true) => format!("{INSTRUCTION_MARK}\n{}", turn.text),
-                (Some(speaker), false) if labelled && turn.role == Role::User => {
-                    labelled_lines(&turn.text, &speaker.label)
-                }
-                (_, false) => turn.text,
-            };
-            Message::new(turn.role, text)
-        })
-        .collect();
+    let mut messages: Vec<Message> = Vec::with_capacity(turns.len());
+    for turn in turns {
+        let text = match (&turn.speaker, turn.instruction) {
+            (_, true) => format!("{INSTRUCTION_MARK}\n{}", turn.text),
+            (Some(speaker), false) if labelled && turn.role == Role::User => {
+                labelled_lines(&turn.text, &speaker.label)
+            }
+            (_, false) => turn.text,
+        };
+        messages.push(Message::new(turn.role, text));
+        messages.extend(turn.rounds.into_iter().flat_map(|round| round.messages));
+    }
     if labelled {
         let notes = format!("{NOTES_HEADER}\n\n{SPEAKER_NOTE}");
         match messages.last_mut() {

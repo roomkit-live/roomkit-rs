@@ -96,6 +96,14 @@ impl Toolbox {
         self.exempt.contains(name) || policy.permits(name)
     }
 
+    /// Whether a call to `name` is work the agent did, which its later
+    /// turns replay (RFC §6.4 "The tools of earlier turns"): not a call to
+    /// a tool of its own, which only reads or unlocks (its skills'), as the
+    /// reference implementation's `in_tool_memory` trait reads them.
+    pub(crate) fn in_tool_memory(&self, name: &str) -> bool {
+        !self.exempt.contains(name)
+    }
+
     /// The tools `policy` lets the model call, in order: what each round
     /// declares (RFC §21.1).
     pub(crate) fn declared(&self, policy: &ToolPolicy) -> Vec<ToolDefinition> {

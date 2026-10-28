@@ -67,9 +67,13 @@ const STANDALONE: &str = "standalone";
 /// record, `loop_end_reason` and `ai_usage` in its metadata. A provider's
 /// error keeps the text it produced and fails the turn (RFC §12.2 step
 /// 13s); after a round, the rows stand and the record says `error` (RFC
-/// §6.4 "A turn cut short"). A later turn reads each round's text, never
-/// its calls. Called outside a kit, the turn returns the same rows at its
-/// end, buffered.
+/// §6.4 "A turn cut short"). A later turn's history replays each round at
+/// its place, from those rows (RFC §6.4 "The tools of earlier turns"): its
+/// text, then the agent's calls and their results as tool messages, the
+/// last 8 calls a tool answered, the 3 most recent with their result whole
+/// up to 6,000 characters, the older ones a preview; a call to its skills'
+/// tools is left out. Called outside a kit, the turn returns the same rows
+/// at its end, buffered.
 ///
 /// With the instructions of MCP servers
 /// ([`with_server_instructions`](Self::with_server_instructions)), each
@@ -350,7 +354,9 @@ impl<P: AiProvider> Channel for AiAgent<P> {
         if !self.answers(&event) {
             return Ok(ChannelOutput::default());
         }
-        let messages = conversation(self.id(), &event, &context, self.history);
+        let messages = conversation(self.id(), &event, &context, self.history, |name| {
+            self.toolbox.in_tool_memory(name)
+        });
         let turn = current_turn();
         let stands_alone = stands_alone(&event);
         let system_prompt = self.turn_system_prompt(&context, stands_alone);
