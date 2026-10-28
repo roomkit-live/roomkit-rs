@@ -479,6 +479,27 @@ async fn a_commit_ending_within_the_close_s_bounds_is_stored() {
     );
 }
 
+/// Plan step 3, the write bounds' first row: a commit that ends within the
+/// close's first wait is delivered, its event's place in the room's lane
+/// taken before the lanes are sealed, as Python's decided write covers the
+/// commit and the lane's enqueue (`inbound_locked.py` `_write_decision`).
+/// On threads and real time, twenty calls each closed while its commit
+/// runs: none is left undelivered (`lr2_probe_rs.out`: on e310aa7, four
+/// of four were).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_commit_ending_within_the_first_wait_is_delivered() {
+    let mut undelivered = 0;
+    for _ in 0..20 {
+        let (kit, ws) = gated_room().await;
+        let call = slow_commit(&kit, Duration::from_millis(20)).await;
+        closing(&kit).await;
+        let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
+        let answered = matches!(ended, Ok(result) if result.cancellation_reason.is_none());
+        undelivered += usize::from(!(answered && ws.texts() == ["Slow"]));
+    }
+    assert_eq!(undelivered, 0);
+}
+
 /// Plan step 3: a commit longer than the close's bounds does not hold the
 /// close, which returns at 10 s, and is never cancelled: it lands after,
 /// as Python's (`close_writes.out`: a write of 20 s, the close 10.0 s,

@@ -48,6 +48,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinSet};
 use tokio::time::Instant;
 
+use self::calls::WentOn;
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::inbound::Caller;
 pub(crate) use self::inbound::{InboundOutput, Ran, Record, ended, run_inbound};
@@ -155,6 +156,8 @@ async fn drive<S: ConversationStore, O: Operation>(
         refused: None,
         caller,
         cut: Vec::new(),
+        writing: HashMap::new(),
+        written: Vec::new(),
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -205,6 +208,12 @@ struct Driver<'kit, S> {
     /// The turns the run cut as it gave their calls up, whose end it joins
     /// before it ends (RFC §10.1 "Explicit delivery cancellation").
     cut: Vec<Canceller>,
+    /// The run's hold on each write it asked for, by its effect, until the
+    /// operation takes the write's outcome.
+    writing: HashMap<EffectId, WentOn>,
+    /// The holds on the writes whose outcome the operation took, until what
+    /// that outcome led to is started.
+    written: Vec<WentOn>,
 }
 
 impl<S> Drop for Driver<'_, S> {
@@ -254,17 +263,30 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 Next::Waiting => Vec::new(),
                 Next::Effects(effects) => effects,
             };
-            let mut answered = false;
-            for effect in effects {
-                if let Some((id, outcome)) = self.start(effect) {
-                    operation.complete(id, outcome)?;
-                    answered = true;
-                }
-            }
-            if !answered {
+            if !self.start_all(&mut operation, effects)? {
                 self.wait(&mut operation).await?;
             }
         }
+    }
+
+    /// Starts `effects`, handing `operation` the answers carried out at
+    /// once; whether there was one. The writes whose outcome the operation
+    /// took on its previous poll are let go then: what their outcome led
+    /// to is started, a commit's place in its room's lane taken.
+    fn start_all<O: Operation>(
+        &mut self,
+        operation: &mut O,
+        effects: Vec<Effect>,
+    ) -> Result<bool, KitError> {
+        let mut answered = false;
+        for effect in effects {
+            if let Some((id, outcome)) = self.start(effect) {
+                operation.complete(id, outcome)?;
+                answered = true;
+            }
+        }
+        self.written.clear();
+        Ok(answered)
     }
 
     /// Waits for the next wait over, call finished or call into the room
@@ -364,6 +386,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 self.effect_of_task.remove(&call.id());
                 self.shared.answered(*effect);
             }
+            self.writing.remove(effect);
         }
     }
 
@@ -386,10 +409,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         match request {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) if writes(&request) => {
-                let (writing, written) = calls::write(&inner, request);
+                let (writing, written, went_on) = calls::write(&inner, request);
                 if let (Some(result), Some(caller)) = (decides, self.caller.as_deref()) {
                     caller.commits(*result, written);
                 }
+                self.writing.insert(id, went_on);
                 self.spawn(id, work, deadline, writing);
             }
             Request::Store(request) => self.spawn(id, work, deadline, async move {
@@ -581,6 +605,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         };
         let effect = self.effect_of_task.remove(&task)?;
         self.call_of_effect.remove(&effect);
+        self.written.extend(self.writing.remove(&effect));
         self.shared.answered(effect);
         self.indexes.answered(effect, &outcome);
         Some((effect, outcome))

@@ -2,6 +2,7 @@
 //! the store's, a channel's, hooks' and the router's, each within its
 //! execution context; and the notices it performs without answering.
 
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use roomkit_core::model::{
@@ -14,7 +15,7 @@ use roomkit_core::ops::{
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
 use roomkit_core::rules::routing::RouteQuery;
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinSet;
 
 use crate::channel::{ChannelError, EventDraft};
@@ -254,20 +255,31 @@ pub(super) async fn route<S: ConversationStore>(
 /// What a write of the store came to, once it ended; nothing while it runs.
 pub(crate) type Written = watch::Receiver<Option<Outcome>>;
 
+/// The run's hold on a write's task once the write ended: never sent,
+/// dropped once the run went on from the write's outcome.
+pub(super) type WentOn = oneshot::Sender<Infallible>;
+
 /// Carries out `request`, a write of the store, as a task of its own the
 /// kit tracks, which the run's abort does not end: a write decided runs to
 /// its end, whatever becomes of its run, as the Python implementation runs
-/// its decided writes (RFC §13.6). Returns the run's call, which answers
-/// the write's outcome, and where anyone else reads it.
+/// its decided writes (RFC §13.6). The task ends once the run went on from
+/// the write's outcome too, its hold dropped: the kit's close, which waits
+/// for the writes, sees a commit's event take its place in the room's lane
+/// before it seals the lanes, as Python's decided write covers the commit
+/// and the lane's enqueue (`_write_decision`). Returns the run's call,
+/// which answers the write's outcome, where anyone else reads it, and the
+/// run's hold.
 pub(super) fn write<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     request: StoreRequest,
-) -> (impl Future<Output = Outcome> + Send + 'static, Written) {
+) -> (impl Future<Output = Outcome> + Send + 'static, Written, WentOn) {
     let (ended, written) = watch::channel(None);
+    let (went_on, run_going_on) = oneshot::channel();
     let writer = Arc::clone(inner);
     let writing = async move {
         let outcome = store(&*writer.store, request).await;
         ended.send_replace(Some(outcome));
+        let Err(_went_on) = run_going_on.await;
     };
     // A write is spawned whatever the kit's state.
     let spawned = inner.tasks.spawn(Kind::Write, writing).is_some();
@@ -278,7 +290,7 @@ pub(super) fn write<S: ConversationStore>(
         }
         outcome_of(&mut read).await
     };
-    (call, written)
+    (call, written, went_on)
 }
 
 /// What the write `written` tells came to, once it ended: a failure for one
