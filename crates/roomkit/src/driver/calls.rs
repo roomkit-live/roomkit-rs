@@ -268,12 +268,12 @@ pub(super) type WentOn = oneshot::Sender<Infallible>;
 /// kit tracks, which the run's abort does not end: a write decided runs to
 /// its end, whatever becomes of its run, as the Python implementation runs
 /// its decided writes (RFC §13.6). The task ends once the run went on from
-/// the write's outcome too, its hold dropped: the kit's close, which waits
-/// for the writes, sees a commit's event take its place in the room's lane
-/// before it seals the lanes, as Python's decided write covers the commit
-/// and the lane's enqueue (`_write_decision`). Returns the run's call,
-/// which answers the write's outcome, where anyone else reads it, and the
-/// run's hold.
+/// the write's outcome too, when the run keeps its hold: the kit's close,
+/// which waits for the writes, sees an inbound run's commit take its place
+/// in the room's lane before it seals the lanes, as Python's decided write
+/// covers the commit and the lane's enqueue (`_write_decision`). Returns
+/// the run's call, which answers the write's outcome, where anyone else
+/// reads it, and the run's hold.
 pub(super) fn write<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     request: StoreRequest,

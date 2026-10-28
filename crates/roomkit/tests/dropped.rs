@@ -6,21 +6,23 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, EventContent, EventId, EventStatus, EventUpdates,
-    HookResult, Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId,
-    Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource,
+    EventStatus, EventType, EventUpdates, HookResult, Identity, IdentityId, InboundMessage,
+    Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
+    Task, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, EventFilter, EventQuery,
-    FrameworkEvent, InMemoryStore, InboundError, KitError, ProcessInboundOptions, RoomCounters,
-    RoomFilter, RoomKit, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
+    AttachChannelOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, EventFilter,
+    EventQuery, FrameworkEvent, InMemoryStore, InboundError, KitError, ProcessInboundOptions,
+    RoomCounters, RoomFilter, RoomKit, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -645,6 +647,51 @@ async fn the_writes_left_running_and_failing_are_logged() {
         ));
     }
     assert_eq!(logged, [(2, 1), (0, 1), (0, 0)]);
+}
+
+/// A record from the WebSocket channel, for `commit_event`.
+fn record(text: &str) -> RoomEvent {
+    let source = EventSource::new(
+        channel("ws"),
+        ChannelType::WEBSOCKET,
+        EventDirection::Inbound,
+    );
+    RoomEvent::new(
+        "record_1".parse().unwrap(),
+        room_id(),
+        EventType::Message,
+        source,
+        EventContent::text(text),
+        Timestamp::UNIX_EPOCH,
+    )
+}
+
+/// A run in its caller's own task, which the caller keeps but stops
+/// polling once its write started (a `select!` whose other branch awaits
+/// the close): the close waits for the write, ended at 1 s, not for the run
+/// to take its outcome (light review 3, probe p7: the close waited its
+/// first 5 s on e8c9984).
+#[tokio::test(start_paused = true)]
+async fn a_run_its_caller_stops_polling_holds_the_close_for_its_write_only() {
+    let (kit, _ws) = gated_room().await;
+    let room = room_id();
+    let mut commit = pin!(kit.commit_event(&room, record("Slow"), CommitEventOptions::default()));
+    tokio::select! {
+        _ = commit.as_mut() => panic!("the commit ended before its write"),
+        () = kit.store().committing.notified() => {}
+    }
+    let go = Arc::clone(&kit.store().go);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        go.notify_one();
+    });
+    let took = closing(&kit).await;
+    let at_close = stored(&kit, "Slow").await;
+    let ended = commit.await.map(|event| roomkit::text_of(&event.content));
+    assert_eq!(
+        (took < Duration::from_secs(2), at_close, ended.ok()),
+        (true, true, Some("Slow".to_owned()))
+    );
 }
 
 /// A commit whose write panics is answered as any call that panicked: the

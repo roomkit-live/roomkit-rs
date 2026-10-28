@@ -208,8 +208,8 @@ struct Driver<'kit, S> {
     /// The turns the run cut as it gave their calls up, whose end it joins
     /// before it ends (RFC §10.1 "Explicit delivery cancellation").
     cut: Vec<Canceller>,
-    /// The run's hold on each write it asked for, by its effect, until the
-    /// operation takes the write's outcome.
+    /// An inbound run's hold on each write it asked for, by its effect,
+    /// until the operation takes the write's outcome.
     writing: HashMap<EffectId, WentOn>,
     /// The holds on the writes whose outcome the operation took, until what
     /// that outcome led to is started.
@@ -413,7 +413,13 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 if let (Some(result), Some(caller)) = (decides, self.caller.as_deref()) {
                     caller.commits(*result, written);
                 }
-                self.writing.insert(id, went_on);
+                // Only an inbound run's commit takes a place in a room's
+                // lane, and its run, a task of its own, is always polled; a
+                // run in its caller's own task may sit unpolled, and its
+                // writes end with their write.
+                if self.caller.is_some() {
+                    self.writing.insert(id, went_on);
+                }
                 self.spawn(id, work, deadline, writing);
             }
             Request::Store(request) => self.spawn(id, work, deadline, async move {
