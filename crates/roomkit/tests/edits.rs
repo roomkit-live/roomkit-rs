@@ -318,7 +318,9 @@ mod an_edit {
     }
 
     /// RFC Appendix B.6: the agent reads the edit, with the corrected text
-    /// in its history.
+    /// in its history, then the edit itself as its newest event, as the
+    /// Python implementation's turn reads it (RMK-1023, probe
+    /// `py_turn_after_edit.out`).
     #[tokio::test]
     async fn is_read_by_the_agent_with_its_target_corrected() {
         let room = room().await;
@@ -326,7 +328,13 @@ mod an_edit {
         let (event, history) = room.agent.read().last().cloned().unwrap();
         assert_eq!(
             (event.event_type, history),
-            (EventType::Edit, vec!["I need 50000$".to_owned()])
+            (
+                EventType::Edit,
+                vec![
+                    "I need 50000$".to_owned(),
+                    "Correction: I need 50000$".to_owned()
+                ]
+            )
         );
     }
 
@@ -437,6 +445,24 @@ mod a_delete {
             (
                 vec![String::new(), "Is it gone?".to_owned()],
                 EventContent::text("I need 5000$")
+            )
+        );
+    }
+
+    /// The agent's turn on the delete reads the deleted message with its
+    /// text withheld, then the delete itself as its history's newest event,
+    /// as the Python implementation's turn reads it (RMK-1023, light
+    /// review's probe `py_turn_after_delete.out`).
+    #[tokio::test]
+    async fn is_read_by_the_agent_as_its_history_s_newest_event() {
+        let room = room().await;
+        send(&room.kit, delete()).await;
+        let (event, history) = room.agent.read().last().cloned().unwrap();
+        assert_eq!(
+            (event.event_type, history),
+            (
+                EventType::Delete,
+                vec![String::new(), "[Message deleted]".to_owned()]
             )
         );
     }

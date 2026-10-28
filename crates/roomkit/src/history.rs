@@ -30,9 +30,10 @@ const TOOL_ROWS: u64 = 60;
 
 /// `context`, the one the pipeline hands `binding`'s channel for its turn
 /// on `event`, with its history read from `store`: the room's latest
-/// messages up to `event`, and the channel's own latest tool-call rows. A
-/// store that cannot be read leaves the history as the pipeline handed it,
-/// with a warning: the turn goes on.
+/// messages up to `event`, `event` itself the newest when it is a stored
+/// event of another type (an edit, a delete), and the channel's own latest
+/// tool-call rows. A store that cannot be read leaves the history as the
+/// pipeline handed it, with a warning: the turn goes on.
 pub(crate) async fn turn_context<S: ConversationStore>(
     store: &S,
     binding: &ChannelBinding,
@@ -64,8 +65,11 @@ pub(crate) async fn turn_context<S: ConversationStore>(
     }
 }
 
-/// The room's latest messages up to `event`, then `binding`'s channel's
-/// latest tool-call rows, merged in timeline order.
+/// The room's latest messages up to `event`, `event` among them when it
+/// is no message, then `binding`'s channel's latest tool-call rows, merged
+/// in timeline order. The Python implementation's turn reads its trigger as
+/// the newest event of its context (`provisional`); an instruction, never
+/// stored, is not there.
 async fn read<S: ConversationStore>(
     store: &S,
     binding: &ChannelBinding,
@@ -84,6 +88,12 @@ async fn read<S: ConversationStore>(
     let mut history = store
         .list_events(&event.room_id, &messages_up_to(event, messages))
         .await?;
+    if !matches!(
+        event.event_type,
+        EventType::Message | EventType::Instruction
+    ) {
+        history.push(event.clone());
+    }
     let latest_rows = EventQuery {
         limit: TOOL_ROWS,
         event_filter: Some(rows),
@@ -232,6 +242,18 @@ mod tests {
         expected.push(54);
         expected.extend(65..125);
         assert_eq!((indexes, messages), (expected, 48));
+    }
+
+    /// A stored trigger that is no message, a delete here, is the history's
+    /// newest event, as the Python implementation's turn reads it.
+    #[tokio::test]
+    async fn a_trigger_that_is_no_message_is_the_history_s_newest_event() {
+        let mut events: Vec<RoomEvent> = (0..4).map(|index| event(index, None)).collect();
+        let mut delete = event(4, None);
+        delete.event_type = EventType::Delete;
+        events.push(delete.clone());
+        let store = store(events).await;
+        assert_eq!(read_by(&store, &delete).await, (vec![0, 1, 2, 3, 4], 4));
     }
 
     /// An instruction, never stored, holds the index the room's next event
