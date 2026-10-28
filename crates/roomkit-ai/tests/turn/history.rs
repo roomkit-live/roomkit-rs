@@ -194,6 +194,117 @@ async fn a_hook_s_rewrite_is_what_is_replayed() {
     );
 }
 
+/// Each message of `request`, on one line: its role and text, the ids it
+/// calls, or the call its result answers.
+fn shape(request: &AiRequest) -> Vec<String> {
+    request
+        .messages
+        .iter()
+        .map(|message| match message.role {
+            Role::Assistant if !message.tool_calls.is_empty() => {
+                let ids: Vec<&str> = message
+                    .tool_calls
+                    .iter()
+                    .map(|call| call.id.as_str())
+                    .collect();
+                format!("calls {}", ids.join(" "))
+            }
+            Role::Tool => format!(
+                "result {} {}",
+                message.tool_call_id.as_deref().unwrap_or_default(),
+                message.text
+            ),
+            Role::User => format!("user {}", message.text),
+            Role::Assistant | _ => format!("assistant {}", message.text),
+        })
+        .collect()
+}
+
+/// The lines `shape` gives a round calling `ids`, each served.
+fn round_of(ids: &[String]) -> Vec<String> {
+    let mut lines = vec![format!("calls {}", ids.join(" "))];
+    lines.extend(ids.iter().map(|id| {
+        let order = id.trim_start_matches(['c', 't']);
+        format!(r#"result {id} {{"order":"{order}","status":"shipped"}}"#)
+    }));
+    lines
+}
+
+/// A round calling `ids`, each `lookup_order` of the order its id names.
+fn calling_each(ids: &[String]) -> ScriptedRound {
+    let arguments: Vec<String> = ids
+        .iter()
+        .map(|id| json!({ "order": id.trim_start_matches(['c', 't']) }).to_string())
+        .collect();
+    let calls: Vec<(&str, &str, &str)> = ids
+        .iter()
+        .zip(&arguments)
+        .map(|(id, arguments)| (id.as_str(), "lookup_order", arguments.as_str()))
+        .collect();
+    ScriptedRound::calling("", calls)
+}
+
+/// RFC §6.4: a turn of 30 calls in one round leaves the next turn its
+/// question, its last 8 calls and its answer, as the reference
+/// implementation's history reads them: the room's latest 50 messages and
+/// the agent's latest 60 tool rows, read apart (review probe `py_window.out`,
+/// `heavy`). The room's latest 50 events of every kind held the answer
+/// alone.
+#[tokio::test]
+async fn a_turn_of_thirty_calls_leaves_its_question_and_last_calls_to_the_next() {
+    let ids: Vec<String> = (0..30).map(|n| format!("c{n}")).collect();
+    let model = ScriptedProvider::new([
+        calling_each(&ids),
+        ScriptedRound::answering("Answer one."),
+        ScriptedRound::answering("Answer two."),
+        ScriptedRound::answering("Answer three."),
+    ]);
+    let room = Room::new(model.clone(), served()).await;
+    for text in ["first question", "second question", "third question"] {
+        room.says(text).await;
+    }
+    room.kit.close().await;
+    let requests = model.requests();
+    let mut second = vec!["user first question".to_owned()];
+    second.extend(round_of(&ids[22..]));
+    second.extend(["assistant Answer one.", "user second question"].map(str::to_owned));
+    assert_eq!(shape(&requests[2]), second);
+    let mut third = second;
+    third.extend(["assistant Answer two.", "user third question"].map(str::to_owned));
+    assert_eq!(shape(&requests[3]), third);
+}
+
+/// RFC §6.4: twelve turns of two calls each leave the thirteenth every
+/// message, the room's 25, and the last 8 calls, at their place (review
+/// probe `py_window.out`, `many`). The room's latest 50 events of every kind
+/// opened on the fourth answer.
+#[tokio::test]
+async fn twelve_turns_of_two_calls_leave_every_message_and_the_last_calls() {
+    let pair = |n: usize| vec![format!("t{n}a"), format!("t{n}b")];
+    let mut script = Vec::new();
+    for n in 0..12 {
+        script.push(calling_each(&pair(n)));
+        script.push(ScriptedRound::answering(format!("Answer {n}.")));
+    }
+    script.push(ScriptedRound::answering("Answer last."));
+    let model = ScriptedProvider::new(script);
+    let room = Room::new(model.clone(), served()).await;
+    for n in 0..13 {
+        room.says(&format!("question {n}")).await;
+    }
+    room.kit.close().await;
+    let mut expected = Vec::new();
+    for n in 0..12 {
+        expected.push(format!("user question {n}"));
+        if n >= 8 {
+            expected.extend(round_of(&pair(n)));
+        }
+        expected.push(format!("assistant Answer {n}."));
+    }
+    expected.push("user question 12".to_owned());
+    assert_eq!(shape(model.requests().last().unwrap()), expected);
+}
+
 /// The Python implementation's stamps (probe `py_turn_correlation.out`): every
 /// row of a turn carries the turn's own `correlation_id`, 32 lowercase
 /// hexadecimal digits, a fresh one per turn, never the one its trigger

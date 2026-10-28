@@ -54,6 +54,7 @@ mod cursors;
 mod driver;
 mod environment;
 mod error;
+mod history;
 mod hooks;
 mod host;
 mod inbound;

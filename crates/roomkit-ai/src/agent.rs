@@ -26,7 +26,7 @@ use crate::tools::toolbox::Toolbox;
 use crate::tools::{DynToolset, ToolContext, ToolPolicy, Toolset};
 
 /// How many of the room's latest messages a turn sends by default: as many
-/// as a kit's context can hold, 50 events.
+/// as a kit hands a turn, 50 messages.
 const DEFAULT_HISTORY: usize = 50;
 
 /// The most rounds of calls a turn runs by default (Appendix A.9
@@ -207,9 +207,9 @@ impl<P: AiProvider> AiAgent<P> {
     }
 
     /// The same agent, sending at most the room's latest `messages`
-    /// messages before the turn's input. A turn reads only the context the
-    /// kit hands it, the room's latest 50 events: a value above what it
-    /// holds sends no more.
+    /// messages before the turn's input. A turn reads only the history the
+    /// kit hands it, the room's latest 50 messages and the agent's latest 60
+    /// tool-call rows: a value above what it holds sends no more.
     #[must_use]
     pub fn with_history(mut self, messages: usize) -> Self {
         self.history = messages;

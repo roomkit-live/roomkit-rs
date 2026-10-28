@@ -4,7 +4,7 @@ use std::fmt;
 use std::time::Duration;
 
 /// How many of the room's latest messages a turn sends by default: as many
-/// as a kit's context can hold, 50 events.
+/// as a kit hands a turn, 50 messages.
 const DEFAULT_HISTORY: usize = 50;
 
 /// How long a completion may take by default, from its request to the end
@@ -70,10 +70,10 @@ impl OpenAiConfig {
     /// The same configuration, sending at most the room's latest
     /// `messages` messages before the turn's input.
     ///
-    /// A turn reads only the context the kit hands it: the room's latest 50
-    /// events, of every type (lifecycle records, edits and deletes count
-    /// too), of which it sends the messages. A value above what that window
-    /// holds sends no more: it can lower the history, never raise it.
+    /// A turn reads only the history the kit hands it: the room's latest 50
+    /// messages, and the agent's latest 60 tool-call rows, whose rounds it
+    /// replays. A value above what that window holds sends no more: it can
+    /// lower the history, never raise it.
     #[must_use]
     pub fn with_history(mut self, messages: usize) -> Self {
         self.history = messages;

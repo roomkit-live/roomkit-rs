@@ -421,8 +421,11 @@ mod a_delete {
         );
     }
 
-    /// Gap G-062: the agent's next turn reads the delete, never the deleted
-    /// text, which the store keeps.
+    /// Gap G-062: the agent's next turn reads the deleted message with its
+    /// text withheld, which the store keeps. Its history is the room's
+    /// messages up to the turn's own (RFC §6.4, RMK-1023), as the Python
+    /// implementation's conversation reads them: the delete, an event of its
+    /// own type, is not one of them.
     #[tokio::test]
     async fn leaves_the_agent_s_next_turn_without_the_deleted_text() {
         let room = room().await;
@@ -432,7 +435,7 @@ mod a_delete {
         assert_eq!(
             (history, target(&room.kit).await.unwrap().content),
             (
-                vec![String::new(), "[Message deleted]".to_owned()],
+                vec![String::new(), "Is it gone?".to_owned()],
                 EventContent::text("I need 5000$")
             )
         );

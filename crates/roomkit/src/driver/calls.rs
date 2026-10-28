@@ -164,10 +164,13 @@ pub(super) async fn channel<S: ConversationStore>(
             if binding.category != ChannelCategory::Intelligence {
                 return channel_output(channel.on_event(event, binding, *context).await);
             }
-            // A turn: it runs through the turn backend (RFC §10.6).
+            // A turn: it runs through the turn backend (RFC §10.6), on the
+            // room's conversation and its channel's tool rows (RFC §6.4).
+            let context = crate::history::turn_context(&*inner.store, &binding, &event, *context);
+            let context = context.await;
             let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
             let cut = |turn| shared.turn_submitted(effect, turn);
-            let answered = inner.turns.run(&kit, &binding, event, *context, cut).await;
+            let answered = inner.turns.run(&kit, &binding, event, context, cut).await;
             let outcome = match answered {
                 Ok(Answer::Output(output)) => ChannelOutcome::Output(output).into(),
                 Ok(Answer::Streamed(output, turn)) => {
