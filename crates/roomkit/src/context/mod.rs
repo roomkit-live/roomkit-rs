@@ -361,13 +361,16 @@ impl ExecutionContext {
     }
 
     /// Whether an inbound call of this context into `room_id` returns at
-    /// its decision: a frame delivers in the room, stands in its admission
-    /// order, or holds a live lease on its lock, and its run's set or
-    /// section would wait for this call (RFC §10.1 step 18).
+    /// its decision: a frame whose call still runs delivers in the room or
+    /// stands in its admission order, or the context holds a live lease on
+    /// its lock, and its run's set or section would wait for this call (RFC
+    /// §10.1 step 18). A frame kept past its call's end, as a run started
+    /// from a delivery carries it, stands for no work.
     pub(crate) fn detaches(&self, room_id: &RoomId) -> bool {
         self.lease(room_id).is_some()
             || self.frames.iter().any(|frame| {
-                frame.work.delivering.as_ref() == Some(room_id) || frame.is_admitted_to(room_id)
+                (frame.runs() && frame.work.delivering.as_ref() == Some(room_id))
+                    || frame.is_admitted_to(room_id)
             })
             || self.body_in(room_id).is_some_and(|body| body.detaches)
     }
@@ -450,6 +453,13 @@ impl ExecutionContext {
             None => Draw::HookCall(self.body_in(room_id)?.budget.clone()),
         };
         Some((draw, self.turn_depth().unwrap_or(0)))
+    }
+
+    /// Whether this context is work of `room_id` that still runs: a frame
+    /// under a live lease on its lock, in its admission order or delivering
+    /// in it, or a hook body that works in it.
+    pub(crate) fn works_in_room(&self, room_id: &RoomId) -> bool {
+        self.frames.iter().any(|frame| frame.works_in(room_id)) || self.body_in(room_id).is_some()
     }
 
     /// The innermost frame that runs under `room_id`'s lock or in its
@@ -781,10 +791,11 @@ mod tests {
 
     /// RFC §10.1 step 18: a turn's call into its own room returns at its
     /// decision, and is not adopted; one into another room waits for its
-    /// delivery.
+    /// delivery, and so does one once the delivery's call is over.
     #[test]
     fn a_context_delivering_in_a_room_detaches_from_that_room_only() {
         let (run, _queue) = RunShared::new();
+        run.calling(effect());
         let context = ExecutionContext::default().within(Frame::new(
             &run,
             effect(),
@@ -793,13 +804,15 @@ mod tests {
                 ..Work::default()
             },
         ));
+        let delivering = (
+            context.detaches(&room_id()),
+            context.detaches(&RoomId::new("room_2").unwrap()),
+            context.taker(&room_id()).is_some(),
+        );
+        run.answered(effect());
         assert_eq!(
-            (
-                context.detaches(&room_id()),
-                context.detaches(&RoomId::new("room_2").unwrap()),
-                context.taker(&room_id()).is_some()
-            ),
-            (true, false, false)
+            (delivering, context.detaches(&room_id())),
+            ((true, false, false), false)
         );
     }
 }

@@ -673,6 +673,139 @@ async fn into_its_own_room_from_its_delivery(defer: bool) {
     );
 }
 
+/// RFC §10.1 step 18: room 1's delivery of `hello` calls into room 2 and
+/// goes on; once it is over, room 2's delivery calls back into room 1 and
+/// waits for that call's delivery. Room 2's run carries the frame of room
+/// 1's delivery, which no longer runs: it works in room 1 no more, so the
+/// call back waits for its delivery, as Python's does.
+#[tokio::test]
+async fn a_call_back_from_another_room_s_delivery_waits_for_its_delivery() {
+    let (kit, _audit) = room().await;
+    let room_2 = RoomId::new("room_2").unwrap();
+    let (go, seen) = (Arc::new(Notify::new()), Arc::new(Mutex::new(None)));
+    let (relay_kit, into_2) = (kit.clone(), in_room(room_2.clone()));
+    let relay = Scripted::transport(
+        "relay",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, options) = (relay_kit.clone(), into_2.clone());
+            Box::pin(async move {
+                if text_of(&event.content) == "hello" {
+                    let deferred = ProcessInboundOptions {
+                        defer_delivery: true,
+                        ..options
+                    };
+                    kit.process_inbound(message("to room 2"), deferred).await?;
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    let (back_kit, back_go, back_seen) = (kit.clone(), Arc::clone(&go), Arc::clone(&seen));
+    let back = Scripted::transport(
+        "back",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, go, seen) = (
+                back_kit.clone(),
+                Arc::clone(&back_go),
+                Arc::clone(&back_seen),
+            );
+            Box::pin(async move {
+                if text_of(&event.content) == "to room 2" {
+                    go.notified().await;
+                    let result = kit
+                        .process_inbound(message("back"), in_room(room_id()))
+                        .await?;
+                    let delivered: Vec<String> = result
+                        .delivery_results
+                        .keys()
+                        .map(|id| id.as_str().to_owned())
+                        .collect();
+                    *seen.lock().unwrap() = Some(delivered);
+                }
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(relay).unwrap();
+    kit.register_channel(back).unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("relay"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_2.clone()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["sms", "back"] {
+        kit.attach_channel(&room_2, &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    send(&kit, "hello").await.unwrap();
+    go.notify_one();
+    tokio::time::timeout(BOUND, roomkit::testing::idle(&kit))
+        .await
+        .unwrap();
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        Some(vec![
+            "audit".to_owned(),
+            "relay".to_owned(),
+            "ws".to_owned()
+        ])
+    );
+}
+
+/// RFC §17.2, §8.3: a call from a delivery into its room naming another
+/// organization reads as not found and draws nothing on the delivering
+/// cascade's reentry budget, as the Python implementation's draws nothing:
+/// sixty such calls, past the cap of fifty, leave the next call accepted.
+#[tokio::test]
+async fn a_call_naming_another_organization_draws_nothing_on_the_budget() {
+    let (kit, _audit) = room().await;
+    let seen = Arc::new(Mutex::new(None));
+    let (bot_kit, bot_seen) = (kit.clone(), Arc::clone(&seen));
+    let bot = Scripted::transport(
+        "bot",
+        Arc::new(move |event: RoomEvent| {
+            let (kit, seen) = (bot_kit.clone(), Arc::clone(&bot_seen));
+            Box::pin(async move {
+                if text_of(&event.content) != "hello" {
+                    return Ok(ChannelOutput::default());
+                }
+                let mut not_found = 0;
+                for _ in 0..60 {
+                    let other = ProcessInboundOptions {
+                        organization_id: Some("other".to_owned()),
+                        ..in_room(room_id())
+                    };
+                    let refused = kit.process_inbound(message("other"), other).await;
+                    not_found += usize::from(matches!(
+                        refused,
+                        Err(KitError::Inbound(InboundError::RoomNotFound(_)))
+                    ));
+                }
+                let last = kit
+                    .process_inbound(message("last"), in_room(room_id()))
+                    .await?;
+                *seen.lock().unwrap() = Some((not_found, last.blocked, last.reason));
+                Ok(ChannelOutput::default())
+            })
+        }),
+    );
+    kit.register_channel(bot).unwrap();
+    kit.attach_channel(&room_id(), &channel("bot"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    send(&kit, "hello").await.unwrap();
+    assert_eq!(seen.lock().unwrap().clone(), Some((60, false, None)));
+}
+
 /// RFC §8.3, gap G-070: a transport whose delivery sends a follow-up into
 /// its room on every delivery stops at the reentry cap. Each follow-up is a
 /// new arrival drawing on the budget of the cascade that delivers, the

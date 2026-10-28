@@ -515,22 +515,24 @@ impl Machine {
     }
 }
 
-/// `updates` without the keys the implementation reserves (RFC §10.6.5, gap
-/// G-049), which a stream's target may not write.
+/// `updates` without the keys only the framework writes, of the namespace
+/// the implementation reserves or of the room's private state (RFC §5.1,
+/// §10.6.5, §14.1, gap G-049), which a stream's target may not write.
 fn kept_metadata(responder: &ChannelBinding, updates: Metadata) -> Metadata {
     updates
         .into_iter()
         .filter(|(key, _)| {
-            let reserved = crate::rules::attachment::is_reserved_key(key);
-            if reserved {
+            let the_framework_s = crate::rules::attachment::the_framework_s(key);
+            if the_framework_s {
                 tracing::warn!(
                     target: "roomkit::core::inbound",
                     room_id = %responder.room_id,
                     key = %key,
-                    "a streaming target's room metadata update names a reserved key; the key is refused"
+                    "a streaming target's room metadata update names a key only the framework \
+                     writes; the key is refused"
                 );
             }
-            !reserved
+            !the_framework_s
         })
         .collect()
 }

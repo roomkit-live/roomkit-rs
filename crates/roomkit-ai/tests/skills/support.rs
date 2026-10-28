@@ -146,7 +146,7 @@ impl Room {
     /// The agent replaced by a new one on `model`, serving `skills`: what
     /// it kept in memory is gone, as after a restart.
     pub(crate) fn replace_agent(&self, model: ScriptedProvider, skills: SkillRegistry) {
-        self.kit.unregister_channel(&channel("assistant")).unwrap();
+        drop(self.kit.unregister_channel(&channel("assistant")).unwrap());
         self.kit
             .register_channel(agent(model, skills, |agent| agent))
             .unwrap();

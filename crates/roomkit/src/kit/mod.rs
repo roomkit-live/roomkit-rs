@@ -370,7 +370,11 @@ impl<S> Inner<S> {
     /// it.
     pub(crate) fn registered(&self, channel_id: &ChannelId) -> Option<Arc<dyn RegisteredChannel>> {
         let declaration = read(&self.config).channel(channel_id)?.clone();
-        Some(Arc::new(Registered(declaration)))
+        let channel = self.channel(channel_id)?;
+        Some(Arc::new(Registered {
+            declaration,
+            channel,
+        }))
     }
 
     pub(crate) fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>> {

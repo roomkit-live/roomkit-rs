@@ -4,15 +4,15 @@
 //! apart otherwise.
 
 use roomkit_core::model::{ChannelId, DirectEvent, EventContent, RoomEvent, RoomId};
-use roomkit_core::ops::{CommitRecord, Entry, Inbound, InboundResult, InboundTarget};
+use roomkit_core::ops::{CommitRecord, Entry, Inbound, InboundError, InboundResult, InboundTarget};
 use tokio::task::JoinHandle;
 
 use super::RoomKit;
 use super::options::{CommitEventOptions, SendEventOptions};
-use crate::context::{self, Adopting};
+use crate::context::{self, Adopting, ExecutionContext};
 use crate::driver::{self, InboundOutput};
 use crate::error::KitError;
-use crate::store::ConversationStore;
+use crate::store::{ConversationStore, StoreError};
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Injects an event of `content` from the registered channel
@@ -158,6 +158,7 @@ impl<S: ConversationStore> RoomKit<S> {
         context::as_deep_as_its_turn(chain_depth);
         self.inner.open()?;
         let room_id = entry.room_id().clone();
+        self.reached_from_its_work(&entry).await?;
         let entry = match context::adopt(entry).await {
             Adopting::Settled(result) => return Ok(Entered::settled((*result)?)),
             // A run the kit's shutdown ended abandons the calls it adopted:
@@ -175,6 +176,36 @@ impl<S: ConversationStore> RoomKit<S> {
             result: ran.output??,
             run: ran.delivery,
         })
+    }
+
+    /// Checks that the organization `entry` names reaches its room when the
+    /// call is made from that room's own work, where it would draw on the
+    /// work's reentry budget first thing: a room of another organization
+    /// reads as not found and draws nothing, as the Python implementation
+    /// reads the room first (RFC §17.2, §8.3).
+    async fn reached_from_its_work(&self, entry: &Entry) -> Result<(), KitError> {
+        let organization_id = match entry {
+            Entry::Message {
+                organization_id, ..
+            }
+            | Entry::Direct {
+                organization_id, ..
+            }
+            | Entry::Post {
+                organization_id, ..
+            } => organization_id.as_deref(),
+            Entry::Row { .. } => None,
+        };
+        let room_id = entry.room_id();
+        if organization_id.is_none() || !ExecutionContext::current().works_in_room(room_id) {
+            return Ok(());
+        }
+        match self.reached(room_id, organization_id).await {
+            Err(KitError::Store(StoreError::RoomNotFound(missing))) => {
+                Err(InboundError::RoomNotFound(missing).into())
+            }
+            reached => reached,
+        }
     }
 
     /// The operation that runs `entry`, a call run apart.

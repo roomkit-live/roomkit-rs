@@ -627,15 +627,15 @@ mod unregistering {
     /// A channel no one registered is left as it is, nothing emitted, as
     /// the Python implementation's `unregister_channel` returns `None`.
     #[tokio::test]
-    async fn unregister_of_an_unknown_channel_is_ok() {
+    async fn unregister_of_an_unknown_channel_returns_none() {
         let kit = RoomKit::new(RoomKitOptions::default());
         let mut events = kit.subscribe();
         assert_eq!(
             (
-                kit.unregister_channel(&channel("sms")),
+                kit.unregister_channel(&channel("sms")).is_none(),
                 events.try_recv().ok()
             ),
-            (Ok(()), None)
+            (true, None)
         );
     }
 
@@ -690,6 +690,9 @@ impl Tagger {
     }
 }
 
+/// What [`Tagger`] writes under the keys only the framework writes.
+const FORGED: &str = "forged";
+
 impl Channel for Tagger {
     fn declaration(&self) -> ChannelDeclaration {
         self.declaration.clone()
@@ -708,6 +711,13 @@ impl Channel for Tagger {
         output
             .metadata_updates
             .insert("roomkit:detached_channels".to_owned(), vec!["sms"].into());
+        // Keys of the room's private state, which only the framework writes.
+        output
+            .metadata_updates
+            .insert("author_register".to_owned(), FORGED.into());
+        output
+            .metadata_updates
+            .insert("_speak_queue_results".to_owned(), FORGED.into());
         ready(Ok(output))
     }
 }
@@ -798,10 +808,26 @@ mod metadata_updates {
         assert_eq!(contact, Some("c_42"));
     }
 
+    /// RFC §5.1, §14.1: a key only the framework writes, of the reserved
+    /// namespace or of the room's private state (the register of authors
+    /// among them), is refused to a channel's output, as Python's writers
+    /// refuse it (RMK-978).
     #[tokio::test]
-    async fn a_reserved_key_is_refused() {
+    async fn a_key_only_the_framework_writes_is_refused() {
         let room = tagged_room().await;
-        assert!(!room.metadata.contains_key("roomkit:detached_channels"));
+        let forged: Vec<&str> = [
+            "roomkit:detached_channels",
+            "author_register",
+            "_speak_queue_results",
+        ]
+        .into_iter()
+        .filter(|key| {
+            room.metadata.get(*key).is_some_and(|value| {
+                value.as_str() == Some(FORGED) || value == &serde_json::json!(["sms"])
+            })
+        })
+        .collect();
+        assert_eq!(forged, Vec::<&str>::new());
     }
 
     /// RFC §5.1: a key only the framework writes, of the `roomkit:`
@@ -896,6 +922,31 @@ mod bindings {
         assert_eq!(
             (first, again, elsewhere, bound(&kit).await == after_first),
             (Ok(true), Ok(false), Ok(false), true)
+        );
+    }
+
+    /// An attach reads its room before the channel's registration, as the
+    /// Python implementation's does: an unknown channel attached to a
+    /// missing room is the room's `RoomNotFound`; to a room that exists,
+    /// `UnknownChannel`.
+    #[tokio::test]
+    async fn attach_reads_the_room_before_the_channel_s_registration() {
+        let (kit, _sms, _agent) = sms_and_agent().await;
+        let missing = RoomId::new("room_9").unwrap();
+        let attach = |room: RoomId| {
+            let kit = kit.clone();
+            async move {
+                kit.attach_channel(&room, &channel("ghost"), AttachChannelOptions::default())
+                    .await
+                    .err()
+            }
+        };
+        assert_eq!(
+            (attach(missing.clone()).await, attach(room_id()).await),
+            (
+                Some(KitError::Lifecycle(LifecycleError::RoomNotFound(missing))),
+                Some(KitError::UnknownChannel(channel("ghost")))
+            )
         );
     }
 

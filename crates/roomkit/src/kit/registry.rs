@@ -1,5 +1,6 @@
 //! Registering and unregistering a kit's channels and hooks.
 
+use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -11,6 +12,7 @@ use super::{RoomKit, write};
 use crate::channel::{Channel, DynChannel};
 use crate::error::KitError;
 use crate::hooks::{HookError, HookHandler, HookReturn, Observer};
+use crate::registered::{Registered, RegisteredChannel};
 use crate::store::ConversationStore;
 use crate::tools::{ToolCallEvent, ToolHandler, ToolHookSpec, ToolUse, ToolVerdict};
 
@@ -40,35 +42,35 @@ impl<S: ConversationStore> RoomKit<S> {
         Ok(())
     }
 
-    /// Unregisters a channel, then emits `channel_unregistered` (RFC §8.2);
-    /// a channel no one registered is left as it is, nothing emitted, as the
-    /// Python implementation's `unregister_channel` returns `None` then.
+    /// Unregisters a channel, emits `channel_unregistered` (RFC §8.2), and
+    /// hands the channel back, not closed, as the Python implementation's
+    /// `unregister_channel` returns it: closing is the caller's
+    /// ([`RegisteredChannel::close`]). `None`, nothing emitted, for a
+    /// channel no one registered.
     ///
     /// A message on the channel is refused from now on. Its bindings stay in
     /// their rooms, as the store holds them: a delivery to one fails, and
     /// registering a channel under the same id again serves them (gap
     /// G-048). An operation already running keeps the channel it started
     /// with until it calls it.
-    ///
-    /// # Errors
-    ///
-    /// None today; the `Result` is the kit's calls' form.
-    pub fn unregister_channel(&self, channel_id: &ChannelId) -> Result<(), KitError> {
-        let unregistered = self.inner.try_change_config(|config| {
+    pub fn unregister_channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn RegisteredChannel>> {
+        let Ok(unregistered) = self.inner.try_change_config(|config| {
             let Ok(declaration) = config.unregister_channel(channel_id) else {
-                return Ok::<_, KitError>(None);
+                return Ok::<_, Infallible>(None);
             };
             // No operation can see the declaration once the channel goes.
-            write(&self.inner.channels).remove(channel_id);
-            Ok(Some(declaration))
-        })?;
-        if let Some(declaration) = unregistered {
-            self.inner.publish(FrameworkEvent::channel_unregistered(
-                declaration.channel_id,
-                declaration.channel_type,
-            ));
-        }
-        Ok(())
+            let channel = write(&self.inner.channels).remove(channel_id);
+            Ok(channel.map(|channel| Registered {
+                declaration,
+                channel,
+            }))
+        });
+        let unregistered = unregistered?;
+        self.inner.publish(FrameworkEvent::channel_unregistered(
+            unregistered.declaration.channel_id.clone(),
+            unregistered.declaration.channel_type.clone(),
+        ));
+        Some(Arc::new(unregistered))
     }
 
     /// Registers a hook whose handler is a closure, given the payload and

@@ -10,13 +10,13 @@ use roomkit_core::ops::{AttachChannel, DetachChannel, LifecycleError, UpdateBind
 use super::RoomKit;
 use super::events::room_work;
 use super::options::{
-    AttachChannelOptions, DetachChannelOptions, GetBindingOptions, ListBindingsOptions,
-    ListMembersOptions, MuteOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
-    UpdateBindingMetadataOptions,
+    AttachChannelOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
+    ListBindingsOptions, ListMembersOptions, MuteOptions, SetAccessOptions, SetVisibilityOptions,
+    UnmuteOptions, UpdateBindingMetadataOptions,
 };
 use crate::driver;
 use crate::error::KitError;
-use crate::store::ConversationStore;
+use crate::store::{ConversationStore, StoreError};
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Attaches a registered channel to a room with the binding `options`
@@ -33,10 +33,12 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::UnknownChannel`] for a channel not registered, and
-    /// [`KitError::Lifecycle`] when the room does not exist or is not of the
-    /// organization `options` names, or the binding's visibility is
-    /// `internal`, which only the framework writes (gap G-041).
+    /// Returns [`KitError::Lifecycle`] when the room does not exist or is not
+    /// of the organization `options` names, read first, as the Python
+    /// implementation reads it; [`KitError::UnknownChannel`] for a channel
+    /// not registered; and [`KitError::Lifecycle`] when the binding's
+    /// visibility is `internal`, which only the framework writes (gap
+    /// G-041).
     pub async fn attach_channel(
         &self,
         room_id: &RoomId,
@@ -44,9 +46,12 @@ impl<S: ConversationStore> RoomKit<S> {
         options: AttachChannelOptions,
     ) -> Result<ChannelBinding, KitError> {
         let config = self.config();
-        let declaration = config
-            .channel(channel_id)
-            .ok_or_else(|| KitError::UnknownChannel(channel_id.clone()))?;
+        let Some(declaration) = config.channel(channel_id) else {
+            let organization_id = options.organization_id;
+            return Err(self
+                .unregistered(room_id, channel_id, organization_id)
+                .await);
+        };
         let environment = self.inner.environment();
         let organization_id = options.organization_id.clone();
         let binding = options.apply(declaration.binding(room_id.clone(), environment.now()));
@@ -60,6 +65,27 @@ impl<S: ConversationStore> RoomKit<S> {
             self.inner.turns.attached(&binding);
         }
         Ok(binding)
+    }
+
+    /// Why an attach of `channel_id`, which no channel is registered under,
+    /// into `room_id` fails: the room's absence first, for the organization
+    /// `organization_id` names, then the channel's.
+    async fn unregistered(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+        organization_id: Option<String>,
+    ) -> KitError {
+        match self
+            .get_room(room_id, GetRoomOptions { organization_id })
+            .await
+        {
+            Ok(_) => KitError::UnknownChannel(channel_id.clone()),
+            Err(KitError::Store(StoreError::RoomNotFound(missing))) => {
+                LifecycleError::RoomNotFound(missing).into()
+            }
+            Err(error) => error,
+        }
     }
 
     /// Detaches a channel from a room: its binding is removed, and the room

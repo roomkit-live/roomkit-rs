@@ -577,18 +577,20 @@ impl DeliverySet {
     }
 
     /// Keeps a target's room metadata updates, a side effect collected
-    /// whatever the target's permissions (RFC §7.5 rule 3). A key of the
-    /// namespace the implementation reserves is refused (RFC §10.6.5, gap
+    /// whatever the target's permissions (RFC §7.5 rule 3). A key only the
+    /// framework writes, of the namespace the implementation reserves or of
+    /// the room's private state, is refused (RFC §5.1, §10.6.5, §14.1, gap
     /// G-049).
     fn collect_metadata(&mut self, channel_id: &ChannelId, updates: Metadata) {
         for (key, value) in updates {
-            if attachment::is_reserved_key(&key) {
+            if attachment::the_framework_s(&key) {
                 tracing::warn!(
                     target: "roomkit::core::inbound",
                     room_id = %self.event.room_id,
                     channel_id = %channel_id,
                     key = %key,
-                    "a channel's room metadata update names a reserved key; the key is refused"
+                    "a channel's room metadata update names a key only the framework writes; \
+                     the key is refused"
                 );
                 continue;
             }

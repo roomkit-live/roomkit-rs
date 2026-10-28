@@ -163,3 +163,25 @@ async fn the_kit_s_close_closes_the_agent_s_toolsets_once() {
     room.kit.close().await;
     assert_eq!(closing.closes.load(Ordering::SeqCst), 1);
 }
+
+/// The Python implementation's `unregister_channel` hands the channel back
+/// not closed, for its caller to close: the agent's toolsets close once the
+/// caller closes it, and the kit's close closes it no more.
+#[tokio::test]
+async fn an_unregistered_agent_is_closed_by_its_caller() {
+    let closing = Closing::default();
+    let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
+    let toolset = closing.clone();
+    let room = Room::equipped(model, served(), |agent| agent.with_tools(toolset).unwrap()).await;
+    let agent = room.kit.unregister_channel(&channel("assistant")).unwrap();
+    let handed_back = (
+        agent.channel_id().as_str().to_owned(),
+        closing.closes.load(Ordering::SeqCst),
+    );
+    agent.close().await;
+    room.kit.close().await;
+    assert_eq!(
+        (handed_back, closing.closes.load(Ordering::SeqCst)),
+        (("assistant".to_owned(), 0), 1)
+    );
+}
