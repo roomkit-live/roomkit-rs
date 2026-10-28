@@ -6,7 +6,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -217,15 +217,104 @@ async fn a_deferred_call_refused_before_the_lock_has_no_handle() {
         .process_inbound(hello(&sms_2), deferred())
         .await
         .unwrap();
+    let capped = past_the_reentry_cap().await;
     let refused =
         |result: &roomkit::InboundResult| (result.reason.clone(), result.delivery.is_none());
     assert_eq!(
-        (refused(&instruction), refused(&late)),
+        (refused(&instruction), refused(&late), refused(&capped)),
         (
             (Some("instruction_unaddressed".to_owned()), true),
-            (Some("process_timeout".to_owned()), true)
+            (Some("process_timeout".to_owned()), true),
+            (Some("reentry_loop_cap".to_owned()), true)
         )
     );
+}
+
+/// A transport whose every delivery sends a deferred follow-up into its
+/// room, until one is refused; it keeps that one's result.
+#[derive(Clone)]
+struct Echoing {
+    kit: Arc<Mutex<Option<RoomKit>>>,
+    capped: Arc<Mutex<Option<roomkit::InboundResult>>>,
+}
+
+impl Channel for Echoing {
+    fn declaration(&self) -> ChannelDeclaration {
+        let mut declaration = ChannelDeclaration::new(
+            channel("echo"),
+            ChannelType::WEBSOCKET,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        );
+        declaration.recipient_key = None;
+        declaration
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let echoing = self.clone();
+        async move {
+            let kit = echoing.kit.lock().unwrap().clone();
+            if let Some(kit) = kit
+                && echoing.capped.lock().unwrap().is_none()
+            {
+                let again = InboundMessage::new(
+                    channel("sms"),
+                    "+15551234567",
+                    EventContent::text("Again"),
+                );
+                let result = kit.process_inbound(again, deferred()).await.unwrap();
+                if result.blocked {
+                    *echoing.capped.lock().unwrap() = Some(result);
+                }
+            }
+            Ok(ChannelOutput::default())
+        }
+    }
+}
+
+/// The deferred follow-up a delivery sends past the reentry cap of the
+/// cascade it draws on (RFC §8.3, review probe g).
+async fn past_the_reentry_cap() -> roomkit::InboundResult {
+    let (kit, sms, held) = room().await;
+    let echoing = Echoing {
+        kit: Arc::new(Mutex::new(Some(kit.clone()))),
+        capped: Arc::default(),
+    };
+    kit.register_channel(echoing.clone()).unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("echo"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    // The held transport delivers at once from now on.
+    held.release.notify_waiters();
+    let releasing = tokio::spawn(async move {
+        loop {
+            held.delivering.notified().await;
+            held.release.notify_one();
+        }
+    });
+    kit.process_inbound(hello(&sms), deferred()).await.unwrap();
+    let capped = tokio::time::timeout(BOUND, async {
+        loop {
+            if let Some(capped) = echoing.capped.lock().unwrap().clone() {
+                return capped;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    releasing.abort();
+    echoing.kit.lock().unwrap().take();
+    capped
 }
 
 /// A call that does not defer has no delivery handle: it returned once its

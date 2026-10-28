@@ -413,16 +413,19 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
 /// `output`, a run's at its end: once the kit's close cut the work under
 /// way, its turns cut by it (RFC §10.6.8), the delivery of a call whose own
 /// set had its turn reads as cancelled [`LANE_CANCELLED`], as the Python
-/// implementation's lane reports the cascade it cut, whatever the close
-/// dropped of it after. The cut is read here, at the run's end, so that a
-/// run that ended before it reports its result whenever its end is read.
+/// implementation's lane reports the cascade it cut, unless an earlier
+/// reason stands: the first one stays, as Python's first cancel does. The
+/// cut is read here, at the run's end, so that a run that ended before it
+/// reports its result whenever its end is read.
 fn cut_at_its_end(output: InboundOutput, cut: bool, record: &Record) -> InboundOutput {
     if !cut || !record.delivering.load(Ordering::Acquire) {
         return output;
     }
     output.map(|result| {
         result.map(|mut result| {
-            result.cancellation_reason = Some(LANE_CANCELLED.to_owned());
+            result
+                .cancellation_reason
+                .get_or_insert_with(|| LANE_CANCELLED.to_owned());
             result
         })
     })

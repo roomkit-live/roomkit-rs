@@ -12,5 +12,6 @@
 mod busy;
 mod cuts;
 mod depth;
+mod streams;
 mod support;
 mod tap;

@@ -54,7 +54,7 @@ impl Drop for Cut {
 /// with its reason; the executor cuts the handler and reports the call
 /// `cancelled` to the kit's observers; the turn's end follows; the reader
 /// stores the call's end `cancelled`; the caller receives its result, its
-/// delivery `lane_cancelled`. (Milestone 6 left the call's start with no
+/// cascade cancelled `kit_closed`, the first reason. (Milestone 6 left the call's start with no
 /// end, and reported nothing.)
 #[tokio::test(start_paused = true)]
 async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_cancelled() {
@@ -129,8 +129,10 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
         ),
         (
             // The caller receives the call it made, as Python's awaited
-            // caller does, its delivery cut.
-            Ok((true, Some("lane_cancelled".to_owned()))),
+            // caller does: the turn's answer, committed once the close
+            // drained, was dropped first, and its reason stays, as
+            // Python's first cancel wins (review probe f: `kit_closed`).
+            Ok((true, Some("kit_closed".to_owned()))),
             vec!["control cancel kit_closed", "frame end"],
             vec!["cut"],
             vec![(

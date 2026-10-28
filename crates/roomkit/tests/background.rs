@@ -225,6 +225,10 @@ async fn close_drains_a_delivery_in_progress() {
     });
     // The close drains: it is still running, and a second one returns.
     let draining = tokio::time::timeout(BRIEF, &mut closing).await.is_err();
+    assert!(
+        draining,
+        "the close returned at once: it did not wait for the delivery in progress"
+    );
     tokio::time::timeout(BOUND, kit.close()).await.unwrap();
     slow.gate.open.notify_one();
     tokio::time::timeout(BOUND, closing).await.unwrap().unwrap();
@@ -318,6 +322,10 @@ async fn a_call_while_the_close_drains_is_taken_its_delivery_dropped() {
         async move { kit.close().await }
     });
     let draining = tokio::time::timeout(BRIEF, &mut closing).await.is_err();
+    assert!(
+        draining,
+        "the close returned at once: it did not wait for the delivery in progress"
+    );
     let during = kit
         .process_inbound(message("During"), in_room())
         .await
@@ -431,6 +439,10 @@ async fn a_draining_delivery_s_calls_into_its_room_are_taken() {
         async move { kit.close().await }
     });
     let draining = tokio::time::timeout(BRIEF, &mut closing).await.is_err();
+    assert!(
+        draining,
+        "the close returned at once: it did not wait for the delivery in progress"
+    );
     calling.gate.open.notify_one();
     tokio::time::timeout(BOUND, closing).await.unwrap().unwrap();
     tokio::time::timeout(BOUND, call)
@@ -818,4 +830,53 @@ async fn a_call_whose_delivery_ends_during_the_drain_reports_its_result() {
         cut += usize::from(!matches!(ended, Ok(result) if result.cancellation_reason.is_none()));
     }
     assert_eq!(cut, 0);
+}
+
+/// Decision 15, plan step 2: once the grace runs out, the queued work is
+/// aborted before the other observers drain: an observer of another
+/// trigger that runs 30 s does not leave twenty queued deliveries of
+/// 500 ms going on meanwhile; past the grace nothing more is delivered.
+#[tokio::test(start_paused = true)]
+async fn the_queued_work_is_aborted_before_the_observers_drain() {
+    let kit = room().await;
+    let slow = Slow::default();
+    kit.register_channel(slow.clone()).unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("slow"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut spec = HookSpec::new("long", HookTrigger::BeforeBroadcast, HookExecution::Async);
+    spec.timeout = Duration::from_secs(60);
+    kit.hook(spec, |event, _| async move {
+        if text_of(&event.content) == "m0" {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+        Ok(HookResult::allow())
+    })
+    .unwrap();
+    let deferred = ProcessInboundOptions {
+        defer_delivery: true,
+        ..in_room()
+    };
+    for n in 0..20 {
+        let message = message(&format!("m{n}"));
+        tokio::time::timeout(BOUND, kit.process_inbound(message, deferred.clone()))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    let started = tokio::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(120), kit.close())
+        .await
+        .unwrap();
+    let took = started.elapsed();
+    let delivered = slow.delivered.lock().unwrap().len();
+    assert_eq!(
+        (took >= Duration::from_secs(29), delivered <= 11),
+        (true, true),
+        "{delivered} delivered by the close's end, after {took:?}"
+    );
 }
