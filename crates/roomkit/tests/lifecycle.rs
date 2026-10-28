@@ -925,28 +925,48 @@ mod bindings {
         );
     }
 
-    /// An attach reads its room before the channel's registration, as the
-    /// Python implementation's does: an unknown channel attached to a
-    /// missing room is the room's `RoomNotFound`; to a room that exists,
-    /// `UnknownChannel`.
+    /// An attach refuses in the Python implementation's order
+    /// (`channel_ops.py:317-326`, probe `tasks/probes/step5-lot1/
+    /// attach_order.out`): the visibility `internal` first, then the room,
+    /// then the channel's registration, then a host channel bound as an
+    /// intelligence channel.
     #[tokio::test]
-    async fn attach_reads_the_room_before_the_channel_s_registration() {
+    async fn attach_refuses_in_python_s_order() {
         let (kit, _sms, _agent) = sms_and_agent().await;
+        kit.register_channel(roomkit::HostChannel::new()).unwrap();
         let missing = RoomId::new("room_9").unwrap();
-        let attach = |room: RoomId| {
-            let kit = kit.clone();
-            async move {
-                kit.attach_channel(&room, &channel("ghost"), AttachChannelOptions::default())
-                    .await
-                    .err()
-            }
+        let attach = |room: RoomId, channel_id: &str, options: AttachChannelOptions| {
+            let (kit, channel_id) = (kit.clone(), channel(channel_id));
+            async move { kit.attach_channel(&room, &channel_id, options).await.err() }
         };
+        let internal = AttachChannelOptions {
+            visibility: Visibility::Internal,
+            ..AttachChannelOptions::default()
+        };
+        let thinking = || AttachChannelOptions {
+            category: Some(ChannelCategory::Intelligence),
+            ..AttachChannelOptions::default()
+        };
+        let refused = vec![
+            attach(missing.clone(), "ghost", internal).await,
+            attach(missing.clone(), "ghost", AttachChannelOptions::default()).await,
+            attach(missing.clone(), "host", thinking()).await,
+            attach(room_id(), "ghost", AttachChannelOptions::default()).await,
+            attach(room_id(), "host", thinking()).await,
+        ];
         assert_eq!(
-            (attach(missing.clone()).await, attach(room_id()).await),
-            (
+            refused,
+            vec![
+                Some(KitError::Lifecycle(LifecycleError::InternalVisibility)),
+                Some(KitError::Lifecycle(LifecycleError::RoomNotFound(
+                    missing.clone()
+                ))),
                 Some(KitError::Lifecycle(LifecycleError::RoomNotFound(missing))),
-                Some(KitError::UnknownChannel(channel("ghost")))
-            )
+                Some(KitError::UnknownChannel(channel("ghost"))),
+                Some(KitError::Lifecycle(LifecycleError::HostAsIntelligence(
+                    channel("host")
+                ))),
+            ]
         );
     }
 

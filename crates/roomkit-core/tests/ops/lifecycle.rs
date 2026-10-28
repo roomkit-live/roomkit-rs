@@ -271,10 +271,11 @@ mod attach_channel {
     }
 
     /// RFC §6.2, §10.5: a host channel is bound as a transport only: a
-    /// binding of one as an intelligence channel is refused before anything
-    /// is read.
+    /// binding of one as an intelligence channel is refused once the room
+    /// is read, as the Python implementation refuses it, nothing written:
+    /// the lock, the room's read and the release.
     #[test]
-    fn of_a_host_channel_as_an_intelligence_channel_is_refused_before_any_effect() {
+    fn of_a_host_channel_as_an_intelligence_channel_is_refused_once_the_room_is_read() {
         let mut sim = Sim::new();
         let binding = ChannelBinding::new(
             channel("host"),
@@ -287,7 +288,7 @@ mod attach_channel {
         let attached = sim.run(AttachChannel::new(sim.shared_config(), binding, None));
         assert_eq!(
             (attached, sim.trace.len()),
-            (Err(LifecycleError::HostAsIntelligence(channel("host"))), 0)
+            (Err(LifecycleError::HostAsIntelligence(channel("host"))), 3)
         );
     }
 

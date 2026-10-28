@@ -10,7 +10,6 @@ use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomId, Visibility}
 use crate::ops::protocol::{EffectId, Operation, Outcome, ProtocolError, Step};
 use crate::ops::{Environment, KitConfig};
 use crate::rules::chain_depth::Draw;
-use crate::rules::host;
 
 /// Attaches a channel to a room with its binding, under the room's lock,
 /// then fires `ON_CHANNEL_ATTACHED` and emits `room_channel_attached`. Its
@@ -59,14 +58,10 @@ impl AttachChannel {
 }
 
 /// Why `binding` cannot be attached, before anything is read: the
-/// visibility `internal`, the framework's alone (gap G-041), or a host
-/// channel bound as an intelligence channel (RFC §6.2, §10.5).
+/// visibility `internal`, the framework's alone (gap G-041), as the Python
+/// implementation refuses it before it reads the room.
 fn refusal(binding: &ChannelBinding) -> Option<LifecycleError> {
-    if binding.visibility == Visibility::Internal {
-        return Some(LifecycleError::InternalVisibility);
-    }
-    host::host_as_intelligence(&binding.channel_type, binding.category)
-        .then(|| LifecycleError::HostAsIntelligence(binding.channel_id.clone()))
+    (binding.visibility == Visibility::Internal).then_some(LifecycleError::InternalVisibility)
 }
 
 impl Operation for AttachChannel {

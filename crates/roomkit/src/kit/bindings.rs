@@ -33,18 +33,22 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist or is not
-    /// of the organization `options` names, read first, as the Python
-    /// implementation reads it; [`KitError::UnknownChannel`] for a channel
-    /// not registered; and [`KitError::Lifecycle`] when the binding's
-    /// visibility is `internal`, which only the framework writes (gap
-    /// G-041).
+    /// Refuses in the Python implementation's order (`channel_ops.py`):
+    /// [`KitError::Lifecycle`] for the visibility `internal`, which only the
+    /// framework writes (gap G-041); then [`KitError::Lifecycle`] when the
+    /// room does not exist or is not of the organization `options` names;
+    /// then [`KitError::UnknownChannel`] for a channel not registered; then
+    /// [`KitError::Lifecycle`] for a host channel bound as an intelligence
+    /// channel (RFC §6.2, §10.5).
     pub async fn attach_channel(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
         options: AttachChannelOptions,
     ) -> Result<ChannelBinding, KitError> {
+        if options.visibility == Visibility::Internal {
+            return Err(LifecycleError::InternalVisibility.into());
+        }
         let config = self.config();
         let Some(declaration) = config.channel(channel_id) else {
             let organization_id = options.organization_id;

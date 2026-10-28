@@ -16,9 +16,9 @@ use super::report::Reported;
 use crate::model::{BindingUpdate, ChannelBinding, ChannelId, RoomContext, RoomUpdates};
 use crate::ops::Cx;
 use crate::ops::protocol::StoreRequest;
-use crate::rules::attachment;
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::records::Record;
+use crate::rules::{attachment, host};
 
 /// A change a locked section makes (`LockedSection`).
 pub(crate) trait SectionChange: Debug {
@@ -157,6 +157,13 @@ impl SectionChange for AttachChange {
         cx: &Cx<'_>,
     ) -> Result<Decision<Attached>, LifecycleError> {
         let binding = &self.0;
+        // Once the room is read, as the Python implementation refuses it
+        // (RFC §6.2, §10.5): a host channel bound as an intelligence one.
+        if host::host_as_intelligence(&binding.channel_type, binding.category) {
+            return Err(LifecycleError::HostAsIntelligence(
+                binding.channel_id.clone(),
+            ));
+        }
         let mut writes = VecDeque::new();
         let now = cx.env.now();
         if let Some(updates) = attachment::clear_revocation(&context.room, &binding.channel_id, now)
