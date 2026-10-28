@@ -272,7 +272,11 @@ pub(super) type WentOn = oneshot::Sender<Infallible>;
 pub(super) fn write<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     request: StoreRequest,
-) -> (impl Future<Output = Outcome> + Send + 'static, Written, WentOn) {
+) -> (
+    impl Future<Output = Outcome> + Send + 'static,
+    Written,
+    WentOn,
+) {
     let (ended, written) = watch::channel(None);
     let (went_on, run_going_on) = oneshot::channel();
     let writer = Arc::clone(inner);
