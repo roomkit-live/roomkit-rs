@@ -18,8 +18,8 @@ use serde_json::json;
 use tokio::time::Instant;
 
 use crate::support::{
-    AT_ONCE, BOUND, Closer, Door, Witness, attach_agent, channel, ended, kit_with, ok, open,
-    room_id, spawn_message, stored,
+    AT_ONCE, Answered, BOUND, Closer, Door, Witness, attach_agent, channel, ended, kit_with, ok,
+    open, room_id, spawn_message, stored,
 };
 
 /// RFC §12.10.4: a delivery closes the kit while the room's next message
@@ -238,15 +238,50 @@ fn closing_hook(kit: &RoomKit, closer: &Closer, needs_lock: bool) {
     .unwrap();
 }
 
-/// RFC §12.10.4: a SYNC hook closes the kit under `room_1`'s lock while
-/// `room_2` drains a delivery of 2 s; "Two." comes to `room_1` 0.5 s into
-/// the close: it waits behind the spared run's lock, so it is refused at
-/// once, and the close returns once `room_2`'s delivery ended, at 2 s, as
-/// Python's (`rmk1017-lightreview/lr_probe_py.out` P1). On 9dfe09b the
-/// close found waiters only as it began and as callers joined: "Two." held
-/// it until the grace, 5 s (`lr_probe_head.out`).
+/// RFC §12.10.4, §9.5.1: a SYNC hook closes the kit under `room_1`'s
+/// lock, or holding its admission ticket off the lock, while `room_2`
+/// drains a delivery of 2 s; "Two." comes to `room_1` 0.5 s into the
+/// close: it waits behind the spared run's lock or ticket, so it is refused
+/// at once, and the close returns once `room_2`'s delivery ended, at 2 s,
+/// as Python's (`rmk1017-lightreview/lr_probe_py.out` P1,
+/// `rmk1017-fix4/py_p1_tickets.out`), whose "Two." is refused only then, at
+/// 2 s (decided 2026-10-28: Rust drops it at once). On 9dfe09b the close
+/// found waiters only as it began and as callers joined: "Two." held it
+/// until the grace, 5 s (`lr_probe_head.out`); without the tickets' half of
+/// `Driver::waits_behind`, the ticket's "Two." waits for the close's return
+/// (`rmk1017-fix4/mutation_waits_ticket.out`).
 #[tokio::test(start_paused = true)]
-async fn a_message_coming_behind_a_spared_lock_as_the_close_drains_is_refused() {
+async fn a_message_coming_behind_a_spared_lock_or_ticket_as_the_close_drains_is_refused() {
+    let mut rows = Vec::new();
+    for needs_lock in [true, false] {
+        rows.push((needs_lock, behind_a_spared_hold(needs_lock).await));
+    }
+    let row = |needs_lock| {
+        (
+            needs_lock,
+            (
+                (Some(Err(KitError::ShutDown)), 5),
+                (Some(true), 20),
+                Some(Err(KitError::ShutDown)),
+                Some(ok(None, None)),
+            ),
+        )
+    };
+    assert_eq!(rows, [row(true), row(false)]);
+}
+
+/// What "Two." and the close come to in [`a_message_coming_behind_a_spared_lock_or_ticket_as_the_close_drains_is_refused`],
+/// the closing hook taking `room_1`'s lock when `needs_lock`, else its
+/// admission ticket: Two's call and when it ended, the close's return and
+/// when, One's and Slow's calls, the times in tenths of a second.
+async fn behind_a_spared_hold(
+    needs_lock: bool,
+) -> (
+    (Option<Answered>, u128),
+    (Option<bool>, u128),
+    Option<Answered>,
+    Option<Answered>,
+) {
     let witness = Witness::new();
     let kit = kit_with(&witness).await;
     let slow = Witness::slow("Slow.", Duration::from_secs(2)).named("slow");
@@ -264,7 +299,7 @@ async fn a_message_coming_behind_a_spared_lock_as_the_close_drains_is_refused() 
             .unwrap();
     }
     let closer = Closer::new(&kit, &witness, true);
-    closing_hook(&kit, &closer, true);
+    closing_hook(&kit, &closer, needs_lock);
     let started = Instant::now();
     let tenths = || (started.elapsed().as_millis() + 50) / 100;
     let slow_call = spawn_message(&kit, "Slow.", room_2);
@@ -280,20 +315,12 @@ async fn a_message_coming_behind_a_spared_lock_as_the_close_drains_is_refused() 
     let two_at = tenths();
     let returned = closer.returned_once_closed().await;
     let closed_at = tenths();
-    assert_eq!(
-        (
-            (two, two_at),
-            (returned, closed_at),
-            ended(one).await,
-            ended(slow_call).await
-        ),
-        (
-            (Some(Err(KitError::ShutDown)), 5),
-            (Some(true), 20),
-            Some(Err(KitError::ShutDown)),
-            Some(ok(None, None))
-        )
-    );
+    (
+        (two, two_at),
+        (returned, closed_at),
+        ended(one).await,
+        ended(slow_call).await,
+    )
 }
 
 /// RFC §12.10.4, §9.5.1: an off-lock SYNC hook closes the kit while its

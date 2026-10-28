@@ -358,3 +358,76 @@ async fn a_close_from_a_tool_s_observer_cuts_its_turn() {
         ((Some(true), true), Some(ok(None, None)), 0, false)
     );
 }
+
+/// RFC §12.10.4, §10.6.8: once the kit is sealed, a set of spared work
+/// that delivers to an agent has the agent's `on_event()` refused with the
+/// turn link's `backend_closed`, its call carrying `TurnLinkError`, as a
+/// spared turn's stream read once sealed is
+/// (`stuck::the_turns_a_spared_delivery_runs_are_spared_with_it`).
+/// "One."'s witness delivery holds `room_1`'s lane; "Two.", whose hook
+/// spawned a task kept in its context, has its set queued behind it. That
+/// task closes the kit, then the witness's delivery closes it too,
+/// joining: both runs are spared, the kit is sealed and closed, the
+/// witness's delivery ends, and only then does "Two."'s set deliver, its
+/// calls refused. With the agent's `on_event()` refused as a transport's
+/// delivery is, "Two."'s call reads `kit_closed`, no error
+/// (`rmk1017-fix4/mutation_refused_onevent.out`).
+#[tokio::test(start_paused = true)]
+async fn a_spared_set_s_turn_asked_once_sealed_is_refused_backend_closed() {
+    let witness = Witness::new();
+    let kit = kit_with(&witness).await;
+    let one_closes = Closer::new(&kit, &witness, true);
+    *witness.closes_on_delivery.lock().unwrap() = Some(one_closes.clone());
+    let two_closes = Closer::new(&kit, &witness, true);
+    let work = two_closes.clone();
+    let spec = HookSpec::new("keep", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    kit.hook(spec, move |event, _context| {
+        let work = work.clone();
+        let is_two = roomkit::text_of(&event.content) == "Two.";
+        async move {
+            if is_two {
+                drop(tokio::spawn(roomkit::keep_context(async move {
+                    work.close().await;
+                })));
+            }
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    let model = ScriptedProvider::new([
+        ScriptedRound::answering("Hi."),
+        ScriptedRound::answering("Hi."),
+    ]);
+    attach_agent(&kit, model, Tools::new()).await;
+    let one = spawn_message(&kit, "One.", room_id());
+    tokio::time::timeout(BOUND, one_closes.entered.notified())
+        .await
+        .unwrap();
+    let two = spawn_message(&kit, "Two.", room_id());
+    tokio::time::timeout(BOUND, two_closes.entered.notified())
+        .await
+        .unwrap();
+    // "Two." commits and takes its place behind "One."'s set.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    two_closes.go.notify_one();
+    // The shutdown drains, "One."'s delivery holding the lane.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    one_closes.go.notify_one();
+    let returned = (
+        one_closes.returned_once_closed().await,
+        two_closes.returned_once_closed().await,
+    );
+    let two_delivered = witness
+        .delivered()
+        .iter()
+        .any(|text| text.starts_with("Two."));
+    drop(one);
+    assert_eq!(
+        (returned, ended(two).await, two_delivered),
+        (
+            (Some(true), Some(true)),
+            Some(ok(None, Some("TurnLinkError"))),
+            false
+        )
+    );
+}
