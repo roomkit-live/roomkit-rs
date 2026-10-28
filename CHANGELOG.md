@@ -94,9 +94,13 @@ kit, its construction and its calls).
   reason standing) rather than `ShutDown`; the other observers finish
   within their hook's timeout; the channels close once. The store's writes
   are never aborted: the close waits for them on one deadline, 5 s from its
-  start, as Python's `CLOSE_WAIT_S`, then leaves a write still running to
-  end on its own; a caller whose own commit outlived its run reads what the
-  write came to, its event `kit_closed`.
+  start, as Python's `CLOSE_WAIT_S`, a commit's write until its event took
+  its place in the room's lane, then leaves a write still running to end on
+  its own, with a warning; a caller whose own commit outlived its run reads
+  what the write came to, its event `kit_closed`, its record blocked with
+  the hook's reason, or the store's error; a call cut before its own commit
+  receives `ShutDown`, whatever its run committed first; a write that fails
+  once its caller is gone is logged as an error.
 - A task the kit's work spawns, that calls the kit and waits on its own
   room, is spawned with `keep_context`, the Rust form of Python's
   `create_task` copying its context; spawned plainly, it blocks.
