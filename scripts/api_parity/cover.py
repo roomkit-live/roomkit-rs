@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from api_parity.compare import Comparison, Finding, ItemResult
+from api_parity.compare import NON_EXHAUSTIVE, Comparison, Finding, ItemResult
 from api_parity.mapping import Entry, Mapping
 from api_parity.sides import Python, Surface, spec_hash
 
@@ -60,6 +60,7 @@ def _settle(items: dict[str, ItemResult], comparison: Comparison, mapping: Mappi
             result.findings, result.status = comparison.own_members(path), "options"
         elif path in exceptions and any(finding.path == path for finding in result.findings):
             result.status = "exception"
+            result.findings += comparison.excepted(path)
         elif result.python is None:
             result.status = "unmapped"
         else:
@@ -83,9 +84,13 @@ def _cover(findings: list[Finding], mapping: Mapping) -> list[Finding]:
 def _covers(entry: Entry, finding: Finding) -> bool:
     """An entry covers what it names. One naming a whole Rust item covers
     the item's own finding alone ("no Python name", or the alias named as a
-    class), never its members: it goes dead once the item maps."""
+    class), never its members: it goes dead once the item maps. An
+    `[[exception]]` approves the item's form, never its `#[non_exhaustive]`,
+    which refuses the struct update a caller builds it with."""
     if entry.whole:
         side, path = entry.paths()[0]
+        if entry.table == "exception" and finding.detail == NON_EXHAUSTIVE:
+            return False
         return side == finding.side == "rust" and finding.path == path
     return any(side == finding.side and path == finding.path for side, path in entry.paths())
 

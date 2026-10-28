@@ -106,6 +106,15 @@ class Comparison:
         self._buildable(item, None)
         return self.findings[before:]
 
+    def excepted(self, path: str) -> list[Finding]:
+        """A struct an `[[exception]]` covers whole, the options of a method
+        only Rust has or a Rust-only record, is built by struct update all
+        the same: `#[non_exhaustive]` is a finding no exception covers."""
+        item, before = self.surface.items[path], len(self.findings)
+        if item["kind"] == "struct":
+            self._buildable(item, None)
+        return self.findings[before:]
+
     def _buildable(self, item: dict, python: str | None) -> None:
         """A struct a caller builds, an options struct or a model, is not
         `#[non_exhaustive]`: outside its crate that refuses the struct update

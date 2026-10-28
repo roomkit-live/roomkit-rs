@@ -40,7 +40,10 @@ The rules, which apply with no entry:
   entry gives its name;
 - a struct a caller builds, an options struct or a model, is not
   `#[non_exhaustive]`, which refuses the struct update standing for Python's
-  keywords outside its crate (convention 9); an enum may be;
+  keywords outside its crate (convention 9); an enum may be. A struct an
+  `[[exception]]` covers whole, the options of a method only Rust has or a
+  Rust-only record, is checked too: the exception approves its form, never
+  its `#[non_exhaustive]`;
 - a type that implements a trait of the surface has the trait's methods: a
   member a Python subclass repeats from the trait's Python class, unchanged,
   is compared on the trait alone;

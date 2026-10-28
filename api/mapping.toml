@@ -64,6 +64,12 @@ approved = "2026-10-27"
 reason = "only the framework builds it"
 
 [[exception]]
+python = "roomkit.DeliveryHandle"
+members = ["__init__"]
+approved = "2026-10-27"
+reason = "only the framework builds it, from the call's run or its adoption (lot 1 fix pass, D2)"
+
+[[exception]]
 rust = "roomkit::HookError"
 approved = "2026-10-27"
 reason = "a handler type of its own, or a boxed future (decision 18)"
@@ -328,11 +334,6 @@ members = ["cancel"]
 reason = "decision 7: not in 0.x, Rust has no delivery cancellation (RMK-860 is Python's)"
 
 [[missing]]
-python = "roomkit.DeliveryHandle"
-members = ["__init__"]
-reason = "not ported: plumbing; only the framework builds it, from the call's cascade and its consumer task"
-
-[[missing]]
 python = "roomkit.InboundResult"
 members = ["report_cascade"]
 reason = "not ported: plumbing (lot 2)"
@@ -571,8 +572,8 @@ reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / 
 [[pending]]
 lot = 2
 python = "roomkit.InboundResult.__init__"
-params = ["duplicate", "unavailable_targets", "cancellation_reason", "response_events"]
-reason = "lot 2: InboundResult takes Python's fields: duplicate, unavailable_targets, cancellation_reason, response_events"
+params = ["duplicate", "unavailable_targets", "response_events"]
+reason = "lot 2: InboundResult takes Python's fields: duplicate, unavailable_targets, response_events (cancellation_reason came with lot 1's close)"
 
 [[pending]]
 lot = 2

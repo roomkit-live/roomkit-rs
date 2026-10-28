@@ -209,6 +209,35 @@ class Members(unittest.TestCase):
         )
         self.assertEqual(report.items["roomkit::MuteOptions"].status, "options")
 
+    def test_an_excepted_struct_keeping_non_exhaustive(self) -> None:
+        """A struct an `[[exception]]` covers whole, the options of a method
+        only Rust has (PauseRoomOptions) or a Rust-only record
+        (testing::Delivery), is built by struct update all the same: it is a
+        finding when it keeps `#[non_exhaustive]`, which no exception
+        covers."""
+        dated = {"approved": "2026-10-27", "reason": "Python adds it", "until": "roomkit.RoomKit.pause_room"}
+        report = run(
+            [
+                struct("roomkit::PauseRoomOptions", fields=[("organization_id", "Option<String>")], non_exhaustive=True),
+                struct("roomkit::testing::Delivery", fields=[("text", "String")], non_exhaustive=True),
+                struct("roomkit::testing::Tapped", fields=[("text", "String")]),
+            ],
+            {},
+            entries={
+                "exception": [
+                    {"rust": "roomkit::PauseRoomOptions", **dated},
+                    {"rust": "roomkit::testing::Delivery", **dated},
+                    {"rust": "roomkit::testing::Tapped", **dated},
+                ]
+            },
+        )
+        self.assertEqual(
+            [f.path for f in report.uncovered if "non_exhaustive" in f.detail],
+            ["roomkit::PauseRoomOptions", "roomkit::testing::Delivery"],
+        )
+        self.assertEqual(len(report.uncovered), 2)
+        self.assertEqual(report.items["roomkit::PauseRoomOptions"].status, "exception")
+
     def test_parameters_on_one_side_only(self) -> None:
         report = run(
             [
