@@ -148,6 +148,10 @@ name = "agent_tools"
 path = "agent_tools.rs"
 
 [[example]]
+name = "close_from_a_tool"
+path = "close_from_a_tool.rs"
+
+[[example]]
 name = "agent_skills"
 path = "agent_skills.rs"
 
