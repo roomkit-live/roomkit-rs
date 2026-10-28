@@ -113,3 +113,135 @@ fn messages_up_to(event: &RoomEvent, filter: EventFilter) -> EventQuery {
         ..EventQuery::default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use roomkit_core::model::{
+        ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventContent, EventDirection,
+        EventId, EventSource, EventStatus, Room, RoomId, RoomUpdates, Timestamp, ToolCallContent,
+    };
+    use roomkit_core::ops::RoomCounters;
+
+    use super::*;
+    use crate::store::InMemoryStore;
+
+    fn room_id() -> RoomId {
+        RoomId::new("room_1").unwrap()
+    }
+
+    fn binding(channel: &str, channel_type: ChannelType) -> ChannelBinding {
+        ChannelBinding::new(
+            ChannelId::new(channel).unwrap(),
+            room_id(),
+            channel_type,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+            Timestamp::UNIX_EPOCH,
+        )
+    }
+
+    /// The room's event at `index`: a message on `sms`, or a tool-call row
+    /// of `channel`.
+    fn event(index: u64, channel: Option<&str>) -> RoomEvent {
+        let (event_type, source, content) = match channel {
+            None => (
+                EventType::Message,
+                EventSource::new(
+                    ChannelId::new("sms").unwrap(),
+                    ChannelType::SMS,
+                    EventDirection::Inbound,
+                ),
+                EventContent::text(format!("message {index}")),
+            ),
+            Some(channel) => (
+                EventType::ToolCallStart,
+                EventSource::new(
+                    ChannelId::new(channel).unwrap(),
+                    ChannelType::AI,
+                    EventDirection::Outbound,
+                ),
+                EventContent::ToolCall(ToolCallContent::new("lookup", format!("c{index}"))),
+            ),
+        };
+        let mut event = RoomEvent::new(
+            EventId::new(format!("evt_{index}")).unwrap(),
+            room_id(),
+            event_type,
+            source,
+            content,
+            Timestamp::UNIX_EPOCH,
+        );
+        event.index = index;
+        event
+    }
+
+    /// A store holding `room_1` and `events`, committed in their order.
+    async fn store(events: Vec<RoomEvent>) -> InMemoryStore {
+        let store = InMemoryStore::new();
+        store
+            .create_room(Room::new(room_id(), Timestamp::UNIX_EPOCH))
+            .await
+            .unwrap();
+        for event in events {
+            let counters = RoomCounters {
+                event_count: event.index + 1,
+                latest_index: event.index,
+                last_activity_at: None,
+                room: RoomUpdates::default(),
+            };
+            store.commit(event, counters, None).await.unwrap();
+        }
+        store
+    }
+
+    /// The indexes `agent`'s turn on `trigger` reads, and how many of them
+    /// are messages.
+    async fn read_by(store: &InMemoryStore, trigger: &RoomEvent) -> (Vec<u64>, usize) {
+        let agent = binding("agent", ChannelType::AI);
+        let mut context = RoomContext::new(Room::new(room_id(), Timestamp::UNIX_EPOCH));
+        context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
+        let read = turn_context(store, &agent, trigger, context).await;
+        let indexes = read.recent_events.iter().map(|event| event.index).collect();
+        let messages = read
+            .recent_events
+            .iter()
+            .filter(|event| event.event_type == EventType::Message)
+            .count();
+        (indexes, messages)
+    }
+
+    /// The room's latest 50 messages up to the turn's own event, two
+    /// blocked ones among them, which take their place in the window and
+    /// reach no reader; and the agent's latest 60 tool rows, another
+    /// channel's left out, whatever came after: 55 messages, then 70 rows
+    /// of the agent's and 5 of another's, then a message after the trigger.
+    #[tokio::test]
+    async fn a_turn_reads_its_latest_messages_and_its_latest_tool_rows() {
+        let mut events: Vec<RoomEvent> = (0..55).map(|index| event(index, None)).collect();
+        for blocked in &mut events[52..54] {
+            blocked.status = EventStatus::Blocked;
+        }
+        events.extend((55..125).map(|index| event(index, Some("agent"))));
+        events.extend((125..130).map(|index| event(index, Some("other"))));
+        events.push(event(130, None));
+        let trigger = events[54].clone();
+        let store = store(events).await;
+        let (indexes, messages) = read_by(&store, &trigger).await;
+        let mut expected: Vec<u64> = (5..52).collect();
+        expected.push(54);
+        expected.extend(65..125);
+        assert_eq!((indexes, messages), (expected, 48));
+    }
+
+    /// An instruction, never stored, holds the index the room's next event
+    /// takes: the messages it reads are the ones before it, a message
+    /// committed at that index since left out.
+    #[tokio::test]
+    async fn an_instruction_reads_the_messages_before_its_index() {
+        let store = store((0..4).map(|index| event(index, None)).collect()).await;
+        let mut instruction = event(3, None);
+        instruction.event_type = EventType::Instruction;
+        assert_eq!(read_by(&store, &instruction).await, (vec![0, 1, 2], 3));
+    }
+}
