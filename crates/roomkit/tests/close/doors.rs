@@ -290,14 +290,17 @@ async fn a_close_from_an_observer_waits_for_the_run_that_fired_it() {
 }
 
 /// RFC §12.10.4: a tool call's observer closes while the turn goes on to a
-/// tool of 8 s: the close spares the observer alone, so it cuts the turn
-/// as a close from outside does, at once (RFC §10.6.8), the slow tool
-/// never ending and no answer stored; on 1d8796c the observer's close
-/// spared the turn, whose slow tool ran to its end and whose answer was
-/// committed after the seal (`review_probe_1d8796c.out`, leak tool
-/// observer). The call reads no reason, its own delivery over; Python's
-/// reads `kit_closed`, from how its lane meets the close
-/// (`rmk1017-lightreview/lr_probe_py.out` c2).
+/// tool of 8 s: an observer the kit fires and forgets starts with fresh
+/// marks, so its close spares the observer alone and cuts the turn as a
+/// close from outside does, at once (RFC §10.6.8), the close returning at
+/// once, the slow tool never ending and no answer stored; on 1d8796c the
+/// observer's close spared the turn, whose slow tool ran to its end and
+/// whose answer was committed after the seal (`review_probe_1d8796c.out`,
+/// leak tool observer). The call reads no reason, its own delivery over.
+/// Python's observer copies the context that fired it, spares the turn's
+/// stream reader, and reads `kit_closed` (`rmk1017-lightreview/
+/// lr_probe_py.out` c2, `rmk1017-lightreview2/c2_mechanism.out`); it
+/// aligns on this rule (RMK-1021).
 #[tokio::test(start_paused = true)]
 async fn a_close_from_a_tool_s_observer_cuts_its_turn() {
     let witness = Witness::new();
@@ -338,18 +341,20 @@ async fn a_close_from_a_tool_s_observer_cuts_its_turn() {
         }
     })
     .unwrap();
+    let started = Instant::now();
     let call = spawn_message(&kit, "Go.", room_id());
     let returned = closer.returned_once_closed().await;
+    let at_once = started.elapsed() < AT_ONCE;
     let call = ended(call).await;
     roomkit::testing::idle(&kit).await;
     let stored = stored(&kit).await;
     assert_eq!(
         (
-            returned,
+            (returned, at_once),
             call,
             slow_ended.load(Ordering::SeqCst),
             stored.iter().any(|text| text == "Done.")
         ),
-        (Some(true), Some(ok(None, None)), 0, false)
+        ((Some(true), true), Some(ok(None, None)), 0, false)
     );
 }
