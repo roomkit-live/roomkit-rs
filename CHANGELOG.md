@@ -110,19 +110,38 @@ kit, its construction and its calls).
   `close`, concurrent or later, waits for it and returns once it ended; a
   second `close` returned at once, before anything was closed. A `close`
   whose future is dropped stops only its own wait: the shutdown runs to its
-  end, where it stopped half-way. A `close` from the kit's own work, a
-  hook's body, a hook a delivery fired, an observer, a channel's delivery
-  or an agent's tool call, neither waits for that work nor cuts it, whether
-  it started the shutdown or joined one under way: it returns once every
+  end, where it stopped half-way. A `close` from a channel's close returns
+  at once.
+- `RoomKit::close` returns `Result<(), KitError>`, its end
+  answering every caller, the first included, as Python's `close` raises:
+  `KitError::ChannelsFailedToClose` names each channel whose `close`
+  panicked, with what its panic said, the channels after it closed all the
+  same, where the panic killed the shutdown and left them open; and
+  `KitError::ShutdownCancelled` answers a `close` after a shutdown that
+  never ended, its runtime dropped under it. The variants' names are
+  provisional: a caller writes `kit.close().await?`, or handles the error.
+- A `close` from the kit's own work, a hook's body, a hook a delivery
+  fired, a channel's delivery, an agent's tool call or a task spawned with
+  `keep_context`, neither waits for that work nor cuts it, whether it
+  started the shutdown or joined one under way: it returns once every
   channel is closed, where it waited for the close's 5 s grace and was then
   cut with its work, leaving the channels open and the kit unsealed. The
-  deliveries queued behind a delivery a `close` runs in are dropped at once,
-  `kit_closed`, not at the grace. A `close` from a channel's close returns
-  at once. A shutdown that never ended, its task dropped with its runtime
-  or a channel's close panicking, is logged as an error to a later `close`,
-  which returns; a panicking channel's close no longer reaches the caller of
-  `close`. Once the turns are cut, the close waits, within the same bound,
-  for the runs whose turns it cut to commit what their readers read.
+  turns the spared run's delivery set runs are spared with it. A `close`
+  from an observer the kit fires and forgets, an ASYNC hook or a tool
+  call's observer, spares that observer alone. What waits behind spared
+  work is dropped at once rather than at the grace: the deliveries queued
+  behind its place in the room's lane, `kit_closed`, and the messages
+  waiting for the room's lock or admission ticket it holds, refused
+  `KitError::ShutDown`, nothing of them stored. Once the kit is sealed,
+  the spared work stores and delivers nothing: its writes and its channel
+  calls are refused, a message whose commit is so refused failing
+  `KitError::ShutDown`, nothing stored, and one refused past its commit
+  reading `kit_closed`.
+- Once the turns are cut, the close waits, within the same bound, for the
+  runs whose turns it cut to commit what their readers read, not for the
+  rest of those runs; a run then aborted reads `kit_closed` when the close
+  dropped one of its sets first. The close's warning counts the writes
+  whose store call still runs.
 - A task the kit's work spawns, that calls the kit and waits on its own
   room, is spawned with `keep_context`, the Rust form of Python's
   `create_task` copying its context; spawned plainly, it blocks.

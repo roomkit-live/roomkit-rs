@@ -612,7 +612,7 @@ reason = "decision 9: one RoomKitError of flat variants named after Python's cla
 [[pending]]
 lot = 2
 rust = "roomkit::KitError"
-reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
+reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported; close()'s ChannelsFailedToClose and ShutdownCancelled (RMK-1017) take their names there"
 
 [[pending]]
 lot = 2
