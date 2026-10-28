@@ -123,7 +123,8 @@ async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id(
     context.recent_events.clone_from(&timeline);
     let read = conversation(&id("assistant"), &timeline[5], &context, 50, |_| true);
     let call = |id: &str| {
-        let call = roomkit::model::ToolCall::new(id, "lookup_order", Default::default());
+        let call =
+            roomkit::model::ToolCall::new(id, "lookup_order", roomkit::model::Metadata::new());
         Message::assistant_calls("", vec![call])
     };
     assert_eq!(
