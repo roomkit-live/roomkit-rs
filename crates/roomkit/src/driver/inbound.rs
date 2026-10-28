@@ -144,8 +144,9 @@ impl Record {
 
     /// The result of a call aborted while the commit that decides it ran:
     /// once the write ended, the call as that commit decides it, its event
-    /// never delivered; `ShutDown` for a call that never reached that
-    /// commit.
+    /// never delivered, or the store's error for a write that failed, as
+    /// the run would have read them; `ShutDown` for a call that never
+    /// reached that commit.
     async fn committed(&self) -> InboundOutput {
         let committing = self
             .committing
@@ -155,7 +156,11 @@ impl Record {
         let Some((mut result, mut written)) = committing else {
             return Err(KitError::ShutDown);
         };
-        if calls::outcome_of(&mut written).await != Outcome::Store(StoreOutcome::Committed) {
+        let outcome = calls::outcome_of(&mut written).await;
+        if let Outcome::Failed(error) = outcome {
+            return Ok(Err(InboundError::Store(error)));
+        }
+        if outcome != Outcome::Store(StoreOutcome::Committed) {
             return Err(KitError::ShutDown);
         }
         if !result.blocked {

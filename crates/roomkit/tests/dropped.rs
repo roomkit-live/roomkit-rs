@@ -19,8 +19,8 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, EventFilter, EventQuery,
-    FrameworkEvent, InMemoryStore, KitError, ProcessInboundOptions, RoomCounters, RoomFilter,
-    RoomKit, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
+    FrameworkEvent, InMemoryStore, InboundError, KitError, ProcessInboundOptions, RoomCounters,
+    RoomFilter, RoomKit, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -574,6 +574,30 @@ async fn a_caller_waiting_on_a_commit_past_the_close_reads_its_event() {
             )
         ]
     );
+}
+
+/// A waiting caller whose commit fails reads the store's error, the write
+/// ending within the close's first wait or past the close, as Python's
+/// caller raises it (`close_failed_write_py.out`: failing writes of 3 s
+/// and 12 s, the caller raising at 3.0 s and 12.0 s).
+#[tokio::test(start_paused = true)]
+async fn a_waiting_caller_whose_commit_fails_reads_the_store_s_error() {
+    let mut read = Vec::new();
+    for seconds in [3, 12] {
+        let (kit, _ws) = gated_room().await;
+        kit.store().fails.store(true, Ordering::SeqCst);
+        let call = slow_commit(&kit, Duration::from_secs(seconds)).await;
+        closing(&kit).await;
+        let ended = tokio::time::timeout(Duration::from_secs(30), call)
+            .await
+            .unwrap()
+            .unwrap();
+        read.push(match ended {
+            Err(KitError::Inbound(InboundError::Store(error))) => Some(error.error_type),
+            _ => None,
+        });
+    }
+    assert_eq!(read, vec![Some("InvalidArgument".to_owned()); 2]);
 }
 
 /// `Bonjour` into `room_1` once `kit`'s `BEFORE_BROADCAST` hook is one that
