@@ -27,9 +27,10 @@ pub(crate) enum Kind {
     /// fired, bounded by its hook's timeout: waited for once the work is
     /// drained or cut.
     Observer,
-    /// A write of the store a run asked for: never aborted, so that a write
-    /// decided runs to its end whatever becomes of its run (RFC §13.6), and
-    /// waited for at the close's end.
+    /// A write of the store a run asked for, until its run went on from it:
+    /// never aborted, so that a write decided runs to its end whatever
+    /// becomes of its run (RFC §13.6), and waited for first and last in the
+    /// kit's close, both times until 5 seconds from the close's start.
     Write,
 }
 
