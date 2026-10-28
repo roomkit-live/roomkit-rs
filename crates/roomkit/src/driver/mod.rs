@@ -596,7 +596,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             Ok(finished) => finished,
             Err(failure) => {
                 let error = if failure.is_panic() {
-                    ErrorRecord::new("Panic", "the call panicked")
+                    calls::panicked()
                 } else {
                     ErrorRecord::new("Cancelled", "the call was cancelled")
                 };

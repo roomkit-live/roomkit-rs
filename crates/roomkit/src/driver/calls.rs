@@ -3,7 +3,12 @@
 //! execution context; and the notices it performs without answering.
 
 use std::convert::Infallible;
+use std::future::poll_fn;
+use std::panic::{self, AssertUnwindSafe};
+use std::pin::pin;
 use std::sync::Arc;
+use std::task::Poll;
+use std::thread;
 
 use roomkit_core::model::{
     ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId,
@@ -281,7 +286,9 @@ pub(super) fn write<S: ConversationStore>(
     let (went_on, run_going_on) = oneshot::channel();
     let writer = Arc::clone(inner);
     let writing = async move {
-        let outcome = store(&*writer.store, request).await;
+        let outcome = unwinding(store(&*writer.store, request))
+            .await
+            .unwrap_or_else(|_panic| Outcome::Failed(panicked()));
         ended.send_replace(Some(outcome));
         let Err(_went_on) = run_going_on.await;
     };
@@ -295,6 +302,26 @@ pub(super) fn write<S: ConversationStore>(
         outcome_of(&mut read).await
     };
     (call, written, went_on)
+}
+
+/// Runs `future` to its end, `Err` for a panic in it, as a task's join
+/// reports one: a write's task answers a store that panicked as the run
+/// answers any call that did.
+async fn unwinding<F: Future>(future: F) -> thread::Result<F::Output> {
+    let mut future = pin!(future);
+    poll_fn(
+        |cx| match panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
+            Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
+            Ok(Poll::Pending) => Poll::Pending,
+            Err(panic) => Poll::Ready(Err(panic)),
+        },
+    )
+    .await
+}
+
+/// The failure of a call that panicked.
+pub(super) fn panicked() -> ErrorRecord {
+    ErrorRecord::new("Panic", "the call panicked")
 }
 
 /// What the write `written` tells came to, once it ended: a failure for one

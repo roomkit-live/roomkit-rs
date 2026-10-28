@@ -38,7 +38,8 @@ fn room_id() -> RoomId {
 /// An in-memory store whose first commit of an event that is not the
 /// framework's own lifecycle record (gap G-046) tells `committing` it
 /// started, then waits for `go`, as a slow database does; that commit then
-/// fails when `fails` is set, as a database gone does.
+/// fails when `fails` is set, as a database gone does, or panics when
+/// `panics` is, as a broken driver does.
 #[derive(Debug, Default)]
 struct GatedStore {
     store: InMemoryStore,
@@ -46,6 +47,7 @@ struct GatedStore {
     committing: Arc<Notify>,
     go: Arc<Notify>,
     fails: AtomicBool,
+    panics: AtomicBool,
 }
 
 impl ConversationStore for GatedStore {
@@ -223,6 +225,10 @@ impl ConversationStore for GatedStore {
             if self.fails.load(Ordering::SeqCst) {
                 return Err(StoreError::InvalidArgument("the database is gone"));
             }
+            assert!(
+                !self.panics.load(Ordering::SeqCst),
+                "the store's driver broke"
+            );
         }
         self.store.commit(event, counters, target).await
     }
@@ -598,6 +604,22 @@ async fn a_waiting_caller_whose_commit_fails_reads_the_store_s_error() {
         });
     }
     assert_eq!(read, vec![Some("InvalidArgument".to_owned()); 2]);
+}
+
+/// A commit whose write panics is answered as any call that panicked: the
+/// caller reads the store's error `Panic`, as it did before the writes ran
+/// as tasks of their own (647277b).
+#[tokio::test(start_paused = true)]
+async fn a_commit_whose_write_panics_reads_as_a_panic() {
+    let (kit, _ws) = gated_room().await;
+    kit.store().panics.store(true, Ordering::SeqCst);
+    let call = slow_commit(&kit, Duration::ZERO).await;
+    let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
+    let read = match ended {
+        Err(KitError::Inbound(InboundError::Store(error))) => Some(error.error_type),
+        _ => None,
+    };
+    assert_eq!(read.as_deref(), Some("Panic"));
 }
 
 /// `Bonjour` into `room_1` once `kit`'s `BEFORE_BROADCAST` hook is one that
