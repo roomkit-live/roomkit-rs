@@ -44,7 +44,8 @@ use crate::channel::ChannelError;
 use crate::context::{self, Adopting};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::turns::{OwnerTurn, RemoteItem, record_of};
+use crate::tasks::Unit;
+use crate::turns::{Cut, OwnerTurn, RemoteItem, record_of};
 
 /// The error of a call a stream's reader stopped before it ended.
 const CANCELLED: &str = "cancelled";
@@ -168,20 +169,23 @@ async fn drain(mut stream: DeliveryStream) -> Result<ChannelOutput, ChannelError
 }
 
 /// What stops a read from outside: the operation's stop of this read, and
-/// the kit's shutdown, which cuts every turn.
+/// the kit's shutdown, which cuts every turn it does not spare.
 #[derive(Debug)]
 pub(crate) struct Stops {
     /// `true` once the operation stops the read.
     pub(crate) read: watch::Receiver<bool>,
-    /// `true` once the kit shuts down.
-    pub(crate) kit: watch::Receiver<bool>,
+    /// The kit's cut of its turns, once it shuts down.
+    pub(crate) kit: watch::Receiver<Cut>,
+    /// The unit of the turn read, which the cut may spare (RFC §12.10.4).
+    pub(crate) turn: Option<Unit>,
 }
 
 impl Stops {
     /// Returns once the read is stopped: the reason its turn is cut with.
     async fn stopped(&mut self) -> &'static str {
         let read = async { self.read.wait_for(|stopped| *stopped).await.is_ok() };
-        let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
+        let turn = self.turn;
+        let kit = async { self.kit.wait_for(|cut| cut.cuts(turn)).await.is_ok() };
         tokio::select! {
             true = read => CALLER_CANCELLED,
             true = kit => KIT_CLOSED,

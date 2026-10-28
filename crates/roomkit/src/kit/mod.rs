@@ -15,6 +15,7 @@
 //! - `timeline`: a room's timeline;
 //! - `timers`: applying room timers, on demand or in the background;
 //! - `background`: waiting for the kit's background work, and ending it;
+//! - `shutdown`: the kit's one shutdown, which every close joins;
 //! - `weak`: the kit held without keeping it alive.
 
 mod background;
@@ -25,6 +26,7 @@ mod options;
 mod post;
 mod registry;
 mod rooms;
+mod shutdown;
 #[cfg(test)]
 mod tests;
 mod timeline;
@@ -141,6 +143,8 @@ pub(crate) struct Inner<S> {
     /// Set once the channels were closed at the kit's close: they are
     /// closed once.
     channels_closed: tokio::sync::OnceCell<()>,
+    /// The kit's one shutdown, which every close joins (RFC §12.10.4).
+    shutdown: shutdown::Shutdown,
 }
 
 impl<S> std::fmt::Debug for Inner<S> {
@@ -189,6 +193,7 @@ impl<S: ConversationStore> RoomKit<S> {
             events,
             turns: Arc::default(),
             channels_closed: tokio::sync::OnceCell::new(),
+            shutdown: shutdown::Shutdown::default(),
         });
         Self { inner }
     }

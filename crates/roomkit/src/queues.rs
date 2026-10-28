@@ -14,14 +14,20 @@
 //!   lock, and its delivery set waits for that place's turn: the sets run in
 //!   the order of the commits, one event's set completing before the next
 //!   one's begins.
+//!
+//! Each place records the unit of the kit's work that took it, so that the
+//! kit's close drops the places queued behind one a spared unit holds (RFC
+//! §12.10.4).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{EventId, RoomId};
 use tokio::sync::Notify;
+
+use crate::tasks::{Marks, Unit};
 
 /// One queue per room, created on first use and dropped once the room holds
 /// nothing in it.
@@ -33,8 +39,9 @@ pub(crate) struct RoomQueues<K> {
 /// One room's queue.
 #[derive(Debug)]
 struct Queue<K> {
-    /// What is held, in the order it was taken.
-    held: VecDeque<K>,
+    /// What is held, in the order it was taken, with the unit of the work
+    /// that took it.
+    held: VecDeque<(K, Option<Unit>)>,
     /// Woken whenever something of the room is released.
     released: Arc<Notify>,
 }
@@ -77,14 +84,16 @@ impl<K> Default for RoomQueues<K> {
 }
 
 impl<K: Clone + PartialEq> RoomQueues<K> {
-    /// Takes `key` at the back of the room's queue: it never waits.
+    /// Takes `key` at the back of the room's queue, for the unit of the
+    /// work the current code runs in: it never waits.
     pub(crate) fn take(&self, room_id: &RoomId, key: K) -> Slot<'_, K> {
+        let unit = Marks::current().innermost();
         let mut rooms = self.rooms();
         let queue = rooms.entry(room_id.clone()).or_insert_with(|| Queue {
             held: VecDeque::new(),
             released: Arc::new(Notify::new()),
         });
-        queue.held.push_back(key.clone());
+        queue.held.push_back((key.clone(), unit));
         Slot {
             room_id: room_id.clone(),
             key,
@@ -113,7 +122,20 @@ impl<K: Clone + PartialEq> RoomQueues<K> {
         self.rooms()
             .get(&slot.room_id)
             .and_then(|queue| queue.held.front())
-            .is_none_or(|first| *first == slot.key)
+            .is_none_or(|(first, _)| *first == slot.key)
+    }
+
+    /// The units of the work queued behind a place of a unit in `spared`,
+    /// at the front of its room's queue, but those `spared` holds: their
+    /// turn comes only once that unit lets its place go.
+    pub(crate) fn queued_behind(&self, spared: &HashSet<Unit>) -> HashSet<Unit> {
+        let is_spared = |unit: &Option<Unit>| unit.is_some_and(|unit| spared.contains(&unit));
+        self.rooms()
+            .values()
+            .filter(|queue| queue.held.front().is_some_and(|(_, unit)| is_spared(unit)))
+            .flat_map(|queue| queue.held.iter().skip(1))
+            .filter_map(|(_, unit)| unit.filter(|unit| !spared.contains(unit)))
+            .collect()
     }
 
     fn rooms(&self) -> MutexGuard<'_, HashMap<RoomId, Queue<K>>> {
@@ -137,7 +159,7 @@ impl<K: PartialEq> Drop for Slot<'_, K> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if let Some(queue) = rooms.get_mut(&self.room_id) {
-            if let Some(at) = queue.held.iter().position(|key| *key == self.key) {
+            if let Some(at) = queue.held.iter().position(|(key, _)| *key == self.key) {
                 queue.held.remove(at);
             }
             if queue.held.is_empty() {

@@ -57,6 +57,7 @@ use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::KitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
+use crate::tasks::Marks;
 use crate::turns::Canceller;
 
 /// The kit's clock and the runtime's, read together at a run's start: a
@@ -143,6 +144,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         inner,
         call,
         context: ExecutionContext::current(),
+        marks: Marks::current(),
         held: Held::new(Arc::clone(&shared), leases),
         indexes: Indexes::default(),
         shared,
@@ -179,6 +181,9 @@ struct Driver<'kit, S> {
     call: &'static str,
     /// The execution context the run is made in.
     context: ExecutionContext,
+    /// The units of the kit's work the run runs within, which its calls run
+    /// within too (RFC §12.10.4).
+    marks: Marks,
     held: Held<'kit>,
     /// The indexes the run commits, until their turn is over.
     indexes: Indexes,
@@ -529,8 +534,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// Runs `call`, the call of `effect`, as a task within its execution
-    /// context, the run's frame recording `work` for it, and within
-    /// `deadline`.
+    /// context and the run's marks, the run's frame recording `work` for
+    /// it, and within `deadline`.
     fn spawn(
         &mut self,
         effect: EffectId,
@@ -541,11 +546,13 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let frame = Frame::new(&self.shared, effect, work);
         self.shared.calling(effect);
         let context = self.context.within(frame);
-        let task = self.calls.spawn(context.scope(async move {
-            within(deadline, call)
-                .await
-                .unwrap_or(Outcome::DeadlinePassed)
-        }));
+        let task = self
+            .calls
+            .spawn(self.marks.clone().scoped(context.scope(async move {
+                within(deadline, call)
+                    .await
+                    .unwrap_or(Outcome::DeadlinePassed)
+            })));
         self.effect_of_task.insert(task.id(), effect);
         self.call_of_effect.insert(effect, task);
     }

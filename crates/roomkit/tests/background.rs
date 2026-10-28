@@ -211,7 +211,7 @@ async fn idle_waits_for_a_call_that_goes_on_detached() {
 /// Decision 15: a delivery in progress when the kit closes runs to its
 /// end: the close waits for it, its event is delivered, its caller
 /// receives its result, and `close` returns once it is over. A second
-/// `close` meanwhile returns at once.
+/// `close` meanwhile waits for the same shutdown (RFC §12.10.4).
 #[tokio::test]
 async fn close_drains_a_delivery_in_progress() {
     let (kit, slow) = slow_room().await;
@@ -219,19 +219,21 @@ async fn close_drains_a_delivery_in_progress() {
     tokio::time::timeout(BOUND, slow.gate.reached.notified())
         .await
         .unwrap();
-    let mut closing = tokio::spawn({
+    let closes = || {
         let kit = kit.clone();
-        async move { kit.close().await }
-    });
-    // The close drains: it is still running, and a second one returns.
-    let draining = tokio::time::timeout(BRIEF, &mut closing).await.is_err();
+        tokio::spawn(async move { kit.close().await })
+    };
+    let (mut first, mut second) = (closes(), closes());
+    // The close drains: both closes are still running.
+    let draining = tokio::time::timeout(BRIEF, &mut first).await.is_err()
+        && tokio::time::timeout(BRIEF, &mut second).await.is_err();
     assert!(
         draining,
-        "the close returned at once: it did not wait for the delivery in progress"
+        "a close returned at once: it did not wait for the delivery in progress"
     );
-    tokio::time::timeout(BOUND, kit.close()).await.unwrap();
     slow.gate.open.notify_one();
-    tokio::time::timeout(BOUND, closing).await.unwrap().unwrap();
+    tokio::time::timeout(BOUND, first).await.unwrap().unwrap();
+    tokio::time::timeout(BOUND, second).await.unwrap().unwrap();
     let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
     assert_eq!(
         (

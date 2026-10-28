@@ -46,7 +46,7 @@ use crate::context::ExecutionContext;
 use crate::error::{KitError, with_causes};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::tasks::Kind;
+use crate::tasks::{Kind, Marks, Tasks};
 
 /// What an inbound call's run comes to: the operation's output, or why the
 /// kit's call failed.
@@ -392,7 +392,9 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
         )
         .await;
         caller.log_unread_end(call, &output);
-        cut_at_its_end(output, kit.tasks.is_cut(), &caller.record)
+        // The run's own unit: a close called from inside it spares it.
+        let cut = kit.tasks.cuts(Marks::current().innermost());
+        cut_at_its_end(output, cut, &caller.record)
     };
     // The kit tracks the run. Dropped, the handle detaches it: the run
     // itself stops when its caller is gone before the call's decision.
@@ -403,7 +405,7 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
         biased;
         // Boxed: what an aborted run's caller waits for, its commit's end,
         // would make every caller's future large.
-        joined = &mut task => Ran::ended(Box::pin(ended(joined, &record, inner.tasks.is_cut())).await),
+        joined = &mut task => Ran::ended(Box::pin(ended(joined, &record, &inner.tasks)).await),
         Ok(answer) = decided => Ran {
             output: answer,
             delivery: defer.then_some((task, record)),
@@ -417,7 +419,8 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
 /// implementation's lane reports the cascade it cut, unless an earlier
 /// reason stands: the first one stays, as Python's first cancel does. The
 /// cut is read here, at the run's end, so that a run that ended before it
-/// reports its result whenever its end is read.
+/// reports its result whenever its end is read; a run a close was called
+/// from inside is spared, never cut (RFC §12.10.4).
 fn cut_at_its_end(output: InboundOutput, cut: bool, record: &Record) -> InboundOutput {
     if !cut || !record.delivering.load(Ordering::Acquire) {
         return output;
@@ -448,20 +451,20 @@ fn charged(inbound: Inbound, room_id: Option<&RoomId>, context: &ExecutionContex
 }
 
 /// The output of a run's task that ended: its own, the close's cut read at
-/// its end; for one the kit's close aborted, `cut` read then, what its
+/// its end; for one the kit's close aborted, as `tasks` tell, what its
 /// `record` reports ([`Record::aborted`]); for one the runtime cancelled,
 /// [`KitError::Cancelled`].
 pub(crate) async fn ended(
     joined: Result<InboundOutput, JoinError>,
     record: &Record,
-    cut: bool,
+    tasks: &Tasks,
 ) -> InboundOutput {
     match joined {
         Ok(output) => output,
         // A panic of the driver's own loop is a defect of this crate: the
         // caller receives it as it would from a run it drove itself.
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
-        Err(_aborted) if cut => record.aborted().await,
+        Err(aborted) if tasks.ended_by_close(aborted.id()) => record.aborted().await,
         Err(_cancelled) => Err(KitError::Cancelled),
     }
 }

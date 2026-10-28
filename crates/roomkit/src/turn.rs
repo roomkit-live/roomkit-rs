@@ -476,14 +476,15 @@ pub(crate) trait TurnKit: Send + Sync {
         source: &EventSource,
     ) -> Vec<(HookSpec, ToolHandler)>;
 
-    /// Runs `task` in the background, tracked; `false` once the kit is
-    /// shut down.
+    /// Runs `task` in the background, tracked, in the turn's unit; `false`
+    /// once the kit is shut down.
     fn spawn(&self, task: BoxFuture<'static, ()>) -> bool {
         self.spawn_tracked(task).is_some()
     }
 
-    /// Runs `task` in the background, tracked: what aborts it; `None` once
-    /// the kit is shut down.
+    /// Runs `task` in the background, tracked, in the unit of the kit's
+    /// work the current code runs in, the turn's: what aborts it; `None`
+    /// once the kit is shut down.
     fn spawn_tracked(&self, task: BoxFuture<'static, ()>) -> Option<AbortHandle>;
 
     /// Runs `task`, an observer hook's body bounded by its timeout, in the
@@ -525,7 +526,7 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         let inner = self.upgrade()?;
         inner
             .tasks
-            .spawn(Kind::Work, task)
+            .spawn_joined(Kind::Work, task)
             .map(|task| task.abort_handle())
     }
 

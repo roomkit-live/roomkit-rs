@@ -88,6 +88,7 @@ use roomkit_core::rules::chain_depth::{self, Draw, ReentryBudget};
 pub(crate) use self::adoption::{Adopting, Adoption, Completion, Reply, adopt, adopt_by_own_run};
 use self::run::Lease;
 pub(crate) use self::run::RunShared;
+use crate::tasks::Marks;
 
 tokio::task_local! {
     static CONTEXT: ExecutionContext;
@@ -520,7 +521,9 @@ pub(crate) fn as_deep_as_its_turn(chain_depth: &mut u32) {
 /// room must be wrapped: unwrapped, its call is a stranger's, and its wait,
 /// on the call or on the call's [`DeliveryHandle`](crate::DeliveryHandle),
 /// blocks behind the very delivery that awaits the task, whatever the
-/// kit's `process_timeout`.
+/// kit's `process_timeout`. The task is the kit's work its spawner runs
+/// within, too: a [`RoomKit::close`](crate::RoomKit::close) it calls
+/// neither waits for that work nor cuts it (RFC §12.10.4).
 ///
 /// ```no_run
 /// # use roomkit::model::{ChannelId, EventContent, RoomId};
@@ -540,7 +543,7 @@ where
 {
     CONTEXT.scope(
         ExecutionContext::current(),
-        crate::turn::within_current_turn(future),
+        Marks::current().scoped(crate::turn::within_current_turn(future)),
     )
 }
 

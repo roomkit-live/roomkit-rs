@@ -1,11 +1,13 @@
 //! The work a kit runs in the background, which it tracks (decision 3 of
-//! step 2b), and the kit's close, which drains it, then ends what is left.
+//! step 2b), and the kit's close, which drains it, then ends what is left,
+//! in the kit's one shutdown (`shutdown`).
 
 use std::time::Duration;
 
 use tokio::time::Instant;
 
 use super::RoomKit;
+use super::shutdown::{self, Joined, Starting};
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Tasks};
 
@@ -25,9 +27,25 @@ impl<S: ConversationStore> RoomKit<S> {
     /// ended, and the channels close, as the Python implementation's
     /// `close` does.
     ///
-    /// 1. The close begins, and a second `close` returns at once. Calls go
-    ///    on being taken until the kit is sealed (step 5), as Python's are
-    ///    until its store is.
+    /// The kit has one shutdown (RFC §12.10.4): the first `close` starts it
+    /// in a task of its own, and every `close`, concurrent or later, waits
+    /// for that one, and returns once it ended; it never runs twice. A
+    /// caller that stops waiting, its future dropped, by a
+    /// `tokio::time::timeout` for instance, stops only its own wait: the
+    /// shutdown runs to its end. A `close` from the kit's own work, a
+    /// hook's body, a tool's call, a channel's delivery or a hook a
+    /// delivery fired, neither waits for that work nor cuts it, whether it
+    /// started the shutdown or joined one under way: the work it runs
+    /// within is spared, the shutdown closes everything else, and the work
+    /// ends on its own once the call returns. The deliveries queued behind
+    /// a spared delivery in its room's lane are dropped,
+    /// `cancellation_reason` `kit_closed`. A `close` from the shutdown's
+    /// own work, a channel's close, returns at once. A shutdown that never
+    /// ended, its task dropped with its runtime or panicked, is logged as
+    /// an error to a later caller, which returns.
+    ///
+    /// 1. The close begins. Calls go on being taken until the kit is sealed
+    ///    (step 5), as Python's are until its store is.
     /// 2. The store's writes decided for a caller, an event's commit among
     ///    them, get up to 5 seconds from the close's start to end, the work
     ///    going on meanwhile, as Python's `CLOSE_WAIT_S`; an inbound call's
@@ -56,7 +74,10 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    `cancelled` to the kit's observers, and the reader of a stream
     ///    stores what it read, the text it was handed marked `cancelled`
     ///    and each call it opened ended `cancelled`. The close waits for
-    ///    that within twice the turns' cancel bound, 10 seconds by default.
+    ///    that, then for the inbound calls whose turns it cut to commit what
+    ///    their readers read, within twice the turns' cancel bound, 10
+    ///    seconds by default. A turn a `close` was called from inside is
+    ///    not cut.
     ///    What is left of the inbound calls is then aborted at its next
     ///    wait, letting go of what it holds, its room lock, its places in
     ///    the room's lane and its admission ticket: an event committed and
@@ -94,16 +115,33 @@ impl<S: ConversationStore> RoomKit<S> {
     /// other, each for up to 5 seconds; this one drains them together,
     /// under that bound.
     pub async fn close(&self) {
-        let tasks = &self.inner.tasks;
-        if !tasks.close() {
-            return;
+        let joined = self.inner.shutdown.join(&self.inner.tasks, |starting| {
+            self.inner.tasks.close();
+            let Starting { marks, ended } = starting;
+            let kit = self.clone();
+            tokio::spawn(marks.scoped(async move {
+                kit.shut_down().await;
+                ended.send_replace(true);
+            }));
+        });
+        match joined {
+            Joined::Own => {}
+            Joined::Waits(ended) => shutdown::wait_for(ended).await,
         }
+    }
+
+    /// The kit's one shutdown, in the steps [`close`](Self::close) lists.
+    async fn shut_down(&self) {
+        let tasks = &self.inner.tasks;
         let writes = Instant::now() + CLOSE_WAIT;
         wait_for_writes(tasks, writes).await;
-        tasks.drain();
-        let _drained = tokio::time::timeout(CLOSE_GRACE, tasks.idle_of_kind(Kind::Work)).await;
+        self.drain().await;
         tasks.cut();
-        self.inner.turns.cut_all().await;
+        let cut = self.inner.turns.cut_all(tasks.spared()).await;
+        // A run whose turn was cut commits what its reader read before the
+        // rest of the work is aborted, within the same bound.
+        let _committed =
+            tokio::time::timeout_at(cut.until, tasks.idle_of_units(Kind::Work, &cut.runs)).await;
         tasks.abort(Kind::Work).await;
         tasks.idle_of_kind(Kind::Observer).await;
         tasks.shut_down().await;
@@ -111,6 +149,27 @@ impl<S: ConversationStore> RoomKit<S> {
         wait_for_writes(tasks, writes).await;
         self.inner.close_channels().await;
         wait_for_writes(tasks, Instant::now() + CLOSE_WAIT).await;
+    }
+
+    /// Drains the work under way for up to the close's grace, but the work
+    /// a caller of the close runs within: the runs queued behind a spared
+    /// run's place in a room's lane are dropped then, as their place's turn
+    /// would come only once the close returned, and again each time a
+    /// caller joins (RFC §12.10.4).
+    async fn drain(&self) {
+        let tasks = &self.inner.tasks;
+        tasks.drain();
+        let draining = async {
+            loop {
+                let seen = tasks.spared_changes();
+                let spared = tasks.spared();
+                tasks.drop_work_of(&self.inner.lanes.queued_behind(&spared));
+                if tasks.idle_or_spared(Kind::Work, seen).await {
+                    return;
+                }
+            }
+        };
+        let _drained = tokio::time::timeout(CLOSE_GRACE, draining).await;
     }
 }
 

@@ -30,7 +30,7 @@ use crate::kit::Inner;
 use crate::router;
 use crate::store::ConversationStore;
 use crate::stream::{self, KeptStream, Stops};
-use crate::tasks::Kind;
+use crate::tasks::{Kind, Marks};
 use crate::turn::TurnKit;
 use crate::turns::Answer;
 
@@ -192,11 +192,14 @@ pub(super) async fn channel<S: ConversationStore>(
             answers,
             target,
         } => {
-            let _working = inner.turns.working();
             let kept = shared.take_stream(turn);
+            let _working = kept
+                .as_ref()
+                .map(|kept| inner.turns.working(kept.turn.unit()));
             let stops = Stops {
                 read: shared.stop_signal(effect),
                 kit: inner.turns.cutting(),
+                turn: kept.as_ref().map(|kept| kept.turn.unit()),
             };
             Box::pin(stream::read(
                 inner, kept, stops, responder, *answers, target,
@@ -428,7 +431,8 @@ fn in_its_work(
 
 /// Runs observer hooks concurrently and returns once every one has
 /// finished or timed out, what they raise logged (RFC §9.3, gap G-050).
-/// Awaited, each runs in the context of the call that awaits it.
+/// Awaited, each runs in the context and the marks of the call that awaits
+/// it.
 async fn run_observers<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     trigger: HookTrigger,
@@ -437,10 +441,11 @@ async fn run_observers<S: ConversationStore>(
     context: RoomContext,
 ) {
     let execution = ExecutionContext::current();
+    let marks = Marks::current();
     let mut observers = JoinSet::new();
     for hook in hooks {
         if let Some(observing) = observe(inner, trigger, hook, &event, &context) {
-            observers.spawn(execution.clone().scope(observing));
+            observers.spawn(marks.clone().scoped(execution.clone().scope(observing)));
         }
     }
     while let Some(joined) = observers.join_next().await {

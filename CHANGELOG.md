@@ -84,7 +84,7 @@ kit, its construction and its calls).
   `roomkit:`, or of the room's private state) with a warning and writes the
   rest (RFC §5.1); it was refused.
 - `RoomKit::close` replaces `shutdown` and drains as Python's `close`
-  does: a second `close` returns at once; calls are taken while the work
+  does: calls are taken while the work
   drains, a delivery that would start then dropped (`cancellation_reason`
   `kit_closed`), and refused once the kit is sealed; the inbound runs,
   their deliveries, turns and the observers their deliveries fire, get up
@@ -105,6 +105,24 @@ kit, its construction and its calls).
   the hook's reason, or the store's error; a call cut before its own commit
   receives `ShutDown`, whatever its run committed first; a write that fails
   once its caller is gone is logged as an error.
+- The kit has one shutdown, as Python's since RMK-1015 (RFC §12.10.4,
+  RMK-1017): the first `close` starts it in a task of its own, and every
+  `close`, concurrent or later, waits for it and returns once it ended; a
+  second `close` returned at once, before anything was closed. A `close`
+  whose future is dropped stops only its own wait: the shutdown runs to its
+  end, where it stopped half-way. A `close` from the kit's own work, a
+  hook's body, a hook a delivery fired, an observer, a channel's delivery
+  or an agent's tool call, neither waits for that work nor cuts it, whether
+  it started the shutdown or joined one under way: it returns once every
+  channel is closed, where it waited for the close's 5 s grace and was then
+  cut with its work, leaving the channels open and the kit unsealed. The
+  deliveries queued behind a delivery a `close` runs in are dropped at once,
+  `kit_closed`, not at the grace. A `close` from a channel's close returns
+  at once. A shutdown that never ended, its task dropped with its runtime
+  or a channel's close panicking, is logged as an error to a later `close`,
+  which returns; a panicking channel's close no longer reaches the caller of
+  `close`. Once the turns are cut, the close waits, within the same bound,
+  for the runs whose turns it cut to commit what their readers read.
 - A task the kit's work spawns, that calls the kit and waits on its own
   room, is spawned with `keep_context`, the Rust form of Python's
   `create_task` copying its context; spawned plainly, it blocks.
