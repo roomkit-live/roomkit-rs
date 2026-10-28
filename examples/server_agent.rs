@@ -22,8 +22,10 @@
 //! - The agent serves a tool, `lookup_order`, which finds an order by its
 //!   number (RFC §6.4, §21): a turn that calls it stores the round's text,
 //!   the call's start and end rows, then the answer, which carries the
-//!   turn's record (`loop_end_reason`, `ai_usage`); a later turn reads what
-//!   each round said, never the call.
+//!   turn's record (`loop_end_reason`, `ai_usage`); a later turn's history
+//!   replays the round at its place, its call and its result read back
+//!   from the rows, after a restart too (RFC §6.4 "The tools of earlier
+//!   turns").
 //! - The room's deliveries to `websocket` go out on each of the room's
 //!   connections, one JSON frame per event: the agent's rows, a call's
 //!   `tool` and the turn's `ended` included, in index order, each with its
@@ -931,7 +933,7 @@ fn check_the_model_s_turns(checks: &mut Checks, requests: &[Value], answers: &[&
     );
     checks.expect(
         "the turn after the restart reads the conversation from the file, each person \
-         labelled as before, and replays no call",
+         labelled as before, and Bob's lookup at its place",
         after_the_restart.is_some_and(goes_on),
     );
 }
@@ -1193,20 +1195,29 @@ fn is_labelled(message: &(String, String), label: &str, text: &str) -> bool {
 
 /// Whether the turn after the restart sent the system prompt, then the
 /// conversation before it: Alice's question, the first answer, Bob's, what
-/// the agent said before its lookup and its answer, each a message of its
-/// own, and Alice's new question, labelled `Alice` as before rather than as
-/// a second Alice; and no call nor result of the lookup.
+/// the agent said before its lookup, the lookup's call and its result as
+/// the file holds them, then the answer, each a message of its own, and
+/// Alice's new question, labelled `Alice` as before rather than as a second
+/// Alice.
 fn goes_on(request: &Value) -> bool {
     let sent = sent(request);
-    let [system, alice, first, bob, looking, second, again] = sent.as_slice() else {
+    // The lookup's call and result, at 5 and 6, are read whole below.
+    let [system, alice, first, bob, looking, _, _, second, again] = sent.as_slice() else {
         return false;
     };
     let answered = |message: &(String, String), reply: &str| {
         message == &("assistant".to_owned(), reply.to_owned())
     };
-    let replays_no_call = messages(request)
-        .iter()
-        .all(|message| message["role"] != "tool" && message.get("tool_calls").is_none());
+    let all = messages(request);
+    let replays_the_lookup = all.get(5).is_some_and(|call| {
+        call["role"] == "assistant"
+            && call["content"].is_null()
+            && call.pointer("/tool_calls/0/id") == Some(&json!(LOOKUP_CALL))
+    }) && all.get(6).is_some_and(|result| {
+        result["role"] == "tool"
+            && result["tool_call_id"] == LOOKUP_CALL
+            && result["content"] == ORDER_42
+    });
     is_system(system)
         && is_labelled(alice, "Alice", ALICE_ASKS)
         && ANSWERS.first().is_some_and(|reply| answered(first, reply))
@@ -1214,5 +1225,5 @@ fn goes_on(request: &Value) -> bool {
         && answered(looking, LOOKING_UP)
         && ANSWERS.get(1).is_some_and(|reply| answered(second, reply))
         && is_labelled(again, "Alice", ALICE_AGAIN)
-        && replays_no_call
+        && replays_the_lookup
 }
