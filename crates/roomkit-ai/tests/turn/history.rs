@@ -7,9 +7,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{EventType, HookResult, Metadata};
+use roomkit::model::{EventContent, EventType, HookResult, Metadata};
 use roomkit::transcript::{Message, Role};
-use roomkit::{HookExecution, HookSpec, HookTrigger, ToolVerdict};
+use roomkit::{HookExecution, HookSpec, HookTrigger, ToolVerdict, UpdateEventOptions};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, Done, ProviderResponse, ProviderStream, ProviderToolCall,
@@ -17,7 +17,7 @@ use roomkit_ai::{
 };
 use serde_json::json;
 
-use super::support::{Room, channel, served};
+use super::support::{Room, channel, room_id, served};
 
 /// A model that does not stream: each generation hands its whole
 /// response at once (RFC §6.4 "One loop, streamed or not").
@@ -402,4 +402,47 @@ async fn every_row_of_a_turn_carries_the_turn_s_own_correlation_id() {
             .collect::<Vec<_>>(),
         [Some("integrator-ref"); 2]
     );
+}
+
+/// A round of three calls whose middle start row the host then marks
+/// deleted: the next turn, whose history hands that row with its content
+/// withheld, replays the round as two, `c1` then `c3`, as the reference
+/// implementation does (probe `py_deleted_start.out`; light review,
+/// `probe_deleted_start_e2e.out`).
+#[tokio::test]
+async fn a_deleted_start_row_ends_its_round_in_the_next_turn() {
+    let ids: Vec<String> = (1..=3).map(|n| format!("c{n}")).collect();
+    let model = ScriptedProvider::new([
+        calling_each(&ids),
+        ScriptedRound::answering("Answer one."),
+        ScriptedRound::answering("Answer two."),
+    ]);
+    let room = Room::new(model.clone(), served()).await;
+    room.says("first question").await;
+    let timeline = room.timeline().await;
+    let start = timeline
+        .iter()
+        .find(|row| {
+            row.event_type == EventType::ToolCallStart
+                && matches!(&row.content, EventContent::ToolCall(call) if call.tool_id == "c2")
+        })
+        .unwrap();
+    let mut metadata = start.metadata.clone();
+    metadata.insert("deleted".to_owned(), json!(true));
+    let options = UpdateEventOptions {
+        metadata: Some(metadata),
+        ..UpdateEventOptions::default()
+    };
+    room.kit
+        .update_event(&room_id(), &start.id, options)
+        .await
+        .unwrap()
+        .unwrap();
+    room.says("second question").await;
+    room.kit.close().await;
+    let mut expected = vec!["user first question".to_owned()];
+    expected.extend(round_of(&ids[..1]));
+    expected.extend(round_of(&ids[2..]));
+    expected.extend(["assistant Answer one.", "user second question"].map(str::to_owned));
+    assert_eq!(shape(model.requests().last().unwrap()), expected);
 }

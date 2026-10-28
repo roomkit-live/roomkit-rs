@@ -114,24 +114,30 @@ type Chosen<'a> = BTreeMap<(usize, usize), (&'a str, bool)>;
 
 /// `channel_id`'s tool rows among `events`, with their content: rows it
 /// wrote (outbound; one that entered the room inbound under its id is no
-/// call it made). A deleted one keeps its place with its content withheld,
-/// as from any history (RFC §7.5 rule 8): it ends a round, as the
-/// reference implementation's withheld row does.
+/// call it made), told by their type and source. A deleted one keeps its
+/// place with no content, whether the history handed it whole or withheld
+/// its content, as a channel's history does (RFC §7.5 rule 8,
+/// `visible_events`): it ends a round, as the reference implementation's
+/// withheld row does.
 fn own_rows<'a>(
     events: &'a [RoomEvent],
     channel_id: &'a ChannelId,
 ) -> impl Iterator<Item = (&'a RoomEvent, Option<&'a ToolCallContent>)> {
     events.iter().filter_map(move |event| {
-        let EventContent::ToolCall(row) = &event.content else {
-            return None;
-        };
         let is_tool_row = matches!(
             event.event_type,
             EventType::ToolCallStart | EventType::ToolCallEnd
         );
         let own = &event.source.channel_id == channel_id
             && event.source.direction == EventDirection::Outbound;
-        (is_tool_row && own).then_some((event, (!is_deleted(event)).then_some(row)))
+        let row = if let EventContent::ToolCall(row) = &event.content
+            && !is_deleted(event)
+        {
+            Some(row)
+        } else {
+            None
+        };
+        (is_tool_row && own).then_some((event, row))
     })
 }
 

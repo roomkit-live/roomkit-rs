@@ -276,35 +276,45 @@ fn overlapping_turns_pair_each_end_with_the_start_of_its_own_turn() {
 
 /// A deleted start row ends the round it stood in, its call left out, as
 /// the reference implementation's withheld row does (probe
-/// `py_deleted_start.out`).
+/// `py_deleted_start.out`): handed whole, or with its content withheld, as
+/// a channel's history hands it (`visible_events`, light review).
 #[test]
 fn a_deleted_start_row_ends_its_round() {
-    let mut deleted = start(2, "c2");
-    deleted
-        .metadata
-        .insert("deleted".to_owned(), Value::Bool(true));
-    let answered = |index, id: &str| {
-        end(
-            index,
-            id,
-            json!(format!("{id}'s")),
-            Some(ToolCallOutcome::Served),
-        )
-    };
-    let rows = [
-        start(1, "c1"),
-        deleted,
-        start(3, "c3"),
-        answered(4, "c1"),
-        answered(5, "c2"),
-        answered(6, "c3"),
-    ];
-    let replayed = rounds(&rows);
-    assert_eq!(ids(&replayed), [vec!["c1"], vec!["c3"]]);
-    assert_eq!(
-        replayed.iter().map(|round| round.index).collect::<Vec<_>>(),
-        [1, 3]
-    );
+    for withheld in [false, true] {
+        let mut deleted = start(2, "c2");
+        deleted
+            .metadata
+            .insert("deleted".to_owned(), Value::Bool(true));
+        if withheld {
+            deleted.content = EventContent::text("");
+        }
+        let answered = |index, id: &str| {
+            end(
+                index,
+                id,
+                json!(format!("{id}'s")),
+                Some(ToolCallOutcome::Served),
+            )
+        };
+        let rows = [
+            start(1, "c1"),
+            deleted,
+            start(3, "c3"),
+            answered(4, "c1"),
+            answered(5, "c2"),
+            answered(6, "c3"),
+        ];
+        let replayed = rounds(&rows);
+        assert_eq!(
+            ids(&replayed),
+            [vec!["c1"], vec!["c3"]],
+            "withheld: {withheld}"
+        );
+        assert_eq!(
+            replayed.iter().map(|round| round.index).collect::<Vec<_>>(),
+            [1, 3]
+        );
+    }
 }
 
 /// A result stored as parts reads as its texts, a part other than text
