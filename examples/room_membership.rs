@@ -240,6 +240,6 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         !team.is_deleted(&hello).await?,
     );
     shared::print_timeline(&shared::timeline(&team.kit, &team.room).await?);
-    team.kit.close().await;
+    team.kit.close().await?;
     Ok(checks.finish())
 }

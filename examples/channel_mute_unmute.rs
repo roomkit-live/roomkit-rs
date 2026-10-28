@@ -138,7 +138,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     shared::print_timeline(&timeline);
     // The hooks run in the background, after the calls that fired them:
     // the kit's close lets them finish.
-    kit.close().await;
+    kit.close().await?;
     let mut fired = changes.entries();
     fired.sort();
 

@@ -103,6 +103,23 @@ pub(crate) struct Turns {
     cut: watch::Sender<Cut>,
 }
 
+/// The units of the kit's work a turn is: its own, which its tasks run
+/// in, and the run's whose delivery set runs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TurnUnits {
+    pub(crate) turn: Unit,
+    pub(crate) run: Option<Unit>,
+}
+
+impl TurnUnits {
+    /// Whether the kit's close spares the turn, whose units are in
+    /// `spared`: a close called from inside it, or from inside the run
+    /// that waits for it (RFC §12.10.4).
+    fn spared_by(&self, spared: &HashSet<Unit>) -> bool {
+        spared.contains(&self.turn) || self.run.is_some_and(|run| spared.contains(&run))
+    }
+}
+
 /// The kit's cut of its turns (RFC §10.6.8): none until the kit shuts
 /// down, then every turn but those of the units a caller of the kit's
 /// close runs within, which the shutdown spares (RFC §12.10.4).
@@ -115,12 +132,12 @@ impl Cut {
         self.0.is_some()
     }
 
-    /// Whether the kit's shutdown cuts the turn of `unit`; `None`, a turn
-    /// whose unit is not known, is cut.
-    pub(crate) fn cuts(&self, unit: Option<Unit>) -> bool {
+    /// Whether the kit's shutdown cuts the turn of `units`; `None`, a turn
+    /// whose units are not known, is cut.
+    pub(crate) fn cuts(&self, units: Option<TurnUnits>) -> bool {
         self.0
             .as_ref()
-            .is_some_and(|spared| unit.is_none_or(|unit| !spared.contains(&unit)))
+            .is_some_and(|spared| units.is_none_or(|units| !units.spared_by(spared)))
     }
 }
 
@@ -202,16 +219,13 @@ impl Turns {
             .clone()
     }
 
-    /// Counts the owner's work on the turn of `unit`, by the run the
-    /// current code runs in, until the guard drops.
-    pub(crate) fn working(self: &Arc<Self>, unit: Unit) -> Working {
-        let run = Marks::current().innermost();
+    /// Counts the owner's work on the turn of `units` until the guard
+    /// drops.
+    pub(crate) fn working(self: &Arc<Self>, units: TurnUnits) -> Working {
         let mut working = lock(&self.working);
-        let (count, worked_by) = working.entry(unit).or_insert((0, run));
-        *count += 1;
-        *worked_by = worked_by.or(run);
+        working.entry(units.turn).or_insert((0, units.run)).0 += 1;
         drop(working);
-        Working(Arc::clone(self), unit)
+        Working(Arc::clone(self), units.turn)
     }
 
     /// The signal every turn's reader cuts its turn on, once the kit shuts
@@ -230,12 +244,17 @@ impl Turns {
         let spared = Arc::new(spared);
         self.cut.send_replace(Cut(Some(Arc::clone(&spared))));
         let bound = self.timeouts().cancel.saturating_mul(2);
-        let cut = CutTurns {
-            runs: lock(&self.working)
+        let cut_turns = || {
+            lock(&self.working)
                 .iter()
-                .filter(|(turn, _)| !spared.contains(turn))
-                .filter_map(|(_, (_, run))| *run)
-                .filter(|run| !spared.contains(run))
+                .map(|(&turn, &(_, run))| TurnUnits { turn, run })
+                .filter(|units| !units.spared_by(&spared))
+                .collect::<Vec<_>>()
+        };
+        let cut = CutTurns {
+            runs: cut_turns()
+                .into_iter()
+                .filter_map(|units| units.run)
                 .collect(),
             until: Instant::now() + bound,
         };
@@ -243,7 +262,7 @@ impl Turns {
             loop {
                 let mut idle = std::pin::pin!(self.idle.notified());
                 idle.as_mut().enable();
-                if lock(&self.working).keys().all(|unit| spared.contains(unit)) {
+                if cut_turns().is_empty() {
                     return;
                 }
                 idle.await;
@@ -287,13 +306,18 @@ impl Turns {
         context: RoomContext,
         submitted: impl FnOnce(Canceller),
     ) -> Result<Answer, ErrorRecord> {
-        // The turn's tasks run in a unit of their own, within the call's:
-        // a close from the turn's work spares them all (RFC §12.10.4).
-        let unit = Unit::new();
-        let _working = self.working(unit);
-        let mut turn = Marks::current()
-            .with(unit)
-            .sync_scope(|| self.submit(kit, binding, event, context, unit))?;
+        // The turn's tasks run in a unit of their own, within the call's
+        // run's: a close from the turn's work, or from its run's, spares
+        // them all (RFC §12.10.4).
+        let marks = Marks::current();
+        let units = TurnUnits {
+            turn: Unit::new(),
+            run: marks.innermost(),
+        };
+        let _working = self.working(units);
+        let mut turn = marks
+            .with(units.turn)
+            .sync_scope(|| self.submit(kit, binding, event, context, units))?;
         submitted(turn.canceller());
         let (output, streams) = turn.output(self.cutting()).await?;
         Ok(if streams {
@@ -304,14 +328,15 @@ impl Turns {
     }
 
     /// Hands a turn to the kit's own executor, and opens its owner's side,
-    /// the turn's tasks in `unit`, the one the current code runs in.
+    /// the turn's tasks in its `units`' own, the one the current code runs
+    /// in.
     fn submit(
         self: &Arc<Self>,
         kit: &Arc<dyn TurnKit>,
         binding: &ChannelBinding,
         event: RoomEvent,
         mut context: RoomContext,
-        unit: Unit,
+        units: TurnUnits,
     ) -> Result<OwnerTurn, ErrorRecord> {
         if self.closed.load(Ordering::Acquire) || self.cut.borrow().began() {
             return Err(closed());
@@ -347,7 +372,7 @@ impl Turns {
             facts,
             Arc::clone(kit),
             Arc::clone(self),
-            unit,
+            units,
         );
         let carried = CarriedRequest {
             rest,

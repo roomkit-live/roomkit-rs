@@ -95,7 +95,7 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
         }
     });
     running.notified().await;
-    kit.close().await;
+    kit.close().await.unwrap();
     let asked = asking.await.unwrap();
     let crossed = crossed(&tap);
     let tail: Vec<&str> = crossed

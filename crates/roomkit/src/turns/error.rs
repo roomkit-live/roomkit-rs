@@ -157,6 +157,7 @@ fn rebuilt_variant(error: &WireError) -> Option<KitError> {
     let variant = error.attributes.get(VARIANT)?.as_str()?;
     Some(match variant {
         "ShutDown" => KitError::ShutDown,
+        "ShutdownCancelled" => KitError::ShutdownCancelled,
         "Cancelled" => KitError::Cancelled,
         "Stalled" => KitError::Stalled,
         "NoEvent" => KitError::NoEvent,
@@ -189,6 +190,8 @@ fn variant_of(error: &KitError) -> (&'static str, Metadata) {
         KitError::Cancelled => "Cancelled",
         KitError::NoEvent => "NoEvent",
         KitError::ShutDown => "ShutDown",
+        KitError::ChannelsFailedToClose { .. } => "ChannelsFailedToClose",
+        KitError::ShutdownCancelled => "ShutdownCancelled",
         KitError::Turn(_) => "Turn",
     };
     (variant, fields)

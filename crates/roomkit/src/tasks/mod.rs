@@ -18,6 +18,7 @@ mod marks;
 
 use std::collections::{HashMap, HashSet};
 use std::pin::pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio::sync::Notify;
@@ -50,6 +51,8 @@ pub(crate) enum Kind {
 #[derive(Debug, Default)]
 pub(crate) struct Tasks {
     state: Mutex<State>,
+    /// How many writes of the store have their store's call running.
+    storing: AtomicUsize,
     /// Woken whenever a task ends, a unit is spared, and the kit shuts
     /// down.
     changed: Notify,
@@ -90,12 +93,18 @@ struct State {
     dropped: HashSet<task::Id>,
 }
 
-/// A task running: its kind, its unit, and the handle that aborts it once
-/// its spawn returned it.
+/// A task running: its kind, its unit, the unit of the work that started
+/// it, and the handle that aborts it once its spawn returned it.
 #[derive(Debug)]
 struct Running {
     kind: Kind,
     unit: Unit,
+    /// The unit the task's own runs within, the work that started it:
+    /// `None` for a task that runs within no work, or on its own.
+    parent: Option<Unit>,
+    /// Whether the close spares the task with its parent: a turn's, which
+    /// the spared run whose delivery set runs it waits for.
+    with_parent: bool,
     handle: Option<AbortHandle>,
 }
 
@@ -110,7 +119,29 @@ impl State {
     fn unspared(&self, counts: impl Fn(Kind) -> bool) -> impl Iterator<Item = &Running> {
         self.running
             .values()
-            .filter(move |running| counts(running.kind) && !self.spared.contains(&running.unit))
+            .filter(move |running| counts(running.kind) && !self.spares(running))
+    }
+
+    /// Whether the close spares `running`: its unit, or, for a turn's
+    /// task, the run that runs the turn.
+    fn spares(&self, running: &Running) -> bool {
+        self.spared.contains(&running.unit)
+            || (running.with_parent && running.parent.is_some_and(|run| self.spared.contains(&run)))
+    }
+
+    /// Whether `marks` name a unit the close spares.
+    fn spares_any(&self, marks: &Marks) -> bool {
+        marks.units().iter().any(|unit| self.spared.contains(unit))
+    }
+}
+
+/// A write's store call running, counted until dropped.
+#[derive(Debug)]
+pub(crate) struct Storing(Arc<Tasks>);
+
+impl Drop for Storing {
+    fn drop(&mut self) {
+        self.0.storing.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -123,16 +154,38 @@ struct Tracked {
 
 impl Tasks {
     /// Runs `future` as a task of `kind` the kit tracks, in a unit of its
-    /// own within the units of the current code; `None`, nothing spawned,
-    /// once the kit is sealed, but for a write of the store, which runs
-    /// whatever the kit's state.
+    /// own within the units of the current code, which waits for it;
+    /// `None`, nothing spawned, once the kit is sealed, but for a write of
+    /// the store, which runs whatever the kit's state unless a unit the
+    /// close spares asks it (RFC §12.10.4: the spared work's writes are
+    /// refused once the kit is sealed, as Python's sealed store refuses
+    /// them).
     pub(crate) fn spawn<F>(self: &Arc<Self>, kind: Kind, future: F) -> Option<JoinHandle<F::Output>>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
         let unit = Unit::new();
-        self.spawn_in(kind, unit, Marks::current().with(unit), future)
+        let marks = Marks::current();
+        let parent = marks.innermost();
+        self.spawn_in(kind, unit, parent, false, marks.with(unit), future)
+    }
+
+    /// Runs `future` as [`spawn`](Self::spawn) does, within no work but
+    /// its own: a task the current code fires and forgets, an observer,
+    /// which nothing of the current code waits for, so that a close it
+    /// calls spares that task alone.
+    pub(crate) fn spawn_alone<F>(
+        self: &Arc<Self>,
+        kind: Kind,
+        future: F,
+    ) -> Option<JoinHandle<F::Output>>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let unit = Unit::new();
+        self.spawn_in(kind, unit, None, false, Marks::default().with(unit), future)
     }
 
     /// Runs `future` as [`spawn`](Self::spawn) does, in the unit the
@@ -148,8 +201,15 @@ impl Tasks {
         F::Output: Send + 'static,
     {
         let marks = Marks::current();
-        match marks.innermost() {
-            Some(unit) => self.spawn_in(kind, unit, marks, future),
+        let units = marks.units();
+        match units.last() {
+            Some(&unit) => {
+                let parent = units
+                    .len()
+                    .checked_sub(2)
+                    .and_then(|at| units.get(at).copied());
+                self.spawn_in(kind, unit, parent, true, marks, future)
+            }
             None => self.spawn(kind, future),
         }
     }
@@ -158,6 +218,8 @@ impl Tasks {
         self: &Arc<Self>,
         kind: Kind,
         unit: Unit,
+        parent: Option<Unit>,
+        with_parent: bool,
         marks: Marks,
         future: F,
     ) -> Option<JoinHandle<F::Output>>
@@ -167,7 +229,8 @@ impl Tasks {
     {
         let key = {
             let mut state = self.state();
-            if state.phase == Phase::Sealed && kind != Kind::Write {
+            let sealed = state.phase == Phase::Sealed;
+            if sealed && (kind != Kind::Write || state.spares_any(&marks)) {
                 return None;
             }
             let key = state.next;
@@ -175,6 +238,8 @@ impl Tasks {
             let running = Running {
                 kind,
                 unit,
+                parent,
+                with_parent,
                 handle: None,
             };
             state.running.insert(key, running);
@@ -195,7 +260,11 @@ impl Tasks {
             if let Some(running) = state.running.get_mut(&key) {
                 running.handle = Some(task.abort_handle());
             }
-            state.phase == Phase::Sealed && !state.spared.contains(&unit)
+            state.phase == Phase::Sealed
+                && state
+                    .running
+                    .get(&key)
+                    .is_some_and(|running| !state.spares(running))
         };
         if shut_down && kind != Kind::Write {
             task.abort();
@@ -256,6 +325,14 @@ impl Tasks {
         state.phase >= Phase::Cut || state.dropped.contains(&id)
     }
 
+    /// Whether the kit, sealed, refuses what work within `marks` asks: work
+    /// a close spared, which stores and delivers nothing once the kit is
+    /// sealed (RFC §12.10.4).
+    pub(crate) fn refuses(&self, marks: &Marks) -> bool {
+        let state = self.state();
+        state.phase == Phase::Sealed && state.spares_any(marks)
+    }
+
     /// Spares the units `marks` name from the kit's close (RFC
     /// §12.10.4): its waits pass over their tasks from now on, those under
     /// way woken to read so, and it aborts none of them.
@@ -293,13 +370,16 @@ impl Tasks {
             .await;
     }
 
-    /// Waits until no tracked task of `kind` in one of `units` the close
-    /// does not spare runs.
-    pub(crate) async fn idle_of_units(&self, kind: Kind, units: &HashSet<Unit>) {
+    /// Waits until no tracked task of `kind` that the work of one of
+    /// `parents` started runs: the writes of the runs whose turns the
+    /// close cut, which commit what the turns' readers read.
+    pub(crate) async fn idle_of_children(&self, kind: Kind, parents: &HashSet<Unit>) {
         self.wait_until(|state| {
-            state
-                .unspared(|running| running == kind)
-                .all(|running| !units.contains(&running.unit))
+            state.unspared(|running| running == kind).all(|running| {
+                running
+                    .parent
+                    .is_none_or(|parent| !parents.contains(&parent))
+            })
         })
         .await;
     }
@@ -386,9 +466,17 @@ impl Tasks {
             .collect()
     }
 
-    /// How many tasks of `kind` the close does not spare run.
-    pub(crate) fn running_of(&self, kind: Kind) -> usize {
-        self.state().unspared(|running| running == kind).count()
+    /// Counts a write's store call while the guard lives: what the close
+    /// names in its warning, a write whose store call ended being over for
+    /// it, whether its run went on from it yet or not.
+    pub(crate) fn storing(self: &Arc<Self>) -> Storing {
+        self.storing.fetch_add(1, Ordering::AcqRel);
+        Storing(Arc::clone(self))
+    }
+
+    /// How many writes of the store have their store's call running.
+    pub(crate) fn writes_storing(&self) -> usize {
+        self.storing.load(Ordering::Acquire)
     }
 
     fn state(&self) -> MutexGuard<'_, State> {

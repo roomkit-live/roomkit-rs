@@ -91,7 +91,7 @@ async fn left_after_drop(held: Held) -> (bool, usize) {
     let attached = bindings
         .iter()
         .any(|binding| binding.channel_id == websocket);
-    kit.close().await;
+    kit.close().await.unwrap();
     drop(kit);
     (attached, open_handles(file.path()))
 }

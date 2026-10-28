@@ -214,7 +214,7 @@ async fn the_kit_s_close_stops_the_server_of_its_agent() {
     let room = Room::with(agent(&model).with_tools(server).unwrap()).await;
     room.says("Hello").await;
     let running = exists(pid);
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
     assert_eq!((running, exists(pid)), (true, false));
 }
 

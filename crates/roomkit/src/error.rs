@@ -77,9 +77,30 @@ pub enum KitError {
     NoEvent,
     /// The kit is closed ([`RoomKit::close`](crate::RoomKit::close)): the
     /// call was made once the close began, or its run was running and the
-    /// close cut it past its grace, what it wrote by then not known.
+    /// close cut it past its grace, what it wrote by then not known, or a
+    /// close its own work called spared it and the kit, sealed, refused its
+    /// commit, nothing of it stored.
     #[error("the kit is shut down")]
     ShutDown,
+    /// The kit's close closed every channel but these, whose close
+    /// panicked, each with what its panic said; the rest of the shutdown
+    /// ran to its end (RFC §12.10.4), and every close is answered so, as
+    /// the Python implementation's `close` raises its `ExceptionGroup`.
+    /// Its name is lot 2's to settle (step 5).
+    #[error("{} channel(s) failed to close; the rest of the shutdown ran to completion", failures.len())]
+    ChannelsFailedToClose {
+        /// Each channel that failed to close, and what its panic said.
+        failures: Vec<(ChannelId, String)>,
+    },
+    /// The kit's shutdown never ended, its task dropped with its runtime
+    /// or panicked: its channels and its store may not all be closed, as
+    /// the Python implementation's `close` raises `RoomKitError` (RFC
+    /// §12.10.4). Its name is lot 2's to settle (step 5).
+    #[error(
+        "the kit's shutdown was cancelled before it ended: its channels and its store may not \
+         all be closed"
+    )]
+    ShutdownCancelled,
     /// A call across the turn backend failed (RFC §10.6.8): a turn's host
     /// verb whose link failed or that its owner refused, or one whose error
     /// on the owner this side does not rebuild, its kind and message kept.

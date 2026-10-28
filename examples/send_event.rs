@@ -218,7 +218,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .ok_or("the agent sent no note")?;
     // Nothing awaits the note's delivery: it runs in the background, which
     // the kit's close lets finish, and the framework reports its end.
-    kit.close().await;
+    kit.close().await?;
     let processed = shared::framework_events(&mut events).into_iter().find(|event| {
         matches!(event, FrameworkEvent::EventProcessed { event_id, .. } if *event_id == note.event.id)
     });

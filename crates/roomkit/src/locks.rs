@@ -1,10 +1,16 @@
 //! Per-room mutual exclusion, in one process (RFC §13.5).
+//!
+//! Each lock records the unit of the kit's work that holds it and of those
+//! that wait for it, so that the kit's close drops the work waiting on a
+//! lock a spared unit holds (RFC §12.10.4).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::RoomId;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+
+use crate::tasks::{Marks, Unit};
 
 /// One asynchronous mutex per room, created on first use and dropped once
 /// nobody holds or waits for it, so rooms that come and go (or ids that name
@@ -16,6 +22,25 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 #[derive(Debug, Default)]
 pub(crate) struct RoomMutexes {
     rooms: Mutex<HashMap<RoomId, Arc<AsyncMutex<()>>>>,
+    /// Who holds and waits for each room's lock.
+    takers: Mutex<Takers>,
+}
+
+/// The work holding and waiting for the rooms' locks, by room.
+#[derive(Debug, Default)]
+struct Takers {
+    /// The key the next taker is recorded under.
+    next: u64,
+    rooms: HashMap<RoomId, Vec<Taker>>,
+}
+
+/// One taker of a room's lock: the unit of its work, and whether it holds
+/// the lock or waits for it.
+#[derive(Debug)]
+struct Taker {
+    key: u64,
+    unit: Option<Unit>,
+    holds: bool,
 }
 
 /// A held room mutex; dropping it releases the mutex.
@@ -29,17 +54,22 @@ pub(crate) struct RoomGuard<'mutexes> {
     /// The waiter's handle on the mutex, until it holds it.
     waiting: Option<Arc<AsyncMutex<()>>>,
     room_id: RoomId,
+    /// The guard's record among the room's takers.
+    taker: u64,
     mutexes: &'mutexes RoomMutexes,
 }
 
 impl RoomMutexes {
-    /// Waits for the room's mutex and returns its guard.
+    /// Waits for the room's mutex and returns its guard, for the unit of
+    /// the work the current code runs in.
     pub(crate) async fn lock(&self, room_id: &RoomId) -> RoomGuard<'_> {
         let mutex = Arc::clone(self.rooms().entry(room_id.clone()).or_default());
+        let taker = self.takes(room_id, Marks::current().innermost());
         let mut guard = RoomGuard {
             guard: None,
             waiting: Some(Arc::clone(&mutex)),
             room_id: room_id.clone(),
+            taker,
             mutexes: self,
         };
         // Cancelled during this wait, the pending lock future, declared after
@@ -47,11 +77,75 @@ impl RoomMutexes {
         // by the map alone when nobody else uses it.
         guard.guard = Some(mutex.lock_owned().await);
         guard.waiting = None;
+        self.holds(room_id, taker);
         guard
+    }
+
+    /// The units of the work waiting for a room's lock a unit in `spared`
+    /// holds, but those `spared` holds: their wait ends only once that unit
+    /// lets the lock go.
+    pub(crate) fn queued_behind(&self, spared: &HashSet<Unit>) -> HashSet<Unit> {
+        let is_spared = |unit: Option<Unit>| unit.is_some_and(|unit| spared.contains(&unit));
+        self.takers()
+            .rooms
+            .values()
+            .filter(|takers| {
+                takers
+                    .iter()
+                    .any(|taker| taker.holds && is_spared(taker.unit))
+            })
+            .flatten()
+            .filter(|taker| !taker.holds)
+            .filter_map(|taker| taker.unit.filter(|unit| !spared.contains(unit)))
+            .collect()
+    }
+
+    /// Records a taker of `room_id`'s lock in `unit`, waiting.
+    fn takes(&self, room_id: &RoomId, unit: Option<Unit>) -> u64 {
+        let mut takers = self.takers();
+        let key = takers.next;
+        takers.next = key.wrapping_add(1);
+        takers
+            .rooms
+            .entry(room_id.clone())
+            .or_default()
+            .push(Taker {
+                key,
+                unit,
+                holds: false,
+            });
+        key
+    }
+
+    /// The taker `key` of `room_id`'s lock holds it.
+    fn holds(&self, room_id: &RoomId, key: u64) {
+        let mut takers = self.takers();
+        let taker = takers
+            .rooms
+            .get_mut(room_id)
+            .and_then(|takers| takers.iter_mut().find(|taker| taker.key == key));
+        if let Some(taker) = taker {
+            taker.holds = true;
+        }
+    }
+
+    /// The taker `key` of `room_id`'s lock is gone.
+    fn leaves(&self, room_id: &RoomId, key: u64) {
+        let mut takers = self.takers();
+        if let Some(room) = takers.rooms.get_mut(room_id) {
+            room.retain(|taker| taker.key != key);
+            if room.is_empty() {
+                takers.rooms.remove(room_id);
+            }
+        }
     }
 
     fn rooms(&self) -> MutexGuard<'_, HashMap<RoomId, Arc<AsyncMutex<()>>>> {
         self.rooms.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn takers(&self) -> MutexGuard<'_, Takers> {
+        self.takers.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -61,6 +155,7 @@ impl Drop for RoomGuard<'_> {
         // reference to it.
         drop(self.guard.take());
         drop(self.waiting.take());
+        self.mutexes.leaves(&self.room_id, self.taker);
         let mut rooms = self.mutexes.rooms();
         // A waiter cloned the mutex under this same lock before waiting, so a
         // mutex only the map still holds has neither holder nor waiter.

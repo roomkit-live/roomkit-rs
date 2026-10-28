@@ -7,12 +7,16 @@
 //! caller from a hook's body, a tool's call, a delivery or a hook a
 //! delivery fired is neither waited for nor cut. A caller that stops
 //! waiting, its future dropped, stops only its own wait. A caller from the
-//! shutdown's own work, a channel's close, returns at once.
+//! shutdown's own work, a channel's close, returns at once. The shutdown's
+//! end answers every caller, the first included: the channels whose close
+//! failed, or a shutdown cut before it ended.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
+use roomkit_core::model::ChannelId;
 use tokio::sync::watch;
 
+use crate::error::KitError;
 use crate::tasks::{Marks, Tasks, Unit};
 
 /// Where the kit's shutdown is: not started, or started in its unit, its
@@ -26,10 +30,15 @@ pub(super) struct Shutdown {
 struct Started {
     /// The unit the shutdown's own work runs in.
     unit: Unit,
-    /// `true` once the shutdown ended; closed without it for a shutdown
-    /// that never ended, its task dropped with its runtime or panicked.
-    ended: watch::Receiver<bool>,
+    /// How the shutdown ended, once it did; closed with nothing for a
+    /// shutdown that never ended, its task dropped with its runtime or
+    /// panicked.
+    ended: watch::Receiver<Option<Ended>>,
 }
+
+/// How the kit's shutdown ended: the channels whose close failed, each
+/// with what its panic said, none when every channel closed.
+pub(super) type Ended = Arc<[(ChannelId, String)]>;
 
 /// What a `close()` does once it joined the shutdown.
 #[derive(Debug)]
@@ -38,7 +47,7 @@ pub(super) enum Joined {
     /// for the shutdown would wait for itself.
     Own,
     /// It waits for the shutdown's end.
-    Waits(watch::Receiver<bool>),
+    Waits(watch::Receiver<Option<Ended>>),
 }
 
 /// What the task of the shutdown it starts is given: the marks its own
@@ -46,7 +55,7 @@ pub(super) enum Joined {
 #[derive(Debug)]
 pub(super) struct Starting {
     pub(super) marks: Marks,
-    pub(super) ended: watch::Sender<bool>,
+    pub(super) ended: watch::Sender<Option<Ended>>,
 }
 
 impl Shutdown {
@@ -65,7 +74,7 @@ impl Shutdown {
         }
         tasks.spare(&marks);
         let unit = Unit::new();
-        let (ended, told) = watch::channel(false);
+        let (ended, told) = watch::channel(None);
         *started = Some(Started {
             unit,
             ended: told.clone(),
@@ -78,15 +87,22 @@ impl Shutdown {
     }
 }
 
-/// Waits for the shutdown `ended` tells the end of. One that never ended,
-/// cut with its runtime or panicked, is logged: the channels and the
-/// store may not all be closed.
-pub(super) async fn wait_for(mut ended: watch::Receiver<bool>) {
-    if ended.wait_for(|ended| *ended).await.is_err() {
-        tracing::error!(
-            target: "roomkit::kit",
-            "the kit's shutdown was cut before it ended: its channels and its store may not all \
-             be closed"
-        );
+/// Waits for the shutdown `ended` tells the end of, and answers it.
+///
+/// # Errors
+///
+/// Returns [`KitError::ChannelsFailedToClose`] when a channel's close
+/// panicked, and [`KitError::ShutdownCancelled`] when the shutdown never
+/// ended.
+pub(super) async fn wait_for(mut ended: watch::Receiver<Option<Ended>>) -> Result<(), KitError> {
+    let failures = match ended.wait_for(Option::is_some).await {
+        Ok(ended) => ended.clone().unwrap_or_default(),
+        Err(_cut) => return Err(KitError::ShutdownCancelled),
+    };
+    if failures.is_empty() {
+        return Ok(());
     }
+    Err(KitError::ChannelsFailedToClose {
+        failures: failures.to_vec(),
+    })
 }

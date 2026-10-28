@@ -240,6 +240,6 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             && shown.contains(&noted.to_owned())
             && !heard.contains(&noted.to_owned()),
     );
-    kit.close().await;
+    kit.close().await?;
     Ok(checks.finish())
 }

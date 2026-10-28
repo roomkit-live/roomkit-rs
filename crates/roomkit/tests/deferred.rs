@@ -351,6 +351,7 @@ async fn a_deferred_delivery_the_close_cuts_reports_it() {
         .unwrap();
     tokio::time::timeout(Duration::from_secs(60), kit.close())
         .await
+        .unwrap()
         .unwrap();
     let delivery = result.delivery.unwrap();
     let waited = tokio::time::timeout(BOUND, delivery.wait()).await.unwrap();
@@ -388,7 +389,10 @@ async fn a_delivery_over_before_the_close_reports_it_after() {
     })
     .await
     .unwrap();
-    tokio::time::timeout(BOUND, kit.close()).await.unwrap();
+    tokio::time::timeout(BOUND, kit.close())
+        .await
+        .unwrap()
+        .unwrap();
     let waited = tokio::time::timeout(BOUND, delivery.wait()).await.unwrap();
     assert_eq!(
         waited.map(|result| (result.delivery_results.len(), result.cancellation_reason)),

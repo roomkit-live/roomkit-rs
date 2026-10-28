@@ -98,7 +98,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .await?;
     // The calls' observers run in the background: the kit's close lets them
     // finish.
-    kit.close().await;
+    kit.close().await?;
 
     let timeline = shared::timeline(&kit, &room).await?;
     print_rows(&timeline);

@@ -167,7 +167,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     shared::print_timeline(&timeline);
     let read_by_noah = screen.read.entries().split_off(before);
     check_noah(&mut checks, &read_by_noah, &sms, &timeline, &endpoint);
-    kit.close().await;
+    kit.close().await?;
     Ok(checks.finish())
 }
 

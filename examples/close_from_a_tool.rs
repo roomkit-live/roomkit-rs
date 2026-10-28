@@ -31,7 +31,7 @@ use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, CreateRoomOptions, KitError,
     ProcessInboundOptions, RoomKit,
 };
-use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::json;
 use tokio::time::Instant;
@@ -107,7 +107,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     };
     let result = kit.process_inbound(message, options).await?;
     let started = Instant::now();
-    kit.close().await;
+    kit.close().await?;
     let second = started.elapsed();
 
     let refused = kit
@@ -185,7 +185,9 @@ fn shut_down(kit: &RoomKit, pager: &Pager, closed: &Log<Closed>) -> Tools {
         async move {
             let started = Instant::now();
             if let Some(kit) = kit {
-                kit.close().await;
+                kit.close()
+                    .await
+                    .map_err(|error| ToolError::raised(&error))?;
             }
             closed.push((started.elapsed(), !pager.closes.entries().is_empty()));
             Ok(ToolOutput::from("closed"))

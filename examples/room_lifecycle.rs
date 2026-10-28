@@ -279,7 +279,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     // The hooks run in the background, after the calls that fired them:
     // the kit's close lets them finish.
-    desk.kit.close().await;
+    desk.kit.close().await?;
     let mut fired = transitions.entries();
     fired.sort();
     println!("Lifecycle hooks: {fired:?}");

@@ -490,7 +490,7 @@ async fn a_streaming_target_reads_the_deltas_then_each_row_the_store_holds() {
     );
     let rows = room.rows().await;
     assert_eq!(rows.last().unwrap().3.as_deref(), Some("completed"));
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// RFC §12.2 step 13s: a reader that stops mid-answer leaves the text it
@@ -527,7 +527,7 @@ async fn a_reader_that_stops_leaves_its_text_stored_cancelled_and_its_stream_clo
         (model.requests(), room.dropped.load(Ordering::SeqCst)),
         (1, 1)
     );
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// RFC §12.2 step 13s, §10.6.4: a reader that stops at a call's start
@@ -587,7 +587,7 @@ async fn a_reader_that_stops_at_a_call_s_start_runs_no_call() {
         )
     );
     assert_eq!(*updated.lock().unwrap(), ["Let me check."]);
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// RFC §12.2 step 13s: a call already running when its reader stops is let
@@ -623,7 +623,7 @@ async fn a_reader_that_stops_while_a_call_runs_lets_it_finish_and_asks_no_more()
         .unwrap();
     assert_eq!(room.ws.delivered(), [3, end_index]);
     assert_eq!(room.dropped.load(Ordering::SeqCst), 1);
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// RFC §12.2 step 13s: a response that fails mid-answer stores the text it
@@ -672,7 +672,7 @@ async fn a_response_that_fails_stores_its_text_and_hands_it_to_the_target_first(
         ),
         (vec![3], vec![(EventType::Message, 4)], 1)
     );
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// RFC §12.2 step 13s: a streaming channel that fails, not the response,
@@ -699,7 +699,7 @@ async fn a_streaming_channel_that_fails_leaves_the_text_to_every_target() {
         (room.ws.delivered(), room.web_rows()),
         (vec![3, 4], vec![(EventType::Message, 4)])
     );
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// RFC §12.2 step 13s: a streaming channel that fails while a call runs
@@ -741,7 +741,7 @@ async fn a_streaming_channel_that_fails_while_a_call_runs_lets_it_finish() {
         .map(|event| event.index)
         .unwrap();
     assert_eq!(room.ws.delivered(), [3, end_index]);
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// RFC §6.4 "The turn's record": a turn that ends on no text, an empty
@@ -786,7 +786,7 @@ async fn a_turn_ending_on_no_text_writes_its_record_on_its_last_message() {
             (EventType::ToolCallEnd, 6)
         ]
     );
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// RFC §6.4, §12.2 step 13s: the rows a round ends are stored as its reader
@@ -838,7 +838,7 @@ async fn an_event_a_tool_sends_is_stored_after_the_round_s_text_and_start() {
             "Message Done."
         ]
     );
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// The streaming path keeps milestone 5's rule (F2): a streaming channel
@@ -865,7 +865,7 @@ async fn a_streaming_target_that_takes_no_tool_row_is_handed_none() {
     );
     assert_eq!(room.ws.delivered(), [3]);
     assert_eq!(room.rows().await.len(), 4);
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// A provider whose one generation hands the events a test sends it, as it
@@ -999,7 +999,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
         )
     );
     drop(feed);
-    kit.close().await;
+    kit.close().await.unwrap();
 }
 
 /// A channel that says it streams and keeps the default `deliver_stream`
@@ -1046,7 +1046,7 @@ async fn the_default_deliver_stream_delivers_each_row_once_the_stream_is_over() 
         .map(|delivery| roomkit::text_of(&delivery.event.content))
         .collect();
     assert_eq!(delivered, ["Hi", "Hello there."]);
-    kit.close().await;
+    kit.close().await.unwrap();
 }
 
 /// A recording WebSocket that says it streams, with the default

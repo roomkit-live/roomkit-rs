@@ -100,7 +100,7 @@ async fn run() -> Result<ExitCode, Box<dyn Error>> {
             },
         )
         .await?;
-    kit.close().await;
+    kit.close().await?;
     let timeline = shared::timeline(&kit, &room).await?;
     print_ends(&timeline);
     checks.expect("the turn did not fail", result.error.is_none());

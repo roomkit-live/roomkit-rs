@@ -108,5 +108,5 @@ async fn a_streaming_target_cannot_write_a_key_only_the_framework_writes() {
         (metadata.get("crm"), forged),
         (Some(&json!("c_1")), Vec::<&String>::new())
     );
-    kit.close().await;
+    kit.close().await.unwrap();
 }

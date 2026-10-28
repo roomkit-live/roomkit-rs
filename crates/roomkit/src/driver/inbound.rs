@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
-use roomkit_core::model::{EventId, RoomId};
+use roomkit_core::model::{ErrorRecord, EventId, RoomId};
 use roomkit_core::ops::{
     Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED, Outcome,
     StoreOutcome,
@@ -82,6 +82,9 @@ impl Ran {
 pub(crate) struct Record {
     decided: Mutex<Option<InboundResult>>,
     delivering: AtomicBool,
+    /// Whether the kit's close dropped a delivery set of the run as it
+    /// would take its place: its `kit_closed`, the first reason, stands.
+    lane_closed: AtomicBool,
     /// The call's result once its own event's commit, the one that decides
     /// it, is stored, and what that write came to.
     committing: Mutex<Option<(InboundResult, Written)>>,
@@ -105,6 +108,12 @@ impl Record {
         }
     }
 
+    /// The kit's close dropped one of the run's delivery sets as it would
+    /// take its place in its room's lane.
+    fn lane_closed(&self) {
+        self.lane_closed.store(true, Ordering::Release);
+    }
+
     /// The commit that decides the call as `result` runs, its outcome told
     /// by `written`.
     fn commits(&self, result: InboundResult, written: Written) {
@@ -117,7 +126,8 @@ impl Record {
     /// What a run the kit's close aborted reports, as the Python
     /// implementation's lane reports a delivery it dropped: the call as it
     /// was decided, its delivery cancelled [`LANE_CANCELLED`] when its set
-    /// delivered, [`KIT_CLOSED`] when it still waited for its turn. A call
+    /// delivered, [`KIT_CLOSED`] when it still waited for its turn or when
+    /// the close dropped one of its sets first, the first reason. A call
     /// whose own commit still ran reads what the write came to, once it
     /// ends, as Python's caller does: its event, stored and never
     /// delivered, `kit_closed`. [`KitError::ShutDown`] for a call nothing of
@@ -131,7 +141,10 @@ impl Record {
         let Some(mut result) = decided else {
             return self.committed().await;
         };
-        let reason = if self.delivering.load(Ordering::Acquire) {
+        // A set the close dropped first gave the call its reason.
+        let cut_running =
+            self.delivering.load(Ordering::Acquire) && !self.lane_closed.load(Ordering::Acquire);
+        let reason = if cut_running {
             LANE_CANCELLED
         } else {
             KIT_CLOSED
@@ -221,6 +234,11 @@ impl Caller {
     /// The lane's turn of `event_id`'s set came.
     pub(super) fn turn_came(&self, event_id: &EventId) {
         self.record.turn_came(event_id);
+    }
+
+    /// The kit's close dropped one of the run's delivery sets.
+    pub(super) fn lane_closed(&self) {
+        self.record.lane_closed();
     }
 
     /// The commit that decides the call as `result` runs, its outcome told
@@ -391,6 +409,7 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
             Some(&mut caller),
         )
         .await;
+        let output = refused_once_sealed(output);
         caller.log_unread_end(call, &output);
         // The run's own unit: a close called from inside it spares it.
         let cut = kit.tasks.cuts(Marks::current().innermost());
@@ -433,6 +452,28 @@ fn cut_at_its_end(output: InboundOutput, cut: bool, record: &Record) -> InboundO
             result
         })
     })
+}
+
+/// `output`, a run's at its end, once the kit, sealed, refused what the
+/// run asked (RFC §12.10.4: the work a close spared stores and delivers
+/// nothing once the kit is sealed). A call whose own commit was refused
+/// fails as every call made once the kit is sealed does, nothing of it
+/// stored, as the Python implementation's sealed store refuses it; a call
+/// whose cascade was refused past its commit reads as one whose delivery
+/// the close dropped, `kit_closed`, as Python's sealed lane drops it.
+fn refused_once_sealed(output: InboundOutput) -> InboundOutput {
+    let refused = |error: &ErrorRecord| error.error_type == calls::SHUT_DOWN;
+    match output {
+        Ok(Err(InboundError::Store(error))) if refused(&error) => Err(KitError::ShutDown),
+        Ok(Ok(mut result)) if result.error.as_ref().is_some_and(refused) => {
+            result.error = None;
+            result
+                .cancellation_reason
+                .get_or_insert_with(|| KIT_CLOSED.to_owned());
+            Ok(Ok(result))
+        }
+        output => output,
+    }
 }
 
 /// `inbound`, a call into `room_id` or routed, charged to the reentry

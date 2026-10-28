@@ -3,12 +3,7 @@
 //! execution context; and the notices it performs without answering.
 
 use std::convert::Infallible;
-use std::future::poll_fn;
-use std::panic::{self, AssertUnwindSafe};
-use std::pin::pin;
 use std::sync::Arc;
-use std::task::Poll;
-use std::thread;
 
 use roomkit_core::model::{
     ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId,
@@ -33,6 +28,7 @@ use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks};
 use crate::turn::TurnKit;
 use crate::turns::Answer;
+use crate::unwind::unwinding;
 
 /// Carries out a request on the store (RFC §14).
 pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest) -> Outcome {
@@ -123,7 +119,9 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
 /// Calls a channel (RFC §6.1): a parse, a turn, a delivery or the read of
 /// a turn's stream; a parse drafts its event at `environment`'s instant,
 /// the run's. A turn that answers with a stream leaves it with its run,
-/// `shared`, by its effect, `effect`, until it is read.
+/// `shared`, by its effect, `effect`, until it is read. Work a close spared
+/// calls no channel once the kit is sealed, its channels closed (RFC
+/// §12.10.4).
 pub(super) async fn channel<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     environment: &(dyn Environment + Send + Sync),
@@ -131,6 +129,9 @@ pub(super) async fn channel<S: ConversationStore>(
     effect: EffectId,
     request: ChannelRequest,
 ) -> Outcome {
+    if inner.tasks.refuses(&Marks::current()) {
+        return Outcome::Failed(ErrorRecord::new(SHUT_DOWN, "the kit is closed"));
+    }
     match request {
         ChannelRequest::HandleInbound {
             channel_id,
@@ -193,18 +194,23 @@ pub(super) async fn channel<S: ConversationStore>(
             target,
         } => {
             let kept = shared.take_stream(turn);
-            let _working = kept
-                .as_ref()
-                .map(|kept| inner.turns.working(kept.turn.unit()));
+            let units = kept.as_ref().map(|kept| kept.turn.units());
+            let working = units.map(|units| inner.turns.working(units));
             let stops = Stops {
                 read: shared.stop_signal(effect),
                 kit: inner.turns.cutting(),
-                turn: kept.as_ref().map(|kept| kept.turn.unit()),
+                turn: units,
             };
-            Box::pin(stream::read(
+            let read = Box::pin(stream::read(
                 inner, kept, stops, responder, *answers, target,
             ))
-            .await
+            .await;
+            // The owner works on the turn until its run committed what it
+            // read: the kit's close waits for that (RFC §12.10.4).
+            if let Some(working) = working {
+                shared.keep_reading(effect, working);
+            }
+            read
         }
     }
 }
@@ -260,6 +266,10 @@ pub(super) async fn route<S: ConversationStore>(
     }
 }
 
+/// The kind of the failure of a write the kit refused, sealed: the work a
+/// close spared asked it once the close sealed the kit (RFC §12.10.4).
+pub(super) const SHUT_DOWN: &str = "ShutDown";
+
 /// What a write of the store came to, once it ended; nothing while it runs.
 pub(crate) type Written = watch::Receiver<Option<Outcome>>;
 
@@ -289,6 +299,7 @@ pub(super) fn write<S: ConversationStore>(
     let (went_on, run_going_on) = oneshot::channel();
     let writer = Arc::clone(inner);
     let writing = async move {
+        let storing = writer.tasks.storing();
         let outcome = unwinding(store(&*writer.store, request))
             .await
             .unwrap_or_else(|_panic| Outcome::Failed(panicked()));
@@ -299,33 +310,20 @@ pub(super) fn write<S: ConversationStore>(
             log_left_failed(error);
         }
         ended.send_replace(Some(outcome));
+        drop(storing);
         let Err(_went_on) = run_going_on.await;
     };
-    // A write is spawned whatever the kit's state.
+    // A write is spawned whatever the kit's state, but once sealed for
+    // work the close spared.
     let spawned = inner.tasks.spawn(Kind::Write, writing).is_some();
     let mut read = written.clone();
     let call = async move {
         if !spawned {
-            return Outcome::Failed(ErrorRecord::new("ShutDown", "the kit is closed"));
+            return Outcome::Failed(ErrorRecord::new(SHUT_DOWN, "the kit is closed"));
         }
         outcome_of(&mut read).await
     };
     (call, written, went_on)
-}
-
-/// Runs `future` to its end, `Err` for a panic in it, as a task's join
-/// reports one: a write's task answers a store that panicked as the run
-/// answers any call that did.
-async fn unwinding<F: Future>(future: F) -> thread::Result<F::Output> {
-    let mut future = pin!(future);
-    poll_fn(
-        |cx| match panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
-            Ok(Poll::Ready(output)) => Poll::Ready(Ok(output)),
-            Ok(Poll::Pending) => Poll::Pending,
-            Err(panic) => Poll::Ready(Err(panic)),
-        },
-    )
-    .await
 }
 
 /// Logs `error`, a write's that failed once its caller was gone, as
@@ -387,13 +385,14 @@ pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notic
                     in_its_work(trigger, &event.room_id, after_delivery.as_ref(), observing);
                 // The observers a delivery fires are its cascade's work,
                 // drained and cut with it, as the Python implementation's
-                // lane runs them; the others run after the fact.
+                // lane runs them; the others run after the fact. Nothing
+                // waits for either: a close one calls spares it alone.
                 let kind = if trigger == HookTrigger::AfterBroadcast {
                     Kind::Work
                 } else {
                     Kind::Observer
                 };
-                if inner.tasks.spawn(kind, observing).is_none() {
+                if inner.tasks.spawn_alone(kind, observing).is_none() {
                     tracing::debug!(
                         target: "roomkit::hooks",
                         ?trigger,

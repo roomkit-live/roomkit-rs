@@ -1,0 +1,343 @@
+//! RFC §12.10.4: a close from the kit's own work neither waits for that
+//! work nor cuts it, and the work stores and delivers nothing once the kit
+//! is sealed, as Python's `test_kit_close_doors.py`.
+
+use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use pretty_assertions::assert_eq;
+use roomkit::model::{ChannelBinding, ChannelOutput, HookResult, RoomContext, RoomEvent, RoomId};
+use roomkit::{
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
+    HookExecution, HookSpec, HookTrigger, RoomKit,
+};
+use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
+use serde_json::json;
+use tokio::sync::Barrier;
+use tokio::time::Instant;
+
+use crate::support::{
+    AT_ONCE, BOUND, Closer, DOORS, Door, Witness, attach_agent, channel, ended, kit_with, open,
+    room_id, sealed, spawn_message, stored, transport,
+};
+
+/// RFC §12.10.4: the kit's own work closes the kit: its close neither
+/// waits for nor cuts the work it runs within, and returns once every
+/// channel is closed; the kit is sealed, the work's call ends as Python's
+/// does (`Door::call_ends`), and nothing more is stored or delivered.
+#[tokio::test(start_paused = true)]
+async fn a_close_from_the_kit_s_own_work_returns_and_closes_the_kit() {
+    let mut doors = Vec::new();
+    for door in DOORS {
+        let witness = Witness::new();
+        let started = Instant::now();
+        let (kit, closer, call) = open(door, &witness, false).await;
+        let returned = closer.returned_once_closed().await;
+        let at_once = started.elapsed() < AT_ONCE;
+        let call = ended(call).await;
+        roomkit::testing::idle(&kit).await;
+        doors.push((
+            door,
+            (returned, at_once, sealed(&kit).await),
+            call,
+            stored(&kit).await,
+            witness.delivered_before_its_close("Bye."),
+        ));
+    }
+    let expected = DOORS.map(|door| {
+        (
+            door,
+            (Some(true), true, true),
+            Some(door.call_ends()),
+            door.stores(),
+            (door != Door::SyncHook, true),
+        )
+    });
+    assert_eq!(doors, expected);
+}
+
+/// RFC §12.10.4: another close runs, and waits for the work (the drain),
+/// when that work closes the kit too: from then on it is spared, and both
+/// closes return once the kit is closed. The tool's door is RMK-1019's:
+/// the close that joins spares its own caller's work, not only the first
+/// caller's.
+#[tokio::test(start_paused = true)]
+async fn a_close_from_the_kit_s_own_work_joining_another_spares_that_work() {
+    let mut doors = Vec::new();
+    for door in DOORS {
+        let witness = Witness::new();
+        let (kit, closer, call) = open(door, &witness, true).await;
+        tokio::time::timeout(BOUND, closer.entered.notified())
+            .await
+            .unwrap();
+        let started = Instant::now();
+        let first = tokio::spawn({
+            let kit = kit.clone();
+            async move { kit.close().await }
+        });
+        // The first close's drain reaches the work, and waits for it.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        closer.go.notify_one();
+        let returned = closer.returned_once_closed().await;
+        let first = tokio::time::timeout(BOUND, first).await.unwrap().unwrap();
+        let at_once = started.elapsed() < AT_ONCE;
+        let call = ended(call).await;
+        roomkit::testing::idle(&kit).await;
+        doors.push((door, (returned, first, at_once), call, stored(&kit).await));
+    }
+    let expected = DOORS.map(|door| {
+        (
+            door,
+            (Some(true), Ok(()), true),
+            Some(door.call_ends()),
+            door.stores(),
+        )
+    });
+    assert_eq!(doors, expected);
+}
+
+/// A transport whose deliveries each close the kit, once both are in
+/// their delivery.
+#[derive(Clone)]
+struct ClosingTransport {
+    kit: Arc<Mutex<Option<RoomKit>>>,
+    together: Arc<Barrier>,
+    returned: Arc<AtomicUsize>,
+}
+
+impl Channel for ClosingTransport {
+    fn declaration(&self) -> ChannelDeclaration {
+        transport("closing")
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let this = self.clone();
+        async move {
+            this.together.wait().await;
+            let kit = this.kit.lock().unwrap().clone();
+            if let Some(kit) = kit
+                && kit.close().await.is_ok()
+            {
+                this.returned.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(ChannelOutput::default())
+        }
+    }
+}
+
+/// RFC §12.10.4: two deliveries, in two rooms, each close the kit at once:
+/// the second close joins the shutdown the first started, which spares
+/// both, and both return once the kit is closed (Python's
+/// `test_two_sessions_ending_at_once_each_close_the_kit`).
+#[tokio::test(start_paused = true)]
+async fn two_deliveries_closing_the_kit_at_once_each_close_it() {
+    let witness = Witness::new();
+    let kit = kit_with(&witness).await;
+    let closing = ClosingTransport {
+        kit: Arc::new(Mutex::new(Some(kit.clone()))),
+        together: Arc::new(Barrier::new(2)),
+        returned: Arc::default(),
+    };
+    kit.register_channel(closing.clone()).unwrap();
+    let rooms = [room_id(), RoomId::new("room_2").unwrap()];
+    for room in &rooms {
+        if room != &room_id() {
+            kit.create_room(CreateRoomOptions {
+                room_id: Some(room.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        }
+        kit.attach_channel(room, &channel("closing"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let started = Instant::now();
+    let calls = rooms.map(|room| spawn_message(&kit, "Bye.", room));
+    let mut ended_calls = 0;
+    for call in calls {
+        ended_calls += usize::from(ended(call).await.is_some());
+    }
+    assert_eq!(
+        (
+            ended_calls,
+            closing.returned.load(Ordering::SeqCst),
+            started.elapsed() < AT_ONCE,
+            witness.closed.load(Ordering::SeqCst)
+        ),
+        (2, 2, true, true)
+    );
+}
+
+/// A transport whose delivery runs `closer` in a task it spawns with
+/// `keep_context`, and waits for that task.
+#[derive(Clone)]
+struct KeepingContext {
+    closer: Arc<Mutex<Option<Closer>>>,
+}
+
+impl Channel for KeepingContext {
+    fn declaration(&self) -> ChannelDeclaration {
+        transport("keeping")
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let closer = self.closer.lock().unwrap().take();
+        async move {
+            if let Some(closer) = closer {
+                let task = tokio::spawn(roomkit::keep_context(async move { closer.close().await }));
+                task.await.unwrap();
+            }
+            Ok(ChannelOutput::default())
+        }
+    }
+}
+
+/// RFC §12.10.4: a task the kit's work spawns with `keep_context` is that
+/// work: a close it calls neither waits for the delivery awaiting the task
+/// nor cuts it, as `keep_context` promises, the Rust form of Python's
+/// `test_a_close_from_a_held_run_does_not_wait_for_it`.
+#[tokio::test(start_paused = true)]
+async fn a_close_from_a_task_kept_in_its_context_does_not_wait_for_its_work() {
+    let witness = Witness::new();
+    let kit = kit_with(&witness).await;
+    let closer = Closer::new(&kit, &witness, false);
+    let keeping = KeepingContext {
+        closer: Arc::new(Mutex::new(Some(closer.clone()))),
+    };
+    kit.register_channel(keeping).unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("keeping"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    let started = Instant::now();
+    let call = spawn_message(&kit, "Bye.", room_id());
+    let returned = closer.returned_once_closed().await;
+    let at_once = started.elapsed() < AT_ONCE;
+    assert_eq!(
+        (returned, at_once, ended(call).await, sealed(&kit).await),
+        (Some(true), true, Some(Ok(None)), true)
+    );
+}
+
+/// RFC §12.10.4: an observer the kit fires and forgets is no work its run
+/// waits for: a close it calls spares the observer alone, and the close
+/// waits for the run that fired it as a close from outside the kit's work
+/// does. An ASYNC `BEFORE_BROADCAST` observer closes while its run delivers
+/// for 2 s: the close returns once the delivery ended, the witness reading
+/// its text before its close, as Python's (`py_review_probe.out`, leak
+/// observer); on 1d8796c the close returned at once and the delivery came
+/// to a closed channel.
+#[tokio::test(start_paused = true)]
+async fn a_close_from_an_observer_waits_for_the_run_that_fired_it() {
+    let witness = Witness::slow("Bye.", Duration::from_secs(2));
+    let kit = kit_with(&witness).await;
+    let closer = Closer::new(&kit, &witness, false);
+    let work = closer.clone();
+    let spec = HookSpec::new("quit", HookTrigger::BeforeBroadcast, HookExecution::Async);
+    kit.hook(spec, move |_event, _context| {
+        let work = work.clone();
+        async move {
+            work.close().await;
+            Ok(HookResult::allow())
+        }
+    })
+    .unwrap();
+    let started = Instant::now();
+    let call = spawn_message(&kit, "Bye.", room_id());
+    let returned = closer.returned_once_closed().await;
+    let took = started.elapsed();
+    assert_eq!(
+        (
+            returned,
+            took >= Duration::from_secs(2) && took < Duration::from_secs(3),
+            ended(call).await,
+            witness.delivered()
+        ),
+        (Some(true), true, Some(Ok(None)), vec!["Bye.".to_owned()])
+    );
+}
+
+/// RFC §12.10.4: a tool call's observer closes while the turn goes on to a
+/// tool of 8 s: the close spares the observer alone, so it cuts the turn
+/// as a close from outside does, at the drain's grace, the slow tool never
+/// ending and no answer stored; on 1d8796c the observer's close spared the
+/// turn, whose slow tool ran to its end and whose answer was committed
+/// after the seal (`review_probe_1d8796c.out`, leak tool observer).
+#[tokio::test(start_paused = true)]
+async fn a_close_from_a_tool_s_observer_cuts_its_turn() {
+    let witness = Witness::new();
+    let kit = kit_with(&witness).await;
+    let closer = Closer::new(&kit, &witness, false);
+    let slow_ended = Arc::new(AtomicUsize::new(0));
+    let ended_slow = Arc::clone(&slow_ended);
+    let tools = Tools::new()
+        .tool(
+            ToolDefinition::new("quick", "Quick.", json!({ "type": "object" })),
+            |_call, _context| async { Ok(ToolOutput::Text("quick".to_owned())) },
+        )
+        .tool(
+            ToolDefinition::new("slow", "Slow.", json!({ "type": "object" })),
+            move |_call, _context| {
+                let ended_slow = Arc::clone(&ended_slow);
+                async move {
+                    tokio::time::sleep(Duration::from_secs(8)).await;
+                    ended_slow.fetch_add(1, Ordering::SeqCst);
+                    Ok(ToolOutput::Text("slow".to_owned()))
+                }
+            },
+        );
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "quick", "{}")]),
+        ScriptedRound::calling("", [("c2", "slow", "{}")]),
+        ScriptedRound::answering("Done."),
+    ]);
+    attach_agent(&kit, model, tools).await;
+    let work = closer.clone();
+    kit.observe_tool_calls("quit", move |event, _context| {
+        let work = work.clone();
+        let quick_ended = event.call.name == "quick" && event.outcome.is_some();
+        async move {
+            if quick_ended {
+                work.close().await;
+            }
+        }
+    })
+    .unwrap();
+    let call = spawn_message(&kit, "Go.", room_id());
+    let returned = closer.returned_once_closed().await;
+    let call = ended(call).await;
+    roomkit::testing::idle(&kit).await;
+    let stored = stored(&kit).await;
+    assert_eq!(
+        (
+            returned,
+            call,
+            slow_ended.load(Ordering::SeqCst),
+            stored.iter().any(|text| text == "Done.")
+        ),
+        (
+            Some(true),
+            Some(Ok(Some("kit_closed".to_owned()))),
+            0,
+            false
+        )
+    );
+}

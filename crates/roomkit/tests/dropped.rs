@@ -471,6 +471,7 @@ async fn closing(kit: &RoomKit<GatedStore>) -> Duration {
     let started = tokio::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(60), kit.close())
         .await
+        .unwrap()
         .unwrap();
     started.elapsed()
 }

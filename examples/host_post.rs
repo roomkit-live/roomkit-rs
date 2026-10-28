@@ -152,7 +152,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .await;
     // What the posts started runs in the background: the kit's close lets
     // it finish.
-    kit.close().await;
+    kit.close().await?;
 
     let texted = sms.sent_to(CUSTOMER);
     print_timeline(&timeline(&kit, &room).await?);

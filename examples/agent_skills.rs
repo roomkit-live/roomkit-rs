@@ -96,11 +96,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     shop.alice_says("Can I return order 42? It came 20 days ago.")
         .await?;
     shop.alice_says("Do I pay for shipping it back?").await?;
-    let mut answers = shop.close().await;
+    let mut answers = shop.close().await?;
     println!("The shop restarts on the same file.");
     let shop = Shop::open(database.path(), &endpoint, &mut checks).await?;
     shop.alice_says("When will I see the refund?").await?;
-    answers.extend(shop.close().await);
+    answers.extend(shop.close().await?);
 
     let requests = endpoint
         .fake()
@@ -212,9 +212,9 @@ impl Shop {
     }
 
     /// Closes the shop; returns the answers Alice received.
-    async fn close(self) -> Vec<String> {
-        self.kit.close().await;
-        self.sms.texts()
+    async fn close(self) -> Result<Vec<String>, Box<dyn Error>> {
+        self.kit.close().await?;
+        Ok(self.sms.texts())
     }
 }
 

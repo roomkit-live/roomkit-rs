@@ -174,11 +174,11 @@ impl Conversation {
 
     /// The mute and unmute hooks that fired. They run as observers, in the
     /// background: the kit is closed first, which lets them finish.
-    async fn mute_hooks_fired(&self) -> Vec<String> {
-        self.kit.close().await;
+    async fn mute_hooks_fired(&self) -> Result<Vec<String>, Box<dyn Error>> {
+        self.kit.close().await?;
         let mut fired = self.mute_hooks.entries();
         fired.sort();
-        fired
+        Ok(fired)
     }
 
     /// The advisor's `room_channel_attached` event, if it was emitted.
@@ -229,7 +229,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     println!("Delivered on SMS: {customer:?}");
     println!("Delivered to the advisor: {advisor:?}");
     let attached = conversation.advisor_attached();
-    let hooks = conversation.mute_hooks_fired().await;
+    let hooks = conversation.mute_hooks_fired().await?;
     let whisper = timeline
         .iter()
         .find(|event| has_suggestion(&[text_of(&event.content)]));

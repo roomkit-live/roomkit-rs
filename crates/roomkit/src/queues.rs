@@ -183,6 +183,12 @@ impl RoomTickets {
         self.queues.turn(ticket).await;
     }
 
+    /// The units of the work whose tickets wait behind a ticket of a unit
+    /// in `spared` (`RoomQueues::queued_behind`).
+    pub(crate) fn queued_behind(&self, spared: &HashSet<Unit>) -> HashSet<Unit> {
+        self.queues.queued_behind(spared)
+    }
+
     /// How many tickets the room holds, for tests.
     #[cfg(test)]
     pub(crate) fn held(&self, room_id: &RoomId) -> usize {

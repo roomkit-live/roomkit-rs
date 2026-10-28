@@ -159,8 +159,8 @@ async fn the_kit_s_close_closes_the_agent_s_toolsets_once() {
     let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
     let toolset = closing.clone();
     let room = Room::equipped(model, served(), |agent| agent.with_tools(toolset).unwrap()).await;
-    room.kit.close().await;
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
+    room.kit.close().await.unwrap();
     assert_eq!(closing.closes.load(Ordering::SeqCst), 1);
 }
 
@@ -179,7 +179,7 @@ async fn an_unregistered_agent_is_closed_by_its_caller() {
         closing.closes.load(Ordering::SeqCst),
     );
     agent.close().await;
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
     assert_eq!(
         (handed_back, closing.closes.load(Ordering::SeqCst)),
         (("assistant".to_owned(), 0), 1)

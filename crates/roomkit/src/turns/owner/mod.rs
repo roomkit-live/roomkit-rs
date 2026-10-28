@@ -35,8 +35,8 @@ use super::wire::{Control, Frame, Item, WireError, WireOutput};
 use super::{MemoryTurn, Turns};
 use crate::channel::BoxFuture;
 use crate::context::ExecutionContext;
-use crate::tasks::Unit;
 use crate::turn::TurnKit;
+use crate::turns::TurnUnits;
 
 /// What the owner knows of a turn it submitted, which its verbs read.
 #[derive(Clone, Debug)]
@@ -123,7 +123,7 @@ pub(crate) fn open(
     facts: Facts,
     kit: Arc<dyn TurnKit>,
     turns: Arc<Turns>,
-    unit: Unit,
+    units: TurnUnits,
 ) -> (OwnerTurn, BoxFuture<'static, ()>) {
     let state = Arc::new(OwnerState {
         turn,
@@ -136,7 +136,7 @@ pub(crate) fn open(
     });
     let (main, received) = mpsc::unbounded_channel();
     let pump = Pump::new(Arc::clone(&state), frames, main, kit, turns);
-    (OwnerTurn::new(state, received, unit), Box::pin(pump.run()))
+    (OwnerTurn::new(state, received, units), Box::pin(pump.run()))
 }
 
 /// Sends `cancel` once, the pump then waiting for the end within the

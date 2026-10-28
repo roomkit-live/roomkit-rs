@@ -232,8 +232,16 @@ async fn close_drains_a_delivery_in_progress() {
         "a close returned at once: it did not wait for the delivery in progress"
     );
     slow.gate.open.notify_one();
-    tokio::time::timeout(BOUND, first).await.unwrap().unwrap();
-    tokio::time::timeout(BOUND, second).await.unwrap().unwrap();
+    tokio::time::timeout(BOUND, first)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(BOUND, second)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
     assert_eq!(
         (
@@ -259,6 +267,7 @@ async fn close_aborts_what_outlives_the_lane_grace() {
     let started = tokio::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(60), kit.close())
         .await
+        .unwrap()
         .unwrap();
     let took = started.elapsed();
     let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
@@ -292,6 +301,7 @@ async fn close_ends_a_call_stuck_before_its_commit() {
     tokio::time::sleep(BRIEF).await;
     tokio::time::timeout(Duration::from_secs(60), kit.close())
         .await
+        .unwrap()
         .unwrap();
     let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
     let stored = kit
@@ -334,7 +344,11 @@ async fn a_call_while_the_close_drains_is_taken_its_delivery_dropped() {
         .map(|result| (result.event.is_some(), result.cancellation_reason));
     let created = kit.create_room(CreateRoomOptions::default()).await.is_ok();
     slow.gate.open.notify_one();
-    tokio::time::timeout(BOUND, closing).await.unwrap().unwrap();
+    tokio::time::timeout(BOUND, closing)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     tokio::time::timeout(BOUND, call)
         .await
         .unwrap()
@@ -446,7 +460,11 @@ async fn a_draining_delivery_s_calls_into_its_room_are_taken() {
         "the close returned at once: it did not wait for the delivery in progress"
     );
     calling.gate.open.notify_one();
-    tokio::time::timeout(BOUND, closing).await.unwrap().unwrap();
+    tokio::time::timeout(BOUND, closing)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     tokio::time::timeout(BOUND, call)
         .await
         .unwrap()
@@ -493,6 +511,7 @@ async fn close_cuts_an_after_broadcast_observer_at_the_grace() {
     let started = tokio::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(60), kit.close())
         .await
+        .unwrap()
         .unwrap();
     let took = started.elapsed();
     assert_eq!(
@@ -530,6 +549,7 @@ async fn close_lets_an_observer_finish_within_its_hook_s_timeout() {
     let started = tokio::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(60), kit.close())
         .await
+        .unwrap()
         .unwrap();
     let took = started.elapsed();
     assert_eq!(
@@ -624,6 +644,7 @@ async fn close_ends_the_queued_deliveries_at_the_grace() {
     let started = tokio::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(60), kit.close())
         .await
+        .unwrap()
         .unwrap();
     let took = started.elapsed();
     let mut reasons = Vec::new();
@@ -701,7 +722,7 @@ fn spawn_bonjour(kit: &RoomKit) -> JoinHandle<Result<roomkit::InboundResult, Kit
 #[tokio::test]
 async fn a_call_made_after_the_close_is_refused() {
     let kit = room().await;
-    kit.close().await;
+    kit.close().await.unwrap();
     let room = room_id();
     let refused = (
         kit.process_inbound(
@@ -792,8 +813,8 @@ async fn close_closes_each_channel_once_in_the_order_of_their_ids() {
         kit.register_channel(Closing::new(id, &closed)).unwrap();
     }
     let (first, second) = tokio::join!(kit.close(), kit.close());
-    let ((), ()) = (first, second);
-    kit.close().await;
+    assert_eq!((first, second), (Ok(()), Ok(())));
+    kit.close().await.unwrap();
     assert_eq!(*closed.lock().unwrap(), ["ws_a", "ws_b"]);
 }
 
@@ -824,7 +845,7 @@ async fn a_call_whose_delivery_ends_during_the_drain_reports_its_result() {
             let kit = kit.clone();
             async move {
                 tokio::time::sleep(Duration::from_millis(1)).await;
-                kit.close().await;
+                kit.close().await.unwrap();
             }
         });
         let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
@@ -873,6 +894,7 @@ async fn the_queued_work_is_aborted_before_the_observers_drain() {
     let started = tokio::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(120), kit.close())
         .await
+        .unwrap()
         .unwrap();
     let took = started.elapsed();
     let delivered = slow.delivered.lock().unwrap().len();

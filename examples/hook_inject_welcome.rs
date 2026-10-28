@@ -144,7 +144,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     says(&bob, "Hi Alice!").await?;
     says(&alice, "How are you, Bob?").await?;
 
-    kit.close().await;
+    kit.close().await?;
     let timeline = shared::timeline(&kit, &room).await?;
     shared::print_timeline(&timeline);
     println!("Alice received: {:?}", alice.texts());

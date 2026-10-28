@@ -54,7 +54,7 @@ pub(crate) async fn run(scenario: &Value) -> Vec<String> {
     }
     run.idle().await;
     let observed = observe(&run, step_outcomes).await;
-    run.kit().close().await;
+    run.kit().close().await.unwrap();
     let mut found = lock(&run.problems).clone();
     found.extend(compare(&run, scenario, &observed));
     found

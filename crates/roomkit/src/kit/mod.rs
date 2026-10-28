@@ -71,6 +71,7 @@ use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Tasks;
 use crate::tools::ToolHandler;
 use crate::turns::Turns;
+use crate::unwind;
 
 /// How many framework events a slow subscriber may fall behind before it
 /// misses some.
@@ -140,9 +141,9 @@ pub(crate) struct Inner<S> {
     events: broadcast::Sender<FrameworkEvent>,
     /// The turn backend every intelligence turn runs through (RFC §10.6).
     pub(crate) turns: Arc<Turns>,
-    /// Set once the channels were closed at the kit's close: they are
-    /// closed once.
-    channels_closed: tokio::sync::OnceCell<()>,
+    /// Set once the channels were closed at the kit's close, with those
+    /// whose close failed: they are closed once.
+    channels_closed: tokio::sync::OnceCell<shutdown::Ended>,
     /// The kit's one shutdown, which every close joins (RFC §12.10.4).
     shutdown: shutdown::Shutdown,
 }
@@ -391,20 +392,32 @@ impl<S> Inner<S> {
 
     /// Closes each channel registered now, in the order of their ids, one
     /// after the other (RFC §6.1 `close`), once: a second call waits for the
-    /// first one's end.
-    pub(crate) async fn close_channels(&self) {
-        self.channels_closed
-            .get_or_init(|| async {
-                let mut channels: Vec<(ChannelId, Arc<dyn DynChannel>)> = read(&self.channels)
-                    .iter()
-                    .map(|(id, channel)| (id.clone(), Arc::clone(channel)))
-                    .collect();
-                channels.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
-                for (_, channel) in channels {
-                    channel.close().await;
+    /// first one's end. A channel whose close panics is logged and noted,
+    /// and the channels after it close all the same (RFC §12.10.4); the
+    /// channels whose close failed, each with what its panic said.
+    pub(crate) async fn close_channels(&self) -> shutdown::Ended {
+        let closed = self.channels_closed.get_or_init(|| async {
+            let mut channels: Vec<(ChannelId, Arc<dyn DynChannel>)> = read(&self.channels)
+                .iter()
+                .map(|(id, channel)| (id.clone(), Arc::clone(channel)))
+                .collect();
+            channels.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+            let mut failures = Vec::new();
+            for (channel_id, channel) in channels {
+                if let Err(panic) = unwind::unwinding(channel.close()).await {
+                    let message = unwind::message(&*panic);
+                    tracing::error!(
+                        target: "roomkit::kit",
+                        channel_id = %channel_id,
+                        %message,
+                        "a channel failed to close; the remaining channels still close"
+                    );
+                    failures.push((channel_id, message));
                 }
-            })
-            .await;
+            }
+            failures.into()
+        });
+        Arc::clone(closed.await)
     }
 
     /// The kit's router.

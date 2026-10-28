@@ -58,7 +58,7 @@ use crate::error::KitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::tasks::Marks;
-use crate::turns::Canceller;
+use crate::turns::{Canceller, Working};
 
 /// The kit's clock and the runtime's, read together at a run's start: a
 /// deadline the core set on the kit's clock is waited for on the runtime's,
@@ -160,6 +160,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         cut: Vec::new(),
         writing: HashMap::new(),
         written: Vec::new(),
+        read: Vec::new(),
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -219,6 +220,10 @@ struct Driver<'kit, S> {
     /// The holds on the writes whose outcome the operation took, until what
     /// that outcome led to is started.
     written: Vec<WentOn>,
+    /// The owner's work on the turns whose streams the operation read, until
+    /// what the read led to is started, the commit of what it read: the
+    /// kit's close waits for it (RFC §12.10.4).
+    read: Vec<Working>,
 }
 
 impl<S> Drop for Driver<'_, S> {
@@ -291,6 +296,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
         }
         self.written.clear();
+        self.read.clear();
         Ok(answered)
     }
 
@@ -464,6 +470,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             // The kit's close drops a delivery set that would take its place
             // now, as the Python implementation's sealed lanes drop it: its
             // index has no place, its turn over at the lock's release.
+            if let Some(caller) = self.caller.as_deref() {
+                caller.lane_closed();
+            }
             return Some((id, HoldOutcome::LaneClosed.into()));
         }
         let over = self.turns_over(&request);
@@ -619,6 +628,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let effect = self.effect_of_task.remove(&task)?;
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));
+        self.read.extend(self.shared.take_reading(effect));
         self.shared.answered(effect);
         self.indexes.answered(effect, &outcome);
         Some((effect, outcome))

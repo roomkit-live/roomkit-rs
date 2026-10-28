@@ -239,7 +239,7 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
     .await
     .unwrap();
     roomkit::testing::idle(&kit).await;
-    kit.close().await;
+    kit.close().await.unwrap();
     let mut depths = posted.lock().unwrap().clone();
     depths.sort_unstable();
     depths.into_iter().map(|(_, depth)| depth).collect()
@@ -336,7 +336,7 @@ pub(crate) async fn two_agents(rounds: usize) -> usize {
     .await
     .unwrap();
     roomkit::testing::idle(&kit).await;
-    kit.close().await;
+    kit.close().await.unwrap();
     alpha.turns.load(Ordering::SeqCst) + beta.turns.load(Ordering::SeqCst)
 }
 
@@ -450,7 +450,7 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
         .iter()
         .filter(|event| event.blocked_by.as_deref() == Some("reentry_loop_cap"))
         .count();
-    kit.close().await;
+    kit.close().await.unwrap();
     (model.turns.load(Ordering::SeqCst), capped)
 }
 

@@ -262,7 +262,7 @@ impl AgentServer {
             served
         };
         let ended = tokio::time::timeout(patience.grace, ended).await;
-        kit.close().await;
+        kit.close().await?;
         let Ok(served) = ended else {
             serving.abort();
             return Err("the server's work outlived its grace".into());

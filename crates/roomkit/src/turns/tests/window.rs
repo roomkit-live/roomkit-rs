@@ -26,7 +26,7 @@ async fn a_reader_that_stops_pulling_holds_the_executor_at_its_window() {
     let produced = agent.produced.load(Ordering::SeqCst);
     let items = timed.count(Carried::Frame, "item");
     let pulls = timed.count(Carried::Control, "pull");
-    kit.close().await;
+    kit.close().await.unwrap();
     assert_eq!(
         (still_reading, produced, items, pulls),
         (true, window(), window(), 1)

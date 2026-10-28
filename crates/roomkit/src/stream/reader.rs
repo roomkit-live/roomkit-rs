@@ -44,8 +44,7 @@ use crate::channel::ChannelError;
 use crate::context::{self, Adopting};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::tasks::Unit;
-use crate::turns::{Cut, OwnerTurn, RemoteItem, record_of};
+use crate::turns::{Cut, OwnerTurn, RemoteItem, TurnUnits, record_of};
 
 /// The error of a call a stream's reader stopped before it ended.
 const CANCELLED: &str = "cancelled";
@@ -176,8 +175,9 @@ pub(crate) struct Stops {
     pub(crate) read: watch::Receiver<bool>,
     /// The kit's cut of its turns, once it shuts down.
     pub(crate) kit: watch::Receiver<Cut>,
-    /// The unit of the turn read, which the cut may spare (RFC §12.10.4).
-    pub(crate) turn: Option<Unit>,
+    /// The units of the turn read, which the cut may spare (RFC
+    /// §12.10.4).
+    pub(crate) turn: Option<TurnUnits>,
 }
 
 impl Stops {

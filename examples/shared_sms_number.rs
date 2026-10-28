@@ -154,6 +154,6 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "a group binding takes everyone's text into its one room",
         landed.iter().all(|room| *room == team_room) && senders == [ALICE, BOB, CAROL],
     );
-    kit.close().await;
+    kit.close().await?;
     Ok(checks.finish())
 }

@@ -529,7 +529,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
             .find(|event| roomkit::text_of(&event.content) == "Welcome.")
             .unwrap();
         assert_eq!(greeting.chain_depth, 1, "{tool}");
-        kit.close().await;
+        kit.close().await.unwrap();
     }
 }
 

@@ -123,9 +123,9 @@ impl Conversation {
 
     /// The mutation triggers that fired, once the kit is closed, which lets
     /// the observers still running finish.
-    async fn every_change(&self) -> Vec<Change> {
-        self.kit.close().await;
-        self.changed.entries()
+    async fn every_change(&self) -> Result<Vec<Change>, Box<dyn Error>> {
+        self.kit.close().await?;
+        Ok(self.changed.entries())
     }
 
     async fn send(
@@ -322,7 +322,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let blocked = conversation.edit(4, "To card 4242 4242 4242 4242")?;
     let refused = conversation.send(blocked).await?;
     let target = conversation.stored(4).await?;
-    let fired = conversation.every_change().await;
+    let fired = conversation.every_change().await?;
     checks.expect(
         "the edit is blocked by the scanner, and its target still reads \"To my savings account\"",
         refused.blocked
