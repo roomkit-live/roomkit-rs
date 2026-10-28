@@ -213,6 +213,19 @@ kit, its construction and its calls).
   read each round's text alone, so a follow-up about a result the answer
   left out found nothing. `transcript::conversation` takes the predicate
   saying which tools' calls are replayed (`replayed`).
+- An intelligence channel's turn reads its history from the store as it
+  starts: the room's latest 50 messages up to its event and the channel's
+  latest 60 tool-call rows, as Python's AI channel reads them (RMK-1023).
+  It read the pipeline's context, the latest 50 events of every kind, so
+  that after a turn of 30 calls the next one lost its question and every
+  round. Hooks and transports keep that context. The edit and delete
+  records are no longer in a turn's history; a deleted message still is,
+  its content withheld.
+- Every row of a streamed response carries the turn's own
+  `correlation_id`, a fresh one per response whatever the trigger
+  carries, as Python stamps it, and the replay pairs a call's start and
+  end by it: two overlapping turns reusing an id paired one call with the
+  other's result.
 
 ## [0.1.0] — 2026-10-27
 
