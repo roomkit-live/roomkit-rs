@@ -247,11 +247,12 @@ impl AgentServer {
 
     /// Stops the server: it accepts no more connections and closes the
     /// ones open, which get the grace of its patience to end. The kit is
-    /// then closed (`RoomKit::close`): a turn whose model or tools still
-    /// run is cut at once, what else still runs drains for up to 5
-    /// seconds, then is cut, and the connections still open get the grace
-    /// once more, to tell their clients whose answer the close cut and
-    /// close; the file is closed once the last connection let go of it.
+    /// then closed (`RoomKit::close`): a turn whose stream is read is cut
+    /// at once, what else still runs drains for up to 5 seconds, a turn
+    /// asked meanwhile cut once nothing is left to deliver, then the rest
+    /// is cut, and the connections still open get the grace once more, to
+    /// tell their clients whose answer the close cut and close; the file
+    /// is closed once the last connection let go of it.
     ///
     /// # Errors
     ///
