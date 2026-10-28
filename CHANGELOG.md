@@ -218,14 +218,17 @@ kit, its construction and its calls).
   latest 60 tool-call rows, as Python's AI channel reads them (RMK-1023).
   It read the pipeline's context, the latest 50 events of every kind, so
   that after a turn of 30 calls the next one lost its question and every
-  round. Hooks and transports keep that context. The edit and delete
-  records are no longer in a turn's history; a deleted message still is,
-  its content withheld.
+  round. Hooks and transports keep that context. The earlier edit and
+  delete records are no longer in a turn's history; a deleted message
+  still is, its content withheld, and a turn on an edit or a delete reads
+  that event as its history's newest, as Python's does.
 - Every row of a streamed response carries the turn's own
   `correlation_id`, a fresh one per response whatever the trigger
   carries, as Python stamps it, and the replay pairs a call's start and
-  end by it: two overlapping turns reusing an id paired one call with the
-  other's result.
+  end by it. Two overlapping turns answering the same trigger and reusing
+  an id were paired by that trigger, one call with the other's result.
+  A deleted start row ends its round in a turn run through the kit too,
+  whose history hands it with its content withheld.
 
 ## [0.1.0] — 2026-10-27
 
