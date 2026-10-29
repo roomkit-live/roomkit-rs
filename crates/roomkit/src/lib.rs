@@ -93,9 +93,7 @@ pub mod model {
     /// What a hook returns: [`HookResult`]'s constructors and their options,
     /// Python's keywords of `HookResult.allow`, `block` and `modify`.
     pub mod hook {
-        pub use roomkit_core::model::hook::{
-            AllowOptions, BlockOptions, HookAction, HookResult, InjectedEvent, ModifyOptions,
-        };
+        pub use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
     }
     // Outside the public API: the Python implementation keeps them private,
     // and the workspace's crates read them across crates. `ToolCall` leaves

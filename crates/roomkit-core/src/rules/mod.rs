@@ -33,7 +33,7 @@
 //!
 //! Visibility itself (§7.3) is a model type: see
 //! [`Visibility::admits`](crate::model::Visibility::admits) and
-//! [`Visibility::intersect`](crate::model::Visibility::intersect). So is
+//! `Visibility::intersect`. So is
 //! rule 6 of §7.5, which every write to an existing binding goes through:
 //! [`BindingUpdate::apply`](crate::model::BindingUpdate::apply).
 

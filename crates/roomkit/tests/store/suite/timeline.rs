@@ -5,7 +5,7 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelType, EventStatus, EventType, RoomEvent, RoomId, Timestamp, Visibility,
+    ChannelSet, ChannelType, EventStatus, EventType, RoomEvent, RoomId, Timestamp, Visibility,
 };
 use roomkit::{ConversationStore, EventFilter, EventQuery, StoreError};
 
@@ -356,7 +356,11 @@ async fn a_visibility_filter_is_an_exact_value_the_filter_s_own_overrides() {
         ..transport.clone()
     };
     let listed = EventQuery {
-        visibility_filter: Some(Visibility::channels([channel("sms")]).unwrap()),
+        visibility_filter: Some(
+            ChannelSet::new([channel("sms")])
+                .map(Visibility::Channels)
+                .unwrap(),
+        ),
         ..EventQuery::default()
     };
     assert_eq!(

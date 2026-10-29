@@ -43,17 +43,22 @@ pub enum Visibility {
 }
 
 impl Visibility {
-    /// The list form: only the given channels.
+    /// The list form: only the given channels. Hidden: a caller writes
+    /// `ChannelSet::new(ids).map(Visibility::Channels)`, the variant Python's
+    /// list of channels stands for.
     ///
     /// # Errors
     ///
     /// Returns [`ModelError::InvalidVisibility`] when `ids` is empty.
+    #[doc(hidden)]
     pub fn channels(ids: impl IntoIterator<Item = ChannelId>) -> Result<Self, ModelError> {
         ChannelSet::new(ids).map(Self::Channels)
     }
 
     /// Whether the channel `channel`, of `category`, may see an event of
-    /// this visibility (RFC §7.3).
+    /// this visibility (RFC §7.3). Hidden: Python's `visibility_allows`
+    /// reads it, which roomkit exports.
+    #[doc(hidden)]
     pub fn admits(&self, channel: &ChannelId, category: ChannelCategory) -> bool {
         match self {
             Self::All => true,
@@ -72,7 +77,7 @@ impl Visibility {
     /// list keeps the listed channels of that category, which
     /// `category_of` tells; a channel it does not know matches nothing.
     #[must_use]
-    pub fn intersect(
+    pub(crate) fn intersect(
         &self,
         other: &Self,
         category_of: impl Fn(&ChannelId) -> Option<ChannelCategory>,

@@ -30,6 +30,9 @@ parity = _load("api_parity", "api-parity.py")
 RULES = {
     "acronyms": {"Ai": "AI", "OpenAi": "OpenAI", "Mcp": "MCP", "Sqlite": "SQLite"},
     "duration_suffix": "_seconds",
+    "builtins": {"RoomId": "str", "ChannelSet": "list[str]", "ModelError": "ValueError"},
+    "literals": {"HookAction": "roomkit.HookResult.__init__(action)", "RichFormat": "roomkit.RichContent.__init__(form)"},
+    "builtin_errors": {"Value": "ValueError"},
     "packages": {
         "roomkit": ["roomkit"],
         "roomkit::model": ["roomkit", "roomkit.models"],
@@ -478,6 +481,117 @@ class Members(unittest.TestCase):
             },
         )
         self.assertEqual(found(report), [("python", "roomkit.Channel.__init__(name)")])
+
+
+class LotTwoRules(unittest.TestCase):
+    """The rules lot 2 of step 5 adds: strong types, `Literal`s, the
+    contents' tag, and the errors."""
+
+    def test_a_strong_type_and_a_validator_s_error_read_as_their_builtin(self) -> None:
+        report = run(
+            [
+                struct("roomkit::model::RoomId", methods=["pub fn new(value: impl Into<String>) -> Result<RoomId, ModelError>"]),
+                enum("roomkit::model::ModelError", ["EmptyIdentifier"]),
+            ],
+            {},
+        )
+        self.assertEqual(
+            (
+                report.items["roomkit::model::RoomId"].python,
+                report.items["roomkit::model::ModelError"].python,
+                found(report),
+            ),
+            ("builtins.str", "builtins.ValueError", []),
+        )
+
+    def test_a_variant_carrying_a_strong_type_is_python_s_value_of_it(self) -> None:
+        variants = [
+            {"name": "All", "decl": "All", "fields": []},
+            {"name": "Channels", "decl": "Channels(ChannelSet)", "fields": []},
+            {"name": "Other", "decl": "Other(String)", "fields": []},
+        ]
+        visibility = {**enum("roomkit::model::Visibility"), "variants": variants}
+        report = run([visibility], {"roomkit.Visibility": {"ALL": ["member", "'all'"]}})
+        self.assertEqual(found(report), [("rust", "roomkit::model::Visibility::Other")])
+
+    def test_a_literal_is_read_by_the_field_it_types(self) -> None:
+        report = run(
+            [enum("roomkit::model::HookAction", ["Allow"]), enum("roomkit::model::RichFormat", ["Html"])],
+            {
+                "roomkit.HookResult": {"__init__": ["def", "*", "action", "event=None"]},
+                "roomkit.RichContent": {"__init__": ["def", "*", "body", "format='markdown'"]},
+            },
+        )
+        self.assertEqual(
+            (report.items["roomkit::model::HookAction"].python, found(report)),
+            ("roomkit.HookResult.__init__(action)", [("rust", "roomkit::model::RichFormat")]),
+        )
+
+    def test_a_content_s_type_is_its_union_s_tag(self) -> None:
+        content = {
+            **enum("roomkit::model::EventContent"),
+            "variants": [{"name": "Text", "decl": "Text(TextContent)", "fields": []}],
+        }
+        report = run(
+            [
+                content,
+                struct(
+                    "roomkit::model::TextContent",
+                    fields=[("body", "String")],
+                    methods=["pub fn new(body: impl Into<String>) -> TextContent"],
+                ),
+                struct("roomkit::model::Other", fields=[("body", "String")], methods=["pub fn new(body: String) -> Other"]),
+            ],
+            {
+                "roomkit.TextContent": {"__init__": ["def", "*", "type='text'", "body"]},
+                "roomkit.Other": {"__init__": ["def", "*", "type='other'", "body"]},
+            },
+            names={"roomkit": ["TextContent", "Other"], "roomkit.models": ["EventContent"]},
+        )
+        self.assertEqual(found(report), [("python", "roomkit.Other.__init__(type)")])
+
+    def test_an_error_variant_is_its_python_class(self) -> None:
+        def variant(name, fields=()):
+            return {"name": name, "decl": name, "fields": [{"name": field, "type": "X"} for field in fields]}
+
+        error = {
+            **enum("roomkit::RoomKitError"),
+            "impls": ["Debug", "Display", "Error"],
+            "variants": [
+                variant("RoomNotFound"),
+                variant("ChangeRefused", ["reason"]),
+                variant("TransitionRefused", ["room_id", "status"]),
+                variant("Value"),
+                variant("Store"),
+            ],
+        }
+        family = {
+            **enum("roomkit::SkillError"),
+            "impls": ["Error"],
+            "variants": [variant("Parse")],
+        }
+        report = run(
+            [error, family],
+            {
+                "roomkit.RoomKitError": {},
+                "roomkit.RoomNotFoundError": {},
+                "roomkit.ChangeRefusedError": {"__init__": ["def", "reason"]},
+                "roomkit.TransitionRefusedError": {"__init__": ["def", "room_id", "status", "transition"]},
+                "roomkit.SkillError": {},
+                "roomkit.SkillParseError": {},
+            },
+        )
+        self.assertEqual(
+            found(report),
+            [
+                ("python", "roomkit.TransitionRefusedError.__init__(transition)"),
+                ("rust", "roomkit::RoomKitError::Store"),
+            ],
+        )
+
+    def test_a_literal_naming_no_field_is_refused(self) -> None:
+        with self.assertRaises(parity.ParityError):
+            parity.Rules.from_table({**RULES, "literals": {"HookAction": "roomkit.HookResult"}})
 
 
 class Entries(unittest.TestCase):

@@ -48,7 +48,22 @@ The rules, which apply with no entry:
   member a Python subclass repeats from the trait's Python class, unchanged,
   is compared on the trait alone;
 - a type alias or a constant named as a Python class with members is a
-  finding: nothing of the class is there to compare.
+  finding: nothing of the class is there to compare;
+- a Rust type `[rules] builtins` names stands for that Python builtin (a
+  strong id `str`, `Timestamp` `datetime`, `Metadata` `dict`, a
+  validator's error `ValueError`, a raised exception's alias
+  `Exception`), with no member compared; a variant carrying one is
+  Python's value of it (`Visibility::Channels(ChannelSet)`), no member;
+- a Rust enum `[rules] literals` names stands for the Python `Literal`
+  of the field it types (`HookAction`, `HookResult.action`): the field
+  must exist, the values are not in the snapshot;
+- a content's `type='text'` is the tag of the tagged union its Rust type
+  is a variant of (`EventContent::Text(TextContent)`), no field;
+- an error enum (one implementing `Error`) is its Python base class, each
+  variant one of its exception classes: `X` the class `XError` or the
+  family's `<Stem>XError` (`SkillError::Parse`, `SkillParseError`), or a
+  builtin exception `[rules] builtin_errors` names; its named fields are
+  compared with the class's `__init__` when the class has one.
 
 What a rule does not give, an entry of `api/mapping.toml` does: `[[map]]`
 names the Python counterpart, `[[exception]]` an approved Rust form,

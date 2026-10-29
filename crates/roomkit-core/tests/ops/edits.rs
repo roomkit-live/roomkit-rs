@@ -12,10 +12,10 @@ use std::rc::Rc;
 
 use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit_core::model::{
-    ChannelOutput, CompositeContent, DeleteContent, DeleteType, DirectEvent, EditContent,
-    EditSource, EventContent, EventId, EventStatus, EventType, EventUpdates, HookResult,
-    InboundMessage, InjectedEvent, Participant, ParticipantId, ParticipantRole, Room, RoomEvent,
-    RoomId, RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
+    ChannelOutput, ChannelSet, CompositeContent, DeleteContent, DeleteType, DirectEvent,
+    EditContent, EditSource, EventContent, EventId, EventStatus, EventType, EventUpdates,
+    HookResult, InboundMessage, InjectedEvent, Participant, ParticipantId, ParticipantRole, Room,
+    RoomEvent, RoomId, RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit_core::ops::{Entry, InboundResult};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -472,7 +472,9 @@ mod native_and_fallback_delivery {
         sim.transport("ws");
         sim.transport("sms");
         let mut restricted = Sim::message("wa", "My card is 4242");
-        restricted.visibility = Visibility::channels([channel("ws")]).unwrap();
+        restricted.visibility = ChannelSet::new([channel("ws")])
+            .map(Visibility::Channels)
+            .unwrap();
         sim.send(restricted).unwrap();
         forget(&mut sim);
         let result = sim
@@ -1009,7 +1011,9 @@ mod a_hook {
         sim.transport("ws");
         sim.transport("sms");
         let mut restricted = Sim::message("wa", "My card is 4242");
-        restricted.visibility = Visibility::channels([channel("ws")]).unwrap();
+        restricted.visibility = ChannelSet::new([channel("ws")])
+            .map(Visibility::Channels)
+            .unwrap();
         sim.send(restricted).unwrap();
         forget(&mut sim);
         injecting(&mut sim, moderation_delete(DeleteType::System));

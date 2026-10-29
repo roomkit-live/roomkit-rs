@@ -31,9 +31,9 @@ use std::future::{Future, ready};
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
-    Visibility,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelSet,
+    ChannelType, EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId,
+    TextContent, Visibility,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -173,13 +173,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     // Typed on the screen, the question asks for its answers there.
     let typed = "What is the meaning of life?";
     let on_screen = InboundMessage {
-        response_visibility: Some(Visibility::channels([screen.id().clone()])?),
+        response_visibility: Some(
+            ChannelSet::new([screen.id().clone()]).map(Visibility::Channels)?,
+        ),
         ..message(&screen, typed, Visibility::Intelligence)
     };
     writes(&kit, &room, on_screen).await?;
     let notice = "Can you keep your answers short?";
     writes(&kit, &room, message(&supervisor, notice, Visibility::All)).await?;
-    let note = Visibility::channels([screen.id().clone()])?;
+    let note = ChannelSet::new([screen.id().clone()]).map(Visibility::Channels)?;
     let noted = "Note: call recorded.";
     writes(&kit, &room, message(&supervisor, noted, note)).await?;
 

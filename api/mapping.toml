@@ -26,6 +26,20 @@
 acronyms = { Ai = "AI", OpenAi = "OpenAI", Mcp = "MCP", Sqlite = "SQLite" }
 # What a `Duration` drops from a Python name (decision 3).
 duration_suffix = "_seconds"
+# The Rust types a Python builtin stands for, read as that builtin with no
+# member compared (decision 4; the architecture table's "Types and values"
+# and "Errors"): the strong ids, values and maps, and the errors a
+# validator raises, and the aliases of what a channel or a router raises,
+# Python's `Exception`. A variant carrying one is Python's value of it
+# (`Visibility::Channels(ChannelSet)`).
+builtins = { ChannelError = "Exception", RouterError = "Exception", RoomId = "str", EventId = "str", ChannelId = "str", ParticipantId = "str", IdentityId = "str", TaskId = "str", ObservationId = "str", CountryCode = "str", ChannelSet = "list[str]", Timestamp = "datetime", Metadata = "dict", Confidence = "float", Latitude = "float", Longitude = "float", ModelError = "ValueError", InvalidCountryCode = "ValueError" }
+# The Rust enums a Python `Literal` stands for, by the field it types
+# (decision 4; a nameless literal takes its field's name).
+literals = { HookAction = "roomkit.HookResult.__init__(action)", DeliveryResultStatus = "roomkit.DeliveryResult.__init__(status)", RichFormat = "roomkit.models.RichContent.__init__(format)", ToolCallStatus = "roomkit.ToolCallContent.__init__(status)", EditSource = "roomkit.models.EditContent.__init__(edit_source)" }
+# The error variants a Python builtin exception stands for (convention 5),
+# the variant the builtin's name without `Error`; `ExceptionGroup` the
+# answer of a close whose channels failed (decided 2026-10-29).
+builtin_errors = { Value = "ValueError", Cancelled = "asyncio.CancelledError", ExceptionGroup = "ExceptionGroup" }
 
 # The Python packages a Rust module's items are looked for in, in order. A
 # module not listed takes its closest listed parent's.
@@ -126,6 +140,32 @@ reason = "an override cannot call a trait's default body (convention 8)"
 rust = "roomkit::keep_context"
 approved = "2026-10-27"
 reason = "tokio does not carry task-locals into a spawned task (decision 18)"
+
+[[exception]]
+rust = "roomkit::RoomKitError"
+members = ["Store", "Lock", "Channel", "Router"]
+approved = "2026-10-27"
+reason = "a variant carries a foreign error, the cause kept: what Python propagates as the store driver, the lock manager, a channel or the router raised it (the architecture table, Errors)"
+
+[[exception]]
+rust = "roomkit::RoomKitError"
+members = ["Internal"]
+approved = "2026-10-27"
+reason = "a defect of the crate, where Python asserts: the driver broke the core's effect protocol, or a run ended with neither its event nor a refusal (the architecture table, Errors)"
+
+[[exception]]
+rust = "roomkit::RoomKitError"
+members = ["KitClosed"]
+approved = "2026-10-29"
+until = "roomkit.KitClosedError"
+reason = "a call after close(): Python raises the bare RoomKitError and adds KitClosedError, which Rust's variant names (decided by the maintainer on 2026-10-29, RMK-1021)"
+
+[[exception]]
+rust = "roomkit::RoomKitError"
+members = ["ShutdownCancelled"]
+approved = "2026-10-29"
+until = "roomkit.ShutdownCancelledError"
+reason = "a close whose shutdown was cut: Python raises the bare RoomKitError and adds ShutdownCancelledError, which Rust's variant names (decided by the maintainer on 2026-10-29, RMK-1021)"
 
 [[exception]]
 rust = "roomkit::model::ErrorRecord"
@@ -519,635 +559,6 @@ reason = "not in 0.x: retries, reasoning effort and response schemas of OpenAICo
 # none left. "?": the plan names no lot.
 
 [[pending]]
-lot = 2
-python = "roomkit.ChannelBinding"
-members = ["can_write", "sends"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-python = "roomkit.ChannelCapabilities.__init__"
-params = [
-    "max_audio_duration_seconds", "supported_audio_formats",
-    "max_video_duration_seconds", "supported_video_formats",
-]
-reason = "lot 2: the model members Python has and Rust lacks are added, those only Rust has go"
-
-[[pending]]
-lot = 2
-python = "roomkit.ChannelOutput"
-members = ["empty"]
-reason = "lot 2: ChannelOutput::empty(), Python's classmethod; respond() goes"
-
-[[pending]]
-lot = 2
-python = "roomkit.DeliveryStatus"
-members = ["__init__"]
-reason = "decision 20: DeliveryStatus is renamed DeliveryResultStatus; Python's DeliveryStatus is the status webhook model"
-
-[[pending]]
-lot = 2
-python = "roomkit.HookResult.__init__"
-params = ["action", "event"]
-reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
-
-[[pending]]
-lot = 2
-python = "roomkit.HookResult.allow"
-params = ["injected"]
-reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
-
-[[pending]]
-lot = 2
-python = "roomkit.HookResult.block"
-params = ["injected", "tasks", "observations"]
-reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
-
-[[pending]]
-lot = 2
-python = "roomkit.HookResult.modify"
-params = ["event", "injected"]
-reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
-
-[[pending]]
-lot = 2
-python = "roomkit.InboundResult.__init__"
-params = ["duplicate", "unavailable_targets", "response_events"]
-reason = "lot 2: InboundResult takes Python's fields: duplicate, unavailable_targets, response_events (cancellation_reason came with lot 1's close)"
-
-[[pending]]
-lot = 2
-python = "roomkit.RoomContext"
-members = ["channels_by_type", "get_binding", "other_channels"]
-reason = "lot 2: RoomContext::get_binding, other_channels and channels_by_type, as Python's"
-
-[[pending]]
-lot = 2
-python = "roomkit.RoomEvent.__init__"
-params = ["type"]
-reason = "lot 2: RoomEvent::new(room_id, source, content), r#type for Python's type (point 7)"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.Identity.__init__"
-params = ["email", "phone", "external_ids"]
-reason = "lot 2: the model members Python has and Rust lacks are added, those only Rust has go"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.RateLimit.__init__"
-params = ["max_per_hour"]
-reason = "lot 2: the model members Python has and Rust lacks are added, those only Rust has go"
-
-[[pending]]
-lot = 2
-rust = "roomkit::ConfigError"
-reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
-
-[[pending]]
-lot = 2
-rust = "roomkit::InboundError"
-reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
-
-[[pending]]
-lot = 2
-rust = "roomkit::KitError"
-reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported; close()'s ChannelsFailedToClose and ShutdownCancelled (RMK-1017) take their names there"
-
-[[pending]]
-lot = 2
-rust = "roomkit::LifecycleError"
-reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
-
-[[pending]]
-lot = 2
-rust = "roomkit::MutationError"
-reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
-
-[[pending]]
-lot = 2
-rust = "roomkit::ProtocolError"
-reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
-
-[[pending]]
-lot = 2
-rust = "roomkit::RegistrationError"
-reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Access"
-members = ["reads", "writes"]
-reason = "decision 16: a helper public in Rust and private in Python is hidden"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ChannelBinding::new"
-params = ["category", "direction", "attached_at"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ChannelCapabilities"
-members = ["carries"]
-reason = "decision 16: a helper public in Rust and private in Python is hidden"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ChannelCapabilities"
-members = ["rate_limit"]
-reason = "lot 2: the model members Python has and Rust lacks are added, those only Rust has go"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ChannelDirection"
-members = ["receives", "sends"]
-reason = "decision 16: a helper public in Rust and private in Python is hidden"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ChannelMediaType"
-members = ["all"]
-reason = "decision 16: a helper public in Rust and private in Python is hidden"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ChannelOutput"
-members = ["respond"]
-reason = "lot 2: ChannelOutput::empty(), Python's classmethod; respond() goes"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Consumption"
-reason = "lot 2, point 5: consumption and its types leave the model"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ConsumptionState"
-reason = "lot 2, point 5: consumption and its types leave the model"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::DeleteContent"
-members = ["with_delete_type"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::DeliveryStatus"
-members = ["Sent", "Queued", "Failed"]
-reason = "decision 20: DeliveryStatus is renamed DeliveryResultStatus; Python's DeliveryStatus is the status webhook model"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::EditContent"
-members = ["with_edit_source"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::EventSource::new"
-params = ["direction"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::HookDecision"
-reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::HookResult"
-members = ["decision", "with_reason", "inject", "with_task", "with_observation", "is_block"]
-reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::HookResult::modify"
-params = ["payload"]
-reason = "lot 2: HookResult takes Python's action and event, and AllowOptions / BlockOptions / ModifyOptions"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Identity"
-members = ["uses", "link", "unlink"]
-reason = "decision 16: a helper public in Rust and private in Python is hidden"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Identity::new"
-params = ["organization_id"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::InjectedEvent"
-members = ["to_channels", "stored_only"]
-reason = "lot 2: InjectedEvent::new(event); to_channels and stored_only go"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ModelError"
-reason = "decision 9: one RoomKitError of flat variants named after Python's classes; the per-operation enums are no longer re-exported"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Observation::new"
-params = ["created_at"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Participant::new"
-params = ["joined_at"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ParticipantConsumption"
-reason = "lot 2, point 5: consumption and its types leave the model"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RateLimit"
-members = ["burst"]
-reason = "lot 2: the model members Python has and Rust lacks are added, those only Rust has go"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RetryPolicy::new"
-params = ["max_retries", "base_delay_seconds", "max_delay_seconds"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Room::new"
-params = ["now"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RoomContext"
-members = ["binding"]
-reason = "lot 2: RoomContext::get_binding, other_channels and channels_by_type, as Python's"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RoomEvent"
-members = ["consumption"]
-reason = "lot 2, point 5: consumption and its types leave the model"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RoomEvent"
-members = ["event_type"]
-reason = "lot 2: RoomEvent::new(room_id, source, content), r#type for Python's type (point 7)"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RoomEvent::new"
-params = ["id", "event_type", "created_at"]
-reason = "lot 2: RoomEvent::new(room_id, source, content), r#type for Python's type (point 7)"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RoomStatus"
-members = ["accepts_events"]
-reason = "decision 16: a helper public in Rust and private in Python is hidden"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Task::new"
-params = ["created_at"]
-reason = "lot 2's model rule: public fields of Python's names, new(<required fields>) filling Python's defaults, struct update for the rest"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ToolCall"
-reason = "lot 2: model::ToolCall leaves the model's public API (lot 3 flattens it, lot 5 names AiToolCall)"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::VideoContent::new"
-params = ["mime_type"]
-reason = "lot 2: VideoContent::new(url), mime_type video/mp4 by default"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Visibility"
-members = ["channels", "admits", "intersect"]
-reason = "decision 16: a helper public in Rust and private in Python is hidden"
-
-[[pending]]
-lot = 2
-python = "roomkit.DeliveryError"
-members = ["__init__"]
-reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
-
-[[pending]]
-lot = 2
-python = "roomkit.DeliveryResult"
-members = ["__init__"]
-reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
-
-[[pending]]
-lot = 2
-python = "roomkit.HookResult"
-members = ["__init__"]
-reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
-
-[[pending]]
-lot = 2
-python = "roomkit.InjectedEvent"
-members = ["__init__"]
-reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
-
-[[pending]]
-lot = 2
-python = "roomkit.ProviderResult"
-members = ["__init__"]
-reason = "convention 4: new(<required fields>) sets the fields Python defaults; a model Rust builds by struct literal alone cannot (review S2)"
-
-[[pending]]
-lot = 2
-python = "roomkit.TextContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.ToolCallContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.AudioContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.CompositeContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.DeleteContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.EditContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.LocationContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.MediaContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.RichContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.SystemContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.TemplateContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-python = "roomkit.models.VideoContent.__init__"
-params = ["type"]
-reason = "the contents' type is the tagged union's tag, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::ChannelError"
-reason = "the error alias of a raised exception, a rule lot 2 adds with the error rules"
-
-[[pending]]
-lot = 2
-rust = "roomkit::CountryCode"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::InvalidCountryCode"
-reason = "the error of a validated strong type: lot 2's strong-type and error rules read it"
-
-[[pending]]
-lot = 2
-rust = "roomkit::RouterError"
-reason = "the error alias of a raised exception, a rule lot 2 adds with the error rules"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ChannelId"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ChannelSet"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::CompositeContent"
-members = ["into_parts"]
-reason = "decision 16: CompositeContent::into_parts, a Rust-only helper, hidden in lot 2"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Confidence"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::EditSource"
-reason = "decision 4: a Literal reads as an enum of its values, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::EventId"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::HOST_CHANNEL_ID"
-reason = "decision 16: hidden from the public API in lot 2"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::IdentityId"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Latitude"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Longitude"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::MAX_COMPOSITE_DEPTH"
-reason = "decision 16: hidden from the public API in lot 2"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Metadata"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ObservationId"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ParticipantId"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RichFormat"
-reason = "decision 4: a Literal reads as an enum of its values, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RoomId"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::TaskId"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Timestamp"
-reason = "decision 4: a strong type reads as Python's str, float or dict, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ToolCallStatus"
-reason = "decision 4: a Literal reads as an enum of its values, a rule lot 2 adds to the report"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::Visibility"
-members = ["Channels"]
-reason = "decision 4: Visibility::Channels(ChannelSet) stands for Python's channel list, read by lot 2's strong-type rule"
-
-[[pending]]
-lot = 2
-rust = "roomkit::ChannelDeclaration"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::ToolCallEvent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::TurnTimeouts"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::AudioContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ChannelCapabilities"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::DeleteContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::EditContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::LocationContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::MediaContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RateLimit"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RetryPolicy"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::RichContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::SystemContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::TemplateContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::TextContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::ToolCallContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
-lot = 2
-rust = "roomkit::model::VideoContent"
-reason = "convention 9: lot 2 drops #[non_exhaustive] from the models a caller builds"
-
-[[pending]]
 lot = 3
 python = "roomkit.FrameworkEvent"
 members = ["__init__"]
@@ -1320,6 +731,12 @@ reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
 lot = 3
 rust = "roomkit::TransitionReason"
 reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
+
+[[pending]]
+lot = 3
+rust = "roomkit::RoomKitError"
+members = ["Turn"]
+reason = "lot 3: TurnError goes; its two cases become RoomKitError::RemoteTurn and TurnLink, Python's RemoteTurnError and TurnLinkError (decision 9)"
 
 [[pending]]
 lot = 3
@@ -1829,12 +1246,6 @@ lot = 5
 rust = "roomkit_ai::Skill"
 members = ["license", "compatibility"]
 reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
-
-[[pending]]
-lot = 5
-rust = "roomkit_ai::SkillError"
-members = ["Discovery", "Parse", "Validation"]
-reason = "lot 5: ToolError, AiError and SkillError keep their variants under the error naming rule (convention 5)"
 
 [[pending]]
 lot = 5

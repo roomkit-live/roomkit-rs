@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit_core::model::{
-    ChannelOutput, DeliveryResultStatus, ErrorRecord, EventId, EventStatus, EventType, HookResult,
-    InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId, TextContent,
-    Timestamp, Visibility,
+    ChannelOutput, ChannelSet, DeliveryResultStatus, ErrorRecord, EventId, EventStatus, EventType,
+    HookResult, InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId,
+    TextContent, Timestamp, Visibility,
 };
 use roomkit_core::ops::{
     ChannelDeclaration, FrameworkEvent, HoldOutcome, Inbound, InboundError, InboundTarget,
@@ -1445,7 +1445,9 @@ mod the_receiving_channel {
         let mut sim = room();
         let mut whispered = notice_event("whisper", "advisor only");
         whispered.status = EventStatus::Delivered;
-        whispered.visibility = Visibility::channels([channel("ws")]).unwrap();
+        whispered.visibility = ChannelSet::new([channel("ws")])
+            .map(Visibility::Channels)
+            .unwrap();
         let mut refused = notice_event("refused", "blocked text");
         refused.status = EventStatus::Blocked;
         let mut seen = notice_event("seen", "for everyone");
@@ -1538,7 +1540,9 @@ mod targets {
         sim.transport("sms");
         sim.transport("ws_advisor");
         sim.echo_agent("assistant", "Suggest the premium plan")
-            .visibility = Visibility::channels([channel("ws_advisor")]).unwrap();
+            .visibility = ChannelSet::new([channel("ws_advisor")])
+            .map(Visibility::Channels)
+            .unwrap();
         sim.send(Sim::message("sms", "Which plan?")).unwrap();
         assert_eq!(
             sim.traced("deliver"),

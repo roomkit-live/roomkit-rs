@@ -15,6 +15,9 @@ from api_parity.sides import Python, Surface, python_signature
 # What a struct a caller builds that keeps `#[non_exhaustive]` is found with.
 NON_EXHAUSTIVE = "#[non_exhaustive]: a caller outside the crate cannot build it by struct update"
 
+# The Python name a Rust item standing for a builtin reads as.
+BUILTIN = "builtins."
+
 @dataclass(frozen=True)
 class Finding:
     side: str  # "rust" or "python": the side `path` is on
@@ -86,12 +89,19 @@ class Comparison:
         return results
 
     def python_of(self, item: dict) -> str | None:
-        """The item's Python name: its `[[map]]` entry's, or the rules'."""
+        """The item's Python name: its `[[map]]` entry's, or the rules':
+        the builtin a strong type, a validator's error or a raised
+        exception's alias stands for, a `Literal`'s field, or the name by
+        its casing."""
         entry = self.item_maps.get(item["path"])
         if entry is not None:
             self.applied.add(id(entry))
             return entry.python
         module, _, name = item["path"].rpartition("::")
+        if name in self.rules.builtins:
+            return BUILTIN + self.rules.builtins[name]
+        if item["kind"] == "enum" and name in self.rules.literals:
+            return self.rules.literals[name]
         wanted = name if item["kind"] in ("fn", "constant") else self.rules.python_type_name(name)
         return self.python.find(self.rules.packages_for(module), wanted)
 
@@ -132,6 +142,13 @@ class Comparison:
         return python == rust or (python == rust + suffix and "Duration" in rust_type)
 
     def _item(self, item: dict, python: str) -> None:
+        if python.startswith(BUILTIN):
+            return  # a strong type or an error a builtin stands for: no member to compare
+        if item["path"].rpartition("::")[2] in self.rules.literals:
+            # A `Literal`'s values are not in the snapshot: its field is.
+            if not self.python.exists(python):
+                self._find("rust", item["path"], f"a Literal of {python}: no such Python field", item["path"], python)
+            return
         spec = self.python.specs.get(python)
         if spec is None:
             return  # a Python constant or alias: a name, and no member to compare
@@ -155,6 +172,8 @@ class Comparison:
             members={variant_name(v["name"]): v["name"] for v in item.get("variants", [])}
             | {c["name"]: c["name"] for c in item.get("constants", [])},
         )
+        if item["kind"] == "enum" and "Error" in item.get("impls", []):
+            self._error_family(item, cls)
         bases, inherited = self._inherited(item)
         cls.owners = {name: owner for name, (owner, _) in inherited.items() if name not in cls.methods}
         cls.methods = {name: method for name, (_, method) in inherited.items()} | cls.methods
@@ -191,6 +210,35 @@ class Comparison:
                 bases.append(self.python.specs[python])
             methods |= {m["name"]: (trait["path"], m) for kind in ("required", "provided") for m in trait.get(kind, [])}
         return bases, methods
+
+    def _error_family(self, item: dict, cls: _Class) -> None:
+        """An error enum is its Python base class, each variant one of its
+        exception classes: `X` the class `XError`, or the family's
+        `<Stem>XError` (`SkillError::Parse`, `SkillParseError`), or a
+        builtin exception. A variant's named fields are the class's
+        constructor's parameters, when the class has one; a class without
+        takes a message, whatever the variant carries."""
+        stem = cls.path.rpartition("::")[2].removesuffix("Error")
+        packages = self.rules.packages_for(cls.path.rpartition("::")[0])
+        for variant in item.get("variants", []):
+            name = variant["name"]
+            cls.used.add(name)
+            if name in self.rules.builtin_errors:
+                continue
+            python = self.python.find(packages, f"{name}Error") or self.python.find(packages, f"{stem}{name}Error")
+            path = f"{cls.path}::{name}"
+            if python is None:
+                self._find("rust", path, "an error variant: no Python exception class", cls.path, cls.python)
+                continue
+            init = self.python.specs.get(python, {}).get("__init__")
+            if init is None:
+                continue
+            params = [param.name for param in python_signature(init)]
+            fields = [field_["name"] for field_ in variant.get("fields", [])]
+            for missing in (param for param in params if param not in fields):
+                self._find("python", f"{python}.__init__({missing})", f"no field of {path}", cls.path, cls.python)
+            for extra in (field_ for field_ in fields if field_ not in params):
+                self._find("rust", f"{path}::{extra}", f"no parameter of {python}", cls.path, cls.python)
 
     def _enum_member(self, cls: _Class, member: str) -> None:
         rust = cls.members.get(member)
@@ -260,13 +308,27 @@ class Comparison:
                 self._find("python", f"{cls.python}.__init__({param.name})", detail, cls.path, cls.python)
 
     def _model_fields(self, cls: _Class, init: list, renames: dict) -> None:
-        params = python_signature(init)
+        params = [param for param in python_signature(init) if not self._union_tag(cls.path, param)]
         for param in params:
             if not any(self._same(param.name, renames.get(n, n), f["type"]) for n, f in cls.fields.items()):
                 self._find("python", f"{cls.python}.__init__({param.name})", "no Rust field", cls.path, cls.python)
         for name, field_ in cls.fields.items():
             if not any(self._same(param.name, renames.get(name, name), field_["type"]) for param in params):
                 self._find("rust", f"{cls.path}::{name}", "no Python parameter", cls.path, cls.python)
+
+    def _union_tag(self, path: str, param) -> bool:
+        """Python's `type='text'` of a content: the tag of the tagged union
+        the Rust type is a variant of (`EventContent::Text(TextContent)`),
+        no field or parameter of its own."""
+        if param.name != "type" or not (param.default or "").startswith("'"):
+            return False
+        name = path.rpartition("::")[2]
+        return any(
+            variant["decl"].endswith(f"({name})")
+            for item in self.surface.items.values()
+            if item["kind"] == "enum"
+            for variant in item.get("variants", [])
+        )
 
     def _model_without_new(self, cls: _Class, init: list, default: bool) -> None:
         """A model Rust builds by struct literal alone cannot take Python's
@@ -309,8 +371,17 @@ class Comparison:
             if name not in cls.used:
                 self._find("rust", f"{cls.path}::{name}", "no Python parameter or property", cls.path, cls.python)
         for name in cls.members.values():
-            if name not in cls.used:
+            if name not in cls.used and not self._builtin_payload(cls, name):
                 self._find("rust", f"{cls.path}::{name}", "no Python member", cls.path, cls.python)
+
+    def _builtin_payload(self, cls: _Class, variant: str) -> bool:
+        """A variant carrying a strong type stands for Python's value of
+        that builtin, no member: `Visibility::Channels(ChannelSet)`, Python's
+        list of channels."""
+        item = self.surface.items[cls.path]
+        decls = [found["decl"] for found in item.get("variants", []) if found["name"] == variant]
+        payload = re.fullmatch(r"\w+\((\w+)\)", decls[0]) if decls else None
+        return payload is not None and payload.group(1) in self.rules.builtins
 
     def _params(self, rust_path: str, method: dict, python_path: str, member_spec: list, owner: tuple, renames=None) -> None:
         """A method's parameters against Python's: a positional one for each
@@ -319,6 +390,8 @@ class Comparison:
         renames = renames or {}
         taken: set[str] = set()
         for param in python_signature(member_spec):
+            if self._union_tag(owner[0], param):
+                continue
             named = [r for r in rust if renames.get(r.name) == param.name]
             if param.variadic and named:
                 # `**kwargs` stands for every parameter a [[map]] entry names

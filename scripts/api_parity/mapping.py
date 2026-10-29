@@ -31,20 +31,47 @@ def variant_name(variant: str) -> str:
     return "_".join(token.upper() for token in tokens(variant))
 
 
+# The tables of [rules], and those of them that lot 2 of step 5 added, which
+# a mapping may leave out.
+_RULES = {"acronyms", "duration_suffix", "packages", "builtins", "literals", "builtin_errors"}
+_RULES_REQUIRED = {"acronyms", "duration_suffix", "packages"}
+
+
 @dataclass
 class Rules:
     acronyms: list[tuple[list[str], str]]
     duration_suffix: str
     packages: dict[str, list[str]]
+    # A Rust type that stands for a Python builtin (decision 4): a strong
+    # type, the error a validator raises; the builtin's name.
+    builtins: dict[str, str] = field(default_factory=dict)
+    # A Rust enum that stands for a Python `Literal`: the field it types,
+    # `pkg.Class.__init__(field)`.
+    literals: dict[str, str] = field(default_factory=dict)
+    # An error variant that stands for a Python builtin exception.
+    builtin_errors: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_table(cls, table: dict) -> Rules:
-        if set(table) != {"acronyms", "duration_suffix", "packages"}:
-            raise ParityError(f"[rules] holds acronyms, duration_suffix and packages, not {sorted(table)}")
+        if not _RULES_REQUIRED <= set(table) <= _RULES:
+            raise ParityError(
+                f"[rules] holds acronyms, duration_suffix and packages, and may hold builtins, literals "
+                f"and builtin_errors, not {sorted(table)}"
+            )
         acronyms = sorted(
             ((tokens(rust), python) for rust, python in table["acronyms"].items()), key=lambda pair: -len(pair[0])
         )
-        return cls(acronyms, table["duration_suffix"], dict(table["packages"]))
+        for literal, python in table.get("literals", {}).items():
+            if not _PYTHON_NAME.fullmatch(python) or "(" not in python:
+                raise ParityError(f"[rules] literals: {literal} names pkg.Class.__init__(field), not {python}")
+        return cls(
+            acronyms,
+            table["duration_suffix"],
+            dict(table["packages"]),
+            dict(table.get("builtins", {})),
+            dict(table.get("literals", {})),
+            dict(table.get("builtin_errors", {})),
+        )
 
     def python_type_name(self, rust: str) -> str:
         """A Rust type's name with its acronyms in Python's casing."""

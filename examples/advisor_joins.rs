@@ -20,7 +20,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    Access, ChannelId, ChannelType, InboundMessage, RoomId, TextContent, Visibility,
+    Access, ChannelId, ChannelSet, ChannelType, InboundMessage, RoomId, TextContent, Visibility,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -157,8 +157,10 @@ impl Conversation {
         self.kit
             .mute(&self.room, &self.agent, MuteOptions::default())
             .await?;
-        self.agent_visible_to(Visibility::channels([self.advisor.id().clone()])?)
-            .await?;
+        self.agent_visible_to(
+            ChannelSet::new([self.advisor.id().clone()]).map(Visibility::Channels)?,
+        )
+        .await?;
         self.kit
             .unmute(&self.room, &self.agent, UnmuteOptions::default())
             .await?;

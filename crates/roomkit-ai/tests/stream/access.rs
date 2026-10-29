@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicUsize;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
-use roomkit::model::{EventStatus, EventType, HookResult, Visibility};
+use roomkit::model::{ChannelSet, EventStatus, EventType, HookResult, Visibility};
 use roomkit::{
     DetachChannelOptions, HookExecution, HookSpec, HookTrigger, MuteOptions, RoomKit,
     SetVisibilityOptions,
@@ -46,7 +46,9 @@ async fn a_row_the_streaming_target_may_not_read_is_never_handed_to_it() {
                 if !narrowed {
                     return Ok(HookResult::block("secret", BlockOptions::default()));
                 }
-                event.visibility = Visibility::channels([channel("web")]).unwrap();
+                event.visibility = ChannelSet::new([channel("web")])
+                    .map(Visibility::Channels)
+                    .unwrap();
                 Ok(HookResult::modify(event, ModifyOptions::default()))
             })
             .unwrap();
@@ -108,7 +110,9 @@ fn changing(kit: &RoomKit, change: Change) -> Tools {
                         .unwrap();
                 }
                 Change::Narrow => {
-                    let web = Visibility::channels([channel("web")]).unwrap();
+                    let web = ChannelSet::new([channel("web")])
+                        .map(Visibility::Channels)
+                        .unwrap();
                     kit.set_visibility(
                         &room_id(),
                         &channel("agent"),
@@ -213,7 +217,9 @@ async fn a_hook_hiding_the_tool_rows_leaves_the_text_streaming() {
             if event.r#type == EventType::Message {
                 return Ok(HookResult::allow(AllowOptions::default()));
             }
-            event.visibility = Visibility::channels([channel("web")]).unwrap();
+            event.visibility = ChannelSet::new([channel("web")])
+                .map(Visibility::Channels)
+                .unwrap();
             Ok(HookResult::modify(event, ModifyOptions::default()))
         })
         .unwrap();

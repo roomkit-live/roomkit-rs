@@ -9,9 +9,9 @@ use std::rc::Rc;
 
 use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit_core::model::{
-    ChannelOutput, DirectEvent, EditContent, EditSource, ErrorRecord, EventContent, EventDirection,
-    EventStatus, EventType, HookResult, InboundMessage, InjectedEvent, RoomEvent, RoomId,
-    RoomStatus, TextContent, Visibility,
+    ChannelOutput, ChannelSet, DirectEvent, EditContent, EditSource, ErrorRecord, EventContent,
+    EventDirection, EventStatus, EventType, HookResult, InboundMessage, InjectedEvent, RoomEvent,
+    RoomId, RoomStatus, TextContent, Visibility,
 };
 use roomkit_core::ops::{
     EffectId, Entry, FrameworkEvent, Inbound, InboundError, InboundTarget, MutationError, Next,
@@ -2738,7 +2738,9 @@ mod a_blocked_record_s_visibility {
     #[test]
     fn is_narrowed_to_its_source_binding_s() {
         let mut sim = room();
-        sim.bindings[0].visibility = Visibility::channels([channel("ws")]).unwrap();
+        sim.bindings[0].visibility = ChannelSet::new([channel("ws")])
+            .map(Visibility::Channels)
+            .unwrap();
         sim.before_broadcast(
             "policy",
             Box::new(|_| {

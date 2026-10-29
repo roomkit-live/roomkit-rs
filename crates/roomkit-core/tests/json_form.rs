@@ -14,14 +14,14 @@ use pretty_assertions::assert_eq;
 use roomkit_core::model::hook::BlockOptions;
 use roomkit_core::model::{
     Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCategory, ChannelDirection,
-    ChannelId, ChannelMediaType, ChannelOutput, ChannelType, Confidence, DeleteContent, DeleteType,
-    DeliveryError, DeliveryResult, DeliveryResultStatus, EditContent, EditSource, EventContent,
-    EventId, EventSource, EventStatus, EventType, HookResult, IdentificationStatus, Identity,
-    InboundMessage, InjectedEvent, Latitude, LocationContent, Longitude, MediaContent, Metadata,
-    Observation, ObservationId, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
-    RichContent, Room, RoomEvent, RoomId, RoomStatus, RoomTimers, SystemContent, Task, TaskId,
-    TaskStatus, TemplateContent, TextContent, Timestamp, ToolCallContent, VerificationStatus,
-    VideoContent, Visibility,
+    ChannelId, ChannelMediaType, ChannelOutput, ChannelSet, ChannelType, Confidence, DeleteContent,
+    DeleteType, DeliveryError, DeliveryResult, DeliveryResultStatus, EditContent, EditSource,
+    EventContent, EventId, EventSource, EventStatus, EventType, HookResult, IdentificationStatus,
+    Identity, InboundMessage, InjectedEvent, Latitude, LocationContent, Longitude, MediaContent,
+    Metadata, Observation, ObservationId, Participant, ParticipantId, ParticipantRole,
+    ParticipantStatus, RichContent, Room, RoomEvent, RoomId, RoomStatus, RoomTimers, SystemContent,
+    Task, TaskId, TaskStatus, TemplateContent, TextContent, Timestamp, ToolCallContent,
+    VerificationStatus, VideoContent, Visibility,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -81,7 +81,9 @@ fn full_event() -> RoomEvent {
     );
     event.status = EventStatus::Delivered;
     event.blocked_by = None;
-    event.visibility = Visibility::channels([channel("ws_advisor")]).unwrap();
+    event.visibility = ChannelSet::new([channel("ws_advisor")])
+        .map(Visibility::Channels)
+        .unwrap();
     event.addressed_to = Some(vec![channel("ai")]);
     event.response_visibility = Some(Visibility::Transport);
     event.index = 4;
