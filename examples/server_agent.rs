@@ -453,13 +453,17 @@ async fn alice_goes_on(
 /// Erin reads the answer as the model writes it, Finn, in the same room,
 /// reads its rows: Erin's deltas join to the row's text, which comes with
 /// its id and index, and every frame Finn receives is a row the file holds
-/// (RFC §6.1, §12.2 step 14s). The words the model writes together reach
-/// Erin as one delta (RFC §10.6.4).
+/// (RFC §6.1, §12.2 step 14s). The model writes it word by word, as one
+/// that writes slowly.
 async fn a_client_reads_the_answer_as_it_is_written(
     checks: &mut Checks,
 ) -> Result<(), Box<dyn Error>> {
     println!("Erin reads the answer as it is written; Finn reads its rows.");
-    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(&[RYE]).await?);
+    // Written word by word, so that its text reaches Erin before the answer
+    // is complete: words written together would reach her as one delta
+    // (RFC §10.6.4).
+    let rye = Reply::from(RYE).pausing(WORD_PAUSE);
+    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(&[rye]).await?);
     let database = TempDatabase::new("server_agent_studio");
     let server =
         AgentServer::start(database.path(), &endpoint, ANY_PORT.parse()?, CHECKING).await?;
@@ -500,7 +504,7 @@ async fn a_client_reads_the_answer_as_it_is_written(
     checks.expect(
         "a client that streams receives the answer's pieces, then its row with its id and \
          index, the pieces joining to the row's text",
-        read.len() >= 2
+        read.len() > 2
             && read
                 .iter()
                 .take(read.len() - 1)
