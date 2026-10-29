@@ -45,6 +45,11 @@ impl<S: ConversationStore> RoomKit<S> {
         event_id: &EventId,
         options: UpdateEventOptions,
     ) -> Result<Option<RoomEvent>, RoomKitError> {
+        // A content a struct literal built past its model's check is refused
+        // here, as Python's model refuses it when built.
+        if let Some(content) = &options.content {
+            content.check()?;
+        }
         let updates = EventUpdates {
             content: options.content,
             source: options.source,

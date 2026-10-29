@@ -49,6 +49,12 @@ impl<S: ConversationStore> RoomKit<S> {
         if options.visibility == Visibility::Internal {
             return Err(LifecycleError::InternalVisibility.into());
         }
+        // A rate limit a struct literal built past its model's check is
+        // refused before anything is read, as Python's model refuses it when
+        // built.
+        if let Some(rate_limit) = &options.rate_limit {
+            rate_limit.check()?;
+        }
         let config = self.config();
         let Some(declaration) = config.channel(channel_id) else {
             let organization_id = options.organization_id;

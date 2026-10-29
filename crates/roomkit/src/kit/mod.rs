@@ -307,6 +307,9 @@ impl<S: ConversationStore> RoomKit<S> {
         mut message: InboundMessage,
         options: ProcessInboundOptions,
     ) -> Result<InboundResult, RoomKitError> {
+        // A content a struct literal built past its model's check is refused
+        // before anything is read, as Python's model refuses it when built.
+        message.content.check()?;
         let ProcessInboundOptions {
             room_id,
             defer_delivery,

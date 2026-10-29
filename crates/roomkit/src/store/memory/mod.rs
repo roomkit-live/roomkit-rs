@@ -368,6 +368,7 @@ impl ConversationStore for InMemoryStore {
     }
 
     async fn store_binding(&self, binding: ChannelBinding) -> Result<(), StoreError> {
+        super::written::binding(&binding)?;
         let room_id = binding.room_id.clone();
         self.write(&room_id, |record| {
             // In its place: the room lists its bindings in the order they
@@ -551,6 +552,7 @@ impl ConversationStore for InMemoryStore {
         counters: RoomCounters,
         target: Option<TargetUpdate>,
     ) -> Result<(), StoreError> {
+        super::written::event(&event, target.as_ref())?;
         // A blank key is no key: the event is stored with none (RFC §13.4).
         event.idempotency_key = idempotency::key(event.idempotency_key);
         let room_id = event.room_id.clone();
@@ -623,6 +625,7 @@ impl ConversationStore for InMemoryStore {
         event_id: &EventId,
         updates: EventUpdates,
     ) -> Result<RoomEvent, StoreError> {
+        super::written::updates(&updates)?;
         let mut rooms = self.rooms();
         let stored = rooms
             .values_mut()

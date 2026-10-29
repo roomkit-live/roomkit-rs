@@ -75,6 +75,52 @@ impl RoomFilter {
     }
 }
 
+/// The checks a store runs on what it writes: a value its model refuses,
+/// which a struct literal can hold since it runs no check, is refused with
+/// [`StoreError::Value`], nothing written, so that a later read of the
+/// record never fails on it (RFC §6.4 media URLs, a rate limit not above
+/// 0). The Python implementation refuses such a value when its model is
+/// built; Rust refuses it at each door that writes it. Outside the public
+/// API: every store of the workspace runs them.
+#[doc(hidden)]
+pub mod written {
+    use roomkit_core::model::{ChannelBinding, EventContent, EventUpdates, RoomEvent};
+    use roomkit_core::ops::TargetUpdate;
+
+    use super::StoreError;
+
+    /// An event a commit writes, and what it writes on its target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Value`] for a content its model refuses.
+    pub fn event(event: &RoomEvent, target: Option<&TargetUpdate>) -> Result<(), StoreError> {
+        event.check()?;
+        target.map_or(Ok(()), |target| updates(&target.updates))
+    }
+
+    /// What an update writes on an event.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Value`] for a content its model refuses.
+    pub fn updates(updates: &EventUpdates) -> Result<(), StoreError> {
+        Ok(updates
+            .content
+            .as_ref()
+            .map_or(Ok(()), EventContent::check)?)
+    }
+
+    /// A binding a store writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Value`] for a rate limit its model refuses.
+    pub fn binding(binding: &ChannelBinding) -> Result<(), StoreError> {
+        Ok(binding.check()?)
+    }
+}
+
 /// How many events a read of a whole timeline asks the store for at a time.
 const TIMELINE_PAGE: u64 = 500;
 

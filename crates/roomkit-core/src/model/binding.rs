@@ -179,6 +179,19 @@ impl ChannelBinding {
         }
     }
 
+    /// Refuses a binding whose rate limit its deserialization would have
+    /// refused, a limit not above 0 ([`RateLimit::check`]): a struct literal
+    /// runs no check, so every door that writes a binding runs this one, the
+    /// kit's `attach_channel` and the stores. Outside the public API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::NotPositive`](crate::model::ModelError::NotPositive).
+    #[doc(hidden)]
+    pub fn check(&self) -> Result<(), crate::model::ModelError> {
+        self.rate_limit.as_ref().map_or(Ok(()), RateLimit::check)
+    }
+
     /// Whether the binding's direction delivers to the outside (RFC §4.2),
     /// Python's property `sends`: a transport is delivered to only when it
     /// sends.

@@ -169,6 +169,7 @@ impl ConversationStore for SqliteStore {
     }
 
     async fn store_binding(&self, binding: ChannelBinding) -> Result<(), StoreError> {
+        roomkit::written::binding(&binding)?;
         self.database
             .write(move |connection| members::store_binding(connection, &binding))
             .await
@@ -363,6 +364,7 @@ impl ConversationStore for SqliteStore {
         counters: RoomCounters,
         target: Option<TargetUpdate>,
     ) -> Result<(), StoreError> {
+        roomkit::written::event(&event, target.as_ref())?;
         self.database
             .write(move |connection| events::commit(connection, event, counters, target))
             .await
@@ -380,6 +382,7 @@ impl ConversationStore for SqliteStore {
         event_id: &EventId,
         updates: EventUpdates,
     ) -> Result<RoomEvent, StoreError> {
+        roomkit::written::updates(&updates)?;
         let event_id = event_id.clone();
         self.database
             .write(move |connection| events::update(connection, &event_id, &updates))

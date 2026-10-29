@@ -140,6 +140,8 @@ pub use self::router::{
     ChannelOf, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, InboundRoomRouter,
     RouteOptions, RouterError, RouterFuture,
 };
+#[doc(hidden)]
+pub use self::store::written;
 pub use self::store::{
     ConversationStore, EventFilter, EventQuery, InMemoryStore, RoomCounters, RoomFilter,
     StoreError, StoreFailure, TargetUpdate,

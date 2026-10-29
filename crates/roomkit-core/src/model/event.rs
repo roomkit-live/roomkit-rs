@@ -248,6 +248,17 @@ impl RoomEvent {
         )
     }
 
+    /// Refuses an event whose content its constructor would have refused
+    /// ([`EventContent::check`]). Outside the public API.
+    ///
+    /// # Errors
+    ///
+    /// Returns what the content's constructor would have returned.
+    #[doc(hidden)]
+    pub fn check(&self) -> Result<(), crate::model::ModelError> {
+        self.content.check()
+    }
+
     /// [`RoomEvent::new`] with its id, type and instant given: what the
     /// core's operations build from their environment. Outside the public
     /// API.

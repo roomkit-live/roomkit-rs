@@ -6,7 +6,8 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use roomkit_core::model::{
-    ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, RoomContext, RoomEvent, RoomId,
+    ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, ModelError, RoomContext, RoomEvent,
+    RoomId,
 };
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, Environment,
@@ -149,7 +150,10 @@ pub(super) async fn channel<S: ConversationStore>(
                 now: environment.now(),
             };
             match channel.handle_inbound(message, *context, draft).await {
-                Ok(event) => ChannelOutcome::Parsed(Box::new(event)).into(),
+                Ok(event) => match event.check() {
+                    Ok(()) => ChannelOutcome::Parsed(Box::new(event)).into(),
+                    Err(refusal) => refused_content(&refusal),
+                },
                 Err(error) => Outcome::Failed(ErrorRecord::new("ChannelError", error.to_string())),
             }
         }
@@ -172,7 +176,7 @@ pub(super) async fn channel<S: ConversationStore>(
             let cut = |turn| shared.turn_submitted(effect, turn);
             let answered = inner.turns.run(&kit, &binding, event, context, cut).await;
             let outcome = match answered {
-                Ok(Answer::Output(output)) => ChannelOutcome::Output(output).into(),
+                Ok(Answer::Output(output)) => checked_output(output),
                 Ok(Answer::Streamed(output, turn)) => {
                     shared.keep_stream(effect, KeptStream { turn });
                     ChannelOutcome::Streamed(output).into()
@@ -510,9 +514,29 @@ fn observe<S: ConversationStore>(
 
 fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
     match result {
-        Ok(output) => ChannelOutcome::Output(Box::new(output)).into(),
+        Ok(output) => checked_output(Box::new(output)),
         Err(error) => Outcome::Failed(ErrorRecord::new("ChannelError", error.to_string())),
     }
+}
+
+/// A channel's answer, unless a response it carries holds a content its
+/// model refuses, built by struct literal past the model's check: the call
+/// then reads as the channel raising the `ValueError` Python's model raises
+/// when built, none of its responses kept.
+fn checked_output(output: Box<ChannelOutput>) -> Outcome {
+    match output
+        .response_events
+        .iter()
+        .find_map(|event| event.check().err())
+    {
+        Some(refusal) => refused_content(&refusal),
+        None => ChannelOutcome::Output(output).into(),
+    }
+}
+
+/// A channel's call that produced a content its model refuses.
+fn refused_content(refusal: &ModelError) -> Outcome {
+    Outcome::Failed(ErrorRecord::new("ChannelError", refusal.to_string()))
 }
 
 /// A channel the kit no longer holds, asked to parse a message.

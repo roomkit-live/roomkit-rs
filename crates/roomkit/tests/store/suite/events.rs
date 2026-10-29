@@ -3,10 +3,10 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, DeleteContent, EventContent, EventStatus, EventType, EventUpdates, Room, RoomEvent,
-    RoomId, TextContent, Timestamp,
+    ChannelId, DeleteContent, EventContent, EventStatus, EventType, EventUpdates, MediaContent,
+    Room, RoomEvent, RoomId, TextContent, Timestamp,
 };
-use roomkit::{ConversationStore, EventFilter, StoreError, TargetUpdate};
+use roomkit::{ConversationStore, EventFilter, EventQuery, StoreError, TargetUpdate};
 use serde_json::json;
 
 use super::{
@@ -63,6 +63,71 @@ async fn an_index_the_room_holds_is_refused() {
             room_id: room_id(),
             index: 0
         })
+    );
+}
+
+/// A media its model refuses, built by struct literal past the check
+/// `MediaContent::new` runs (RFC §6.4).
+fn javascript_media() -> EventContent {
+    MediaContent {
+        url: "javascript:alert(1)".to_owned(),
+        ..MediaContent::new("https://example.com/a.png", "image/png").unwrap()
+    }
+    .into()
+}
+
+/// The refusal of `javascript_media`, Python's `ValueError`.
+fn javascript_refused() -> StoreError {
+    StoreError::Value(
+        "URL must be a link (http://, https://), a data: URI, or a reference <scheme>://... (two \
+         letters of scheme at least, not file, ftp, javascript or vbscript, no '..' segment and \
+         no backslash): \"javascript:alert(1)\""
+            .to_owned(),
+    )
+}
+
+/// A content its model refuses, which a struct literal can hold, is
+/// refused by every write that would store it, nothing written: a commit,
+/// a commit's update of its target, an update. Stored, it would fail every
+/// later read of the timeline.
+#[tokio::test]
+async fn a_content_its_model_refuses_is_never_written() {
+    let store = with_events(vec![event(0)]).await;
+    let mut media = event(1);
+    media.content = javascript_media();
+    let edit = edit_of(1, 0);
+    let target = TargetUpdate {
+        event_id: event_id("evt_0"),
+        updates: EventUpdates {
+            content: Some(javascript_media()),
+            ..EventUpdates::default()
+        },
+    };
+    let updates = EventUpdates {
+        content: Some(javascript_media()),
+        ..EventUpdates::default()
+    };
+    let refused = [
+        store.commit(media, counters(1), None).await,
+        store.commit(edit, counters(1), Some(target)).await,
+        store
+            .update_event(&event_id("evt_0"), updates)
+            .await
+            .map(drop),
+    ];
+    assert_eq!(
+        (
+            refused,
+            store.list_events(&room_id(), &EventQuery::default()).await
+        ),
+        (
+            [
+                Err(javascript_refused()),
+                Err(javascript_refused()),
+                Err(javascript_refused())
+            ],
+            Ok(vec![event(0)])
+        )
     );
 }
 
@@ -529,21 +594,21 @@ async fn a_delete_s_commit_marks_its_target_s_edits_deleted() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> EventQuery {
+    EventQuery {
         limit: u64::MAX,
         event_filter: Some(EventFilter {
             include_blocked: true,
             ..EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..EventQuery::default()
     }
 }
 
 /// Every event of a room's timeline the room received.
-fn received() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn received() -> EventQuery {
+    EventQuery {
         limit: u64::MAX,
-        ..roomkit::EventQuery::default()
+        ..EventQuery::default()
     }
 }

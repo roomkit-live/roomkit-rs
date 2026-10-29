@@ -93,6 +93,9 @@ impl<S: ConversationStore> RoomKit<S> {
         organization_id: Option<String>,
         event: DirectEvent,
     ) -> Result<RoomEvent, RoomKitError> {
+        // A content a struct literal built past its model's check is refused
+        // before anything is read, as Python's model refuses it when built.
+        event.content.check()?;
         let entry = Entry::Direct {
             room_id: room_id.clone(),
             organization_id,
@@ -133,6 +136,7 @@ impl<S: ConversationStore> RoomKit<S> {
         event: RoomEvent,
         options: CommitEventOptions,
     ) -> Result<RoomEvent, RoomKitError> {
+        event.check()?;
         let taken = (
             event.source.channel_id.clone(),
             event.idempotency_key.clone(),

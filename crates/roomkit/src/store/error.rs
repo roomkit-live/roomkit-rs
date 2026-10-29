@@ -173,6 +173,13 @@ pub enum StoreError {
     Unavailable(#[source] StoreFailure),
 }
 
+/// A value its model refuses, as the Python implementation's `ValueError`.
+impl From<roomkit_core::model::ModelError> for StoreError {
+    fn from(error: roomkit_core::model::ModelError) -> Self {
+        Self::Value(error.to_string())
+    }
+}
+
 impl StoreError {
     /// A store that could not be reached or failed, with `cause`, the error
     /// it met, or a message.

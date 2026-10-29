@@ -15,17 +15,19 @@ use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventId, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
-    Timestamp,
+    DeliveryResultStatus, EventContent, EventDirection, EventId, EventSource, EventStatus,
+    HookResult, InboundMessage, MediaContent, RateLimit, RoomContext, RoomEvent, RoomId,
+    TextContent, Timestamp,
 };
 use roomkit::testing::{
     EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
-    ConversationStore, CreateRoomOptions, EventDraft, FrameworkEvent, HookExecution, HookHandler,
-    HookReturn, HookSpec, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitError,
-    RoomKitOptions, default_inbound_event, text_of,
+    CommitEventOptions, ConversationStore, CreateRoomOptions, EventDraft, FrameworkEvent,
+    HookExecution, HookHandler, HookReturn, HookSpec, HookTrigger, PostOptions,
+    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, SendEventOptions,
+    UpdateEventOptions, default_inbound_event, text_of,
 };
 use tokio::sync::mpsc;
 
@@ -489,7 +491,213 @@ async fn a_channel_that_panics_fails_its_delivery_and_the_kit_goes_on() {
         .map(|delivery| delivery.status);
     assert_eq!(
         (broken, sms.texts().len()),
-        (Some(roomkit::model::DeliveryResultStatus::Failed), 1)
+        (Some(DeliveryResultStatus::Failed), 1)
+    );
+}
+
+/// A media its model refuses, which a struct literal can hold past the
+/// check `MediaContent::new` runs (RFC §6.4).
+fn javascript_media() -> EventContent {
+    MediaContent {
+        url: "javascript:alert(1)".to_owned(),
+        ..MediaContent::new("https://example.com/a.png", "image/png").unwrap()
+    }
+    .into()
+}
+
+/// Python's message refusing `javascript_media`.
+const JAVASCRIPT_REFUSED: &str = "URL must be a link (http://, https://), a data: URI, or a \
+     reference <scheme>://... (two letters of scheme at least, not file, ftp, javascript or \
+     vbscript, no '..' segment and no backslash): \"javascript:alert(1)\"";
+
+/// A value its model refuses, which a struct literal can hold, is refused
+/// by each of the kit's calls that would write it, as Python's `ValueError`
+/// when its model is built: before anything is read, so a missing room is
+/// not even looked for, and nothing written. A content at `send_event`,
+/// `post`, `process_inbound`, `commit_event` and `update_event`, a rate
+/// limit not above 0 at `attach_channel`. Stored, it would fail every later
+/// read of the room.
+#[tokio::test]
+async fn a_value_its_model_refuses_is_refused_by_every_call_before_any_read() {
+    let (kit, sms) = sms_and_agent().await;
+    let before = timeline(&kit).await;
+    let ghost = RoomId::new("ghost").unwrap();
+    let mut record = before[0].clone();
+    record.room_id = ghost.clone();
+    record.content = javascript_media();
+    let mut message = message(&sms, "x");
+    message.content = javascript_media();
+    let updated = UpdateEventOptions {
+        content: Some(javascript_media()),
+        ..Default::default()
+    };
+    let limited = AttachChannelOptions {
+        rate_limit: Some(RateLimit {
+            max_per_minute: Some(-1.0),
+            ..RateLimit::default()
+        }),
+        ..Default::default()
+    };
+    let routed = ProcessInboundOptions {
+        room_id: Some(ghost.clone()),
+        ..Default::default()
+    };
+    let refused = [
+        kit.send_event(
+            &ghost,
+            sms.id(),
+            javascript_media(),
+            SendEventOptions::default(),
+        )
+        .await
+        .map(drop),
+        kit.post(&ghost, javascript_media(), PostOptions::default())
+            .await
+            .map(drop),
+        kit.process_inbound(message, routed).await.map(drop),
+        kit.commit_event(&ghost, record, CommitEventOptions::default())
+            .await
+            .map(drop),
+        kit.update_event(&ghost, &before[0].id, updated)
+            .await
+            .map(drop),
+        kit.attach_channel(&ghost, &channel("ai"), limited)
+            .await
+            .map(drop),
+    ];
+    let media = || Err(RoomKitError::Value(JAVASCRIPT_REFUSED.to_owned()));
+    let rate = Err(RoomKitError::Value(
+        "max_per_minute -1 is not greater than 0".to_owned(),
+    ));
+    let rooms = kit
+        .store()
+        .list_rooms(&roomkit::RoomFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        (refused, timeline(&kit).await == before, rooms.len()),
+        ([media(), media(), media(), media(), media(), rate], true, 1)
+    );
+}
+
+/// A SYNC hook that replaces the message with a content its model refuses
+/// reads as a hook that raised, as Python's hook raises building it: it
+/// fails open, and the message is stored as it came.
+#[tokio::test]
+async fn a_hook_answering_a_content_its_model_refuses_reads_as_raising() {
+    let (kit, sms) = sms_and_agent().await;
+    kit.hook(
+        HookSpec::new(
+            "rewriter",
+            HookTrigger::BeforeBroadcast,
+            HookExecution::Sync,
+        ),
+        |mut event: RoomEvent, _context| async move {
+            event.content = javascript_media();
+            Ok(HookResult::modify(event, ModifyOptions::default()))
+        },
+    )
+    .unwrap();
+    let mut errors = kit.subscribe();
+    kit.process_inbound(
+        message(&sms, "Bonjour"),
+        ProcessInboundOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let raised = loop {
+        if let FrameworkEvent::HookError { hook, error, .. } = errors.recv().await.unwrap() {
+            break (hook, error);
+        }
+    };
+    let stored = timeline(&kit)
+        .await
+        .into_iter()
+        .find(|event| event.source.channel_id == channel("sms"))
+        .map(|event| text_of(&event.content));
+    assert_eq!(
+        (raised.0, raised.1.contains("javascript:alert(1)"), stored),
+        ("rewriter".to_owned(), true, Some("Bonjour".to_owned()))
+    );
+}
+
+/// A transport whose delivery answers with a content its model refuses.
+struct AnsweringJavascript {
+    declaration: ChannelDeclaration,
+}
+
+impl Channel for AnsweringJavascript {
+    fn declaration(&self) -> ChannelDeclaration {
+        self.declaration.clone()
+    }
+
+    fn deliver(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(self.declaration.channel_id.clone(), ChannelType::WEBHOOK)
+        };
+        let response = RoomEvent::new(event.room_id, source, javascript_media());
+        ready(Ok(ChannelOutput {
+            responded: true,
+            response_events: vec![response],
+            ..ChannelOutput::empty()
+        }))
+    }
+}
+
+/// A channel that answers with a content its model refuses reads as one
+/// that raised, as Python's raises building it: its delivery fails, and
+/// nothing of its answer is stored.
+#[tokio::test]
+async fn a_channel_answering_a_content_its_model_refuses_fails_its_call() {
+    let (kit, sms) = sms_and_agent().await;
+    kit.register_channel(AnsweringJavascript {
+        declaration: ChannelDeclaration::new(
+            channel("hook"),
+            ChannelType::WEBHOOK,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        ),
+    })
+    .unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("hook"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    let result = kit
+        .process_inbound(
+            message(&sms, "Bonjour"),
+            ProcessInboundOptions {
+                room_id: Some(room_id()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    roomkit::testing::idle(&kit).await;
+    let delivered = result
+        .delivery_results
+        .get("hook")
+        .map(|delivery| delivery.status);
+    let answers = timeline(&kit)
+        .await
+        .iter()
+        .filter(|event| event.source.channel_id == channel("hook"))
+        .count();
+    assert_eq!(
+        (delivered, answers),
+        (Some(DeliveryResultStatus::Failed), 0)
     );
 }
 

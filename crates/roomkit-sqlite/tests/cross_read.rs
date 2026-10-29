@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, ChannelType, DeleteContent, EventContent, EventType, EventUpdates, IdentityId,
-    InboundMessage, RoomId, RoomUpdates, TextContent, Timestamp,
+    ChannelBinding, ChannelId, ChannelType, DeleteContent, EventContent, EventType, EventUpdates,
+    IdentityId, InboundMessage, Room, RoomId, RoomUpdates, TextContent, Timestamp,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{ConversationStore, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions};
@@ -721,6 +721,52 @@ async fn an_identity_with_a_key_rust_does_not_read_resolves_and_keeps_it() {
                 "email": ["lena@example.com"],
             })
         )
+    );
+}
+
+/// A binding row holding a rate limit its model refuses, which neither
+/// implementation's store writes through its interface, but a hand-edited
+/// file can hold: the room is read, and the read of its bindings fails, as
+/// the Python implementation's does on the same row (probe
+/// `tasks/probes/step5-lot2/invalid_stored_binding.py`: `get_room` ok,
+/// `list_bindings` a `ValidationError`). A store never serves a value its
+/// model refuses.
+#[tokio::test]
+async fn a_binding_row_its_model_refuses_fails_its_read_as_python_s_does() {
+    let file = TempFile::new("refused_binding");
+    let room_id = RoomId::new("r").unwrap();
+    {
+        let store = SqliteStore::open(file.path()).await.unwrap();
+        store.create_room(Room::new(room_id.clone())).await.unwrap();
+        let binding = ChannelBinding::new(
+            ChannelId::new("ws").unwrap(),
+            room_id.clone(),
+            ChannelType::HOST,
+        );
+        store.store_binding(binding).await.unwrap();
+    }
+    let connection = Connection::open(file.path()).unwrap();
+    let data: String = connection
+        .query_row("SELECT data FROM bindings WHERE room_id = 'r'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let mut record: Value = serde_json::from_str(&data).unwrap();
+    record["rate_limit"] = serde_json::json!({ "max_per_second": 0 });
+    connection
+        .execute(
+            "UPDATE bindings SET data = ?1 WHERE room_id = 'r'",
+            [record.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+    let store = SqliteStore::open(file.path()).await.unwrap();
+    assert_eq!(
+        (
+            store.get_room(&room_id).await.map(|room| room.is_some()),
+            store.list_bindings(&room_id).await.is_err()
+        ),
+        (Ok(true), true)
     );
 }
 

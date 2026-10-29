@@ -47,6 +47,41 @@ pub enum EventContent {
 }
 
 impl EventContent {
+    /// Refuses a content its constructor or its deserialization would have
+    /// refused: a media URL no reader may take, a negative duration (RFC
+    /// §6.4), through a composite's parts and an edit's new content. A
+    /// struct literal runs no check, so every door that writes an event runs
+    /// this one: the kit's calls, the hook chain, a channel's answer and the
+    /// stores. Outside the public API.
+    ///
+    /// # Errors
+    ///
+    /// Returns what the content's constructor would have returned.
+    #[doc(hidden)]
+    pub fn check(&self) -> Result<(), ModelError> {
+        match self {
+            Self::Media(media) => media_url(media.url.clone()).map(drop),
+            Self::Audio(audio) => {
+                playable_url(audio.url.clone())?;
+                duration(audio.duration_seconds).map(drop)
+            }
+            Self::Video(video) => {
+                playable_url(video.url.clone())?;
+                video.thumbnail_url.clone().map(playable_url).transpose()?;
+                duration(video.duration_seconds).map(drop)
+            }
+            Self::Composite(composite) => composite.parts.iter().try_for_each(Self::check),
+            Self::Edit(edit) => edit.new_content.check(),
+            Self::Text(_)
+            | Self::Rich(_)
+            | Self::Location(_)
+            | Self::System(_)
+            | Self::Template(_)
+            | Self::Delete(_)
+            | Self::ToolCall(_) => Ok(()),
+        }
+    }
+
     /// How many composite levels this content holds, counting through the
     /// new content of an edit (gap G-006): 0 for any other content.
     pub(crate) fn composite_depth(&self) -> usize {
