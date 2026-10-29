@@ -87,7 +87,7 @@ use roomkit_core::rules::chain_depth::{self, Draw, ReentryBudget};
 
 pub(crate) use self::adoption::{Adopting, Adoption, Completion, Reply, adopt, adopt_by_own_run};
 use self::run::Lease;
-pub(crate) use self::run::RunShared;
+pub(crate) use self::run::{LeftOpen, RunShared, Written};
 use crate::tasks::Marks;
 
 tokio::task_local! {

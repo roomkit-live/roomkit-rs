@@ -195,6 +195,7 @@ pub(super) async fn channel<S: ConversationStore>(
             target,
         } => {
             let kept = shared.take_stream(turn);
+            let taken = kept.is_some();
             let unit = kept.as_ref().map(|kept| kept.turn.unit());
             let _reading = kept.as_ref().map(|kept| inner.turns.reading(&kept.turn));
             let stops = Stops {
@@ -202,10 +203,16 @@ pub(super) async fn channel<S: ConversationStore>(
                 kit: inner.turns.cutting(),
                 turn: unit,
             };
-            Box::pin(stream::read(
+            let read = Box::pin(stream::read(
                 inner, kept, stops, responder, *answers, target,
             ))
-            .await
+            .await;
+            // A read the run's abort drops never returns: its stream stays
+            // open, as the abort reads it.
+            if taken {
+                shared.read_returned();
+            }
+            read
         }
     }
 }
@@ -284,7 +291,7 @@ fn refused_once_sealed(request: &ChannelRequest) -> ErrorRecord {
 }
 
 /// What a write of the store came to, once it ended; nothing while it runs.
-pub(crate) type Written = watch::Receiver<Option<Outcome>>;
+pub(crate) use crate::context::Written;
 
 /// The run's hold on a write's task once the write ended: never sent,
 /// dropped once the run went on from the write's outcome.

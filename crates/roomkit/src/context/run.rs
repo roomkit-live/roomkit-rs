@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::RoomId;
-use roomkit_core::ops::EffectId;
+use roomkit_core::ops::{EffectId, Outcome};
 use tokio::sync::{mpsc, watch};
 
 use super::adoption::Adoption;
@@ -26,6 +26,22 @@ struct Holdings {
     /// them yet.
     calls: HashSet<EffectId>,
 }
+
+/// What a write of the store came to, once it ended; nothing while it runs.
+pub(crate) type Written = watch::Receiver<Option<Outcome>>;
+
+/// The reads of the run's kept streams under way, and the commits written
+/// while one is: each with whether it commits an event to deliver, one
+/// stored `BLOCKED` never being one.
+#[derive(Debug, Default)]
+struct Reads {
+    open: usize,
+    rows: Vec<(bool, Written)>,
+}
+
+/// What a run leaves of its turns' streams as it ends: the commits its
+/// reads under way wrote, none for a stream kept unread.
+pub(crate) type LeftOpen = Vec<(bool, Written)>;
 
 /// How a run holds a room's lock.
 #[derive(Clone, Debug)]
@@ -51,6 +67,8 @@ pub(crate) struct RunShared {
     /// The turns the run's calls submitted and await the output of, by
     /// their effect: a call given up cuts its turn at once.
     turns: Mutex<HashMap<EffectId, Canceller>>,
+    /// The reads of its kept streams under way.
+    reads: Mutex<Reads>,
 }
 
 /// A claim on one tenure of a room's lock, which code run under that lock
@@ -73,6 +91,7 @@ impl RunShared {
             streams: Mutex::new(HashMap::new()),
             stops: Mutex::new(HashMap::new()),
             turns: Mutex::new(HashMap::new()),
+            reads: Mutex::new(Reads::default()),
         });
         (shared, received)
     }
@@ -138,6 +157,7 @@ impl RunShared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+        *self.reads() = Reads::default();
     }
 
     /// The call of `effect` submitted a turn, which `turn` cuts.
@@ -168,13 +188,40 @@ impl RunShared {
         Some(turn)
     }
 
-    /// Whether the run keeps the stream of a turn it has not read.
-    pub(crate) fn keeps_streams(&self) -> bool {
-        !self
+    fn reads(&self) -> MutexGuard<'_, Reads> {
+        self.reads.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The streams of its turns the run leaves open: kept unread, or read
+    /// as it ends, with the commits those reads wrote; `None` when it
+    /// leaves none.
+    pub(crate) fn left_open(&self) -> Option<LeftOpen> {
+        let kept = !self
             .streams
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .is_empty()
+            .is_empty();
+        let mut reads = self.reads();
+        (kept || reads.open > 0).then(|| std::mem::take(&mut reads.rows))
+    }
+
+    /// A commit the run writes, `delivers` its event, told by `written`:
+    /// kept while a read of a stream is under way, as that read's row.
+    pub(crate) fn wrote(&self, delivers: bool, written: &Written) {
+        let mut reads = self.reads();
+        if reads.open > 0 {
+            reads.rows.push((delivers, written.clone()));
+        }
+    }
+
+    /// The read of a stream [`take_stream`](Self::take_stream) took
+    /// returned: once none is under way, its rows are forgotten.
+    pub(crate) fn read_returned(&self) {
+        let mut reads = self.reads();
+        reads.open = reads.open.saturating_sub(1);
+        if reads.open == 0 {
+            reads.rows.clear();
+        }
     }
 
     /// Keeps the stream the turn of `effect` answered with, until it is read.
@@ -206,12 +253,16 @@ impl RunShared {
             .send_replace(true);
     }
 
-    /// The stream the turn of `effect` answered with, taken to be read.
+    /// The stream the turn of `effect` answered with, taken to be read: its
+    /// read is under way until [`read_returned`](Self::read_returned).
     pub(crate) fn take_stream(&self, effect: EffectId) -> Option<KeptStream> {
-        self.streams
+        let kept = self
+            .streams
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remove(&effect)
+            .remove(&effect)?;
+        self.reads().open += 1;
+        Some(kept)
     }
 
     /// The lease on the lock of `room_id` the run holds, by its own tenure

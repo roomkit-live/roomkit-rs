@@ -16,7 +16,9 @@
 //!   turn's work is cut with no grace;
 //! - `drain`: a turn asked as the lanes drain runs within their grace, the
 //!   turns left once the lanes are idle are cut then, and a stream whose
-//!   read begins as the close waits for those it cut is cut in turn.
+//!   read begins as the close waits for those it cut is cut in turn;
+//! - `grace`: a call whose run the grace's end aborts with a turn's stream
+//!   open reads the turn's end (N8).
 //!
 //! The kit's own work here is what roomkit-rs has of Python's doors: a
 //! SYNC hook's body, an ASYNC hook a delivery fires, a transport's
@@ -30,6 +32,7 @@
 
 mod doors;
 mod drain;
+mod grace;
 mod join;
 mod shutdown;
 mod store;

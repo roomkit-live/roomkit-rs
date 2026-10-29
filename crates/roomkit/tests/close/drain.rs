@@ -152,7 +152,7 @@ impl AiProvider for Pausing {
 
 /// What the turn the drain leaves does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Left {
+pub(crate) enum Left {
     /// It writes "Think", then waits 30 s.
     Stream,
     /// It writes 100 deltas at once.
@@ -164,7 +164,7 @@ enum Left {
 }
 
 /// The agent whose turn does what `left` says, attached to `room_1`.
-async fn attach_left<S: ConversationStore>(kit: &RoomKit<S>, left: Left) {
+pub(crate) async fn attach_left<S: ConversationStore>(kit: &RoomKit<S>, left: Left) {
     let first = match left {
         Left::Stream => Some("Think"),
         Left::Output => None,
@@ -201,7 +201,7 @@ async fn attach_scripted<S: ConversationStore>(kit: &RoomKit<S>, left: Left) {
 
 /// A call's result, as `(cancellation_reason, "type: message")` of its
 /// error; `None` for a call that failed or did not end.
-async fn told(call: Call) -> Option<(Option<String>, Option<String>)> {
+pub(crate) async fn told(call: Call) -> Option<(Option<String>, Option<String>)> {
     let result = tokio::time::timeout(Duration::from_secs(60), call)
         .await
         .ok()?
@@ -213,7 +213,7 @@ async fn told(call: Call) -> Option<(Option<String>, Option<String>)> {
     Some((result.cancellation_reason, error))
 }
 
-fn texts(texts: &[&str]) -> Vec<String> {
+pub(crate) fn texts(texts: &[&str]) -> Vec<String> {
     texts.iter().map(|&text| text.to_owned()).collect()
 }
 
@@ -790,38 +790,4 @@ async fn a_cut_target_is_dropped_where_it_waits_on_threads() {
         }
     }
     assert_eq!(wrong, []);
-}
-
-/// RFC §10.6.8 (RMK-1017, light review 6, fix 3): a run the close aborts
-/// keeping the stream of a turn it never read carries that turn's
-/// `backend_closed`, the turn still open as the kit closes. N8's race at
-/// the grace's edge, made sure: One's set leaves its place at 1 s, the
-/// write of its room's delivery cursor taking 10 s, so its turn's stream,
-/// answered and kept, is not read yet when the grace ends at 5.1 s, and
-/// the run is aborted there. Python's reader of a turn `turns.close`
-/// abandons fails the same row `TurnLinkError`, nothing of the turn
-/// stored (`rmk1017-lightreview5/n8_py.out`, tool, 5099 ms). On c4cc718
-/// the call read no reason and no error.
-#[tokio::test(start_paused = true)]
-async fn a_turn_kept_unread_at_the_abort_fails_backend_closed() {
-    let store = SlowCommits::advancing(room_id(), Duration::from_secs(10));
-    let witness = Witness::slow("One.", Duration::from_secs(1));
-    let kit = kit_on(RoomKit::new(RoomKitOptions::with_store(store)), &witness).await;
-    attach_left(&kit, Left::Tool).await;
-    let one = spawn_message(&kit, "One.", room_id());
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    tokio::time::timeout(Duration::from_secs(60), kit.close())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        (told(one).await, stored(&kit).await),
-        (
-            Some((
-                None,
-                Some("TurnLinkError: backend_closed: the turn backend closed".to_owned())
-            )),
-            texts(&["One."])
-        )
-    );
 }

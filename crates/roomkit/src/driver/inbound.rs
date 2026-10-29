@@ -42,7 +42,7 @@ use tokio::task::{JoinError, JoinHandle};
 
 use super::Leases;
 use super::calls::{self, Written};
-use crate::context::ExecutionContext;
+use crate::context::{ExecutionContext, LeftOpen};
 use crate::error::{KitError, with_causes};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
@@ -89,9 +89,9 @@ pub(crate) struct Record {
     /// The call's result once its own event's commit, the one that decides
     /// it, is stored, and what that write came to.
     committing: Mutex<Option<(InboundResult, Written)>>,
-    /// Whether the run was aborted keeping the stream of a turn it never
-    /// read.
-    left_open: AtomicBool,
+    /// The streams of its turns the run was aborted leaving open, kept
+    /// unread or read, with the commits their reads wrote.
+    left_open: Mutex<Option<LeftOpen>>,
     /// The commits of the call's cascade past the one that decides it, of
     /// events to deliver, whose outcome the run has not taken, by their
     /// effect, each with what its write came to: one stored BLOCKED is not
@@ -148,9 +148,13 @@ impl Record {
             .push((effect, written));
     }
 
-    /// The run is aborted keeping the stream of a turn it never read.
-    fn left_open(&self) {
-        self.left_open.store(true, Ordering::Release);
+    /// The run is aborted leaving its turns' streams open, kept unread or
+    /// read, its reads having written `rows`.
+    fn left_open(&self, rows: LeftOpen) {
+        *self
+            .left_open
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(rows);
     }
 
     /// The run took the outcome of `effect`'s write, or gave it up. One it
@@ -206,6 +210,11 @@ impl Record {
         let Some(mut result) = decided else {
             return self.committed().await;
         };
+        let left_open = self
+            .left_open
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         // A call whose own delivery was over when the run was aborted reads
         // no reason of the abort's, as Python's caller, whose lane cut a
         // later entry of its cascade.
@@ -214,13 +223,16 @@ impl Record {
                 result
                     .cancellation_reason
                     .get_or_insert_with(|| KIT_CLOSED.to_owned());
-            } else if self.left_open.load(Ordering::Acquire) {
-                // A turn whose stream the run kept and never read: still
-                // open as the kit closes, it fails `backend_closed` (RFC
-                // §10.6.8), as Python's reader of a turn `turns.close`
-                // abandons fails it.
-                result.error.get_or_insert_with(turns::closed);
+            } else if let Some(rows) = left_open {
+                read_left_open(&mut result, rows).await;
             }
+            return Ok(Ok(result));
+        }
+        // What the abort cuts is a turn's stream, its `on_event()` over,
+        // not a delivery running: the call reads the turn's end, as
+        // Python's, whose grace cuts the turn's reader.
+        if let Some(rows) = left_open {
+            read_left_open(&mut result, rows).await;
             return Ok(Ok(result));
         }
         let reason = if self.delivering.load(Ordering::Acquire) {
@@ -338,9 +350,10 @@ impl Caller {
         self.record.went_on(effect, past_the_cut);
     }
 
-    /// The run ends keeping the stream of a turn it never read.
-    pub(super) fn left_open(&self) {
-        self.record.left_open();
+    /// The run ends leaving its turns' streams open, kept unread or read,
+    /// its reads having written `rows`.
+    pub(super) fn left_open(&self, rows: LeftOpen) {
+        self.record.left_open(rows);
     }
 
     /// Takes the call's decision, `decided`: the caller is answered with
@@ -536,6 +549,33 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
 /// cut is read here, at the run's end, so that a run that ended before it
 /// reports its result whenever its end is read; a run a close was called
 /// from inside is spared, never cut (RFC §12.10.4).
+/// What a call whose aborted run left a turn's stream open reads, once
+/// the writes of its reads ended (RFC §10.6.8). A row stored to deliver:
+/// `kit_closed`, as a commit of its cascade stored and never delivered
+/// reads since pass 4. Rows stored `BLOCKED` only: nothing more, as an
+/// event never delivered. Nothing of the turn stored: the turn link's
+/// `backend_closed`, as Python's call reads the `TurnLinkError` of a turn
+/// whose reader its grace cut, `executor_lost` there, `backend_closed`
+/// here (decided 2026-10-28).
+async fn read_left_open(result: &mut InboundResult, rows: LeftOpen) {
+    let mut stored = false;
+    for (delivers, mut written) in rows {
+        if calls::outcome_of(&mut written).await != Outcome::Store(StoreOutcome::Committed) {
+            continue;
+        }
+        if delivers {
+            result
+                .cancellation_reason
+                .get_or_insert_with(|| KIT_CLOSED.to_owned());
+            return;
+        }
+        stored = true;
+    }
+    if !stored {
+        result.error.get_or_insert_with(turns::closed);
+    }
+}
+
 fn cut_at_its_end(output: InboundOutput, cut: bool, record: &Record) -> InboundOutput {
     if !cut || !record.delivering.load(Ordering::Acquire) {
         return output;

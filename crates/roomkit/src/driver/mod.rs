@@ -226,12 +226,12 @@ struct Driver<'kit, S> {
 
 impl<S> Drop for Driver<'_, S> {
     fn drop(&mut self) {
-        // A run ending with a turn's stream it never read, as the kit's
-        // close aborts it: its caller reads that turn left open.
+        // A run ending with a turn's stream kept unread or read, as the
+        // kit's close aborts it: its caller reads that turn left open.
         if let Some(caller) = self.caller.as_deref()
-            && self.shared.keeps_streams()
+            && let Some(rows) = self.shared.left_open()
         {
-            caller.left_open();
+            caller.left_open(rows);
         }
         self.adoptions.close();
         while let Ok(adoption) = self.adoptions.try_recv() {
@@ -287,20 +287,24 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
 
     /// Tells an inbound run's caller of a write it starts, `written` telling
     /// its outcome: the commit that decides the call, `decides`, or another
-    /// commit, of its cascade, of an event to deliver, when it `commits`.
+    /// commit, `commit` whether its event is one to deliver, of its cascade,
+    /// a row of a stream read when one is.
     fn note_the_commit(
         &self,
         id: EffectId,
         decides: Option<Box<InboundResult>>,
-        commits: bool,
+        commit: Option<bool>,
         written: calls::Written,
     ) {
         let Some(caller) = self.caller.as_deref() else {
             return;
         };
+        if let Some(delivers) = commit {
+            self.shared.wrote(delivers, &written);
+        }
         match decides {
             Some(result) => caller.commits(*result, written),
-            None if commits => caller.cascade_commits(id, written),
+            None if commit == Some(true) => caller.cascade_commits(id, written),
             None => {}
         }
     }
@@ -465,17 +469,18 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         } = effect;
         let deadline = deadline.and_then(|deadline| self.clocks.instant_of(deadline));
         let inner = Arc::clone(self.inner);
-        // A commit of an event to deliver: one stored BLOCKED never is.
-        let mut commits = false;
+        // A commit, of an event to deliver or not: one stored BLOCKED never
+        // is.
+        let mut commit = None;
         if let Request::Store(StoreRequest::Commit { event, .. }) = &request {
-            commits = event.status != EventStatus::Blocked;
+            commit = Some(event.status != EventStatus::Blocked);
             self.indexes.committing(id, event);
         }
         match request {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) if writes(&request) => {
                 let (writing, written, went_on) = calls::write(&inner, request);
-                self.note_the_commit(id, decides, commits, written);
+                self.note_the_commit(id, decides, commit, written);
                 // Only an inbound run's commit takes a place in a room's
                 // lane, and its run, a task of its own, is always polled; a
                 // run in its caller's own task may sit unpolled, and its
