@@ -221,7 +221,7 @@ kit, its construction and its calls).
   round. Hooks and transports keep that context. The earlier edit and
   delete records are no longer in a turn's history; a deleted message
   still is, its content withheld, and a turn on an edit or a delete reads
-  that event as its history's newest, as Python's does.
+  that event as its history's newest, as stored, as Python's does.
 - Every row of a streamed response carries the turn's own
   `correlation_id`, a fresh one per response whatever the trigger
   carries, as Python stamps it, and the replay pairs a call's start and
