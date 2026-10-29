@@ -2,16 +2,25 @@
 //! once it read an answer: its `metadata_updates`, without the keys only
 //! the framework writes. RFC §10.6.4: how a stream's deltas reach it.
 
+use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+use std::time::Duration;
+
+use futures_core::Stream;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, RoomContext,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, EventContent,
+    InboundMessage, Metadata, RoomContext, RoomEvent, ToolCallContent, ToolCallStatus,
 };
 use roomkit::testing::TurnTap;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, DeliveryStream, RoomKit, RoomKitOptions, StreamItem, text_of,
+    CreateRoomOptions, DeliveryStream, ProcessInboundOptions, ResponseItem, RoomKit,
+    RoomKitOptions, StreamItem, current_turn, text_of,
 };
 use roomkit_ai::AiAgent;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
@@ -212,6 +221,225 @@ async fn deltas_yielded_together_cross_as_one_item() {
                 (40, json!(8))
             ],
             Some(890)
+        )
+    );
+    kit.close().await.unwrap();
+}
+
+/// A response's items, each ready at once.
+struct Items(VecDeque<ResponseItem>);
+
+impl Stream for Items {
+    type Item = Result<ResponseItem, ChannelError>;
+
+    fn poll_next(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.get_mut().0.pop_front().map(Ok))
+    }
+}
+
+/// An intelligence channel whose own stream writes text, a call's start,
+/// two deltas, the call's end, then text again, as `ResponseItem` lets a
+/// channel write it.
+struct Writing;
+
+impl Channel for Writing {
+    fn declaration(&self) -> ChannelDeclaration {
+        ChannelDeclaration::new(
+            channel("ai"),
+            ChannelType::AI,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+        )
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let own = event.source.channel_id == channel("ai");
+        async move {
+            if own {
+                return Ok(ChannelOutput::default());
+            }
+            let start = ToolCallContent::new("look", "c1");
+            let mut end = ToolCallContent::new("look", "c1");
+            end.status = ToolCallStatus::Completed;
+            end.result = json!("ok");
+            let mut record = Metadata::new();
+            record.insert("loop_end_reason".to_owned(), json!("completed"));
+            let items = VecDeque::from([
+                ResponseItem::Text("a ".to_owned()),
+                ResponseItem::ToolStart(start),
+                ResponseItem::Text("b ".to_owned()),
+                ResponseItem::Text("c ".to_owned()),
+                ResponseItem::ToolEnd(end),
+                ResponseItem::Text("d ".to_owned()),
+                ResponseItem::End(record),
+            ]);
+            Ok(current_turn()
+                .unwrap()
+                .respond_with_stream(Box::pin(Items(items))))
+        }
+    }
+}
+
+/// A WebSocket transport that streams and keeps what it read, in order.
+#[derive(Clone)]
+struct Logging {
+    read: Arc<Mutex<Vec<String>>>,
+}
+
+impl Channel for Logging {
+    fn declaration(&self) -> ChannelDeclaration {
+        let mut declaration = ChannelDeclaration::new(
+            channel("ws"),
+            ChannelType::WEBSOCKET,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        );
+        declaration.supports_streaming_delivery = true;
+        declaration.recipient_key = None;
+        declaration
+    }
+
+    async fn deliver_stream(
+        &self,
+        mut stream: DeliveryStream,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        while let Some(item) = stream.next().await {
+            let line = match item {
+                Ok(StreamItem::Text(text)) => format!("text {text:?}"),
+                Ok(StreamItem::Row(row)) => {
+                    format!("row {:?} {:?}", row.event_type, text_of(&row.content))
+                }
+                Ok(_) => "other".to_owned(),
+                Err(error) => format!("error {error}"),
+            };
+            self.read.lock().unwrap().push(line);
+        }
+        Ok(ChannelOutput::default())
+    }
+}
+
+/// The turn link's frames the tap saw, a line each, but its heartbeats and
+/// its acceptance: an item by its kind, a text with its deltas.
+fn frame_lines(tap: &TurnTap) -> Vec<String> {
+    tap.messages()
+        .into_iter()
+        .filter(|message| message.family == "frame")
+        .filter_map(|message| {
+            let frame: Value = serde_json::from_str(&message.json).unwrap();
+            let frame = &frame["message"];
+            let kind = frame["type"].as_str().unwrap_or_default();
+            if matches!(kind, "heartbeat" | "accepted") {
+                return None;
+            }
+            let item = &frame["item"];
+            Some(match item["kind"].as_str() {
+                Some("text") => format!("text {} {}", item["text"], item["deltas"]),
+                Some(other) => other.to_owned(),
+                None => kind.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// RFC §10.6.4 (RMK-1017, light review 6, S7): text a channel's stream
+/// writes inside a call, between its start and its end, crosses in order:
+/// the burst kept goes before the call's end, so the call's end never
+/// waits on it. Bounded: on a mutation that kept the burst past the end
+/// (`B_end_burst`), the call never returned.
+#[tokio::test(start_paused = true)]
+async fn text_written_inside_a_call_crosses_in_order() {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    kit.register_channel(roomkit::testing::RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+    ))
+    .unwrap();
+    let target = Logging {
+        read: Arc::default(),
+    };
+    kit.register_channel(target.clone()).unwrap();
+    kit.register_channel(Writing).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["sms", "ws", "ai"] {
+        kit.attach_channel(&room(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let tap = TurnTap::on(&kit);
+    let message = InboundMessage::new(channel("sms"), "+15550000001", EventContent::text("Go."));
+    let options = ProcessInboundOptions {
+        room_id: Some(room()),
+        ..Default::default()
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(60),
+        kit.process_inbound(message, options),
+    )
+    .await
+    .expect("the call returns")
+    .unwrap();
+    roomkit::testing::idle(&kit).await;
+    let frames = frame_lines(&tap);
+    let events = kit.store().list_events(&room(), &received()).await.unwrap();
+    let stored: Vec<String> = events
+        .iter()
+        .filter(|event| event.source.channel_id == channel("ai"))
+        .map(|event| format!("{:?} {:?}", event.event_type, text_of(&event.content)))
+        .collect();
+    let lines = |lines: &[&str]| {
+        lines
+            .iter()
+            .map(|&line| line.to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        (
+            result.error,
+            frames,
+            target.read.lock().unwrap().clone(),
+            stored
+        ),
+        (
+            None,
+            lines(&[
+                "output",
+                "text \"a \" null",
+                "tool_start",
+                "text \"b c \" 2",
+                "tool_end",
+                "text \"d \" null",
+                "record",
+                "loop_end",
+                "stream_end",
+                "end"
+            ]),
+            lines(&[
+                "text \"a \"",
+                "row Message \"a \"",
+                "row ToolCallStart \"[Tool call: look]\"",
+                "text \"b c \"",
+                "row ToolCallEnd \"[Tool call: look]\"",
+                "text \"d \"",
+                "row Message \"b c d \""
+            ]),
+            lines(&[
+                "Message \"a \"",
+                "ToolCallStart \"[Tool call: look]\"",
+                "ToolCallEnd \"[Tool call: look]\"",
+                "Message \"b c d \""
+            ])
         )
     );
     kit.close().await.unwrap();
