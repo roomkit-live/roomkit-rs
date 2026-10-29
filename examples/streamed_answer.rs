@@ -3,8 +3,10 @@
 //! and on an SMS number that receives each message once it is stored.
 //!
 //! - The screen is a streaming channel (`supports_streaming_delivery`): its
-//!   `deliver_stream` reads the answer's text piece by piece, then each row
-//!   as the store holds it, with its id and index. The SMS number buffers:
+//!   `deliver_stream` reads the answer's text piece by piece, the words
+//!   the model writes together reaching it as one piece (RFC §10.6.4), then
+//!   each row as the store holds it, with its id and index. The SMS number
+//!   buffers:
 //!   it receives the rows through `deliver()` while the turn goes on, and
 //!   never a tool call's row.
 //! - Mia's question makes the model say a sentence, call `check_shelves`,
@@ -246,9 +248,10 @@ fn rows(timeline: &[RoomEvent]) -> Vec<(EventType, String)> {
         .collect()
 }
 
-/// Mia's turn: the screen reads the pieces of each segment, then its row
-/// as stored, the call's two rows between them; the SMS receives the two
-/// messages only; the call ran once, between the segments.
+/// Mia's turn: the screen reads the pieces of each segment, the words the
+/// model wrote together as one, then its row as stored, the call's two
+/// rows between them; the SMS receives the two messages only; the call ran
+/// once, between the segments.
 fn check_mia(
     checks: &mut Checks,
     read: &[Read],
@@ -290,8 +293,8 @@ fn check_mia(
         }
     }
     checks.expect(
-        "the screen reads each segment piece by piece, then its row as the store holds it, \
-         the pieces joining to the row's text, and the call's rows between them",
+        "the screen reads each segment's pieces, then its row as the store holds it, the \
+         pieces joining to the row's text, and the call's rows between them",
         segments_join
             && kinds
                 == [
@@ -304,7 +307,7 @@ fn check_mia(
                 .iter()
                 .filter(|item| matches!(item, Read::Text(_)))
                 .count()
-                > 2,
+                >= 2,
     );
     checks.expect(
         "the SMS number receives the two messages once each is stored, never a tool call's row",
