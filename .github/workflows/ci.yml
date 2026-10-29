@@ -53,6 +53,9 @@ jobs:
       - run: make fmt-check
       - run: make clippy
       - run: make test
+      # The core's tests without its default-off features: the
+      # system-environment constructors must stay optional.
+      - run: make test-core
       - run: make examples
       - run: make doc
       - run: make check-core-deps

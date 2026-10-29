@@ -22,7 +22,9 @@ make hooks
 ## Gates
 
 `make all` passes before every commit: formatting, clippy with warnings
-denied, tests, documentation with warnings denied, `cargo deny` (it fails
+denied, tests, the core's tests without its features (`make test-core`: the
+core builds and passes without `system-environment`, which reads the clock),
+documentation with warnings denied, `cargo deny` (it fails
 when cargo-deny is not installed: `cargo install cargo-deny --locked`), the
 check that `roomkit-core` depends, on every target, only on the crates its
 allow list names (`scripts/check-core-deps.sh`), every example, each of
