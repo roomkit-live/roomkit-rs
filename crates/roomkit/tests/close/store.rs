@@ -15,14 +15,16 @@ use roomkit::{
 use tokio::sync::Notify;
 
 /// An in-memory store whose commit of "Slow." tells `committing` it
-/// started, then waits for `go`, as a slow database does, and whose commit
-/// of the text and room `delayed` names takes its delay.
+/// started, then waits for `go`, as a slow database does, whose commit of
+/// the text and room `delayed` names takes its delay, and whose moves of
+/// the delivery cursor of the room `advancing` names take its delay.
 #[derive(Debug, Default)]
 pub(crate) struct SlowCommits {
     store: InMemoryStore,
     pub(crate) committing: Arc<Notify>,
     pub(crate) go: Arc<Notify>,
     delayed: Option<(&'static str, RoomId, Duration)>,
+    advancing: Option<(RoomId, Duration)>,
 }
 
 impl SlowCommits {
@@ -30,6 +32,14 @@ impl SlowCommits {
     pub(crate) fn delaying(text: &'static str, room_id: RoomId, delay: Duration) -> Self {
         Self {
             delayed: Some((text, room_id, delay)),
+            ..Self::default()
+        }
+    }
+
+    /// A store whose moves of `room_id`'s delivery cursor take `delay`.
+    pub(crate) fn advancing(room_id: RoomId, delay: Duration) -> Self {
+        Self {
+            advancing: Some((room_id, delay)),
             ..Self::default()
         }
     }
@@ -58,6 +68,11 @@ impl ConversationStore for SlowCommits {
         index: u64,
         force: bool,
     ) -> Result<bool, StoreError> {
+        if let Some((slow, delay)) = &self.advancing
+            && slow == room_id
+        {
+            tokio::time::sleep(*delay).await;
+        }
         self.store
             .advance_delivered_index(room_id, index, force)
             .await

@@ -168,6 +168,15 @@ impl RunShared {
         Some(turn)
     }
 
+    /// Whether the run keeps the stream of a turn it has not read.
+    pub(crate) fn keeps_streams(&self) -> bool {
+        !self
+            .streams
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    }
+
     /// Keeps the stream the turn of `effect` answered with, until it is read.
     pub(crate) fn keep_stream(&self, effect: EffectId, stream: KeptStream) {
         self.streams

@@ -47,6 +47,7 @@ use crate::error::{KitError, with_causes};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Marks, Tasks};
+use crate::turns;
 
 /// What an inbound call's run comes to: the operation's output, or why the
 /// kit's call failed.
@@ -88,6 +89,9 @@ pub(crate) struct Record {
     /// The call's result once its own event's commit, the one that decides
     /// it, is stored, and what that write came to.
     committing: Mutex<Option<(InboundResult, Written)>>,
+    /// Whether the run was aborted keeping the stream of a turn it never
+    /// read.
+    left_open: AtomicBool,
     /// The commits of the call's cascade past the one that decides it, of
     /// events to deliver, whose outcome the run has not taken, by their
     /// effect, each with what its write came to: one stored BLOCKED is not
@@ -142,6 +146,11 @@ impl Record {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push((effect, written));
+    }
+
+    /// The run is aborted keeping the stream of a turn it never read.
+    fn left_open(&self) {
+        self.left_open.store(true, Ordering::Release);
     }
 
     /// The run took the outcome of `effect`'s write, or gave it up. One it
@@ -205,6 +214,12 @@ impl Record {
                 result
                     .cancellation_reason
                     .get_or_insert_with(|| KIT_CLOSED.to_owned());
+            } else if self.left_open.load(Ordering::Acquire) {
+                // A turn whose stream the run kept and never read: still
+                // open as the kit closes, it fails `backend_closed` (RFC
+                // §10.6.8), as Python's reader of a turn `turns.close`
+                // abandons fails it.
+                result.error.get_or_insert_with(turns::closed);
             }
             return Ok(Ok(result));
         }
@@ -321,6 +336,11 @@ impl Caller {
     /// once the kit's close cut the work.
     pub(super) fn went_on(&self, effect: EffectId, past_the_cut: bool) {
         self.record.went_on(effect, past_the_cut);
+    }
+
+    /// The run ends keeping the stream of a turn it never read.
+    pub(super) fn left_open(&self) {
+        self.record.left_open();
     }
 
     /// Takes the call's decision, `decided`: the caller is answered with

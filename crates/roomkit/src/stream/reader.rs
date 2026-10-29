@@ -134,6 +134,7 @@ pub(crate) async fn read<S: ConversationStore>(
         cut: None,
         draining: None,
         took: false,
+        unanswered: None,
         reads: channel
             .as_ref()
             .map_or(Reads::Nobody, |(_, target)| Reads::Target {
@@ -236,6 +237,9 @@ struct Producer {
     draining: Option<&'static str>,
     /// Whether the turn's response gave the read anything.
     took: bool,
+    /// The reader's pull the read stopped on, unanswered: kept open until
+    /// the reader is dropped, so that it never reads an end there.
+    unanswered: Option<oneshot::Sender<Pulled>>,
     /// Who reads the stream's rows in it.
     reads: Reads,
     /// What the reader is handed next, in order.
@@ -266,8 +270,9 @@ impl Producer {
         stops: Stops,
     ) -> Result<ChannelOutput, ChannelError> {
         let mut reader = Box::pin(reader);
+        let mut pulls = pulls;
         {
-            let mut serving = pin!(self.serve(pulls, reader_done, stops));
+            let mut serving = pin!(self.serve(&mut pulls, reader_done, stops));
             tokio::select! {
                 biased;
                 read = &mut reader => {
@@ -278,10 +283,18 @@ impl Producer {
             }
         }
         if self.cut != Some(KIT_CLOSED) {
+            // The reader reads the stream's end.
+            drop(self.unanswered.take());
+            drop(pulls);
             return reader.await;
         }
+        // The pulls and the one left unanswered stay open while the reader
+        // is polled one last time: it is dropped where it waits, never
+        // reading an end the stream did not have.
         let last = poll_fn(|cx| Poll::Ready(reader.as_mut().poll(cx))).await;
         drop(reader);
+        drop(self.unanswered.take());
+        drop(pulls);
         match last {
             Poll::Ready(read) => read,
             Poll::Pending => Ok(ChannelOutput::default()),
@@ -294,7 +307,7 @@ impl Producer {
     /// one's (RFC §12.2 step 13s).
     async fn serve(
         &mut self,
-        mut pulls: mpsc::UnboundedReceiver<oneshot::Sender<Pulled>>,
+        pulls: &mut mpsc::UnboundedReceiver<oneshot::Sender<Pulled>>,
         mut reader_done: oneshot::Receiver<()>,
         mut stops: Stops,
     ) {
@@ -357,6 +370,7 @@ impl Producer {
                 stop = stops.stopped(), if self.draining.is_none() => match stop {
                     Stop::Now(reason) => {
                         self.cut = Some(reason);
+                        self.unanswered = Some(pull);
                         return false;
                     }
                     Stop::Drained(reason) => {
@@ -375,6 +389,7 @@ impl Producer {
                 // The cut turn ended, what it sent read: the read stops as a
                 // cut one.
                 self.cut = self.draining;
+                self.unanswered = Some(pull);
                 return false;
             }
             self.take(read).await;

@@ -226,6 +226,13 @@ struct Driver<'kit, S> {
 
 impl<S> Drop for Driver<'_, S> {
     fn drop(&mut self) {
+        // A run ending with a turn's stream it never read, as the kit's
+        // close aborts it: its caller reads that turn left open.
+        if let Some(caller) = self.caller.as_deref()
+            && self.shared.keeps_streams()
+        {
+            caller.left_open();
+        }
         self.adoptions.close();
         while let Ok(adoption) = self.adoptions.try_recv() {
             let declined = Reply::Declined(Box::new(adoption.entry));
