@@ -333,6 +333,10 @@ impl RoomKitError {
     }
 }
 
+// The core's per-operation errors convert into the kit's. Their impls are
+// hidden, as roomkit does not re-export those errors (docs/architecture.md,
+// Conventions).
+#[doc(hidden)]
 impl From<InboundError> for RoomKitError {
     fn from(error: InboundError) -> Self {
         match error {
@@ -427,6 +431,7 @@ fn repr(text: &str) -> String {
     written
 }
 
+#[doc(hidden)]
 impl From<LifecycleError> for RoomKitError {
     fn from(error: LifecycleError) -> Self {
         match error {
@@ -456,6 +461,7 @@ impl From<LifecycleError> for RoomKitError {
     }
 }
 
+#[doc(hidden)]
 impl From<MutationError> for RoomKitError {
     fn from(error: MutationError) -> Self {
         match error {
@@ -472,6 +478,7 @@ impl From<MutationError> for RoomKitError {
     }
 }
 
+#[doc(hidden)]
 impl From<ConfigError> for RoomKitError {
     fn from(error: ConfigError) -> Self {
         match error {
@@ -482,6 +489,7 @@ impl From<ConfigError> for RoomKitError {
     }
 }
 
+#[doc(hidden)]
 impl From<RegistrationError> for RoomKitError {
     fn from(error: RegistrationError) -> Self {
         Self::Value(error.to_string())
@@ -494,6 +502,7 @@ impl From<ModelError> for RoomKitError {
     }
 }
 
+#[doc(hidden)]
 impl From<ProtocolError> for RoomKitError {
     fn from(error: ProtocolError) -> Self {
         Self::Internal(format!("the driver broke the effect protocol: {error}"))

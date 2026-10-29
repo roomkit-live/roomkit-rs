@@ -81,7 +81,8 @@ impl RoomFilter {
 /// record never fails on it (RFC §6.4 media URLs, a rate limit not above
 /// 0). The Python implementation refuses such a value when its model is
 /// built; Rust refuses it at each door that writes it. Outside the public
-/// API: every store of the workspace runs them.
+/// API: every store of the workspace runs them, and a third-party store
+/// runs none unless it calls them.
 #[doc(hidden)]
 pub mod written {
     use roomkit_core::model::{ChannelBinding, EventContent, EventUpdates, RoomEvent};
