@@ -119,8 +119,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    deliver into and are cut then, not at the grace, as Python's
     ///    `turns.close` follows its `lanes.aclose` (RFC §10.6.8): each
     ///    crosses as `cancel`, what it sent before is read while its
-    ///    reader pulls, a streaming target that does not cut with it, as
-    ///    Python cancels its readers, and the text the reader was handed
+    ///    reader pulls, a streaming target that does not pull cut with it,
+    ///    as Python cancels its readers, and the text the target received
     ///    is stored, marked `cancelled` (RFC §12.2 step 13s), its delivery
     ///    dropped, the call reading `kit_closed`; one that said nothing,
     ///    still open, fails the turn link's `backend_closed` (RFC

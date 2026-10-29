@@ -146,6 +146,13 @@ pub trait Channel: Send + Sync + 'static {
     /// handed stored marked `cancelled` (RFC §12.2 step 13s). The text is
     /// shown before `BEFORE_BROADCAST` judges the row it ends in.
     ///
+    /// The kit's close may drop this future, as the Python implementation
+    /// cancels its stream readers: a stream the close cuts as it starts,
+    /// and one it drains once its lanes are idle, whose target does not
+    /// pull. The future is polled once more first, so that it takes what it
+    /// was handed, then dropped where it waits, with no async cleanup: a
+    /// target that must release what it holds does so in a `Drop`.
+    ///
     /// The default reads the stream to its end, then delivers each row
     /// through [`deliver`](Channel::deliver); a response that fails is
     /// delivered as far as it came, then the failure is returned.

@@ -11,6 +11,13 @@ kit, its construction and its calls).
 
 ### Changed
 
+- A stream's text deltas yielded without a wait between them cross the
+  turn link as one item, their text joined and their number told in the
+  item's `deltas`, up to the 64 a pull grants, sent once the stream waits
+  and before any other frame, as the Python implementation's
+  `FrameSender` sends them (RFC §10.6.4): a streaming target is handed
+  them as one piece. 200 deltas yielded at once reach a target as four
+  items, where it was handed 200.
 - `RoomKit::new(RoomKitOptions { .. })` builds a kit with the Python
   implementation's constructor keywords: `store`, `inbound_router`,
   `max_chain_depth`, `agent_response_policy` and `process_timeout`;
@@ -154,7 +161,7 @@ kit, its construction and its calls).
   call reading `kit_closed`, and a turn that said nothing, still open,
   fails the turn link's `backend_closed`. Once cut, a turn's streaming
   target that does not read on is cut with it, as Python cancels its
-  readers, and the text it was handed is stored, marked `cancelled`: a
+  readers, and the text it received is stored, marked `cancelled`: a
   stalled target held the close 15 s or more, storing nothing. An agent
   writing then running a tool of 30 s, closed from outside, closes at 0.1
   s, where it closed at 5.1 s; one asked once a delivery of 1 s ended, at

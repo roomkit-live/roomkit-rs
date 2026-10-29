@@ -708,8 +708,13 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));
         if let Some(caller) = self.caller.as_deref() {
-            // A write that ends once the close cut the work: the run is
-            // aborted before what its outcome leads to starts.
+            // A guard: a cascade commit whose outcome the run takes once
+            // the close cut the work stays recorded, so that a run aborted
+            // at a later wait, before its own result is read, still reads
+            // its event stored and never delivered. The run goes on from
+            // the outcome at once to the event's delivery set, which the
+            // draining lanes drop, `kit_closed` in its own result, so no
+            // test found that later wait (RMK-1017, light review 5).
             let cut = self.inner.tasks.cuts(self.marks.innermost());
             caller.went_on(effect, cut);
         }
