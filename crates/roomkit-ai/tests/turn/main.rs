@@ -98,7 +98,14 @@ async fn a_tool_trigger_takes_no_event_hook() {
     let registered = room.kit.hook(spec, |_event, _context| async {
         Ok(roomkit::model::HookResult::allow(AllowOptions::default()))
     });
-    assert!(matches!(registered, Err(RoomKitError::Value(_))));
+    assert_eq!(
+        registered.map(drop),
+        Err(RoomKitError::Value(
+            "hook \"approve\": BeforeToolUse takes a tool call, not an event: register it as a \
+             tool hook"
+                .to_owned()
+        ))
+    );
 }
 
 /// RFC §9.3: each SYNC hook reads the result as the one before left it;

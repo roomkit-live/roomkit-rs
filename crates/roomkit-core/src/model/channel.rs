@@ -489,6 +489,20 @@ mod tests {
         );
     }
 
+    /// Python's `gt=0` refuses `NaN`, which no JSON holds but a struct
+    /// literal can: the check every door runs refuses it.
+    #[test]
+    fn a_nan_rate_limit_is_refused_by_its_check() {
+        let limit = RateLimit {
+            max_per_minute: Some(f64::NAN),
+            ..RateLimit::default()
+        };
+        assert_eq!(
+            limit.check().map_err(|error| error.to_string()),
+            Err("max_per_minute: Input should be greater than 0 [input_value=NaN]".to_owned())
+        );
+    }
+
     /// Python's `gt=0` on a capability's limits: each read must be greater
     /// than 0, and `None` is no limit.
     #[test]
