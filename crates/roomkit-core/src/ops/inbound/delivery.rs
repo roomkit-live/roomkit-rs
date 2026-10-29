@@ -89,6 +89,9 @@ pub(super) struct SetOutcome {
     pub(super) delivered: Vec<ChannelId>,
     /// The targets that failed, with what failed.
     pub(super) failures: BTreeMap<ChannelId, String>,
+    /// The agents whose channel was not registered when their turn came:
+    /// the turn they were owed was never taken (gap G-048).
+    pub(super) unreached: Vec<ChannelId>,
     /// How many targets the set had.
     pub(super) targets: usize,
     /// The merged response metadata of the intelligence targets (RFC §10.1).
@@ -218,6 +221,14 @@ impl DeliverySet {
     /// Whose cascade the set belongs to.
     pub(super) fn lineage(&self) -> Lineage {
         self.lineage
+    }
+
+    /// Whether the set asks `channel_id` for a turn: an agent its plan
+    /// holds.
+    pub(super) fn asks(&self, channel_id: &ChannelId) -> bool {
+        self.targets
+            .iter()
+            .any(|target| target.role == Role::Agent && &target.binding.channel_id == channel_id)
     }
 
     /// Cuts the set's turns: it asks no agent from now on, and the turns it
@@ -634,7 +645,9 @@ impl DeliverySet {
 
     /// A target whose channel is not registered, its binding left in the
     /// room (gap G-048): a transport is skipped, and counts as no target;
-    /// an intelligence channel is reported `delivery_failed`.
+    /// an intelligence channel is reported `delivery_failed`, and its
+    /// delivery result failed `channel_not_registered`, not retryable, as
+    /// the Python implementation's `_delivery_error` reports it.
     fn not_registered(&mut self, index: usize) {
         let Some(target) = self.targets.get(index) else {
             return;
@@ -659,6 +672,23 @@ impl DeliverySet {
                     channel_id = %channel_id,
                     "the intelligence channel is not registered; its turn is not taken"
                 );
+                let channel_id = channel_id.clone();
+                self.outcome.delivery_results.insert(
+                    channel_id.clone(),
+                    DeliveryResult {
+                        channel_id: channel_id.clone(),
+                        status: DeliveryResultStatus::Failed,
+                        provider_message_id: None,
+                        error: Some(DeliveryError {
+                            code: CHANNEL_NOT_REGISTERED.to_owned(),
+                            message: CHANNEL_NOT_REGISTERED.to_owned(),
+                            retryable: false,
+                        }),
+                        retry_after: None,
+                        provider_result: None,
+                    },
+                );
+                self.outcome.unreached.push(channel_id);
                 self.fail(index, CHANNEL_NOT_REGISTERED.to_owned());
             }
         }

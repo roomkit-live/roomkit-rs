@@ -9,15 +9,16 @@
 )]
 use std::future::{Future, ready};
 use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, DeliveryResultStatus, EventContent, EventDirection, EventId,
-    EventSource, EventStatus, HookResult, InboundMessage, MediaContent, RateLimit, RetryPolicy,
-    RoomContext, RoomEvent, RoomId, TextContent, Timestamp,
+    ChannelOutput, ChannelType, DeliveryError, DeliveryResultStatus, EventContent, EventDirection,
+    EventId, EventSource, EventStatus, HookResult, InboundMessage, MediaContent, RateLimit,
+    RetryPolicy, RoomContext, RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
     EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
@@ -27,7 +28,7 @@ use roomkit::{
     CommitEventOptions, ConversationStore, CreateRoomOptions, EventDraft, FrameworkEvent,
     HookExecution, HookHandler, HookReturn, HookSpec, HookTrigger, PostOptions,
     ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, SendEventOptions,
-    UpdateEventOptions, default_inbound_event, text_of,
+    UpdateEventOptions, WeakRoomKit, default_inbound_event, text_of,
 };
 use tokio::sync::mpsc;
 
@@ -165,6 +166,84 @@ async fn an_inbound_result_reports_its_replay_answers_and_unreached_addresses() 
             ),
             (false, Some(vec![]), vec![]),
         ]
+    );
+}
+
+/// A transport that unregisters the channel `ai` when it is told of an
+/// event: the agent's turn, owed by the plan the commit made, is asked
+/// after it, and never taken.
+#[derive(Default)]
+struct Unregistering {
+    kit: Arc<OnceLock<WeakRoomKit>>,
+}
+
+impl Channel for Unregistering {
+    fn declaration(&self) -> ChannelDeclaration {
+        ChannelDeclaration::new(
+            channel("gate"),
+            ChannelType::WEBSOCKET,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        )
+    }
+
+    fn on_event(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        if let Some(kit) = self.kit.get().and_then(WeakRoomKit::upgrade) {
+            kit.unregister_channel(&channel("ai"));
+        }
+        ready(Ok(ChannelOutput::default()))
+    }
+}
+
+/// Python's `_report_root_pass` refreshes `unavailable_targets` once the
+/// trigger's delivery set is over (`lane_execution.py`,
+/// `_unavailable_targets`; probe
+/// `tasks/probes/step5-lot2-review-A/not_ported_inbound.py`): an addressed
+/// agent the committed plan held, unregistered before its turn, reads as
+/// unavailable, its delivery result failed `channel_not_registered`, not
+/// retryable, as Python's `_delivery_error` writes it.
+#[tokio::test]
+async fn an_addressed_agent_unregistered_before_its_turn_reads_as_unavailable() {
+    let (kit, sms) = sms_and_agent().await;
+    let gate = Unregistering::default();
+    gate.kit.set(kit.downgrade()).unwrap();
+    kit.register_channel(gate).unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("gate"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut addressed = message(&sms, "hi");
+    addressed.addressed_to = Some(vec![channel("ai")]);
+    let routed = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    let result = kit.process_inbound(addressed, routed).await.unwrap();
+    let failed = result
+        .delivery_results
+        .get(&channel("ai"))
+        .map(|delivered| (delivered.status, delivered.error.clone()));
+    assert_eq!(
+        (result.unavailable_targets, failed),
+        (
+            Some(vec![channel("ai")]),
+            Some((
+                DeliveryResultStatus::Failed,
+                Some(DeliveryError {
+                    code: "channel_not_registered".to_owned(),
+                    message: "channel_not_registered".to_owned(),
+                    retryable: false,
+                })
+            ))
+        )
     );
 }
 

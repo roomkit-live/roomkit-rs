@@ -85,8 +85,11 @@ kit, its construction and its calls; lot 2: the model and the errors).
   one built by literal reads as a hook that raised Python's `ValueError`,
   as a modify without its event does.
 - `InboundResult` gains Python's `duplicate` (a replayed key),
-  `unavailable_targets` (the addresses the committed plan asks no turn
-  of) and `response_events` (the answers the call's cascade delivered).
+  `unavailable_targets` (the addresses no turn reached: the committed plan
+  asks none of them, or the agent's channel was unregistered before its
+  turn, which its delivery result then reports failed
+  `channel_not_registered`) and `response_events` (the answers the call's
+  cascade delivered; an adopted call's wait reads its own).
 - `RoomEvent.consumption` and its three types go, `RateLimit.burst` and
   `ChannelCapabilities.rate_limit` too (step 5, point 5); `RateLimit`
   gains `max_per_hour` and refuses a limit not above 0,

@@ -89,6 +89,7 @@ mod stamp;
 mod stream;
 mod work_read;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use self::adoption::Adoptions;
@@ -125,7 +126,10 @@ use crate::rules::chain_depth::{Draw, ReentryBudget};
 pub struct Inbound {
     config: Arc<KitConfig>,
     io: Io,
-    machine: Machine,
+    /// Boxed: a driver holds the operation across its awaits, and the
+    /// call's state inline would make the future of every call that drives
+    /// one large.
+    machine: Box<Machine>,
 }
 
 impl Inbound {
@@ -256,15 +260,16 @@ impl Inbound {
         Self {
             config,
             io: Io::new(),
-            machine: Machine {
+            machine: Box::new(Machine {
                 call: CallFacts::new(entry),
                 stage: CallStage::new(call),
                 trigger: Trigger::default(),
                 cascade: Cascade::new(budget),
                 adopted: Adoptions::default(),
+                adopted_deliveries: BTreeMap::new(),
                 side_effects: SideEffects::default(),
                 outcome: None,
-            },
+            }),
         }
     }
 }
@@ -353,6 +358,10 @@ struct Machine {
     cascade: Cascade,
     /// The entries adopted from the operation's own work (gap G-070).
     adopted: Adoptions,
+    /// What the delivery sets of adopted entries reported, each held until
+    /// its entry's cascade is over, so that it carries the answers that
+    /// cascade delivered (Python's `InboundResult.response_events`).
+    adopted_deliveries: BTreeMap<EntryId, InboundResult>,
     side_effects: SideEffects,
     outcome: Option<Result<InboundResult, InboundError>>,
 }
@@ -410,6 +419,7 @@ impl Machine {
             cx.io.work_for(&self.cascade.budget);
             self.start_adopted(cx);
             self.run_queues(cx);
+            self.report_adopted_deliveries(cx);
             self.end_once_settled();
             if !cx.io.has_outcomes() {
                 return;

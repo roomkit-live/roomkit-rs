@@ -25,7 +25,7 @@ use roomkit::model::{
     EditContent, EventContent, EventDirection, EventId, EventSource, EventStatus, EventType,
     HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, RoomStatus, TextContent, Timestamp,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
     CommitEventOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, EventDraft,
@@ -624,6 +624,87 @@ async fn waited_from_a_hook(needs_lock: bool) -> (Vec<String>, Vec<String>, Vec<
     let texts = delivered(&audit, 2).await;
     let waited = seen.lock().unwrap().clone();
     (waited, delivered_to(&later), texts)
+}
+
+/// Python's `InboundResult.response_events` for a call the room's work
+/// adopted (probe `tasks/probes/step5-lot2-review-A/not_ported_inbound.py`,
+/// case 2): a deferred call a locked `BEFORE_BROADCAST` hook makes into the
+/// room reads, once waited, the answers its own cascade delivered, and the
+/// outer call reads its own, never the adopted call's. The hook's own wait
+/// returns unwaited.
+///
+/// Off the lock, the call is adopted from the outer call's admission work:
+/// its answers' passes wait for the outer call's pass, which waits for the
+/// hook, so its wait returns once its delivery set is over, without them,
+/// where Python's reads `['A1']` (probe
+/// `tasks/probes/step5-lot2/adopted_answers_off_lock.py`).
+#[tokio::test]
+async fn an_adopted_call_s_wait_reads_the_answers_its_cascade_delivered() {
+    let under_lock = answers_of_an_adopted_call(true).await;
+    let off_lock = answers_of_an_adopted_call(false).await;
+    let answer = |text: &str| vec![format!("You said: {text}")];
+    assert_eq!(
+        (under_lock, off_lock),
+        (
+            (vec![], answer("side"), answer("hello")),
+            (vec![], vec![], answer("hello"))
+        )
+    );
+}
+
+/// What the hook's wait on the deferred `side` read of its answers, what a
+/// wait from outside read once `hello` was over, and `hello`'s own, in a
+/// room an agent echoes.
+async fn answers_of_an_adopted_call(needs_lock: bool) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let (kit, _audit) = room().await;
+    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
+        .unwrap();
+    kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let handles = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (hook_kit, hook_handles, hook_seen) =
+        (kit.clone(), Arc::clone(&handles), Arc::clone(&seen));
+    kit.hook(before_broadcast("side", needs_lock), move |event, _| {
+        let (kit, handles, seen) = (
+            hook_kit.clone(),
+            Arc::clone(&hook_handles),
+            Arc::clone(&hook_seen),
+        );
+        async move {
+            if text_of(&event.content) == "hello" {
+                let deferred = ProcessInboundOptions {
+                    defer_delivery: true,
+                    ..in_room(room_id())
+                };
+                let side = kit.process_inbound(message("side"), deferred).await?;
+                let handle = side.delivery.unwrap();
+                *seen.lock().unwrap() = answers(&handle.wait().await?);
+                handles.lock().unwrap().push(handle);
+            }
+            Ok(HookResult::allow(AllowOptions::default()))
+        }
+    })
+    .unwrap();
+    let hello = send(&kit, "hello").await.unwrap();
+    let handle = handles.lock().unwrap().pop().unwrap();
+    let later = tokio::time::timeout(BOUND, handle.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    let waited = seen.lock().unwrap().clone();
+    kit.close().await.unwrap();
+    (waited, answers(&later), answers(&hello))
+}
+
+/// The texts of the answers `result` reports.
+fn answers(result: &roomkit::InboundResult) -> Vec<String> {
+    result
+        .response_events
+        .iter()
+        .map(|event| text_of(&event.content))
+        .collect()
 }
 
 /// The channels `result` reports a delivery to.

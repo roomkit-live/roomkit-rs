@@ -226,8 +226,9 @@ impl DeliveryHandle {
 
     /// Waits until the delivery is over, then reports the call as one that
     /// waited for it would have: its `delivery_results`, `error`,
-    /// `response_metadata` and `cancellation_reason` filled, the handle on
-    /// the result. It may be called again, and from any clone: each reads
+    /// `response_metadata`, `response_events` and `cancellation_reason`
+    /// filled, its `unavailable_targets` refreshed, the handle on the
+    /// result. It may be called again, and from any clone: each reads
     /// the same end.
     ///
     /// Called, the delivery not done, from the room's own work where a call
@@ -309,7 +310,7 @@ impl Shared {
     }
 
     /// The decided result, with what an adopted call's delivery set
-    /// reported, `delivered`; with none, the adopting run over without it,
+    /// reported and the answers its cascade delivered, `delivered`; with none, the adopting run over without it,
     /// the delivery reads as one the kit's close dropped, when it closes.
     fn backfilled(&self, delivered: Option<ops::InboundResult>) -> ops::InboundResult {
         let mut result = self.decided.clone();
@@ -321,6 +322,10 @@ impl Shared {
         };
         result.delivery_results = delivered.delivery_results;
         result.response_metadata = delivered.response_metadata;
+        result.response_events = delivered.response_events;
+        if delivered.unavailable_targets.is_some() {
+            result.unavailable_targets = delivered.unavailable_targets;
+        }
         result.error = result.error.or(delivered.error);
         result.cancellation_reason = delivered.cancellation_reason;
         result

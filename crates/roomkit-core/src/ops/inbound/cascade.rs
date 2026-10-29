@@ -17,10 +17,11 @@ use super::pass::{CommitPass, PassOrigin, PassReport, PassResult};
 use super::queues::{Delivery, Lineage};
 use super::record::{RecordPass, RecordReport, RecordResult};
 use super::stream::{self, StreamJob};
-use super::{InboundError, InboundResult, Machine, instructions, report, stamp};
+use super::{InboundError, InboundResult, Machine, Stage, instructions, report, stamp};
 use crate::model::{
     ChannelCategory, ChannelId, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId,
 };
+use crate::ops::protocol::EntryId;
 use crate::ops::{Abort, Cx};
 use crate::rules::chain_depth;
 use crate::rules::permissions::DeliveryPlan;
@@ -192,10 +193,11 @@ impl Machine {
             }
             return;
         };
-        // A response of the call's own cascade, delivered, is one of the
-        // call's answers (Python's `InboundResult.response_events`).
-        if matches!(origin, PassOrigin::Response { .. }) && report.lineage == Lineage::Call {
-            self.trigger.result.response_events.push((*event).clone());
+        // A response delivered is one of the answers of the call whose
+        // cascade it belongs to, the call's own or an adopted entry's
+        // (Python's `InboundResult.response_events`).
+        if matches!(origin, PassOrigin::Response { .. }) {
+            self.answered(report.lineage, &event);
         }
         if let Some(changed) = &changed {
             report::target_changed(
@@ -323,10 +325,11 @@ impl Machine {
         let event = set.event();
         report::after_broadcast(cx, event, set.context(), &self.cascade.budget);
         match set.kind() {
-            SetKind::Root => self.settle_root(cx, event, &outcome),
+            SetKind::Root => self.settle_root(cx, set, &outcome),
             SetKind::Adopted(entry) => {
                 report::root_deliveries(cx, event, &outcome);
-                cx.io.delivered(entry, delivered(&outcome));
+                self.adopted_deliveries
+                    .insert(entry, delivered(set, &outcome));
             }
             SetKind::Response | SetKind::Injected => {}
         }
@@ -392,9 +395,11 @@ impl Machine {
     }
 
     /// Reports the inbound event's deliveries and writes them into the
-    /// result (RFC §10.1 step 18).
-    fn settle_root(&mut self, cx: &mut Cx<'_>, event: &RoomEvent, outcome: &SetOutcome) {
-        report::root_deliveries(cx, event, outcome);
+    /// result (RFC §10.1 step 18), the addresses no turn reached among
+    /// them, as Python's `_report_root_pass` refreshes them.
+    fn settle_root(&mut self, cx: &mut Cx<'_>, set: &DeliverySet, outcome: &SetOutcome) {
+        report::root_deliveries(cx, set.event(), outcome);
+        self.trigger.result.unavailable_targets = Some(unavailable_after(set, outcome));
         self.trigger
             .result
             .delivery_results
@@ -474,10 +479,49 @@ impl Machine {
     }
 }
 
+impl Machine {
+    /// Keeps `response`, delivered in the cascade of `lineage`, among the
+    /// answers of the call that cascade belongs to: the call's own, or an
+    /// adopted entry's, whose delivery set is over by then.
+    fn answered(&mut self, lineage: Lineage, response: &RoomEvent) {
+        let answers = match lineage {
+            Lineage::Call => &mut self.trigger.result.response_events,
+            Lineage::Entry(entry) => match self.adopted_deliveries.get_mut(&entry) {
+                Some(delivered) => &mut delivered.response_events,
+                None => return,
+            },
+        };
+        answers.push(response.clone());
+    }
+
+    /// Tells the caller of each adopted entry whose cascade is over what
+    /// its delivery set reported, with the answers its cascade delivered
+    /// (RFC §10.1 step 18). An entry adopted from the call's admission work
+    /// is told once its delivery set is over: its answers' passes wait for
+    /// the call's own pass, which may wait for this report, so they are not
+    /// among them.
+    pub(super) fn report_adopted_deliveries(&mut self, cx: &mut Cx<'_>) {
+        let passing = matches!(self.stage.current(), Stage::Cascade | Stage::Ending(_));
+        let over: Vec<EntryId> = self
+            .adopted_deliveries
+            .keys()
+            .copied()
+            .filter(|entry| !self.cascade.holds(Lineage::Entry(*entry), passing))
+            .collect();
+        for entry in over {
+            if let Some(delivered) = self.adopted_deliveries.remove(&entry) {
+                cx.io.delivered(entry, delivered);
+            }
+        }
+    }
+}
+
 /// What an adopted entry's delivery set reports to its caller's completion
-/// handle (RFC §10.1 step 18).
-fn delivered(outcome: &SetOutcome) -> InboundResult {
+/// handle (RFC §10.1 step 18): its deliveries, and the addresses no turn
+/// reached among them.
+fn delivered(set: &DeliverySet, outcome: &SetOutcome) -> InboundResult {
     InboundResult {
+        unavailable_targets: Some(unavailable_after(set, outcome)),
         delivery_results: outcome.delivery_results.clone(),
         response_metadata: outcome.response_metadata.clone(),
         error: outcome.error.clone(),
@@ -574,6 +618,21 @@ fn unavailable_targets(event: &RoomEvent, plan: &DeliveryPlan) -> Vec<ChannelId>
         .iter()
         .flatten()
         .filter(|target| !plan.agents.iter().any(|agent| &agent.channel_id == *target))
+        .cloned()
+        .collect()
+}
+
+/// The channels the event of `set` addressed that no turn of the set
+/// reached, in the order the event names them, as the Python
+/// implementation's `_unavailable_targets` reports them once the set is
+/// over: one the set asks no turn of, and an agent whose channel was not
+/// registered when its turn came (RFC §10.1 step 18).
+fn unavailable_after(set: &DeliverySet, outcome: &SetOutcome) -> Vec<ChannelId> {
+    set.event()
+        .addressed_to
+        .iter()
+        .flatten()
+        .filter(|target| !set.asks(target) || outcome.unreached.contains(target))
         .cloned()
         .collect()
 }

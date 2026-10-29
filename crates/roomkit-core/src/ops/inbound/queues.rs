@@ -246,6 +246,33 @@ impl Cascade {
         }
     }
 
+    /// Whether the cascade of `lineage` has work queued or running that
+    /// goes on in the call's present stage: a delivery set, which runs
+    /// whatever the stage; and, once the call's passes run (`passing`), a
+    /// pass, a stream or a row waiting for its pass, which counts for every
+    /// lineage. Before then a pass waits for the call's own admission,
+    /// which may wait for what the work of `lineage` reports.
+    pub(super) fn holds(&self, lineage: Lineage, passing: bool) -> bool {
+        let of = |job: &Job| match job {
+            Job::Pass(pass, _) | Job::Row(pass, _) => pass.lineage() == lineage,
+            Job::Record(..) => false,
+        };
+        let delivering = self
+            .sets
+            .iter()
+            .chain(&self.delivery)
+            .any(|delivery| delivery.set.lineage() == lineage);
+        delivering
+            || passing
+                && (self.passes.iter().chain(&self.pass).any(of)
+                    || self.streams.iter().any(|job| job.lineage == lineage)
+                    || self
+                        .stream
+                        .as_ref()
+                        .is_some_and(|read| read.lineage() == lineage)
+                    || !self.rows.is_empty())
+    }
+
     /// Whether the cascade has nothing queued nor running, no stream to
     /// read included.
     pub(super) fn is_idle(&self) -> bool {
