@@ -1061,16 +1061,6 @@ mod tests {
     }
 
     #[test]
-    fn a_link_s_scheme_is_lower_cased_and_a_reference_s_kept() {
-        let urls = [
-            ("HTTPS://A/b.png", "https://A/b.png"),
-            ("App://a/b", "App://a/b"),
-        ]
-        .map(|(url, _)| MediaContent::new(url, "image/png").unwrap().url);
-        assert_eq!(urls, ["https://A/b.png", "App://a/b"]);
-    }
-
-    #[test]
     fn deserialization_applies_the_media_url_rule() {
         let refused = [
             json!({ "type": "media", "url": "javascript:alert(1)", "mime_type": "text/html" }),

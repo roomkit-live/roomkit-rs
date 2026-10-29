@@ -605,7 +605,13 @@ mod tests {
     }
 
     /// RFC §10.5 and Python's `_raise_unless_committed`: a direct entry's
-    /// refusal before its commit, by its class.
+    /// refusal before its commit, by its class, for the reasons no kit test
+    /// reaches through `of_entry`. `room_closed`, `process_timeout` and
+    /// `source_unbound` are the kit's tests' (`host_post.rs`'s
+    /// `a_refused_post_writes_nothing`, `reentrancy.rs`'s
+    /// `into_a_closed_room_is_refused`,
+    /// `a_turn_s_call_meets_its_own_process_timeout` and
+    /// `on_a_channel_the_room_does_not_bind_is_refused`).
     #[test]
     fn an_entry_s_refusal_reads_as_python_s_class() {
         let room_id = RoomId::new("room_1").unwrap();
@@ -620,25 +626,8 @@ mod tests {
             )
         };
         assert_eq!(
+            ["not_original_author", "reentry_loop_cap"].map(read),
             [
-                "room_closed",
-                "process_timeout",
-                "source_unbound",
-                "not_original_author",
-                "reentry_loop_cap"
-            ]
-            .map(read),
-            [
-                RoomKitError::RoomClosed {
-                    room_id: room_id.clone()
-                },
-                RoomKitError::ProcessTimeout {
-                    room_id: room_id.clone()
-                },
-                RoomKitError::ChannelNotFound {
-                    room_id: room_id.clone(),
-                    channel_id: channel_id.clone()
-                },
                 RoomKitError::ChangeRefused {
                     reason: "not_original_author".to_owned()
                 },

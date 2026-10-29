@@ -3006,22 +3006,18 @@ mod send_event {
         );
     }
 
-    /// RFC §10.5, §17.2, and Python's probe
+    /// RFC §10.5 and Python's probe
     /// `tasks/probes/step5-lot2/send_event_errors.py`: a refusal before the
-    /// commit reads as Python's class for it, nothing written: another
-    /// organization's room as `RoomNotFoundError`, an edit of a missing
-    /// target as `ChangeRefusedError`, an instruction naming no agent as
-    /// `ValueError`.
+    /// commit reads as Python's class for it, nothing written: an edit of a
+    /// missing target as `ChangeRefusedError`, an instruction naming no
+    /// agent as `ValueError`. Another organization's room is
+    /// `organizations.rs`'s `another_organizations_room_is_not_found`.
     #[tokio::test]
     async fn its_refusals_read_as_python_s_classes() {
         let (kit, _) = room().await;
         let (room, ws) = (room_id(), channel("ws"));
         let send = |content: EventContent, options: SendEventOptions| {
             kit.send_event(&room, &ws, content, options)
-        };
-        let scoped = SendEventOptions {
-            organization_id: Some("clinic".to_owned()),
-            ..Default::default()
         };
         let edit = EditContent::new(EventId::new("missing").unwrap(), TextContent::new("y"));
         let edited = SendEventOptions {
@@ -3033,7 +3029,6 @@ mod send_event {
             ..Default::default()
         };
         let refused = [
-            send(TextContent::new("x").into(), scoped).await,
             send(edit.into(), edited).await,
             send(TextContent::new("do it").into(), instruction).await,
         ]
@@ -3042,7 +3037,6 @@ mod send_event {
             (refused, timeline(&kit).await.len()),
             (
                 [
-                    Some(RoomKitError::RoomNotFound(room_id())),
                     Some(RoomKitError::ChangeRefused {
                         reason: "target_event_not_found".to_owned()
                     }),
