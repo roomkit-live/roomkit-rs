@@ -169,10 +169,18 @@ kit, its construction and its calls).
   s, where it closed at 5.1 s; one asked once a delivery of 1 s ended, at
   1 s. A call aborted once its own delivery was over reads no reason, as
   Python's, where it read `lane_cancelled`, but `kit_closed` when a commit
-  of its cascade, of an event to deliver, still ran, its event stored and
-  never delivered, and the turn link's `backend_closed` in its `error`
-  when its turn's stream was kept, unread, as the close ended its work,
-  as Python's reads `TurnLinkError`.
+  of its cascade stored an event to deliver whose set never took its
+  place in the room's lane, its write still running or its outcome
+  taken: stored and never delivered. A call whose run the close aborts
+  with a turn's stream open, kept unread, being read, or read as the
+  close drained, reads the turn's end, as Python's, whose grace cuts the
+  turn's reader: `kit_closed` once a row of it was stored to deliver;
+  the turn link's `backend_closed` in its `error`, with no reason, when
+  nothing of the turn was stored, Python's `TurnLinkError`
+  (`executor_lost` there); so does one whose own set still delivers at
+  the grace's end, its turn's stream kept, where it read
+  `lane_cancelled`. A run that ends on its own past the cut reads
+  `lane_cancelled` only while its own set still delivers.
   The close's warning counts the writes whose store call still runs.
 - A task the kit's work spawns, that calls the kit and waits on its own
   room, is spawned with `keep_context`, the Rust form of Python's
