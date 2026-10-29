@@ -157,10 +157,11 @@ impl Conversation {
         self.kit
             .mute(&self.room, &self.agent, MuteOptions::default())
             .await?;
-        self.agent_visible_to(
-            ChannelSet::new([self.advisor.id().clone()]).map(Visibility::Channels)?,
-        )
-        .await?;
+        self.agent_visible_to(Visibility::Channels(ChannelSet::new([self
+            .advisor
+            .id()
+            .clone()])?))
+            .await?;
         self.kit
             .unmute(&self.room, &self.agent, UnmuteOptions::default())
             .await?;

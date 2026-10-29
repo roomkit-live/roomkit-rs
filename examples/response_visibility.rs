@@ -173,15 +173,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     // Typed on the screen, the question asks for its answers there.
     let typed = "What is the meaning of life?";
     let on_screen = InboundMessage {
-        response_visibility: Some(
-            ChannelSet::new([screen.id().clone()]).map(Visibility::Channels)?,
-        ),
+        response_visibility: Some(Visibility::Channels(ChannelSet::new([screen
+            .id()
+            .clone()])?)),
         ..message(&screen, typed, Visibility::Intelligence)
     };
     writes(&kit, &room, on_screen).await?;
     let notice = "Can you keep your answers short?";
     writes(&kit, &room, message(&supervisor, notice, Visibility::All)).await?;
-    let note = ChannelSet::new([screen.id().clone()]).map(Visibility::Channels)?;
+    let note = Visibility::Channels(ChannelSet::new([screen.id().clone()])?);
     let noted = "Note: call recorded.";
     writes(&kit, &room, message(&supervisor, noted, note)).await?;
 

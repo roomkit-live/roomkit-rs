@@ -655,6 +655,12 @@ async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>
         .await?;
     let image = frank.next_frame(TOLD_PATIENCE).await;
     println!("  Frank receives {image:?}");
+    println!("Frank sends an image whose URL is https:.");
+    frank
+        .say(r#"{"image": "https://example.com/cellar.png"}"#)
+        .await?;
+    let linked = frank.next_frame(TOLD_PATIENCE).await;
+    println!("  Frank receives {linked:?}");
     let mut grace = Client::connect(server.address(), CELLAR, "grace", "Grace").await?;
     println!("Grace sends a message one byte over the limit.");
     grace.send("a".repeat(MESSAGE_LIMIT + 1)).await?;
@@ -680,6 +686,14 @@ async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>
             .and_then(|frame| frame.get("error"))
             .and_then(Value::as_str)
             == Some(IMAGE_REFUSED),
+    );
+    checks.expect(
+        "an image whose URL is https: is taken, its turn asked as a text's is",
+        linked
+            .as_ref()
+            .and_then(|frame| frame.get("error"))
+            .and_then(Value::as_str)
+            == Some(TURN_FAILED),
     );
     checks.expect(
         "a message over the limit closes its connection with 1009, too large",

@@ -18,7 +18,7 @@ use std::process::ExitCode;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType, HookResult,
-    InboundMessage, InjectedEvent, RoomEvent, RoomId, SystemContent, TextContent,
+    InboundMessage, InjectedEvent, ModelError, RoomEvent, RoomId, SystemContent, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -28,12 +28,15 @@ use roomkit::{
 
 use shared::{Checks, Log};
 
+/// The channel id the framework's own records carry, `system`.
+const SYSTEM: &str = "system";
+
 /// A system welcome to `newcomer`, delivered to it only, for the hook to
 /// inject beside `event`, the newcomer's first message.
-fn welcome(event: &RoomEvent, newcomer: &ChannelId) -> InjectedEvent {
+fn welcome(event: &RoomEvent, newcomer: &ChannelId) -> Result<InjectedEvent, ModelError> {
     let source = EventSource {
         direction: EventDirection::Outbound,
-        ..EventSource::new(ChannelId::system(), ChannelType::SYSTEM)
+        ..EventSource::new(ChannelId::new(SYSTEM)?, ChannelType::SYSTEM)
     };
     let mut welcome = SystemContent::new(format!("Welcome to {}, {newcomer}!", event.room_id));
     welcome.code = Some("welcome".to_owned());
@@ -45,10 +48,10 @@ fn welcome(event: &RoomEvent, newcomer: &ChannelId) -> InjectedEvent {
         created_at: event.created_at,
         ..RoomEvent::new(event.room_id.clone(), source, content)
     };
-    InjectedEvent {
+    Ok(InjectedEvent {
         target_channel_ids: Some(vec![newcomer.clone()]),
         ..InjectedEvent::new(welcome)
-    }
+    })
 }
 
 /// Registers the observer that notes each channel attached in `attached`,
@@ -87,7 +90,7 @@ fn welcome_newcomers(
             }
             // An allow lets the message through, with the events it injects.
             Ok(HookResult::allow(AllowOptions {
-                injected: Some(vec![welcome(&event, &newcomer)]),
+                injected: Some(vec![welcome(&event, &newcomer)?]),
             }))
         }
     })?;
@@ -175,7 +178,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         timeline
             .iter()
             .filter(|event| event.r#type == EventType::System)
-            .all(|event| event.source.channel_id == ChannelId::system())
+            .all(|event| event.source.channel_id.as_str() == SYSTEM)
             && timeline
                 .iter()
                 .filter(|event| event.r#type == EventType::System)
