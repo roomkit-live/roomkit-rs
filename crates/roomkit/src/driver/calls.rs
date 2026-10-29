@@ -208,8 +208,11 @@ pub(super) async fn channel<S: ConversationStore>(
             ))
             .await;
             // A read the run's abort drops never returns: its stream stays
-            // open, as the abort reads it.
-            if taken {
+            // open, as the abort reads it. One that returns as the kit's
+            // close drains stays open too, until the run ends: an abort
+            // before that end reads the turn's end, which the run had not
+            // reported yet.
+            if taken && !inner.tasks.is_draining() {
                 shared.read_returned();
             }
             read

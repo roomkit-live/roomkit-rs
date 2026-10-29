@@ -39,7 +39,7 @@ use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::Poll;
 
-use roomkit_core::model::{ErrorRecord, EventStatus, RoomId, Timestamp};
+use roomkit_core::model::{ErrorRecord, EventId, EventStatus, RoomId, Timestamp};
 use roomkit_core::ops::{
     Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest, InboundResult,
     Next, Notice, Operation, Outcome, Request, Settled, StoreRequest,
@@ -287,25 +287,25 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
 
     /// Tells an inbound run's caller of a write it starts, `written` telling
     /// its outcome: the commit that decides the call, `decides`, or another
-    /// commit, `commit` whether its event is one to deliver, of its cascade,
-    /// a row of a stream read when one is.
+    /// commit, `commit` its event and whether it is one to deliver, of its
+    /// cascade, a row of a stream read when one is.
     fn note_the_commit(
         &self,
         id: EffectId,
         decides: Option<Box<InboundResult>>,
-        commit: Option<bool>,
+        commit: Option<(bool, EventId)>,
         written: calls::Written,
     ) {
         let Some(caller) = self.caller.as_deref() else {
             return;
         };
-        if let Some(delivers) = commit {
-            self.shared.wrote(delivers, &written);
+        if let Some((delivers, _)) = &commit {
+            self.shared.wrote(*delivers, &written);
         }
-        match decides {
-            Some(result) => caller.commits(*result, written),
-            None if commit == Some(true) => caller.cascade_commits(id, written),
-            None => {}
+        match (decides, commit) {
+            (Some(result), _) => caller.commits(*result, written),
+            (None, Some((true, event_id))) => caller.cascade_commits(id, event_id, written),
+            (None, _) => {}
         }
     }
 
@@ -451,7 +451,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             }
             self.writing.remove(effect);
             if let Some(caller) = self.caller.as_deref() {
-                caller.went_on(*effect, false);
+                caller.gave_up(*effect);
             }
         }
     }
@@ -473,7 +473,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         // is.
         let mut commit = None;
         if let Request::Store(StoreRequest::Commit { event, .. }) = &request {
-            commit = Some(event.status != EventStatus::Blocked);
+            commit = Some((event.status != EventStatus::Blocked, event.id.clone()));
             self.indexes.committing(id, event);
         }
         match request {
@@ -529,10 +529,10 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             // index has no place, its turn over at the lock's release.
             return Some((id, HoldOutcome::LaneClosed.into()));
         }
-        if let (HoldRequest::LeaveLane { event_id, .. }, Some(caller)) =
-            (&request, self.caller.as_deref())
-        {
-            caller.left(event_id);
+        match (&request, self.caller.as_deref()) {
+            (HoldRequest::EnterLane { event_id, .. }, Some(caller)) => caller.entered(event_id),
+            (HoldRequest::LeaveLane { event_id, .. }, Some(caller)) => caller.left(event_id),
+            _ => {}
         }
         let behind = self.waits_behind(&request);
         let over = self.turns_over(&request);
@@ -719,17 +719,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let effect = self.effect_of_task.remove(&task)?;
         self.call_of_effect.remove(&effect);
         self.written.extend(self.writing.remove(&effect));
-        if let Some(caller) = self.caller.as_deref() {
-            // A guard: a cascade commit whose outcome the run takes once
-            // the close cut the work stays recorded, so that a run aborted
-            // at a later wait, before its own result is read, still reads
-            // its event stored and never delivered. The run goes on from
-            // the outcome at once to the event's delivery set, which the
-            // draining lanes drop, `kit_closed` in its own result, so no
-            // test found that later wait (RMK-1017, light review 5).
-            let cut = self.inner.tasks.cuts(self.marks.innermost());
-            caller.went_on(effect, cut);
-        }
         self.shared.answered(effect);
         self.indexes.answered(effect, &outcome);
         Some((effect, outcome))

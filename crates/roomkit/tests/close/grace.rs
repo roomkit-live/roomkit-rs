@@ -102,39 +102,42 @@ async fn n8_at_the_grace_s_end() {
     );
 }
 
-/// N8 on threads, its runs at once: from 5096 to 5100 ms each call reads
-/// the turn cut once the lanes were idle, or its stream left open by the
-/// grace's end, never no reason and no error; at 5200 ms, One's set still
-/// delivering at the grace's end, the turn's `backend_closed`, as Python's
-/// `TurnLinkError` (`rmk1017-fix8/py_n8_reason.out`). On 7a0da49 about one
-/// run in twelve at 5100 ms read no reason and no error, its turn's
-/// stream being read as the abort came, and most at 5100 and 5200 ms read
-/// `lane_cancelled` (`rmk1017-fix7/lr6c_head.out`, `n8w_head.out`).
+/// Whether `row` is the turn cut once the lanes were idle: what it said
+/// stored, "Thinking" at least, its delivery dropped.
+fn cut_once_idle(row: &Row) -> bool {
+    let (told, stored) = row;
+    *told == Some((Some("kit_closed".to_owned()), None))
+        && stored.get(..2) == Some(&texts(&["One.", "Thinking"])[..])
+}
+
+/// N8 on threads, eight runs at a time, 40 at 5100 ms: from 5096 to 5100
+/// ms each call reads the turn cut once the lanes were idle, or its stream
+/// left open by the grace's end, never no reason and no error; at 5200
+/// ms, One's set still delivering at the grace's end, the turn's
+/// `backend_closed`, as Python's `TurnLinkError`
+/// (`rmk1017-fix8/py_n8_reason.out`). On 7a0da49 runs at 5100 ms read no
+/// reason and no error, their turn's stream read as the abort came, or
+/// its rows taken before the cut and their sets never placed in the
+/// lane, and most at 5100 and 5200 ms read `lane_cancelled`
+/// (`rmk1017-fix7/lr6c_head.out`, `rmk1017-fix8/conc_*.out`). About 26 s.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn n8_at_the_grace_s_end_on_threads() {
-    let mut runs = Vec::new();
-    for (witness_ms, times) in [
-        (5096, 6),
-        (5097, 6),
-        (5098, 6),
-        (5099, 6),
-        (5100, 48),
-        (5200, 6),
-    ] {
-        for _ in 0..times {
-            runs.push((witness_ms, tokio::spawn(n8(witness_ms))));
-        }
-    }
     let mut wrong = Vec::new();
-    for (witness_ms, run) in runs {
-        let row = run.await.unwrap();
-        let allowed = if witness_ms < 5200 {
-            row == said() || row == closed()
-        } else {
-            row == closed()
-        };
-        if !allowed {
-            wrong.push((witness_ms, row));
+    for batch in 0..5 {
+        let mut witnesses = vec![5100; 8];
+        if batch == 0 {
+            witnesses.extend([5096, 5097, 5098, 5099, 5200, 5200]);
+        }
+        let runs: Vec<_> = witnesses
+            .into_iter()
+            .map(|witness_ms| (witness_ms, tokio::spawn(n8(witness_ms))))
+            .collect();
+        for (witness_ms, run) in runs {
+            let row = run.await.unwrap();
+            let allowed = row == closed() || (witness_ms < 5200 && cut_once_idle(&row));
+            if !allowed {
+                wrong.push((witness_ms, row));
+            }
         }
     }
     assert_eq!(wrong, []);

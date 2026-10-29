@@ -193,8 +193,9 @@ impl RunShared {
     }
 
     /// The streams of its turns the run leaves open: kept unread, or read
-    /// as it ends, with the commits those reads wrote; `None` when it
-    /// leaves none.
+    /// as it ends, a read that returned as the kit's close drained
+    /// included, with the commits those reads wrote; `None` when it leaves
+    /// none.
     pub(crate) fn left_open(&self) -> Option<LeftOpen> {
         let kept = !self
             .streams

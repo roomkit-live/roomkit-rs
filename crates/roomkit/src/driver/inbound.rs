@@ -93,11 +93,13 @@ pub(crate) struct Record {
     /// unread or read, with the commits their reads wrote.
     left_open: Mutex<Option<LeftOpen>>,
     /// The commits of the call's cascade past the one that decides it, of
-    /// events to deliver, whose outcome the run has not taken, by their
-    /// effect, each with what its write came to: one stored BLOCKED is not
-    /// among them, as [`committed`](Self::committed) reads a blocked call
-    /// with no reason.
-    cascade: Mutex<Vec<(EffectId, Written)>>,
+    /// events to deliver, by their effect and their event, each with what
+    /// its write came to, until the event's delivery set takes its place in
+    /// the room's lane: one whose set never took it was never delivered,
+    /// as Python's sealed lanes refuse it. One stored BLOCKED is not among
+    /// them, as [`committed`](Self::committed) reads a blocked call with no
+    /// reason.
+    cascade: Mutex<Vec<(EffectId, EventId, Written)>>,
 }
 
 impl Record {
@@ -139,13 +141,23 @@ impl Record {
             .unwrap_or_else(PoisonError::into_inner) = Some((result, written));
     }
 
-    /// A commit of the call's cascade runs for `effect`, its outcome told
-    /// by `written`, until the run takes it ([`went_on`](Self::went_on)).
-    fn cascade_commits(&self, effect: EffectId, written: Written) {
+    /// A commit of the call's cascade runs for `effect`, of `event_id`, its
+    /// outcome told by `written`, until the event's set takes its place in
+    /// the room's lane ([`entered`](Self::entered)) or the run gives the
+    /// commit up ([`gave_up`](Self::gave_up)).
+    fn cascade_commits(&self, effect: EffectId, event_id: EventId, written: Written) {
         self.cascade
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((effect, written));
+            .push((effect, event_id, written));
+    }
+
+    /// `event_id`'s delivery set took its place in the room's lane.
+    fn entered(&self, event_id: &EventId) {
+        self.cascade
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(_, event, _)| event != event_id);
     }
 
     /// The run is aborted leaving its turns' streams open, kept unread or
@@ -157,28 +169,24 @@ impl Record {
             .unwrap_or_else(PoisonError::into_inner) = Some(rows);
     }
 
-    /// The run took the outcome of `effect`'s write, or gave it up. One it
-    /// took once the kit's close cut the work, `past_the_cut`, stays: the
-    /// run is aborted before the event's delivery set starts.
-    fn went_on(&self, effect: EffectId, past_the_cut: bool) {
-        if past_the_cut {
-            return;
-        }
+    /// The run gave the write of `effect` up.
+    fn gave_up(&self, effect: EffectId) {
         self.cascade
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .retain(|(running, _)| *running != effect);
+            .retain(|(running, _, _)| *running != effect);
     }
 
-    /// Whether a commit of the call's cascade the run had not gone on from
-    /// before the close cut it stored its event, once its write ended.
+    /// Whether a commit of the call's cascade whose set never took its
+    /// place in the room's lane stored its event, once its write ended:
+    /// stored and never delivered.
     async fn cascade_stored(&self) -> bool {
         let running: Vec<Written> = self
             .cascade
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .map(|(_, written)| written.clone())
+            .map(|(_, _, written)| written.clone())
             .collect();
         for mut written in running {
             if calls::outcome_of(&mut written).await == Outcome::Store(StoreOutcome::Committed) {
@@ -194,9 +202,11 @@ impl Record {
     /// delivered, [`KIT_CLOSED`] when it still waited for its turn, and no
     /// reason of the abort's once its set was over, the abort cutting a
     /// later set of its cascade, as Python's caller reads, but
-    /// [`KIT_CLOSED`] when a commit of its cascade still ran, its event
-    /// stored and never delivered, as Python's caller reads the delivery
-    /// its sealed lanes refuse. A call
+    /// [`KIT_CLOSED`] when a commit of its cascade stored an event whose set
+    /// never took its place in the room's lane, its write still running or
+    /// its outcome taken, an event stored and never delivered, as Python's
+    /// caller reads the delivery its sealed lanes refuse. A run that left a
+    /// turn's stream open reads the turn's end ([`read_left_open`]). A call
     /// whose own commit still ran reads what the write came to, once it
     /// ends, as Python's caller does: its event, stored and never
     /// delivered, `kit_closed`. [`KitError::ShutDown`] for a call nothing of
@@ -338,16 +348,20 @@ impl Caller {
         self.record.commits(result, written);
     }
 
-    /// A commit of the call's cascade runs for `effect`, its outcome told
-    /// by `written`.
-    pub(super) fn cascade_commits(&self, effect: EffectId, written: Written) {
-        self.record.cascade_commits(effect, written);
+    /// A commit of the call's cascade runs for `effect`, of `event_id`, its
+    /// outcome told by `written`.
+    pub(super) fn cascade_commits(&self, effect: EffectId, event_id: EventId, written: Written) {
+        self.record.cascade_commits(effect, event_id, written);
     }
 
-    /// The run took the outcome of `effect`, or gave it up; `past_the_cut`
-    /// once the kit's close cut the work.
-    pub(super) fn went_on(&self, effect: EffectId, past_the_cut: bool) {
-        self.record.went_on(effect, past_the_cut);
+    /// `event_id`'s delivery set took its place in the room's lane.
+    pub(super) fn entered(&self, event_id: &EventId) {
+        self.record.entered(event_id);
+    }
+
+    /// The run gave the write of `effect` up.
+    pub(super) fn gave_up(&self, effect: EffectId) {
+        self.record.gave_up(effect);
     }
 
     /// The run ends leaving its turns' streams open, kept unread or read,
@@ -541,14 +555,6 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     }
 }
 
-/// `output`, a run's at its end: once the kit's close cut the work under
-/// way, its turns cut by it (RFC §10.6.8), the delivery of a call whose own
-/// set had its turn reads as cancelled [`LANE_CANCELLED`], as the Python
-/// implementation's lane reports the cascade it cut, unless an earlier
-/// reason stands: the first one stays, as Python's first cancel does. The
-/// cut is read here, at the run's end, so that a run that ended before it
-/// reports its result whenever its end is read; a run a close was called
-/// from inside is spared, never cut (RFC §12.10.4).
 /// What a call whose aborted run left a turn's stream open reads, once
 /// the writes of its reads ended (RFC §10.6.8). A row stored to deliver:
 /// `kit_closed`, as a commit of its cascade stored and never delivered
@@ -576,8 +582,21 @@ async fn read_left_open(result: &mut InboundResult, rows: LeftOpen) {
     }
 }
 
+/// `output`, a run's at its end: once the kit's close cut the work under
+/// way, its turns cut by it (RFC §10.6.8), the delivery of a call whose own
+/// set had its turn and still delivered reads as cancelled
+/// [`LANE_CANCELLED`], as the Python implementation's lane reports the
+/// cascade it cut, unless an earlier reason stands: the first one stays,
+/// as Python's first cancel does. A call whose set's delivery was over
+/// reads what the run read, a turn's stream the cut ended included, its
+/// turn link's error with no reason, as Python's. The cut is read here,
+/// at the run's end, so that a run that ended before it reports its
+/// result whenever its end is read; a run a close was called from inside
+/// is spared, never cut (RFC §12.10.4).
 fn cut_at_its_end(output: InboundOutput, cut: bool, record: &Record) -> InboundOutput {
-    if !cut || !record.delivering.load(Ordering::Acquire) {
+    let delivering =
+        record.delivering.load(Ordering::Acquire) && !record.delivered.load(Ordering::Acquire);
+    if !cut || !delivering {
         return output;
     }
     output.map(|result| {
