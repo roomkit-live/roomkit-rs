@@ -174,9 +174,10 @@ kit, its construction and its calls).
   taken: stored and never delivered. A call whose run the close aborts
   with a turn's stream open, kept unread, being read, or read as the
   close drained, reads the turn's end, as Python's, whose grace cuts the
-  turn's reader: `kit_closed` once a row of it was stored to deliver;
-  the turn link's `backend_closed` in its `error`, with no reason, when
-  nothing of the turn was stored, Python's `TurnLinkError`
+  turn's reader: nothing more once a row of it was stored, `kit_closed`
+  for one stored and never delivered, its set never in the lane as
+  above; the turn link's `backend_closed` in its `error`, with no
+  reason, when nothing of the turn was stored, Python's `TurnLinkError`
   (`executor_lost` there); so does one whose own set still delivers at
   the grace's end, its turn's stream kept, where it read
   `lane_cancelled`. A run that ends on its own past the cut reads
