@@ -32,7 +32,7 @@ use tokio::task::JoinHandle;
 use crate::bakery::{SYSTEM_PROMPT, orders};
 use crate::{OpenAiEndpoint, WebSocketChannel};
 
-pub use self::connection::{MESSAGE_LIMIT, REFUSED, STOPPED, TURN_FAILED};
+pub use self::connection::{IMAGE_REFUSED, MESSAGE_LIMIT, REFUSED, STOPPED, TURN_FAILED};
 
 /// The path of the WebSocket endpoint, the conversation's id its last
 /// segment.

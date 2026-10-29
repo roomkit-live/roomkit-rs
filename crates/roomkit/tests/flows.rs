@@ -146,7 +146,7 @@ async fn an_inbound_result_reports_its_replay_answers_and_unreached_addresses() 
         )
         .await
         .unwrap();
-    kit.mute(&room_id(), &channel("ai"), Default::default())
+    kit.mute(&room_id(), &channel("ai"), roomkit::MuteOptions::default())
         .await
         .unwrap();
     let muted = kit

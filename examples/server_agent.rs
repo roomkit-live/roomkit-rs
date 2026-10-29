@@ -16,7 +16,10 @@
 //!   (`defer_delivery`, RFC §10.1 step 18): the call returns at the
 //!   commit, and the connection reads on while the agent answers. A
 //!   message the room refuses, or whose turn fails or is ended by a stop,
-//!   gets `{"error": "..."}` back, a reason of the server's own. A message
+//!   gets `{"error": "..."}` back, a reason of the server's own. A frame
+//!   `{"image": "<url>"}` is an image (`MediaContent`): one whose URL no
+//!   reader may take, `javascript:` among them, is refused before the room
+//!   reads anything (RFC §6.4). A message
 //!   or a frame over 64 KiB closes the connection with 1009, a frame at its
 //!   header, and a stop closes them all with 1001.
 //! - The agent serves a tool, `lookup_order`, which finds an order by its
@@ -114,7 +117,7 @@ use tokio_tungstenite::{WebSocketStream, tungstenite};
 
 use shared::bakery::{ORDER_42, SYSTEM_PROMPT};
 use shared::server::{
-    AgentServer, CHECKING, MESSAGE_LIMIT, Patience, SERVING, STOPPED, TURN_FAILED,
+    AgentServer, CHECKING, IMAGE_REFUSED, MESSAGE_LIMIT, Patience, SERVING, STOPPED, TURN_FAILED,
 };
 use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, TempDatabase, every_row};
 
@@ -646,6 +649,12 @@ async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>
     frank.say("Is anyone there?").await?;
     let told = frank.next_frame(TOLD_PATIENCE).await;
     println!("  Frank receives {told:?}");
+    println!("Frank sends an image whose URL is javascript:.");
+    frank
+        .say(r#"{"image": "javascript:alert(document.cookie)"}"#)
+        .await?;
+    let image = frank.next_frame(TOLD_PATIENCE).await;
+    println!("  Frank receives {image:?}");
     let mut grace = Client::connect(server.address(), CELLAR, "grace", "Grace").await?;
     println!("Grace sends a message one byte over the limit.");
     grace.send("a".repeat(MESSAGE_LIMIT + 1)).await?;
@@ -663,6 +672,14 @@ async fn what_a_client_is_told(checks: &mut Checks) -> Result<(), Box<dyn Error>
             .and_then(|frame| frame.get("error"))
             .and_then(Value::as_str)
             == Some(TURN_FAILED),
+    );
+    checks.expect(
+        "an image whose URL is javascript: is refused, its client told so",
+        image
+            .as_ref()
+            .and_then(|frame| frame.get("error"))
+            .and_then(Value::as_str)
+            == Some(IMAGE_REFUSED),
     );
     checks.expect(
         "a message over the limit closes its connection with 1009, too large",

@@ -11,9 +11,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures_util::stream::{FuturesUnordered, SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use roomkit::model::{InboundMessage, ParticipantId, RoomId, TextContent};
+use roomkit::model::{
+    EventContent, InboundMessage, MediaContent, ModelError, ParticipantId, RoomId, TextContent,
+};
 use roomkit::{DeliveryHandle, InboundResult, ProcessInboundOptions, RoomKitError};
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite;
 
@@ -29,6 +31,10 @@ pub const TURN_FAILED: &str = "the agent could not answer";
 pub const REFUSED: &str = "the room refused the message";
 /// See [`TURN_FAILED`].
 pub const STOPPED: &str = "the server stopped before the answer";
+/// What a client is told when the image it sent has a URL no reader may
+/// take (RFC §6.4): `MediaContent::new` refuses it, before the room reads
+/// anything.
+pub const IMAGE_REFUSED: &str = "the image's URL is refused";
 
 /// What a message came to: refused or decided at once, or once its
 /// delivery ran.
@@ -233,11 +239,15 @@ impl App {
         user: &ParticipantId,
         text: &str,
     ) -> Option<DeliveryHandle> {
-        let message = InboundMessage::new(
-            self.websocket.id().clone(),
-            user.as_str(),
-            TextContent::new(text),
-        );
+        let content = match content_of(text) {
+            Ok(content) => content,
+            Err(refused) => {
+                println!("  {:?}'s image was refused: {refused}", user.as_str());
+                let _told = registration.send(json!({ "error": IMAGE_REFUSED }).to_string());
+                return None;
+            }
+        };
+        let message = InboundMessage::new(self.websocket.id().clone(), user.as_str(), content);
         let options = ProcessInboundOptions {
             room_id: Some(room_id.clone()),
             defer_delivery: true,
@@ -255,6 +265,24 @@ impl App {
             }
         }
     }
+}
+
+/// What a client's frame says: an image, `{"image": "<url>", "mime_type":
+/// "<type>"}` (`image/png` unless named), or any other text, a text. An
+/// image's URL is a link, a `data:` URI or a reference the application
+/// resolves, as `MediaContent::new` checks it (RFC §6.4).
+fn content_of(text: &str) -> Result<EventContent, ModelError> {
+    let Ok(Value::Object(frame)) = serde_json::from_str::<Value>(text) else {
+        return Ok(TextContent::new(text).into());
+    };
+    let Some(url) = frame.get("image").and_then(Value::as_str) else {
+        return Ok(TextContent::new(text).into());
+    };
+    let mime_type = frame
+        .get("mime_type")
+        .and_then(Value::as_str)
+        .unwrap_or("image/png");
+    Ok(MediaContent::new(url, mime_type)?.into())
 }
 
 /// `outcome`, a delivery's that ended once the kit's close began: one that
