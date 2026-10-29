@@ -2,7 +2,7 @@
 //! §6.4, §10.1 step 12, §14.1, gap G-089), effect by effect. The digests and
 //! ranks are the Python implementation's (roomkit 2d6e6267,
 //! `core/_authors.py`), computed for the same room, sources and names.
-
+use roomkit_core::model::hook::BlockOptions;
 use roomkit_core::model::{
     ChannelType, EventSource, EventType, EventUpdates, HookResult, Metadata, Participant,
     ParticipantId, RoomEvent, TextContent, Timestamp,
@@ -203,7 +203,7 @@ fn a_blocked_message_takes_no_author_and_loses_the_one_it_came_with() {
     sim.transport("sms");
     sim.before_broadcast(
         "no_entry",
-        Box::new(|_| HookOutcome::Returned(HookResult::block("closed"))),
+        Box::new(|_| HookOutcome::Returned(HookResult::block("closed", BlockOptions::default()))),
     );
     let mut message = named("Alice");
     message

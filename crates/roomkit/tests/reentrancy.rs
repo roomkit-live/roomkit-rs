@@ -12,6 +12,7 @@
     reason = "a test fails on a broken fixture"
 )]
 
+use roomkit::model::hook::AllowOptions;
 use std::future::{Future, ready};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
@@ -291,7 +292,7 @@ mod a_locked_hook {
             async move {
                 kit.mute(&room_id(), &channel("sms"), MuteOptions::default())
                     .await?;
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();
@@ -323,7 +324,7 @@ mod a_locked_hook {
             async move {
                 kit.close_room(&room_id(), CloseRoomOptions::default())
                     .await?;
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();
@@ -374,7 +375,7 @@ mod a_locked_hook {
                         .await?;
                     *seen.lock().unwrap() = Some(injected.index);
                 }
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();
@@ -421,7 +422,7 @@ mod a_locked_hook {
                     first?;
                     second?;
                 }
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();
@@ -453,7 +454,7 @@ mod a_locked_hook {
                 record.content = TextContent::new("trace").into();
                 kit.commit_event(&room_id(), record, CommitEventOptions::default())
                     .await?;
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();
@@ -494,7 +495,7 @@ mod a_locked_hook {
                     .await?;
                 muted.notify_one();
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();
@@ -543,7 +544,7 @@ async fn an_off_lock_hook_injects_without_a_ticket() {
                 )
                 .await?;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -610,7 +611,7 @@ async fn waited_from_a_hook(needs_lock: bool) -> (Vec<String>, Vec<String>, Vec<
                 *seen.lock().unwrap() = delivered_to(&waited);
                 handles.lock().unwrap().push(handle);
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1156,7 +1157,7 @@ mod a_context {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                     *spawned.lock().unwrap() = Some(task);
                 }
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();
@@ -1193,7 +1194,7 @@ mod a_context {
                     entered.notify_one();
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();
@@ -1395,7 +1396,7 @@ async fn an_entry_made_by_a_nested_entry_s_parse_is_nested_in_turn() {
                     InboundMessage::new(channel("bot"), "relay", TextContent::new("Relayed"));
                 kit.process_inbound(relayed, in_room(room_id())).await?;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1506,7 +1507,7 @@ async fn a_task_a_locked_hook_spawns_in_its_context_acts_for_it_while_it_runs() 
                     }
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();
@@ -1567,7 +1568,7 @@ async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_ove
                 })));
                 over.notify_one();
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1582,7 +1583,7 @@ async fn a_task_a_locked_hook_left_running_calls_as_a_new_arrival_once_it_is_ove
                 calling.notified().await;
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1627,7 +1628,7 @@ async fn a_later_hook_awaiting_a_task_an_earlier_one_left_waits_until_its_timeou
                 }));
                 *put.lock().unwrap() = Some(task);
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1650,7 +1651,7 @@ async fn a_later_hook_awaiting_a_task_an_earlier_one_left_waits_until_its_timeou
                     *saw.lock().unwrap() = Some(task.await.unwrap());
                 }
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1769,7 +1770,7 @@ async fn a_call_dropped_after_its_hook_s_event_committed_delivers_that_event() {
                 .await?;
                 std::future::pending::<()>().await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1811,7 +1812,7 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
         if text_of(&event.content) == "Heads up" {
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let hook_kit = kit.clone();
@@ -1831,7 +1832,7 @@ async fn a_lock_request_held_back_past_the_deadline_is_given_up_on() {
                 })));
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1861,7 +1862,7 @@ async fn a_hook_that_times_out_while_its_entry_works_is_heard_after_it() {
         if text_of(&event.content) == "Heads up" {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let hook_kit = kit.clone();
@@ -1879,7 +1880,7 @@ async fn a_hook_that_times_out_while_its_entry_works_is_heard_after_it() {
                 )
                 .await?;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -2191,7 +2192,7 @@ async fn a_call_that_could_only_wait_for_itself_fails() {
                     .await;
                 *refused.lock().unwrap() = Some(routed.err());
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -2295,7 +2296,7 @@ async fn an_off_lock_hook_routing_back_a_message_no_check_fires_for_fails() {
                     .await;
                 *refused.lock().unwrap() = Some(routed.err());
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -2333,7 +2334,7 @@ async fn a_detached_run_s_turn_is_not_taken_by_a_finished_parse() {
     .await
     .unwrap();
     kit.hook(before_broadcast("scanner", false), |_, _| async {
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let bot_kit = kit.clone();
@@ -2465,7 +2466,7 @@ async fn a_turn_s_call_ticketed_behind_another_message_commits_after_it() {
                 "E" => e_checking.notify_one(),
                 _ => {}
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -2542,7 +2543,7 @@ async fn a_turn_s_call_meets_its_own_process_timeout() {
         if text_of(&event.content) == "Let me check." {
             tokio::time::sleep(Duration::from_secs(3600)).await;
         }
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let seen = Arc::new(Mutex::new(None));

@@ -4,7 +4,7 @@
 //! lanes drain runs within their grace; once the lanes are idle, the
 //! turns still running are cut then, what they said read and stored, as
 //! the Python implementation's `turns.close` follows its `lanes.aclose`.
-
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -411,9 +411,9 @@ async fn a_blocked_answer_committed_past_the_grace_reads_no_reason() {
             let is_answer = text_of(&event.content) == "A.";
             async move {
                 Ok(if is_answer {
-                    HookResult::block("no")
+                    HookResult::block("no", BlockOptions::default())
                 } else {
-                    HookResult::allow()
+                    HookResult::allow(AllowOptions::default())
                 })
             }
         })

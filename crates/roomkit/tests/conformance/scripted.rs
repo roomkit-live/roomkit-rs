@@ -1,7 +1,7 @@
 //! The scripted parts of a scenario: gates, reactions, channels and hooks
 //! (roomkit-specs `conformance/README.md`, "Scripted channels", "Scripted
 //! hooks"), built on the tokio runtime.
-
+use roomkit::model::hook::AllowOptions;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
@@ -411,12 +411,12 @@ pub(crate) fn hook_handler(
         let (name, trigger, run) = (name.clone(), trigger.clone(), Weak::clone(&run));
         Box::pin(async move {
             let Some(run) = run.upgrade() else {
-                return Ok(HookResult::allow());
+                return Ok(HookResult::allow(AllowOptions::default()));
             };
             let room_id = context.room.id.to_string();
             run.record_hook(&name, &trigger, &room_id, &payload);
             let Some(reaction) = reactions.pick(&event_subject(&payload, &room_id)) else {
-                return Ok(HookResult::allow());
+                return Ok(HookResult::allow(AllowOptions::default()));
             };
             let scope = Scope::with_event(&room_id, payload.id.as_ref());
             perform(&run, &reaction, &scope).await?;

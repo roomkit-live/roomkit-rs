@@ -1,5 +1,5 @@
 //! A room with an SMS transport and an AI agent on a scripted model.
-
+use roomkit::model::hook::AllowOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -402,7 +402,7 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
                             .send_event(&room_id(), &channel("sms"), TextContent::new("Echo"), echo)
                             .await;
                     }
-                    Ok(HookResult::allow())
+                    Ok(HookResult::allow(AllowOptions::default()))
                 }
             })
             .unwrap();

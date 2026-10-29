@@ -4,7 +4,7 @@
 //! handle waits for the rest.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -155,8 +155,10 @@ async fn deferred_delivery_returns_at_the_commit() {
 #[tokio::test]
 async fn a_deferred_call_s_refusal_is_returned_at_once() {
     let (kit, sms, _held) = room().await;
-    kit.before_broadcast("refuse", |_, _| async { Ok(HookResult::block("spam")) })
-        .unwrap();
+    kit.before_broadcast("refuse", |_, _| async {
+        Ok(HookResult::block("spam", BlockOptions::default()))
+    })
+    .unwrap();
     let result = kit.process_inbound(hello(&sms), deferred()).await.unwrap();
     let delivery = result.delivery.clone().unwrap();
     let done = delivery.done();
@@ -195,7 +197,7 @@ async fn a_deferred_call_refused_before_the_lock_has_no_handle() {
     timed
         .hook(off_lock, |_, _| async {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         })
         .unwrap();
     let sms_2 = RecordingTransport::new(channel("sms"), ChannelType::SMS);

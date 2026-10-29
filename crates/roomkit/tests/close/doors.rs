@@ -1,7 +1,7 @@
 //! RFC §12.10.4: a close from the kit's own work neither waits for that
 //! work nor cuts it, and the work stores and delivers nothing once the kit
 //! is sealed, as Python's `test_kit_close_doors.py`.
-
+use roomkit::model::hook::AllowOptions;
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -265,7 +265,7 @@ async fn a_close_from_an_observer_waits_for_the_run_that_fired_it() {
         let work = work.clone();
         async move {
             work.close().await;
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -390,7 +390,7 @@ async fn a_spared_set_s_turn_asked_once_sealed_is_refused_backend_closed() {
                     work.close().await;
                 })));
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();

@@ -11,6 +11,7 @@
 )]
 
 use pretty_assertions::assert_eq;
+use roomkit_core::model::hook::BlockOptions;
 use roomkit_core::model::{
     Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCategory, ChannelDirection,
     ChannelId, ChannelMediaType, ChannelOutput, ChannelType, Confidence, DeleteContent, DeleteType,
@@ -476,10 +477,16 @@ fn channel_output() {
 
 #[test]
 fn hook_result_blocking_with_an_injected_event() {
-    let result: HookResult = HookResult::block("SIN detected").inject(InjectedEvent::to_channels(
-        full_event(),
-        vec![channel("sms")],
-    ));
+    let result: HookResult = HookResult::block(
+        "SIN detected",
+        BlockOptions {
+            injected: Some(vec![InjectedEvent {
+                target_channel_ids: Some(vec![channel("sms")]),
+                ..InjectedEvent::new(full_event())
+            }]),
+            ..Default::default()
+        },
+    );
     let form = json!({
         "action": "block",
         "event": null,

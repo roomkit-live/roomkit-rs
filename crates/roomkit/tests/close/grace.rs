@@ -8,7 +8,7 @@
 //! it, writes "Thinking" then calls a tool of 30 s, and the kit is closed
 //! from outside at 0.1 s, so that the lanes go idle just before or after
 //! the grace ends at 5.1 s.
-
+use roomkit::model::hook::AllowOptions;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -143,7 +143,7 @@ async fn a_row_delivered_before_the_abort_reads_no_reason() {
             if slow {
                 tokio::time::sleep(Duration::from_secs(400)).await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();

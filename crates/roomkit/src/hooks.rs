@@ -1,5 +1,5 @@
 //! Hook handlers: the host code behind a hook registration (RFC §9).
-
+use roomkit_core::model::hook::AllowOptions;
 use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
@@ -56,7 +56,7 @@ where
         let observing = (self.0)(event, context);
         Box::pin(async move {
             observing.await;
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         })
     }
 }

@@ -6,6 +6,7 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::future::{Future, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -417,9 +418,9 @@ mod an_edit {
         room.kit
             .before_broadcast("no_edits", |event, _| async move {
                 Ok(if event.r#type == EventType::Edit {
-                    HookResult::block("edits are closed")
+                    HookResult::block("edits are closed", BlockOptions::default())
                 } else {
-                    HookResult::allow()
+                    HookResult::allow(AllowOptions::default())
                 })
             })
             .unwrap();
@@ -867,7 +868,7 @@ mod changes_at_once {
                         holding.notify_one();
                         tokio::time::sleep(Duration::from_millis(50)).await;
                     }
-                    Ok(HookResult::allow())
+                    Ok(HookResult::allow(AllowOptions::default()))
                 }
             })
             .unwrap();

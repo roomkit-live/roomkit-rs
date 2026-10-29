@@ -5,7 +5,7 @@
 //! the call there while its caller goes.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -553,7 +553,7 @@ async fn a_caller_waiting_on_a_commit_past_the_close_reads_its_event() {
         let (kit, ws) = gated_room().await;
         if blocks {
             kit.before_broadcast("moderator", |_, _| async {
-                Ok(HookResult::block("spam detected"))
+                Ok(HookResult::block("spam detected", BlockOptions::default()))
             })
             .unwrap();
         }
@@ -995,7 +995,7 @@ fn side_entry_hook(kit: &RoomKit<GatedStore>, locked: bool, more: Duration) {
         let kit = hook_kit.clone();
         async move {
             if roomkit::text_of(&event.content) != "Slow" {
-                return Ok(HookResult::allow());
+                return Ok(HookResult::allow(AllowOptions::default()));
             }
             if locked {
                 let options = SendEventOptions::default();
@@ -1012,7 +1012,7 @@ fn side_entry_hook(kit: &RoomKit<GatedStore>, locked: bool, more: Duration) {
                 kit.process_inbound(message, options).await?;
             }
             tokio::time::sleep(more).await;
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1114,7 +1114,7 @@ async fn a_call_cut_before_its_commit_does_not_read_an_adopted_entry_s() {
                 hanging.notify_one();
                 std::future::pending::<()>().await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1147,7 +1147,7 @@ async fn a_call_cut_before_its_commit_does_not_read_its_channel_s_record() {
         async move {
             hanging.notify_one();
             std::future::pending::<()>().await;
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();

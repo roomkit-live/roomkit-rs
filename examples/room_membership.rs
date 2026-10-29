@@ -16,7 +16,7 @@
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-
+use roomkit::model::hook::AllowOptions;
 use std::error::Error;
 use std::process::ExitCode;
 
@@ -60,7 +60,7 @@ impl Team {
                 .filter_map(|member| member.display_name.clone())
                 .collect();
             read.push(active);
-            async { Ok(HookResult::allow()) }
+            async { Ok(HookResult::allow(AllowOptions::default())) }
         })?;
         let room = RoomId::new("team")?;
         kit.create_room(CreateRoomOptions {

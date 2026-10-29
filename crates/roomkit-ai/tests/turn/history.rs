@@ -2,7 +2,7 @@
 //! (RFC §6.4 "The tools of earlier turns"), through the kit: each round
 //! reads at its place, as the assistant's calls then their results, the
 //! way the turn itself sent it.
-
+use roomkit::model::hook::{AllowOptions, ModifyOptions};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -329,10 +329,10 @@ async fn every_row_of_a_turn_carries_the_turn_s_own_correlation_id() {
     room.kit
         .hook(spec, |mut event, _context| async move {
             if event.source.channel_id != channel("sms") {
-                return Ok(HookResult::allow());
+                return Ok(HookResult::allow(AllowOptions::default()));
             }
             event.correlation_id = Some("integrator-ref".to_owned());
-            Ok(HookResult::modify(event))
+            Ok(HookResult::modify(event, ModifyOptions::default()))
         })
         .unwrap();
     room.says("first").await;

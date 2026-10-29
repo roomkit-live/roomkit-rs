@@ -9,7 +9,7 @@
 //!
 //! The room holds the customer's `sms` and the advisor's `ws`. The off-lock
 //! hook is `scanner`; `policy` needs the lock.
-
+use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -48,7 +48,7 @@ fn answering(answer: impl Fn() -> HookResult + 'static) -> crate::support::Hook 
         if from_customer(event) {
             HookOutcome::Returned(answer())
         } else {
-            HookOutcome::Returned(HookResult::allow())
+            HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
         }
     })
 }
@@ -58,7 +58,10 @@ fn answering(answer: impl Fn() -> HookResult + 'static) -> crate::support::Hook 
 fn scanned(answer: impl Fn() -> HookResult + 'static) -> Sim {
     let mut sim = room();
     sim.off_lock_check("scanner", answering(answer));
-    sim.before_broadcast("policy", answering(HookResult::allow));
+    sim.before_broadcast(
+        "policy",
+        answering(|| HookResult::allow(AllowOptions::default())),
+    );
     sim
 }
 
@@ -97,7 +100,7 @@ mod an_off_lock_hook {
 
     #[test]
     fn runs_before_the_room_lock_between_its_ticket_and_its_turn() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.send(bonjour()).unwrap();
         assert_eq!(
             sim.trace,
@@ -128,7 +131,7 @@ mod an_off_lock_hook {
     /// stand in it by the lock.
     #[test]
     fn runs_in_the_room_s_admission_order_as_the_parse_does() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.send(bonjour()).unwrap();
         assert_eq!(
             sim.in_admission_order,
@@ -141,7 +144,7 @@ mod an_off_lock_hook {
     /// only.
     #[test]
     fn reads_the_context_built_before_the_lock() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.recorded_meanwhile = Some((
             room_id(),
             channel("sms"),
@@ -168,7 +171,7 @@ mod an_off_lock_hook {
                 if from_customer(event) {
                     redacted.content = TextContent::new("[redacted]").into();
                 }
-                HookOutcome::Returned(HookResult::modify(redacted))
+                HookOutcome::Returned(HookResult::modify(redacted, ModifyOptions::default()))
             }),
         );
         let seen = Rc::new(RefCell::new(Vec::new()));
@@ -177,7 +180,7 @@ mod an_off_lock_hook {
             "policy",
             Box::new(move |event| {
                 kept.borrow_mut().push(event.clone());
-                HookOutcome::Returned(HookResult::allow())
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
             }),
         );
         sim.send(bonjour()).unwrap();
@@ -213,8 +216,14 @@ mod an_off_lock_hook {
     #[test]
     fn blocking_leaves_the_next_off_lock_hook_unrun() {
         let mut sim = room();
-        sim.off_lock_check("scanner", answering(|| HookResult::block("SIN detected")));
-        sim.off_lock_check("moderation", answering(HookResult::allow));
+        sim.off_lock_check(
+            "scanner",
+            answering(|| HookResult::block("SIN detected", BlockOptions::default())),
+        );
+        sim.off_lock_check(
+            "moderation",
+            answering(|| HookResult::allow(AllowOptions::default())),
+        );
         sim.send(bonjour()).unwrap();
         assert_eq!(sim.traced("hook"), ["hook scanner"]);
     }
@@ -253,7 +262,7 @@ mod an_off_lock_block {
     use pretty_assertions::assert_eq;
 
     fn blocking() -> Sim {
-        scanned(|| HookResult::block("SIN detected"))
+        scanned(|| HookResult::block("SIN detected", BlockOptions::default()))
     }
 
     #[test]
@@ -362,17 +371,22 @@ mod an_off_lock_block {
     #[test]
     fn refused_by_a_gate_drops_the_check_s_side_effects() {
         let mut sim = scanned(|| {
-            HookResult::block("SIN detected")
-                .with_task(Task::at(
-                    TaskId::new("task_1").unwrap(),
-                    room_id(),
-                    "Call back",
-                    Timestamp::UNIX_EPOCH,
-                ))
-                .inject(InjectedEvent::to_channels(
-                    notice_event("inj_1", "Message blocked."),
-                    vec![channel("sms")],
-                ))
+            HookResult::block(
+                "SIN detected",
+                BlockOptions {
+                    tasks: Some(vec![Task::at(
+                        TaskId::new("task_1").unwrap(),
+                        room_id(),
+                        "Call back",
+                        Timestamp::UNIX_EPOCH,
+                    )]),
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(vec![channel("sms")]),
+                        ..InjectedEvent::new(notice_event("inj_1", "Message blocked."))
+                    }]),
+                    ..Default::default()
+                },
+            )
         });
         sim.hooks_change = Some(HookChange::CloseRoom);
         sim.send(bonjour()).unwrap();
@@ -395,35 +409,37 @@ mod the_side_effects_of_both_phases {
         let mut sim = room();
         sim.off_lock_check(
             "scanner",
-            answering(|| {
-                HookResult::allow()
-                    .with_task(Task::at(
-                        TaskId::new("task_1").unwrap(),
-                        room_id(),
-                        "Review the message",
-                        Timestamp::UNIX_EPOCH,
-                    ))
-                    .inject(InjectedEvent::to_channels(
-                        notice_event("inj_1", "Scanned"),
-                        vec![channel("ws")],
-                    ))
+            answering(|| HookResult {
+                tasks: vec![Task::at(
+                    TaskId::new("task_1").unwrap(),
+                    room_id(),
+                    "Review the message",
+                    Timestamp::UNIX_EPOCH,
+                )],
+                ..HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(vec![channel("ws")]),
+                        ..InjectedEvent::new(notice_event("inj_1", "Scanned"))
+                    }]),
+                })
             }),
         );
         sim.before_broadcast(
             "policy",
-            answering(|| {
-                HookResult::allow()
-                    .with_observation(Observation::at(
-                        ObservationId::new("obs_1").unwrap(),
-                        room_id(),
-                        channel("sms"),
-                        "policy checked",
-                        Timestamp::UNIX_EPOCH,
-                    ))
-                    .inject(InjectedEvent::to_channels(
-                        notice_event("inj_2", "Checked"),
-                        vec![channel("sms")],
-                    ))
+            answering(|| HookResult {
+                observations: vec![Observation::at(
+                    ObservationId::new("obs_1").unwrap(),
+                    room_id(),
+                    channel("sms"),
+                    "policy checked",
+                    Timestamp::UNIX_EPOCH,
+                )],
+                ..HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(vec![channel("sms")]),
+                        ..InjectedEvent::new(notice_event("inj_2", "Checked"))
+                    }]),
+                })
             }),
         );
         sim
@@ -476,9 +492,12 @@ mod an_event_no_off_lock_hook_fires_for {
         spec.filter.channel_ids = Some([channel("email")].into());
         sim.sync_hook(
             spec,
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
-        sim.before_broadcast("policy", answering(HookResult::allow));
+        sim.before_broadcast(
+            "policy",
+            answering(|| HookResult::allow(AllowOptions::default())),
+        );
         sim.send(bonjour()).unwrap();
         assert_eq!(
             (sim.traced("take ticket"), sim.traced("hook")),
@@ -531,11 +550,11 @@ mod another_pass {
         sim.echo_agent("ai", "Hello back");
         sim.off_lock_check(
             "scanner",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim.before_broadcast(
             "policy",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim.send(bonjour()).unwrap();
         let mut expected = every_hook_under_the_lock();
@@ -552,15 +571,17 @@ mod another_pass {
         sim.off_lock_check(
             "scanner",
             answering(|| {
-                HookResult::allow().inject(InjectedEvent::to_channels(
-                    notice_event("inj_1", "Scanned"),
-                    vec![channel("ws")],
-                ))
+                HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(vec![channel("ws")]),
+                        ..InjectedEvent::new(notice_event("inj_1", "Scanned"))
+                    }]),
+                })
             }),
         );
         sim.before_broadcast(
             "policy",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim.send(bonjour()).unwrap();
         let mut expected = every_hook_under_the_lock();
@@ -593,7 +614,7 @@ mod the_ticket {
 
     #[test]
     fn is_released_after_the_lock_once_the_event_is_committed() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.send(bonjour()).unwrap();
         let after_commit: Vec<&str> = sim
             .trace
@@ -616,15 +637,21 @@ mod the_ticket {
     #[test]
     fn is_released_after_a_locked_hook_s_block() {
         let mut sim = room();
-        sim.off_lock_check("scanner", answering(HookResult::allow));
-        sim.before_broadcast("policy", answering(|| HookResult::block("no")));
+        sim.off_lock_check(
+            "scanner",
+            answering(|| HookResult::allow(AllowOptions::default())),
+        );
+        sim.before_broadcast(
+            "policy",
+            answering(|| HookResult::block("no", BlockOptions::default())),
+        );
         sim.send(bonjour()).unwrap();
         assert_eq!(ticket_lines(&sim), taken_awaited_released());
     }
 
     #[test]
     fn is_released_for_a_duplicate() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         let mut first = notice_event("evt_0", "Bonjour");
         first.source.channel_id = channel("sms");
         first.idempotency_key = Some("SM1".to_owned());
@@ -637,7 +664,7 @@ mod the_ticket {
 
     #[test]
     fn is_released_when_an_edit_is_refused() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         let mut edit = InboundMessage::new(
             channel("sms"),
             SENDER,
@@ -655,7 +682,7 @@ mod the_ticket {
     /// goes once the lock is released.
     #[test]
     fn is_released_once_an_instruction_is_decided() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.echo_agent("ai", "Hello, I am the assistant.");
         let mut instruction = Sim::message("ws", "Introduce yourself.");
         instruction.event_type = EventType::Instruction;
@@ -685,7 +712,7 @@ mod the_ticket {
 
     #[test]
     fn is_released_when_the_room_refuses_the_event() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.room.status = RoomStatus::Closed;
         sim.send(bonjour()).unwrap();
         assert_eq!(ticket_lines(&sim), taken_awaited_released());
@@ -693,7 +720,7 @@ mod the_ticket {
 
     #[test]
     fn is_released_when_the_commit_fails() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.failing_effect = Some("commit");
         let failed = sim.send(bonjour());
         assert_eq!(
@@ -704,7 +731,7 @@ mod the_ticket {
 
     #[test]
     fn is_released_when_the_lock_cannot_be_taken() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.failing_effect = Some("lock room_1");
         let failed = sim.send(bonjour());
         assert_eq!(
@@ -718,7 +745,7 @@ mod the_ticket {
 
     #[test]
     fn is_released_when_its_turn_cannot_be_awaited() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.failing_effect = Some("await ticket");
         let failed = sim.send(bonjour());
         assert_eq!(
@@ -739,7 +766,7 @@ mod the_ticket {
 
     #[test]
     fn that_cannot_be_taken_fails_the_call_with_nothing_written() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.failing_effect = Some("take ticket");
         let failed = sim.send(bonjour());
         assert_eq!(
@@ -756,7 +783,7 @@ mod the_ticket {
     /// Gap G-025: a failed release changes nothing the call decided.
     #[test]
     fn whose_release_fails_leaves_the_event_committed_and_reports_it() {
-        let mut sim = scanned(HookResult::allow);
+        let mut sim = scanned(|| HookResult::allow(AllowOptions::default()));
         sim.failing_effect = Some("release ticket");
         let result = sim.send(bonjour()).unwrap();
         assert_eq!(

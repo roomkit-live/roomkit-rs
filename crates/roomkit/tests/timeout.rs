@@ -23,7 +23,7 @@
     clippy::panic,
     reason = "a test fails on a broken fixture"
 )]
-
+use roomkit::model::hook::AllowOptions;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -104,7 +104,7 @@ fn slow_the_first_time(kit: &RoomKit, needs_lock: bool) {
             if first {
                 tokio::time::sleep(Duration::from_secs(3600)).await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -236,7 +236,7 @@ async fn a_hook_s_own_timeout_stays_a_hook_error() {
     spec.timeout = Duration::from_millis(20);
     kit.hook(spec, |_, _| async {
         tokio::time::sleep(Duration::from_secs(3600)).await;
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let mut events = kit.subscribe();
@@ -462,7 +462,7 @@ async fn process_timeout_defaults_to_30_seconds() {
     spec.timeout = Duration::from_secs(60);
     kit.hook(spec, |_, _| async {
         tokio::time::sleep(Duration::from_secs(31)).await;
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let room = room_id();

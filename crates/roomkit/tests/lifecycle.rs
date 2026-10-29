@@ -5,6 +5,7 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+use roomkit::model::hook::AllowOptions;
 use std::future::{Future, ready};
 use std::sync::Arc;
 use std::time::Duration;
@@ -553,7 +554,9 @@ mod unregistering {
         let channel_id = channel(channel_id);
         kit.before_broadcast("unplug", move |_, _| {
             unregistering.unregister_channel(&channel_id).unwrap();
-            ready(Ok(roomkit::model::HookResult::allow()))
+            ready(Ok(roomkit::model::HookResult::allow(
+                AllowOptions::default(),
+            )))
         })
         .unwrap();
     }

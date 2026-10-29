@@ -8,7 +8,7 @@
 //! The kit's timeout is ten seconds; a slow effect takes eleven on the
 //! simulated clock. The room holds the customer's `sms` and the advisor's
 //! `ws`.
-
+use roomkit_core::model::hook::AllowOptions;
 use std::time::Duration;
 
 use roomkit_core::model::{
@@ -37,11 +37,11 @@ fn scanned() -> Sim {
     let mut sim = room();
     sim.off_lock_check(
         "scanner",
-        Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+        Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
     );
     sim.before_broadcast(
         "policy",
-        Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+        Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
     );
     sim
 }
@@ -229,14 +229,20 @@ mod expiring_during {
                     "Call back",
                     Timestamp::UNIX_EPOCH,
                 );
-                HookOutcome::Returned(HookResult::allow().with_task(task).inject(
-                    InjectedEvent::to_channels(notice_event("inj_1", "Noted"), vec![channel("ws")]),
-                ))
+                HookOutcome::Returned(HookResult {
+                    tasks: vec![task],
+                    ..HookResult::allow(AllowOptions {
+                        injected: Some(vec![InjectedEvent {
+                            target_channel_ids: Some(vec![channel("ws")]),
+                            ..InjectedEvent::new(notice_event("inj_1", "Noted"))
+                        }]),
+                    })
+                })
             }),
         );
         sim.before_broadcast(
             "policy",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         slow(&mut sim, "hook policy");
         sim.send(bonjour()).unwrap();

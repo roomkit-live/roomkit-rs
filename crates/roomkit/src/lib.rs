@@ -82,7 +82,7 @@ pub mod model {
         ChannelType, CompositeContent, Confidence, DeleteContent, DeleteType, DeliveryError,
         DeliveryResult, DeliveryResultStatus, DirectEvent, EditContent, EditSource, ErrorRecord,
         EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates,
-        HookDecision, HookResult, IdentificationStatus, Identity, IdentityId, InboundMessage,
+        HookAction, HookResult, IdentificationStatus, Identity, IdentityId, InboundMessage,
         InjectedEvent, Latitude, LocationContent, Longitude, MediaContent, Metadata, ModelError,
         Observation, ObservationId, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
         ProviderResult, RateLimit, RetryPolicy, RichContent, RichFormat, Room, RoomContext,
@@ -90,6 +90,13 @@ pub mod model {
         TaskStatus, TemplateContent, TextContent, Timestamp, ToolCallContent, ToolCallOutcome,
         ToolCallStatus, VerificationStatus, VideoContent, Visibility,
     };
+    /// What a hook returns: [`HookResult`]'s constructors and their options,
+    /// Python's keywords of `HookResult.allow`, `block` and `modify`.
+    pub mod hook {
+        pub use roomkit_core::model::hook::{
+            AllowOptions, BlockOptions, HookAction, HookResult, InjectedEvent, ModifyOptions,
+        };
+    }
     // Outside the public API: the Python implementation keeps them private,
     // and the workspace's crates read them across crates. `ToolCall` leaves
     // with lot 3 (`ToolCallEvent`) and lot 5 (`AiToolCall`).

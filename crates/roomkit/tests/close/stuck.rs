@@ -1,7 +1,7 @@
 //! RFC §12.10.4: what waits behind spared work is dropped at once, rather
 //! than drained for the close's grace, and a turn the close cuts holds it
 //! only until its reader's read is committed.
-
+use roomkit::model::hook::AllowOptions;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -232,7 +232,7 @@ fn closing_hook(kit: &RoomKit, closer: &Closer, needs_lock: bool) {
             if is_one {
                 work.close().await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();

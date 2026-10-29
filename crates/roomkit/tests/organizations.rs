@@ -6,7 +6,7 @@
 //! names no organization reaches every room.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
+use roomkit::model::hook::AllowOptions;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -418,7 +418,7 @@ async fn a_replay_is_never_handed_to_another_organization() {
                     .map(|event| event.id);
                 answers.lock().unwrap().push(replayed);
             }
-            Ok(roomkit::model::HookResult::allow())
+            Ok(roomkit::model::HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();

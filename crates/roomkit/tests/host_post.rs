@@ -5,7 +5,7 @@
 //! it, with nothing written; and its key.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
+use roomkit::model::hook::AllowOptions;
 use std::future::{Future, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -1014,7 +1014,7 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
                         .await?;
                     posted.lock().unwrap().push(event.id);
                 }
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();

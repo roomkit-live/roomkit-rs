@@ -15,11 +15,11 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::pin::pin;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use axum::Router;
 use axum::routing::get;
-use roomkit::model::{ChannelId, Participant, ParticipantId, RoomId, Timestamp};
+use roomkit::model::{ChannelId, Participant, ParticipantId, RoomId};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, RoomKit, RoomKitOptions,
 };
@@ -347,29 +347,13 @@ impl App {
                 .await?;
         }
         if store.get_participant(room_id, user).await?.is_none() {
-            let mut person = Participant::at(
-                user.clone(),
-                room_id.clone(),
-                self.websocket.id().clone(),
-                wall_clock(),
-            );
-            person.display_name = name;
+            // The participant joins now, as `Participant::new` fills it.
+            let person = Participant {
+                display_name: name,
+                ..Participant::new(user.clone(), room_id.clone(), self.websocket.id().clone())
+            };
             store.create_participant(person).await?;
         }
         Ok(())
     }
-}
-
-/// The instant a person joins at: the wall clock's, as the kit stamps its
-/// own records on a system clock.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a participant the server stores joins at the wall clock's instant"
-)]
-fn wall_clock() -> Timestamp {
-    let elapsed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let millis = i64::try_from(elapsed.as_millis()).unwrap_or_default();
-    Timestamp::from_unix_millis(millis).unwrap_or(Timestamp::UNIX_EPOCH)
 }

@@ -13,7 +13,7 @@
 //! does not stop fails at once rather than run forever.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
+use roomkit::model::hook::AllowOptions;
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -579,7 +579,7 @@ async fn a_task_the_hook_starts_calls_as_work_of_its_own() {
             );
             async move {
                 if text_of(&event.content) != "hi" {
-                    return Ok(HookResult::allow());
+                    return Ok(HookResult::allow(AllowOptions::default()));
                 }
                 tokio::spawn(keep_context(async move {
                     over.notified().await;
@@ -598,7 +598,7 @@ async fn a_task_the_hook_starts_calls_as_work_of_its_own() {
                     }
                 }));
                 match ends {
-                    Ends::Returns => Ok(HookResult::allow()),
+                    Ends::Returns => Ok(HookResult::allow(AllowOptions::default())),
                     Ends::Raises => Err("the hook's body fails".into()),
                     Ends::TimesOut => std::future::pending().await,
                 }
@@ -1043,7 +1043,7 @@ async fn work_outside_a_hook_body_draws_nothing() {
                     if let (Some(target), "go") = (target, text_of(&event.content).as_str()) {
                         update_sixty_times(&kit, &target, &failures).await;
                     }
-                    Ok(HookResult::allow())
+                    Ok(HookResult::allow(AllowOptions::default()))
                 }
             })
             .unwrap();
@@ -1132,7 +1132,7 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
                 };
                 kit.update_event(&room_id(), &target, updates).await?;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -1253,7 +1253,7 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
                         }
                     }
                 }
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();

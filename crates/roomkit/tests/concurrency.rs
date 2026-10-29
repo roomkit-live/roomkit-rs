@@ -12,7 +12,7 @@
 //! invariants hold for the interleavings it met, not for every one.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
+use roomkit::model::hook::AllowOptions;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -69,7 +69,7 @@ async fn rooms() -> (RoomKit, RecordingTransport) {
             if first && event.room_id == room(0) {
                 meeting.wait().await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();

@@ -13,7 +13,7 @@
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-
+use roomkit::model::hook::AllowOptions;
 use std::error::Error;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -53,7 +53,7 @@ fn scan_off_the_lock(kit: &RoomKit, scans: &Log<String>) -> Result<(), Box<dyn E
             // Stands in for the scanner's HTTP round trip.
             tokio::time::sleep(SCAN).await;
             scans.push(format!("{text} scan ends"));
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })?;
     Ok(())

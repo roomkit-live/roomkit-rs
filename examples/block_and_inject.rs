@@ -7,7 +7,7 @@
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::error::Error;
 use std::process::ExitCode;
 
@@ -33,11 +33,37 @@ fn has_sin(text: &str) -> bool {
     })
 }
 
-/// An event from the framework itself, for the hook to inject.
+/// An event from the framework itself, for the hook to inject: the
+/// pipeline gives every injected event a fresh id.
 fn notice(text: &str, now: Timestamp) -> Result<RoomEvent, Box<dyn Error>> {
-    Ok(
-        RoomEvent { id: // The pipeline gives every injected event a fresh id.
-        "placeholder".parse()?, created_at: now, ..RoomEvent::new(RoomId::new("room_1")?, EventSource { direction: EventDirection::Outbound, ..EventSource::new(ChannelId::new("system")?, ChannelType::SYSTEM) }, TextContent::new(text)) },
+    let source = EventSource {
+        direction: EventDirection::Outbound,
+        ..EventSource::new(ChannelId::new("system")?, ChannelType::SYSTEM)
+    };
+    Ok(RoomEvent {
+        created_at: now,
+        ..RoomEvent::new(RoomId::new("room_1")?, source, TextContent::new(text))
+    })
+}
+
+/// The scanner's answer to a message holding a SIN, as Python writes it,
+/// `HookResult.block("SIN detected", injected=[...], observations=[...])`:
+/// each notice injected to its own target only.
+fn refusal(notices: [(RoomEvent, ChannelId); 2], observation: Observation) -> HookResult {
+    let injected = notices
+        .into_iter()
+        .map(|(event, target)| InjectedEvent {
+            target_channel_ids: Some(vec![target]),
+            ..InjectedEvent::new(event)
+        })
+        .collect();
+    HookResult::block(
+        "SIN detected",
+        BlockOptions {
+            injected: Some(injected),
+            observations: Some(vec![observation]),
+            ..BlockOptions::default()
+        },
     )
 }
 
@@ -61,19 +87,21 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         let (customer_id, advisor_id) = (customer_id.clone(), advisor_id.clone());
         async move {
             if !found {
-                return Ok(HookResult::allow());
+                return Ok(HookResult::allow(AllowOptions::default()));
             }
-            let observation = Observation::at(
-                "obs_sin".parse()?,
-                context.room.id.clone(),
-                customer_id.clone(),
-                "SIN sent by SMS",
-                event.created_at,
-            );
-            Ok(HookResult::block("SIN detected")
-                .inject(InjectedEvent::to_channels(to_customer, vec![customer_id]))
-                .inject(InjectedEvent::to_channels(to_advisor, vec![advisor_id]))
-                .with_observation(observation))
+            let observation = Observation {
+                created_at: event.created_at,
+                ..Observation::new(
+                    "obs_sin".parse()?,
+                    context.room.id.clone(),
+                    customer_id.clone(),
+                    "SIN sent by SMS",
+                )
+            };
+            Ok(refusal(
+                [(to_customer, customer_id), (to_advisor, advisor_id)],
+                observation,
+            ))
         }
     })?;
 

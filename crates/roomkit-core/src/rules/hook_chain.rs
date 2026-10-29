@@ -5,7 +5,7 @@
 //! chain, a modify that replaces the payload, and an unusable outcome that
 //! allows or blocks depending on the hook and the trigger.
 
-use crate::model::{ErrorRecord, HookDecision, HookResult, InjectedEvent, Observation, Task};
+use crate::model::{ErrorRecord, HookAction, HookResult, InjectedEvent, Observation, Task};
 use crate::rules::hook_registry::{HookSpec, HookTrigger};
 
 /// What running one hook produced, as the driver observed it.
@@ -206,14 +206,23 @@ impl<P> HookChain<P> {
         }
     }
 
+    /// A result the Python implementation's validator refuses, a `modify`
+    /// without its event or a `block` without its reason, built by struct
+    /// literal, is read as the hook raising the `ValueError` Python's hook
+    /// would have raised building it: none of its side effects is kept.
     fn apply_result(&mut self, hook: &HookSpec, result: HookResult<P>, keep: impl FnOnce(P) -> P) {
+        if result.check().is_err() {
+            let error = ErrorRecord::new("ValueError", python_validator_message(result.action));
+            self.apply_problem(hook, HookProblem::Raised(error));
+            return;
+        }
         self.injected_events.extend(result.injected_events);
         self.tasks.extend(result.tasks);
         self.observations.extend(result.observations);
-        match result.decision {
-            HookDecision::Allow => {}
-            HookDecision::Modify(payload) => self.payload = keep(payload),
-            HookDecision::Block => self.block = Some((hook.name.clone(), result.reason)),
+        match (result.action, result.event) {
+            (HookAction::Modify, Some(payload)) => self.payload = keep(payload),
+            (HookAction::Block, _) => self.block = Some((hook.name.clone(), result.reason)),
+            (HookAction::Allow | HookAction::Modify, _) => {}
         }
     }
 
@@ -233,11 +242,22 @@ impl<P> HookChain<P> {
     }
 }
 
+/// The message the Python implementation's `HookResult` validator raises
+/// for a result of `action` it refuses (`src/roomkit/models/hook.py`): an
+/// allow is never refused.
+fn python_validator_message(action: HookAction) -> &'static str {
+    match action {
+        HookAction::Modify => "action='modify' requires 'event' to be set",
+        HookAction::Block | HookAction::Allow => "action='block' requires 'reason' to be set",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
     use crate::model::{
         ChannelId, ChannelType, EventDirection, EventId, EventSource, EventType, RoomEvent, RoomId,
         TaskId, TextContent, Timestamp,
@@ -278,7 +298,7 @@ mod tests {
     }
 
     fn injected() -> InjectedEvent {
-        InjectedEvent::stored_only(RoomEvent::at(
+        InjectedEvent::new(RoomEvent::at(
             EventId::new("evt_9").unwrap(),
             RoomId::new("room_1").unwrap(),
             EventType::Message,
@@ -294,14 +314,17 @@ mod tests {
     #[test]
     fn a_chain_of_allows_keeps_the_payload() {
         let mut chain = chain();
-        chain.apply(&hook("audit"), HookOutcome::Returned(HookResult::allow()));
+        chain.apply(
+            &hook("audit"),
+            HookOutcome::Returned(HookResult::allow(AllowOptions::default())),
+        );
         assert_eq!(allowed_payload(chain).as_deref(), Some("original"));
     }
 
     #[test]
     fn a_modify_replaces_the_payload() {
         let mut chain = chain();
-        let modify = HookResult::modify("redacted".to_owned());
+        let modify = HookResult::modify("redacted".to_owned(), ModifyOptions::default());
         chain.apply(&hook("pii"), HookOutcome::Returned(modify));
         assert_eq!(allowed_payload(chain).as_deref(), Some("redacted"));
     }
@@ -311,7 +334,7 @@ mod tests {
         let mut chain = chain();
         chain.apply(
             &hook("pii"),
-            HookOutcome::Returned(HookResult::modify(String::new())),
+            HookOutcome::Returned(HookResult::modify(String::new(), ModifyOptions::default())),
         );
         assert_eq!(allowed_payload(chain).as_deref(), Some(""));
     }
@@ -319,7 +342,7 @@ mod tests {
     #[test]
     fn the_next_hook_receives_the_modified_payload() {
         let mut chain = chain();
-        let modify = HookResult::modify("redacted".to_owned());
+        let modify = HookResult::modify("redacted".to_owned(), ModifyOptions::default());
         chain.apply(&hook("pii"), HookOutcome::Returned(modify));
         assert_eq!(chain.payload(), "redacted");
     }
@@ -329,7 +352,7 @@ mod tests {
         let mut chain = chain();
         chain.apply(
             &hook("sensitivity_scanner"),
-            HookOutcome::Returned(HookResult::block("SIN detected")),
+            HookOutcome::Returned(HookResult::block("SIN detected", BlockOptions::default())),
         );
         assert_eq!(
             decision(chain),
@@ -343,11 +366,11 @@ mod tests {
     #[test]
     fn a_blocked_verdict_carries_the_payload_the_earlier_hooks_left() {
         let mut chain = chain();
-        let modify = HookResult::modify("redacted".to_owned());
+        let modify = HookResult::modify("redacted".to_owned(), ModifyOptions::default());
         chain.apply(&hook("pii"), HookOutcome::Returned(modify));
         chain.apply(
             &hook("policy"),
-            HookOutcome::Returned(HookResult::block("no")),
+            HookOutcome::Returned(HookResult::block("no", BlockOptions::default())),
         );
         assert_eq!(chain.finish().payload, "redacted");
     }
@@ -357,11 +380,14 @@ mod tests {
         let mut chain = chain();
         chain.apply(
             &hook("first"),
-            HookOutcome::Returned(HookResult::block("stop")),
+            HookOutcome::Returned(HookResult::block("stop", BlockOptions::default())),
         );
         chain.apply(
             &hook("second"),
-            HookOutcome::Returned(HookResult::modify("late".to_owned())),
+            HookOutcome::Returned(HookResult::modify(
+                "late".to_owned(),
+                ModifyOptions::default(),
+            )),
         );
         assert!(matches!(
             decision(chain),
@@ -391,6 +417,63 @@ mod tests {
                 problem: HookProblem::Raised(error),
                 blocked: false,
             }]
+        );
+    }
+
+    /// A result Python's validator refuses, built by struct literal, reads
+    /// as the hook raising Python's `ValueError`: a block without a reason
+    /// and a modify without its event allow, their side effects dropped.
+    #[test]
+    fn a_result_python_refuses_reads_as_a_raised_hook() {
+        let task = Task::at(
+            TaskId::new("task_1").unwrap(),
+            RoomId::new("room_1").unwrap(),
+            "follow up",
+            Timestamp::UNIX_EPOCH,
+        );
+        let mut chain = chain();
+        chain.apply(
+            &hook("no_reason"),
+            HookOutcome::Returned(HookResult {
+                tasks: vec![task],
+                ..HookResult::new(HookAction::Block)
+            }),
+        );
+        chain.apply(
+            &hook("no_event"),
+            HookOutcome::Returned(HookResult::new(HookAction::Modify)),
+        );
+        let verdict = chain.finish();
+        assert_eq!(
+            (
+                verdict.decision,
+                verdict.payload,
+                verdict.tasks,
+                verdict.incidents
+            ),
+            (
+                ChainDecision::Allowed,
+                "original".to_owned(),
+                Vec::new(),
+                vec![
+                    HookIncident {
+                        hook: "no_reason".to_owned(),
+                        problem: HookProblem::Raised(ErrorRecord::new(
+                            "ValueError",
+                            "action='block' requires 'reason' to be set"
+                        )),
+                        blocked: false,
+                    },
+                    HookIncident {
+                        hook: "no_event".to_owned(),
+                        problem: HookProblem::Raised(ErrorRecord::new(
+                            "ValueError",
+                            "action='modify' requires 'event' to be set"
+                        )),
+                        blocked: false,
+                    },
+                ]
+            )
         );
     }
 
@@ -447,7 +530,10 @@ mod tests {
     #[test]
     fn side_effects_of_an_allow_are_collected() {
         let mut chain = chain();
-        let allow = HookResult::allow().with_task(task("task_1"));
+        let allow = HookResult {
+            tasks: vec![task("task_1")],
+            ..HookResult::allow(AllowOptions::default())
+        };
         chain.apply(&hook("triage"), HookOutcome::Returned(allow));
         assert_eq!(chain.finish().tasks, [task("task_1")]);
     }
@@ -455,11 +541,14 @@ mod tests {
     #[test]
     fn side_effects_of_the_hooks_before_a_block_are_collected() {
         let mut chain = chain();
-        let allow = HookResult::allow().with_task(task("task_1"));
+        let allow = HookResult {
+            tasks: vec![task("task_1")],
+            ..HookResult::allow(AllowOptions::default())
+        };
         chain.apply(&hook("triage"), HookOutcome::Returned(allow));
         chain.apply(
             &hook("pii"),
-            HookOutcome::Returned(HookResult::block("SIN")),
+            HookOutcome::Returned(HookResult::block("SIN", BlockOptions::default())),
         );
         assert_eq!(chain.finish().tasks, [task("task_1")]);
     }
@@ -467,7 +556,9 @@ mod tests {
     #[test]
     fn events_injected_by_an_allow_are_collected() {
         let mut chain = chain();
-        let allow = HookResult::allow().inject(injected());
+        let allow = HookResult::allow(AllowOptions {
+            injected: Some(vec![injected()]),
+        });
         chain.apply(&hook("notifier"), HookOutcome::Returned(allow));
         assert_eq!(chain.finish().injected_events, [injected()]);
     }
@@ -493,7 +584,13 @@ mod tests {
     #[test]
     fn events_injected_by_a_block_are_collected() {
         let mut chain = chain();
-        let block = HookResult::block("SIN").inject(injected());
+        let block = HookResult::block(
+            "SIN",
+            BlockOptions {
+                injected: Some(vec![injected()]),
+                ..Default::default()
+            },
+        );
         chain.apply(&hook("pii"), HookOutcome::Returned(block));
         assert_eq!(chain.finish().injected_events, [injected()]);
     }

@@ -5,6 +5,7 @@
 //! The simulated driver checks on every run that the operation ended with
 //! the room lock released.
 
+use roomkit_core::model::hook::{AllowOptions, BlockOptions};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -1218,12 +1219,14 @@ mod the_status_gate {
             "notify",
             Box::new(|event| {
                 if event.source.channel_id.as_str() != "sms" {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
-                HookOutcome::Returned(HookResult::allow().inject(InjectedEvent::to_channels(
-                    notice_event("inj_1", "Heads up"),
-                    vec![channel("ws")],
-                )))
+                HookOutcome::Returned(HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(vec![channel("ws")]),
+                        ..InjectedEvent::new(notice_event("inj_1", "Heads up"))
+                    }]),
+                }))
             }),
         );
         sim.delivery_duration = Duration::from_secs(100);
@@ -1415,7 +1418,9 @@ mod a_timer_transition_s_report {
                         event: Box::new(DirectEvent::new(channel("sms"), TextContent::new("Note"))),
                     })
                 }),
-                answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::AtOnce(Box::new(|| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         // The third read is the entry's, after the trigger's step 2 and gate.
@@ -1695,7 +1700,9 @@ mod a_paused_room {
         let mut sim = paused();
         sim.before_broadcast(
             "refuse",
-            Box::new(|_| HookOutcome::Returned(HookResult::block("not now"))),
+            Box::new(|_| {
+                HookOutcome::Returned(HookResult::block("not now", BlockOptions::default()))
+            }),
         );
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(sim.room.status, RoomStatus::Paused);

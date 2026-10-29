@@ -1,7 +1,7 @@
 //! Templates: the records a scenario writes in part, completed with what
 //! the record requires (roomkit-specs `conformance/README.md`, "Templates"),
 //! and a hook's result built from them.
-
+use roomkit::model::hook::AllowOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use roomkit::model::{HookResult, RoomEvent, Timestamp};
@@ -77,7 +77,7 @@ pub(crate) fn hook_result(
     room_id: &str,
 ) -> Result<HookResult, serde_json::Error> {
     let Some(spec) = spec else {
-        return Ok(HookResult::allow());
+        return Ok(HookResult::allow(AllowOptions::default()));
     };
     let mut data: Map<String, Value> = spec.as_object().cloned().unwrap_or_default();
     if data.get("action") == Some(&json!("modify"))

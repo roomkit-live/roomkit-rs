@@ -6,7 +6,7 @@
 //! refused.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
+use roomkit::model::hook::AllowOptions;
 use std::future::{Future, pending};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -294,7 +294,7 @@ async fn close_ends_a_call_stuck_before_its_commit() {
     let kit = room().await;
     kit.before_broadcast("stuck", |_, _| async {
         pending::<()>().await;
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let call = spawn_bonjour(&kit);
@@ -500,7 +500,7 @@ async fn close_cuts_an_after_broadcast_observer_at_the_grace() {
             async move {
                 tokio::time::sleep(Duration::from_secs(runs)).await;
                 observed.lock().unwrap().push(name);
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();
@@ -626,7 +626,7 @@ async fn close_ends_the_queued_deliveries_at_the_grace() {
         if text_of(&event.content) == "m0" {
             tokio::time::sleep(Duration::from_secs(9)).await;
         }
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let deferred = ProcessInboundOptions {
@@ -877,7 +877,7 @@ async fn the_queued_work_is_aborted_before_the_observers_drain() {
         if text_of(&event.content) == "m0" {
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let deferred = ProcessInboundOptions {

@@ -1,5 +1,6 @@
 //! The inbound pipeline, effect by effect (RFC §10.1, §10.2).
 
+use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::sync::Arc;
 
 use roomkit_core::model::{
@@ -37,7 +38,7 @@ mod an_allowed_message {
         let mut sim = room();
         sim.before_broadcast(
             "pii_scan",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
 
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
@@ -209,7 +210,10 @@ mod an_allowed_message {
                     "Call back",
                     Timestamp::UNIX_EPOCH,
                 );
-                HookOutcome::Returned(HookResult::allow().with_task(task))
+                HookOutcome::Returned(HookResult {
+                    tasks: vec![task],
+                    ..HookResult::allow(AllowOptions::default())
+                })
             }),
         );
         sim
@@ -257,7 +261,7 @@ mod a_blocked_message {
             Box::new(|event| {
                 let text = roomkit_core::rules::transcoding::text_of(&event.content);
                 if !text.contains("123-456-789") {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
                 let observation = Observation::at(
                     ObservationId::new("obs_sin").unwrap(),
@@ -266,18 +270,29 @@ mod a_blocked_message {
                     "SIN sent by SMS",
                     Timestamp::UNIX_EPOCH,
                 );
-                HookOutcome::Returned(
-                    HookResult::block("SIN detected")
-                        .inject(InjectedEvent::to_channels(
-                            notice_event("inj_1", "Message blocked. Do not send SIN by SMS."),
-                            vec![channel("sms")],
-                        ))
-                        .inject(InjectedEvent::to_channels(
-                            notice_event("inj_2", "Client attempted to send SIN. Blocked."),
-                            vec![channel("ws")],
-                        ))
-                        .with_observation(observation),
-                )
+                HookOutcome::Returned(HookResult::block(
+                    "SIN detected",
+                    BlockOptions {
+                        injected: Some(vec![
+                            InjectedEvent {
+                                target_channel_ids: Some(vec![channel("sms")]),
+                                ..InjectedEvent::new(notice_event(
+                                    "inj_1",
+                                    "Message blocked. Do not send SIN by SMS.",
+                                ))
+                            },
+                            InjectedEvent {
+                                target_channel_ids: Some(vec![channel("ws")]),
+                                ..InjectedEvent::new(notice_event(
+                                    "inj_2",
+                                    "Client attempted to send SIN. Blocked.",
+                                ))
+                            },
+                        ]),
+                        observations: Some(vec![observation]),
+                        ..Default::default()
+                    },
+                ))
             }),
         );
         sim
@@ -331,7 +346,7 @@ mod a_blocked_message {
                     })
                 }),
                 answer: Answer::Awaits(Box::new(|_| {
-                    HookOutcome::Returned(HookResult::block("not now"))
+                    HookOutcome::Returned(HookResult::block("not now", BlockOptions::default()))
                 })),
             },
         );
@@ -444,12 +459,14 @@ mod a_blocked_message {
             Box::new(|event| {
                 let mut redacted = event.clone();
                 redacted.content = TextContent::new("[redacted]").into();
-                HookOutcome::Returned(HookResult::modify(redacted))
+                HookOutcome::Returned(HookResult::modify(redacted, ModifyOptions::default()))
             }),
         );
         sim.before_broadcast(
             "policy",
-            Box::new(|_| HookOutcome::Returned(HookResult::block("not allowed"))),
+            Box::new(|_| {
+                HookOutcome::Returned(HookResult::block("not allowed", BlockOptions::default()))
+            }),
         );
         sim.send(Sim::message("sms", "secret")).unwrap();
         assert_eq!(
@@ -474,10 +491,17 @@ mod an_injected_event {
             "gate",
             Box::new(move |event| {
                 if roomkit_core::rules::transcoding::text_of(&event.content) != "trigger" {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
-                HookOutcome::Returned(HookResult::block("gated").inject(
-                    InjectedEvent::to_channels(injected.clone(), vec![target.clone()]),
+                HookOutcome::Returned(HookResult::block(
+                    "gated",
+                    BlockOptions {
+                        injected: Some(vec![InjectedEvent {
+                            target_channel_ids: Some(vec![target.clone()]),
+                            ..InjectedEvent::new(injected.clone())
+                        }]),
+                        ..Default::default()
+                    },
                 ))
             }),
         );
@@ -588,12 +612,14 @@ mod an_injected_event_s_pass {
             Box::new(move |event| {
                 let text = roomkit_core::rules::transcoding::text_of(&event.content);
                 if !always && text != "hello" {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
-                HookOutcome::Returned(HookResult::allow().inject(InjectedEvent::to_channels(
-                    notice_event("inj_1", "Heads up"),
-                    vec![channel("ws")],
-                )))
+                HookOutcome::Returned(HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(vec![channel("ws")]),
+                        ..InjectedEvent::new(notice_event("inj_1", "Heads up"))
+                    }]),
+                }))
             }),
         );
         sim
@@ -633,9 +659,12 @@ mod an_injected_event_s_pass {
             "quiet",
             Box::new(|event| {
                 if roomkit_core::rules::transcoding::text_of(&event.content) == "Heads up" {
-                    return HookOutcome::Returned(HookResult::block("no notices"));
+                    return HookOutcome::Returned(HookResult::block(
+                        "no notices",
+                        BlockOptions::default(),
+                    ));
                 }
-                HookOutcome::Returned(HookResult::allow())
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
             }),
         );
         sim.send(Sim::message("sms", "hello")).unwrap();
@@ -702,13 +731,15 @@ mod an_injected_event_s_visibility {
             "notify",
             Box::new(move |event| {
                 if text_of(&event.content) != "hello" {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
                 let targets = targets.iter().map(|id| channel(id)).collect();
-                HookOutcome::Returned(HookResult::allow().inject(InjectedEvent::to_channels(
-                    notice_event("inj_1", "Heads up"),
-                    targets,
-                )))
+                HookOutcome::Returned(HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(targets),
+                        ..InjectedEvent::new(notice_event("inj_1", "Heads up"))
+                    }]),
+                }))
             }),
         );
         sim
@@ -721,11 +752,11 @@ mod an_injected_event_s_visibility {
             "rewrite",
             Box::new(move |event| {
                 if text_of(&event.content) != "Heads up" {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
                 let mut modified = event.clone();
                 modified.visibility = visibility.parse().unwrap();
-                HookOutcome::Returned(HookResult::modify(modified))
+                HookOutcome::Returned(HookResult::modify(modified, ModifyOptions::default()))
             }),
         );
     }
@@ -786,7 +817,7 @@ mod an_injected_event_s_visibility {
                 if text_of(&event.content) == "Heads up" {
                     seeing.borrow_mut().push(event.visibility.to_string());
                 }
-                HookOutcome::Returned(HookResult::allow())
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
             }),
         );
         hello(&mut sim);
@@ -838,9 +869,12 @@ mod an_injected_event_s_visibility {
             "quiet",
             Box::new(|event| {
                 if text_of(&event.content) == "Heads up" {
-                    return HookOutcome::Returned(HookResult::block("no notices"));
+                    return HookOutcome::Returned(HookResult::block(
+                        "no notices",
+                        BlockOptions::default(),
+                    ));
                 }
-                HookOutcome::Returned(HookResult::allow())
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
             }),
         );
         hello(&mut sim);
@@ -858,10 +892,12 @@ mod an_injected_event_s_visibility {
         sim.before_broadcast(
             "notify",
             Box::new(|_| {
-                HookOutcome::Returned(HookResult::allow().inject(InjectedEvent::to_channels(
-                    notice_event("inj_1", "Heads up"),
-                    vec![channel("ws"), channel("billing")],
-                )))
+                HookOutcome::Returned(HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(vec![channel("ws"), channel("billing")]),
+                        ..InjectedEvent::new(notice_event("inj_1", "Heads up"))
+                    }]),
+                }))
             }),
         );
         hello(&mut sim);
@@ -1005,7 +1041,7 @@ mod a_source_that_cannot_write {
         sim.bindings[0].muted = true;
         sim.before_broadcast(
             "audit",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
@@ -1057,7 +1093,7 @@ mod a_source_that_cannot_write {
         let mut sim = room();
         sim.before_broadcast(
             "moderator",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         // The context read under the lock still shows the source unmuted;
         // the hook mutes it. The source check reads the bindings as the hook
@@ -1363,7 +1399,9 @@ mod a_duplicate_message {
         let mut sim = room();
         sim.before_broadcast(
             "policy",
-            Box::new(|_| HookOutcome::Returned(HookResult::block("not allowed"))),
+            Box::new(|_| {
+                HookOutcome::Returned(HookResult::block("not allowed", BlockOptions::default()))
+            }),
         );
         sim.send(keyed("Bonjour")).unwrap();
         let result = sim.send(keyed("Bonjour")).unwrap();
@@ -1639,11 +1677,11 @@ mod a_response_visibility {
             "widen",
             Box::new(|event| {
                 if event.source.channel_id.as_str() != "ai" {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
                 let mut widened = event.clone();
                 widened.visibility = Visibility::All;
-                HookOutcome::Returned(HookResult::modify(widened))
+                HookOutcome::Returned(HookResult::modify(widened, ModifyOptions::default()))
             }),
         );
         sim.send(answered_within("Hello", "ws_advisor")).unwrap();
@@ -1676,7 +1714,9 @@ mod a_response_visibility {
                         message: Box::new(answered_within("Follow-up", "ws_advisor")),
                     })
                 }),
-                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Awaits(Box::new(|_| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(Sim::message("sms", "Hello")).unwrap();
@@ -1790,11 +1830,11 @@ mod a_response_visibility {
             name,
             Box::new(move |event| {
                 if event.source.channel_id.as_str() != "sms" {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
                 let mut rescoped = event.clone();
                 rescoped.response_visibility.clone_from(&scope);
-                HookOutcome::Returned(HookResult::modify(rescoped))
+                HookOutcome::Returned(HookResult::modify(rescoped, ModifyOptions::default()))
             }),
         );
     }
@@ -2248,7 +2288,9 @@ mod the_delivery_lane {
         let mut sim = room();
         sim.before_broadcast(
             "policy",
-            Box::new(|_| HookOutcome::Returned(HookResult::block("not now"))),
+            Box::new(|_| {
+                HookOutcome::Returned(HookResult::block("not now", BlockOptions::default()))
+            }),
         );
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
@@ -2418,7 +2460,7 @@ mod a_caller_that_stops_waiting {
         let mut sim = room();
         sim.before_broadcast(
             "scanner",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim
     }
@@ -2663,7 +2705,7 @@ mod a_thread_parent {
         let mut sim = threaded();
         sim.before_broadcast(
             "audit",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim.send(replying("Thanks", "evt_reply")).unwrap();
         let section: Vec<&str> = sim
@@ -2752,14 +2794,16 @@ mod a_thread_parent {
             "notifier",
             Box::new(|event| {
                 if event.source.channel_id.as_str() != "sms" {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
                 let mut notice = notice_event("evt_notice", "Noticed");
                 notice.parent_event_id = Some(id("evt_reply"));
-                HookOutcome::Returned(
-                    HookResult::allow()
-                        .inject(InjectedEvent::to_channels(notice, vec![channel("ws")])),
-                )
+                HookOutcome::Returned(HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(vec![channel("ws")]),
+                        ..InjectedEvent::new(notice)
+                    }]),
+                }))
             }),
         );
         sim.send(Sim::message("sms", "Hello")).unwrap();
@@ -2816,11 +2860,11 @@ mod a_thread_parent {
             "threader",
             Box::new(|event| {
                 if event.source.channel_id.as_str() != "sms" {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
                 let mut threaded = event.clone();
                 threaded.parent_event_id = Some(id("evt_reply"));
-                HookOutcome::Returned(HookResult::modify(threaded))
+                HookOutcome::Returned(HookResult::modify(threaded, ModifyOptions::default()))
             }),
         );
         sim.send(Sim::message("sms", "Hello")).unwrap();
@@ -2846,7 +2890,7 @@ mod an_async_hook_on_before_broadcast {
             Box::new(|event| {
                 let mut rewritten = event.clone();
                 rewritten.content = TextContent::new("rewritten").into();
-                HookOutcome::Returned(HookResult::modify(rewritten))
+                HookOutcome::Returned(HookResult::modify(rewritten, ModifyOptions::default()))
             }),
         );
         sim.observer("watcher", HookTrigger::BeforeBroadcast);
@@ -2878,7 +2922,9 @@ mod an_async_hook_on_before_broadcast {
         let mut sim = rewritten();
         sim.before_broadcast(
             "policy",
-            Box::new(|_| HookOutcome::Returned(HookResult::block("not allowed"))),
+            Box::new(|_| {
+                HookOutcome::Returned(HookResult::block("not allowed", BlockOptions::default()))
+            }),
         );
         sim.send(Sim::message("sms", "original")).unwrap();
         assert!(!sim.async_triggers().contains(&HookTrigger::BeforeBroadcast));

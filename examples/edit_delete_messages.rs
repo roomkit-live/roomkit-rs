@@ -13,7 +13,7 @@
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::error::Error;
 use std::process::ExitCode;
 
@@ -231,9 +231,9 @@ fn moderate_edits(kit: &RoomKit) -> Result<(), Box<dyn Error>> {
             false
         };
         Ok(if corrects_to_a_card {
-            HookResult::block("card number in an edit")
+            HookResult::block("card number in an edit", BlockOptions::default())
         } else {
-            HookResult::allow()
+            HookResult::allow(AllowOptions::default())
         })
     })?;
     Ok(())

@@ -11,6 +11,7 @@
 //! (`Inbound::drawing_on_from_delivery`), or, into that room by name, on
 //! the budget at once (`Inbound::drawing_on`).
 
+use roomkit_core::model::hook::AllowOptions;
 use roomkit_core::model::{
     ChannelType, HookResult, InboundMessage, InjectedEvent, ParticipantId, Room, RoomId,
     TextContent, Timestamp,
@@ -207,11 +208,13 @@ mod a_room_created_meanwhile {
         sim.before_broadcast(
             "notify",
             Box::new(|event| {
-                let notice = InjectedEvent::stored_only(notice_event("inj_1", "Heads up"));
+                let notice = InjectedEvent::new(notice_event("inj_1", "Heads up"));
                 if text_of(&event.content) == "Bonjour" {
-                    return HookOutcome::Returned(HookResult::allow().inject(notice));
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions {
+                        injected: Some(vec![notice]),
+                    }));
                 }
-                HookOutcome::Returned(HookResult::allow())
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
             }),
         );
         let one = budget_of(1);

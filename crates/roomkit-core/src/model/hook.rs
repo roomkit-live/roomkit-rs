@@ -4,35 +4,51 @@ use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Metadata, ModelError, Observation, RoomEvent, Task};
 
-/// What a SYNC hook returns (RFC §9.4).
+/// What a SYNC hook does with its payload (RFC §9.4): the Python
+/// implementation's `Literal["allow", "block", "modify"]` of
+/// `HookResult.action`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookAction {
+    /// Let the payload through unchanged.
+    Allow,
+    /// Stop the pipeline: no further hook runs.
+    Block,
+    /// Replace the payload with `event`, whatever the replacement's value.
+    Modify,
+}
+
+/// What a SYNC hook returns (RFC §9.4), the Python implementation's
+/// `HookResult`.
 ///
-/// `P` is the payload type of the hook's trigger: a [`RoomEvent`] for
-/// `BEFORE_BROADCAST`, a string for a TTS trigger. Serialized with the RFC's
-/// `action` and `event` fields; a `modify` without an event does not
-/// deserialize (gap G-010), and the event of an `allow` or a `block` is
-/// ignored.
+/// `P` stands for Python's `event: Any`: the payload type of the hook's
+/// trigger, a [`RoomEvent`] for `BEFORE_BROADCAST`. A `modify` carries its
+/// replacement in `event`, and a `block` its `reason`, which may be blank:
+/// one without is refused when deserialized, and a handler that returns
+/// one built by struct literal is read as a hook that raised, as a Python
+/// hook building it would have raised.
 ///
 /// ```
-/// use roomkit_core::model::HookResult;
+/// use roomkit_core::model::hook::BlockOptions;
+/// use roomkit_core::model::{HookAction, HookResult};
 ///
-/// let result: HookResult = HookResult::block("SIN detected");
-/// assert!(result.is_block());
+/// let result: HookResult = HookResult::block("SIN detected", BlockOptions::default());
+/// assert_eq!(result.action, HookAction::Block);
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
-    bound(
-        serialize = "P: Serialize + Clone",
-        deserialize = "P: Deserialize<'de>"
-    ),
-    into = "RawHookResult<P>",
-    try_from = "RawHookResult<P>"
+    bound(serialize = "P: Serialize", deserialize = "P: Deserialize<'de>"),
+    try_from = "HookResultWire<P>"
 )]
 pub struct HookResult<P = RoomEvent> {
     /// Allow, block, or modify with a replacement payload.
-    pub decision: HookDecision<P>,
-    /// Why the hook blocked or modified.
+    pub action: HookAction,
+    /// The replacement payload, for a `modify`.
+    pub event: Option<P>,
+    /// Why the hook blocked: required for a `block`.
     pub reason: Option<String>,
-    /// Events to inject when blocking.
+    /// Events to inject, whatever the action; committed on
+    /// `BEFORE_BROADCAST` only.
     pub injected_events: Vec<InjectedEvent>,
     /// Tasks to create, always collected.
     pub tasks: Vec<Task>,
@@ -42,70 +58,40 @@ pub struct HookResult<P = RoomEvent> {
     pub metadata: Metadata,
 }
 
-/// A SYNC hook's decision on its payload (RFC §9.4).
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum HookDecision<P> {
-    /// Let the payload through unchanged.
-    Allow,
-    /// Stop the pipeline: no further hook runs.
-    Block,
-    /// Replace the payload, whatever the replacement's value.
-    Modify(P),
+/// What [`HookResult::allow`] takes beside nothing: Python's keywords.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AllowOptions {
+    /// Events to inject; `None` injects none.
+    pub injected: Option<Vec<InjectedEvent>>,
+}
+
+/// What [`HookResult::block`] takes beside its reason: Python's keywords.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BlockOptions {
+    /// Events to inject; `None` injects none.
+    pub injected: Option<Vec<InjectedEvent>>,
+    /// Tasks to create; `None` creates none.
+    pub tasks: Option<Vec<Task>>,
+    /// Observations to record; `None` records none.
+    pub observations: Option<Vec<Observation>>,
+}
+
+/// What [`HookResult::modify`] takes beside its replacement: Python's
+/// keywords.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModifyOptions {
+    /// Events to inject; `None` injects none.
+    pub injected: Option<Vec<InjectedEvent>>,
 }
 
 impl<P> HookResult<P> {
-    /// Let the payload through.
-    pub fn allow() -> Self {
-        Self::with_decision(HookDecision::Allow)
-    }
-
-    /// Stop the pipeline, saying why.
-    pub fn block(reason: impl Into<String>) -> Self {
-        Self::with_decision(HookDecision::Block).with_reason(reason)
-    }
-
-    /// Replace the payload with `payload`.
-    pub fn modify(payload: P) -> Self {
-        Self::with_decision(HookDecision::Modify(payload))
-    }
-
-    /// The same result with `reason`.
-    #[must_use]
-    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
-        self.reason = Some(reason.into());
-        self
-    }
-
-    /// The same result, also injecting `event`.
-    #[must_use]
-    pub fn inject(mut self, event: InjectedEvent) -> Self {
-        self.injected_events.push(event);
-        self
-    }
-
-    /// The same result, also creating `task`.
-    #[must_use]
-    pub fn with_task(mut self, task: Task) -> Self {
-        self.tasks.push(task);
-        self
-    }
-
-    /// The same result, also recording `observation`.
-    #[must_use]
-    pub fn with_observation(mut self, observation: Observation) -> Self {
-        self.observations.push(observation);
-        self
-    }
-
-    /// Whether the hook blocked.
-    pub fn is_block(&self) -> bool {
-        matches!(self.decision, HookDecision::Block)
-    }
-
-    fn with_decision(decision: HookDecision<P>) -> Self {
+    /// A result of `action` with no event, reason or side effect, Python's
+    /// `HookResult(action=…)`: a caller sets the other fields by struct
+    /// update.
+    pub fn new(action: HookAction) -> Self {
         Self {
-            decision,
+            action,
+            event: None,
             reason: None,
             injected_events: Vec::new(),
             tasks: Vec::new(),
@@ -113,9 +99,55 @@ impl<P> HookResult<P> {
             metadata: Metadata::new(),
         }
     }
+
+    /// Let the payload through.
+    pub fn allow(options: AllowOptions) -> Self {
+        Self {
+            injected_events: options.injected.unwrap_or_default(),
+            ..Self::new(HookAction::Allow)
+        }
+    }
+
+    /// Stop the pipeline, saying why; `reason` may be blank.
+    pub fn block(reason: impl Into<String>, options: BlockOptions) -> Self {
+        Self {
+            reason: Some(reason.into()),
+            injected_events: options.injected.unwrap_or_default(),
+            tasks: options.tasks.unwrap_or_default(),
+            observations: options.observations.unwrap_or_default(),
+            ..Self::new(HookAction::Block)
+        }
+    }
+
+    /// Replace the payload with `event`.
+    pub fn modify(event: P, options: ModifyOptions) -> Self {
+        Self {
+            event: Some(event),
+            injected_events: options.injected.unwrap_or_default(),
+            ..Self::new(HookAction::Modify)
+        }
+    }
+
+    /// What the Python implementation's validator raises for this result:
+    /// a `modify` without its event, a `block` without its reason. Outside
+    /// the public API: the hook chain reads such a result as a hook that
+    /// raised.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::ModifyWithoutPayload`] or
+    /// [`ModelError::BlockWithoutReason`].
+    #[doc(hidden)]
+    pub fn check(&self) -> Result<(), ModelError> {
+        match self.action {
+            HookAction::Modify if self.event.is_none() => Err(ModelError::ModifyWithoutPayload),
+            HookAction::Block if self.reason.is_none() => Err(ModelError::BlockWithoutReason),
+            HookAction::Allow | HookAction::Block | HookAction::Modify => Ok(()),
+        }
+    }
 }
 
-/// An event a blocking hook injects (RFC §9.4).
+/// An event a hook injects (RFC §9.4).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InjectedEvent {
     /// The event to inject.
@@ -126,16 +158,9 @@ pub struct InjectedEvent {
 }
 
 impl InjectedEvent {
-    /// `event`, delivered to `targets`.
-    pub fn to_channels(event: RoomEvent, targets: Vec<ChannelId>) -> Self {
-        Self {
-            event,
-            target_channel_ids: Some(targets),
-        }
-    }
-
-    /// `event`, stored and delivered to no channel.
-    pub fn stored_only(event: RoomEvent) -> Self {
+    /// `event`, stored and delivered to no channel: a caller names the
+    /// channels by struct update, `target_channel_ids: Some(…)`.
+    pub fn new(event: RoomEvent) -> Self {
         Self {
             event,
             target_channel_ids: None,
@@ -143,17 +168,11 @@ impl InjectedEvent {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum HookAction {
-    Allow,
-    Block,
-    Modify,
-}
-
-#[derive(Serialize, Deserialize)]
-struct RawHookResult<P> {
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "P: Deserialize<'de>"))]
+struct HookResultWire<P> {
     action: HookAction,
+    #[serde(default = "Option::default")]
     event: Option<P>,
     #[serde(default)]
     reason: Option<String>,
@@ -167,43 +186,21 @@ struct RawHookResult<P> {
     metadata: Metadata,
 }
 
-impl<P> From<HookResult<P>> for RawHookResult<P> {
-    fn from(result: HookResult<P>) -> Self {
-        let (action, event) = match result.decision {
-            HookDecision::Allow => (HookAction::Allow, None),
-            HookDecision::Block => (HookAction::Block, None),
-            HookDecision::Modify(payload) => (HookAction::Modify, Some(payload)),
-        };
-        Self {
-            action,
-            event,
-            reason: result.reason,
-            injected_events: result.injected_events,
-            tasks: result.tasks,
-            observations: result.observations,
-            metadata: result.metadata,
-        }
-    }
-}
-
-impl<P> TryFrom<RawHookResult<P>> for HookResult<P> {
+impl<P> TryFrom<HookResultWire<P>> for HookResult<P> {
     type Error = ModelError;
 
-    fn try_from(raw: RawHookResult<P>) -> Result<Self, Self::Error> {
-        let decision = match (raw.action, raw.event) {
-            (HookAction::Allow, _) => HookDecision::Allow,
-            (HookAction::Block, _) => HookDecision::Block,
-            (HookAction::Modify, Some(payload)) => HookDecision::Modify(payload),
-            (HookAction::Modify, None) => return Err(ModelError::ModifyWithoutPayload),
+    fn try_from(wire: HookResultWire<P>) -> Result<Self, Self::Error> {
+        let result = Self {
+            action: wire.action,
+            event: wire.event,
+            reason: wire.reason,
+            injected_events: wire.injected_events,
+            tasks: wire.tasks,
+            observations: wire.observations,
+            metadata: wire.metadata,
         };
-        Ok(Self {
-            decision,
-            reason: raw.reason,
-            injected_events: raw.injected_events,
-            tasks: raw.tasks,
-            observations: raw.observations,
-            metadata: raw.metadata,
-        })
+        result.check()?;
+        Ok(result)
     }
 }
 
@@ -216,7 +213,7 @@ mod tests {
 
     #[test]
     fn a_block_serializes_its_action_and_reason() {
-        let result: HookResult<String> = HookResult::block("SIN detected");
+        let result: HookResult<String> = HookResult::block("SIN detected", BlockOptions::default());
         let json = serde_json::to_value(result).unwrap();
         assert_eq!(
             (json["action"].clone(), json["reason"].clone()),
@@ -226,7 +223,11 @@ mod tests {
 
     #[test]
     fn a_modify_carries_its_payload_as_the_event() {
-        let json = serde_json::to_value(HookResult::modify("redacted".to_owned())).unwrap();
+        let json = serde_json::to_value(HookResult::modify(
+            "redacted".to_owned(),
+            ModifyOptions::default(),
+        ))
+        .unwrap();
         assert_eq!(json["event"], json!("redacted"));
     }
 
@@ -234,13 +235,29 @@ mod tests {
     fn a_modify_to_an_empty_payload_keeps_the_empty_payload() {
         let parsed: HookResult<String> =
             serde_json::from_value(json!({ "action": "modify", "event": "" })).unwrap();
-        assert_eq!(parsed.decision, HookDecision::Modify(String::new()));
+        assert_eq!(parsed.event, Some(String::new()));
     }
 
     #[test]
     fn a_modify_without_an_event_does_not_deserialize() {
         let parsed = serde_json::from_value::<HookResult<String>>(json!({ "action": "modify" }));
         assert!(parsed.is_err());
+    }
+
+    /// Python's validator: `action='block' requires 'reason' to be set`; a
+    /// blank reason is one.
+    #[test]
+    fn a_block_without_a_reason_does_not_deserialize() {
+        let without = serde_json::from_value::<HookResult<String>>(json!({ "action": "block" }));
+        let blank: HookResult<String> =
+            serde_json::from_value(json!({ "action": "block", "reason": "" })).unwrap();
+        assert_eq!(
+            (without.map_err(|error| error.to_string()), blank.reason),
+            (
+                Err("a block hook result carries no reason".to_owned()),
+                Some(String::new())
+            )
+        );
     }
 
     #[test]
@@ -251,7 +268,10 @@ mod tests {
 
     #[test]
     fn an_allow_round_trips_through_json() {
-        let result: HookResult<String> = HookResult::allow().with_reason("checked");
+        let result: HookResult<String> = HookResult {
+            reason: Some("checked".to_owned()),
+            ..HookResult::allow(AllowOptions::default())
+        };
         let json = serde_json::to_value(result.clone()).unwrap();
         assert_eq!(
             serde_json::from_value::<HookResult<String>>(json).unwrap(),

@@ -9,7 +9,7 @@
 )]
 
 mod fake;
-
+use roomkit::model::hook::AllowOptions;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -156,7 +156,7 @@ fn on_error(room: &Room) -> mpsc::UnboundedReceiver<RoomEvent> {
     room.kit
         .hook(spec, move |event, _| {
             errors.send(event).unwrap();
-            async { Ok(roomkit::model::HookResult::allow()) }
+            async { Ok(roomkit::model::HookResult::allow(AllowOptions::default())) }
         })
         .unwrap();
     reported

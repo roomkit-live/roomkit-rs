@@ -4,7 +4,7 @@
 //! The room holds the customer's `sms` and the advisor's console `ws`; an
 //! agent `ai` joins where a test needs one. An event the integrator injects
 //! comes from `ws`, as a console's REST call would.
-
+use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -102,7 +102,7 @@ fn replaying(sim: &mut Sim) -> Seen {
             }),
             answer: Answer::Awaits(Box::new(move |called| {
                 kept.borrow_mut().extend(committed(called));
-                HookOutcome::Returned(HookResult::allow())
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
             })),
         },
     );
@@ -141,7 +141,7 @@ fn notifier(sim: &mut Sim, seen: &Seen, shown: &Shown) {
             }),
             answer: Answer::Awaits(Box::new(move |called| {
                 seen.borrow_mut().extend(committed(called));
-                HookOutcome::Returned(HookResult::allow())
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
             })),
         },
     );
@@ -240,7 +240,9 @@ mod an_injected_event {
         let mut sim = room();
         sim.before_broadcast(
             "policy",
-            Box::new(|_| HookOutcome::Returned(HookResult::block("not now"))),
+            Box::new(|_| {
+                HookOutcome::Returned(HookResult::block("not now", BlockOptions::default()))
+            }),
         );
         let result = sim.inject("room_1", from_console("Hi")).unwrap();
         assert_eq!(
@@ -323,7 +325,7 @@ mod an_injected_event {
         sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
         sim.before_broadcast(
             "audit",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         let event = DirectEvent::new(channel("api"), TextContent::new("Order shipped"));
         sim.inject("room_1", event).unwrap_err();
@@ -338,7 +340,7 @@ mod an_injected_event {
         sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
         sim.off_lock_check(
             "scanner",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         let event = DirectEvent::new(channel("api"), TextContent::new("Order shipped"));
         let refused = sim.inject("room_1", event);
@@ -393,7 +395,7 @@ mod an_injected_event {
         sim.room.organization_id = Some("bank".to_owned());
         sim.off_lock_check(
             "scanner",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         let refused = sim.inject_for(Some("clinic"), "room_1", from_console("Hi"));
         assert_eq!(
@@ -409,7 +411,7 @@ mod an_injected_event {
         let mut sim = room();
         sim.off_lock_check(
             "scanner",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim.inject("room_1", from_console("Hi")).unwrap();
         assert_eq!(
@@ -674,7 +676,9 @@ mod an_entry_adopted_under_the_lock {
                     injected |= first;
                     first.then(|| send_event("Heads up"))
                 }),
-                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Awaits(Box::new(|_| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.leaves_before = Some("on_event ai <- evt_3");
@@ -742,7 +746,7 @@ mod an_entry_adopted_under_the_lock {
                 }),
                 answer: Answer::Awaits(Box::new(move |called| {
                     kept.borrow_mut().extend(committed(called));
-                    HookOutcome::Returned(HookResult::allow())
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
                 })),
             },
         );
@@ -814,7 +818,9 @@ mod an_entry_adopted_under_the_lock {
                         event: Box::new(threaded),
                     })
                 }),
-                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Awaits(Box::new(|_| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -858,7 +864,9 @@ mod an_entry_adopted_under_the_lock {
                     entries.extend((0..10).map(|_| send_event("Heads up")));
                     entries
                 }),
-                answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::AtOnce(Box::new(|| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -896,7 +904,9 @@ mod an_entry_adopted_under_the_lock {
                     entries.push(send_event("Fresh"));
                     entries
                 }),
-                answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::AtOnce(Box::new(|| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -981,7 +991,9 @@ mod an_entry_adopted_under_the_lock {
                 entries: calling(|event| {
                     (event.source.channel_id.as_str() == "sms").then(|| send_event("Heads up"))
                 }),
-                answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::AtOnce(Box::new(|| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -1052,7 +1064,9 @@ mod an_entry_adopted_under_the_lock {
                     }
                     vec![send_event("First"), send_event("Second")]
                 }),
-                answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::AtOnce(Box::new(|| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -1095,7 +1109,9 @@ mod an_entry_adopted_under_the_lock {
             true,
             Reentry {
                 entries: calling(|_| Some(send_event("again"))),
-                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Awaits(Box::new(|_| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -1117,7 +1133,7 @@ mod an_entry_adopted_under_the_lock {
         let mut sim = room();
         sim.before_broadcast(
             "moderator",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim.hooks_change = Some(HookChange::Mute(channel("sms")));
         let result = sim.send(hello()).unwrap();
@@ -1139,10 +1155,12 @@ mod an_entry_adopted_under_the_lock {
         sim.before_broadcast(
             "closer",
             Box::new(|_| {
-                HookOutcome::Returned(HookResult::allow().inject(InjectedEvent::to_channels(
-                    notice_event("inj_1", "Goodbye"),
-                    vec![channel("sms")],
-                )))
+                HookOutcome::Returned(HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(vec![channel("sms")]),
+                        ..InjectedEvent::new(notice_event("inj_1", "Goodbye"))
+                    }]),
+                }))
             }),
         );
         sim.hooks_change = Some(HookChange::CloseRoom);
@@ -1183,7 +1201,7 @@ mod an_entry_adopted_under_the_lock {
                 }),
                 answer: Answer::Awaits(Box::new(move |called| {
                     kept.borrow_mut().push(called.clone().map(|_| ()));
-                    HookOutcome::Returned(HookResult::allow())
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
                 })),
             },
         );
@@ -1397,7 +1415,7 @@ mod an_arrival_from_a_delivery {
         let mut sim = checking(&seen);
         sim.off_lock_check(
             "scanner",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim.send(hello()).unwrap();
         let cascade: Vec<&str> = sim
@@ -1448,7 +1466,9 @@ mod an_arrival_from_a_delivery {
                 entries: calling(|event| {
                     (text_of(&event.content) == "Let me check.").then(|| send_event("Scanned"))
                 }),
-                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Awaits(Box::new(|_| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -1743,7 +1763,9 @@ mod two_sections_of_one_operation {
         let mut sim = room();
         scanning(
             &mut sim,
-            Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+            Answer::AtOnce(Box::new(|| {
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+            })),
         );
         sim.send(hello()).unwrap();
         let locked: Vec<&str> = sim
@@ -1794,7 +1816,9 @@ mod a_ticket_held_for_an_adopted_entry {
                         message: Box::new(Sim::message("sms", "follow-up")),
                     })
                 }),
-                answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::AtOnce(Box::new(|| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -1841,7 +1865,9 @@ mod a_caller_gone_while_its_second_section_waits {
         let mut sim = room();
         scanning(
             &mut sim,
-            Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+            Answer::AtOnce(Box::new(|| {
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+            })),
         );
         sim.leaves_before = Some("commit");
         let result = sim.send(hello()).unwrap();
@@ -1884,7 +1910,9 @@ mod an_entry_whose_caller_did_not_wait {
         let mut sim = room();
         scanning(
             &mut sim,
-            Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+            Answer::AtOnce(Box::new(|| {
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+            })),
         );
         sim.send(hello()).unwrap();
         assert_eq!(
@@ -1914,7 +1942,9 @@ mod an_entry_whose_caller_did_not_wait {
         crm_filing_a_task_on(&mut sim, "Scanned");
         scanning(
             &mut sim,
-            Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+            Answer::AtOnce(Box::new(|| {
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+            })),
         );
         sim.send(hello()).unwrap();
         assert_eq!(sim.tasks.len(), 1);
@@ -2017,7 +2047,7 @@ mod an_entry_adopted_from_an_off_lock_hook {
                 }),
                 answer: Answer::Awaits(Box::new(move |called| {
                     kept.borrow_mut().extend(committed(called));
-                    HookOutcome::Returned(HookResult::allow())
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
                 })),
             },
         );
@@ -2042,7 +2072,9 @@ mod an_entry_adopted_from_an_off_lock_hook {
         let mut sim = room();
         scanning(
             &mut sim,
-            Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            Answer::Awaits(Box::new(|_| {
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+            })),
         );
         sim.send(hello()).unwrap();
         assert_eq!(
@@ -2072,7 +2104,9 @@ mod an_entry_adopted_from_an_off_lock_hook {
                 entries: calling(|event| {
                     (event.source.channel_id.as_str() == "sms").then(|| send_event("Scanned"))
                 }),
-                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Awaits(Box::new(|_| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -2142,7 +2176,9 @@ fn an_off_lock_entry_s_set_waiting_in_the_lane_leaves_the_trigger_s_pass_free() 
             entries: calling(|event| {
                 (event.source.channel_id.as_str() == "sms").then(|| send_event("Scanned"))
             }),
-            answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            answer: Answer::Awaits(Box::new(|_| {
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+            })),
         },
     );
     sim.send(hello()).unwrap();
@@ -2194,7 +2230,9 @@ fn an_off_lock_entry_is_delivered_when_its_caller_s_event_passes_its_deadline() 
             entries: calling(|event| {
                 (event.source.channel_id.as_str() == "sms").then(|| send_event("Scanned"))
             }),
-            answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            answer: Answer::Awaits(Box::new(|_| {
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+            })),
         },
     );
     let result = sim.send(hello()).unwrap();
@@ -2238,7 +2276,9 @@ mod a_call_no_operation_adopts {
                         }
                     })
                 }),
-                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Awaits(Box::new(|_| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim
@@ -2303,7 +2343,9 @@ mod a_call_no_operation_adopts {
                 entries: calling(|event| {
                     (event.source.channel_id.as_str() == "sms").then(|| send_event("Heads up"))
                 }),
-                answer: Answer::Apart(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Apart(Box::new(|| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -2362,7 +2404,9 @@ mod a_call_no_operation_adopts {
                 entries: calling(|event| {
                     (event.source.channel_id.as_str() == "sms").then(|| send_event("Heads up"))
                 }),
-                answer: Answer::Apart(Box::new(|| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Apart(Box::new(|| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(hello()).unwrap();
@@ -2402,7 +2446,9 @@ fn a_call_past_its_deadline_is_decided_before_its_off_lock_entry_is_delivered() 
             entries: calling(|event| {
                 (event.source.channel_id.as_str() == "sms").then(|| send_event("Scanned"))
             }),
-            answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+            answer: Answer::Awaits(Box::new(|_| {
+                HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+            })),
         },
     );
     sim.send(hello()).unwrap();
@@ -2695,7 +2741,9 @@ mod a_blocked_record_s_visibility {
         sim.bindings[0].visibility = Visibility::channels([channel("ws")]).unwrap();
         sim.before_broadcast(
             "policy",
-            Box::new(|_| HookOutcome::Returned(HookResult::block("not now"))),
+            Box::new(|_| {
+                HookOutcome::Returned(HookResult::block("not now", BlockOptions::default()))
+            }),
         );
         sim.send(hello()).unwrap();
         assert_eq!(sim.timeline[0].visibility.to_string(), "ws");
@@ -2733,10 +2781,12 @@ mod a_blocked_record_s_visibility {
             Box::new(|_| {
                 let mut notice = notice_event("inj_1", "Heads up");
                 notice.source.channel_id = channel("ws");
-                HookOutcome::Returned(
-                    HookResult::allow()
-                        .inject(InjectedEvent::to_channels(notice, vec![channel("sms")])),
-                )
+                HookOutcome::Returned(HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent {
+                        target_channel_ids: Some(vec![channel("sms")]),
+                        ..InjectedEvent::new(notice)
+                    }]),
+                }))
             }),
         );
         sim.send(hello()).unwrap();
@@ -2798,7 +2848,7 @@ mod the_visibility_internal {
             Box::new(|event| {
                 let mut hidden = event.clone();
                 hidden.visibility = Visibility::Internal;
-                HookOutcome::Returned(HookResult::modify(hidden))
+                HookOutcome::Returned(HookResult::modify(hidden, ModifyOptions::default()))
             }),
         );
         sim.send(hello()).unwrap();

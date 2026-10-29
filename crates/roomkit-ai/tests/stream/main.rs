@@ -4,7 +4,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod access;
-
+use roomkit::model::hook::AllowOptions;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -461,7 +461,7 @@ async fn a_streaming_target_reads_the_deltas_then_each_row_the_store_holds() {
     room.kit
         .hook(spec, move |event, _context| {
             noting.lock().unwrap().push(event.r#type);
-            async { Ok(HookResult::allow()) }
+            async { Ok(HookResult::allow(AllowOptions::default())) }
         })
         .unwrap();
     let result = room.says("Where is order 42?").await;

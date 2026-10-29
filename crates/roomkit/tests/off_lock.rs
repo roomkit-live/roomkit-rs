@@ -10,7 +10,7 @@
     clippy::panic,
     reason = "a test fails on a broken fixture"
 )]
-
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -82,7 +82,7 @@ async fn message_held_in_its_hook(
         async move {
             started.notify_one();
             go.notified().await;
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -223,7 +223,7 @@ async fn two_overlapping_checks_commit_in_ticket_order() {
             } else {
                 second_checked.notify_one();
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -277,7 +277,7 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
         async move {
             held.notify_one();
             go.notified().await;
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -325,7 +325,7 @@ async fn a_call_cancelled_during_its_off_lock_check_releases_its_ticket() {
             if first {
                 tokio::time::sleep(Duration::from_secs(3600)).await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -367,7 +367,7 @@ async fn a_call_cancelled_during_its_off_lock_check_releases_its_ticket() {
 async fn a_call_cancelled_in_a_locked_hook_after_its_check_leaves_everything_free() {
     let kit = room().await;
     kit.hook(before_broadcast("scanner", false), |_, _| async {
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let hung = Arc::new(AtomicBool::new(false));
@@ -377,7 +377,7 @@ async fn a_call_cancelled_in_a_locked_hook_after_its_check_leaves_everything_fre
             if first {
                 tokio::time::sleep(Duration::from_secs(3600)).await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -479,7 +479,7 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
             let (to_customer, to_advisor) = (to_customer.clone(), to_advisor.clone());
             async move {
                 if !found {
-                    return HookReturn::Ok(HookResult::allow());
+                    return HookReturn::Ok(HookResult::allow(AllowOptions::default()));
                 }
                 let observation = Observation {
                     created_at: event.created_at,
@@ -490,16 +490,23 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
                         "SIN sent by SMS",
                     )
                 };
-                Ok(HookResult::block("SIN detected")
-                    .inject(InjectedEvent::to_channels(
-                        to_customer,
-                        vec![channel("sms_customer")],
-                    ))
-                    .inject(InjectedEvent::to_channels(
-                        to_advisor,
-                        vec![channel("ws_advisor")],
-                    ))
-                    .with_observation(observation))
+                Ok(HookResult::block(
+                    "SIN detected",
+                    BlockOptions {
+                        injected: Some(vec![
+                            InjectedEvent {
+                                target_channel_ids: Some(vec![channel("sms_customer")]),
+                                ..InjectedEvent::new(to_customer)
+                            },
+                            InjectedEvent {
+                                target_channel_ids: Some(vec![channel("ws_advisor")]),
+                                ..InjectedEvent::new(to_advisor)
+                            },
+                        ]),
+                        observations: Some(vec![observation]),
+                        ..Default::default()
+                    },
+                ))
             }
         },
     )

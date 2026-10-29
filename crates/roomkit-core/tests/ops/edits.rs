@@ -7,6 +7,7 @@
 //! and deletes natively, and an SMS-like `sms` that does neither. Its first
 //! event, `evt_1` at index 0, is `+15551234567`'s "I need 5000$".
 
+use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -218,7 +219,7 @@ mod an_accepted_edit {
         let mut sim = room();
         sim.before_broadcast(
             "moderation",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim.send(edit()).unwrap();
         assert_eq!(
@@ -496,7 +497,9 @@ mod a_blocked_change {
     fn blocking(sim: &mut Sim) {
         sim.before_broadcast(
             "moderation",
-            Box::new(|_| HookOutcome::Returned(HookResult::block("no edits"))),
+            Box::new(|_| {
+                HookOutcome::Returned(HookResult::block("no edits", BlockOptions::default()))
+            }),
         );
         sim.observer("updated", HookTrigger::OnEventUpdated);
         sim.observer("deleted", HookTrigger::OnEventDeleted);
@@ -704,7 +707,7 @@ mod a_refused_change {
         let mut sim = room();
         sim.before_broadcast(
             "moderation",
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         sim.send(edit_from(OTHER, "evt_1", "I need 0$")).unwrap();
         assert_eq!(
@@ -865,12 +868,14 @@ mod a_hook {
                 let reported =
                     matches!(&event.content, EventContent::Text(text) if text.body == "report it");
                 let result = if reported {
-                    HookResult::allow().inject(InjectedEvent::to_channels(
-                        injected.clone(),
-                        vec![channel("ws"), channel("sms")],
-                    ))
+                    HookResult::allow(AllowOptions {
+                        injected: Some(vec![InjectedEvent {
+                            target_channel_ids: Some(vec![channel("ws"), channel("sms")]),
+                            ..InjectedEvent::new(injected.clone())
+                        }]),
+                    })
                 } else {
-                    HookResult::allow()
+                    HookResult::allow(AllowOptions::default())
                 };
                 HookOutcome::Returned(result)
             }),
@@ -929,7 +934,7 @@ mod a_hook {
                     edit.target_event_id = id("evt_2");
                     *edit.new_content = TextContent::new("I need [redacted]").into();
                 }
-                HookOutcome::Returned(HookResult::modify(redacted))
+                HookOutcome::Returned(HookResult::modify(redacted, ModifyOptions::default()))
             }),
         );
         sim.send(edit()).unwrap();
@@ -956,7 +961,7 @@ mod a_hook {
             Box::new(|event| {
                 let mut redacted = event.clone();
                 redacted.content = TextContent::new("I need [redacted]").into();
-                HookOutcome::Returned(HookResult::modify(redacted))
+                HookOutcome::Returned(HookResult::modify(redacted, ModifyOptions::default()))
             }),
         );
         sim.send(edit()).unwrap();
@@ -985,7 +990,7 @@ mod a_hook {
                 if let EventContent::Edit(edit) = &mut nested.content {
                     *edit.new_content = EventContent::Delete(DeleteContent::new(id("evt_9")));
                 }
-                HookOutcome::Returned(HookResult::modify(nested))
+                HookOutcome::Returned(HookResult::modify(nested, ModifyOptions::default()))
             }),
         );
         sim.send(edit()).unwrap();
@@ -1039,15 +1044,19 @@ mod a_hook {
                 let reported =
                     matches!(&event.content, EventContent::Text(text) if text.body == "spam");
                 if !reported {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
                 let mut delete = moderation_delete(DeleteType::System);
                 if let EventContent::Delete(content) = &mut delete.content {
                     content.target_event_id = event.id.clone();
                 }
-                HookOutcome::Returned(
-                    HookResult::block("spam").inject(InjectedEvent::stored_only(delete)),
-                )
+                HookOutcome::Returned(HookResult::block(
+                    "spam",
+                    BlockOptions {
+                        injected: Some(vec![InjectedEvent::new(delete)]),
+                        ..Default::default()
+                    },
+                ))
             }),
         );
         sim.send(Sim::message("wa", "spam")).unwrap();
@@ -1072,7 +1081,7 @@ mod a_hook {
                     edit_source: Some(EditSource::Sender),
                     ..EditContent::new(id("evt_1"), TextContent::new("forged"))
                 });
-                HookOutcome::Returned(HookResult::modify(forged))
+                HookOutcome::Returned(HookResult::modify(forged, ModifyOptions::default()))
             }),
         );
         sim.send(Sim::message("wa", "Bonjour")).unwrap();
@@ -1528,7 +1537,9 @@ mod a_target_changed_by_a_hook {
                         }
                     })
                 }),
-                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Awaits(Box::new(|_| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         let result = sim.send(edit()).unwrap();
@@ -1662,7 +1673,9 @@ mod a_mutation_trigger {
                         )),
                     })
                 }),
-                answer: Answer::Awaits(Box::new(|_| HookOutcome::Returned(HookResult::allow()))),
+                answer: Answer::Awaits(Box::new(|_| {
+                    HookOutcome::Returned(HookResult::allow(AllowOptions::default()))
+                })),
             },
         );
         sim.send(edit()).unwrap();
@@ -1711,11 +1724,11 @@ mod a_mutation_trigger {
                 let reported =
                     matches!(&event.content, EventContent::Text(text) if text.body == "report it");
                 if !reported {
-                    return HookOutcome::Returned(HookResult::allow());
+                    return HookOutcome::Returned(HookResult::allow(AllowOptions::default()));
                 }
-                HookOutcome::Returned(
-                    HookResult::allow().inject(InjectedEvent::stored_only(correction.clone())),
-                )
+                HookOutcome::Returned(HookResult::allow(AllowOptions {
+                    injected: Some(vec![InjectedEvent::new(correction.clone())]),
+                }))
             }),
         );
         sim.send(Sim::message("wa", "report it")).unwrap();

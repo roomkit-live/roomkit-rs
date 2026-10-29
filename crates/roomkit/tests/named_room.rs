@@ -6,7 +6,7 @@
 //! caller's organization, and the participants the host stores.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-
+use roomkit::model::hook::AllowOptions;
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -205,7 +205,7 @@ async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
         let seen = seen.clone();
         async move {
             seen.send(context.participants).unwrap();
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();
@@ -232,7 +232,7 @@ async fn an_on_room_created_hook_that_hangs_is_bounded_by_its_timeout() {
     spec.timeout = Duration::from_millis(50);
     kit.hook(spec, |_, _| async {
         tokio::time::sleep(Duration::from_secs(3600)).await;
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let room = room_id();

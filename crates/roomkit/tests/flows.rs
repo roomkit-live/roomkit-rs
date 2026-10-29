@@ -7,7 +7,7 @@
     clippy::panic,
     reason = "a test fails on a broken fixture"
 )]
-
+use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::future::{Future, ready};
 use std::pin::Pin;
 use std::time::Duration;
@@ -103,9 +103,9 @@ async fn the_timeline_reads_without_the_refused_events_by_default() {
         let refuse = event.source.channel_id.as_str() == "sms";
         async move {
             Ok(if refuse {
-                HookResult::block("closed for the night")
+                HookResult::block("closed for the night", BlockOptions::default())
             } else {
-                HookResult::allow()
+                HookResult::allow(AllowOptions::default())
             })
         }
     })
@@ -191,7 +191,7 @@ async fn an_async_hook_on_before_broadcast_observes_the_payload_the_chain_left()
     kit.before_broadcast("rewrite", |event, _| {
         let mut rewritten = event;
         rewritten.content = TextContent::new("rewritten").into();
-        ready(Ok(HookResult::modify(rewritten)))
+        ready(Ok(HookResult::modify(rewritten, ModifyOptions::default())))
     })
     .unwrap();
     let (seen, mut observed) = mpsc::unbounded_channel();
@@ -226,7 +226,7 @@ async fn a_hook_past_its_timeout_lets_the_message_through_and_is_reported() {
     spec.timeout = Duration::from_millis(20);
     kit.hook(spec, |_, _| async {
         tokio::time::sleep(Duration::from_secs(5)).await;
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let result = kit
@@ -260,9 +260,9 @@ async fn a_hook_s_closure_reads_its_event_without_annotations() {
         let spam = text_of(&event.content).contains("spam");
         async move {
             Ok(if spam {
-                HookResult::block("spam")
+                HookResult::block("spam", BlockOptions::default())
             } else {
-                HookResult::allow()
+                HookResult::allow(AllowOptions::default())
             })
         }
     })
@@ -294,9 +294,9 @@ impl HookHandler for Blocklist {
         let reason = format!("blocklisted {:?}", self.0);
         Box::pin(async move {
             Ok(if named {
-                HookResult::block(reason)
+                HookResult::block(reason, BlockOptions::default())
             } else {
-                HookResult::allow()
+                HookResult::allow(AllowOptions::default())
             })
         })
     }

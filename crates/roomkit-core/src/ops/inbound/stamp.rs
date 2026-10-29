@@ -564,7 +564,7 @@ mod tests {
 
     #[test]
     fn an_injected_event_loses_the_instruction_key_its_hook_wrote() {
-        let injected = InjectedEvent::stored_only(writing_the_instruction_key(trigger()));
+        let injected = InjectedEvent::new(writing_the_instruction_key(trigger()));
         let stamped = stamp_injected(injected, &trigger(), fresh());
         assert_eq!(stamped.metadata.get(instructions::INSTRUCTION), None);
     }
@@ -647,7 +647,10 @@ mod tests {
 
     #[test]
     fn an_injected_event_is_visible_to_its_targets_only() {
-        let injected = InjectedEvent::to_channels(trigger(), vec![ChannelId::new("sms").unwrap()]);
+        let injected = InjectedEvent {
+            target_channel_ids: Some(vec![ChannelId::new("sms").unwrap()]),
+            ..InjectedEvent::new(trigger())
+        };
         assert_eq!(
             stamp_injected(injected, &trigger(), fresh())
                 .visibility
@@ -658,7 +661,7 @@ mod tests {
 
     #[test]
     fn a_stored_only_injected_event_is_visible_to_no_channel() {
-        let injected = InjectedEvent::stored_only(trigger());
+        let injected = InjectedEvent::new(trigger());
         assert_eq!(
             stamp_injected(injected, &trigger(), fresh()).visibility,
             Visibility::None

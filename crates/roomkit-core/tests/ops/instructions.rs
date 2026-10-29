@@ -10,6 +10,7 @@
 //! `billing`. Its first event, `evt_1` at index 0, is the customer's "My card
 //! was declined"; an instruction is `evt_2`.
 
+use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -354,7 +355,9 @@ mod an_accepted_instruction {
     #[test]
     fn shows_its_hooks_the_index_the_next_event_takes() {
         let mut sim = with_agent();
-        let seen = hook_seeing(&mut sim, "audit", |_| HookResult::allow());
+        let seen = hook_seeing(&mut sim, "audit", |_| {
+            HookResult::allow(AllowOptions::default())
+        });
         sim.send(instruction()).unwrap();
         assert_eq!(
             (
@@ -400,7 +403,9 @@ mod an_accepted_instruction {
     #[test]
     fn is_handed_to_its_hooks_with_the_caller_s_metadata() {
         let mut sim = with_agent();
-        let seen = hook_seeing(&mut sim, "audit", |_| HookResult::allow());
+        let seen = hook_seeing(&mut sim, "audit", |_| {
+            HookResult::allow(AllowOptions::default())
+        });
         let mut message = instruction();
         message.metadata.insert("task_id".to_owned(), json!("t_7"));
         sim.send(message).unwrap();
@@ -491,26 +496,30 @@ mod a_blocked_instruction {
     fn blocking(sim: &mut Sim) {
         hook_seeing(sim, "guard", |event| {
             if event.r#type == EventType::Instruction {
-                HookResult::block("no nudges tonight")
-                    .with_task(Task::at(
-                        TaskId::new("task_1").unwrap(),
-                        room_id(),
-                        "nudge the customer tomorrow",
-                        event.created_at,
-                    ))
-                    .with_observation(Observation::at(
-                        ObservationId::new("obs_1").unwrap(),
-                        room_id(),
-                        channel("app"),
-                        "a nudge came in after hours",
-                        event.created_at,
-                    ))
-                    .inject(InjectedEvent::to_channels(
-                        notice_event("notice", "A nudge was held back"),
-                        vec![channel("sms")],
-                    ))
+                HookResult::block(
+                    "no nudges tonight",
+                    BlockOptions {
+                        tasks: Some(vec![Task::at(
+                            TaskId::new("task_1").unwrap(),
+                            room_id(),
+                            "nudge the customer tomorrow",
+                            event.created_at,
+                        )]),
+                        observations: Some(vec![Observation::at(
+                            ObservationId::new("obs_1").unwrap(),
+                            room_id(),
+                            channel("app"),
+                            "a nudge came in after hours",
+                            event.created_at,
+                        )]),
+                        injected: Some(vec![InjectedEvent {
+                            target_channel_ids: Some(vec![channel("sms")]),
+                            ..InjectedEvent::new(notice_event("notice", "A nudge was held back"))
+                        }]),
+                    },
+                )
             } else {
-                HookResult::allow()
+                HookResult::allow(AllowOptions::default())
             }
         });
     }
@@ -718,7 +727,7 @@ mod the_response {
         hook_seeing(&mut sim, "rewrite", |event| {
             let mut rewritten = event.clone();
             rewritten.content = TextContent::new("abc").into();
-            HookResult::modify(rewritten)
+            HookResult::modify(rewritten, ModifyOptions::default())
         });
         sim.send(instruction()).unwrap();
         assert_eq!(
@@ -742,7 +751,7 @@ mod the_response {
                     .metadata
                     .insert("instruction".to_owned(), json!(TEXT));
             }
-            HookResult::modify(copied)
+            HookResult::modify(copied, ModifyOptions::default())
         });
         sim.send(instruction()).unwrap();
         assert_eq!(
@@ -759,7 +768,7 @@ mod the_response {
         hook_seeing(&mut sim, "redactor", |event| {
             let mut redacted = event.clone();
             redacted.metadata.remove("instruction");
-            HookResult::modify(redacted)
+            HookResult::modify(redacted, ModifyOptions::default())
         });
         sim.send(instruction()).unwrap();
         assert_eq!(
@@ -852,7 +861,7 @@ mod an_instruction_key_the_pipeline_did_not_write {
         hook_seeing(sim, "redactor", |event| {
             let mut redacted = event.clone();
             redacted.metadata.remove("instruction");
-            HookResult::modify(redacted)
+            HookResult::modify(redacted, ModifyOptions::default())
         });
     }
 
@@ -867,7 +876,9 @@ mod an_instruction_key_the_pipeline_did_not_write {
     #[test]
     fn on_an_inbound_message_is_not_handed_to_its_hooks() {
         let mut sim = room();
-        let seen = hook_seeing(&mut sim, "audit", |_| HookResult::allow());
+        let seen = hook_seeing(&mut sim, "audit", |_| {
+            HookResult::allow(AllowOptions::default())
+        });
         sim.send(carrying_the_key()).unwrap();
         assert_eq!(seen.borrow()[0].metadata.get("instruction"), None);
     }
@@ -903,13 +914,18 @@ mod an_instruction_key_the_pipeline_did_not_write {
         let mut sim = room();
         hook_seeing(&mut sim, "notifier", |event| {
             if event.source.channel_id.as_str() != "sms" {
-                return HookResult::allow();
+                return HookResult::allow(AllowOptions::default());
             }
             let mut notice = notice_event("notice", "An advisor will call");
             notice
                 .metadata
                 .insert("instruction".to_owned(), json!(TEXT));
-            HookResult::allow().inject(InjectedEvent::to_channels(notice, vec![channel("sms")]))
+            HookResult::allow(AllowOptions {
+                injected: Some(vec![InjectedEvent {
+                    target_channel_ids: Some(vec![channel("sms")]),
+                    ..InjectedEvent::new(notice)
+                }]),
+            })
         });
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
@@ -923,7 +939,9 @@ mod an_instruction_key_the_pipeline_did_not_write {
     #[test]
     fn on_an_instruction_from_its_caller_is_not_handed_to_its_hooks() {
         let mut sim = with_agent();
-        let seen = hook_seeing(&mut sim, "audit", |_| HookResult::allow());
+        let seen = hook_seeing(&mut sim, "audit", |_| {
+            HookResult::allow(AllowOptions::default())
+        });
         let mut message = instruction();
         message
             .metadata
@@ -985,7 +1003,9 @@ mod a_standalone_instruction {
     #[test]
     fn carries_its_standalone_word_to_its_hooks() {
         let mut sim = with_agent();
-        let seen = hook_seeing(&mut sim, "audit", |_| HookResult::allow());
+        let seen = hook_seeing(&mut sim, "audit", |_| {
+            HookResult::allow(AllowOptions::default())
+        });
         let mut message = instruction();
         message.standalone = true;
         sim.send(message).unwrap();
@@ -1018,7 +1038,7 @@ mod a_hook_s_modify {
         hook_seeing(sim, "rewrite", move |event| {
             let mut modified = event.clone();
             change(&mut modified);
-            HookResult::modify(modified)
+            HookResult::modify(modified, ModifyOptions::default())
         });
     }
 
@@ -1100,14 +1120,20 @@ mod an_instruction_from_inside_the_cascade {
     fn nudging(sim: &mut Sim) -> Rc<RefCell<Vec<RoomEvent>>> {
         hook_seeing(sim, "nudger", |event| {
             if matches!(&event.content, EventContent::Text(text) if text.body == "Bonjour") {
-                HookResult::allow()
-                    .inject(InjectedEvent::to_channels(smuggled(), vec![channel("ai")]))
-                    .inject(InjectedEvent::to_channels(
-                        notice_event("notice", "An advisor will call"),
-                        vec![channel("sms")],
-                    ))
+                HookResult::allow(AllowOptions {
+                    injected: Some(vec![
+                        InjectedEvent {
+                            target_channel_ids: Some(vec![channel("ai")]),
+                            ..InjectedEvent::new(smuggled())
+                        },
+                        InjectedEvent {
+                            target_channel_ids: Some(vec![channel("sms")]),
+                            ..InjectedEvent::new(notice_event("notice", "An advisor will call"))
+                        },
+                    ]),
+                })
             } else {
-                HookResult::allow()
+                HookResult::allow(AllowOptions::default())
             }
         })
     }
@@ -1235,9 +1261,9 @@ mod after_a_locked_hook {
     /// takes once its hooks are over, step 9a's.
     #[test]
     fn carries_the_room_s_next_index_once_its_hooks_are_over() {
-        let blocking: fn() -> HookResult = || HookResult::block("not now");
+        let blocking: fn() -> HookResult = || HookResult::block("not now", BlockOptions::default());
         let mut indexes = Vec::new();
-        for answer in [HookResult::allow, blocking] {
+        for answer in [|| HookResult::allow(AllowOptions::default()), blocking] {
             let mut sim = with_silent_agent();
             committing_ahead(&mut sim, answer);
             let result = sim.send(instruction()).unwrap();
@@ -1254,7 +1280,9 @@ mod after_a_locked_hook {
     #[test]
     fn closed_by_the_hook_is_refused_room_closed_with_no_event() {
         let mut sim = with_silent_agent();
-        hook_seeing(&mut sim, "audit", |_| HookResult::allow());
+        hook_seeing(&mut sim, "audit", |_| {
+            HookResult::allow(AllowOptions::default())
+        });
         sim.hooks_change = Some(HookChange::CloseRoom);
         let result = sim.send(instruction()).unwrap();
         assert_eq!(

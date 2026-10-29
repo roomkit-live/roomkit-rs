@@ -38,7 +38,7 @@
 //! (`Effect::locked`) is checked to be made while the room's lock is held.
 
 mod runs;
-
+use roomkit_core::model::hook::AllowOptions;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::mem;
 use std::sync::Arc;
@@ -571,7 +571,7 @@ impl Sim {
         spec.needs_lock = needs_lock;
         let id = self.sync_hook(
             spec,
-            Box::new(|_| HookOutcome::Returned(HookResult::allow())),
+            Box::new(|_| HookOutcome::Returned(HookResult::allow(AllowOptions::default()))),
         );
         self.reentrant_hooks.insert(id, reentry);
         id

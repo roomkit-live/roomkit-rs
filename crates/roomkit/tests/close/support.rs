@@ -1,7 +1,7 @@
 //! A room with an SMS transport and a witness channel, the kit's own work
 //! closing the kit from one door or another, and what the tests read of a
 //! call and of the room.
-
+use roomkit::model::hook::AllowOptions;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -365,7 +365,7 @@ pub(crate) async fn open(door: Door, witness: &Witness, gated: bool) -> (RoomKit
             let work = work.clone();
             async move {
                 work.close().await;
-                Ok(HookResult::allow())
+                Ok(HookResult::allow(AllowOptions::default()))
             }
         })
         .unwrap();

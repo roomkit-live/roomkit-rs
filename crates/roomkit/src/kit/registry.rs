@@ -80,12 +80,19 @@ impl<S: ConversationStore> RoomKit<S> {
     /// ```
     /// # fn register(kit: &roomkit::RoomKit) -> Result<(), roomkit::KitError> {
     /// use roomkit::model::HookResult;
+    /// use roomkit::model::hook::{AllowOptions, BlockOptions};
     /// use roomkit::{HookExecution, HookSpec, HookTrigger, text_of};
     ///
     /// let spec = HookSpec::new("spam_filter", HookTrigger::BeforeBroadcast, HookExecution::Sync);
     /// kit.hook(spec, |event, _context| {
     ///     let spam = text_of(&event.content).contains("spam");
-    ///     async move { Ok(if spam { HookResult::block("spam") } else { HookResult::allow() }) }
+    ///     async move {
+    ///         Ok(if spam {
+    ///             HookResult::block("spam", BlockOptions::default())
+    ///         } else {
+    ///             HookResult::allow(AllowOptions::default())
+    ///         })
+    ///     }
     /// })?;
     /// # Ok(())
     /// # }

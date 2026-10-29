@@ -10,7 +10,7 @@
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-
+use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::error::Error;
 use std::process::ExitCode;
 
@@ -78,8 +78,10 @@ fn moderate(kit: &RoomKit, ran: &Log<String>) -> Result<(), Box<dyn Error>> {
         let found = prohibited_word(&text);
         async move {
             Ok(match found {
-                Some(word) => HookResult::block(format!("prohibited word {word:?}")),
-                None => HookResult::allow(),
+                Some(word) => {
+                    HookResult::block(format!("prohibited word {word:?}"), BlockOptions::default())
+                }
+                None => HookResult::allow(AllowOptions::default()),
             })
         }
     })?;
@@ -90,7 +92,7 @@ fn moderate(kit: &RoomKit, ran: &Log<String>) -> Result<(), Box<dyn Error>> {
         let clean = redacted(&text);
         async move {
             if clean == text {
-                return Ok(HookResult::allow());
+                return Ok(HookResult::allow(AllowOptions::default()));
             }
             // The replacement is the event every channel receives, and the
             // one the room stores.
@@ -98,7 +100,10 @@ fn moderate(kit: &RoomKit, ran: &Log<String>) -> Result<(), Box<dyn Error>> {
                 content: TextContent::new(clean).into(),
                 ..event
             };
-            Ok(HookResult::modify(modified).with_reason("phone number redacted"))
+            Ok(HookResult {
+                reason: Some("phone number redacted".into()),
+                ..HookResult::modify(modified, ModifyOptions::default())
+            })
         }
     })?;
     Ok(())

@@ -6,7 +6,7 @@
 //! run the real driver against them. They also run the driver on an
 //! operation that breaks the protocol, and a call on a runtime that shuts
 //! down under it.
-
+use roomkit_core::model::hook::AllowOptions;
 use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
@@ -79,8 +79,10 @@ async fn checked_room() -> RoomKit {
     .unwrap();
     let mut spec = HookSpec::new("scanner", HookTrigger::BeforeBroadcast, HookExecution::Sync);
     spec.needs_lock = false;
-    kit.hook(spec, |_, _| async { Ok(HookResult::allow()) })
-        .unwrap();
+    kit.hook(spec, |_, _| async {
+        Ok(HookResult::allow(AllowOptions::default()))
+    })
+    .unwrap();
     kit
 }
 
@@ -322,7 +324,7 @@ fn a_call_whose_runtime_shuts_down_under_it_is_cancelled() {
     unbounded(&kit);
     kit.before_broadcast("stuck", |_, _| async {
         std::future::pending::<()>().await;
-        Ok(HookResult::allow())
+        Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
     let room = room_id();

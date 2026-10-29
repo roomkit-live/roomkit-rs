@@ -101,6 +101,11 @@ pub enum ModelError {
         reason: &'static str,
     },
 
+    /// A hook result says `block` without the reason Python requires (a
+    /// blank one is a reason).
+    #[error("a block hook result carries no reason")]
+    BlockWithoutReason,
+
     /// A hook result says `modify` without the payload that replaces the
     /// trigger's (gap G-010).
     #[error("a modify hook result carries no replacement payload")]

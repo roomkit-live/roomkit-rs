@@ -7,7 +7,7 @@
 mod history;
 mod servers;
 mod support;
-
+use roomkit::model::hook::AllowOptions;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -96,7 +96,7 @@ async fn a_tool_trigger_takes_no_event_hook() {
     let room = Room::new(ScriptedProvider::new([]), Tools::new()).await;
     let spec = HookSpec::new("approve", HookTrigger::BeforeToolUse, HookExecution::Sync);
     let registered = room.kit.hook(spec, |_event, _context| async {
-        Ok(roomkit::model::HookResult::allow())
+        Ok(roomkit::model::HookResult::allow(AllowOptions::default()))
     });
     assert!(matches!(
         registered,

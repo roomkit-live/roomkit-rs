@@ -1,7 +1,7 @@
 //! What a streaming channel reads once the room no longer lets it read
 //! the answer, or once a row's visibility keeps the row from it (RFC §6.1,
 //! §7.2, §7.5, §12.2 step 14s; review of step 4 milestone 6).
-
+use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -41,13 +41,13 @@ async fn a_row_the_streaming_target_may_not_read_is_never_handed_to_it() {
         room.kit
             .hook(spec, move |mut event, _context| async move {
                 if roomkit::text_of(&event.content) != "Secret part." {
-                    return Ok(HookResult::allow());
+                    return Ok(HookResult::allow(AllowOptions::default()));
                 }
                 if !narrowed {
-                    return Ok(HookResult::block("secret"));
+                    return Ok(HookResult::block("secret", BlockOptions::default()));
                 }
                 event.visibility = Visibility::channels([channel("web")]).unwrap();
-                Ok(HookResult::modify(event))
+                Ok(HookResult::modify(event, ModifyOptions::default()))
             })
             .unwrap();
         room.says("Tell me.").await;
@@ -211,10 +211,10 @@ async fn a_hook_hiding_the_tool_rows_leaves_the_text_streaming() {
     room.kit
         .hook(spec, |mut event, _context| async move {
             if event.r#type == EventType::Message {
-                return Ok(HookResult::allow());
+                return Ok(HookResult::allow(AllowOptions::default()));
             }
             event.visibility = Visibility::channels([channel("web")]).unwrap();
-            Ok(HookResult::modify(event))
+            Ok(HookResult::modify(event, ModifyOptions::default()))
         })
         .unwrap();
     room.says("Where is my order?").await;

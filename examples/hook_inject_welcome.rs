@@ -12,7 +12,7 @@
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-
+use roomkit::model::hook::AllowOptions;
 use std::error::Error;
 use std::process::ExitCode;
 
@@ -45,7 +45,10 @@ fn welcome(event: &RoomEvent, newcomer: &ChannelId) -> InjectedEvent {
         created_at: event.created_at,
         ..RoomEvent::new(event.room_id.clone(), source, content)
     };
-    InjectedEvent::to_channels(welcome, vec![newcomer.clone()])
+    InjectedEvent {
+        target_channel_ids: Some(vec![newcomer.clone()]),
+        ..InjectedEvent::new(welcome)
+    }
 }
 
 /// Registers the observer that notes each channel attached in `attached`,
@@ -80,10 +83,12 @@ fn welcome_newcomers(
         }
         async move {
             if !first_message {
-                return Ok(HookResult::allow());
+                return Ok(HookResult::allow(AllowOptions::default()));
             }
             // An allow lets the message through, with the events it injects.
-            Ok(HookResult::allow().inject(welcome(&event, &newcomer)))
+            Ok(HookResult::allow(AllowOptions {
+                injected: Some(vec![welcome(&event, &newcomer)]),
+            }))
         }
     })?;
     Ok(())

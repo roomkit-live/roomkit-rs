@@ -11,7 +11,7 @@
     clippy::panic,
     reason = "a test fails on a broken fixture"
 )]
-
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::future::{Future, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -569,9 +569,9 @@ async fn the_delivery_cursor_follows_the_lane() {
     kit.before_broadcast("no_spam", |event, _| {
         let spam = text_of(&event.content) == "spam";
         ready(Ok(if spam {
-            HookResult::block("spam")
+            HookResult::block("spam", BlockOptions::default())
         } else {
-            HookResult::allow()
+            HookResult::allow(AllowOptions::default())
         }))
     })
     .unwrap();
@@ -648,7 +648,7 @@ async fn a_call_dropped_under_the_room_lock_leaves_the_lane_and_the_lock_free() 
             if first {
                 tokio::time::sleep(Duration::from_secs(3600)).await;
             }
-            Ok(HookResult::allow())
+            Ok(HookResult::allow(AllowOptions::default()))
         }
     })
     .unwrap();

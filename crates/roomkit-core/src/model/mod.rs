@@ -18,7 +18,7 @@ mod delivery;
 mod direct;
 mod error;
 mod event;
-mod hook;
+pub mod hook;
 mod identity;
 mod ids;
 mod inbound;
@@ -49,7 +49,7 @@ pub use delivery::{DeliveryError, DeliveryResult, DeliveryResultStatus, Provider
 pub use direct::DirectEvent;
 pub use error::ModelError;
 pub use event::{EventDirection, EventSource, EventStatus, EventType, RoomEvent};
-pub use hook::{HookDecision, HookResult, InjectedEvent};
+pub use hook::{HookAction, HookResult, InjectedEvent};
 pub use identity::Identity;
 pub use ids::{
     ChannelId, EventId, HOST_CHANNEL_ID, IdentityId, ObservationId, ParticipantId, RoomId, TaskId,
