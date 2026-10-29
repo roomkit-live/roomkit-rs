@@ -86,6 +86,69 @@ fn javascript_refused() -> StoreError {
     )
 }
 
+/// A media whose link's scheme a struct literal wrote in capitals, past
+/// the lower case `MediaContent::new` writes.
+fn shouting_media(url: &str) -> EventContent {
+    MediaContent {
+        url: url.to_owned(),
+        ..MediaContent::new("https://example.com/a.png", "image/png").unwrap()
+    }
+    .into()
+}
+
+/// The URL of the media `event` holds.
+fn media_url(event: &RoomEvent) -> Option<&str> {
+    if let EventContent::Media(media) = &event.content {
+        Some(&media.url)
+    } else {
+        None
+    }
+}
+
+/// A link's scheme a struct literal holds in capitals is written in lower
+/// case by every write, a commit, a commit's update of its target and an
+/// update, as Python's model writes it when built and reads it back (probe
+/// `tasks/probes/step5-lot2-review-A/model_bounds_written.py`: a stored
+/// `HTTPS://Example.com/a.png` reads `https://Example.com/a.png`).
+#[tokio::test]
+async fn a_link_s_scheme_is_written_in_lower_case() {
+    let store = with_events(vec![event(0)]).await;
+    let mut media = event(1);
+    media.content = shouting_media("HTTPS://Example.com/a.png");
+    store.commit(media, counters(1), None).await.unwrap();
+    let target = TargetUpdate {
+        event_id: event_id("evt_0"),
+        updates: EventUpdates {
+            content: Some(shouting_media("Http://Example.com/b.png")),
+            ..EventUpdates::default()
+        },
+    };
+    store
+        .commit(edit_of(2, 0), counters(2), Some(target))
+        .await
+        .unwrap();
+    let updates = EventUpdates {
+        content: Some(shouting_media("DATA:image/png;base64,AAAA")),
+        ..EventUpdates::default()
+    };
+    store
+        .update_event(&event_id("evt_1"), updates)
+        .await
+        .unwrap();
+    let events = store
+        .list_events(&room_id(), &EventQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        events.iter().map(media_url).collect::<Vec<_>>(),
+        [
+            Some("http://Example.com/b.png"),
+            Some("data:image/png;base64,AAAA"),
+            None
+        ]
+    );
+}
+
 /// A content its model refuses, which a struct literal can hold, is
 /// refused by every write that would store it, nothing written: a commit,
 /// a commit's update of its target, an update. Stored, it would fail every

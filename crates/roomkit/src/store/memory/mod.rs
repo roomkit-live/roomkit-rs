@@ -550,9 +550,9 @@ impl ConversationStore for InMemoryStore {
         &self,
         mut event: RoomEvent,
         counters: RoomCounters,
-        target: Option<TargetUpdate>,
+        mut target: Option<TargetUpdate>,
     ) -> Result<(), StoreError> {
-        super::written::event(&event, target.as_ref())?;
+        super::written::event(&mut event, target.as_mut())?;
         // A blank key is no key: the event is stored with none (RFC §13.4).
         event.idempotency_key = idempotency::key(event.idempotency_key);
         let room_id = event.room_id.clone();
@@ -623,9 +623,9 @@ impl ConversationStore for InMemoryStore {
     async fn update_event(
         &self,
         event_id: &EventId,
-        updates: EventUpdates,
+        mut updates: EventUpdates,
     ) -> Result<RoomEvent, StoreError> {
-        super::written::updates(&updates)?;
+        super::written::updates(&mut updates)?;
         let mut rooms = self.rooms();
         let stored = rooms
             .values_mut()

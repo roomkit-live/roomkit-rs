@@ -689,6 +689,84 @@ async fn a_value_its_model_refuses_is_refused_by_every_call_before_any_read() {
     );
 }
 
+/// A media whose link's scheme a struct literal wrote in capitals, past
+/// the lower case `MediaContent::new` writes.
+fn shouting_media() -> EventContent {
+    MediaContent {
+        url: "HTTPS://Example.com/a.png".to_owned(),
+        ..MediaContent::new("https://example.com/a.png", "image/png").unwrap()
+    }
+    .into()
+}
+
+/// The URL of the media `content` is.
+fn media_url(content: &EventContent) -> Option<String> {
+    if let EventContent::Media(media) = content {
+        Some(media.url.clone())
+    } else {
+        None
+    }
+}
+
+/// A link's scheme a struct literal holds in capitals enters the room in
+/// lower case at each of the kit's calls, as Python's model writes it when
+/// built: what a `BEFORE_BROADCAST` hook reads of `process_inbound`'s
+/// message, and what `send_event`, `post` and `commit_event` return.
+#[tokio::test]
+async fn a_link_s_scheme_a_struct_literal_holds_enters_in_lower_case() {
+    let (kit, sms) = sms_and_agent().await;
+    let (read, mut hook_read) = mpsc::unbounded_channel();
+    kit.hook(
+        HookSpec::new(
+            "media_reader",
+            HookTrigger::BeforeBroadcast,
+            HookExecution::Sync,
+        ),
+        move |event: RoomEvent, _context| {
+            read.send(media_url(&event.content)).unwrap();
+            ready(Ok(HookResult::allow(AllowOptions::default())))
+        },
+    )
+    .unwrap();
+    let mut inbound = message(&sms, "x");
+    inbound.content = shouting_media();
+    let routed = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    kit.process_inbound(inbound, routed).await.unwrap();
+    let sent = kit
+        .send_event(
+            &room_id(),
+            sms.id(),
+            shouting_media(),
+            SendEventOptions::default(),
+        )
+        .await
+        .unwrap();
+    let posted = kit
+        .post(&room_id(), shouting_media(), PostOptions::default())
+        .await
+        .unwrap();
+    let mut record = sent.clone();
+    record.id = EventId::new("evt_record").unwrap();
+    record.content = shouting_media();
+    let committed = kit
+        .commit_event(&room_id(), record, CommitEventOptions::default())
+        .await
+        .unwrap();
+    let lower = || Some("https://Example.com/a.png".to_owned());
+    assert_eq!(
+        [
+            next(&mut hook_read).await,
+            media_url(&sent.content),
+            media_url(&posted.content),
+            media_url(&committed.content)
+        ],
+        [lower(), lower(), lower(), lower()]
+    );
+}
+
 /// A SYNC hook that replaces the message with a content its model refuses
 /// reads as a hook that raised, as Python's hook raises building it: it
 /// fails open, and the message is stored as it came.

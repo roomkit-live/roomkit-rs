@@ -150,7 +150,7 @@ pub(super) async fn channel<S: ConversationStore>(
                 now: environment.now(),
             };
             match channel.handle_inbound(message, *context, draft).await {
-                Ok(event) => match event.check() {
+                Ok(mut event) => match event.check() {
                     Ok(()) => ChannelOutcome::Parsed(Box::new(event)).into(),
                     Err(refusal) => refused_content(&refusal),
                 },
@@ -522,11 +522,12 @@ fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
 /// A channel's answer, unless a response it carries holds a content its
 /// model refuses, built by struct literal past the model's check: the call
 /// then reads as the channel raising the `ValueError` Python's model raises
-/// when built, none of its responses kept.
-fn checked_output(output: Box<ChannelOutput>) -> Outcome {
+/// when built, none of its responses kept. A response kept is written as
+/// its constructor writes it.
+fn checked_output(mut output: Box<ChannelOutput>) -> Outcome {
     match output
         .response_events
-        .iter()
+        .iter_mut()
         .find_map(|event| event.check().err())
     {
         Some(refusal) => refused_content(&refusal),

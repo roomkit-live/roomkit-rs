@@ -89,25 +89,30 @@ pub mod written {
 
     use super::StoreError;
 
-    /// An event a commit writes, and what it writes on its target.
+    /// An event a commit writes, and what it writes on its target, each
+    /// content as its constructor writes it (a link's scheme in lower case).
     ///
     /// # Errors
     ///
     /// Returns [`StoreError::Value`] for a content its model refuses.
-    pub fn event(event: &RoomEvent, target: Option<&TargetUpdate>) -> Result<(), StoreError> {
+    pub fn event(
+        event: &mut RoomEvent,
+        target: Option<&mut TargetUpdate>,
+    ) -> Result<(), StoreError> {
         event.check()?;
-        target.map_or(Ok(()), |target| updates(&target.updates))
+        target.map_or(Ok(()), |target| updates(&mut target.updates))
     }
 
-    /// What an update writes on an event.
+    /// What an update writes on an event, its content as its constructor
+    /// writes it.
     ///
     /// # Errors
     ///
     /// Returns [`StoreError::Value`] for a content its model refuses.
-    pub fn updates(updates: &EventUpdates) -> Result<(), StoreError> {
+    pub fn updates(updates: &mut EventUpdates) -> Result<(), StoreError> {
         Ok(updates
             .content
-            .as_ref()
+            .as_mut()
             .map_or(Ok(()), EventContent::check)?)
     }
 

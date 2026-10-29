@@ -48,19 +48,24 @@ pub enum EventContent {
 
 impl EventContent {
     /// Refuses a content its constructor or its deserialization would have
-    /// refused: a media URL no reader may take, a negative duration (RFC
-    /// §6.4), through a composite's parts and an edit's new content. A
-    /// struct literal runs no check, so every door that writes an event runs
-    /// this one: the kit's calls, the hook chain, a channel's answer and the
-    /// stores. Outside the public API.
+    /// refused, a media URL no reader may take, a negative duration (RFC
+    /// §6.4), and writes what it keeps as they write it, a link's or a
+    /// `data:` URI's scheme in lower case, through a composite's parts and
+    /// an edit's new content. A struct literal runs no check, so every door
+    /// that writes an event runs this one: the kit's calls, the hook chain, a
+    /// channel's answer and the stores. Outside the public API.
     ///
     /// # Errors
     ///
-    /// Returns what the content's constructor would have returned.
+    /// Returns what the content's constructor would have returned, the
+    /// content left as it was.
     #[doc(hidden)]
-    pub fn check(&self) -> Result<(), ModelError> {
+    pub fn check(&mut self) -> Result<(), ModelError> {
         match self {
-            Self::Media(media) => media_url(media.url.clone()).map(drop),
+            Self::Media(media) => {
+                media.url = media_url(media.url.clone())?;
+                Ok(())
+            }
             Self::Audio(audio) => {
                 playable_url(audio.url.clone())?;
                 duration(audio.duration_seconds).map(drop)
@@ -70,7 +75,7 @@ impl EventContent {
                 video.thumbnail_url.clone().map(playable_url).transpose()?;
                 duration(video.duration_seconds).map(drop)
             }
-            Self::Composite(composite) => composite.parts.iter().try_for_each(Self::check),
+            Self::Composite(composite) => composite.parts.iter_mut().try_for_each(Self::check),
             Self::Edit(edit) => edit.new_content.check(),
             Self::Text(_)
             | Self::Rich(_)

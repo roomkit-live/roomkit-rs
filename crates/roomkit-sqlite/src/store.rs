@@ -360,11 +360,11 @@ impl ConversationStore for SqliteStore {
 
     async fn commit(
         &self,
-        event: RoomEvent,
+        mut event: RoomEvent,
         counters: RoomCounters,
-        target: Option<TargetUpdate>,
+        mut target: Option<TargetUpdate>,
     ) -> Result<(), StoreError> {
-        roomkit::written::event(&event, target.as_ref())?;
+        roomkit::written::event(&mut event, target.as_mut())?;
         self.database
             .write(move |connection| events::commit(connection, event, counters, target))
             .await
@@ -380,9 +380,9 @@ impl ConversationStore for SqliteStore {
     async fn update_event(
         &self,
         event_id: &EventId,
-        updates: EventUpdates,
+        mut updates: EventUpdates,
     ) -> Result<RoomEvent, StoreError> {
-        roomkit::written::updates(&updates)?;
+        roomkit::written::updates(&mut updates)?;
         let event_id = event_id.clone();
         self.database
             .write(move |connection| events::update(connection, &event_id, &updates))

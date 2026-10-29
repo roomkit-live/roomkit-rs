@@ -91,10 +91,11 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         room_id: &RoomId,
         organization_id: Option<String>,
-        event: DirectEvent,
+        mut event: DirectEvent,
     ) -> Result<RoomEvent, RoomKitError> {
         // A content a struct literal built past its model's check is refused
-        // before anything is read, as Python's model refuses it when built.
+        // before anything is read, as Python's model refuses it when built,
+        // and one kept is written as its constructor writes it.
         event.content.check()?;
         let entry = Entry::Direct {
             room_id: room_id.clone(),
@@ -133,7 +134,7 @@ impl<S: ConversationStore> RoomKit<S> {
     pub async fn commit_event(
         &self,
         room_id: &RoomId,
-        event: RoomEvent,
+        mut event: RoomEvent,
         options: CommitEventOptions,
     ) -> Result<RoomEvent, RoomKitError> {
         event.check()?;

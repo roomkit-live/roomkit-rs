@@ -51,9 +51,10 @@ impl<S: ConversationStore> RoomKit<S> {
         content: impl Into<EventContent>,
         options: PostOptions,
     ) -> Result<RoomEvent, RoomKitError> {
-        let content = content.into();
+        let mut content = content.into();
         // A content a struct literal built past its model's check is refused
-        // before anything is written, as Python's model refuses it when built.
+        // before anything is written, as Python's model refuses it when built,
+        // and one kept is written as its constructor writes it.
         content.check()?;
         if options.channel_id.is_none() {
             self.register_host_channel()?;

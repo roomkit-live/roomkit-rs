@@ -70,7 +70,7 @@ pub(crate) async fn run(
     timeout: Duration,
 ) -> HookOutcome<RoomEvent> {
     match tokio::time::timeout(timeout, handler.call(event, context)).await {
-        Ok(Ok(result)) => match refused_content(&result) {
+        Ok(Ok(mut result)) => match refused_content(&mut result) {
             // A content a struct literal built past its model's check: the
             // hook reads as raising the `ValueError` Python's model raises
             // when built.
@@ -83,16 +83,17 @@ pub(crate) async fn run(
 }
 
 /// What refuses a content `result` carries, its replacement's or an
-/// injected event's, as its model would have refused it when built.
-fn refused_content(result: &HookResult) -> Option<String> {
+/// injected event's, as its model would have refused it when built; each
+/// content kept is written as its constructor writes it.
+fn refused_content(result: &mut HookResult) -> Option<String> {
     result
         .event
-        .iter()
+        .iter_mut()
         .chain(
             result
                 .injected_events
-                .iter()
-                .map(|injected| &injected.event),
+                .iter_mut()
+                .map(|injected| &mut injected.event),
         )
         .find_map(|event| event.check().err())
         .map(|refusal| refusal.to_string())
