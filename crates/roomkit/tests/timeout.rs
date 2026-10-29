@@ -33,7 +33,7 @@ use pretty_assertions::assert_eq;
 use roomkit::model::Timestamp;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
@@ -57,7 +57,7 @@ fn room_id() -> RoomId {
 }
 
 fn message(text: &str) -> InboundMessage {
-    InboundMessage::new(channel("sms"), "+15551234567", EventContent::text(text))
+    InboundMessage::new(channel("sms"), "+15551234567", TextContent::new(text))
 }
 
 /// A kit with an SMS transport attached to `room_1`, and a

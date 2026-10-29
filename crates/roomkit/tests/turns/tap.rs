@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{DirectEvent, EventContent, EventType};
+use roomkit::model::{DirectEvent, EventType, TextContent};
 use roomkit::testing::{TappedMessage, TurnTap};
 use roomkit::{ConversationStore, current_turn};
 use roomkit_ai::{ToolError, ToolOutput};
@@ -163,7 +163,7 @@ fn fixture_lines(messages: &[(String, Value)]) -> String {
 async fn the_probe_s_turn_carries_python_s_messages() {
     let kit = kit(|_call, _context| async {
         let turn = current_turn().unwrap();
-        let note = DirectEvent::new(channel("ai"), EventContent::text("(looking it up)"));
+        let note = DirectEvent::new(channel("ai"), TextContent::new("(looking it up)"));
         turn.send_event(note)
             .await
             .map_err(|error| ToolError::raised(&error))?;

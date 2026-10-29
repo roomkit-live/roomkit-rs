@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use roomkit_core::model::{
     Access, BindingUpdate, ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput,
-    ChannelType, DirectEvent, ErrorRecord, EventContent, EventType, HookResult, InjectedEvent,
-    Room, RoomStatus, RoomTimers, Timestamp, Visibility,
+    ChannelType, DirectEvent, ErrorRecord, EventType, HookResult, InjectedEvent, Room, RoomStatus,
+    RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit_core::ops::{
     ArchiveRoom, AttachChannel, CheckTimers, CloseRoom, CreateRoom, DetachChannel, Entry,
@@ -1412,10 +1412,7 @@ mod a_timer_transition_s_report {
                     (text_of(&event.content) == "Hello?").then(|| Entry::Direct {
                         room_id: room_id(),
                         organization_id: None,
-                        event: Box::new(DirectEvent::new(
-                            channel("sms"),
-                            EventContent::text("Note"),
-                        )),
+                        event: Box::new(DirectEvent::new(channel("sms"), TextContent::new("Note"))),
                     })
                 }),
                 answer: Answer::AtOnce(Box::new(|| HookOutcome::Returned(HookResult::allow()))),

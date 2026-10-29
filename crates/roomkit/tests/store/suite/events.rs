@@ -4,7 +4,7 @@
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelId, DeleteContent, EventContent, EventStatus, EventType, EventUpdates, Room, RoomEvent,
-    RoomId, Timestamp,
+    RoomId, TextContent, Timestamp,
 };
 use roomkit::{ConversationStore, EventFilter, StoreError, TargetUpdate};
 use serde_json::json;
@@ -18,7 +18,7 @@ use crate::Store;
 /// The update an edit of `evt_0` writes, its text `text`.
 fn edited(text: &str) -> TargetUpdate {
     let updates = EventUpdates {
-        content: Some(EventContent::text(text)),
+        content: Some(TextContent::new(text).into()),
         ..EventUpdates::default()
     };
     TargetUpdate {
@@ -156,7 +156,7 @@ async fn a_key_its_channel_holds_refuses_another_event() {
                 key: "SM1".to_owned(),
             }),
             3,
-            EventContent::text("hi"),
+            TextContent::new("hi").into(),
             [Ok(()), Ok(()), Ok(())],
         )
     );
@@ -200,7 +200,7 @@ async fn an_update_and_a_change_s_commit_keep_the_delivery_results() {
     let stored = store.get_event(&event_id("evt_0")).await.unwrap().unwrap();
     assert_eq!(
         (stored.content, stored.delivery_results.get("sms").cloned()),
-        (EventContent::text("hello"), Some("failed".into()))
+        (TextContent::new("hello").into(), Some("failed".into()))
     );
 }
 
@@ -213,7 +213,7 @@ async fn a_commit_updates_its_target_in_the_same_write() {
         .await
         .unwrap();
     let target = store.get_event(&event_id("evt_0")).await.unwrap().unwrap();
-    assert_eq!(target.content, EventContent::text("hello"));
+    assert_eq!(target.content, TextContent::new("hello").into());
 }
 
 #[tokio::test]
@@ -327,7 +327,7 @@ async fn an_update_writes_what_it_names_and_returns_the_event() {
         .unwrap();
     assert_eq!(
         (updated.content, updated.index),
-        (EventContent::text("hello"), 0)
+        (TextContent::new("hello").into(), 0)
     );
 }
 

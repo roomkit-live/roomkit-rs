@@ -76,11 +76,11 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
-        content: EventContent,
+        content: impl Into<EventContent>,
         options: SendEventOptions,
     ) -> Result<RoomEvent, KitError> {
         let organization_id = options.organization_id.clone();
-        let event = options.event(channel_id.clone(), content);
+        let event = options.event(channel_id.clone(), content.into());
         self.inject(room_id, organization_id, event).await
     }
 

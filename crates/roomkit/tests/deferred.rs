@@ -12,8 +12,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventStatus, EventType, HookResult, InboundMessage, RoomContext, RoomEvent,
-    RoomId,
+    EventStatus, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -98,11 +98,7 @@ fn deferred() -> ProcessInboundOptions {
 }
 
 fn hello(sms: &RecordingTransport) -> InboundMessage {
-    InboundMessage::new(
-        sms.id().clone(),
-        "+15551234567",
-        EventContent::text("Hello"),
-    )
+    InboundMessage::new(sms.id().clone(), "+15551234567", TextContent::new("Hello"))
 }
 
 /// The call returns at its commit while the held transport still delivers;
@@ -262,11 +258,8 @@ impl Channel for Echoing {
             if let Some(kit) = kit
                 && echoing.capped.lock().unwrap().is_none()
             {
-                let again = InboundMessage::new(
-                    channel("sms"),
-                    "+15551234567",
-                    EventContent::text("Again"),
-                );
+                let again =
+                    InboundMessage::new(channel("sms"), "+15551234567", TextContent::new("Again"));
                 let result = kit.process_inbound(again, deferred()).await.unwrap();
                 if result.blocked {
                     *echoing.capped.lock().unwrap() = Some(result);

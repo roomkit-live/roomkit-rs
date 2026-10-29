@@ -9,8 +9,8 @@ use std::time::Duration;
 use futures_core::Stream;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventDirection, EventSource, EventType, InboundMessage, Metadata, RoomContext,
-    RoomEvent, RoomId,
+    EventDirection, EventSource, EventType, InboundMessage, Metadata, RoomContext, RoomEvent,
+    RoomId, TextContent,
 };
 use roomkit_core::ops::ChannelDeclaration;
 use serde_json::Value;
@@ -62,7 +62,7 @@ pub(super) async fn bind(kit: &RoomKit, channel: impl Channel) {
 
 /// Alice writes `text` by SMS.
 pub(super) async fn says(kit: &RoomKit, text: &str) -> Result<InboundResult, KitError> {
-    let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text(text));
+    let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new(text));
     kit.process_inbound(
         message,
         ProcessInboundOptions {
@@ -220,7 +220,7 @@ impl Channel for Waiting {
             event.room_id.clone(),
             EventType::Message,
             source,
-            EventContent::text("Done."),
+            TextContent::new("Done.").into(),
             event.created_at,
         );
         Ok(ChannelOutput::respond(vec![answer]))
@@ -432,7 +432,7 @@ impl Channel for Eager {
             self.turned.lock().unwrap().push(current_turn().is_some());
             let room_id = event.room_id.clone();
             tokio::spawn(crate::keep_context(async move {
-                let note = EventContent::text("(note)");
+                let note = TextContent::new("(note)");
                 kit.send_event(&room_id, &channel("ai"), note, SendEventOptions::default())
                     .await
                     .map(|_| ())

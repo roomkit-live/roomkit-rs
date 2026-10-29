@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, EventContent,
-    EventType, RoomContext, ToolCallOutcome,
+    EventType, RoomContext, TextContent, ToolCallOutcome,
 };
 use roomkit::testing::TurnTap;
 use roomkit::{
@@ -152,7 +152,7 @@ fn message() -> roomkit::model::InboundMessage {
     roomkit::model::InboundMessage::new(
         channel("sms"),
         "+15550000001",
-        EventContent::text("What is it?"),
+        TextContent::new("What is it?"),
     )
 }
 

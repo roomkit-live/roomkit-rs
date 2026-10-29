@@ -526,11 +526,11 @@ pub(crate) fn as_deep_as_its_turn(chain_depth: &mut u32) {
 /// neither waits for that work nor cuts it (RFC §12.10.4).
 ///
 /// ```no_run
-/// # use roomkit::model::{ChannelId, EventContent, RoomId};
+/// # use roomkit::model::{ChannelId, RoomId, TextContent};
 /// # async fn turn(kit: roomkit::RoomKit, room: RoomId, agent: ChannelId) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 /// // Inside an agent's turn: the tool runs in a task of its own, awaited.
 /// let tool = tokio::spawn(roomkit::keep_context(async move {
-///     let note = EventContent::text("Looking it up.");
+///     let note = TextContent::new("Looking it up.");
 ///     kit.send_event(&room, &agent, note, Default::default()).await
 /// }));
 /// let injected = tool.await??;
@@ -550,8 +550,8 @@ where
 #[cfg(test)]
 mod tests {
     use roomkit_core::model::{
-        ChannelDirection, ChannelId, ChannelType, EventContent, EventDirection, EventSource,
-        EventType, Room, RoomContext, RoomEvent, Timestamp,
+        ChannelDirection, ChannelId, ChannelType, EventDirection, EventSource, EventType, Room,
+        RoomContext, RoomEvent, TextContent, Timestamp,
     };
     use roomkit_core::ops::{
         ChannelDeclaration, CheckTimers, KitConfig, Next, Operation, SequentialEnvironment,
@@ -769,7 +769,7 @@ mod tests {
             room_id(),
             EventType::Message,
             source,
-            EventContent::text("Hi"),
+            TextContent::new("Hi").into(),
             Timestamp::UNIX_EPOCH,
         );
         event.chain_depth = depth;

@@ -11,7 +11,7 @@ use std::rc::Rc;
 use roomkit_core::model::{
     ChannelOutput, DirectEvent, EditContent, EditSource, ErrorRecord, EventContent, EventDirection,
     EventStatus, EventType, HookResult, InboundMessage, InjectedEvent, RoomEvent, RoomId,
-    RoomStatus, Visibility,
+    RoomStatus, TextContent, Visibility,
 };
 use roomkit_core::ops::{
     EffectId, Entry, FrameworkEvent, Inbound, InboundError, InboundTarget, MutationError, Next,
@@ -34,7 +34,7 @@ fn room() -> Sim {
 
 /// A text the advisor's console injects.
 fn from_console(text: &str) -> DirectEvent {
-    DirectEvent::new(channel("ws"), EventContent::text(text))
+    DirectEvent::new(channel("ws"), TextContent::new(text))
 }
 
 /// The call `send_event(room_1, ...)` of the console's `text`.
@@ -217,7 +217,7 @@ mod an_injected_event {
     fn from_an_intelligence_channel_is_outbound() {
         let mut sim = room();
         sim.echo_agent("ai", "Hello back");
-        let event = DirectEvent::new(channel("ai"), EventContent::text("Let me check."));
+        let event = DirectEvent::new(channel("ai"), TextContent::new("Let me check."));
         let result = sim.inject("room_1", event).unwrap();
         assert_eq!(
             result.event.map(|event| event.source.direction),
@@ -302,7 +302,7 @@ mod an_injected_event {
     fn from_an_unbound_channel_is_refused_with_nothing_written() {
         let mut sim = room();
         sim.unbound_transport("api", roomkit_core::model::ChannelType::WEBHOOK);
-        let event = DirectEvent::new(channel("api"), EventContent::text("Order shipped"));
+        let event = DirectEvent::new(channel("api"), TextContent::new("Order shipped"));
         let refused = sim.inject("room_1", event);
         assert_eq!(
             (refused, sim.bindings.len(), sim.timeline_lines()),
@@ -325,7 +325,7 @@ mod an_injected_event {
             "audit",
             Box::new(|_| HookOutcome::Returned(HookResult::allow())),
         );
-        let event = DirectEvent::new(channel("api"), EventContent::text("Order shipped"));
+        let event = DirectEvent::new(channel("api"), TextContent::new("Order shipped"));
         sim.inject("room_1", event).unwrap_err();
         assert_eq!(sim.traced("hook"), Vec::<&str>::new());
     }
@@ -340,7 +340,7 @@ mod an_injected_event {
             "scanner",
             Box::new(|_| HookOutcome::Returned(HookResult::allow())),
         );
-        let event = DirectEvent::new(channel("api"), EventContent::text("Order shipped"));
+        let event = DirectEvent::new(channel("api"), TextContent::new("Order shipped"));
         let refused = sim.inject("room_1", event);
         assert_eq!(
             (refused, sim.traced("hook"), sim.traced("take ticket")),
@@ -521,10 +521,10 @@ mod a_refusal_before_the_commit {
         let mut sim = room();
         let mut edit = DirectEvent::new(
             channel("ws"),
-            EventContent::Edit(
-                EditContent::new("evt_404".parse().unwrap(), EventContent::text("Bonsoir"))
-                    .with_edit_source(EditSource::Sender),
-            ),
+            EventContent::Edit(EditContent {
+                edit_source: Some(EditSource::Sender),
+                ..EditContent::new("evt_404".parse().unwrap(), TextContent::new("Bonsoir"))
+            }),
         );
         edit.event_type = EventType::Edit;
         assert_eq!(
@@ -559,7 +559,7 @@ mod a_refusal_before_the_commit {
     #[test]
     fn of_an_unregistered_channel_is_raised_before_anything_is_read() {
         let mut sim = room();
-        let event = DirectEvent::new(channel("fax"), EventContent::text("Hi"));
+        let event = DirectEvent::new(channel("fax"), TextContent::new("Hi"));
         assert_eq!(
             (outcome(&mut sim, event), sim.trace.len()),
             ((Err(InboundError::UnknownChannel(channel("fax"))), 0), 0)
@@ -852,7 +852,7 @@ mod an_entry_adopted_under_the_lock {
                     let refused = || Entry::Direct {
                         room_id: room_id(),
                         organization_id: None,
-                        event: Box::new(DirectEvent::new(channel("api"), EventContent::text("x"))),
+                        event: Box::new(DirectEvent::new(channel("api"), TextContent::new("x"))),
                     };
                     let mut entries: Vec<Entry> = (0..3).map(|_| refused()).collect();
                     entries.extend((0..10).map(|_| send_event("Heads up")));
@@ -1201,7 +1201,7 @@ mod an_entry_adopted_under_the_lock {
             organization_id: None,
             event: Box::new(DirectEvent::new(
                 channel("api"),
-                EventContent::text("Shipped"),
+                TextContent::new("Shipped"),
             )),
         };
         let answers = answered(&mut sim, entry);
@@ -1229,7 +1229,7 @@ mod an_entry_adopted_under_the_lock {
             organization_id: None,
             event: Box::new(DirectEvent::new(
                 channel("api"),
-                EventContent::text("Shipped"),
+                TextContent::new("Shipped"),
             )),
         };
         let answers = answered(&mut sim, entry);
@@ -1326,7 +1326,7 @@ mod an_entry_adopted_under_the_lock {
             let mut held = console_keyed("evt_0", "alert_1");
             held.source.channel_id = channel(channel_id);
             sim.seed(held);
-            let mut event = DirectEvent::new(channel(channel_id), EventContent::text("Heads up"));
+            let mut event = DirectEvent::new(channel(channel_id), TextContent::new("Heads up"));
             event.idempotency_key = Some("alert_1".to_owned());
             let entry = Entry::Direct {
                 room_id: room_id(),
@@ -1387,7 +1387,7 @@ mod an_arrival_from_a_delivery {
         Entry::Direct {
             room_id: room_id(),
             organization_id: None,
-            event: Box::new(DirectEvent::new(channel("ai"), EventContent::text(text))),
+            event: Box::new(DirectEvent::new(channel("ai"), TextContent::new(text))),
         }
     }
 
@@ -1555,7 +1555,7 @@ mod an_arrival_from_a_delivery {
                     }
                     let keyed = || {
                         let mut event =
-                            DirectEvent::new(channel("ai"), EventContent::text("Checking."));
+                            DirectEvent::new(channel("ai"), TextContent::new("Checking."));
                         event.idempotency_key = Some("thought_1".to_owned());
                         Entry::Direct {
                             room_id: room_id(),
@@ -1601,7 +1601,7 @@ mod an_arrival_from_a_delivery {
                     let refused = || Entry::Direct {
                         room_id: room_id(),
                         organization_id: None,
-                        event: Box::new(DirectEvent::new(channel("api"), EventContent::text("x"))),
+                        event: Box::new(DirectEvent::new(channel("api"), TextContent::new("x"))),
                     };
                     let mut entries: Vec<Entry> = (0..20).map(|_| thought("Checking.")).collect();
                     entries.extend((0..3).map(|_| refused()));

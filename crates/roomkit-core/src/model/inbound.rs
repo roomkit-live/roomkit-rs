@@ -75,11 +75,15 @@ pub struct InboundMessage {
 
 impl InboundMessage {
     /// A message with the RFC defaults: a `message` event visible to all.
-    pub fn new(channel_id: ChannelId, sender_id: impl Into<String>, content: EventContent) -> Self {
+    pub fn new(
+        channel_id: ChannelId,
+        sender_id: impl Into<String>,
+        content: impl Into<EventContent>,
+    ) -> Self {
         Self {
             channel_id,
             sender_id: sender_id.into(),
-            content,
+            content: content.into(),
             event_type: EventType::Message,
             external_id: None,
             thread_id: None,

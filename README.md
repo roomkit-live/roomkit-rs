@@ -84,7 +84,7 @@ documentation of each crate shows its own setup, compiled as a doctest.
 The kit's calls on their own, with the crate's test channels:
 
 ```rust
-use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{CreateRoomOptions, ProcessInboundOptions, RoomKit};
 
@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     kit.attach_channel(&room, sms.id(), Default::default()).await?;
     kit.attach_channel(&room, agent.id(), Default::default()).await?;
 
-    let message = InboundMessage::new(sms.id().clone(), "+15551234567", EventContent::text("Bonjour"));
+    let message = InboundMessage::new(sms.id().clone(), "+15551234567", TextContent::new("Bonjour"));
     kit.process_inbound(message, ProcessInboundOptions { room_id: Some(room), ..Default::default() }).await?;
     assert_eq!(sms.texts(), ["You said: Bonjour"]);
     kit.close().await?;

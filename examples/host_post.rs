@@ -29,7 +29,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, EventContent, InboundMessage, Metadata, Participant, ParticipantId, RoomId,
+    ChannelId, InboundMessage, Metadata, Participant, ParticipantId, RoomId, TextContent,
 };
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, InboundError, KitError,
@@ -107,7 +107,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     open_order(&kit, &room, &sms, &assistant).await?;
 
     // 1. The backend's notice: texted to the customer, no agent answers it.
-    let notice = || EventContent::text("Your order shipped.");
+    let notice = || TextContent::new("Your order shipped.");
     let shipped = || PostOptions {
         idempotency_key: Some("shipped-1042".to_owned()),
         ..Default::default()
@@ -117,7 +117,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let question = InboundMessage::new(
         sms.id().clone(),
         CUSTOMER,
-        EventContent::text("Where is my order?"),
+        TextContent::new("Where is my order?"),
     );
     let into_room = ProcessInboundOptions {
         room_id: Some(room.clone()),
@@ -132,7 +132,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     };
     kit.post(
         &room,
-        EventContent::text("Confirm the delivery address with the customer."),
+        TextContent::new("Confirm the delivery address with the customer."),
         ask,
     )
     .await?;
@@ -144,11 +144,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     };
     let refused = kit
-        .post(
-            &room,
-            EventContent::text("I cancel my order."),
-            impersonating,
-        )
+        .post(&room, TextContent::new("I cancel my order."), impersonating)
         .await;
     // What the posts started runs in the background: the kit's close lets
     // it finish.

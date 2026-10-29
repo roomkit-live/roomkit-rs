@@ -11,8 +11,8 @@
 //! and every lock released.
 
 use roomkit_core::model::{
-    Access, ChannelBinding, ChannelType, ErrorRecord, EventContent, Identity, IdentityId,
-    InboundMessage, Participant, ParticipantId, Room, RoomId, RoomStatus, RoomTimers, Timestamp,
+    Access, ChannelBinding, ChannelType, ErrorRecord, Identity, IdentityId, InboundMessage,
+    Participant, ParticipantId, Room, RoomId, RoomStatus, RoomTimers, TextContent, Timestamp,
 };
 use roomkit_core::ops::{FrameworkEvent, InboundError, InboundResult};
 use roomkit_core::rules::hook_registry::HookTrigger;
@@ -25,7 +25,7 @@ const OTHER: &str = "+15550000009";
 
 /// A message from `sender` on `channel_id`.
 fn message_from(channel_id: &str, sender: &str, text: &str) -> InboundMessage {
-    InboundMessage::new(channel(channel_id), sender, EventContent::text(text))
+    InboundMessage::new(channel(channel_id), sender, TextContent::new(text))
 }
 
 /// `room_1` with an SMS channel bound naming no one, which the router

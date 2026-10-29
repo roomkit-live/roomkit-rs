@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ChannelType, EventContent, HookResult,
-    InboundMessage, Metadata, RoomContext, RoomEvent, RoomId,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, HookResult, InboundMessage, Metadata,
+    RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::transcript::Role;
@@ -97,7 +97,7 @@ impl Room {
     }
 
     pub(crate) async fn says(&self, text: &str) -> InboundResult {
-        let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text(text));
+        let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new(text));
         self.kit
             .process_inbound(
                 message,
@@ -220,7 +220,7 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
                 .send_event(
                     &room_id(),
                     &channel("sms"),
-                    EventContent::text("called"),
+                    TextContent::new("called"),
                     post,
                 )
                 .await
@@ -233,7 +233,7 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
         }
     })
     .unwrap();
-    let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Go"));
+    let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new("Go"));
     kit.process_inbound(
         message,
         ProcessInboundOptions {
@@ -330,7 +330,7 @@ pub(crate) async fn two_agents(rounds: usize) -> usize {
             .await
             .unwrap();
     }
-    let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Go"));
+    let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new("Go"));
     kit.process_inbound(
         message,
         ProcessInboundOptions {
@@ -399,12 +399,7 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
                         // Past the budget the call is refused, its event
                         // stored refused.
                         let _sent = kit
-                            .send_event(
-                                &room_id(),
-                                &channel("sms"),
-                                EventContent::text("Echo"),
-                                echo,
-                            )
+                            .send_event(&room_id(), &channel("sms"), TextContent::new("Echo"), echo)
                             .await;
                     }
                     Ok(HookResult::allow())
@@ -427,7 +422,7 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
                                 ..Default::default()
                             };
                             // Past the hook calls the post is stored refused.
-                            let echo = EventContent::text("Echo");
+                            let echo = TextContent::new("Echo");
                             let _posted = kit.post(&room_id(), echo, post).await;
                         }
                     }
@@ -436,7 +431,7 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
             .unwrap();
         }
     }
-    let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Go"));
+    let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new("Go"));
     kit.process_inbound(
         message,
         ProcessInboundOptions {

@@ -46,10 +46,10 @@ use std::time::Duration;
 
 use roomkit_core::model::{
     Access, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelMediaType, ChannelOutput, ChannelType, DirectEvent, ErrorRecord, EventContent,
-    EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates, HookResult,
-    Identity, InboundMessage, Metadata, Observation, Participant, ParticipantId, Room, RoomContext,
-    RoomEvent, RoomId, RoomStatus, RoomUpdates, Task, Timestamp,
+    ChannelMediaType, ChannelOutput, ChannelType, DirectEvent, ErrorRecord, EventDirection,
+    EventId, EventSource, EventStatus, EventType, EventUpdates, HookResult, Identity,
+    InboundMessage, Metadata, Observation, Participant, ParticipantId, Room, RoomContext,
+    RoomEvent, RoomId, RoomStatus, RoomUpdates, Task, TextContent, Timestamp,
 };
 use roomkit_core::ops::{
     ChannelDeclaration, ChannelOutcome, ChannelRequest, CommitRecord, Decided, DeleteEvent, Effect,
@@ -636,11 +636,7 @@ impl Sim {
 
     /// A text message from `+15551234567` on `channel_id`.
     pub(crate) fn message(channel_id: &str, text: &str) -> InboundMessage {
-        InboundMessage::new(
-            channel(channel_id),
-            "+15551234567",
-            EventContent::text(text),
-        )
+        InboundMessage::new(channel(channel_id), "+15551234567", TextContent::new(text))
     }
 
     /// Runs `message` into `room_1` through the inbound operation, for a
@@ -1919,7 +1915,7 @@ pub(crate) fn response(channel_id: &str, event: &RoomEvent, text: &str) -> RoomE
             ChannelType::AI,
             EventDirection::Outbound,
         ),
-        EventContent::text(text),
+        TextContent::new(text).into(),
         event.created_at,
     )
 }
@@ -1935,7 +1931,7 @@ pub(crate) fn notice_event(id: &str, text: &str) -> RoomEvent {
             ChannelType::SYSTEM,
             EventDirection::Outbound,
         ),
-        EventContent::text(text),
+        TextContent::new(text).into(),
         Timestamp::UNIX_EPOCH,
     )
 }

@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomEvent, RoomId,
-    ToolCallContent, ToolCallOutcome,
+    TextContent, ToolCallContent, ToolCallOutcome,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
@@ -89,7 +89,7 @@ async fn run() -> Result<ExitCode, Box<dyn Error>> {
     let message = InboundMessage::new(
         ChannelId::new("sms")?,
         "+15551234567",
-        EventContent::text("Where is order 42? Cancel it, and wipe my data."),
+        TextContent::new("Where is order 42? Cancel it, and wipe my data."),
     );
     let result = kit
         .process_inbound(

@@ -16,7 +16,7 @@
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::model::{ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, ChannelType, EventType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::RecordingTransport;
 use roomkit::{AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions};
 
@@ -47,7 +47,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         (sms.id(), "+15551234567", "Alice"),
     ] {
         println!("{sender} writes, signed {name:?}.");
-        let mut message = InboundMessage::new(channel.clone(), sender, EventContent::text("Hello"));
+        let mut message = InboundMessage::new(channel.clone(), sender, TextContent::new("Hello"));
         message
             .metadata
             .insert("sender_name".to_owned(), name.into());

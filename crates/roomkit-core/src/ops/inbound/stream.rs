@@ -28,8 +28,8 @@ use super::pass::{CommitPass, PassOrigin, PassResult};
 use super::queues::Lineage;
 use super::{InboundResult, stamp};
 use crate::model::{
-    ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventContent, EventDirection,
-    EventSource, EventType, RoomContext, RoomEvent, Visibility,
+    ChannelBinding, ChannelId, ChannelOutput, ErrorRecord, EventDirection, EventSource, EventType,
+    RoomContext, RoomEvent, TextContent, Visibility,
 };
 use crate::ops::Cx;
 use crate::ops::protocol::{
@@ -357,7 +357,7 @@ fn answer_plan(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Option<De
             responder.channel_type.clone(),
             EventDirection::Outbound,
         ),
-        EventContent::text(""),
+        TextContent::new("").into(),
         job.answers.created_at,
     );
     let answer = stamp::stamp_response(answer, responder, &job.answers, job.answers.id.clone());

@@ -410,8 +410,8 @@ fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
 #[cfg(test)]
 mod tests {
     use roomkit_core::model::{
-        ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource, EventType,
-        RoomEvent, RoomId, Timestamp,
+        ChannelId, ChannelType, EventDirection, EventId, EventSource, EventType, RoomEvent, RoomId,
+        TextContent, Timestamp,
     };
 
     use super::*;
@@ -431,7 +431,7 @@ mod tests {
             RoomId::new("room_1").unwrap(),
             EventType::Message,
             source,
-            EventContent::text("Hi"),
+            TextContent::new("Hi").into(),
             at,
         );
         let carried = CarriedRequest {

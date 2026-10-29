@@ -17,8 +17,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventType, InboundMessage, Metadata, ParticipantId,
-    RoomId,
+    ChannelId, ChannelType, EventType, InboundMessage, Metadata, ParticipantId, RoomId, TextContent,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
@@ -39,7 +38,7 @@ async fn text(
     from: &str,
     body: &str,
 ) -> Result<RoomId, Box<dyn Error>> {
-    let message = InboundMessage::new(channel.clone(), from, EventContent::text(body));
+    let message = InboundMessage::new(channel.clone(), from, TextContent::new(body));
     let result = kit
         .process_inbound(message, ProcessInboundOptions::default())
         .await?;

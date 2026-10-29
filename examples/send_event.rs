@@ -21,8 +21,8 @@ use std::process::ExitCode;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent,
-    RoomId,
+    EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent, RoomId,
+    TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -85,7 +85,7 @@ impl Agent {
             event.room_id.clone(),
             EventType::Message,
             source,
-            EventContent::text("Your refund was issued yesterday."),
+            TextContent::new("Your refund was issued yesterday.").into(),
             event.created_at,
         )
     }
@@ -116,7 +116,7 @@ impl Channel for Agent {
             }
             // A call from a turn into its own room returns at its decision.
             let kit = kit.ok_or("the kit was dropped")?;
-            let note = EventContent::text("Let me check your refund...");
+            let note = TextContent::new("Let me check your refund...");
             let sent = kit
                 .send_event(&event.room_id, &agent, note, SendEventOptions::default())
                 .await?;
@@ -156,7 +156,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let mut checks = Checks::default();
 
     println!("The back office tells the customer their order shipped, and retries.");
-    let shipped = || EventContent::text("Your order #42 has shipped.");
+    let shipped = || TextContent::new("Your order #42 has shipped.");
     let keyed = || SendEventOptions {
         idempotency_key: Some("order_42_shipped".to_owned()),
         ..Default::default()
@@ -184,7 +184,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .send_event(
             &room,
             crm.id(),
-            EventContent::text("Account updated."),
+            TextContent::new("Account updated."),
             SendEventOptions::default(),
         )
         .await;
@@ -201,7 +201,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let question = InboundMessage::new(
         customer.id().clone(),
         "+15551234567",
-        EventContent::text("Where is my refund?"),
+        TextContent::new("Where is my refund?"),
     );
     kit.process_inbound(
         question,

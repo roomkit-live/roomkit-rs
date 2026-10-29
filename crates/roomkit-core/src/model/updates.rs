@@ -246,6 +246,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::model::TextContent;
     use crate::model::{
         ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventDirection, EventId,
         EventType, RoomId,
@@ -339,7 +340,7 @@ mod tests {
                 ChannelType::WHATSAPP,
                 EventDirection::Inbound,
             ),
-            EventContent::text("I need 5000$"),
+            TextContent::new("I need 5000$").into(),
             Timestamp::UNIX_EPOCH,
         );
         event.metadata.insert("crm".to_owned(), json!("c_1"));
@@ -371,14 +372,14 @@ mod tests {
     fn an_event_update_keeps_what_it_does_not_name() {
         let mut stored = event();
         let update = EventUpdates {
-            content: Some(EventContent::text("I need 50000$")),
+            content: Some(TextContent::new("I need 50000$").into()),
             ..EventUpdates::default()
         };
         update.apply(&mut stored);
         assert_eq!(
             (stored.content, stored.metadata, stored.source),
             (
-                EventContent::text("I need 50000$"),
+                TextContent::new("I need 50000$").into(),
                 event().metadata,
                 event().source
             )

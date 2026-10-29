@@ -8,7 +8,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, ChannelType, EventType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
@@ -112,7 +112,7 @@ async fn names_that_read_alike_are_ranked_as_the_python_implementation_ranks_the
         .await
         .unwrap();
     for (from, sender, name, _) in SENT {
-        let mut message = InboundMessage::new(channel(from), sender, EventContent::text("hi"));
+        let mut message = InboundMessage::new(channel(from), sender, TextContent::new("hi"));
         if let Some(name) = name {
             message
                 .metadata

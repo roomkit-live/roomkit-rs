@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    ErrorRecord, EventContent, Identity, IdentityId, InboundMessage, Participant, ParticipantId,
-    RoomContext, RoomEvent, RoomId, Timestamp,
+    ErrorRecord, Identity, IdentityId, InboundMessage, Participant, ParticipantId, RoomContext,
+    RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{EchoAgent, SequentialEnvironment, kit_with_environment};
 use roomkit::{
@@ -162,7 +162,7 @@ fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Provider) {
 }
 
 fn message(from: &str, text: &str) -> InboundMessage {
-    InboundMessage::new(channel("sms"), from, EventContent::text(text))
+    InboundMessage::new(channel("sms"), from, TextContent::new(text))
 }
 
 /// Routes `message` and returns the room it landed in.
@@ -613,7 +613,7 @@ async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
         .unwrap();
         let in_the_chat = |author: &str, text: &str| {
             let mut message =
-                InboundMessage::new(channel_id.clone(), author, EventContent::text(text));
+                InboundMessage::new(channel_id.clone(), author, TextContent::new(text));
             message
                 .metadata
                 .insert(chat_key.to_owned(), (-100_777).into());
@@ -623,7 +623,7 @@ async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
         let second = routed(&kit, in_the_chat("4343", "Hello")).await;
         // Without its chat, a message names no conversation: not its
         // author's, whose replies go to the chat.
-        let unchatted = InboundMessage::new(channel_id.clone(), "4242", EventContent::text("Hey"));
+        let unchatted = InboundMessage::new(channel_id.clone(), "4242", TextContent::new("Hey"));
         let third = routed(&kit, unchatted).await;
         answered.push((first == second, first == third, chat_channel.sent()));
     }
@@ -669,7 +669,7 @@ async fn a_room_the_host_opened_for_a_chat_id_is_the_chat_s() {
         kit.attach_channel(&room("chat-room"), &channel("tg"), options)
             .await
             .unwrap();
-        let mut message = InboundMessage::new(channel("tg"), "7", EventContent::text("Hi"));
+        let mut message = InboundMessage::new(channel("tg"), "7", TextContent::new("Hi"));
         message.metadata.insert("chat_id".to_owned(), "7".into());
         let landed_in = routed(&kit, message).await;
         let recorded = kit

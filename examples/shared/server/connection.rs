@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures_util::stream::{FuturesUnordered, SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use roomkit::model::{EventContent, InboundMessage, ParticipantId, RoomId};
+use roomkit::model::{InboundMessage, ParticipantId, RoomId, TextContent};
 use roomkit::{DeliveryHandle, InboundResult, KitError, ProcessInboundOptions};
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -236,7 +236,7 @@ impl App {
         let message = InboundMessage::new(
             self.websocket.id().clone(),
             user.as_str(),
-            EventContent::text(text),
+            TextContent::new(text),
         );
         let options = ProcessInboundOptions {
             room_id: Some(room_id.clone()),

@@ -54,7 +54,7 @@ mod tests {
 
     use super::*;
     use crate::model::{
-        ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType, Timestamp,
+        ChannelId, ChannelType, EventDirection, EventSource, EventType, TextContent, Timestamp,
     };
 
     fn event(id: &str, room: &str, parent: Option<&str>) -> RoomEvent {
@@ -67,7 +67,7 @@ mod tests {
                 ChannelType::SMS,
                 EventDirection::Inbound,
             ),
-            EventContent::text("hi"),
+            TextContent::new("hi").into(),
             Timestamp::UNIX_EPOCH,
         );
         event.parent_event_id = parent.map(|parent| EventId::new(parent).unwrap());

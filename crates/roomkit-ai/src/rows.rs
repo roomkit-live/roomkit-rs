@@ -10,7 +10,7 @@ use std::task::{Context, Poll};
 use futures_core::Stream;
 use roomkit::model::{
     ChannelOutput, ErrorRecord, EventContent, EventSource, EventType, Metadata, RoomEvent,
-    ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    TextContent, ToolCall, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::{ChannelError, ResponseItem, ResponseStream};
 use serde_json::Value;
@@ -92,7 +92,7 @@ impl Rows<'_> {
             return;
         }
         self.last_message = Some(self.events.len());
-        self.push(EventType::Message, EventContent::text(text));
+        self.push(EventType::Message, TextContent::new(text).into());
     }
 
     /// The turn's record on its last MESSAGE: its final text's, or the last

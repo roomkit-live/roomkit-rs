@@ -39,7 +39,7 @@ use std::time::Duration;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventType, InboundMessage, RoomContext, RoomEvent, RoomId,
+    EventType, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -223,7 +223,7 @@ async fn ask(
     number: &str,
     text: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let message = InboundMessage::new(sms.id().clone(), number, EventContent::text(text));
+    let message = InboundMessage::new(sms.id().clone(), number, TextContent::new(text));
     let result = kit
         .process_inbound(
             message,

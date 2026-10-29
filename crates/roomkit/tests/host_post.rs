@@ -17,7 +17,7 @@ use roomkit::model::{
     ChannelMediaType, ChannelOutput, ChannelType, EventContent, EventDirection, EventId,
     EventSource, EventType, EventUpdates, HookResult, Identity, IdentityId, InboundMessage,
     Metadata, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId,
-    RoomUpdates, Task, Timestamp,
+    RoomUpdates, Task, TextContent, Timestamp,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
@@ -43,7 +43,7 @@ fn room_id() -> RoomId {
 }
 
 fn text(body: &str) -> EventContent {
-    EventContent::text(body)
+    TextContent::new(body).into()
 }
 
 /// An SMS provider: it delivers to the binding's `phone_number`, and

@@ -316,6 +316,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::model::TextContent;
 
     fn event() -> RoomEvent {
         RoomEvent::new(
@@ -327,7 +328,7 @@ mod tests {
                 ChannelType::SMS,
                 EventDirection::Inbound,
             ),
-            EventContent::text("Bonjour"),
+            TextContent::new("Bonjour").into(),
             Timestamp::UNIX_EPOCH,
         )
     }

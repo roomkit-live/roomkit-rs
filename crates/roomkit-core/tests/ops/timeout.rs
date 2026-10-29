@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use roomkit_core::model::{
     ChannelType, EditContent, EditSource, EventContent, EventStatus, EventType, HookResult,
-    InboundMessage, InjectedEvent, RoomId, Task, TaskId, Timestamp,
+    InboundMessage, InjectedEvent, RoomId, Task, TaskId, TextContent, Timestamp,
 };
 use roomkit_core::ops::{FrameworkEvent, InboundResult};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -355,10 +355,10 @@ mod expiring_during {
         let mut edit = InboundMessage::new(
             channel("sms"),
             "+15551234567",
-            EventContent::Edit(
-                EditContent::new("evt_404".parse().unwrap(), EventContent::text("Bonsoir"))
-                    .with_edit_source(EditSource::Sender),
-            ),
+            EventContent::Edit(EditContent {
+                edit_source: Some(EditSource::Sender),
+                ..EditContent::new("evt_404".parse().unwrap(), TextContent::new("Bonsoir"))
+            }),
         );
         edit.event_type = EventType::Edit;
         let sim = under_the_lock_while("get_event", edit);

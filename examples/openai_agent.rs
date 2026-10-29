@@ -20,7 +20,7 @@
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::RecordingTransport;
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, text_of};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -74,8 +74,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         (&web, "visitor-7", "Bob", "Can I pick up two loaves at 5?"),
     ] {
         println!("{name} writes on {}: {text:?}", channel.id());
-        let mut message =
-            InboundMessage::new(channel.id().clone(), sender, EventContent::text(text));
+        let mut message = InboundMessage::new(channel.id().clone(), sender, TextContent::new(text));
         message
             .metadata
             .insert("sender_name".to_owned(), name.into());

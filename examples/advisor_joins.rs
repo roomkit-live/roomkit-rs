@@ -20,7 +20,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    Access, ChannelId, ChannelType, EventContent, InboundMessage, RoomId, Visibility,
+    Access, ChannelId, ChannelType, InboundMessage, RoomId, TextContent, Visibility,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -112,7 +112,7 @@ impl Conversation {
         text: &str,
     ) -> Result<(), Box<dyn Error>> {
         println!("{sender} writes {text:?}.");
-        let message = InboundMessage::new(on.id().clone(), sender, EventContent::text(text));
+        let message = InboundMessage::new(on.id().clone(), sender, TextContent::new(text));
         self.kit
             .process_inbound(
                 message,

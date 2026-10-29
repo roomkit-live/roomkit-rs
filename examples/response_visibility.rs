@@ -32,8 +32,8 @@ use std::process::ExitCode;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent,
-    RoomId, Visibility,
+    EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent, RoomId,
+    TextContent, Visibility,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -74,7 +74,7 @@ impl Assistant {
             question.room_id.clone(),
             EventType::Message,
             source,
-            EventContent::text(text),
+            TextContent::new(text).into(),
             question.created_at,
         )
     }
@@ -104,7 +104,7 @@ impl Channel for Assistant {
 fn message(from: &RecordingTransport, text: &str, visibility: Visibility) -> InboundMessage {
     InboundMessage {
         visibility,
-        ..InboundMessage::new(from.id().clone(), "user", EventContent::text(text))
+        ..InboundMessage::new(from.id().clone(), "user", TextContent::new(text))
     }
 }
 

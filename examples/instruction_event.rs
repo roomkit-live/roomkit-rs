@@ -18,7 +18,7 @@
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::model::{ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, ChannelType, EventType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, InboundResult, ProcessInboundOptions, text_of,
@@ -51,7 +51,7 @@ fn instruction(
         event_type: EventType::Instruction,
         addressed_to: Some(vec![advisor.clone()]),
         standalone,
-        ..InboundMessage::new(app.clone(), "app", EventContent::text(text))
+        ..InboundMessage::new(app.clone(), "app", TextContent::new(text))
     }
 }
 
@@ -90,7 +90,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let customer = InboundMessage::new(
         sms.id().clone(),
         "+15551234567",
-        EventContent::text("I'd like to check my balance."),
+        TextContent::new("I'd like to check my balance."),
     );
     run(customer).await?;
     run(instruction(app.id(), advisor.id(), SUMMARIZE, false)).await?;

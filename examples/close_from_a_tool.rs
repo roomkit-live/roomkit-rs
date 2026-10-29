@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventContent, InboundMessage, RoomId,
+    ChannelCategory, ChannelDirection, ChannelId, ChannelType, InboundMessage, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -99,7 +99,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let message = InboundMessage::new(
         ChannelId::new("sms")?,
         "+15551234567",
-        EventContent::text("Shut the service down for maintenance."),
+        TextContent::new("Shut the service down for maintenance."),
     );
     let options = ProcessInboundOptions {
         room_id: Some(room.clone()),

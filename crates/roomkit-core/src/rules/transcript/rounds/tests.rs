@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::{ToolRound, tool_rounds};
 use crate::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource, EventType,
-    RoomEvent, RoomId, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    RoomEvent, RoomId, TextContent, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use crate::rules::transcript::Role;
 
@@ -286,7 +286,7 @@ fn a_deleted_start_row_ends_its_round() {
             .metadata
             .insert("deleted".to_owned(), Value::Bool(true));
         if withheld {
-            deleted.content = EventContent::text("");
+            deleted.content = TextContent::new("").into();
         }
         let answered = |index, id: &str| {
             end(

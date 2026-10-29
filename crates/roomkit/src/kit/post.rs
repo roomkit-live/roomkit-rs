@@ -51,9 +51,10 @@ impl<S: ConversationStore> RoomKit<S> {
     pub async fn post(
         &self,
         room_id: &RoomId,
-        content: EventContent,
+        content: impl Into<EventContent>,
         options: PostOptions,
     ) -> Result<RoomEvent, KitError> {
+        let content = content.into();
         if options.channel_id.is_none() {
             self.register_host_channel()?;
         }

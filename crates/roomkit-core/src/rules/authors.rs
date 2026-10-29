@@ -627,7 +627,7 @@ mod tests {
 
     use super::*;
     use crate::model::{
-        ChannelId, EventContent, EventDirection, EventId, EventSource, ParticipantId, Room, RoomId,
+        ChannelId, EventDirection, EventId, EventSource, ParticipantId, Room, RoomId, TextContent,
         Timestamp,
     };
 
@@ -656,7 +656,7 @@ mod tests {
             RoomId::new("room_1").unwrap(),
             crate::model::EventType::Message,
             source,
-            EventContent::text("hi"),
+            TextContent::new("hi").into(),
             Timestamp::UNIX_EPOCH,
         );
         if let Some(name) = name {

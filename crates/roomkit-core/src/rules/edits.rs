@@ -387,7 +387,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::model::{EventSource, RoomId, Timestamp};
+    use crate::model::{EventSource, RoomId, TextContent, Timestamp};
 
     const ALICE: &str = "+15550000001";
     const BOB: &str = "+15550000002";
@@ -413,7 +413,7 @@ mod tests {
             RoomId::new("room_1").unwrap(),
             EventType::Message,
             source,
-            EventContent::text("I need 5000$"),
+            TextContent::new("I need 5000$").into(),
             Timestamp::UNIX_EPOCH,
         );
         event.status = EventStatus::Delivered;
@@ -427,7 +427,7 @@ mod tests {
     fn edit_content(source: Option<EditSource>) -> EventContent {
         EventContent::Edit(EditContent {
             target_event_id: EventId::new("evt_3").unwrap(),
-            new_content: Box::new(EventContent::text("I need 50000$")),
+            new_content: Box::new(TextContent::new("I need 50000$").into()),
             edit_source: source,
         })
     }
@@ -534,7 +534,11 @@ mod tests {
 
         #[test]
         fn of_an_edit_type_without_its_content_names_no_target() {
-            let bare = change(EventType::Edit, EventContent::text("Oops"), Some(ALICE));
+            let bare = change(
+                EventType::Edit,
+                TextContent::new("Oops").into(),
+                Some(ALICE),
+            );
             assert_eq!(mutation(&bare), Err(EditRefusal::TargetNotFound));
         }
 
@@ -570,7 +574,7 @@ mod tests {
 
         #[test]
         fn of_a_message_whose_composite_holds_an_edit_names_no_target() {
-            let parts = vec![EventContent::text("Hi"), edit_content(None)];
+            let parts = vec![TextContent::new("Hi").into(), edit_content(None)];
             let smuggled = change(
                 EventType::Message,
                 EventContent::Composite(crate::model::CompositeContent::new(parts).unwrap()),
@@ -581,7 +585,10 @@ mod tests {
 
         #[test]
         fn of_a_message_whose_composite_holds_no_change_is_none() {
-            let parts = vec![EventContent::text("Hi"), EventContent::text("there")];
+            let parts = vec![
+                TextContent::new("Hi").into(),
+                TextContent::new("there").into(),
+            ];
             let composite = change(
                 EventType::Message,
                 EventContent::Composite(crate::model::CompositeContent::new(parts).unwrap()),
@@ -1119,7 +1126,7 @@ mod tests {
             assert_eq!(
                 (edited.content, Value::Object(edited.metadata)),
                 (
-                    EventContent::text("I need 50000$"),
+                    TextContent::new("I need 50000$").into(),
                     json!({ "crm": "c_1", "edited": true })
                 )
             );
@@ -1136,7 +1143,7 @@ mod tests {
                 ),
                 (
                     true,
-                    EventContent::text("I need 5000$"),
+                    TextContent::new("I need 5000$").into(),
                     json!({ "crm": "c_1", "deleted": true })
                 )
             );

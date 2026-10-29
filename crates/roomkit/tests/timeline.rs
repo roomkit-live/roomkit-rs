@@ -5,7 +5,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{ChannelId, ChannelType, EventContent, HookResult, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId, TextContent};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, GetTimelineOptions, KitError, ProcessInboundOptions,
@@ -40,8 +40,7 @@ async fn a_room_that_refused_one_message() -> RoomKit {
     })
     .unwrap();
     for text in ["one", "spam", "two", "three"] {
-        let message =
-            InboundMessage::new(sms.id().clone(), "+15551234567", EventContent::text(text));
+        let message = InboundMessage::new(sms.id().clone(), "+15551234567", TextContent::new(text));
         kit.process_inbound(
             message,
             ProcessInboundOptions {

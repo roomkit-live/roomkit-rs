@@ -15,8 +15,8 @@
 //! a call's start and end by (RFC §6.4).
 
 use roomkit_core::model::{
-    EventContent, EventId, EventSource, EventType, Metadata, RoomEvent, ToolCallContent,
-    ToolCallOutcome, ToolCallStatus,
+    EventContent, EventId, EventSource, EventType, Metadata, RoomEvent, TextContent,
+    ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -215,7 +215,7 @@ impl Segments {
         if text.trim().is_empty() {
             return None;
         }
-        let mut row = self.draft(EventType::Message, EventContent::text(text));
+        let mut row = self.draft(EventType::Message, TextContent::new(text).into());
         if let Some(record) = self.record.as_ref().filter(|_| self.owed) {
             row.metadata.extend(record.clone());
             if is_cancelled(record) {
@@ -273,7 +273,7 @@ mod tests {
                 ChannelType::SMS,
                 EventDirection::Inbound,
             ),
-            EventContent::text("Hi"),
+            TextContent::new("Hi").into(),
             Timestamp::from_unix_millis(0).unwrap(),
         );
         Segments::new(source, answers)

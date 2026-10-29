@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{DirectEvent, EventContent};
+use roomkit::model::{DirectEvent, TextContent};
 use roomkit::testing::TurnTap;
 use roomkit::{KitError, current_turn};
 use roomkit_ai::ToolOutput;
@@ -33,7 +33,7 @@ async fn observed() -> (roomkit::RoomKit, Arc<Notify>, Sent) {
         async move {
             waits.notified().await;
             let turn = current_turn().unwrap();
-            let note = DirectEvent::new(channel("sms"), EventContent::text("Following up."));
+            let note = DirectEvent::new(channel("sms"), TextContent::new("Following up."));
             let sent = turn.send_event(note).await;
             noted.lock().unwrap().push(match sent {
                 Ok(event) => Ok(event.chain_depth),
@@ -91,7 +91,7 @@ async fn sends_through_the_turn(sends: usize) -> (usize, Vec<u32>, usize) {
     let kit = kit(move |_call, _context| async move {
         let turn = current_turn().unwrap();
         for index in 0..sends {
-            let note = DirectEvent::new(channel("ai"), EventContent::text(format!("Note {index}")));
+            let note = DirectEvent::new(channel("ai"), TextContent::new(format!("Note {index}")));
             turn.send_event(note)
                 .await
                 .map_err(|error| roomkit_ai::ToolError::raised(&error))?;

@@ -12,8 +12,8 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventStatus, EventType,
-    HookResult, InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, Timestamp,
+    ChannelId, ChannelType, EventDirection, EventSource, EventStatus, EventType, HookResult,
+    InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -45,7 +45,7 @@ fn notice(text: &str, now: Timestamp) -> Result<RoomEvent, Box<dyn Error>> {
             ChannelType::SYSTEM,
             EventDirection::Outbound,
         ),
-        EventContent::text(text),
+        TextContent::new(text).into(),
         now,
     ))
 }
@@ -101,7 +101,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let message = InboundMessage::new(
         customer.id().clone(),
         "+15551234567",
-        EventContent::text("Mon NAS est 123-456-789"),
+        TextContent::new("Mon NAS est 123-456-789"),
     );
     let result = kit
         .process_inbound(

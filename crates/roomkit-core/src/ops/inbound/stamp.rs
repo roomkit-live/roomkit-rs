@@ -9,7 +9,7 @@
 use crate::model::{
     ChannelBinding, ChannelCategory, DeleteContent, DirectEvent, EditContent, ErrorRecord,
     EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, InboundMessage,
-    InjectedEvent, Metadata, ParticipantId, RoomEvent, RoomId, Timestamp, Visibility,
+    InjectedEvent, Metadata, ParticipantId, RoomEvent, RoomId, TextContent, Timestamp, Visibility,
 };
 use crate::ops::ChannelDeclaration;
 use crate::rules::{chain_depth, edits, instructions, permissions};
@@ -378,7 +378,7 @@ pub(crate) fn error_event(
         trigger.room_id.clone(),
         EventType::System,
         source,
-        EventContent::text(error.message.clone()),
+        TextContent::new(error.message.clone()).into(),
         now,
     );
     event.chain_depth = chain_depth::response_depth(trigger);
@@ -444,7 +444,7 @@ mod tests {
         let mut message = InboundMessage::new(
             ChannelId::new("sms").unwrap(),
             "+15551234567",
-            EventContent::text("Bonjour"),
+            TextContent::new("Bonjour"),
         );
         message.chain_depth = 2;
         message.idempotency_key = Some("SM1".to_owned());
@@ -674,11 +674,11 @@ mod tests {
     fn a_modified_payload_keeps_the_original_s_source() {
         let mut modified = trigger();
         modified.source.channel_id = ChannelId::new("ws_admin").unwrap();
-        modified.content = EventContent::text("[redacted]");
+        modified.content = TextContent::new("[redacted]").into();
         let kept = keep_identity(&trigger(), modified, &[]);
         assert_eq!(
             (kept.source.channel_id.as_str(), kept.content),
-            ("sms", EventContent::text("[redacted]"))
+            ("sms", TextContent::new("[redacted]").into())
         );
     }
 
@@ -726,7 +726,7 @@ mod tests {
         edit.event_type = EventType::Edit;
         edit.content = EventContent::Edit(EditContent {
             target_event_id: EventId::new(target).unwrap(),
-            new_content: Box::new(EventContent::text(text)),
+            new_content: Box::new(TextContent::new(text).into()),
             edit_source: Some(crate::model::EditSource::Sender),
         });
         edit
@@ -782,7 +782,7 @@ mod tests {
     #[test]
     fn a_text_in_place_of_an_edit_is_the_edit_s_new_content() {
         let mut text = edit_of("evt_1", "x");
-        text.content = EventContent::text("[redacted]");
+        text.content = TextContent::new("[redacted]").into();
         let kept = keep_identity(&edit_of("evt_3", "x"), text, &[]);
         assert_eq!(kept.content, edit_of("evt_3", "[redacted]").content);
     }
@@ -798,7 +798,7 @@ mod tests {
         });
         let smuggling = EventContent::Composite(
             crate::model::CompositeContent::new(vec![
-                EventContent::text("Hi"),
+                TextContent::new("Hi").into(),
                 edit_of("evt_9", "x").content,
             ])
             .unwrap(),
@@ -806,7 +806,7 @@ mod tests {
         let cases = [
             (edit_of("evt_3", "x").content, delete.clone()),
             (edit_of("evt_3", "x").content, smuggling),
-            (delete, EventContent::text("[redacted]")),
+            (delete, TextContent::new("[redacted]").into()),
         ];
         for (original, replacement) in cases {
             let mut event = trigger();
@@ -837,7 +837,7 @@ mod tests {
         let mut smuggled = trigger();
         smuggled.content = EventContent::Composite(
             crate::model::CompositeContent::new(vec![
-                EventContent::text("Hi"),
+                TextContent::new("Hi").into(),
                 edit_of("evt_3", "x").content,
             ])
             .unwrap(),

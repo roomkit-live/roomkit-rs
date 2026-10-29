@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType, HookResult,
-    InboundMessage, InjectedEvent, RoomEvent, RoomId, SystemContent,
+    InboundMessage, InjectedEvent, RoomEvent, RoomId, SystemContent, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -129,7 +129,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let says = async |on: &RecordingTransport, text: &str| -> Result<(), Box<dyn Error>> {
         println!("{} writes {text:?}.", on.id());
         let message =
-            InboundMessage::new(on.id().clone(), on.id().as_str(), EventContent::text(text));
+            InboundMessage::new(on.id().clone(), on.id().as_str(), TextContent::new(text));
         kit.process_inbound(
             message,
             ProcessInboundOptions {

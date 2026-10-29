@@ -150,7 +150,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use roomkit_core::model::{
         ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventContent, EventDirection,
-        EventId, EventSource, EventStatus, Room, RoomId, RoomUpdates, Timestamp, ToolCallContent,
+        EventId, EventSource, EventStatus, Room, RoomId, RoomUpdates, TextContent, Timestamp,
+        ToolCallContent,
     };
     use roomkit_core::ops::RoomCounters;
 
@@ -183,7 +184,7 @@ mod tests {
                     ChannelType::SMS,
                     EventDirection::Inbound,
                 ),
-                EventContent::text(format!("message {index}")),
+                TextContent::new(format!("message {index}")).into(),
             ),
             Some(channel) => (
                 EventType::ToolCallStart,
@@ -286,7 +287,7 @@ mod tests {
         delete.event_type = EventType::Delete;
         let store = store(vec![event(0, None), event(1, None), delete.clone()]).await;
         let mut copy = delete.clone();
-        copy.content = EventContent::text("[Message deleted]");
+        copy.content = TextContent::new("[Message deleted]").into();
         let agent = binding("agent", ChannelType::AI);
         let mut context = RoomContext::new(Room::new(room_id(), Timestamp::UNIX_EPOCH));
         context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];

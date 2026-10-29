@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelId, ChannelType, DeleteContent, EventContent, EventType, EventUpdates, IdentityId,
-    InboundMessage, RoomId, RoomUpdates, Timestamp,
+    InboundMessage, RoomId, RoomUpdates, TextContent, Timestamp,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{ConversationStore, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions};
@@ -409,7 +409,7 @@ async fn a_channel_python_detached_stays_detached() {
     let full = room("room-full");
     let mut results = Vec::new();
     for id in ["ws-gone", "ws-user"] {
-        let message = InboundMessage::new(channel(id), "user-1", EventContent::text("Still here"));
+        let message = InboundMessage::new(channel(id), "user-1", TextContent::new("Still here"));
         let result = kit
             .process_inbound(
                 message,
@@ -458,7 +458,7 @@ async fn what_python_reads_beside_the_timeline_is_kept_right() {
     let mut message = InboundMessage::new(
         channel("ws-user"),
         "user-1",
-        EventContent::text("searchable words"),
+        TextContent::new("searchable words"),
     );
     message.idempotency_key = Some("rust-key".to_owned());
     let event = kit

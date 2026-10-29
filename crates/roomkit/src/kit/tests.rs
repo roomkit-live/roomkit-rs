@@ -15,7 +15,7 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit_core::ops::{
     ChannelDeclaration, EffectId, Environment, FrameworkEvent, Next, Operation, Outcome,
@@ -47,7 +47,7 @@ fn message(text: &str) -> InboundMessage {
     InboundMessage::new(
         ChannelId::new("sms").unwrap(),
         "+15551234567",
-        EventContent::text(text),
+        TextContent::new(text),
     )
 }
 

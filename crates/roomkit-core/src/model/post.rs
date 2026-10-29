@@ -37,9 +37,9 @@ pub struct Post {
 impl Post {
     /// A post of `content`, from the kit's own host channel, addressing no
     /// agent, as the host itself.
-    pub fn new(content: EventContent) -> Self {
+    pub fn new(content: impl Into<EventContent>) -> Self {
         Self {
-            content,
+            content: content.into(),
             participant_id: None,
             addressed_to: Vec::new(),
             metadata: Metadata::new(),

@@ -33,7 +33,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
@@ -197,7 +197,7 @@ impl Shop {
         let message = InboundMessage::new(
             self.sms.id().clone(),
             "+15551234567",
-            EventContent::text(text),
+            TextContent::new(text),
         );
         self.kit
             .process_inbound(

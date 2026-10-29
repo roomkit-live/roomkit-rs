@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit_core::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType, RoomContext,
-    RoomEvent,
+    ChannelOutput, ChannelType, EventDirection, EventSource, EventType, RoomContext, RoomEvent,
+    TextContent,
 };
 use roomkit_core::ops::ChannelDeclaration;
 use roomkit_core::rules::transcoding::text_of;
@@ -213,7 +213,7 @@ impl EchoAgent {
             event.room_id.clone(),
             EventType::Message,
             source,
-            EventContent::text(text),
+            TextContent::new(text).into(),
             event.created_at,
         )
     }

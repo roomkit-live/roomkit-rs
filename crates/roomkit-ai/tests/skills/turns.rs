@@ -5,7 +5,9 @@
 //! (`tasks/probes/step4-m8/skills_m8_probe.out`).
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{EventContent, EventType, InboundMessage, ToolCallContent, ToolCallOutcome};
+use roomkit::model::{
+    EventContent, EventType, InboundMessage, TextContent, ToolCallContent, ToolCallOutcome,
+};
 use roomkit::{ProcessInboundOptions, SendEventOptions, ToolHookSpec, ToolVerdict};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiError, SkillRegistry, ToolDefinition, ToolOutput, ToolPolicy, Tools};
@@ -410,7 +412,7 @@ async fn a_turn_standing_alone_carries_no_active_skill_and_records_none() {
         .send_event(
             &room_id(),
             &channel("sms"),
-            EventContent::text("Summarize."),
+            TextContent::new("Summarize."),
             alone,
         )
         .await

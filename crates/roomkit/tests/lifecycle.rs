@@ -11,9 +11,8 @@ use std::time::Duration;
 
 use roomkit::model::{
     Access, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
-    ChannelType, EventContent, InboundMessage, Metadata, Participant, ParticipantId,
-    ParticipantStatus, RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, Timestamp,
-    Visibility,
+    ChannelType, InboundMessage, Metadata, Participant, ParticipantId, ParticipantStatus,
+    RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit::testing::{
     EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
@@ -48,7 +47,7 @@ fn after_start(seconds: i64) -> Timestamp {
 }
 
 fn message(from: &RecordingTransport, text: &str) -> InboundMessage {
-    InboundMessage::new(from.id().clone(), "+15551234567", EventContent::text(text))
+    InboundMessage::new(from.id().clone(), "+15551234567", TextContent::new(text))
 }
 
 /// A sequential environment the test keeps a handle on, to move the kit's
@@ -366,11 +365,8 @@ mod a_paused_conversation {
             .await
             .unwrap();
         let (paused, _) = paused_by_its_timer(&kit, &clock).await;
-        let other = InboundMessage::new(
-            sms.id().clone(),
-            "+15550000002",
-            EventContent::text("Me too"),
-        );
+        let other =
+            InboundMessage::new(sms.id().clone(), "+15550000002", TextContent::new("Me too"));
         let result = kit
             .process_inbound(other, ProcessInboundOptions::default())
             .await

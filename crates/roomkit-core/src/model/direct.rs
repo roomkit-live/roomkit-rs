@@ -58,10 +58,10 @@ pub struct DirectEvent {
 
 impl DirectEvent {
     /// A `message` event from `channel_id`, visible to all.
-    pub fn new(channel_id: ChannelId, content: EventContent) -> Self {
+    pub fn new(channel_id: ChannelId, content: impl Into<EventContent>) -> Self {
         Self {
             channel_id,
-            content,
+            content: content.into(),
             event_type: EventType::Message,
             participant_id: None,
             visibility: Visibility::All,

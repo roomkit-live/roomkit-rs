@@ -17,7 +17,7 @@ use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     DirectEvent, EventContent, EventType, HookResult, InboundMessage, RoomContext, RoomEvent,
-    RoomId, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    RoomId, TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -363,7 +363,7 @@ impl Room {
     }
 
     async fn says(&self, text: &str) -> InboundResult {
-        let message = InboundMessage::new(channel("web"), "alice", EventContent::text(text));
+        let message = InboundMessage::new(channel("web"), "alice", TextContent::new(text));
         let result = self
             .kit
             .process_inbound(
@@ -819,7 +819,7 @@ async fn an_event_a_tool_sends_is_stored_after_the_round_s_text_and_start() {
         let turn = context.turn().cloned();
         async move {
             if let Some(turn) = turn {
-                let note = DirectEvent::new(channel("web"), EventContent::text("Noted."));
+                let note = DirectEvent::new(channel("web"), TextContent::new("Noted."));
                 turn.send_event(note)
                     .await
                     .map_err(|error| roomkit_ai::ToolError::raised(&error))?;
@@ -965,7 +965,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
             .await
             .unwrap();
     }
-    let message = InboundMessage::new(channel("web"), "alice", EventContent::text("Hi"));
+    let message = InboundMessage::new(channel("web"), "alice", TextContent::new("Hi"));
     let calling = kit.clone();
     let caller = tokio::spawn(async move {
         calling
@@ -1049,7 +1049,7 @@ async fn the_default_deliver_stream_delivers_each_row_once_the_stream_is_over() 
             .await
             .unwrap();
     }
-    let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text("Hi"));
+    let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new("Hi"));
     kit.process_inbound(
         message,
         ProcessInboundOptions {

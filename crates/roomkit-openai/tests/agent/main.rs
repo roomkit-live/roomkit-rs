@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, ChannelType, ErrorRecord, EventContent, EventType, InboundMessage, RoomEvent,
-    RoomId, Timestamp,
+    ChannelId, ChannelType, ErrorRecord, EventType, InboundMessage, RoomEvent, RoomId, TextContent,
+    Timestamp,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
@@ -124,7 +124,7 @@ impl Room {
         text: &str,
     ) -> InboundResult {
         let mut message =
-            InboundMessage::new(transport.id().clone(), sender, EventContent::text(text));
+            InboundMessage::new(transport.id().clone(), sender, TextContent::new(text));
         message
             .metadata
             .insert("sender_name".to_owned(), name.into());
@@ -285,7 +285,7 @@ async fn the_answer_becomes_the_agent_s_response() {
 async fn two_senders_with_no_name_on_one_number_are_labelled_apart() {
     let room = Room::new(vec![Reply::completion("Noted.")], API_KEY).await;
     for (sender, text) in [("+15550001", "Refund me"), ("+15550002", "Do not")] {
-        let message = InboundMessage::new(room.sms.id().clone(), sender, EventContent::text(text));
+        let message = InboundMessage::new(room.sms.id().clone(), sender, TextContent::new(text));
         room.kit
             .process_inbound(
                 message,
@@ -312,7 +312,7 @@ async fn an_instruction_is_sent_as_the_application_s_marked_input() {
         ..InboundMessage::new(
             room.web.id().clone(),
             "app",
-            EventContent::text("Greet the customer."),
+            TextContent::new("Greet the customer."),
         )
     };
     room.kit
@@ -407,7 +407,7 @@ async fn an_unreachable_endpoint_fails_the_turn_without_naming_its_url() {
             .await
             .unwrap();
     }
-    let message = InboundMessage::new(sms.id().clone(), "+15550001", EventContent::text("Hi"));
+    let message = InboundMessage::new(sms.id().clone(), "+15550001", TextContent::new("Hi"));
     let result = kit
         .process_inbound(
             message,

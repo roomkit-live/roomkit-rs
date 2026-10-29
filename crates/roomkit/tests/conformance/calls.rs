@@ -122,7 +122,7 @@ pub(crate) async fn call(
         }
         "send_event" => {
             let room = room_id(spec)?;
-            let (channel, content) = (channel_id(spec)?, field(spec, "content")?);
+            let (channel, content) = (channel_id(spec)?, field::<EventContent>(spec, "content")?);
             let options = send_event_options(spec)?;
             let outcome = run
                 .kit()
@@ -134,7 +134,7 @@ pub(crate) async fn call(
         }
         "post" => {
             let room = room_id(spec)?;
-            let content = field(spec, "content")?;
+            let content = field::<EventContent>(spec, "content")?;
             let options = post_options(spec)?;
             let outcome = run.kit().post(&room, content, options).await;
             let called = finish(run, name, outcome, dump);

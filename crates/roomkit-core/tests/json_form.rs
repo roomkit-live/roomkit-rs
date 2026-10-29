@@ -77,7 +77,7 @@ fn full_event() -> RoomEvent {
         room_id(),
         EventType::Message,
         source,
-        EventContent::text("Bonjour"),
+        TextContent::new("Bonjour").into(),
         at("2026-10-22T14:03:00Z"),
     );
     event.status = EventStatus::Delivered;
@@ -351,11 +351,8 @@ fn identity() {
 
 #[test]
 fn inbound_message() {
-    let mut message = InboundMessage::new(
-        channel("sms"),
-        "+15551234567",
-        EventContent::text("Bonjour"),
-    );
+    let mut message =
+        InboundMessage::new(channel("sms"), "+15551234567", TextContent::new("Bonjour"));
     message.idempotency_key = Some("msg_SM123".to_owned());
     message.addressed_to = Some(vec![channel("ai")]);
     message.response_visibility = Some(Visibility::Transport);
@@ -515,23 +512,26 @@ fn a_content_s_constructor_reads_as_its_minimal_form() {
     let built = [
         EventContent::Text(TextContent::new("Bonjour")),
         EventContent::Rich(RichContent::new("**Bonjour**")),
-        EventContent::Media(MediaContent::new("https://example.com/a.png", "image/png")),
+        EventContent::Media(MediaContent::new("https://example.com/a.png", "image/png").unwrap()),
         EventContent::Location(LocationContent::new(latitude, longitude)),
-        EventContent::Audio(AudioContent::new("https://example.com/a.ogg")),
-        EventContent::Video(VideoContent::new("https://example.com/a.mp4", "video/mp4")),
+        EventContent::Audio(AudioContent::new("https://example.com/a.ogg").unwrap()),
+        EventContent::Video(VideoContent::new("https://example.com/a.mp4").unwrap()),
         EventContent::System(SystemContent::new("Room paused")),
         EventContent::Template(TemplateContent::new("welcome")),
         EventContent::Edit(EditContent::new(
             target.clone(),
-            EventContent::text("Bonsoir"),
+            TextContent::new("Bonsoir"),
         )),
         EventContent::Delete(DeleteContent::new(target.clone())),
         EventContent::ToolCall(ToolCallContent::new("lookup", "call_1")),
-        EventContent::Edit(
-            EditContent::new(target.clone(), EventContent::text("Bonsoir"))
-                .with_edit_source(EditSource::System),
-        ),
-        EventContent::Delete(DeleteContent::new(target).with_delete_type(DeleteType::Admin)),
+        EventContent::Edit(EditContent {
+            edit_source: Some(EditSource::System),
+            ..EditContent::new(target.clone(), TextContent::new("Bonsoir"))
+        }),
+        EventContent::Delete(DeleteContent {
+            delete_type: DeleteType::Admin,
+            ..DeleteContent::new(target)
+        }),
     ];
     let minimal = [
         json!({ "type": "text", "body": "Bonjour" }),

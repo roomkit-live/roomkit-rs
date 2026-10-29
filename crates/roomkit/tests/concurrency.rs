@@ -18,8 +18,7 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventStatus, EventType, HookResult, InboundMessage,
-    RoomId,
+    ChannelId, ChannelType, EventStatus, EventType, HookResult, InboundMessage, RoomId, TextContent,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
@@ -99,7 +98,7 @@ async fn send_all(kit: RoomKit, task: usize) {
     for message in 0..MESSAGES {
         for index in 0..ROOMS {
             let sender = format!("+1555000000{task}");
-            let text = EventContent::text(sent(task, message));
+            let text = TextContent::new(sent(task, message));
             let inbound = InboundMessage::new(channel("sms"), sender, text);
             kit.process_inbound(
                 inbound,

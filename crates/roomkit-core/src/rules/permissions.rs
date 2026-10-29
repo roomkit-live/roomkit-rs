@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use crate::model::{
     AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelId, EventContent, EventId,
-    EventStatus, EventType, Metadata, RoomContext, RoomEvent, Visibility,
+    EventStatus, EventType, Metadata, RoomContext, RoomEvent, TextContent, Visibility,
 };
 use crate::rules::chain_depth;
 use crate::rules::edits::{self, Mutation};
@@ -187,9 +187,9 @@ fn withheld(event: &RoomEvent, deleted: &BTreeSet<&EventId>) -> RoomEvent {
     {
         // An edit keeps its form, marked deleted with its target or not:
         // what it said is its new content.
-        *edit.new_content = EventContent::text("");
+        *edit.new_content = TextContent::new("").into();
     } else if marked {
-        handed.content = EventContent::text("");
+        handed.content = TextContent::new("").into();
     } else {
         return handed;
     }
@@ -499,7 +499,7 @@ mod tests {
                 source.channel_type.clone(),
                 EventDirection::Inbound,
             ),
-            EventContent::text("hello"),
+            TextContent::new("hello").into(),
             Timestamp::UNIX_EPOCH,
         )
     }
@@ -667,7 +667,7 @@ mod tests {
         /// provider's payload.
         fn message() -> RoomEvent {
             let mut event = event_from(&transport("sms"));
-            event.content = EventContent::text("I need 5000$");
+            event.content = TextContent::new("I need 5000$").into();
             event.parent_event_id = Some(id("evt_0"));
             event
                 .source
@@ -696,7 +696,7 @@ mod tests {
             event.event_type = EventType::Edit;
             event.content = EventContent::Edit(EditContent {
                 target_event_id: id("evt_1"),
-                new_content: Box::new(EventContent::text(text)),
+                new_content: Box::new(TextContent::new(text).into()),
                 edit_source: Some(EditSource::Sender),
             });
             event
@@ -733,7 +733,10 @@ mod tests {
 
         #[test]
         fn a_deleted_event_reaches_a_reader_with_its_content_withheld() {
-            assert_eq!(history(vec![deleted()])[0].content, EventContent::text(""));
+            assert_eq!(
+                history(vec![deleted()])[0].content,
+                TextContent::new("").into()
+            );
         }
 
         /// The event keeps its place: the delete that follows names it, and
@@ -876,7 +879,7 @@ mod tests {
         ) -> RoomEvent {
             let mut event = event_from(source);
             event.id = EventId::new(id).unwrap();
-            event.content = EventContent::text(text);
+            event.content = TextContent::new(text).into();
             event.visibility = visibility;
             event
         }

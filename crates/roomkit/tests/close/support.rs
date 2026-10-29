@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -40,7 +40,7 @@ pub(crate) fn room_id() -> RoomId {
 }
 
 pub(crate) fn message(text: &str) -> InboundMessage {
-    InboundMessage::new(channel("sms"), "+15551234567", EventContent::text(text))
+    InboundMessage::new(channel("sms"), "+15551234567", TextContent::new(text))
 }
 
 pub(crate) fn into(room_id: RoomId) -> ProcessInboundOptions {

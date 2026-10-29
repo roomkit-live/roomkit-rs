@@ -16,7 +16,7 @@ use std::rc::Rc;
 use roomkit_core::model::{
     EditContent, EditSource, ErrorRecord, EventContent, EventStatus, EventType, HookResult,
     InboundMessage, InjectedEvent, Observation, ObservationId, ParticipantId, RoomContext,
-    RoomEvent, RoomStatus, Task, TaskId, Timestamp,
+    RoomEvent, RoomStatus, Task, TaskId, TextContent, Timestamp,
 };
 use roomkit_core::ops::{FrameworkEvent, InboundError, RefusedOperation};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -166,7 +166,7 @@ mod an_off_lock_hook {
             Box::new(|event| {
                 let mut redacted = event.clone();
                 if from_customer(event) {
-                    redacted.content = EventContent::text("[redacted]");
+                    redacted.content = TextContent::new("[redacted]").into();
                 }
                 HookOutcome::Returned(HookResult::modify(redacted))
             }),
@@ -344,10 +344,10 @@ mod an_off_lock_block {
         let mut edit = InboundMessage::new(
             channel("sms"),
             SENDER,
-            EventContent::Edit(
-                EditContent::new("evt_404".parse().unwrap(), EventContent::text("Bonsoir"))
-                    .with_edit_source(EditSource::Sender),
-            ),
+            EventContent::Edit(EditContent {
+                edit_source: Some(EditSource::Sender),
+                ..EditContent::new("evt_404".parse().unwrap(), TextContent::new("Bonsoir"))
+            }),
         );
         edit.event_type = EventType::Edit;
         let result = sim.send(edit).unwrap();
@@ -641,10 +641,10 @@ mod the_ticket {
         let mut edit = InboundMessage::new(
             channel("sms"),
             SENDER,
-            EventContent::Edit(
-                EditContent::new("evt_404".parse().unwrap(), EventContent::text("Bonsoir"))
-                    .with_edit_source(EditSource::Sender),
-            ),
+            EventContent::Edit(EditContent {
+                edit_source: Some(EditSource::Sender),
+                ..EditContent::new("evt_404".parse().unwrap(), TextContent::new("Bonsoir"))
+            }),
         );
         edit.event_type = EventType::Edit;
         sim.send(edit).unwrap();

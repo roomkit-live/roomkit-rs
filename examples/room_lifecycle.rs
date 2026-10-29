@@ -19,8 +19,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventType, InboundMessage, Room, RoomId, RoomStatus,
-    RoomTimers,
+    ChannelId, ChannelType, EventType, InboundMessage, Room, RoomId, RoomStatus, RoomTimers,
+    TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -80,7 +80,7 @@ impl Helpdesk {
         let message = InboundMessage::new(
             self.sms.id().clone(),
             "+15551234567",
-            EventContent::text(text),
+            TextContent::new(text),
         );
         Ok(self
             .kit

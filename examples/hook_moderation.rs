@@ -15,8 +15,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventStatus, HookResult, InboundMessage, RoomEvent,
-    RoomId,
+    ChannelId, ChannelType, EventStatus, HookResult, InboundMessage, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -96,7 +95,7 @@ fn moderate(kit: &RoomKit, ran: &Log<String>) -> Result<(), Box<dyn Error>> {
             // The replacement is the event every channel receives, and the
             // one the room stores.
             let modified = RoomEvent {
-                content: EventContent::text(clean),
+                content: TextContent::new(clean).into(),
                 ..event
             };
             Ok(HookResult::modify(modified).with_reason("phone number redacted"))
@@ -127,7 +126,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .await?;
 
     let says = async |text: &str| -> Result<InboundResult, Box<dyn Error>> {
-        let message = InboundMessage::new(user.id().clone(), "user", EventContent::text(text));
+        let message = InboundMessage::new(user.id().clone(), "user", TextContent::new(text));
         let result = kit
             .process_inbound(
                 message,

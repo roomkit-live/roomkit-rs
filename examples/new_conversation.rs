@@ -16,7 +16,7 @@
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::model::{ChannelId, EventContent, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, InboundMessage, RoomId, TextContent};
 use roomkit::testing::EchoAgent;
 use roomkit::{
     AttachChannelOptions, ConversationStore, FrameworkEvent, HookTrigger, ProcessInboundOptions,
@@ -36,7 +36,7 @@ async fn customer_says(
     text: &str,
 ) -> Result<RoomId, Box<dyn Error>> {
     println!("{from} writes {text:?}.");
-    let message = InboundMessage::new(sms.id().clone(), from, EventContent::text(text));
+    let message = InboundMessage::new(sms.id().clone(), from, TextContent::new(text));
     let result = kit
         .process_inbound(message, ProcessInboundOptions::default())
         .await?;

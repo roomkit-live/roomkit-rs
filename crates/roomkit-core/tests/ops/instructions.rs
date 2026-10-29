@@ -16,7 +16,7 @@ use std::rc::Rc;
 use roomkit_core::model::{
     ChannelId, ChannelOutput, EventContent, EventId, EventStatus, EventType, HookResult,
     InboundMessage, InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId,
-    Visibility,
+    TextContent, Visibility,
 };
 use roomkit_core::ops::{FrameworkEvent, InboundError, InboundResult, RefusedOperation};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -716,7 +716,7 @@ mod the_response {
         let mut sim = with_agent();
         hook_seeing(&mut sim, "rewrite", |event| {
             let mut rewritten = event.clone();
-            rewritten.content = EventContent::text("abc");
+            rewritten.content = TextContent::new("abc").into();
             HookResult::modify(rewritten)
         });
         sim.send(instruction()).unwrap();
@@ -1061,12 +1061,14 @@ mod a_hook_s_modify {
             }),
         );
         modifying(&mut sim, |event| {
-            event.content = EventContent::text("Introduce yourself briefly.");
+            event.content = TextContent::new("Introduce yourself briefly.").into();
         });
         sim.send(instruction()).unwrap();
         assert_eq!(
             handed.borrow().clone(),
-            [EventContent::text("Introduce yourself briefly.")]
+            [EventContent::from(TextContent::new(
+                "Introduce yourself briefly."
+            ))]
         );
     }
 }
@@ -1203,7 +1205,7 @@ mod after_a_locked_hook {
                         organization_id: None,
                         event: Box::new(DirectEvent::new(
                             channel("app"),
-                            EventContent::text("Noted"),
+                            TextContent::new("Noted"),
                         )),
                     })
                 }),

@@ -8,7 +8,7 @@ use std::{env, fs, process};
 use roomkit::RoomKit;
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomEvent, RoomId,
-    ToolCallContent,
+    TextContent, ToolCallContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -130,7 +130,7 @@ impl Room {
     }
 
     pub(crate) async fn says(&self, text: &str) -> InboundResult {
-        let message = InboundMessage::new(channel("sms"), "+15550001", EventContent::text(text));
+        let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new(text));
         self.kit
             .process_inbound(
                 message,

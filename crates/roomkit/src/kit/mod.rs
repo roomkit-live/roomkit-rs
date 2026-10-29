@@ -88,7 +88,7 @@ const PROCESS_INBOUND: &str = "process_inbound";
 ///
 /// ```no_run
 /// # async fn example(sms: impl roomkit::Channel) -> Result<(), Box<dyn std::error::Error>> {
-/// use roomkit::model::{ChannelId, EventContent, InboundMessage, RoomId};
+/// use roomkit::model::{ChannelId, InboundMessage, RoomId, TextContent};
 /// use roomkit::{CreateRoomOptions, ProcessInboundOptions, RoomKit};
 ///
 /// let kit = RoomKit::new(Default::default());
@@ -98,7 +98,7 @@ const PROCESS_INBOUND: &str = "process_inbound";
 /// kit.create_room(CreateRoomOptions { room_id: Some(room.clone()), ..Default::default() })
 ///     .await?;
 /// kit.attach_channel(&room, &channel, Default::default()).await?;
-/// let message = InboundMessage::new(channel, "+15551234567", EventContent::text("Bonjour"));
+/// let message = InboundMessage::new(channel, "+15551234567", TextContent::new("Bonjour"));
 /// let options = ProcessInboundOptions { room_id: Some(room), ..Default::default() };
 /// let result = kit.process_inbound(message, options).await?;
 /// # Ok(())

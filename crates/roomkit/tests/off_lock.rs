@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventStatus, EventType,
-    HookResult, InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, RoomStatus,
+    ChannelId, ChannelType, EventDirection, EventSource, EventStatus, EventType, HookResult,
+    InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, RoomStatus, TextContent,
     Timestamp,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
@@ -41,7 +41,7 @@ fn room_id() -> RoomId {
 }
 
 fn message(text: &str) -> InboundMessage {
-    InboundMessage::new(channel("sms"), "+15551234567", EventContent::text(text))
+    InboundMessage::new(channel("sms"), "+15551234567", TextContent::new(text))
 }
 
 /// A SYNC `BEFORE_BROADCAST` hook named `name`, off the room lock or under
@@ -284,7 +284,7 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
     .unwrap();
     let customer = sent(&kit, "Bonjour");
     tokio::time::timeout(BOUND, held.notified()).await.unwrap();
-    let advisor = InboundMessage::new(channel("ws"), "advisor", EventContent::text("Hello"));
+    let advisor = InboundMessage::new(channel("ws"), "advisor", TextContent::new("Hello"));
     let during = tokio::time::timeout(
         BOUND,
         kit.process_inbound(
@@ -445,7 +445,7 @@ fn notice(text: &str, now: Timestamp) -> RoomEvent {
             ChannelType::SYSTEM,
             EventDirection::Outbound,
         ),
-        EventContent::text(text),
+        TextContent::new(text).into(),
         now,
     )
 }
@@ -518,7 +518,7 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
     let sin = InboundMessage::new(
         customer.id().clone(),
         "+15551234567",
-        EventContent::text("Mon NAS est 123-456-789"),
+        TextContent::new("Mon NAS est 123-456-789"),
     );
     let result = kit
         .process_inbound(

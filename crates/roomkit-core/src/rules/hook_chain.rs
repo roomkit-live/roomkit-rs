@@ -239,8 +239,8 @@ mod tests {
 
     use super::*;
     use crate::model::{
-        ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource, EventType,
-        RoomEvent, RoomId, TaskId, Timestamp,
+        ChannelId, ChannelType, EventDirection, EventId, EventSource, EventType, RoomEvent, RoomId,
+        TaskId, TextContent, Timestamp,
     };
     use crate::rules::hook_registry::HookExecution;
 
@@ -287,7 +287,7 @@ mod tests {
                 ChannelType::SYSTEM,
                 EventDirection::Outbound,
             ),
-            EventContent::text("notice"),
+            TextContent::new("notice").into(),
             Timestamp::UNIX_EPOCH,
         ))
     }

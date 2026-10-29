@@ -6,7 +6,7 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomEvent, RoomId, Timestamp,
+    ChannelId, ChannelType, EventType, InboundMessage, RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
     EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
@@ -53,7 +53,7 @@ async fn room() -> (RoomKit, RecordingTransport, RecordingTransport) {
 
 /// The application's instruction `text`, addressed to the agent.
 fn instruction(text: &str) -> InboundMessage {
-    let mut message = InboundMessage::new(channel("app"), "app", EventContent::text(text));
+    let mut message = InboundMessage::new(channel("app"), "app", TextContent::new(text));
     message.event_type = EventType::Instruction;
     message.addressed_to = Some(vec![channel("ai")]);
     message

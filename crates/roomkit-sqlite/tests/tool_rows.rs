@@ -9,8 +9,8 @@ mod support;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource, EventStatus,
-    EventType, InboundMessage, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Timestamp,
-    ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    EventType, InboundMessage, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, TextContent,
+    Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::transcript::{Message, Role, conversation};
@@ -63,7 +63,7 @@ fn event(index: u64, channel: &str, content: EventContent, turn: Option<&str>) -
 /// end reading `result`.
 fn row(index: u64, turn: &str, result: Option<&str>) -> RoomEvent {
     let mut call = ToolCallContent::new("lookup_order", "c1");
-    let mut row = event(index, "assistant", EventContent::text(""), Some(turn));
+    let mut row = event(index, "assistant", TextContent::new("").into(), Some(turn));
     row.event_type = EventType::ToolCallStart;
     if let Some(result) = result {
         row.event_type = EventType::ToolCallEnd;
@@ -88,12 +88,12 @@ async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id(
         .await
         .unwrap();
     let events = [
-        event(0, "sms", EventContent::text("Order 42?"), None),
+        event(0, "sms", TextContent::new("Order 42?").into(), None),
         row(1, "A", None),
         row(2, "B", None),
         row(3, "A", Some("A's")),
         row(4, "B", Some("B's")),
-        event(5, "sms", EventContent::text("And then?"), None),
+        event(5, "sms", TextContent::new("And then?").into(), None),
     ];
     for committed in events {
         let counters = RoomCounters {
@@ -180,7 +180,7 @@ async fn kit_on(file: &TempFile, model: ScriptedProvider, fresh: bool) -> RoomKi
 }
 
 async fn says(kit: &RoomKit<SqliteStore>, text: &str) {
-    let message = InboundMessage::new(id("sms"), "+15550001", EventContent::text(text));
+    let message = InboundMessage::new(id("sms"), "+15550001", TextContent::new(text));
     let options = ProcessInboundOptions {
         room_id: Some(room_id()),
         ..Default::default()

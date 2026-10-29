@@ -5,8 +5,8 @@ use std::future::{Future, ready};
 
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, EventContent, EventDirection, EventSource, EventType, RoomContext,
-    RoomEvent,
+    ChannelOutput, ChannelType, EventDirection, EventSource, EventType, RoomContext, RoomEvent,
+    TextContent,
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError, text_of, turn_context};
 
@@ -96,7 +96,7 @@ impl ScriptedAgent {
             event.room_id.clone(),
             EventType::Message,
             source,
-            EventContent::text(*reply),
+            TextContent::new(*reply).into(),
             event.created_at,
         ))
     }

@@ -144,18 +144,25 @@ identifier!(
 );
 
 /// The id of the kit's own host channel, which a post that names no
-/// channel speaks from, registered on first use (RFC §10.5).
+/// channel speaks from, registered on first use (RFC §10.5). Hidden: the
+/// Python implementation keeps it private, and roomkit reads it across
+/// crates.
+#[doc(hidden)]
 pub const HOST_CHANNEL_ID: &str = "host";
 
 impl ChannelId {
     /// The source of the records the framework writes itself, a lifecycle
-    /// change or a task's creation.
+    /// change or a task's creation. Hidden, as the Python implementation
+    /// spells the id where it writes it.
+    #[doc(hidden)]
     pub fn system() -> Self {
         Self("system".to_owned())
     }
 
     /// The id of the kit's own host channel, [`HOST_CHANNEL_ID`], which a
-    /// post that names no channel speaks from (RFC §10.5).
+    /// post that names no channel speaks from (RFC §10.5). Hidden, as
+    /// [`HOST_CHANNEL_ID`] is.
+    #[doc(hidden)]
     pub fn host() -> Self {
         Self(HOST_CHANNEL_ID.to_owned())
     }
@@ -164,6 +171,8 @@ impl ChannelId {
 impl RoomId {
     /// The room id written from a random 128-bit value, as the 32 hex digits
     /// of a UUID's simple form. It cannot fail: the text is never empty.
+    /// Hidden: the Python implementation writes `uuid4().hex` inline.
+    #[doc(hidden)]
     pub fn from_u128(value: u128) -> Self {
         Self(format!("{value:032x}"))
     }
@@ -178,6 +187,8 @@ impl RoomId {
 impl EventId {
     /// The event id written from a random 128-bit value, as the 32 hex digits
     /// of a UUID's simple form. It cannot fail: the text is never empty.
+    /// Hidden: the Python implementation writes `uuid4().hex` inline.
+    #[doc(hidden)]
     pub fn from_u128(value: u128) -> Self {
         Self(format!("{value:032x}"))
     }
@@ -192,6 +203,8 @@ impl EventId {
 impl ObservationId {
     /// The observation id written from a random 128-bit value, as the 32 hex
     /// digits of a UUID's simple form. It cannot fail: the text is never empty.
+    /// Hidden: the Python implementation writes `uuid4().hex` inline.
+    #[doc(hidden)]
     pub fn from_u128(value: u128) -> Self {
         Self(format!("{value:032x}"))
     }

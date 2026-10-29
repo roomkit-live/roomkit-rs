@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use roomkit::model::{ChannelId, ChannelType, DirectEvent, EventContent, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, ChannelType, DirectEvent, InboundMessage, RoomId, TextContent};
 use roomkit::testing::RecordingTransport;
 use roomkit::transcript::Role;
 use roomkit::{
@@ -108,7 +108,7 @@ fn kit_writing(calls: bool, deltas: usize, writes: bool) -> RoomKit {
     let tools = Tools::new().tool(lookup, move |_call, _context| async move {
         if writes {
             let turn = current_turn().unwrap();
-            let note = DirectEvent::new(channel("ai"), EventContent::text("(looking it up)"));
+            let note = DirectEvent::new(channel("ai"), TextContent::new("(looking it up)"));
             turn.send_event(note).await.unwrap();
         }
         Ok(ToolOutput::Text("42".to_owned()))
@@ -135,7 +135,7 @@ async fn room(kit: &RoomKit, id: &str, history: usize) -> RoomId {
         let message = InboundMessage::new(
             channel("sms"),
             "+15550000001",
-            EventContent::text(format!("Earlier message {index}")),
+            TextContent::new(format!("Earlier message {index}")),
         );
         kit.process_inbound(
             message,
@@ -154,7 +154,7 @@ async fn room(kit: &RoomKit, id: &str, history: usize) -> RoomId {
 }
 
 async fn turn(kit: &RoomKit, room: &RoomId) {
-    let message = InboundMessage::new(channel("sms"), "+15550000001", EventContent::text("What?"));
+    let message = InboundMessage::new(channel("sms"), "+15550000001", TextContent::new("What?"));
     let result = kit
         .process_inbound(
             message,

@@ -22,6 +22,7 @@ mod hook;
 mod identity;
 mod ids;
 mod inbound;
+mod media_url;
 mod output;
 mod participant;
 mod post;

@@ -22,7 +22,7 @@ use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     DeleteContent, EditContent, EventContent, EventDirection, EventId, EventSource, EventType,
-    HookResult, InboundMessage, ParticipantId, RoomContext, RoomEvent, RoomId,
+    HookResult, InboundMessage, ParticipantId, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -91,7 +91,7 @@ async fn room_with(options: RoomKitOptions) -> RoomKit {
 }
 
 fn message(text: &str) -> InboundMessage {
-    InboundMessage::new(channel("sms"), "+15551234567", EventContent::text(text))
+    InboundMessage::new(channel("sms"), "+15551234567", TextContent::new(text))
 }
 
 /// What the customer `u` sends on the SMS: an event of `event_type`.
@@ -145,7 +145,7 @@ impl Channel for Answering {
             event.room_id.clone(),
             EventType::Message,
             EventSource::new(self.id.clone(), ChannelType::AI, EventDirection::Outbound),
-            EventContent::text("Answer."),
+            TextContent::new("Answer.").into(),
             event.created_at,
         );
         ready(Ok(ChannelOutput::respond(vec![answer])))
@@ -167,7 +167,7 @@ async fn a_hook_posting_after_every_event_stops_at_the_cap() {
                 let event = kit
                     .post(
                         &room_id(),
-                        EventContent::text(format!("Noted {}.", len(&posted))),
+                        TextContent::new(format!("Noted {}.", len(&posted))),
                         notice,
                     )
                     .await
@@ -210,7 +210,7 @@ async fn an_observer_of_before_broadcast_posting_on_every_event_stops_at_the_cap
                 let event = kit
                     .post(
                         &room_id(),
-                        EventContent::text(format!("Noted {}.", len(&posted))),
+                        TextContent::new(format!("Noted {}.", len(&posted))),
                         notice,
                     )
                     .await
@@ -388,7 +388,7 @@ async fn a_judge_posting_back_after_each_answer_stops_at_the_depth_limit() {
                 ..Default::default()
             };
             let posted = kit
-                .post(&room_id(), EventContent::text("@a again"), again)
+                .post(&room_id(), TextContent::new("@a again"), again)
                 .await
                 .unwrap();
             push(&depths, posted.chain_depth);
@@ -437,7 +437,7 @@ async fn a_mutation_hook_changing_again_stops_at_the_cap() {
                         addressed_to: Some(Vec::new()),
                         ..from_u(EventType::Message)
                     };
-                    let text = EventContent::text(format!("m{n}"));
+                    let text = TextContent::new(format!("m{n}"));
                     let another = kit
                         .send_event(&room_id(), &channel("sms"), text, options)
                         .await
@@ -466,7 +466,7 @@ async fn a_mutation_hook_changing_again_stops_at_the_cap() {
             .send_event(
                 &room_id(),
                 &channel("sms"),
-                EventContent::text("v"),
+                TextContent::new("v"),
                 from_u(EventType::Message),
             )
             .await
@@ -488,7 +488,7 @@ async fn a_mutation_hook_changing_again_stops_at_the_cap() {
 
 /// The customer's edit of `target` to `text`.
 fn edit_of(target: &EventId, text: &str) -> (EventContent, SendEventOptions) {
-    let edit = EditContent::new(target.clone(), EventContent::text(text));
+    let edit = EditContent::new(target.clone(), TextContent::new(text));
     (EventContent::Edit(edit), from_u(EventType::Edit))
 }
 
@@ -513,7 +513,7 @@ async fn a_hook_posting_once_per_message_posts_for_every_message() {
                 let receipt = kit
                     .post(
                         &room_id(),
-                        EventContent::text("Received."),
+                        TextContent::new("Received."),
                         PostOptions::default(),
                     )
                     .await
@@ -581,7 +581,7 @@ async fn a_task_the_hook_starts_calls_as_work_of_its_own() {
                             .send_event(
                                 &room_id(),
                                 &channel("sms"),
-                                EventContent::text(format!("later {n}")),
+                                TextContent::new(format!("later {n}")),
                                 later,
                             )
                             .await
@@ -645,7 +645,7 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
                     ..Default::default()
                 };
                 if let Err(error) = kit
-                    .post(&room_id(), EventContent::text("Try again."), again)
+                    .post(&room_id(), TextContent::new("Try again."), again)
                     .await
                 {
                     push(&failures, error);
@@ -728,7 +728,7 @@ async fn a_notice_per_answer_costs_the_agents_no_answer() {
                     .send_event(
                         &room_id(),
                         &channel("sms"),
-                        EventContent::text("Noted."),
+                        TextContent::new("Noted."),
                         noted,
                     )
                     .await
@@ -799,7 +799,7 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
                         ..Default::default()
                     };
                     let sent = kit
-                        .send_event(&room_id(), &channel("sms"), EventContent::text("x"), x)
+                        .send_event(&room_id(), &channel("sms"), TextContent::new("x"), x)
                         .await
                         .unwrap();
                     if sent.blocked_by.is_some() {
@@ -830,7 +830,7 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
             .send_event(
                 &room_id(),
                 &channel("sms"),
-                EventContent::text("v"),
+                TextContent::new("v"),
                 SendEventOptions::default(),
             )
             .await
@@ -885,7 +885,7 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
             .send_event(
                 &room_id(),
                 &channel("sms"),
-                EventContent::text("spare"),
+                TextContent::new("spare"),
                 spare,
             )
             .await
@@ -917,7 +917,7 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
                         .map(|_| ())
                 } else {
                     let updates = UpdateEventOptions {
-                        content: Some(EventContent::text("changed")),
+                        content: Some(TextContent::new("changed").into()),
                         ..UpdateEventOptions::default()
                     };
                     kit.update_event(&room_id(), &event.id, updates)
@@ -934,7 +934,7 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
             .send_event(
                 &room_id(),
                 &channel("sms"),
-                EventContent::text("hi"),
+                TextContent::new("hi"),
                 SendEventOptions::default(),
             )
             .await
@@ -1058,7 +1058,7 @@ async fn work_outside_a_hook_body_draws_nothing() {
             .send_event(
                 &room_id(),
                 &channel("sms"),
-                EventContent::text("target"),
+                TextContent::new("target"),
                 SendEventOptions::default(),
             )
             .await
@@ -1067,7 +1067,7 @@ async fn work_outside_a_hook_body_draws_nothing() {
         kit.send_event(
             &room_id(),
             &channel("sms"),
-            EventContent::text("go"),
+            TextContent::new("go"),
             SendEventOptions::default(),
         )
         .await
@@ -1105,7 +1105,7 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
         .send_event(
             &room_id(),
             &channel("sms"),
-            EventContent::text("target"),
+            TextContent::new("target"),
             target,
         )
         .await
@@ -1141,7 +1141,7 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
                 ..Default::default()
             };
             let event = kit
-                .post(&room_id(), EventContent::text("@a again"), again)
+                .post(&room_id(), TextContent::new("@a again"), again)
                 .await
                 .unwrap();
             push(&posted, (event.chain_depth, event.blocked_by));
@@ -1194,7 +1194,7 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
             .send_event(
                 &room_id(),
                 &channel("sms"),
-                EventContent::text("target"),
+                TextContent::new("target"),
                 target,
             )
             .await
@@ -1209,7 +1209,7 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
                         addressed_to: Some(Vec::new()),
                         ..Default::default()
                     };
-                    kit.send_event(&room_id(), &channel("sms"), EventContent::text("x"), x)
+                    kit.send_event(&room_id(), &channel("sms"), TextContent::new("x"), x)
                         .await
                         .unwrap();
                 }
@@ -1252,7 +1252,7 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
         kit.send_event(
             &room_id(),
             &channel("sms"),
-            EventContent::text("hi"),
+            TextContent::new("hi"),
             SendEventOptions::default(),
         )
         .await

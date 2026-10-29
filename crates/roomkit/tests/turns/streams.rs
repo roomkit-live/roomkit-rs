@@ -13,8 +13,8 @@ use futures_core::Stream;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, EventContent,
-    InboundMessage, Metadata, RoomContext, RoomEvent, ToolCallContent, ToolCallStatus,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, InboundMessage,
+    Metadata, RoomContext, RoomEvent, TextContent, ToolCallContent, ToolCallStatus,
 };
 use roomkit::testing::TurnTap;
 use roomkit::{
@@ -378,7 +378,7 @@ async fn text_written_inside_a_call_crosses_in_order() {
             .unwrap();
     }
     let tap = TurnTap::on(&kit);
-    let message = InboundMessage::new(channel("sms"), "+15550000001", EventContent::text("Go."));
+    let message = InboundMessage::new(channel("sms"), "+15550000001", TextContent::new("Go."));
     let options = ProcessInboundOptions {
         room_id: Some(room()),
         ..Default::default()

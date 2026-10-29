@@ -5,7 +5,7 @@
 use std::future::Future;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, InboundMessage, Metadata, RoomId, Timestamp, ToolCall,
+    ChannelId, ChannelType, InboundMessage, Metadata, RoomId, TextContent, Timestamp, ToolCall,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
@@ -79,7 +79,7 @@ where
 
 /// Alice asks by SMS.
 pub(crate) async fn asks(kit: &RoomKit, text: &str) -> InboundResult {
-    let message = InboundMessage::new(channel("sms"), "+15550000001", EventContent::text(text));
+    let message = InboundMessage::new(channel("sms"), "+15550000001", TextContent::new(text));
     kit.process_inbound(
         message,
         ProcessInboundOptions {

@@ -15,7 +15,7 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -42,7 +42,7 @@ fn room_id() -> RoomId {
 }
 
 fn message(text: &str) -> InboundMessage {
-    InboundMessage::new(channel("sms"), "+15551234567", EventContent::text(text))
+    InboundMessage::new(channel("sms"), "+15551234567", TextContent::new(text))
 }
 
 /// A kit with an SMS transport attached to `room_1`.
@@ -401,7 +401,7 @@ impl Channel for Calling {
                 .send_event(
                     &room_id(),
                     &channel("caller"),
-                    EventContent::text("Sent"),
+                    TextContent::new("Sent"),
                     SendEventOptions::default(),
                 )
                 .await

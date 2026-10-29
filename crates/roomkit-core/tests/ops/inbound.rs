@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use roomkit_core::model::{
     ChannelOutput, DeliveryStatus, ErrorRecord, EventId, EventStatus, EventType, HookResult,
-    InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId, Timestamp,
-    Visibility,
+    InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId, TextContent,
+    Timestamp, Visibility,
 };
 use roomkit_core::ops::{
     ChannelDeclaration, FrameworkEvent, HoldOutcome, Inbound, InboundError, InboundTarget,
@@ -237,7 +237,7 @@ mod a_blocked_message {
     use super::*;
     use crate::support::{Answer, Reentry, calling};
     use pretty_assertions::assert_eq;
-    use roomkit_core::model::{DirectEvent, EventContent};
+    use roomkit_core::model::{DirectEvent, TextContent};
     use roomkit_core::ops::Entry;
 
     fn scanning_room() -> Sim {
@@ -318,7 +318,7 @@ mod a_blocked_message {
                         organization_id: None,
                         event: Box::new(DirectEvent::new(
                             channel("sms"),
-                            EventContent::text("Noted"),
+                            TextContent::new("Noted"),
                         )),
                     })
                 }),
@@ -435,7 +435,7 @@ mod a_blocked_message {
             "redact",
             Box::new(|event| {
                 let mut redacted = event.clone();
-                redacted.content = EventContent::text("[redacted]");
+                redacted.content = TextContent::new("[redacted]").into();
                 HookOutcome::Returned(HookResult::modify(redacted))
             }),
         );
@@ -1531,7 +1531,7 @@ mod a_response_visibility {
     use super::*;
     use crate::support::{Answer, OnEvent, Reentry, calling};
     use pretty_assertions::assert_eq;
-    use roomkit_core::model::{DirectEvent, EventContent, InboundMessage};
+    use roomkit_core::model::{DirectEvent, InboundMessage};
     use roomkit_core::ops::Entry;
     use roomkit_core::rules::transcoding::text_of;
 
@@ -1709,7 +1709,7 @@ mod a_response_visibility {
         );
         let event = DirectEvent {
             response_visibility: Some("ws_advisor,writer".parse().unwrap()),
-            ..DirectEvent::new(channel("sms"), EventContent::text("Hello"))
+            ..DirectEvent::new(channel("sms"), TextContent::new("Hello"))
         };
         sim.inject("room_1", event).unwrap();
         assert_eq!(
@@ -2363,7 +2363,7 @@ mod the_decision {
     fn of_a_direct_injection_refused_by_its_room_raises_the_refusal() {
         let mut sim = room();
         sim.room.status = RoomStatus::Closed;
-        let event = DirectEvent::new(channel("ws"), roomkit_core::model::EventContent::text("Hi"));
+        let event = DirectEvent::new(channel("ws"), TextContent::new("Hi"));
         sim.inject("room_1", event).unwrap_err();
         assert_eq!(
             decided(&sim).2,
@@ -2587,7 +2587,7 @@ mod the_protocol {
 mod a_thread_parent {
     use super::*;
     use pretty_assertions::assert_eq;
-    use roomkit_core::model::{DirectEvent, EventContent, InboundMessage, Room, RoomId};
+    use roomkit_core::model::{DirectEvent, InboundMessage, Room, RoomId};
 
     fn id(event_id: &str) -> EventId {
         EventId::new(event_id).unwrap()
@@ -2681,7 +2681,7 @@ mod a_thread_parent {
         let mut sim = threaded();
         let event = DirectEvent {
             parent_event_id: Some(id("evt_reply")),
-            ..DirectEvent::new(channel("ws"), EventContent::text("Noted"))
+            ..DirectEvent::new(channel("ws"), TextContent::new("Noted"))
         };
         sim.inject("room_1", event).unwrap();
         assert_eq!(parent_of(&sim, "Noted"), Some("evt_root".to_owned()));
@@ -2757,7 +2757,7 @@ mod a_thread_parent {
         sim.send(replying("Thanks", "evt_reply")).unwrap();
         let event = DirectEvent {
             parent_event_id: Some(id("evt_reply")),
-            ..DirectEvent::new(channel("ws"), EventContent::text("Noted"))
+            ..DirectEvent::new(channel("ws"), TextContent::new("Noted"))
         };
         sim.inject("room_1", event).unwrap();
         assert_eq!(
@@ -2808,7 +2808,7 @@ mod an_async_hook_on_before_broadcast {
             "rewrite",
             Box::new(|event| {
                 let mut rewritten = event.clone();
-                rewritten.content = roomkit_core::model::EventContent::text("rewritten");
+                rewritten.content = TextContent::new("rewritten").into();
                 HookOutcome::Returned(HookResult::modify(rewritten))
             }),
         );

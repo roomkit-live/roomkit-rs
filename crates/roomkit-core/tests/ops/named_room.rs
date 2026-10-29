@@ -9,7 +9,7 @@
 
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelType, DeliveryStatus, ErrorRecord,
-    EventContent, InboundMessage, Participant, ParticipantId, Room, RoomId, RoomStatus, Timestamp,
+    InboundMessage, Participant, ParticipantId, Room, RoomId, RoomStatus, TextContent, Timestamp,
     Visibility,
 };
 use roomkit_core::ops::{ChannelDeclaration, FrameworkEvent, InboundError};
@@ -21,7 +21,7 @@ use crate::support::{Sim, after_start, channel, room_id};
 
 /// A message from `sender` on `channel_id`.
 fn message_from(channel_id: &str, sender: &str, text: &str) -> InboundMessage {
-    InboundMessage::new(channel(channel_id), sender, EventContent::text(text))
+    InboundMessage::new(channel(channel_id), sender, TextContent::new(text))
 }
 
 /// A store with no room, an SMS channel and an agent no room binds.

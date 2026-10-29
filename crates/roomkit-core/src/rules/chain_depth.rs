@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::model::{
-    ChannelBinding, EventContent, EventDirection, EventId, EventSource, EventStatus, EventType,
-    Observation, ObservationId, RoomEvent, Timestamp,
+    ChannelBinding, EventDirection, EventId, EventSource, EventStatus, EventType, Observation,
+    ObservationId, RoomEvent, TextContent, Timestamp,
 };
 
 /// The default `max_chain_depth` (RFC §8.3).
@@ -52,7 +52,7 @@ pub(crate) fn not_asked_record(
         trigger.room_id.clone(),
         EventType::Message,
         source,
-        EventContent::text(""),
+        TextContent::new("").into(),
         now,
     );
     record.status = EventStatus::Blocked;
@@ -233,7 +233,7 @@ mod tests {
                 ChannelType::AI,
                 EventDirection::Outbound,
             ),
-            EventContent::text("Good report."),
+            TextContent::new("Good report.").into(),
             Timestamp::UNIX_EPOCH,
         );
         event.chain_depth = chain_depth;
@@ -301,7 +301,7 @@ mod tests {
         );
         assert_eq!(
             (record.source.channel_id.as_str(), record.content),
-            ("writer", EventContent::text(""))
+            ("writer", TextContent::new("").into())
         );
     }
 

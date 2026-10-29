@@ -15,7 +15,7 @@ use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelOutput, ChannelType, DeleteContent, EditContent, EditSource, EventContent,
     EventDirection, EventId, EventSource, EventType, HookResult, InboundMessage, RoomContext,
-    RoomEvent, RoomId, Timestamp,
+    RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
     Environment, RecordingTransport, SequentialEnvironment, kit_with_environment,
@@ -223,7 +223,7 @@ async fn room_with(agent: Reader) -> Fixture {
 }
 
 async fn say(kit: &RoomKit, sender: &str, text: &str) -> InboundResult {
-    let message = InboundMessage::new(channel("wa"), sender, EventContent::text(text));
+    let message = InboundMessage::new(channel("wa"), sender, TextContent::new(text));
     kit.process_inbound(
         message,
         ProcessInboundOptions {
@@ -239,10 +239,10 @@ fn edit_from(sender: &str, text: &str) -> InboundMessage {
     let mut message = InboundMessage::new(
         channel("wa"),
         sender,
-        EventContent::Edit(
-            EditContent::new(EventId::new("evt_1").unwrap(), EventContent::text(text))
-                .with_edit_source(EditSource::Sender),
-        ),
+        EventContent::Edit(EditContent {
+            edit_source: Some(EditSource::Sender),
+            ..EditContent::new(EventId::new("evt_1").unwrap(), TextContent::new(text))
+        }),
     );
     message.event_type = EventType::Edit;
     message
@@ -325,7 +325,7 @@ mod an_edit {
             (
                 // Four lifecycle records and the target come first.
                 Some((5, EventType::Edit)),
-                EventContent::text("I need 50000$"),
+                TextContent::new("I need 50000$").into(),
                 Some(true)
             )
         );
@@ -388,7 +388,7 @@ mod an_edit {
                 matches!(newest.content, EventContent::Edit(_))
             ),
             (
-                EventContent::text("Correction: I need 50000$"),
+                TextContent::new("Correction: I need 50000$").into(),
                 EventType::Edit,
                 true
             )
@@ -403,7 +403,7 @@ mod an_edit {
         let payload = next(&mut updated).await;
         assert_eq!(
             (payload.id.as_str(), payload.content),
-            ("evt_1", EventContent::text("I need 50000$"))
+            ("evt_1", TextContent::new("I need 50000$").into())
         );
     }
 
@@ -431,7 +431,7 @@ mod an_edit {
             ),
             (
                 Some("edits are closed"),
-                EventContent::text("I need 5000$"),
+                TextContent::new("I need 5000$").into(),
                 true
             )
         );
@@ -468,7 +468,7 @@ mod a_delete {
         let target = target(&room.kit).await.unwrap();
         assert_eq!(
             (target.content.clone(), Some(is_deleted(&target))),
-            (EventContent::text("I need 5000$"), Some(true))
+            (TextContent::new("I need 5000$").into(), Some(true))
         );
     }
 
@@ -501,7 +501,7 @@ mod a_delete {
             (history, target(&room.kit).await.unwrap().content),
             (
                 vec![String::new(), "Is it gone?".to_owned()],
-                EventContent::text("I need 5000$")
+                TextContent::new("I need 5000$").into()
             )
         );
     }
@@ -548,7 +548,7 @@ mod a_direct_call {
         let room = room().await;
         let mut updated = observed(&room.kit, HookTrigger::OnEventUpdated);
         let update = UpdateEventOptions {
-            content: Some(EventContent::text("I need 6000$")),
+            content: Some(TextContent::new("I need 6000$").into()),
             ..UpdateEventOptions::default()
         };
         let returned = room
@@ -601,7 +601,7 @@ mod a_direct_call {
     #[tokio::test]
     async fn delete_removes_the_thread_and_leaves_the_counters() {
         let room = room().await;
-        let mut reply = InboundMessage::new(channel("wa"), CUSTOMER, EventContent::text("Ok?"));
+        let mut reply = InboundMessage::new(channel("wa"), CUSTOMER, TextContent::new("Ok?"));
         reply.parent_event_id = Some(EventId::new("evt_1").unwrap());
         send(&room.kit, reply).await;
         say(&room.kit, CUSTOMER, "Unrelated").await;
@@ -639,7 +639,7 @@ mod a_direct_call {
     async fn delete_of_the_root_takes_every_answer_to_its_replies() {
         let room = room().await;
         let reply_to = |id: &str| Some(EventId::new(id).unwrap());
-        let mut reply = InboundMessage::new(channel("wa"), CUSTOMER, EventContent::text("Ok?"));
+        let mut reply = InboundMessage::new(channel("wa"), CUSTOMER, TextContent::new("Ok?"));
         reply.parent_event_id = reply_to("evt_1");
         let reply = send(&room.kit, reply).await.event.unwrap().id;
         let injected = SendEventOptions {
@@ -650,7 +650,7 @@ mod a_direct_call {
             .send_event(
                 &room_id(),
                 &channel("ws"),
-                EventContent::text("Checking"),
+                TextContent::new("Checking"),
                 injected,
             )
             .await
@@ -664,7 +664,7 @@ mod a_direct_call {
                 ChannelType::WEBSOCKET,
                 EventDirection::Inbound,
             ),
-            EventContent::text("Snapshot"),
+            TextContent::new("Snapshot").into(),
             Timestamp::UNIX_EPOCH,
         );
         record.parent_event_id = Some(reply);
@@ -690,7 +690,7 @@ mod a_direct_call {
     #[tokio::test]
     async fn delete_fires_on_event_deleted_for_each_event_removed() {
         let room = room().await;
-        let mut reply = InboundMessage::new(channel("wa"), CUSTOMER, EventContent::text("Ok?"));
+        let mut reply = InboundMessage::new(channel("wa"), CUSTOMER, TextContent::new("Ok?"));
         reply.parent_event_id = Some(EventId::new("evt_1").unwrap());
         send(&room.kit, reply).await;
         let mut deleted = observed(&room.kit, HookTrigger::OnEventDeleted);
@@ -795,11 +795,11 @@ mod changes_at_once {
             let marked = is_deleted(&target);
             let outcome = match (edited.event, deleted.event) {
                 (Some(edit), Some(delete)) if edit.index < delete.index => {
-                    target.content == EventContent::text("I need 50000$") && marked
+                    target.content == TextContent::new("I need 50000$").into() && marked
                 }
                 (None, Some(_)) => {
                     edited.reason.as_deref() == Some("target_event_not_found")
-                        && target.content == EventContent::text("I need 5000$")
+                        && target.content == TextContent::new("I need 5000$").into()
                         && marked
                 }
                 _ => false,
@@ -933,7 +933,7 @@ mod changes_at_once {
             };
             assert_eq!(
                 target(&room.kit).await.unwrap().content,
-                EventContent::text(last)
+                TextContent::new(last).into()
             );
         }
     }

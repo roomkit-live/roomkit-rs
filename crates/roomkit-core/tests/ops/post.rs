@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit_core::model::{EventContent, Post};
+use roomkit_core::model::{Post, TextContent};
 use roomkit_core::ops::{ChannelDeclaration, Inbound, InboundError, InboundResult};
 
 use crate::support::{Sim, channel, room_id};
@@ -24,7 +24,7 @@ fn post(sim: &mut Sim, text: &str) -> Result<InboundResult, InboundError> {
         sim.shared_config(),
         room_id(),
         None,
-        Post::new(EventContent::text(text)),
+        Post::new(TextContent::new(text)),
     );
     sim.run(operation)
 }

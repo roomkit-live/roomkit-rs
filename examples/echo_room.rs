@@ -10,7 +10,7 @@
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::model::{ChannelId, ChannelType, EventContent, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
 
@@ -40,7 +40,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let message = InboundMessage::new(
         sms.id().clone(),
         "+15551234567",
-        EventContent::text("Bonjour"),
+        TextContent::new("Bonjour"),
     );
     let result = kit
         .process_inbound(

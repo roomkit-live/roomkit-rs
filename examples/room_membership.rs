@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use roomkit::model::{
     ChannelId, ChannelType, DeleteContent, DeleteType, EventContent, EventId, EventType,
     HookResult, InboundMessage, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
-    RoomId,
+    RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -119,7 +119,7 @@ impl Team {
     /// `who` writes `text` on the WebSocket; returns the event's id.
     async fn says(&self, who: &str, text: &str) -> Result<EventId, Box<dyn Error>> {
         println!("  {who} writes {text:?}.");
-        let message = InboundMessage::new(self.ws.clone(), who, EventContent::text(text));
+        let message = InboundMessage::new(self.ws.clone(), who, TextContent::new(text));
         let result = self
             .kit
             .process_inbound(
@@ -140,7 +140,10 @@ impl Team {
         target: &EventId,
     ) -> Result<InboundResult, Box<dyn Error>> {
         println!("  {who} deletes {target} as an administrator.");
-        let mut delete = DeleteContent::new(target.clone()).with_delete_type(DeleteType::Admin);
+        let mut delete = DeleteContent {
+            delete_type: DeleteType::Admin,
+            ..DeleteContent::new(target.clone())
+        };
         delete.reason = Some("moderation".to_owned());
         let content = EventContent::Delete(delete);
         let message = InboundMessage {

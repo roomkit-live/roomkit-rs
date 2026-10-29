@@ -10,7 +10,7 @@
 use std::error::Error;
 use std::process::ExitCode;
 
-use roomkit::model::{ChannelId, ChannelType, EventContent, EventStatus, InboundMessage, RoomId};
+use roomkit::model::{ChannelId, ChannelType, EventStatus, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, FrameworkEvent, ProcessInboundOptions};
 
@@ -46,7 +46,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let mut message = InboundMessage::new(
         human.id().clone(),
         "alice",
-        EventContent::text("Analyse the quarter"),
+        TextContent::new("Analyse the quarter"),
     );
     message.addressed_to = Some(vec![analyst.id().clone()]);
     kit.process_inbound(

@@ -103,7 +103,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use roomkit::model::{EventContent, EventType, RoomEvent, RoomId};
+use roomkit::model::{EventContent, EventType, RoomEvent, RoomId, TextContent};
 use roomkit::{ConversationStore, HookTrigger, PostOptions, text_of};
 use roomkit_sqlite::SqliteStore;
 use serde_json::{Value, json};
@@ -604,7 +604,7 @@ async fn a_client_stops_reading(checks: &mut Checks) -> Result<(), Box<dyn Error
             .kit()
             .post(
                 &room,
-                EventContent::text(menu.as_str()),
+                TextContent::new(menu.as_str()),
                 PostOptions::default(),
             )
             .await?;

@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, InboundMessage, Metadata, ParticipantId, RoomContext, RoomEvent, RoomId,
+    InboundMessage, Metadata, ParticipantId, RoomContext, RoomEvent, RoomId, TextContent,
     Timestamp,
 };
 use roomkit::testing::{EchoAgent, SequentialEnvironment, kit_with_environment};
@@ -196,7 +196,7 @@ async fn open_room(kit: &RoomKit, id: &str, held: Option<Value>, group: bool) ->
 }
 
 fn message(from: &str, text: &str) -> InboundMessage {
-    InboundMessage::new(channel("sms"), from, EventContent::text(text))
+    InboundMessage::new(channel("sms"), from, TextContent::new(text))
 }
 
 /// Routes `message` and returns the room it landed in.

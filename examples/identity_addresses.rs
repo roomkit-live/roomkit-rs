@@ -28,8 +28,8 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, Identity, IdentityId, InboundMessage, Participant,
-    ParticipantId, RoomId,
+    ChannelId, ChannelType, Identity, IdentityId, InboundMessage, Participant, ParticipantId,
+    RoomId, TextContent,
 };
 use roomkit::testing::EchoAgent;
 use roomkit::{
@@ -165,7 +165,7 @@ impl Bank {
     /// returns the room it was routed to.
     async fn text_from(&self, organization: &str, number: &str) -> Result<RoomId, Box<dyn Error>> {
         let message =
-            InboundMessage::new(self.sms.id().clone(), number, EventContent::text("Bonjour"));
+            InboundMessage::new(self.sms.id().clone(), number, TextContent::new("Bonjour"));
         let options = ProcessInboundOptions {
             organization_id: Some(organization.to_owned()),
             ..Default::default()

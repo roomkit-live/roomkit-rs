@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    Access, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType,
-    InboundMessage, Metadata, RoomEvent, RoomId, RoomStatus, RoomTimers, Timestamp, Visibility,
+    Access, ChannelId, ChannelType, EventDirection, EventSource, EventType, InboundMessage,
+    Metadata, RoomEvent, RoomId, RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
@@ -88,13 +88,13 @@ fn record(text: &str) -> RoomEvent {
         room_id(),
         EventType::Message,
         source,
-        EventContent::text(text),
+        TextContent::new(text).into(),
         Timestamp::UNIX_EPOCH,
     )
 }
 
 fn hi() -> InboundMessage {
-    InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("Hi"))
+    InboundMessage::new(channel("sms"), "+15551234567", TextContent::new("Hi"))
 }
 
 /// `room_1` as the store holds it: its status, its event count, its
@@ -276,7 +276,7 @@ async fn event_calls(
     room: &RoomId,
     committed: &RoomEvent,
 ) -> Vec<(&'static str, String)> {
-    let (sms, x) = (channel("sms"), || EventContent::text("x"));
+    let (sms, x) = (channel("sms"), || TextContent::new("x"));
     let timeline = GetTimelineOptions {
         organization_id: Some(clinic()),
         ..GetTimelineOptions::default()
@@ -298,7 +298,7 @@ async fn event_calls(
         ..ProcessInboundOptions::default()
     };
     let update = UpdateEventOptions {
-        content: Some(EventContent::text("Changed")),
+        content: Some(TextContent::new("Changed").into()),
         organization_id: Some(clinic()),
         ..UpdateEventOptions::default()
     };
@@ -409,7 +409,7 @@ async fn a_replay_is_never_handed_to_another_organization() {
         organization_id: Some(organization.to_owned()),
         ..Default::default()
     };
-    let balance = || EventContent::text("Your balance is 5000$");
+    let balance = || TextContent::new("Your balance is 5000$");
     kit.send_event(&room_id(), &channel("ws"), balance(), held("bank"))
         .await
         .unwrap();

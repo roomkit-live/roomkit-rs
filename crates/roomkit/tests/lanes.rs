@@ -20,8 +20,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventDirection, EventSource, EventStatus, EventType, HookResult, InboundMessage,
-    RoomContext, RoomEvent, RoomId,
+    EventDirection, EventSource, EventStatus, EventType, HookResult, InboundMessage, RoomContext,
+    RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{EchoAgent, RecordingTransport};
 use roomkit::{
@@ -43,7 +43,7 @@ fn room_id() -> RoomId {
 }
 
 fn message(from: &str, sender: &str, text: &str) -> InboundMessage {
-    InboundMessage::new(channel(from), sender, EventContent::text(text))
+    InboundMessage::new(channel(from), sender, TextContent::new(text))
 }
 
 /// A kit with an SMS transport and an echo agent, both attached to `room_1`.
@@ -461,7 +461,7 @@ impl Channel for SlowAgent {
                 event.room_id.clone(),
                 EventType::Message,
                 source,
-                EventContent::text("late answer"),
+                TextContent::new("late answer").into(),
                 event.created_at,
             );
             Ok(ChannelOutput::respond(vec![answer]))

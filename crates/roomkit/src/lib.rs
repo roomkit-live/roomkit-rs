@@ -82,15 +82,20 @@ pub mod model {
         ChannelType, CompositeContent, Confidence, Consumption, ConsumptionState, DeleteContent,
         DeleteType, DeliveryError, DeliveryResult, DeliveryStatus, DirectEvent, EditContent,
         EditSource, ErrorRecord, EventContent, EventDirection, EventId, EventSource, EventStatus,
-        EventType, EventUpdates, HOST_CHANNEL_ID, HookDecision, HookResult, IdentificationStatus,
-        Identity, IdentityId, InboundMessage, InjectedEvent, Latitude, LocationContent, Longitude,
-        MAX_COMPOSITE_DEPTH, MediaContent, Metadata, ModelError, Observation, ObservationId,
-        Participant, ParticipantConsumption, ParticipantId, ParticipantRole, ParticipantStatus,
-        ProviderResult, RateLimit, RetryPolicy, RichContent, RichFormat, Room, RoomContext,
-        RoomEvent, RoomId, RoomStatus, RoomTimers, RoomUpdates, SystemContent, Task, TaskId,
-        TaskStatus, TemplateContent, TextContent, Timestamp, ToolCall, ToolCallContent,
-        ToolCallOutcome, ToolCallStatus, VerificationStatus, VideoContent, Visibility,
+        EventType, EventUpdates, HookDecision, HookResult, IdentificationStatus, Identity,
+        IdentityId, InboundMessage, InjectedEvent, Latitude, LocationContent, Longitude,
+        MediaContent, Metadata, ModelError, Observation, ObservationId, Participant,
+        ParticipantConsumption, ParticipantId, ParticipantRole, ParticipantStatus, ProviderResult,
+        RateLimit, RetryPolicy, RichContent, RichFormat, Room, RoomContext, RoomEvent, RoomId,
+        RoomStatus, RoomTimers, RoomUpdates, SystemContent, Task, TaskId, TaskStatus,
+        TemplateContent, TextContent, Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+        VerificationStatus, VideoContent, Visibility,
     };
+    // Outside the public API: the Python implementation keeps them private,
+    // and the workspace's crates read them across crates. `ToolCall` leaves
+    // with lot 3 (`ToolCallEvent`) and lot 5 (`AiToolCall`).
+    #[doc(hidden)]
+    pub use roomkit_core::model::{HOST_CHANNEL_ID, MAX_COMPOSITE_DEPTH, ToolCall};
 }
 pub use roomkit_core::ops::{
     CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, ConfigError, FrameworkEvent,

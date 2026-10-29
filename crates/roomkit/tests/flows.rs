@@ -15,7 +15,7 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventId, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    EventId, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
     Timestamp,
 };
 use roomkit::testing::{
@@ -38,7 +38,7 @@ fn room_id() -> RoomId {
 }
 
 fn message(from: &RecordingTransport, text: &str) -> InboundMessage {
-    InboundMessage::new(from.id().clone(), "+15551234567", EventContent::text(text))
+    InboundMessage::new(from.id().clone(), "+15551234567", TextContent::new(text))
 }
 
 /// A kit with one room, an SMS transport and an echo agent, all attached.
@@ -190,7 +190,7 @@ async fn an_async_hook_on_before_broadcast_observes_the_payload_the_chain_left()
     let (kit, sms) = sms_and_agent().await;
     kit.before_broadcast("rewrite", |event, _| {
         let mut rewritten = event;
-        rewritten.content = EventContent::text("rewritten");
+        rewritten.content = TextContent::new("rewritten").into();
         ready(Ok(HookResult::modify(rewritten)))
     })
     .unwrap();
@@ -432,11 +432,7 @@ async fn an_inbound_event_is_committed_under_an_id_of_the_pipeline() {
     .unwrap();
     let mut ids = Vec::new();
     for text in ["one", "two"] {
-        let sent = InboundMessage::new(
-            channel("whatsapp"),
-            "+15551234567",
-            EventContent::text(text),
-        );
+        let sent = InboundMessage::new(channel("whatsapp"), "+15551234567", TextContent::new(text));
         let result = kit
             .process_inbound(
                 sent,

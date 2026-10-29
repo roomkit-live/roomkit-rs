@@ -12,8 +12,8 @@
 //! the budget at once (`Inbound::drawing_on`).
 
 use roomkit_core::model::{
-    ChannelType, EventContent, HookResult, InboundMessage, InjectedEvent, ParticipantId, Room,
-    RoomId, Timestamp,
+    ChannelType, HookResult, InboundMessage, InjectedEvent, ParticipantId, Room, RoomId,
+    TextContent, Timestamp,
 };
 use roomkit_core::ops::{Inbound, InboundError, InboundResult, InboundTarget};
 use roomkit_core::rules::chain_depth::{Draw, ReentryBudget};
@@ -248,7 +248,7 @@ mod a_named_message {
     #[test]
     fn past_the_budget_is_refused_before_its_channel_is_looked_up() {
         let mut sim = Sim::new();
-        let message = InboundMessage::new(channel("fax"), SENDER, EventContent::text("Hi"));
+        let message = InboundMessage::new(channel("fax"), SENDER, TextContent::new("Hi"));
         let operation = Inbound::new(
             sim.shared_config(),
             InboundTarget::Room(room_id()),
@@ -279,7 +279,7 @@ mod a_hook_s_body {
     use super::*;
 
     fn console(text: &str) -> DirectEvent {
-        DirectEvent::new(channel("ws"), EventContent::text(text))
+        DirectEvent::new(channel("ws"), TextContent::new(text))
     }
 
     fn room() -> Sim {

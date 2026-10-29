@@ -120,7 +120,7 @@ fn native_or_text(content: &EventContent, native: bool) -> EventContent {
     if native {
         content.clone()
     } else {
-        EventContent::text(text_of(content))
+        TextContent::new(text_of(content)).into()
     }
 }
 
@@ -137,7 +137,7 @@ fn transcode_composite(
         .iter()
         .all(|part| matches!(part, EventContent::Text(_)))
     {
-        return EventContent::text(lines(&parts));
+        return TextContent::new(lines(&parts)).into();
     }
     // Each part is replaced by its own transcoding, which never nests deeper.
     EventContent::Composite(CompositeContent::from_derived_parts(parts))
@@ -305,7 +305,7 @@ mod tests {
     fn edit(new_body: &str) -> EventContent {
         EventContent::Edit(EditContent {
             target_event_id: EventId::new("evt_1").unwrap(),
-            new_content: Box::new(EventContent::text(new_body)),
+            new_content: Box::new(TextContent::new(new_body).into()),
             edit_source: None,
         })
     }
@@ -486,7 +486,7 @@ mod tests {
     #[test]
     fn an_edit_of_a_composite_falls_back_to_one_correction() {
         let new_content = composite(vec![
-            EventContent::text("Here is the receipt"),
+            TextContent::new("Here is the receipt").into(),
             media("https://example.com/a.jpg", None, Some("a.jpg")),
         ]);
         let edit = EventContent::Edit(EditContent {
@@ -497,7 +497,7 @@ mod tests {
         let capabilities = carrying(&[ChannelMediaType::Text, ChannelMediaType::Media]);
         assert_eq!(
             transcode(&edit, &capabilities),
-            EventContent::text("Correction: Here is the receipt\n[Media: a.jpg]")
+            TextContent::new("Correction: Here is the receipt\n[Media: a.jpg]").into()
         );
     }
 
@@ -531,8 +531,8 @@ mod tests {
     #[test]
     fn a_composite_of_text_fallbacks_becomes_one_text() {
         let content = composite(vec![
-            EventContent::text("Here is the receipt"),
-            EventContent::text(""),
+            TextContent::new("Here is the receipt").into(),
+            TextContent::new("").into(),
             media("https://example.com/a.jpg", None, Some("a.jpg")),
         ]);
         assert_eq!(
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn a_composite_keeps_the_parts_the_channel_carries() {
         let photo = media("https://example.com/a.jpg", None, Some("a.jpg"));
-        let content = composite(vec![EventContent::text("Receipt"), photo.clone()]);
+        let content = composite(vec![TextContent::new("Receipt").into(), photo.clone()]);
         let capabilities = carrying(&[ChannelMediaType::Text, ChannelMediaType::Media]);
         assert_eq!(transcode(&content, &capabilities), content);
     }
@@ -577,7 +577,7 @@ mod tests {
             max_length: Some(max_length),
             ..text_only()
         };
-        body_of(&transcode(&EventContent::text(body), &capabilities)).to_owned()
+        body_of(&transcode(&TextContent::new(body).into(), &capabilities)).to_owned()
     }
 
     #[test]
@@ -601,7 +601,7 @@ mod tests {
             max_length: Some(10),
             ..text_only()
         };
-        let content = EventContent::text("short");
+        let content = EventContent::from(TextContent::new("short"));
         assert_eq!(transcode(&content, &capabilities), content);
     }
 
@@ -617,14 +617,17 @@ mod tests {
     #[test]
     fn the_text_parts_of_a_kept_composite_are_cut_to_the_max_length() {
         let photo = media("https://example.com/a.jpg", None, None);
-        let content = composite(vec![EventContent::text("Receipt attached"), photo.clone()]);
+        let content = composite(vec![
+            TextContent::new("Receipt attached").into(),
+            photo.clone(),
+        ]);
         let capabilities = ChannelCapabilities {
             max_length: Some(7),
             ..carrying(&[ChannelMediaType::Text, ChannelMediaType::Media])
         };
         assert_eq!(
             transcode(&content, &capabilities),
-            composite(vec![EventContent::text("Rece..."), photo])
+            composite(vec![TextContent::new("Rece...").into(), photo])
         );
     }
 }

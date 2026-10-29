@@ -8,8 +8,8 @@ use super::{Message, Role, conversation};
 use crate::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventContent,
     EventDirection, EventId, EventSource, EventStatus, EventType, Participant, ParticipantId,
-    ParticipantRole, Room, RoomContext, RoomEvent, RoomId, Timestamp, ToolCall, ToolCallContent,
-    ToolCallOutcome, ToolCallStatus,
+    ParticipantRole, Room, RoomContext, RoomEvent, RoomId, TextContent, Timestamp, ToolCall,
+    ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use crate::rules::authors::with_author;
 
@@ -72,7 +72,7 @@ impl Timeline {
             RoomId::new("room_1").unwrap(),
             event_type,
             source,
-            EventContent::text(text),
+            TextContent::new(text).into(),
             Timestamp::UNIX_EPOCH,
         );
         if let Some(name) = name {

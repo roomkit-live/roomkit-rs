@@ -81,6 +81,16 @@ pub enum ModelError {
         max: f64,
     },
 
+    /// A media URL is refused when its content is built (RFC §6.4): `reason`
+    /// is the Python implementation's message.
+    #[error("{reason}: {value:?}")]
+    InvalidMediaUrl {
+        /// The refused URL.
+        value: String,
+        /// Why it is refused.
+        reason: &'static str,
+    },
+
     /// A hook result says `modify` without the payload that replaces the
     /// trigger's (gap G-010).
     #[error("a modify hook result carries no replacement payload")]

@@ -729,7 +729,7 @@ mod tests {
 
     use super::*;
     use crate::model::{
-        ChannelDirection, EventContent, EventDirection, EventId, EventSource, EventType, Timestamp,
+        ChannelDirection, EventDirection, EventId, EventSource, EventType, TextContent, Timestamp,
     };
     use crate::rules::addresses::{CountryCode, PHONE_NUMBER};
 
@@ -1311,7 +1311,7 @@ mod tests {
                 RoomId::new("room_1").unwrap(),
                 EventType::Message,
                 source,
-                EventContent::text("Hi"),
+                TextContent::new("Hi").into(),
                 Timestamp::UNIX_EPOCH,
             );
             event.status = status;

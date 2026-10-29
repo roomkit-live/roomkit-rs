@@ -267,7 +267,7 @@ mod tests {
     use crate::model::{
         ChannelType, CompositeContent, EventContent, EventDirection, EventId, EventSource,
         Latitude, LocationContent, Longitude, Room, RoomId, SystemContent, TemplateContent,
-        Timestamp, ToolCallContent, ToolCallStatus,
+        TextContent, Timestamp, ToolCallContent, ToolCallStatus,
     };
 
     fn channel(id: &str) -> ChannelId {
@@ -284,7 +284,7 @@ mod tests {
                 ChannelType::WEBSOCKET,
                 EventDirection::Inbound,
             ),
-            EventContent::text(text),
+            TextContent::new(text).into(),
             Timestamp::UNIX_EPOCH,
         )
     }
@@ -459,13 +459,13 @@ mod tests {
         #[test]
         fn a_modify_changes_the_instruction_s_text_and_other_metadata() {
             let kept = replaced(|event| {
-                event.content = EventContent::text("Introduce yourself briefly.");
+                event.content = TextContent::new("Introduce yourself briefly.").into();
                 event.metadata.insert("tone".to_owned(), json!("brief"));
             });
             assert_eq!(
                 (kept.content, kept.metadata.get("tone")),
                 (
-                    EventContent::text("Introduce yourself briefly."),
+                    TextContent::new("Introduce yourself briefly.").into(),
                     Some(&json!("brief"))
                 )
             );
@@ -726,9 +726,9 @@ mod tests {
                 (notice(), "Call transferred."),
                 (
                     composite(vec![
-                        EventContent::text("First."),
-                        EventContent::text(""),
-                        EventContent::text("Then."),
+                        TextContent::new("First.").into(),
+                        TextContent::new("").into(),
+                        TextContent::new("Then.").into(),
                     ]),
                     "First.\nThen.",
                 ),

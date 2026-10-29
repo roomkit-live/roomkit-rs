@@ -14,8 +14,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, HookResult, InboundMessage, Metadata, Participant, ParticipantId, RoomContext,
-    RoomEvent, RoomId, Timestamp,
+    HookResult, InboundMessage, Metadata, Participant, ParticipantId, RoomContext, RoomEvent,
+    RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
     EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
@@ -36,7 +36,7 @@ fn room_id() -> RoomId {
 }
 
 fn message(from: &RecordingTransport, text: &str) -> InboundMessage {
-    InboundMessage::new(from.id().clone(), "+15551234567", EventContent::text(text))
+    InboundMessage::new(from.id().clone(), "+15551234567", TextContent::new(text))
 }
 
 /// A kit with no room, an SMS transport and an echo agent registered.
@@ -409,11 +409,7 @@ async fn sms_room(attach_sms: Option<&str>) -> (RoomKit, Sms) {
 }
 
 fn customer(text: &str) -> InboundMessage {
-    InboundMessage::new(
-        channel("sms"),
-        "+1 (555) 123-4567",
-        EventContent::text(text),
-    )
+    InboundMessage::new(channel("sms"), "+1 (555) 123-4567", TextContent::new(text))
 }
 
 /// RFC §10.1 step 2: with a room id given, only a room step 2 creates

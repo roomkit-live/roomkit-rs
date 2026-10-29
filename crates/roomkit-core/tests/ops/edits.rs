@@ -14,7 +14,7 @@ use roomkit_core::model::{
     ChannelOutput, CompositeContent, DeleteContent, DeleteType, DirectEvent, EditContent,
     EditSource, EventContent, EventId, EventStatus, EventType, EventUpdates, HookResult,
     InboundMessage, InjectedEvent, Participant, ParticipantId, ParticipantRole, Room, RoomEvent,
-    RoomId, RoomStatus, RoomTimers, Timestamp, Visibility,
+    RoomId, RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit_core::ops::{Entry, InboundResult};
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -56,10 +56,10 @@ fn edit_from(sender: &str, target: &str, text: &str) -> InboundMessage {
     let mut message = InboundMessage::new(
         channel("wa"),
         sender,
-        EventContent::Edit(
-            EditContent::new(id(target), EventContent::text(text))
-                .with_edit_source(EditSource::Sender),
-        ),
+        EventContent::Edit(EditContent {
+            edit_source: Some(EditSource::Sender),
+            ..EditContent::new(id(target), TextContent::new(text))
+        }),
     );
     message.event_type = EventType::Edit;
     message
@@ -75,7 +75,10 @@ fn delete_from(sender: &str, target: &str, delete_type: DeleteType) -> InboundMe
     let mut message = InboundMessage::new(
         channel("wa"),
         sender,
-        EventContent::Delete(DeleteContent::new(id(target)).with_delete_type(delete_type)),
+        EventContent::Delete(DeleteContent {
+            delete_type,
+            ..DeleteContent::new(id(target))
+        }),
     );
     message.event_type = EventType::Delete;
     message
@@ -182,7 +185,7 @@ mod an_accepted_edit {
                 serde_json::Value::Object(target.metadata.clone())
             ),
             (
-                EventContent::text("I need 50000$"),
+                TextContent::new("I need 50000$").into(),
                 json!({ "edited": true })
             )
         );
@@ -256,7 +259,7 @@ mod an_accepted_edit {
             .unwrap();
         assert_eq!(
             stored(&sim, "evt_1").content,
-            EventContent::text("I need 500000$")
+            TextContent::new("I need 500000$").into()
         );
     }
 }
@@ -277,7 +280,7 @@ mod an_accepted_delete {
                 serde_json::Value::Object(target.metadata.clone())
             ),
             (
-                EventContent::text("I need 5000$"),
+                TextContent::new("I need 5000$").into(),
                 json!({ "deleted": true })
             )
         );
@@ -373,7 +376,7 @@ mod an_accepted_delete {
         sim.send(Sim::message("wa", "Is it gone?")).unwrap();
         assert_eq!(
             stored(&sim, "evt_1").content,
-            EventContent::text("I need 5000$")
+            TextContent::new("I need 5000$").into()
         );
     }
 
@@ -435,7 +438,7 @@ mod native_and_fallback_delivery {
         sim.send(edit()).unwrap();
         assert_eq!(
             sms.borrow()[0].content,
-            EventContent::text("Correction: I need 50000$")
+            TextContent::new("Correction: I need 50000$").into()
         );
     }
 
@@ -455,7 +458,7 @@ mod native_and_fallback_delivery {
         sim.send(delete()).unwrap();
         assert_eq!(
             sms.borrow()[0].content,
-            EventContent::text("[Message deleted]")
+            TextContent::new("[Message deleted]").into()
         );
     }
 
@@ -513,7 +516,7 @@ mod a_blocked_change {
                 sim.timeline_lines()[1].clone()
             ),
             (
-                EventContent::text("I need 5000$"),
+                TextContent::new("I need 5000$").into(),
                 true,
                 Vec::new(),
                 "#1 wa blocked:moderation \"Correction: I need 50000$\"".to_owned()
@@ -550,7 +553,7 @@ mod a_blocked_change {
             ),
             (
                 Some("source_muted".to_owned()),
-                EventContent::text("I need 5000$"),
+                TextContent::new("I need 5000$").into(),
                 vec!["commit #1 wa blocked:source_muted \"Correction: I need 50000$\""]
             )
         );
@@ -627,13 +630,13 @@ mod a_refused_change {
     fn whose_new_content_is_a_delete_is_refused_target_event_not_found() {
         let mut sim = room();
         let mut nested = edit();
-        nested.content = EventContent::Edit(
-            EditContent::new(
+        nested.content = EventContent::Edit(EditContent {
+            edit_source: Some(EditSource::Sender),
+            ..EditContent::new(
                 id("evt_1"),
                 EventContent::Delete(DeleteContent::new(id("evt_9"))),
             )
-            .with_edit_source(EditSource::Sender),
-        );
+        });
         let result = sim.send(nested).unwrap();
         assert_eq!(
             refusal(&result, &sim),
@@ -646,7 +649,7 @@ mod a_refused_change {
     #[test]
     fn hiding_an_edit_in_a_composite_is_refused_target_event_not_found() {
         let mut sim = room();
-        let parts = vec![EventContent::text("See below"), edit().content.clone()];
+        let parts = vec![TextContent::new("See below").into(), edit().content.clone()];
         let smuggled = InboundMessage::new(
             channel("wa"),
             OTHER,
@@ -723,7 +726,7 @@ mod a_refused_change {
         sim.send(edit_from(OTHER, "evt_1", "I need 0$")).unwrap();
         assert_eq!(
             stored(&sim, "evt_1").content,
-            EventContent::text("I need 5000$")
+            TextContent::new("I need 5000$").into()
         );
     }
 
@@ -769,10 +772,10 @@ mod an_agent_s_response {
                 };
                 let mut correction = response("ai", event, "");
                 correction.event_type = EventType::Edit;
-                correction.content = EventContent::Edit(
-                    EditContent::new(target_event_id, EventContent::text("Hello"))
-                        .with_edit_source(EditSource::Sender),
-                );
+                correction.content = EventContent::Edit(EditContent {
+                    edit_source: Some(EditSource::Sender),
+                    ..EditContent::new(target_event_id, TextContent::new("Hello"))
+                });
                 Ok(ChannelOutput::respond(vec![correction]))
             }),
         );
@@ -803,7 +806,7 @@ mod an_agent_s_response {
                 sim.async_triggers()
             ),
             (
-                EventContent::text("Hello"),
+                TextContent::new("Hello").into(),
                 Some(json!(true)),
                 vec![HookTrigger::OnEventUpdated]
             )
@@ -818,7 +821,7 @@ mod an_agent_s_response {
         assert_eq!(
             (stored(&sim, "evt_1").content.clone(), sim.timeline_lines()),
             (
-                EventContent::text("I need 5000$"),
+                TextContent::new("I need 5000$").into(),
                 vec![
                     "#0 wa delivered \"I need 5000$\"".to_owned(),
                     "#1 wa delivered \"typo?\"".to_owned(),
@@ -837,7 +840,10 @@ mod a_hook {
     fn moderation_delete(delete_type: DeleteType) -> RoomEvent {
         let mut delete = notice_event("placeholder", "");
         delete.event_type = EventType::Delete;
-        let mut content = DeleteContent::new(id("evt_1")).with_delete_type(delete_type);
+        let mut content = DeleteContent {
+            delete_type,
+            ..DeleteContent::new(id("evt_1"))
+        };
         content.reason = Some("spam".to_owned());
         delete.content = EventContent::Delete(content);
         delete
@@ -913,7 +919,7 @@ mod a_hook {
                 let mut redacted = event.clone();
                 if let EventContent::Edit(edit) = &mut redacted.content {
                     edit.target_event_id = id("evt_2");
-                    *edit.new_content = EventContent::text("I need [redacted]");
+                    *edit.new_content = TextContent::new("I need [redacted]").into();
                 }
                 HookOutcome::Returned(HookResult::modify(redacted))
             }),
@@ -925,8 +931,8 @@ mod a_hook {
                 stored(&sim, "evt_2").content.clone()
             ),
             (
-                EventContent::text("I need [redacted]"),
-                EventContent::text("Bonjour")
+                TextContent::new("I need [redacted]").into(),
+                TextContent::new("Bonjour").into()
             )
         );
     }
@@ -941,21 +947,21 @@ mod a_hook {
             "redactor",
             Box::new(|event| {
                 let mut redacted = event.clone();
-                redacted.content = EventContent::text("I need [redacted]");
+                redacted.content = TextContent::new("I need [redacted]").into();
                 HookOutcome::Returned(HookResult::modify(redacted))
             }),
         );
         sim.send(edit()).unwrap();
-        let redacted = EventContent::Edit(
-            EditContent::new(id("evt_1"), EventContent::text("I need [redacted]"))
-                .with_edit_source(EditSource::Sender),
-        );
+        let redacted = EventContent::Edit(EditContent {
+            edit_source: Some(EditSource::Sender),
+            ..EditContent::new(id("evt_1"), TextContent::new("I need [redacted]"))
+        });
         assert_eq!(
             (
                 stored(&sim, "evt_2").content.clone(),
                 stored(&sim, "evt_1").content.clone()
             ),
-            (redacted, EventContent::text("I need [redacted]"))
+            (redacted, TextContent::new("I need [redacted]").into())
         );
     }
 
@@ -977,7 +983,7 @@ mod a_hook {
         sim.send(edit()).unwrap();
         assert_eq!(
             stored(&sim, "evt_1").content,
-            EventContent::text("I need 50000$")
+            TextContent::new("I need 50000$").into()
         );
     }
 
@@ -1054,10 +1060,10 @@ mod a_hook {
             "forger",
             Box::new(|event| {
                 let mut forged = event.clone();
-                forged.content = EventContent::Edit(
-                    EditContent::new(id("evt_1"), EventContent::text("forged"))
-                        .with_edit_source(EditSource::Sender),
-                );
+                forged.content = EventContent::Edit(EditContent {
+                    edit_source: Some(EditSource::Sender),
+                    ..EditContent::new(id("evt_1"), TextContent::new("forged"))
+                });
                 HookOutcome::Returned(HookResult::modify(forged))
             }),
         );
@@ -1068,7 +1074,7 @@ mod a_hook {
                 sim.timeline_lines()[1].clone()
             ),
             (
-                EventContent::text("I need 5000$"),
+                TextContent::new("I need 5000$").into(),
                 "#1 wa delivered \"Bonjour\"".to_owned()
             )
         );
@@ -1082,7 +1088,7 @@ mod a_direct_update {
 
     fn rewrite(text: &str) -> EventUpdates {
         EventUpdates {
-            content: Some(EventContent::text(text)),
+            content: Some(TextContent::new(text).into()),
             ..EventUpdates::default()
         }
     }
@@ -1121,7 +1127,7 @@ mod a_direct_update {
                 updated.metadata.is_empty(),
                 updated.content
             ),
-            (true, true, EventContent::text("I need 6000$"))
+            (true, true, TextContent::new("I need 6000$").into())
         );
     }
 
@@ -1185,7 +1191,7 @@ mod a_direct_update {
                 sim.async_triggers()
             ),
             (
-                Some(EventContent::text("I need 5000$")),
+                Some(TextContent::new("I need 5000$").into()),
                 Vec::<&str>::new(),
                 Vec::new()
             )
@@ -1216,7 +1222,7 @@ mod a_direct_update {
         let updated = sim.update_event("evt_1", rewrite("I need 6000$")).unwrap();
         assert_eq!(
             updated.map(|event| event.content),
-            Some(EventContent::text("I need 6000$"))
+            Some(TextContent::new("I need 6000$").into())
         );
     }
 
@@ -1277,7 +1283,7 @@ mod a_direct_update {
                 history
             ),
             (
-                Ok(Some(EventContent::text("I need 6000$"))),
+                Ok(Some(TextContent::new("I need 6000$").into())),
                 vec![HookTrigger::OnEventUpdated],
                 Some(vec!["I need 6000$".to_owned()])
             )
@@ -1644,7 +1650,7 @@ mod a_mutation_trigger {
                         organization_id: None,
                         event: Box::new(DirectEvent::new(
                             channel("ws"),
-                            EventContent::text("Heads up"),
+                            TextContent::new("Heads up"),
                         )),
                     })
                 }),
@@ -1687,10 +1693,10 @@ mod a_mutation_trigger {
         filtered(&mut sim, "of_system", "system");
         let mut correction = notice_event("placeholder", "");
         correction.event_type = EventType::Edit;
-        correction.content = EventContent::Edit(
-            EditContent::new(id("evt_1"), EventContent::text("I need [redacted]"))
-                .with_edit_source(EditSource::System),
-        );
+        correction.content = EventContent::Edit(EditContent {
+            edit_source: Some(EditSource::System),
+            ..EditContent::new(id("evt_1"), TextContent::new("I need [redacted]"))
+        });
         sim.before_broadcast(
             "redactor",
             Box::new(move |event| {

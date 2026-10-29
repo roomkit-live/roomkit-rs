@@ -14,9 +14,9 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates,
-    HookResult, Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId,
-    Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, Timestamp,
+    EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates, HookResult,
+    Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId, Room,
+    RoomContext, RoomEvent, RoomId, RoomUpdates, Task, TextContent, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -370,11 +370,7 @@ async fn a_message_dropped_during_its_commit_is_delivered() {
     let (kit, ws) = gated_room().await;
     let mut events = kit.subscribe();
     let room = room_id();
-    let message = InboundMessage::new(
-        channel("sms"),
-        "+15551234567",
-        EventContent::text("Bonjour"),
-    );
+    let message = InboundMessage::new(channel("sms"), "+15551234567", TextContent::new("Bonjour"));
     drop_during_the_commit(
         &kit,
         kit.process_inbound(
@@ -403,7 +399,7 @@ async fn an_injected_event_dropped_during_its_commit_is_delivered() {
     let event = SendEventOptions::default();
     drop_during_the_commit(
         &kit,
-        kit.send_event(&room, &channel("sms"), EventContent::text("Bonjour"), event),
+        kit.send_event(&room, &channel("sms"), TextContent::new("Bonjour"), event),
     )
     .await;
     assert_eq!(
@@ -437,7 +433,7 @@ async fn slow_commit(
         let kit = kit.clone();
         tokio::spawn(async move {
             let message =
-                InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("Slow"));
+                InboundMessage::new(channel("sms"), "+15551234567", TextContent::new("Slow"));
             let options = ProcessInboundOptions {
                 room_id: Some(room_id()),
                 ..Default::default()
@@ -671,7 +667,7 @@ fn record(text: &str) -> RoomEvent {
         room_id(),
         EventType::Message,
         source,
-        EventContent::text(text),
+        TextContent::new(text).into(),
         Timestamp::UNIX_EPOCH,
     )
 }
@@ -788,7 +784,7 @@ async fn the_third_wait_counts_from_the_channels_close() {
         let kit = kit.clone();
         tokio::spawn(async move {
             let message =
-                InboundMessage::new(channel("sms"), "+15551234567", EventContent::text("First"));
+                InboundMessage::new(channel("sms"), "+15551234567", TextContent::new("First"));
             let options = ProcessInboundOptions {
                 room_id: Some(room_id()),
                 ..Default::default()
@@ -829,7 +825,7 @@ async fn the_third_wait_counts_from_the_channels_close() {
 
 /// `text` from the SMS sender into `room`.
 fn sms_into(room: RoomId, text: &str) -> (InboundMessage, ProcessInboundOptions) {
-    let message = InboundMessage::new(channel("sms"), "+15551234567", EventContent::text(text));
+    let message = InboundMessage::new(channel("sms"), "+15551234567", TextContent::new(text));
     let options = ProcessInboundOptions {
         room_id: Some(room),
         ..Default::default()
@@ -940,7 +936,7 @@ impl Channel for Agent {
             event.room_id.clone(),
             EventType::Message,
             source,
-            EventContent::text("Answer"),
+            TextContent::new("Answer").into(),
             event.created_at,
         );
         Ok(ChannelOutput::respond(vec![answer]))
@@ -1009,7 +1005,7 @@ fn side_entry_hook(kit: &RoomKit<GatedStore>, locked: bool, more: Duration) {
                 kit.send_event(
                     &room_id(),
                     &channel("sms"),
-                    EventContent::text("First"),
+                    TextContent::new("First"),
                     options,
                 )
                 .await?;
@@ -1076,11 +1072,8 @@ async fn closed_while_its_hook_hangs(kit: &RoomKit<GatedStore>, hanging: &Notify
     let call = {
         let kit = kit.clone();
         tokio::spawn(async move {
-            let message = InboundMessage::new(
-                channel("sms"),
-                "+15551234567",
-                EventContent::text("Bonjour"),
-            );
+            let message =
+                InboundMessage::new(channel("sms"), "+15551234567", TextContent::new("Bonjour"));
             let options = ProcessInboundOptions {
                 room_id: Some(room_id()),
                 ..Default::default()
@@ -1116,7 +1109,7 @@ async fn a_call_cut_before_its_commit_does_not_read_an_adopted_entry_s() {
         let hanging = Arc::clone(&signal);
         async move {
             if event.source.channel_id == channel("sms") {
-                let injected = EventContent::text("Heads up");
+                let injected = TextContent::new("Heads up");
                 let options = SendEventOptions::default();
                 kit.send_event(&room_id(), &channel("ws"), injected, options)
                     .await

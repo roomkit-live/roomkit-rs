@@ -5,10 +5,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::media_url::{media_url, playable_url};
 use super::{EventId, Metadata, ModelError};
 
 /// How deep composite contents may nest (RFC §5.3). The outermost composite
-/// is level 1 (gap G-006).
+/// is level 1 (gap G-006). Hidden: the Python implementation keeps it
+/// private, and roomkit reads it across crates.
+#[doc(hidden)]
 pub const MAX_COMPOSITE_DEPTH: usize = 5;
 
 /// An event's payload: exactly one content type, tagged by `type` with the
@@ -44,14 +47,9 @@ pub enum EventContent {
 }
 
 impl EventContent {
-    /// Plain text content.
-    pub fn text(body: impl Into<String>) -> Self {
-        Self::Text(TextContent::new(body))
-    }
-
     /// How many composite levels this content holds, counting through the
     /// new content of an edit (gap G-006): 0 for any other content.
-    pub fn composite_depth(&self) -> usize {
+    pub(crate) fn composite_depth(&self) -> usize {
         match self {
             Self::Composite(composite) => composite.depth(),
             Self::Edit(edit) => edit.new_content.composite_depth(),
@@ -69,9 +67,36 @@ impl EventContent {
     }
 }
 
+/// Each content is an [`EventContent`], as a Python content is a member of
+/// the union a parameter takes: a parameter that takes a content takes
+/// `impl Into<EventContent>`.
+macro_rules! into_event_content {
+    ($($variant:ident($content:ident)),* $(,)?) => {$(
+        impl From<$content> for EventContent {
+            fn from(content: $content) -> Self {
+                Self::$variant(content)
+            }
+        }
+    )*};
+}
+
+into_event_content!(
+    Text(TextContent),
+    Rich(RichContent),
+    Media(MediaContent),
+    Location(LocationContent),
+    Audio(AudioContent),
+    Video(VideoContent),
+    Composite(CompositeContent),
+    System(SystemContent),
+    Template(TemplateContent),
+    Edit(EditContent),
+    Delete(DeleteContent),
+    ToolCall(ToolCallContent),
+);
+
 /// Plain text (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct TextContent {
     /// The message text.
     pub body: String,
@@ -104,7 +129,6 @@ pub enum RichFormat {
 
 /// Formatted text with interactive elements (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct RichContent {
     /// The primary text, in `format`.
     pub body: String,
@@ -141,8 +165,13 @@ impl RichContent {
 }
 
 /// A file, an image or a document (RFC §5.3).
+///
+/// `url` is a link (`http`, `https`), a `data:` URI, or a reference
+/// `<scheme>://…` in a scheme the application chooses, naming a media it
+/// holds and resolves (RFC §6.4). [`MediaContent::new`] and deserialization
+/// refuse any other, as the Python implementation's validator does.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
+#[serde(try_from = "MediaContentWire")]
 pub struct MediaContent {
     /// A link, a `data:` URI, or a reference the application resolves.
     pub url: String,
@@ -160,21 +189,53 @@ pub struct MediaContent {
 }
 
 impl MediaContent {
-    /// A file at `url` of type `mime_type`, with no name, caption or size.
-    pub fn new(url: impl Into<String>, mime_type: impl Into<String>) -> Self {
-        Self {
-            url: url.into(),
+    /// A file at `url` of type `mime_type`, with no name, caption or size; a
+    /// link's or a `data:` URI's scheme lower-cased.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::InvalidMediaUrl`] for a URL that is neither a
+    /// link, a `data:` URI nor a reference: a scheme of one character, or
+    /// `file`, `ftp`, `javascript` or `vbscript`, a `..` segment or a
+    /// backslash (RFC §6.4).
+    pub fn new(url: impl Into<String>, mime_type: impl Into<String>) -> Result<Self, ModelError> {
+        Ok(Self {
+            url: media_url(url.into())?,
             mime_type: mime_type.into(),
             filename: None,
             caption: None,
             size_bytes: None,
-        }
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct MediaContentWire {
+    url: String,
+    mime_type: String,
+    #[serde(default)]
+    filename: Option<String>,
+    #[serde(default)]
+    caption: Option<String>,
+    #[serde(default)]
+    size_bytes: Option<u64>,
+}
+
+impl TryFrom<MediaContentWire> for MediaContent {
+    type Error = ModelError;
+
+    fn try_from(wire: MediaContentWire) -> Result<Self, Self::Error> {
+        Ok(Self {
+            filename: wire.filename,
+            caption: wire.caption,
+            size_bytes: wire.size_bytes,
+            ..Self::new(wire.url, wire.mime_type)?
+        })
     }
 }
 
 /// Geographic coordinates (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct LocationContent {
     /// The latitude.
     pub latitude: Latitude,
@@ -284,8 +345,13 @@ fn in_range(name: &'static str, value: f64, bound: f64) -> Result<f64, ModelErro
 }
 
 /// An audio message or voice note (RFC §5.3).
+///
+/// `url` starts with `http://`, `https://` or `data:`, as written, and
+/// `duration_seconds` is not negative: [`AudioContent::new`] and
+/// deserialization refuse any other, as the Python implementation's
+/// validators do.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
+#[serde(try_from = "AudioContentWire")]
 pub struct AudioContent {
     /// The audio URL, or a `data:` URI.
     pub url: String,
@@ -302,13 +368,18 @@ pub struct AudioContent {
 
 impl AudioContent {
     /// The audio at `url`, `audio/ogg`, with no duration or transcript.
-    pub fn new(url: impl Into<String>) -> Self {
-        Self {
-            url: url.into(),
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::InvalidMediaUrl`] for a URL that does not start
+    /// with `http://`, `https://` or `data:`.
+    pub fn new(url: impl Into<String>) -> Result<Self, ModelError> {
+        Ok(Self {
+            url: playable_url(url.into())?,
             duration_seconds: None,
             mime_type: default_audio_mime_type(),
             transcript: None,
-        }
+        })
     }
 }
 
@@ -316,16 +387,56 @@ fn default_audio_mime_type() -> String {
     "audio/ogg".to_owned()
 }
 
+#[derive(Deserialize)]
+struct AudioContentWire {
+    url: String,
+    #[serde(default)]
+    duration_seconds: Option<f64>,
+    #[serde(default = "default_audio_mime_type")]
+    mime_type: String,
+    #[serde(default)]
+    transcript: Option<String>,
+}
+
+impl TryFrom<AudioContentWire> for AudioContent {
+    type Error = ModelError;
+
+    fn try_from(wire: AudioContentWire) -> Result<Self, Self::Error> {
+        Ok(Self {
+            duration_seconds: duration(wire.duration_seconds)?,
+            mime_type: wire.mime_type,
+            transcript: wire.transcript,
+            ..Self::new(wire.url)?
+        })
+    }
+}
+
+/// A duration a content declares: not negative, as Python's `ge=0.0`.
+fn duration(seconds: Option<f64>) -> Result<Option<f64>, ModelError> {
+    match seconds {
+        Some(value) if !(value >= 0.0) => Err(ModelError::OutOfRange {
+            name: "duration_seconds",
+            value,
+            min: 0.0,
+            max: f64::INFINITY,
+        }),
+        _ => Ok(seconds),
+    }
+}
+
 /// A video message (RFC §5.3).
+///
+/// `url` and `thumbnail_url` follow [`AudioContent`]'s rule.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
+#[serde(try_from = "VideoContentWire")]
 pub struct VideoContent {
     /// The video URL, or a `data:` URI.
     pub url: String,
     /// The duration in seconds.
     #[serde(default)]
     pub duration_seconds: Option<f64>,
-    /// The MIME type.
+    /// The MIME type, `video/mp4` by default.
+    #[serde(default = "default_video_mime_type")]
     pub mime_type: String,
     /// A preview image URL.
     #[serde(default)]
@@ -333,14 +444,47 @@ pub struct VideoContent {
 }
 
 impl VideoContent {
-    /// The video at `url` of type `mime_type`, with no duration or preview.
-    pub fn new(url: impl Into<String>, mime_type: impl Into<String>) -> Self {
-        Self {
-            url: url.into(),
+    /// The video at `url`, `video/mp4`, with no duration or preview.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::InvalidMediaUrl`] for a URL that does not start
+    /// with `http://`, `https://` or `data:`.
+    pub fn new(url: impl Into<String>) -> Result<Self, ModelError> {
+        Ok(Self {
+            url: playable_url(url.into())?,
             duration_seconds: None,
-            mime_type: mime_type.into(),
+            mime_type: default_video_mime_type(),
             thumbnail_url: None,
-        }
+        })
+    }
+}
+
+fn default_video_mime_type() -> String {
+    "video/mp4".to_owned()
+}
+
+#[derive(Deserialize)]
+struct VideoContentWire {
+    url: String,
+    #[serde(default)]
+    duration_seconds: Option<f64>,
+    #[serde(default = "default_video_mime_type")]
+    mime_type: String,
+    #[serde(default)]
+    thumbnail_url: Option<String>,
+}
+
+impl TryFrom<VideoContentWire> for VideoContent {
+    type Error = ModelError;
+
+    fn try_from(wire: VideoContentWire) -> Result<Self, Self::Error> {
+        Ok(Self {
+            duration_seconds: duration(wire.duration_seconds)?,
+            mime_type: wire.mime_type,
+            thumbnail_url: wire.thumbnail_url.map(playable_url).transpose()?,
+            ..Self::new(wire.url)?
+        })
     }
 }
 
@@ -381,7 +525,9 @@ impl CompositeContent {
         &self.parts
     }
 
-    /// The parts, taken out of the composite.
+    /// The parts, taken out of the composite. Hidden: the Python
+    /// implementation has no such helper, and roomkit reads it across crates.
+    #[doc(hidden)]
     pub fn into_parts(self) -> Vec<EventContent> {
         self.parts
     }
@@ -422,7 +568,6 @@ impl TryFrom<RawCompositeContent> for CompositeContent {
 
 /// A framework-generated message (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct SystemContent {
     /// A human-readable description.
     pub body: String,
@@ -447,7 +592,6 @@ impl SystemContent {
 
 /// A pre-approved template (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct TemplateContent {
     /// The template's id.
     pub template_id: String,
@@ -492,7 +636,6 @@ pub enum EditSource {
 
 /// An edit of a previous message (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct EditContent {
     /// The edited event.
     pub target_event_id: EventId,
@@ -506,19 +649,12 @@ pub struct EditContent {
 impl EditContent {
     /// An edit of `target_event_id` to `new_content`, naming no source, as
     /// the RFC's `edit_source` defaults to null (RFC §5.3).
-    pub fn new(target_event_id: EventId, new_content: EventContent) -> Self {
+    pub fn new(target_event_id: EventId, new_content: impl Into<EventContent>) -> Self {
         Self {
             target_event_id,
-            new_content: Box::new(new_content),
+            new_content: Box::new(new_content.into()),
             edit_source: None,
         }
-    }
-
-    /// The same edit, made by `edit_source`.
-    #[must_use]
-    pub fn with_edit_source(mut self, edit_source: EditSource) -> Self {
-        self.edit_source = Some(edit_source);
-        self
     }
 }
 
@@ -538,7 +674,6 @@ pub enum DeleteType {
 
 /// A deletion of a previous message (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct DeleteContent {
     /// The deleted event.
     pub target_event_id: EventId,
@@ -559,13 +694,6 @@ impl DeleteContent {
             delete_type: DeleteType::default(),
             reason: None,
         }
-    }
-
-    /// The same delete, claiming `delete_type`.
-    #[must_use]
-    pub fn with_delete_type(mut self, delete_type: DeleteType) -> Self {
-        self.delete_type = delete_type;
-        self
     }
 }
 
@@ -604,7 +732,6 @@ pub enum ToolCallOutcome {
 
 /// A tool call (RFC §5.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct ToolCallContent {
     /// The tool called.
     pub tool_name: String,
@@ -663,7 +790,7 @@ mod tests {
     use super::*;
 
     fn composite_of_depth(depth: usize) -> EventContent {
-        let mut content = EventContent::text("innermost");
+        let mut content = EventContent::from(TextContent::new("innermost"));
         for _ in 0..depth {
             content = EventContent::Composite(CompositeContent::new(vec![content]).unwrap());
         }
@@ -681,7 +808,7 @@ mod tests {
     fn each_content_is_tagged_with_its_rfc_name() {
         let id = EventId::new("evt_1").unwrap();
         let contents = [
-            EventContent::text("hello"),
+            TextContent::new("hello").into(),
             EventContent::Rich(RichContent {
                 body: "**hello**".to_owned(),
                 format: RichFormat::Markdown,
@@ -725,7 +852,7 @@ mod tests {
             }),
             EventContent::Edit(EditContent {
                 target_event_id: id.clone(),
-                new_content: Box::new(EventContent::text("fixed")),
+                new_content: Box::new(TextContent::new("fixed").into()),
                 edit_source: None,
             }),
             EventContent::Delete(DeleteContent {
@@ -769,7 +896,7 @@ mod tests {
     #[test]
     fn text_content_serializes_with_its_tag() {
         assert_eq!(
-            serde_json::to_value(EventContent::text("Bonjour")).unwrap(),
+            serde_json::to_value(EventContent::from(TextContent::new("Bonjour"))).unwrap(),
             json!({ "type": "text", "body": "Bonjour", "language": null })
         );
     }
@@ -859,6 +986,83 @@ mod tests {
             panic!("expected audio content, got {parsed:?}");
         };
         assert_eq!(audio.mime_type, "audio/ogg");
+    }
+
+    /// RFC §6.4: a media URL is refused when the content is built, with the
+    /// Python implementation's message (probe
+    /// `tasks/probes/step5-lot2/media_urls.py`).
+    #[test]
+    fn a_media_url_no_reader_may_take_is_refused_when_built() {
+        let refused = [
+            MediaContent::new("javascript:alert(1)", "text/html"),
+            MediaContent::new("file:///etc/passwd", "text/plain"),
+            MediaContent::new("app://a/../b", "image/png"),
+        ]
+        .map(|built| built.unwrap_err());
+        assert_eq!(
+            refused,
+            ["javascript:alert(1)", "file:///etc/passwd", "app://a/../b"].map(|value| {
+                ModelError::InvalidMediaUrl {
+                    value: value.to_owned(),
+                    reason: "URL must be a link (http://, https://), a data: URI, or a \
+                             reference <scheme>://... (two letters of scheme at least, not \
+                             file, ftp, javascript or vbscript, no '..' segment and no \
+                             backslash)",
+                }
+            })
+        );
+        assert_eq!(
+            AudioContent::new("ftp://x"),
+            Err(ModelError::InvalidMediaUrl {
+                value: "ftp://x".to_owned(),
+                reason: "URL must start with http://, https://, or data:",
+            })
+        );
+    }
+
+    #[test]
+    fn a_link_s_scheme_is_lower_cased_and_a_reference_s_kept() {
+        let urls = [
+            ("HTTPS://A/b.png", "https://A/b.png"),
+            ("App://a/b", "App://a/b"),
+        ]
+        .map(|(url, _)| MediaContent::new(url, "image/png").unwrap().url);
+        assert_eq!(urls, ["https://A/b.png", "App://a/b"]);
+    }
+
+    #[test]
+    fn deserialization_applies_the_media_url_rule() {
+        let refused = [
+            json!({ "type": "media", "url": "javascript:alert(1)", "mime_type": "text/html" }),
+            json!({ "type": "audio", "url": "HTTPS://x/a.ogg" }),
+            json!({ "type": "audio", "url": "https://x/a.ogg", "duration_seconds": -1.0 }),
+            json!({ "type": "video", "url": "https://x/a.mp4", "thumbnail_url": "javascript:x" }),
+        ]
+        .map(|json| serde_json::from_value::<EventContent>(json).is_err());
+        let media: EventContent = serde_json::from_value(
+            json!({ "type": "media", "url": "HTTPS://A/b.png", "mime_type": "image/png" }),
+        )
+        .unwrap();
+        assert_eq!(
+            (refused, media),
+            (
+                [true; 4],
+                MediaContent::new("https://A/b.png", "image/png")
+                    .unwrap()
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn video_content_defaults_its_mime_type_to_mp4() {
+        let parsed: EventContent =
+            serde_json::from_value(json!({ "type": "video", "url": "https://example.com/a" }))
+                .unwrap();
+        assert_eq!(
+            parsed,
+            VideoContent::new("https://example.com/a").unwrap().into()
+        );
     }
 
     #[test]

@@ -16,7 +16,7 @@ mod timeline;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EditContent,
     EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, ParticipantId,
-    Room, RoomEvent, RoomId, RoomUpdates, Timestamp,
+    Room, RoomEvent, RoomId, RoomUpdates, TextContent, Timestamp,
 };
 use roomkit::{ConversationStore, RoomCounters};
 
@@ -41,7 +41,7 @@ pub(crate) fn event(index: u64) -> RoomEvent {
         room_id(),
         EventType::Message,
         EventSource::new(channel("sms"), ChannelType::SMS, EventDirection::Inbound),
-        EventContent::text("hi"),
+        TextContent::new("hi").into(),
         Timestamp::UNIX_EPOCH,
     );
     event.index = index;
@@ -68,7 +68,7 @@ pub(crate) fn edit_of(index: u64, target: u64) -> RoomEvent {
     edit.event_type = EventType::Edit;
     edit.content = EventContent::Edit(EditContent::new(
         event_id(&format!("evt_{target}")),
-        EventContent::text("corrected"),
+        TextContent::new("corrected"),
     ));
     edit
 }

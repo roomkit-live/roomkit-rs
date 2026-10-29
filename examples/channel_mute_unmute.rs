@@ -15,7 +15,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventContent, EventStatus, InboundMessage, RoomEvent, RoomId,
+    ChannelId, ChannelType, EventStatus, InboundMessage, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -66,7 +66,7 @@ async fn says(
     let message = InboundMessage::new(
         from.id().clone(),
         from.id().as_str(),
-        EventContent::text(text),
+        TextContent::new(text),
     );
     kit.process_inbound(
         message,

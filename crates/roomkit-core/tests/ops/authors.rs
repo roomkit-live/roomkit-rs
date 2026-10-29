@@ -4,8 +4,8 @@
 //! `core/_authors.py`), computed for the same room, sources and names.
 
 use roomkit_core::model::{
-    ChannelType, EventContent, EventDirection, EventSource, EventType, EventUpdates, HookResult,
-    Metadata, Participant, ParticipantId, RoomEvent, Timestamp,
+    ChannelType, EventDirection, EventSource, EventType, EventUpdates, HookResult, Metadata,
+    Participant, ParticipantId, RoomEvent, TextContent, Timestamp,
 };
 use roomkit_core::ops::UpdateEvent;
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -168,7 +168,7 @@ fn a_room_with_no_register_has_it_rebuilt_from_its_whole_timeline() {
             room_id(),
             EventType::Message,
             source,
-            EventContent::text("Hi"),
+            TextContent::new("Hi").into(),
             Timestamp::UNIX_EPOCH,
         );
         earlier
@@ -230,7 +230,7 @@ fn a_record_committed_outside_the_pipeline_carries_its_author() {
         room_id(),
         EventType::Message,
         source,
-        EventContent::text("Noted"),
+        TextContent::new("Noted").into(),
         Timestamp::UNIX_EPOCH,
     );
     record

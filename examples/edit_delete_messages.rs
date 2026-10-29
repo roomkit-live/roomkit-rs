@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 use roomkit::model::{
     ChannelCapabilities, ChannelId, ChannelType, DeleteContent, EditContent, EditSource,
-    EventContent, EventId, EventType, HookResult, InboundMessage, RoomEvent, RoomId,
+    EventContent, EventId, EventType, HookResult, InboundMessage, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -147,11 +147,8 @@ impl Conversation {
     /// The customer writes [`MESSAGES`].
     async fn chat(&mut self) -> Result<(), Box<dyn Error>> {
         for text in MESSAGES {
-            let message = InboundMessage::new(
-                self.customer.id().clone(),
-                CUSTOMER,
-                EventContent::text(text),
-            );
+            let message =
+                InboundMessage::new(self.customer.id().clone(), CUSTOMER, TextContent::new(text));
             let committed = self
                 .send(message)
                 .await?
@@ -168,10 +165,10 @@ impl Conversation {
         let mut message = InboundMessage::new(
             self.customer.id().clone(),
             CUSTOMER,
-            EventContent::Edit(
-                EditContent::new(target_event_id, EventContent::text(text))
-                    .with_edit_source(EditSource::Sender),
-            ),
+            EventContent::Edit(EditContent {
+                edit_source: Some(EditSource::Sender),
+                ..EditContent::new(target_event_id, TextContent::new(text))
+            }),
         );
         message.event_type = EventType::Edit;
         Ok(message)
@@ -265,7 +262,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     checks.expect(
         "the edit is stored after its target, which now reads \"I need 50000$\" and is marked edited",
         edited.event.as_ref().is_some_and(|event| event.index == 10)
-            && target.as_ref().is_some_and(|target| target.content == EventContent::text("I need 50000$"))
+            && target.as_ref().is_some_and(|target| target.content == TextContent::new("I need 50000$").into())
             && target.as_ref().is_some_and(is_edited),
     );
     checks.expect(
@@ -328,7 +325,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         refused.blocked
             && refused.reason.as_deref() == Some("card number in an edit")
             && target.is_some_and(|target| {
-                target.content == EventContent::text("To my savings account")
+                target.content == TextContent::new("To my savings account").into()
                     && target.metadata.is_empty()
             }),
     );

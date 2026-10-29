@@ -110,10 +110,10 @@ use crate::rules::chain_depth::{Draw, ReentryBudget};
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use roomkit_core::model::{ChannelId, EventContent, InboundMessage, RoomId};
+/// # use roomkit_core::model::{ChannelId, InboundMessage, RoomId, TextContent};
 /// # use roomkit_core::ops::{Inbound, InboundTarget, KitConfig, Next, Operation, SequentialEnvironment};
 /// let config = Arc::new(KitConfig::new());
-/// let message = InboundMessage::new(ChannelId::new("sms")?, "+15551234567", EventContent::text("Hi"));
+/// let message = InboundMessage::new(ChannelId::new("sms")?, "+15551234567", TextContent::new("Hi"));
 /// let room = InboundTarget::Room(RoomId::new("room_1")?);
 /// let mut inbound = Inbound::new(config, room, None, message);
 /// let step = inbound.poll(&SequentialEnvironment::default());
