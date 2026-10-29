@@ -972,13 +972,15 @@ mod bindings {
             refused,
             vec![
                 Some(RoomKitError::Value(
-                    "only the framework writes the visibility internal".to_owned()
+                    "visibility 'internal' marks a record the framework writes (RFC §7.3): an \
+                     event stored for no channel takes 'none'"
+                        .to_owned()
                 )),
                 Some(RoomKitError::RoomNotFound(missing.clone())),
                 Some(RoomKitError::RoomNotFound(missing)),
                 Some(RoomKitError::ChannelNotRegistered(channel("ghost"))),
                 Some(RoomKitError::Value(
-                    "Channel \"host\" is a host channel: it can be attached as a transport \
+                    "Channel 'host' is a host channel: it can be attached as a transport \
                      only, never as an intelligence channel"
                         .to_owned()
                 )),

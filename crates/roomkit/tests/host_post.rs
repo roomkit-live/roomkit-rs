@@ -654,7 +654,7 @@ fn refusals() -> Vec<(&'static str, Setup, Arguments, RoomKitError)> {
     };
     let not_a_host = |id: &str| {
         RoomKitError::Value(format!(
-            "post() speaks from a channel of type HOST; {id:?} is not one"
+            "post() speaks from a channel of type HOST; '{id}' is not one"
         ))
     };
     vec![
@@ -779,10 +779,22 @@ async fn a_refused_speaker_is_told_why() {
                 .to_string(),
         );
     }
-    assert!(
-        told[0].contains("\"ghost\" names nobody of the room")
-            && told[1].contains("names a participant reached through other channels only"),
-        "{told:?}"
+    let refused = |speaker: &str, why: &str| {
+        format!(
+            "post() speaks as a participant of room r the host channel 'host' reaches, and \
+             '{speaker}' {why}. The host's own speakers are members added on that channel: \
+             kit.add_member(room_id, 'host', speaker_id)"
+        )
+    };
+    assert_eq!(
+        told,
+        [
+            refused("ghost", "names nobody of the room"),
+            refused(
+                CUSTOMER,
+                "names a participant reached through other channels only"
+            )
+        ]
     );
 }
 
@@ -861,7 +873,7 @@ async fn a_message_on_the_host_channel_is_refused_before_anything_is_written() {
         .unwrap();
     let refused = || {
         Err(RoomKitError::Value(
-            "Channel \"host\" is a host channel and receives no external payload: the host \
+            "Channel 'host' is a host channel and receives no external payload: the host \
              speaks through RoomKit.post() or send_event()"
                 .to_owned(),
         ))
@@ -937,7 +949,7 @@ async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
         (attached.err(), binding_of(&kit, "host").await.is_none()),
         (
             Some(RoomKitError::Value(
-                "Channel \"host\" is a host channel: it can be attached as a transport only, \
+                "Channel 'host' is a host channel: it can be attached as a transport only, \
                  never as an intelligence channel"
                     .to_owned()
             )),

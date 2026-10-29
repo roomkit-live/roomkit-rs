@@ -1022,15 +1022,23 @@ async fn registering_a_channel_is_announced_to_subscribers() {
     );
 }
 
+/// Python's `ChannelAlreadyRegisteredError`, its message as Python's
+/// (probe `tasks/probes/step5-lot2-review-A/kit_refusals.py`, E22).
 #[tokio::test]
 async fn registering_a_channel_twice_is_refused() {
     let kit = RoomKit::new(RoomKitOptions::default());
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
-    assert!(matches!(
-        kit.register_channel(sms),
-        Err(RoomKitError::ChannelAlreadyRegistered(_))
-    ));
+    let refused = kit.register_channel(sms).unwrap_err();
+    assert_eq!(
+        (refused.to_string(), refused),
+        (
+            "Channel 'sms' is already registered. Call unregister_channel('sms') first to \
+             replace it deliberately."
+                .to_owned(),
+            RoomKitError::ChannelAlreadyRegistered(channel("sms"))
+        )
+    );
 }
 
 #[tokio::test]

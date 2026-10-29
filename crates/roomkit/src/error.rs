@@ -2,7 +2,7 @@
 //! implementation's `RoomKitError`, each variant one of its exception
 //! classes (step 5, decision 9).
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use roomkit_core::model::{
     ChannelId, ChannelType, ErrorRecord, EventId, IdentityId, ModelError, ParticipantId, RoomId,
@@ -100,21 +100,28 @@ pub enum RoomKitError {
     ChannelNotRegistered(ChannelId),
     /// Python's `ChannelAlreadyRegisteredError`: another channel is
     /// registered under the id.
-    #[error("a channel {0} is already registered")]
+    #[error(
+        "Channel {} is already registered. Call unregister_channel({}) first to replace it \
+         deliberately.",
+        repr(.0.as_str()),
+        repr(.0.as_str())
+    )]
     ChannelAlreadyRegistered(ChannelId),
     /// Python's `ParticipantNotFoundError`, of a post's speaker: the id
     /// names no participant of the room the host channel reaches, by their
     /// id or their identity's (RFC §10.5, §5.5). Nothing was written.
     #[error(
-        "post() speaks as a participant of room {room_id} the host channel {:?} reaches, and \
-         {:?} {}. The host's own speakers are members added on that channel",
-        .channel_id.as_str(),
-        .participant_id.as_str(),
+        "post() speaks as a participant of room {room_id} the host channel {} reaches, and \
+         {} {}. The host's own speakers are members added on that channel: \
+         kit.add_member(room_id, {}, speaker_id)",
+        repr(.channel_id.as_str()),
+        repr(.participant_id.as_str()),
         if *.reached_elsewhere {
             "names a participant reached through other channels only"
         } else {
             "names nobody of the room"
-        }
+        },
+        repr(.channel_id.as_str())
     )]
     ParticipantNotFound {
         /// The room.
@@ -332,13 +339,13 @@ impl From<InboundError> for RoomKitError {
             InboundError::UnknownChannel(channel_id) => Self::ChannelNotRegistered(channel_id),
             InboundError::RoomNotFound(room_id) => Self::RoomNotFound(room_id),
             InboundError::InboundOnHostChannel(channel_id) => Self::Value(format!(
-                "Channel {:?} is a host channel and receives no external payload: the host \
+                "Channel {} is a host channel and receives no external payload: the host \
                  speaks through RoomKit.post() or send_event()",
-                channel_id.as_str()
+                repr(channel_id.as_str())
             )),
             InboundError::NotAHostChannel(channel_id) => Self::Value(format!(
-                "post() speaks from a channel of type HOST; {:?} is not one",
-                channel_id.as_str()
+                "post() speaks from a channel of type HOST; {} is not one",
+                repr(channel_id.as_str())
             )),
             InboundError::HostAsIntelligence(channel_id) => host_as_intelligence(&channel_id),
             InboundError::ParticipantNotFound {
@@ -372,14 +379,52 @@ impl From<InboundError> for RoomKitError {
 
 fn host_as_intelligence(channel_id: &ChannelId) -> RoomKitError {
     RoomKitError::Value(format!(
-        "Channel {:?} is a host channel: it can be attached as a transport only, never as an \
+        "Channel {} is a host channel: it can be attached as a transport only, never as an \
          intelligence channel",
-        channel_id.as_str()
+        repr(channel_id.as_str())
     ))
 }
 
+/// Python's `parse_given_visibility` refusing `internal`.
 fn internal_visibility() -> RoomKitError {
-    RoomKitError::Value("only the framework writes the visibility internal".to_owned())
+    RoomKitError::Value(
+        "visibility 'internal' marks a record the framework writes (RFC §7.3): an event stored \
+         for no channel takes 'none'"
+            .to_owned(),
+    )
+}
+
+/// `text` as Python's `repr` of a `str` writes it, which the Python
+/// implementation's messages quote their names with (`{name!r}`): in single
+/// quotes, double ones when it holds a single quote and no double one, its
+/// backslashes, its quote and its control characters escaped.
+fn repr(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut written = String::with_capacity(text.len() + 2);
+    written.push(quote);
+    for character in text.chars() {
+        match character {
+            '\\' => written.push_str("\\\\"),
+            '\n' => written.push_str("\\n"),
+            '\r' => written.push_str("\\r"),
+            '\t' => written.push_str("\\t"),
+            _ if character == quote => {
+                written.push('\\');
+                written.push(character);
+            }
+            _ if character.is_ascii_control() => {
+                // Writing to a `String` does not fail.
+                let _ = write!(written, "\\x{:02x}", u32::from(character));
+            }
+            _ => written.push(character),
+        }
+    }
+    written.push(quote);
+    written
 }
 
 impl From<LifecycleError> for RoomKitError {
@@ -598,6 +643,24 @@ mod tests {
                     reason: "not_original_author".to_owned()
                 },
                 RoomKitError::ReentryLoopCap(room_id.clone()),
+            ]
+        );
+    }
+
+    /// A name the Python implementation quotes with `!r`, as Python's
+    /// `repr` writes it (`python3 -c "print(repr(...))"`).
+    #[test]
+    fn a_name_is_quoted_as_python_s_repr_writes_it() {
+        let names = ["ws", "it's", "a'b\"c", "a\\b", "tab\there", "del\u{7f}"];
+        assert_eq!(
+            names.map(repr),
+            [
+                "'ws'",
+                "\"it's\"",
+                "'a\\'b\"c'",
+                "'a\\\\b'",
+                "'tab\\there'",
+                "'del\\x7f'"
             ]
         );
     }
