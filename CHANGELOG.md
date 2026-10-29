@@ -7,9 +7,106 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 The public API in the Python implementation's terms (step 5, lot 1: the
-kit, its construction and its calls).
+kit, its construction and its calls; lot 2: the model and the errors).
 
 ### Changed
+
+- The kit's calls fail with `RoomKitError`, the Python implementation's
+  base class, for `KitError`: its variants are flat, each named after one
+  of Python's exception classes (`RoomNotFound`, `RoomAlreadyExists`,
+  `RoomClosed`, `TransitionRefused`, `ProcessTimeout`, `ChangeRefused`,
+  `ReentrantCall`, `ReentryLoopCap`, `ChannelNotFound`,
+  `ChannelNotRegistered`, `ChannelAlreadyRegistered`,
+  `ParticipantNotFound`, `IdentityNotFound`, `AddressLinked`,
+  `EventNotFound`, `IdempotencyKeyTaken`), Python's builtins (`Value`,
+  `Cancelled`, `ExceptionGroup`), and what a dependency raised (`Store`,
+  `Lock`, `Channel`, `Router`). `roomkit` no longer re-exports the core's
+  per-operation errors (`InboundError`, `LifecycleError`,
+  `MutationError`, `ConfigError`, `RegistrationError`,
+  `ProtocolError`). The one `RoomNotFound` reads a missing room and
+  another organization's alike, where three variants did. Renamed: the
+  entries below that name `KitError::ShutDown`, `ChannelsFailedToClose`,
+  `Reentrant`, `UnknownChannel` and `Abandoned` read `KitClosed`,
+  `ExceptionGroup`, `ReentrantCall`, `ChannelNotRegistered` and
+  `Cancelled`; `Protocol`, `Stalled` and `NoEvent` are `Internal`.
+- A direct injection refused before its commit raises Python's class for
+  it, as `_raise_unless_committed` does: `RoomClosed`, `ProcessTimeout`,
+  `ChangeRefused { reason }`, `ChannelNotFound` for a channel the room
+  does not bind, `ReentryLoopCap`, `Value` for an instruction's refusal,
+  where it was `InboundError::Refused { reason }`. `create_room` of a
+  taken id is `RoomAlreadyExists` and `commit_event` under a key its
+  channel holds `IdempotencyKeyTaken`, where both read as the store's
+  failure; a store's `ValueError` is `Value`. `StoreError::RoomExists`
+  is `RoomAlreadyExists`, `InvalidArgument` `Value(String)`.
+- A channel of type `host` registers whatever its category and direction,
+  as the Python implementation registers it; only one of type `system`
+  is refused, as `RoomKitError::Value`.
+- The model takes the Python implementation's shape. A model's `new`
+  takes its required fields and sets Python's defaults, a field Python
+  fills by a factory filled from the system clock and random ids:
+  `RoomEvent::new(room_id, source, content)`, `Room::new(id)`,
+  `Participant::new(id, room_id, channel_id)`, `ChannelBinding::new(
+  channel_id, room_id, channel_type)`, `Task::new(id, room_id, title)`,
+  `Observation::new(id, room_id, channel_id, content)`,
+  `EventSource::new(channel_id, channel_type)` (inbound),
+  `Identity::new(id)`, `InjectedEvent::new(event)`, `DeliveryResult::new`,
+  `DeliveryError::new` (retryable), `ProviderResult::new`; the rest is set
+  by struct update, which the models a caller builds now allow, their
+  `#[non_exhaustive]` gone (the contents, `ChannelCapabilities`,
+  `RateLimit`, `RetryPolicy`, `ChannelDeclaration`, `ToolCallEvent`,
+  `TurnTimeouts`). The builder methods go (`with_edit_source`,
+  `with_delete_type`, `RetryPolicy::new`, `ChannelOutput::respond` for
+  `ChannelOutput::empty()`, `InjectedEvent::to_channels` and
+  `stored_only`). `RoomEvent.event_type` is `r#type`, serialized `type`
+  as before.
+- A content converts into `EventContent`, and every parameter that takes
+  one takes `impl Into<EventContent>`: `TextContent::new("Bonjour")` for
+  `EventContent::text`, which goes. `MediaContent::new`,
+  `AudioContent::new` and `VideoContent::new(url)` refuse a URL no reader
+  may take, when built and when read (RFC §6.4): a link's or a `data:`
+  URI's scheme lower-cased, a reference `<scheme>://` of two characters
+  at least, not `file`, `ftp`, `javascript` or `vbscript`, with no `..`
+  segment and no backslash; an audio's or a video's URL starting with
+  `http://`, `https://` or `data:`; a negative duration refused.
+  `VideoContent`'s MIME type defaults to `video/mp4`.
+- A value a model refuses, which a struct literal can hold past its
+  constructor, is refused at every door that writes it, nothing written:
+  the kit's calls before anything is read (`RoomKitError::Value`), a
+  hook's replacement or injected event (the hook reads as raising), a
+  channel's answer (the channel reads as failing) and every store's write
+  (`StoreError::Value`, through `roomkit::written`): a stored record a
+  later read would refuse no longer poisons its room.
+- `HookResult` carries Python's `action` (`HookAction`) and `event`, for
+  `HookDecision`; `HookResult::allow(AllowOptions)`, `block(reason,
+  BlockOptions)` and `modify(event, ModifyOptions)` take Python's
+  keywords (`roomkit::model::hook`), and `new(action)` is Python's
+  constructor; `with_reason`, `inject`, `with_task`, `with_observation`
+  and `is_block` go. A block without a reason is refused when read, and
+  one built by literal reads as a hook that raised Python's `ValueError`,
+  as a modify without its event does.
+- `InboundResult` gains Python's `duplicate` (a replayed key),
+  `unavailable_targets` (the addresses the committed plan asks no turn
+  of) and `response_events` (the answers the call's cascade delivered).
+- `RoomEvent.consumption` and its three types go, `RateLimit.burst` and
+  `ChannelCapabilities.rate_limit` too (step 5, point 5); `RateLimit`
+  gains `max_per_hour` and refuses a limit not above 0,
+  `ChannelCapabilities` the four audio and video members, and `Identity`
+  `email`, `phone` and `external_ids`. `RetryPolicy` takes Python's
+  defaults. A file roomkit-sqlite and the Python implementation share now
+  reads and rewrites with nothing lost and nothing added.
+- `RoomContext::binding` is `get_binding`, beside Python's
+  `other_channels` and `channels_by_type`; `ChannelBinding` gains `sends`
+  and `can_write`. `DeliveryStatus` is `DeliveryResultStatus`.
+- Hidden, as the Python implementation keeps them private: the
+  `Access`, `ChannelDirection` and `ChannelMediaType` helpers,
+  `ChannelCapabilities::carries`, `RoomStatus::accepts_events`,
+  `Identity::uses`, `link` and `unlink`, `Visibility::channels` and
+  `admits` (`ChannelSet::new(ids).map(Visibility::Channels)` builds the
+  list form), `CompositeContent::into_parts`, the ids' `from_u128`,
+  `ChannelId::system` and `host`, `HOST_CHANNEL_ID`,
+  `MAX_COMPOSITE_DEPTH` and `roomkit::model::ToolCall`.
+  `EventContent::composite_depth` and `Visibility::intersect` are
+  crate-private.
 
 - A stream's text deltas yielded without a wait between them cross the
   turn link as one item, their text joined and their number told in the
