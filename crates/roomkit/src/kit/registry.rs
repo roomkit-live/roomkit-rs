@@ -21,11 +21,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::ChannelAlreadyRegistered`] when a channel with
-    /// its id is registered already, and [`RoomKitError::Value`] for a
-    /// channel claiming the type `system` (RFC §5.3).
+    /// Returns [`RoomKitError::Value`] for capabilities their model refuses,
+    /// a limit of 0, as the Python implementation's model refuses them when
+    /// the channel builds them; then [`RoomKitError::ChannelAlreadyRegistered`]
+    /// when a channel with its id is registered already, and
+    /// [`RoomKitError::Value`] for a channel claiming the type `system` (RFC
+    /// §5.3).
     pub fn register_channel(&self, channel: impl Channel) -> Result<(), RoomKitError> {
         let declaration = Channel::declaration(&channel);
+        declaration.capabilities.check()?;
         let registered = FrameworkEvent::channel_registered(
             declaration.channel_id.clone(),
             declaration.channel_type.clone(),

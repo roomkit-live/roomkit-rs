@@ -7,6 +7,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize, Serializer};
 
+use super::positive::{self, deserializers};
 use super::{Metadata, ModelError};
 
 /// The kind of a channel (RFC §6.2): an open name of lowercase ASCII
@@ -253,7 +254,10 @@ impl ChannelMediaType {
 /// What a channel supports (RFC §5.8).
 ///
 /// The RFC gives no default; [`Default`] is a text-only channel with no
-/// limit and no optional feature.
+/// limit and no optional feature. A limit is greater than 0, as the Python
+/// implementation's `gt=0`: deserialization refuses another, and so do the
+/// kit's `register_channel` and the stores, since a struct literal runs no
+/// check.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[expect(
@@ -265,12 +269,14 @@ pub struct ChannelCapabilities {
     pub media_types: BTreeSet<ChannelMediaType>,
     /// The maximum text length, `None` for unlimited (counted as gap G-008
     /// decides).
+    #[serde(deserialize_with = "bounded::max_length")]
     pub max_length: Option<u64>,
     /// Formatted text.
     pub supports_rich_text: bool,
     /// Interactive buttons.
     pub supports_buttons: bool,
     /// The maximum number of buttons, `None` for unlimited.
+    #[serde(deserialize_with = "bounded::max_buttons")]
     pub max_buttons: Option<u32>,
     /// Structured cards.
     pub supports_cards: bool,
@@ -283,16 +289,19 @@ pub struct ChannelCapabilities {
     /// The MIME types of the media the channel accepts.
     pub supported_media_types: Vec<String>,
     /// The maximum media size in bytes, `None` for unlimited.
+    #[serde(deserialize_with = "bounded::max_media_size_bytes")]
     pub max_media_size_bytes: Option<u64>,
     /// Audio.
     pub supports_audio: bool,
     /// The longest audio the channel takes, in seconds, `None` for any.
+    #[serde(deserialize_with = "bounded::max_audio_duration_seconds")]
     pub max_audio_duration_seconds: Option<u64>,
     /// The audio formats the channel takes; empty takes every format.
     pub supported_audio_formats: Vec<String>,
     /// Video.
     pub supports_video: bool,
     /// The longest video the channel takes, in seconds, `None` for any.
+    #[serde(deserialize_with = "bounded::max_video_duration_seconds")]
     pub max_video_duration_seconds: Option<u64>,
     /// The video formats the channel takes; empty takes every format.
     pub supported_video_formats: Vec<String>,
@@ -313,6 +322,28 @@ pub struct ChannelCapabilities {
 }
 
 impl ChannelCapabilities {
+    /// Refuses a limit that is 0, naming the first such field. Outside the
+    /// public API: the kit's `register_channel` runs it on a channel's
+    /// declaration, and the stores on a binding they write.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::NotPositive`] for a limit of 0.
+    #[doc(hidden)]
+    pub fn check(&self) -> Result<(), ModelError> {
+        positive::count("max_length", self.max_length)?;
+        positive::count("max_buttons", self.max_buttons)?;
+        positive::count("max_media_size_bytes", self.max_media_size_bytes)?;
+        positive::count(
+            "max_audio_duration_seconds",
+            self.max_audio_duration_seconds,
+        )?;
+        positive::count(
+            "max_video_duration_seconds",
+            self.max_video_duration_seconds,
+        )
+    }
+
     /// Whether the channel carries `media_type`. Hidden: the Python
     /// implementation reads `media_types` inline.
     #[doc(hidden)]
@@ -384,13 +415,19 @@ impl RateLimit {
             ("max_per_hour", self.max_per_hour),
         ]
         .into_iter()
-        .find_map(|(name, limit)| {
-            limit
-                .filter(|value| value.is_nan() || *value <= 0.0)
-                .map(|value| ModelError::NotPositive { name, value })
-        })
-        .map_or(Ok(()), Err)
+        .try_for_each(|(name, limit)| limit.map_or(Ok(()), |value| positive::number(name, value)))
     }
+}
+
+/// The deserializers of [`ChannelCapabilities`]' limits.
+mod bounded {
+    super::deserializers!(super::positive::count =>
+        max_length: Option<u64>,
+        max_buttons: Option<u32>,
+        max_media_size_bytes: Option<u64>,
+        max_audio_duration_seconds: Option<u64>,
+        max_video_duration_seconds: Option<u64>,
+    );
 }
 
 #[derive(Default, Deserialize)]
@@ -439,12 +476,45 @@ mod tests {
             (read, kept),
             (
                 [
-                    Err("max_per_second 0 is not greater than 0".to_owned()),
-                    Err("max_per_hour -1 is not greater than 0".to_owned()),
+                    Err(
+                        "max_per_second: Input should be greater than 0 [input_value=0]".to_owned()
+                    ),
+                    Err("max_per_hour: Input should be greater than 0 [input_value=-1]".to_owned()),
                 ],
                 RateLimit {
                     max_per_hour: Some(60.0),
                     ..RateLimit::default()
+                }
+            )
+        );
+    }
+
+    /// Python's `gt=0` on a capability's limits: each read must be greater
+    /// than 0, and `None` is no limit.
+    #[test]
+    fn a_capability_limit_of_zero_is_refused_when_read() {
+        let limits = [
+            "max_length",
+            "max_buttons",
+            "max_media_size_bytes",
+            "max_audio_duration_seconds",
+            "max_video_duration_seconds",
+        ];
+        let read = limits.map(|name| {
+            serde_json::from_value::<ChannelCapabilities>(json!({ name: 0 }))
+                .map_err(|error| error.to_string())
+        });
+        let kept: ChannelCapabilities =
+            serde_json::from_value(json!({ "max_length": 160, "max_buttons": null })).unwrap();
+        assert_eq!(
+            (read, kept),
+            (
+                limits.map(|name| Err(format!(
+                    "{name}: Input should be greater than 0 [input_value=0]"
+                ))),
+                ChannelCapabilities {
+                    max_length: Some(160),
+                    ..ChannelCapabilities::default()
                 }
             )
         );

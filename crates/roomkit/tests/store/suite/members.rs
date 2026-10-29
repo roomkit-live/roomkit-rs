@@ -1,7 +1,9 @@
 //! A room's bindings and participants (RFC §5.5, §5.7, §14.1).
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{Participant, RateLimit, Timestamp};
+use roomkit::model::{
+    ChannelBinding, ChannelCapabilities, Participant, RateLimit, RetryPolicy, Timestamp,
+};
 use roomkit::{ConversationStore, StoreError};
 use serde_json::json;
 
@@ -36,27 +38,53 @@ async fn a_binding_stored_again_replaces_the_one_of_its_channel_in_its_place() {
     );
 }
 
-/// A rate limit its model refuses, not above 0, which a struct literal can
-/// hold, is refused by the store, nothing written: stored, it would fail
-/// every later read of the room's bindings, as Python's model refuses it
-/// when read (probe `tasks/probes/step5-lot2/invalid_stored_binding.py`).
+/// A binding its model refuses, which a struct literal can hold, is refused
+/// by the store, nothing written: a rate limit, a retry delay or a
+/// capability limit not above 0. Stored, it would fail every later read of
+/// the room's bindings, as Python's model refuses it when read (probes
+/// `tasks/probes/step5-lot2/invalid_stored_binding.py` and
+/// `tasks/probes/step5-lot2-review-A/model_bounds_written.py`).
 #[tokio::test]
-async fn a_binding_whose_rate_limit_its_model_refuses_is_never_written() {
+async fn a_binding_its_model_refuses_is_never_written() {
     let store = with_room().await;
-    let mut limited = binding("sms");
-    limited.rate_limit = Some(RateLimit {
-        max_per_second: Some(0.0),
-        ..RateLimit::default()
-    });
+    let limited = ChannelBinding {
+        rate_limit: Some(RateLimit {
+            max_per_second: Some(0.0),
+            ..RateLimit::default()
+        }),
+        ..binding("sms")
+    };
+    let retried = ChannelBinding {
+        retry_policy: Some(RetryPolicy {
+            exponential_base: f64::NAN,
+            ..RetryPolicy::default()
+        }),
+        ..binding("sms")
+    };
+    let capped = ChannelBinding {
+        capabilities: ChannelCapabilities {
+            max_buttons: Some(0),
+            ..ChannelCapabilities::default()
+        },
+        ..binding("sms")
+    };
+    let mut written = Vec::new();
+    for refused in [limited, retried, capped] {
+        written.push(store.store_binding(refused).await);
+    }
+    let refused = |name: &str, value: &str| {
+        Err(StoreError::Value(format!(
+            "{name}: Input should be greater than 0 [input_value={value}]"
+        )))
+    };
     assert_eq!(
+        (written, store.list_bindings(&room_id()).await),
         (
-            store.store_binding(limited).await,
-            store.list_bindings(&room_id()).await
-        ),
-        (
-            Err(StoreError::Value(
-                "max_per_second 0 is not greater than 0".to_owned()
-            )),
+            vec![
+                refused("max_per_second", "0"),
+                refused("exponential_base", "NaN"),
+                refused("max_buttons", "0"),
+            ],
             Ok(Vec::new())
         )
     );

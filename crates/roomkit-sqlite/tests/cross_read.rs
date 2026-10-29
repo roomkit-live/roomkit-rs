@@ -724,12 +724,14 @@ async fn an_identity_with_a_key_rust_does_not_read_resolves_and_keeps_it() {
     );
 }
 
-/// A binding row holding a rate limit its model refuses, which neither
+/// A binding row holding a value its model refuses, a rate limit, a
+/// capability limit or a retry delay not above 0, which neither
 /// implementation's store writes through its interface, but a hand-edited
 /// file can hold: the room is read, and the read of its bindings fails, as
-/// the Python implementation's does on the same row (probe
-/// `tasks/probes/step5-lot2/invalid_stored_binding.py`: `get_room` ok,
-/// `list_bindings` a `ValidationError`). A store never serves a value its
+/// the Python implementation's does on the same row (probes
+/// `tasks/probes/step5-lot2/invalid_stored_binding.py` and
+/// `tasks/probes/step5-lot2-review-A/model_bounds_written.py`: `get_room`
+/// ok, `list_bindings` a `ValidationError`). A store never serves a value its
 /// model refuses.
 #[tokio::test]
 async fn a_binding_row_its_model_refuses_fails_its_read_as_python_s_does() {
@@ -751,23 +753,34 @@ async fn a_binding_row_its_model_refuses_fails_its_read_as_python_s_does() {
             row.get(0)
         })
         .unwrap();
-    let mut record: Value = serde_json::from_str(&data).unwrap();
-    record["rate_limit"] = serde_json::json!({ "max_per_second": 0 });
-    connection
-        .execute(
-            "UPDATE bindings SET data = ?1 WHERE room_id = 'r'",
-            [record.to_string()],
-        )
-        .unwrap();
-    drop(connection);
-    let store = SqliteStore::open(file.path()).await.unwrap();
-    assert_eq!(
+    let written: Value = serde_json::from_str(&data).unwrap();
+    let mut read = Vec::new();
+    for (field, refused) in [
+        ("rate_limit", serde_json::json!({ "max_per_second": 0 })),
+        ("capabilities", serde_json::json!({ "max_length": 0 })),
         (
-            store.get_room(&room_id).await.map(|room| room.is_some()),
-            store.list_bindings(&room_id).await.is_err()
+            "retry_policy",
+            serde_json::json!({ "base_delay_seconds": 0 }),
         ),
-        (Ok(true), true)
-    );
+    ] {
+        let mut record = written.clone();
+        record[field] = refused;
+        connection
+            .execute(
+                "UPDATE bindings SET data = ?1 WHERE room_id = 'r'",
+                [record.to_string()],
+            )
+            .unwrap();
+        let store = SqliteStore::open(file.path()).await.unwrap();
+        read.push((
+            store
+                .get_room(&room_id)
+                .await
+                .is_ok_and(|room| room.is_some()),
+            store.list_bindings(&room_id).await.is_err(),
+        ));
+    }
+    assert_eq!(read, [(true, true); 3]);
 }
 
 /// Every row of a room's timeline, the refused ones included.

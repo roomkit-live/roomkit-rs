@@ -14,10 +14,10 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    DeliveryResultStatus, EventContent, EventDirection, EventId, EventSource, EventStatus,
-    HookResult, InboundMessage, MediaContent, RateLimit, RoomContext, RoomEvent, RoomId,
-    TextContent, Timestamp,
+    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
+    ChannelOutput, ChannelType, DeliveryResultStatus, EventContent, EventDirection, EventId,
+    EventSource, EventStatus, HookResult, InboundMessage, MediaContent, RateLimit, RetryPolicy,
+    RoomContext, RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
     EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
@@ -585,8 +585,9 @@ const JAVASCRIPT_REFUSED: &str = "URL must be a link (http://, https://), a data
 /// when its model is built: before anything is read, so a missing room is
 /// not even looked for, and nothing written. A content at `send_event`,
 /// `post`, `process_inbound`, `commit_event` and `update_event`, a rate
-/// limit not above 0 at `attach_channel`. Stored, it would fail every later
-/// read of the room.
+/// limit or a retry policy not above 0 at `attach_channel`, a limit of 0 in
+/// the capabilities `register_channel` is given. Stored, it would fail every
+/// later read of the room.
 #[tokio::test]
 async fn a_value_its_model_refuses_is_refused_by_every_call_before_any_read() {
     let (kit, sms) = sms_and_agent().await;
@@ -608,10 +609,22 @@ async fn a_value_its_model_refuses_is_refused_by_every_call_before_any_read() {
         }),
         ..Default::default()
     };
+    let retried = AttachChannelOptions {
+        retry_policy: Some(RetryPolicy {
+            base_delay_seconds: 0.0,
+            ..RetryPolicy::default()
+        }),
+        ..Default::default()
+    };
     let routed = ProcessInboundOptions {
         room_id: Some(ghost.clone()),
         ..Default::default()
     };
+    let unbounded = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET)
+        .with_capabilities(ChannelCapabilities {
+            max_length: Some(0),
+            ..ChannelCapabilities::default()
+        });
     let refused = [
         kit.send_event(
             &ghost,
@@ -634,19 +647,45 @@ async fn a_value_its_model_refuses_is_refused_by_every_call_before_any_read() {
         kit.attach_channel(&ghost, &channel("ai"), limited)
             .await
             .map(drop),
+        kit.attach_channel(&ghost, &channel("ai"), retried)
+            .await
+            .map(drop),
+        kit.register_channel(unbounded),
     ];
     let media = || Err(RoomKitError::Value(JAVASCRIPT_REFUSED.to_owned()));
-    let rate = Err(RoomKitError::Value(
-        "max_per_minute -1 is not greater than 0".to_owned(),
-    ));
+    let positive = |name: &str, value: &str| {
+        Err(RoomKitError::Value(format!(
+            "{name}: Input should be greater than 0 [input_value={value}]"
+        )))
+    };
     let rooms = kit
         .store()
         .list_rooms(&roomkit::RoomFilter::default())
         .await
         .unwrap();
+    let registered = kit.get_channel(&channel("ws")).is_some();
     assert_eq!(
-        (refused, timeline(&kit).await == before, rooms.len()),
-        ([media(), media(), media(), media(), media(), rate], true, 1)
+        (
+            refused,
+            timeline(&kit).await == before,
+            rooms.len(),
+            registered
+        ),
+        (
+            [
+                media(),
+                media(),
+                media(),
+                media(),
+                media(),
+                positive("max_per_minute", "-1"),
+                positive("base_delay_seconds", "0"),
+                positive("max_length", "0"),
+            ],
+            true,
+            1,
+            false
+        )
     );
 }
 

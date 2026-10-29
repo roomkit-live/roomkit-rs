@@ -83,7 +83,7 @@ pub enum ModelError {
 
     /// A number that must be greater than 0 is not, as the Python
     /// implementation's `gt=0` refuses it.
-    #[error("{name} {value} is not greater than 0")]
+    #[error("{name}: Input should be greater than 0 [input_value={value}]")]
     NotPositive {
         /// The field.
         name: &'static str,

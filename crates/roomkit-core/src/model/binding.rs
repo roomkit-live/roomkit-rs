@@ -2,9 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::positive::{self, deserializers};
 use super::{
     ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId, ChannelType, Metadata,
-    ParticipantId, RateLimit, RoomId, Timestamp, Visibility,
+    ModelError, ParticipantId, RateLimit, RoomId, Timestamp, Visibility,
 };
 
 /// Whether a bound channel reads, writes, both or neither (RFC §7.1).
@@ -47,21 +48,53 @@ impl Access {
 /// How a failed delivery is retried (RFC §13.2), with the Python
 /// implementation's defaults: 3 retries, the first after 1 s, each delay
 /// doubled up to 60 s, for every retryable error.
+///
+/// Its delays and multiplier are greater than 0, as Python's `gt=0`:
+/// deserialization refuses another, and so do the kit's `attach_channel`
+/// and the stores, since a struct literal runs no check.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RetryPolicy {
     /// The maximum number of retries.
     pub max_retries: u32,
     /// The delay before the first retry, in seconds.
+    #[serde(deserialize_with = "bounded::base_delay_seconds")]
     pub base_delay_seconds: f64,
     /// The multiplier applied per attempt.
+    #[serde(deserialize_with = "bounded::exponential_base")]
     pub exponential_base: f64,
     /// The cap on any delay, in seconds.
+    #[serde(deserialize_with = "bounded::max_delay_seconds")]
     pub max_delay_seconds: f64,
     /// The names of the error types that may be retried, as the Python
     /// implementation reads them; `None` retries any error that does not
     /// refuse it itself.
     pub retryable_errors: Option<Vec<String>>,
+}
+
+impl RetryPolicy {
+    /// Refuses a delay or a multiplier that is not greater than 0, `NaN`
+    /// included, naming the first such field. Outside the public API: the
+    /// kit's `attach_channel` runs it on the policy it is given.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::NotPositive`] for a value `<= 0`.
+    #[doc(hidden)]
+    pub fn check(&self) -> Result<(), ModelError> {
+        positive::number("base_delay_seconds", self.base_delay_seconds)?;
+        positive::number("exponential_base", self.exponential_base)?;
+        positive::number("max_delay_seconds", self.max_delay_seconds)
+    }
+}
+
+/// The deserializers of [`RetryPolicy`]'s bounded fields.
+mod bounded {
+    super::deserializers!(super::positive::number =>
+        base_delay_seconds: f64,
+        exponential_base: f64,
+        max_delay_seconds: f64,
+    );
 }
 
 impl Default for RetryPolicy {
@@ -179,17 +212,22 @@ impl ChannelBinding {
         }
     }
 
-    /// Refuses a binding whose rate limit its deserialization would have
-    /// refused, a limit not above 0 ([`RateLimit::check`]): a struct literal
-    /// runs no check, so every door that writes a binding runs this one, the
+    /// Refuses a binding its deserialization would have refused, a limit,
+    /// a delay or a multiplier not above 0 ([`ChannelCapabilities::check`],
+    /// [`RateLimit::check`], [`RetryPolicy::check`]): a struct literal runs
+    /// no check, so every door that writes a binding runs this one, the
     /// kit's `attach_channel` and the stores. Outside the public API.
     ///
     /// # Errors
     ///
-    /// Returns [`ModelError::NotPositive`](crate::model::ModelError::NotPositive).
+    /// Returns [`ModelError::NotPositive`].
     #[doc(hidden)]
-    pub fn check(&self) -> Result<(), crate::model::ModelError> {
-        self.rate_limit.as_ref().map_or(Ok(()), RateLimit::check)
+    pub fn check(&self) -> Result<(), ModelError> {
+        self.capabilities.check()?;
+        self.rate_limit.as_ref().map_or(Ok(()), RateLimit::check)?;
+        self.retry_policy
+            .as_ref()
+            .map_or(Ok(()), RetryPolicy::check)
     }
 
     /// Whether the binding's direction delivers to the outside (RFC §4.2),
@@ -235,6 +273,33 @@ mod tests {
                 (muted.sends(), muted.can_write())
             ],
             [(false, true), (true, false)]
+        );
+    }
+
+    /// Python's `gt=0` on a retry policy's delays and multiplier.
+    #[test]
+    fn a_retry_policy_not_above_zero_is_refused_when_read() {
+        let bounded = [
+            ("base_delay_seconds", json!(0)),
+            ("exponential_base", json!(-1.5)),
+            ("max_delay_seconds", json!(0.0)),
+        ];
+        let read = bounded.clone().map(|(name, value)| {
+            serde_json::from_value::<RetryPolicy>(json!({ name: value }))
+                .map_err(|error| error.to_string())
+        });
+        assert_eq!(
+            read,
+            [
+                Err(
+                    "base_delay_seconds: Input should be greater than 0 [input_value=0]".to_owned()
+                ),
+                Err(
+                    "exponential_base: Input should be greater than 0 [input_value=-1.5]"
+                        .to_owned()
+                ),
+                Err("max_delay_seconds: Input should be greater than 0 [input_value=0]".to_owned()),
+            ]
         );
     }
 

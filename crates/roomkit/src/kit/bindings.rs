@@ -34,7 +34,9 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// Refuses in the Python implementation's order (`channel_ops.py`):
-    /// [`RoomKitError::Value`] for the visibility `internal`, which only the
+    /// [`RoomKitError::Value`] for a rate limit or a retry policy its model
+    /// refuses, a value not above 0, as Python's model refuses it when built;
+    /// then [`RoomKitError::Value`] for the visibility `internal`, which only the
     /// framework writes (gap G-041); then [`RoomKitError::RoomNotFound`] when
     /// the room does not exist or is not of the organization `options`
     /// names; then [`RoomKitError::ChannelNotRegistered`] for a channel not
@@ -46,14 +48,17 @@ impl<S: ConversationStore> RoomKit<S> {
         channel_id: &ChannelId,
         options: AttachChannelOptions,
     ) -> Result<ChannelBinding, RoomKitError> {
-        if options.visibility == Visibility::Internal {
-            return Err(LifecycleError::InternalVisibility.into());
-        }
-        // A rate limit a struct literal built past its model's check is
-        // refused before anything is read, as Python's model refuses it when
-        // built.
+        // A rate limit or a retry policy a struct literal built past its
+        // model's check is refused first, as Python's model refuses it when
+        // built, before the call.
         if let Some(rate_limit) = &options.rate_limit {
             rate_limit.check()?;
+        }
+        if let Some(retry_policy) = &options.retry_policy {
+            retry_policy.check()?;
+        }
+        if options.visibility == Visibility::Internal {
+            return Err(LifecycleError::InternalVisibility.into());
         }
         let config = self.config();
         let Some(declaration) = config.channel(channel_id) else {

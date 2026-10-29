@@ -92,7 +92,9 @@ kit, its construction and its calls; lot 2: the model and the errors).
   gains `max_per_hour` and refuses a limit not above 0,
   `ChannelCapabilities` the four audio and video members, and `Identity`
   `email`, `phone` and `external_ids`. `RetryPolicy` takes Python's
-  defaults. A file roomkit-sqlite and the Python implementation share now
+  defaults. A capability limit of 0 and a retry delay or multiplier not
+  above 0 are refused, as Python's `gt=0` refuses them, when read and at
+  every door that writes one. A file roomkit-sqlite and the Python implementation share now
   reads and rewrites with nothing lost and nothing added.
 - `RoomContext::binding` is `get_binding`, beside Python's
   `other_channels` and `channels_by_type`; `ChannelBinding` gains `sends`
