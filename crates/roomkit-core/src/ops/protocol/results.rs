@@ -24,6 +24,16 @@ pub struct InboundResult {
     /// uncommitted, `DELIVERED` or `BLOCKED` with its `blocked_by`, at the
     /// index its hooks were shown, which the next event takes (gap G-065).
     pub event: Option<RoomEvent>,
+    /// Whether the call is a replay of an idempotency key its channel holds
+    /// in the room (RFC §13.4): `event` is the event the key committed, and
+    /// no new delivery plan was resolved.
+    pub duplicate: bool,
+    /// The channels the event addressed (`addressed_to`) that its committed
+    /// delivery plan asks no turn of: unbound, unregistered, or not an
+    /// intelligence channel of the room, in the order the event names them
+    /// (RFC §10.1 step 18). `None` when no plan was resolved: a replay, a
+    /// refused or blocked event.
+    pub unavailable_targets: Option<Vec<ChannelId>>,
     /// Whether the message was blocked: refused by the room, step 8a, a hook
     /// or its source's permissions, an instruction refused before anything
     /// was read, or a call past its `process_timeout` (RFC §13.6).
@@ -42,6 +52,11 @@ pub struct InboundResult {
     pub error: Option<ErrorRecord>,
     /// The merged response metadata of the turns the message asked for.
     pub response_metadata: Metadata,
+    /// The responses this call's cascade committed and delivered, in their
+    /// commit order: the answers to its event and to their answers, a
+    /// stream's rows among them, never the event itself, a response stored
+    /// `BLOCKED`, nor another call's (RFC §10.1 step 14).
+    pub response_events: Vec<RoomEvent>,
     /// The deliveries of the event to its transport channels.
     pub delivery_results: BTreeMap<ChannelId, DeliveryResult>,
     /// Why the call's delivery was cancelled, the event it committed

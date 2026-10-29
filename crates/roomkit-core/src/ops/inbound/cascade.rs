@@ -18,9 +18,12 @@ use super::queues::{Delivery, Lineage};
 use super::record::{RecordPass, RecordReport, RecordResult};
 use super::stream::{self, StreamJob};
 use super::{InboundError, InboundResult, Machine, instructions, report, stamp};
-use crate::model::{ChannelCategory, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId};
+use crate::model::{
+    ChannelCategory, ChannelId, ErrorRecord, EventStatus, InjectedEvent, RoomEvent, RoomId,
+};
 use crate::ops::{Abort, Cx};
 use crate::rules::chain_depth;
+use crate::rules::permissions::DeliveryPlan;
 
 /// What the call's trigger decided, and what the call holds for it.
 #[derive(Debug, Default)]
@@ -44,6 +47,8 @@ impl Trigger {
     fn settle(&mut self, settled: InboundResult, decided: bool) {
         self.decided = decided;
         self.result.event = settled.event;
+        self.result.duplicate = settled.duplicate;
+        self.result.unavailable_targets = settled.unavailable_targets;
         self.result.blocked = settled.blocked;
         self.result.reason = settled.reason;
     }
@@ -187,6 +192,11 @@ impl Machine {
             }
             return;
         };
+        // A response of the call's own cascade, delivered, is one of the
+        // call's answers (Python's `InboundResult.response_events`).
+        if matches!(origin, PassOrigin::Response { .. }) && report.lineage == Lineage::Call {
+            self.trigger.result.response_events.push((*event).clone());
+        }
         if let Some(changed) = &changed {
             report::target_changed(
                 cx,
@@ -511,7 +521,8 @@ pub(super) fn stored_record(record: RoomEvent) -> InboundResult {
 /// §13.4).
 pub(super) fn entry_result(result: &PassResult) -> InboundResult {
     match result {
-        PassResult::Delivered { event, .. } => InboundResult {
+        PassResult::Delivered { event, plan, .. } => InboundResult {
+            unavailable_targets: Some(unavailable_targets(event, plan)),
             event: Some((**event).clone()),
             ..InboundResult::default()
         },
@@ -542,6 +553,7 @@ pub(super) fn replay_result(original: &RoomEvent) -> InboundResult {
     let blocked = original.status == EventStatus::Blocked;
     InboundResult {
         event: Some(original.clone()),
+        duplicate: true,
         blocked,
         reason: if blocked {
             original.blocked_by.clone()
@@ -550,6 +562,20 @@ pub(super) fn replay_result(original: &RoomEvent) -> InboundResult {
         },
         ..InboundResult::default()
     }
+}
+
+/// The channels `event` addressed that `plan` asks no turn of, in the order
+/// the event names them, as the Python implementation's commit reports
+/// them: an address the room does not bind, an unregistered channel, or a
+/// transport (RFC §10.1 step 18).
+fn unavailable_targets(event: &RoomEvent, plan: &DeliveryPlan) -> Vec<ChannelId> {
+    event
+        .addressed_to
+        .iter()
+        .flatten()
+        .filter(|target| !plan.agents.iter().any(|agent| &agent.channel_id == *target))
+        .cloned()
+        .collect()
 }
 
 /// What a pass or a record that failed before the call was decided fails

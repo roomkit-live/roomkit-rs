@@ -30,6 +30,16 @@ pub struct InboundResult {
     /// uncommitted, `DELIVERED` or `BLOCKED` with its `blocked_by`, at the
     /// index its hooks were shown, which the next event takes (gap G-065).
     pub event: Option<RoomEvent>,
+    /// Whether the call is a replay of an idempotency key its channel holds
+    /// in the room (RFC §13.4), not a new turn: `event` is the event the key
+    /// committed.
+    pub duplicate: bool,
+    /// The channels the event addressed (`addressed_to`) that its committed
+    /// delivery plan asks no turn of, in the order the event names them
+    /// (RFC §10.1 step 18): unbound, unregistered, or no intelligence
+    /// channel. `None` when no plan was resolved: a replay, a refused or a
+    /// blocked event.
+    pub unavailable_targets: Option<Vec<ChannelId>>,
     /// Whether the message was blocked: refused by the room, step 8a, a hook
     /// or its source's permissions, an instruction refused before anything
     /// was read, or a call past its `process_timeout` (RFC §13.6).
@@ -49,6 +59,13 @@ pub struct InboundResult {
     pub cancellation_reason: Option<String>,
     /// The merged response metadata of the turns the message asked for.
     pub response_metadata: Metadata,
+    /// The responses this call's cascade committed and delivered, in their
+    /// commit order: the answers to its event and to their answers, a
+    /// streamed answer's rows among them, never the event itself, a response
+    /// stored `BLOCKED`, nor another call's. A deferred call's result
+    /// returned at its commit holds none: its [`DeliveryHandle::wait`]
+    /// reports them.
+    pub response_events: Vec<RoomEvent>,
     /// The deliveries of the event to its transport channels. A deferred
     /// call's result returned at its commit holds none, unless its delivery
     /// ran meanwhile; its [`DeliveryHandle::wait`] reports them.
@@ -66,21 +83,27 @@ impl InboundResult {
     pub(crate) fn of(result: ops::InboundResult, delivery: Option<DeliveryHandle>) -> Self {
         let ops::InboundResult {
             event,
+            duplicate,
+            unavailable_targets,
             blocked,
             reason,
             error,
             response_metadata,
+            response_events,
             delivery_results,
             cancellation_reason,
             refused_before_the_lock: _,
         } = result;
         Self {
             event,
+            duplicate,
+            unavailable_targets,
             blocked,
             reason,
             error,
             cancellation_reason,
             response_metadata,
+            response_events,
             delivery_results,
             delivery,
         }

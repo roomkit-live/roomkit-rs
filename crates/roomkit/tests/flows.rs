@@ -98,6 +98,76 @@ async fn an_agent_s_answer_reaches_the_customer() {
     assert_eq!(sms.texts(), ["You said: Bonjour"]);
 }
 
+/// Python's `InboundResult.duplicate`, `unavailable_targets` and
+/// `response_events` (probe `tasks/probes/step5-lot2/inbound_result_fields.py`):
+/// a replay of a key is a duplicate with no plan resolved; the addresses
+/// the committed plan asks no turn of, an agent registered but not
+/// attached and a channel never registered, in the order the message names
+/// them; the answers the call's cascade delivered, never one stored
+/// blocked.
+#[tokio::test]
+async fn an_inbound_result_reports_its_replay_answers_and_unreached_addresses() {
+    let (kit, sms) = sms_and_agent().await;
+    kit.register_channel(EchoAgent::new(channel("idle"), "never"))
+        .unwrap();
+    let routed = || ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    let sent = |text: &str, key: Option<&str>, addressed_to: Option<&[&str]>| {
+        let mut message = message(&sms, text);
+        message.idempotency_key = key.map(str::to_owned);
+        message.addressed_to = addressed_to.map(|ids| ids.iter().map(|id| channel(id)).collect());
+        message
+    };
+    let read = |result: roomkit::InboundResult| {
+        let answers: Vec<String> = result
+            .response_events
+            .iter()
+            .map(|event| text_of(&event.content))
+            .collect();
+        let unavailable = result
+            .unavailable_targets
+            .map(|targets| targets.iter().map(ToString::to_string).collect::<Vec<_>>());
+        (result.duplicate, unavailable, answers)
+    };
+    let first = kit
+        .process_inbound(sent("hi", Some("k1"), None), routed())
+        .await
+        .unwrap();
+    let replay = kit
+        .process_inbound(sent("hi", Some("k1"), None), routed())
+        .await
+        .unwrap();
+    let addressed = kit
+        .process_inbound(
+            sent("you two", None, Some(&["ai", "idle", "ghost"])),
+            routed(),
+        )
+        .await
+        .unwrap();
+    kit.mute(&room_id(), &channel("ai"), Default::default())
+        .await
+        .unwrap();
+    let muted = kit
+        .process_inbound(sent("muted?", None, Some(&["ai"])), routed())
+        .await
+        .unwrap();
+    assert_eq!(
+        [read(first), read(replay), read(addressed), read(muted)],
+        [
+            (false, Some(vec![]), vec!["You said: hi".to_owned()]),
+            (true, None, vec![]),
+            (
+                false,
+                Some(vec!["idle".to_owned(), "ghost".to_owned()]),
+                vec!["You said: you two".to_owned()]
+            ),
+            (false, Some(vec![]), vec![]),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn the_timeline_reads_without_the_refused_events_by_default() {
     let (kit, sms) = sms_and_agent().await;
