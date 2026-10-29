@@ -30,18 +30,18 @@ struct Holdings {
 /// What a write of the store came to, once it ended; nothing while it runs.
 pub(crate) type Written = watch::Receiver<Option<Outcome>>;
 
-/// The reads of the run's kept streams under way, and the commits written
-/// while one is: each with whether it commits an event to deliver, one
-/// stored `BLOCKED` never being one.
+/// The reads of the run's kept streams under way, and every commit the run
+/// writes while one is, the rows those reads end among them, stored to
+/// deliver or `BLOCKED`.
 #[derive(Debug, Default)]
 struct Reads {
     open: usize,
-    rows: Vec<(bool, Written)>,
+    rows: Vec<Written>,
 }
 
-/// What a run leaves of its turns' streams as it ends: the commits its
-/// reads under way wrote, none for a stream kept unread.
-pub(crate) type LeftOpen = Vec<(bool, Written)>;
+/// What a run leaves of its turns' streams as it ends: the commits it
+/// wrote while its reads were under way, none for a stream kept unread.
+pub(crate) type LeftOpen = Vec<Written>;
 
 /// How a run holds a room's lock.
 #[derive(Clone, Debug)]
@@ -197,21 +197,25 @@ impl RunShared {
     /// included, with the commits those reads wrote; `None` when it leaves
     /// none.
     pub(crate) fn left_open(&self) -> Option<LeftOpen> {
+        // Lock order: `reads`, then `streams`, as in `take_stream`, which
+        // moves a stream from one to the other under `reads`: a run
+        // aborted on another worker sees it kept or read, never neither.
+        let mut reads = self.reads();
         let kept = !self
             .streams
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .is_empty();
-        let mut reads = self.reads();
         (kept || reads.open > 0).then(|| std::mem::take(&mut reads.rows))
     }
 
-    /// A commit the run writes, `delivers` its event, told by `written`:
-    /// kept while a read of a stream is under way, as that read's row.
-    pub(crate) fn wrote(&self, delivers: bool, written: &Written) {
+    /// A commit the run writes, told by `written`: kept while a read of a
+    /// stream is under way, whichever of the run's commits it is, a row the
+    /// read ends or not.
+    pub(crate) fn wrote(&self, written: &Written) {
         let mut reads = self.reads();
         if reads.open > 0 {
-            reads.rows.push((delivers, written.clone()));
+            reads.rows.push(written.clone());
         }
     }
 
@@ -257,12 +261,16 @@ impl RunShared {
     /// The stream the turn of `effect` answered with, taken to be read: its
     /// read is under way until [`read_returned`](Self::read_returned).
     pub(crate) fn take_stream(&self, effect: EffectId) -> Option<KeptStream> {
+        // Lock order: `reads`, then `streams`, as in `left_open`: the
+        // stream leaves `streams` and its read opens under one hold of
+        // `reads`, so that no abort reads the run between the two.
+        let mut reads = self.reads();
         let kept = self
             .streams
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&effect)?;
-        self.reads().open += 1;
+        reads.open += 1;
         Some(kept)
     }
 

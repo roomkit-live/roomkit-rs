@@ -168,15 +168,19 @@ pub(super) async fn channel<S: ConversationStore>(
             let kit: Arc<dyn TurnKit> = Arc::new(Arc::downgrade(inner));
             let cut = |turn| shared.turn_submitted(effect, turn);
             let answered = inner.turns.run(&kit, &binding, event, *context, cut).await;
-            shared.turn_answered(effect);
-            match answered {
+            let outcome = match answered {
                 Ok(Answer::Output(output)) => ChannelOutcome::Output(output).into(),
                 Ok(Answer::Streamed(output, turn)) => {
                     shared.keep_stream(effect, KeptStream { turn });
                     ChannelOutcome::Streamed(output).into()
                 }
                 Err(error) => Outcome::Failed(error),
-            }
+            };
+            // Its stream kept first, the turn stops being one the call
+            // awaits: an abort between the two reads the stream kept, never
+            // a delivery cut running.
+            shared.turn_answered(effect);
+            outcome
         }
         ChannelRequest::Deliver {
             binding,

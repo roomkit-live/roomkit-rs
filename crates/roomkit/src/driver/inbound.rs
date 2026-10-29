@@ -556,30 +556,20 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
 }
 
 /// What a call whose aborted run left a turn's stream open reads, once
-/// the writes of its reads ended (RFC §10.6.8). A row stored to deliver:
-/// `kit_closed`, as a commit of its cascade stored and never delivered
-/// reads since pass 4. Rows stored `BLOCKED` only: nothing more, as an
-/// event never delivered. Nothing of the turn stored: the turn link's
-/// `backend_closed`, as Python's call reads the `TurnLinkError` of a turn
-/// whose reader its grace cut, `executor_lost` there, `backend_closed`
-/// here (decided 2026-10-28).
+/// the writes of its reads ended (RFC §10.6.8). A row stored, to deliver
+/// or `BLOCKED`: nothing more, the turn having said it, a row stored and
+/// never delivered reading `kit_closed` already, through the cascade's
+/// commits whose set never entered the lane (`cascade_stored`). Nothing of
+/// the turn stored: the turn link's `backend_closed`, as Python's call
+/// reads the `TurnLinkError` of a turn whose reader its grace cut,
+/// `executor_lost` there, `backend_closed` here (decided 2026-10-28).
 async fn read_left_open(result: &mut InboundResult, rows: LeftOpen) {
-    let mut stored = false;
-    for (delivers, mut written) in rows {
-        if calls::outcome_of(&mut written).await != Outcome::Store(StoreOutcome::Committed) {
-            continue;
-        }
-        if delivers {
-            result
-                .cancellation_reason
-                .get_or_insert_with(|| KIT_CLOSED.to_owned());
+    for mut written in rows {
+        if calls::outcome_of(&mut written).await == Outcome::Store(StoreOutcome::Committed) {
             return;
         }
-        stored = true;
     }
-    if !stored {
-        result.error.get_or_insert_with(turns::closed);
-    }
+    result.error.get_or_insert_with(turns::closed);
 }
 
 /// `output`, a run's at its end: once the kit's close cut the work under

@@ -299,8 +299,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let Some(caller) = self.caller.as_deref() else {
             return;
         };
-        if let Some((delivers, _)) = &commit {
-            self.shared.wrote(*delivers, &written);
+        if commit.is_some() {
+            self.shared.wrote(&written);
         }
         match (decides, commit) {
             (Some(result), _) => caller.commits(*result, written),
