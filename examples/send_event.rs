@@ -26,8 +26,8 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    FrameworkEvent, InboundError, KitError, ProcessInboundOptions, RoomKit, SendEventOptions,
-    WeakRoomKit, text_of,
+    FrameworkEvent, ProcessInboundOptions, RoomKit, RoomKitError, SendEventOptions, WeakRoomKit,
+    text_of,
 };
 
 use shared::{Checks, Log};
@@ -192,10 +192,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         )
         .await;
     checks.expect(
-        "a channel the room does not bind is refused source_unbound, nothing written",
+        "a channel the room does not bind is refused as not found in the room, nothing written",
         matches!(
             &refused,
-            Err(KitError::Inbound(InboundError::Refused { reason })) if reason == "source_unbound"
+            Err(RoomKitError::ChannelNotFound { channel_id, .. }) if channel_id == crm.id()
         ) && shared::timeline(&kit, &room).await?.len() == 4,
     );
 

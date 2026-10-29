@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use roomkit_core::model::ChannelId;
 use tokio::sync::watch;
 
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::tasks::{Marks, Tasks, Unit};
 
 /// Where the kit's shutdown is: not started, or started in its unit, its
@@ -91,18 +91,20 @@ impl Shutdown {
 ///
 /// # Errors
 ///
-/// Returns [`KitError::ChannelsFailedToClose`] when a channel's close
-/// panicked, and [`KitError::ShutdownCancelled`] when the shutdown never
+/// Returns [`RoomKitError::ExceptionGroup`] when a channel's close
+/// panicked, and [`RoomKitError::ShutdownCancelled`] when the shutdown never
 /// ended.
-pub(super) async fn wait_for(mut ended: watch::Receiver<Option<Ended>>) -> Result<(), KitError> {
+pub(super) async fn wait_for(
+    mut ended: watch::Receiver<Option<Ended>>,
+) -> Result<(), RoomKitError> {
     let failures = match ended.wait_for(Option::is_some).await {
         Ok(ended) => ended.clone().unwrap_or_default(),
-        Err(_cut) => return Err(KitError::ShutdownCancelled),
+        Err(_cut) => return Err(RoomKitError::ShutdownCancelled),
     };
     if failures.is_empty() {
         return Ok(());
     }
-    Err(KitError::ChannelsFailedToClose {
+    Err(RoomKitError::ExceptionGroup {
         failures: failures.to_vec(),
     })
 }

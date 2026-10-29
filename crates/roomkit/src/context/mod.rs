@@ -49,7 +49,7 @@
 //!   the room. Only a hook body's draws a hook call (RFC §10.3, gap
 //!   G-087).
 //!
-//! A refusal fails the call ([`KitError::Reentrant`](crate::KitError::Reentrant))
+//! A refusal fails the call ([`RoomKitError::ReentrantCall`](crate::RoomKitError::ReentrantCall))
 //! rather than let it wait for itself.
 //!
 //! A lease is live while the run that holds the lock keeps the tenure it

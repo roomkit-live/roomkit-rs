@@ -4,10 +4,10 @@
 //! The room holds the customer's `sms` and the advisor's console `ws`; an
 //! agent `ai` joins where a test needs one. An event the integrator injects
 //! comes from `ws`, as a console's REST call would.
-use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit_core::model::{
     ChannelOutput, DirectEvent, EditContent, EditSource, ErrorRecord, EventContent, EventDirection,
     EventStatus, EventType, HookResult, InboundMessage, InjectedEvent, RoomEvent, RoomId,

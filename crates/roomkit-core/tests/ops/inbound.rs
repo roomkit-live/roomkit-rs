@@ -1,8 +1,8 @@
 //! The inbound pipeline, effect by effect (RFC §10.1, §10.2).
 
-use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::sync::Arc;
 
+use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit_core::model::{
     ChannelOutput, DeliveryResultStatus, ErrorRecord, EventId, EventStatus, EventType, HookResult,
     InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId, TextContent,

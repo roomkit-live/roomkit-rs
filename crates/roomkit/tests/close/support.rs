@@ -1,12 +1,12 @@
 //! A room with an SMS transport and a witness channel, the kit's own work
 //! closing the kit from one door or another, and what the tests read of a
 //! call and of the room.
-use roomkit::model::hook::AllowOptions;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
@@ -15,7 +15,7 @@ use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, EventFilter, EventQuery, HookExecution, HookSpec, HookTrigger,
-    InboundResult, KitError, ProcessInboundOptions, RoomKit, RoomKitOptions, text_of,
+    InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, text_of,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, AiProvider, ToolDefinition, ToolOutput, Tools};
@@ -153,7 +153,7 @@ impl Channel for Witness {
 }
 
 /// What a work's close answered, and whether the witness was closed then.
-type Returned = (Result<(), KitError>, bool);
+type Returned = (Result<(), RoomKitError>, bool);
 
 /// The kit's own work closing the kit, once, once let go when it is gated;
 /// it keeps what its close answered and whether the witness was closed by
@@ -239,7 +239,7 @@ pub(crate) async fn sealed(kit: &RoomKit) -> bool {
         room_id: Some(RoomId::new("after").unwrap()),
         ..Default::default()
     };
-    matches!(kit.create_room(options).await, Err(KitError::ShutDown))
+    matches!(kit.create_room(options).await, Err(RoomKitError::KitClosed))
 }
 
 /// The texts `room_1` stores, its lifecycle records aside.
@@ -268,7 +268,7 @@ pub(crate) async fn stored_in<S: ConversationStore>(
         .collect()
 }
 
-pub(crate) type Call = JoinHandle<Result<InboundResult, KitError>>;
+pub(crate) type Call = JoinHandle<Result<InboundResult, RoomKitError>>;
 
 pub(crate) fn spawn_message<S: ConversationStore>(
     kit: &RoomKit<S>,
@@ -282,7 +282,7 @@ pub(crate) fn spawn_message<S: ConversationStore>(
 
 /// What a call came to: its error, or its result's `cancellation_reason`
 /// and the type of its result's error.
-pub(crate) type Answered = Result<(Option<String>, Option<String>), KitError>;
+pub(crate) type Answered = Result<(Option<String>, Option<String>), RoomKitError>;
 
 /// A call's result, its `cancellation_reason` and its error's type.
 #[expect(
@@ -334,7 +334,7 @@ impl Door {
     /// others end as they would have.
     pub(crate) fn call_ends(self) -> Answered {
         match self {
-            Self::SyncHook => Err(KitError::ShutDown),
+            Self::SyncHook => Err(RoomKitError::KitClosed),
             Self::ToolCall => ok(Some("kit_closed"), None),
             Self::DeliveryHook | Self::Delivery | Self::Observer => ok(None, None),
         }

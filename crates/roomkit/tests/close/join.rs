@@ -91,7 +91,7 @@ async fn a_close_from_a_tool_joining_a_close_still_waiting_for_a_write_spares_it
 struct ClosingTool {
     entered: Arc<Notify>,
     go: Arc<Notify>,
-    answered: Arc<tokio::sync::Mutex<Option<Result<(), roomkit::KitError>>>>,
+    answered: Arc<tokio::sync::Mutex<Option<Result<(), roomkit::RoomKitError>>>>,
 }
 
 /// `room_1`, with SMS and an agent whose one tool is `tool`, and `room_2`,

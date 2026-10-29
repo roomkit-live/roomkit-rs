@@ -1,11 +1,11 @@
 //! Hook handlers: the host code behind a hook registration (RFC §9).
-use roomkit_core::model::hook::AllowOptions;
 use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use roomkit_core::model::hook::AllowOptions;
 use roomkit_core::model::{ErrorRecord, HookResult, RoomContext, RoomEvent};
 use roomkit_core::rules::hook_chain::HookOutcome;
 

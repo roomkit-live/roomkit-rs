@@ -1,9 +1,9 @@
 //! Templates: the records a scenario writes in part, completed with what
 //! the record requires (roomkit-specs `conformance/README.md`, "Templates"),
 //! and a hook's result built from them.
-use roomkit::model::hook::AllowOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookResult, RoomEvent, Timestamp};
 use serde_json::{Map, Value, json};
 

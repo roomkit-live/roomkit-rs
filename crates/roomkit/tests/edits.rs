@@ -6,12 +6,12 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
-use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::future::{Future, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelOutput, ChannelType, DeleteContent, EditContent, EditSource, EventContent, EventId,

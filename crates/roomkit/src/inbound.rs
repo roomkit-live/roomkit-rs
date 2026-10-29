@@ -13,7 +13,7 @@ use tokio::task::{AbortHandle, JoinHandle};
 
 use crate::context::{Completion, ExecutionContext};
 use crate::driver::{self, InboundOutput, Record};
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::tasks::Tasks;
 
 /// What became of an inbound message (RFC §10.1 `InboundResult`), as the
@@ -125,7 +125,7 @@ enum Ended {
     Over(Box<ops::InboundResult>),
     /// The run failed past the commit, a defect of this crate: the first
     /// wait takes the error, the next ones read the result at the commit.
-    Failed(std::sync::Mutex<Option<KitError>>),
+    Failed(std::sync::Mutex<Option<RoomKitError>>),
 }
 
 /// What a handle waits for.
@@ -219,10 +219,10 @@ impl DeliveryHandle {
     /// # Errors
     ///
     /// Returns what a call that waited would have returned past its commit:
-    /// a defect of this crate, as [`KitError::Stalled`] is, to the first
+    /// a defect of this crate, as [`RoomKitError::Internal`], to the first
     /// wait that reads it; another wait then reads the result the call
     /// returned at its commit.
-    pub async fn wait(&self) -> Result<InboundResult, KitError> {
+    pub async fn wait(&self) -> Result<InboundResult, RoomKitError> {
         let shared = &self.shared;
         if !self.done() && shared.waits_for_itself() {
             return Ok(self.with_handle(shared.decided.clone()));

@@ -7,12 +7,12 @@
     clippy::panic,
     reason = "a test fails on a broken fixture"
 )]
-use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::future::{Future, ready};
 use std::pin::Pin;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventId, EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
@@ -24,8 +24,8 @@ use roomkit::testing::{
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
     ConversationStore, CreateRoomOptions, EventDraft, FrameworkEvent, HookExecution, HookHandler,
-    HookReturn, HookSpec, HookTrigger, KitError, ProcessInboundOptions, RoomKit, RoomKitOptions,
-    default_inbound_event, text_of,
+    HookReturn, HookSpec, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitError,
+    RoomKitOptions, default_inbound_event, text_of,
 };
 use tokio::sync::mpsc;
 
@@ -356,7 +356,10 @@ async fn a_message_on_an_unregistered_channel_is_refused() {
             },
         )
         .await;
-    assert!(matches!(refused, Err(KitError::Inbound(_))));
+    assert_eq!(
+        refused.err(),
+        Some(RoomKitError::ChannelNotRegistered(channel("telegram")))
+    );
 }
 
 /// A transport whose deliveries panic.
@@ -552,7 +555,7 @@ async fn registering_a_channel_twice_is_refused() {
     kit.register_channel(sms.clone()).unwrap();
     assert!(matches!(
         kit.register_channel(sms),
-        Err(KitError::Config(_))
+        Err(RoomKitError::ChannelAlreadyRegistered(_))
     ));
 }
 

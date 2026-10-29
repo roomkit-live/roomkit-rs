@@ -38,12 +38,12 @@
 //! (`Effect::locked`) is checked to be made while the room's lock is held.
 
 mod runs;
-use roomkit_core::model::hook::AllowOptions;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
+use roomkit_core::model::hook::AllowOptions;
 use roomkit_core::model::{
     Access, ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelMediaType, ChannelOutput, ChannelType, DirectEvent, ErrorRecord, EventDirection,
@@ -1748,7 +1748,7 @@ impl Sim {
         }
         if self.room_exists {
             return Outcome::Failed(ErrorRecord::new(
-                "RoomExists",
+                "RoomAlreadyExists",
                 "a room with the id exists already",
             ));
         }

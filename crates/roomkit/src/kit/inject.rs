@@ -13,9 +13,9 @@ use super::RoomKit;
 use super::options::{CommitEventOptions, SendEventOptions};
 use crate::context::{self, Adopting, Completion, ExecutionContext};
 use crate::driver::{self, InboundOutput, Ran, Record};
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::inbound::DeliveryHandle;
-use crate::store::{ConversationStore, StoreError};
+use crate::store::ConversationStore;
 use crate::tasks::Tasks;
 
 impl<S: ConversationStore> RoomKit<S> {
@@ -61,24 +61,24 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Inbound`] with
-    /// [`InboundError::RoomNotFound`](crate::InboundError::RoomNotFound) for
-    /// a room that does not exist or that the organization does not reach;
-    /// with [`InboundError::Refused`](crate::InboundError::Refused)
-    /// when the room refused the event before its commit, nothing written:
-    /// `source_unbound` for a channel the room does not bind, `room_closed`,
-    /// `process_timeout`, one of the refusals of an edit or a delete, an
-    /// instruction's refusal; with another error when the event cannot be
-    /// one (an unregistered channel, the visibility `internal`, `standalone`
-    /// on a type other than an instruction) or the store, the lock or the
-    /// admission ticket failed before its commit.
+    /// As Python's `send_event` raises, nothing written:
+    /// [`RoomKitError::RoomNotFound`] for a room that does not exist or that
+    /// the organization does not reach; when the room refused the event
+    /// before its commit, [`RoomKitError::ChannelNotFound`] for a channel the
+    /// room does not bind, [`RoomKitError::RoomClosed`],
+    /// [`RoomKitError::ProcessTimeout`], [`RoomKitError::ChangeRefused`] for
+    /// the refusal of an edit or a delete; [`RoomKitError::ChannelNotRegistered`]
+    /// for an unregistered channel; [`RoomKitError::Value`] when the event
+    /// cannot be one (the visibility `internal`, `standalone` on a type other
+    /// than an instruction, an instruction's refusal); or the store's or the
+    /// lock's failure before its commit.
     pub async fn send_event(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
         content: impl Into<EventContent>,
         options: SendEventOptions,
-    ) -> Result<RoomEvent, KitError> {
+    ) -> Result<RoomEvent, RoomKitError> {
         let organization_id = options.organization_id.clone();
         let event = options.event(channel_id.clone(), content.into());
         self.inject(room_id, organization_id, event).await
@@ -92,14 +92,14 @@ impl<S: ConversationStore> RoomKit<S> {
         room_id: &RoomId,
         organization_id: Option<String>,
         event: DirectEvent,
-    ) -> Result<RoomEvent, KitError> {
+    ) -> Result<RoomEvent, RoomKitError> {
         let entry = Entry::Direct {
             room_id: room_id.clone(),
             organization_id,
             event: Box::new(event),
         };
         let entered = self.enter(entry, SEND_EVENT, false).await?;
-        entered.result.event.ok_or(KitError::NoEvent)
+        entered.result.event.ok_or_else(no_event)
     }
 
     /// Commits `event` to the room `room_id` outside the pipeline (RFC
@@ -120,25 +120,42 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Mutation`] when the record names another room,
-    /// before anything is read; when the room does not exist; when its
-    /// status refuses events (RFC §5.1); when the store refuses it, a key
-    /// its channel holds in the room among others (`IdempotencyKeyTaken`:
-    /// a record is never a replay, RFC §14.3); or when the store or the
-    /// room lock fails.
+    /// Returns [`RoomKitError::Value`] when the record names another room,
+    /// before anything is read; [`RoomKitError::RoomNotFound`] when the room
+    /// does not exist; [`RoomKitError::RoomClosed`] when its status refuses
+    /// events (RFC §5.1); [`RoomKitError::IdempotencyKeyTaken`] for a key
+    /// its channel holds in the room (a record is never a replay, RFC
+    /// §14.3), as Python raises `IdempotencyKeyTakenError`; or the store's
+    /// or the room lock's failure.
     pub async fn commit_event(
         &self,
         room_id: &RoomId,
         event: RoomEvent,
         options: CommitEventOptions,
-    ) -> Result<RoomEvent, KitError> {
+    ) -> Result<RoomEvent, RoomKitError> {
+        let taken = (
+            event.source.channel_id.clone(),
+            event.idempotency_key.clone(),
+        );
         let operation = CommitRecord::new(
             self.config(),
             room_id.clone(),
             event,
             options.organization_id,
         );
-        Ok(driver::run(&self.inner, "commit_event", operation).await??)
+        let committed = driver::run(&self.inner, "commit_event", operation).await?;
+        committed.map_err(|error| match (RoomKitError::from(error), taken) {
+            (refused, (channel_id, Some(key)))
+                if refused.recorded_refusal() == Some("IdempotencyKeyTaken") =>
+            {
+                RoomKitError::IdempotencyKeyTaken {
+                    room_id: room_id.clone(),
+                    channel_id,
+                    key,
+                }
+            }
+            (error, _) => error,
+        })
     }
 
     /// Runs `entry`, a call into the room it names, at least as deep as the
@@ -152,7 +169,7 @@ impl<S: ConversationStore> RoomKit<S> {
         mut entry: Entry,
         call: &'static str,
         defer: bool,
-    ) -> Result<Entered, KitError> {
+    ) -> Result<Entered, RoomKitError> {
         let chain_depth = match &mut entry {
             Entry::Message { message, .. } => &mut message.chain_depth,
             Entry::Direct { event, .. } => &mut event.chain_depth,
@@ -161,27 +178,28 @@ impl<S: ConversationStore> RoomKit<S> {
         };
         context::as_deep_as_its_turn(chain_depth);
         self.inner.open()?;
-        let room_id = entry.room_id().clone();
         self.reached_from_its_work(&entry).await?;
+        let refused = refusal_of(&entry);
         let entry = match context::adopt(entry).await {
             Adopting::Settled(result, completion) => {
                 return Ok(Entered {
-                    result: (*result)?,
+                    result: (*result).map_err(refused)?,
                     following: Following::Adopted(completion),
                 });
             }
             // A run the kit's shutdown ended abandons the calls it adopted:
-            // their callers are told the kit is shut down.
+            // their callers are told the call was cancelled, as the call
+            // that adopted it was.
             Adopting::Abandoned => {
                 self.inner.open()?;
-                return Err(KitError::Abandoned { room_id, call });
+                return Err(RoomKitError::Cancelled);
             }
             Adopting::Apart(entry) => entry,
         };
         let room_id = entry.room_id().clone();
         let operation = self.operation(entry)?;
         let ran = driver::run_inbound(&self.inner, call, Some(&room_id), operation, defer).await;
-        Entered::ran(ran)
+        Entered::ran(ran, refused)
     }
 
     /// Checks that the organization `entry` names reaches its room when the
@@ -189,7 +207,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// work's reentry budget first thing: a room of another organization
     /// reads as not found and draws nothing, as the Python implementation
     /// reads the room first (RFC §17.2, §8.3).
-    async fn reached_from_its_work(&self, entry: &Entry) -> Result<(), KitError> {
+    async fn reached_from_its_work(&self, entry: &Entry) -> Result<(), RoomKitError> {
         let organization_id = match entry {
             Entry::Message {
                 organization_id, ..
@@ -206,16 +224,11 @@ impl<S: ConversationStore> RoomKit<S> {
         if organization_id.is_none() || !ExecutionContext::current().works_in_room(room_id) {
             return Ok(());
         }
-        match self.reached(room_id, organization_id).await {
-            Err(KitError::Store(StoreError::RoomNotFound(missing))) => {
-                Err(InboundError::RoomNotFound(missing).into())
-            }
-            reached => reached,
-        }
+        self.reached(room_id, organization_id).await
     }
 
     /// The operation that runs `entry`, a call run apart.
-    fn operation(&self, entry: Entry) -> Result<Inbound, KitError> {
+    fn operation(&self, entry: Entry) -> Result<Inbound, RoomKitError> {
         Ok(match entry {
             Entry::Message {
                 room_id,
@@ -239,7 +252,11 @@ impl<S: ConversationStore> RoomKit<S> {
             } => Inbound::post(self.config(), room_id, organization_id, *post),
             // A stream's row goes to the run that reads the stream, never
             // through a kit's call: one here is a defect of this crate.
-            Entry::Row { .. } => return Err(KitError::Stalled),
+            Entry::Row { .. } => {
+                return Err(RoomKitError::Internal(
+                    "a stream's row was entered through a kit's call".to_owned(),
+                ));
+            }
         })
     }
 }
@@ -264,14 +281,17 @@ pub(super) enum Following {
 }
 
 impl Entered {
-    /// What a run apart came to.
-    pub(super) fn ran(ran: Ran) -> Result<Self, KitError> {
+    /// What a run apart came to, its error read by `refused`.
+    pub(super) fn ran(
+        ran: Ran,
+        refused: impl FnOnce(InboundError) -> RoomKitError,
+    ) -> Result<Self, RoomKitError> {
         let following = match ran.delivery {
             Some((run, record)) => Following::Run(run, record),
             None => Following::Nothing,
         };
         Ok(Self {
-            result: ran.output??,
+            result: ran.output?.map_err(refused)?,
             following,
         })
     }
@@ -293,6 +313,33 @@ impl Entered {
         };
         crate::InboundResult::of(result, Some(handle))
     }
+}
+
+/// How an entry's error reads to its caller: a direct entry's refusal before
+/// its commit by Python's class for it, which names its room and source
+/// ([`RoomKitError::of_entry`]); a message's, which a refusal never fails,
+/// as [`From`] reads it.
+fn refusal_of(entry: &Entry) -> impl FnOnce(InboundError) -> RoomKitError + use<> {
+    let source = match entry {
+        Entry::Direct { room_id, event, .. } => Some((room_id.clone(), event.channel_id.clone())),
+        Entry::Post { room_id, post, .. } => Some((
+            room_id.clone(),
+            post.channel_id.clone().unwrap_or_else(ChannelId::host),
+        )),
+        Entry::Message { .. } | Entry::Row { .. } => None,
+    };
+    move |error| match source {
+        Some((room_id, channel_id)) => RoomKitError::of_entry(error, &room_id, &channel_id),
+        None => error.into(),
+    }
+}
+
+/// What a direct injection that ended with neither its event nor a refusal
+/// fails with (RFC §10.5): a defect of this crate.
+pub(super) fn no_event() -> RoomKitError {
+    RoomKitError::Internal(
+        "a direct injection ended with neither its event nor a refusal".to_owned(),
+    )
 }
 
 /// The kit's call that injects an event, as an error names it.

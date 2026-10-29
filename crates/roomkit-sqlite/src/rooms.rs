@@ -65,7 +65,7 @@ pub(crate) fn check(connection: &Connection, room_id: &RoomId) -> Result<(), Fai
 }
 
 /// Stores a new room, its index sequence at 0; refused
-/// [`StoreError::RoomExists`] for an id the store holds (RFC §14.3).
+/// [`StoreError::RoomAlreadyExists`] for an id the store holds (RFC §14.3).
 pub(crate) fn create(connection: &Connection, room: &Room) -> Result<(), Failure> {
     let created = connection.execute(
         "INSERT OR IGNORE INTO rooms(id, created_ts, organization_id, status, delivered_index, data)
@@ -80,7 +80,7 @@ pub(crate) fn create(connection: &Connection, room: &Room) -> Result<(), Failure
         ],
     )?;
     if created == 0 {
-        return Err(StoreError::RoomExists(room.id.clone()).into());
+        return Err(StoreError::RoomAlreadyExists(room.id.clone()).into());
     }
     connection.execute(
         "INSERT OR IGNORE INTO event_sequences(room_id, next_index) VALUES(?, 0)",

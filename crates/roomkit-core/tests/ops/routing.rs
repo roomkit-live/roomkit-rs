@@ -854,7 +854,7 @@ mod no_room_found {
             (sent.map(|result| result.blocked), sim.traced("enter lane")),
             (
                 Err(InboundError::Store(ErrorRecord::new(
-                    "RoomExists",
+                    "RoomAlreadyExists",
                     "a room with the id exists already"
                 ))),
                 vec![]

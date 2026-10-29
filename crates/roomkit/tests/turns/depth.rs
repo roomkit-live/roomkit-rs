@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use pretty_assertions::assert_eq;
 use roomkit::model::{DirectEvent, TextContent};
 use roomkit::testing::TurnTap;
-use roomkit::{KitError, current_turn};
+use roomkit::{RoomKitError, current_turn};
 use roomkit_ai::ToolOutput;
 use tokio::sync::Notify;
 
@@ -37,7 +37,7 @@ async fn observed() -> (roomkit::RoomKit, Arc<Notify>, Sent) {
             let sent = turn.send_event(note).await;
             noted.lock().unwrap().push(match sent {
                 Ok(event) => Ok(event.chain_depth),
-                Err(KitError::Turn(error)) => Err(error.kind),
+                Err(RoomKitError::Turn(error)) => Err(error.kind),
                 Err(error) => Err(error.to_string()),
             });
         }

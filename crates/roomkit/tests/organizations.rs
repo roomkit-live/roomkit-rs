@@ -6,11 +6,11 @@
 //! names no organization reaches every room.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-use roomkit::model::hook::AllowOptions;
 use std::sync::Arc;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     Access, ChannelId, ChannelType, EventSource, InboundMessage, Metadata, RoomEvent, RoomId,
     RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
@@ -19,11 +19,11 @@ use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_envir
 use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
     CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
-    DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions, InboundError,
-    KitError, LifecycleError, ListBindingsOptions, ListMembersOptions, MutationError, MuteOptions,
-    PauseRoomOptions, PostOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions,
-    RoomKit, RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, StoreError,
-    UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions,
+    DetachChannelOptions, GetBindingOptions, GetRoomOptions, GetTimelineOptions,
+    ListBindingsOptions, ListMembersOptions, MuteOptions, PauseRoomOptions, PostOptions,
+    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError,
+    RoomKitOptions, SendEventOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
+    UpdateBindingMetadataOptions, UpdateEventOptions,
 };
 
 const START_MILLIS: i64 = 1_792_677_780_000;
@@ -106,14 +106,9 @@ async fn as_stored(kit: &RoomKit) -> (RoomStatus, u64, Vec<(String, bool)>) {
 
 /// What a call came to, as the Python implementation's outcomes are named:
 /// `RoomNotFound`, or the value it returned when it found nothing.
-fn outcome<T: std::fmt::Debug>(result: Result<T, KitError>) -> String {
+fn outcome<T: std::fmt::Debug>(result: Result<T, RoomKitError>) -> String {
     match result {
-        Err(
-            KitError::Store(StoreError::RoomNotFound(_))
-            | KitError::Lifecycle(LifecycleError::RoomNotFound(_))
-            | KitError::Inbound(InboundError::RoomNotFound(_))
-            | KitError::Mutation(MutationError::RoomNotFound(_)),
-        ) => "RoomNotFound".to_owned(),
+        Err(RoomKitError::RoomNotFound(_)) => "RoomNotFound".to_owned(),
         Err(other) => format!("{other:?}"),
         Ok(value) => format!("{value:?}"),
     }
@@ -430,9 +425,7 @@ async fn a_replay_is_never_handed_to_another_organization() {
     kit.process_inbound(hi(), options).await.unwrap();
     assert_eq!(
         std::mem::take(&mut *answers.lock().unwrap()),
-        [Err(KitError::Inbound(
-            InboundError::RoomNotFound(room_id())
-        ))]
+        [Err(RoomKitError::RoomNotFound(room_id()))]
     );
 }
 

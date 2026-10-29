@@ -163,8 +163,8 @@ pub enum ConfigError {
     /// No channel is registered under the id.
     #[error("no channel {0} is registered")]
     UnknownChannel(ChannelId),
-    /// The channel claims a type reserved for what it does not do: `system`,
-    /// or `host` for a channel other than a host channel (RFC §6.2, §10.5).
+    /// The channel claims the type reserved for the framework's own records,
+    /// `system` (RFC §5.3).
     #[error("channel {channel_id} claims the reserved type {channel_type}")]
     ReservedChannelType {
         /// The channel.
@@ -212,18 +212,13 @@ impl KitConfig {
     /// # Errors
     ///
     /// Returns [`ConfigError::DuplicateChannel`] when the id is taken, and
-    /// [`ConfigError::ReservedChannelType`] for a channel claiming `system`,
-    /// or `host` without being a host channel, a transport whose direction is
-    /// `INBOUND` (RFC §6.2, §10.5).
+    /// [`ConfigError::ReservedChannelType`] for a channel claiming `system`
+    /// (RFC §5.3).
     pub fn register_channel(&mut self, declaration: ChannelDeclaration) -> Result<(), ConfigError> {
         if self.channels.contains_key(&declaration.channel_id) {
             return Err(ConfigError::DuplicateChannel(declaration.channel_id));
         }
-        if host::claims_reserved_type(
-            &declaration.channel_type,
-            declaration.category,
-            declaration.direction,
-        ) {
+        if host::claims_reserved_type(&declaration.channel_type) {
             return Err(ConfigError::ReservedChannelType {
                 channel_id: declaration.channel_id,
                 channel_type: declaration.channel_type,

@@ -10,12 +10,12 @@
     clippy::panic,
     reason = "a test fails on a broken fixture"
 )]
-use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
     ChannelId, ChannelType, EventDirection, EventSource, EventStatus, HookResult, InboundMessage,
     InjectedEvent, Observation, RoomEvent, RoomId, RoomStatus, TextContent, Timestamp,

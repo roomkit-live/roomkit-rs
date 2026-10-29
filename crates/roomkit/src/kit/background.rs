@@ -9,7 +9,7 @@ use tokio::time::Instant;
 
 use super::RoomKit;
 use super::shutdown::{self, Joined, Starting};
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Tasks, Unit};
 
@@ -55,7 +55,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// storing and delivering nothing once the kit is sealed, at step 6,
     /// before the channels close: its writes and its channel calls are
     /// refused, a message whose commit is so refused failing
-    /// [`KitError::ShutDown`], nothing of it stored, one refused past its
+    /// [`RoomKitError::KitClosed`], nothing of it stored, one refused past its
     /// commit reading `cancellation_reason` `kit_closed`, and one whose
     /// turn is refused carrying the turn link's `backend_closed` in its
     /// result's `error` (RFC §10.6.8). A `close` from an observer the kit
@@ -63,16 +63,16 @@ impl<S: ConversationStore> RoomKit<S> {
     /// spared work is dropped at once: the deliveries queued behind its
     /// place in its room's lane, `kit_closed`, and the messages waiting, or
     /// starting to wait as the close drains, for the room's lock or
-    /// admission ticket it holds, refused [`KitError::ShutDown`]. A `close`
+    /// admission ticket it holds, refused [`RoomKitError::KitClosed`]. A `close`
     /// from the shutdown's own work, a channel's close, returns at once.
     ///
     /// # Errors
     ///
     /// Every caller, the first included, receives how the shutdown ended:
-    /// [`KitError::ChannelsFailedToClose`] when a channel's close panicked,
+    /// [`RoomKitError::ExceptionGroup`] when a channel's close panicked,
     /// the channels after it closed all the same and the rest of the
     /// shutdown run to its end, as the Python implementation's `close`
-    /// raises its `ExceptionGroup`; [`KitError::ShutdownCancelled`] when
+    /// raises its `ExceptionGroup`; [`RoomKitError::ShutdownCancelled`] when
     /// the shutdown never ended, its task dropped with its runtime or
     /// panicked, as Python's raises `RoomKitError`.
     ///
@@ -146,13 +146,13 @@ impl<S: ConversationStore> RoomKit<S> {
     ///    and never delivered, as Python's caller reads its close's
     ///    refusal of that delivery, the store's error for such a commit
     ///    that failed, or
-    ///    [`KitError::ShutDown`](crate::KitError::ShutDown) for a call cut
+    ///    [`RoomKitError::KitClosed`](crate::RoomKitError::KitClosed) for a call cut
     ///    before its own commit, whatever its run committed for other
     ///    events first (RMK-1010 item 41).
     /// 5. The other observer hooks still running after the fact (RFC §9.3)
     ///    finish, each within its hook's timeout.
     /// 6. The kit is sealed: every call that runs an operation fails from
-    ///    now on with `KitError::ShutDown`, an inbound call, a lifecycle
+    ///    now on with `RoomKitError::KitClosed`, an inbound call, a lifecycle
     ///    change, a direct change of a stored event,
     ///    [`commit_event`](Self::commit_event) and
     ///    [`check_all_timers`](Self::check_all_timers); registering
@@ -175,7 +175,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// The Python implementation drains its rooms' lanes one after the
     /// other, each for up to 5 seconds; this one drains them together,
     /// under that bound.
-    pub async fn close(&self) -> Result<(), KitError> {
+    pub async fn close(&self) -> Result<(), RoomKitError> {
         let joined = self.inner.shutdown.join(&self.inner.tasks, |starting| {
             self.inner.tasks.close();
             let Starting { marks, ended } = starting;

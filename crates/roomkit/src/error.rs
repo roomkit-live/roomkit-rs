@@ -1,111 +1,495 @@
-//! What a kit's operations fail with.
+//! What a kit's calls fail with: [`RoomKitError`], the Python
+//! implementation's `RoomKitError`, each variant one of its exception
+//! classes (step 5, decision 9).
 
-use roomkit_core::model::{ChannelId, RoomId};
+use std::fmt;
+
+use roomkit_core::model::{
+    ChannelId, ChannelType, ErrorRecord, EventId, IdentityId, ModelError, ParticipantId, RoomId,
+    RoomStatus,
+};
 use roomkit_core::ops::{ConfigError, InboundError, LifecycleError, MutationError, ProtocolError};
 use roomkit_core::rules::hook_registry::RegistrationError;
+use roomkit_core::rules::lifecycle::Transition;
 use thiserror::Error;
 
-use crate::store::StoreError;
+use crate::store::{StoreError, StoreFailure};
 use crate::turns::TurnError;
 
-/// Why a kit call failed.
+/// Why a kit call failed: the Python implementation's `RoomKitError`, each
+/// variant named after one of its exception classes without the `Error`
+/// suffix, which clippy refuses on every variant of an enum.
+///
+/// The per-operation errors of `roomkit-core` (`InboundError`,
+/// `LifecycleError`, ...) convert into it. A room of another organization
+/// reads as [`RoomNotFound`](Self::RoomNotFound), as RFC §17.2 requires.
 #[derive(Debug, PartialEq, Eq, Error)]
 #[non_exhaustive]
-pub enum KitError {
-    /// The inbound pipeline refused or failed the message.
-    #[error(transparent)]
-    Inbound(#[from] InboundError),
-    /// A room lifecycle change failed.
-    #[error(transparent)]
-    Lifecycle(#[from] LifecycleError),
-    /// A direct update or delete of a stored event failed (RFC §10.3).
-    #[error(transparent)]
-    Mutation(#[from] MutationError),
-    /// The kit's configuration refused a channel.
-    #[error(transparent)]
-    Config(#[from] ConfigError),
-    /// A hook registration broke a rule of RFC §9.1.
-    #[error(transparent)]
-    Registration(#[from] RegistrationError),
-    /// No channel is registered under the id.
-    #[error("no channel {0} is registered")]
-    UnknownChannel(ChannelId),
-    /// The store failed a read the kit made itself.
-    #[error(transparent)]
-    Store(#[from] StoreError),
-    /// A call made from inside a room's own work, under the room's lock or
-    /// in its admission order, could not be adopted: it would have waited
-    /// for what its own caller holds, the room's lock or its admission
-    /// ticket, or committed outside the order its caller stands in (RFC
-    /// §13.5, §9.5.1 Reentrance). A call into the room it names is adopted
-    /// by the operation whose work made it instead; this one was not, a
-    /// message a hook, an off-lock hook's body or a parse routed back into
-    /// the room, whose room is known only once routed, so it fails rather
-    /// than wait for itself or recurse.
+pub enum RoomKitError {
+    /// Python's `RoomNotFoundError`: the room does not exist, or belongs to
+    /// another organization than the one the call acts for (RFC §17.2).
+    #[error("room {0} not found")]
+    RoomNotFound(RoomId),
+    /// Python's `RoomAlreadyExistsError`: a room was created under an id the
+    /// store holds (RFC §14.3). Nothing was written.
+    #[error("room {0} exists already")]
+    RoomAlreadyExists(RoomId),
+    /// Python's `RoomClosedError`: the room's status refuses new events
+    /// (RFC §5.1). Nothing was written.
+    #[error("room {room_id} does not accept new events")]
+    RoomClosed {
+        /// The room.
+        room_id: RoomId,
+    },
+    /// Python's `TransitionRefusedError`: the room's status is neither one
+    /// the transition leaves from nor the one it leads to (RFC §5.1).
+    /// Nothing was written.
+    #[error("room {room_id} is {}, which {transition} does not leave from", status_name(*.status))]
+    TransitionRefused {
+        /// The room.
+        room_id: RoomId,
+        /// The room's status, as the transition found it.
+        status: RoomStatus,
+        /// The transition refused: `pause`, `resume`, `reopen`, `close` or
+        /// `archive`.
+        transition: String,
+    },
+    /// Python's `ProcessTimeoutError`: `process_timeout` expired before the
+    /// commit point (RFC §13.6). Nothing was written.
+    #[error("room {room_id}: process_timeout expired before the event was committed")]
+    ProcessTimeout {
+        /// The room.
+        room_id: RoomId,
+    },
+    /// Python's `ChangeRefusedError(reason)`: an edit or a delete was
+    /// refused at RFC §10.1 step 8a, nothing written. `reason` is
+    /// `target_event_not_found`, `identity_required_for_edit`,
+    /// `not_authorized` or `not_original_author`.
+    #[error("edit or delete refused: {reason}")]
+    ChangeRefused {
+        /// Why.
+        reason: String,
+    },
+    /// Python's `ReentrantCallError`: a call made from inside a room's own
+    /// work, under its lock or in its admission order, could not be adopted
+    /// (RFC §13.5, §9.5.1 Reentrance): a message routed back into the room,
+    /// whose room is known only once routed. Nothing was written.
     #[error("{call} from inside room {room_id}'s own work would wait for itself")]
-    Reentrant {
+    ReentrantCall {
         /// The room whose lock or admission order the caller holds.
         room_id: RoomId,
         /// The kit's call.
         call: &'static str,
     },
-    /// A call made from inside a room's own work was adopted by the call
-    /// whose work made it, and that call was dropped before deciding it:
-    /// whether its event was committed is not known.
-    #[error("{call} into room {room_id} was adopted by a call dropped before deciding it")]
-    Abandoned {
+    /// Python's `ReentryLoopCapError`: a change from a hook's body is past
+    /// the reentry budget it runs on (RFC §8.3, §9.5.1). Nothing was
+    /// written.
+    #[error("room {0}: the change is past its reentry budget")]
+    ReentryLoopCap(RoomId),
+    /// Python's `ChannelNotFoundError`: the room does not bind the channel.
+    #[error("channel {channel_id} not in room {room_id}")]
+    ChannelNotFound {
         /// The room.
         room_id: RoomId,
-        /// The kit's call.
-        call: &'static str,
+        /// The channel.
+        channel_id: ChannelId,
     },
-    /// The driver broke the effect protocol: a defect of this crate.
-    #[error("the driver broke the effect protocol")]
-    Protocol(#[from] ProtocolError),
-    /// An operation's run waited for effects the driver never received, or
-    /// was answered for a call it never made: a defect of this crate.
-    #[error("an operation's run stalled: it waited for effects the driver never received")]
-    Stalled,
-    /// The runtime cancelled the call's run before it ended, as a tokio
-    /// runtime does when it shuts down: what the call wrote by then is not
+    /// Python's `ChannelNotRegisteredError`: no channel is registered under
+    /// the id.
+    #[error("channel {0} not registered")]
+    ChannelNotRegistered(ChannelId),
+    /// Python's `ChannelAlreadyRegisteredError`: another channel is
+    /// registered under the id.
+    #[error("a channel {0} is already registered")]
+    ChannelAlreadyRegistered(ChannelId),
+    /// Python's `ParticipantNotFoundError`, of a post's speaker: the id
+    /// names no participant of the room the host channel reaches, by their
+    /// id or their identity's (RFC §10.5, §5.5). Nothing was written.
+    #[error(
+        "post() speaks as a participant of room {room_id} the host channel {:?} reaches, and \
+         {:?} {}. The host's own speakers are members added on that channel",
+        .channel_id.as_str(),
+        .participant_id.as_str(),
+        if *.reached_elsewhere {
+            "names a participant reached through other channels only"
+        } else {
+            "names nobody of the room"
+        }
+    )]
+    ParticipantNotFound {
+        /// The room.
+        room_id: RoomId,
+        /// The speaker the post names.
+        participant_id: ParticipantId,
+        /// The host channel the post speaks from.
+        channel_id: ChannelId,
+        /// Whether the id names a participant of the room reached through
+        /// other channels only, or nobody of the room.
+        reached_elsewhere: bool,
+    },
+    /// Python's `IdentityNotFoundError`.
+    #[error("no identity {0} in the organization")]
+    IdentityNotFound(IdentityId),
+    /// Python's `AddressLinkedError`: another identity of the organization
+    /// uses the address on channels of the type already (RFC §5.6).
+    #[error("the {channel_type} address {address} belongs to identity {identity_id} already")]
+    AddressLinked {
+        /// The channel type.
+        channel_type: ChannelType,
+        /// The address.
+        address: String,
+        /// The identity that uses it.
+        identity_id: IdentityId,
+    },
+    /// Python's `EventNotFoundError`: the event, or a change's target, is
+    /// not in its room (RFC §14.3).
+    #[error("event {0} does not exist")]
+    EventNotFound(EventId),
+    /// Python's `IdempotencyKeyTakenError`: the source channel holds the key
+    /// in the room for another event (RFC §13.4, §14.3). Nothing was
+    /// written.
+    #[error("room {room_id} holds an event of channel {channel_id} with the key {key:?}")]
+    IdempotencyKeyTaken {
+        /// The room.
+        room_id: RoomId,
+        /// The event's source channel.
+        channel_id: ChannelId,
+        /// The key.
+        key: String,
+    },
+    /// Python's builtin `ValueError`: an argument the call refuses, as the
+    /// Python implementation's message says.
+    #[error("{0}")]
+    Value(String),
+    /// Python's `asyncio.CancelledError`: the call's run was cancelled
+    /// before it ended, by the runtime's shutdown, or the call that adopted
+    /// it was dropped before deciding it: what it wrote by then is not
     /// known.
-    #[error("the runtime cancelled the call's run before it ended")]
+    #[error("the call was cancelled before it ended")]
     Cancelled,
-    /// A direct injection's run ended with neither its event nor a refusal
-    /// (RFC §10.5): a defect of this crate.
-    #[error("a direct injection ended with neither its event nor a refusal")]
-    NoEvent,
-    /// The kit is closed ([`RoomKit::close`](crate::RoomKit::close)): the
-    /// call was made once the close began, or its run was running and the
-    /// close cut it past its grace, what it wrote by then not known, or a
-    /// close its own work called spared it and the kit, sealed, refused its
-    /// commit, nothing of it stored.
-    #[error("the kit is shut down")]
-    ShutDown,
-    /// The kit's close closed every channel but these, whose close
-    /// panicked, each with what its panic said; the rest of the shutdown
-    /// ran to its end (RFC §12.10.4), and every close is answered so, as
-    /// the Python implementation's `close` raises its `ExceptionGroup`.
-    /// Its name is lot 2's to settle (step 5).
+    /// Python's `ExceptionGroup` of [`RoomKit::close`](crate::RoomKit::close):
+    /// every channel closed but these, whose close panicked, each with what
+    /// its panic said; the rest of the shutdown ran to its end (RFC
+    /// §12.10.4), and every close is answered so.
     #[error("{} channel(s) failed to close; the rest of the shutdown ran to completion", failures.len())]
-    ChannelsFailedToClose {
+    ExceptionGroup {
         /// Each channel that failed to close, and what its panic said.
         failures: Vec<(ChannelId, String)>,
     },
-    /// The kit's shutdown never ended, its task dropped with its runtime
-    /// or panicked: its channels and its store may not all be closed, as
-    /// the Python implementation's `close` raises `RoomKitError` (RFC
-    /// §12.10.4). Its name is lot 2's to settle (step 5).
+    /// The kit is closed ([`RoomKit::close`](crate::RoomKit::close)): the
+    /// call was made once the close sealed it, or its run was cut past its
+    /// grace, what it wrote by then not known. Python raises the bare
+    /// `RoomKitError`; its `KitClosedError` is to come (RMK-1021).
+    #[error("the kit is closed")]
+    KitClosed,
+    /// The kit's shutdown never ended, its task dropped with its runtime or
+    /// panicked: its channels and its store may not all be closed (RFC
+    /// §12.10.4). Python raises the bare `RoomKitError`; its
+    /// `ShutdownCancelledError` is to come (RMK-1021).
     #[error(
         "the kit's shutdown was cancelled before it ended: its channels and its store may not \
          all be closed"
     )]
     ShutdownCancelled,
+    /// The store failed, as Python propagates its driver's exception: the
+    /// error it met is the cause.
+    #[error("the store failed")]
+    Store(#[source] StoreFailure),
+    /// The room's lock could not be taken, as Python propagates the lock
+    /// manager's exception.
+    #[error("the room lock failed: {}", .0.message)]
+    Lock(ErrorRecord),
+    /// A channel failed what the call asked of it, as Python propagates the
+    /// channel's exception: a parse of the message, for instance.
+    #[error("channel {channel_id} failed: {}", .error.message)]
+    Channel {
+        /// The channel.
+        channel_id: ChannelId,
+        /// What it raised.
+        error: ErrorRecord,
+    },
+    /// The kit's router failed to route the message (RFC §10.4), as Python
+    /// propagates the router's exception.
+    #[error("the router failed: {}", .0.message)]
+    Router(ErrorRecord),
     /// A call across the turn backend failed (RFC §10.6.8): a turn's host
     /// verb whose link failed or that its owner refused, or one whose error
     /// on the owner this side does not rebuild, its kind and message kept.
+    /// Lot 3 of step 5 names it after Python's `RemoteTurnError` and
+    /// `TurnLinkError`.
     #[error(transparent)]
     Turn(#[from] TurnError),
+    /// A defect of this crate, where Python asserts: the driver broke the
+    /// core's effect protocol, or a run ended with neither its event nor a
+    /// refusal.
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
+impl RoomKitError {
+    /// `error`, an entry's into `room_id` from `channel_id`, read as the
+    /// Python implementation's `_raise_unless_committed` raises a refusal
+    /// before the commit point (RFC §10.5): `room_closed`, `process_timeout`
+    /// and a change's refusal by their classes, a source the room does not
+    /// bind as [`ChannelNotFound`](Self::ChannelNotFound); any other error as
+    /// [`From`] reads it.
+    pub(crate) fn of_entry(error: InboundError, room_id: &RoomId, channel_id: &ChannelId) -> Self {
+        let InboundError::Refused { reason } = error else {
+            return error.into();
+        };
+        refusal(reason, room_id, channel_id)
+    }
+}
+
+/// A direct entry's refusal before its commit, by its reason (RFC §10.5).
+fn refusal(reason: String, room_id: &RoomId, channel_id: &ChannelId) -> RoomKitError {
+    match reason.as_str() {
+        "room_closed" => RoomKitError::RoomClosed {
+            room_id: room_id.clone(),
+        },
+        "process_timeout" => RoomKitError::ProcessTimeout {
+            room_id: room_id.clone(),
+        },
+        "source_unbound" => RoomKitError::ChannelNotFound {
+            room_id: room_id.clone(),
+            channel_id: channel_id.clone(),
+        },
+        "reentry_loop_cap" => RoomKitError::ReentryLoopCap(room_id.clone()),
+        "target_event_not_found"
+        | "identity_required_for_edit"
+        | "not_authorized"
+        | "not_original_author" => RoomKitError::ChangeRefused { reason },
+        "instruction_unaddressed" => RoomKitError::Value(
+            "An INSTRUCTION must name an agent it directs (addressed_to): an intelligence \
+             channel the kit registers"
+                .to_owned(),
+        ),
+        "instruction_not_idempotent" => RoomKitError::Value(
+            "An INSTRUCTION is never stored and takes no idempotency_key".to_owned(),
+        ),
+        _ => RoomKitError::Value(format!("the event was refused before its commit: {reason}")),
+    }
+}
+
+/// How the Python implementation spells a room's status.
+fn status_name(status: RoomStatus) -> String {
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|name| name.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{status:?}"))
+}
+
+/// How the Python implementation spells a transition: `close`, `pause`...
+pub(crate) fn transition_name(transition: Transition) -> String {
+    serde_json::to_value(transition)
+        .ok()
+        .and_then(|name| name.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{transition:?}"))
+}
+
+/// An error the core recorded, a store's, as a store failure's cause.
+#[derive(Debug)]
+struct Recorded(ErrorRecord);
+
+impl fmt::Display for Recorded {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0.message)
+    }
+}
+
+impl std::error::Error for Recorded {}
+
+/// A store failure the core recorded: a store's `ValueError` as itself, as
+/// Python propagates it, any other as the store's failure.
+fn store_failure(record: ErrorRecord) -> RoomKitError {
+    if record.error_type == STORE_VALUE {
+        return RoomKitError::Value(record.message);
+    }
+    RoomKitError::Store(StoreFailure::new(Recorded(record)))
+}
+
+/// The record name of a store's `ValueError` ([`StoreError::Value`]).
+const STORE_VALUE: &str = "Value";
+
+impl RoomKitError {
+    /// The name the core recorded a store's refusal under, when this error
+    /// is one: `RoomAlreadyExists`, `IdempotencyKeyTaken`... A door that
+    /// knows what the refusal names rebuilds Python's class from it.
+    pub(crate) fn recorded_refusal(&self) -> Option<&str> {
+        let Self::Store(failure) = self else {
+            return None;
+        };
+        let cause: &(dyn std::error::Error + Send + Sync + 'static) = &**failure;
+        cause
+            .downcast_ref::<Recorded>()
+            .map(|recorded| recorded.0.error_type.as_str())
+    }
+}
+
+impl From<InboundError> for RoomKitError {
+    fn from(error: InboundError) -> Self {
+        match error {
+            InboundError::UnknownChannel(channel_id) => Self::ChannelNotRegistered(channel_id),
+            InboundError::RoomNotFound(room_id) => Self::RoomNotFound(room_id),
+            InboundError::InboundOnHostChannel(channel_id) => Self::Value(format!(
+                "Channel {:?} is a host channel and receives no external payload: the host \
+                 speaks through RoomKit.post() or send_event()",
+                channel_id.as_str()
+            )),
+            InboundError::NotAHostChannel(channel_id) => Self::Value(format!(
+                "post() speaks from a channel of type HOST; {:?} is not one",
+                channel_id.as_str()
+            )),
+            InboundError::HostAsIntelligence(channel_id) => host_as_intelligence(&channel_id),
+            InboundError::ParticipantNotFound {
+                room_id,
+                participant_id,
+                channel_id,
+                reached_elsewhere,
+            } => Self::ParticipantNotFound {
+                room_id,
+                participant_id,
+                channel_id,
+                reached_elsewhere,
+            },
+            InboundError::Routing(error) => Self::Router(error),
+            InboundError::StandaloneOutsideInstruction => {
+                Self::Value("standalone applies to an INSTRUCTION only".to_owned())
+            }
+            InboundError::InternalVisibility => internal_visibility(),
+            InboundError::Refused { reason } => {
+                Self::Value(format!("the event was refused before its commit: {reason}"))
+            }
+            InboundError::ChannelFailed { channel_id, error } => {
+                Self::Channel { channel_id, error }
+            }
+            InboundError::Store(error) => store_failure(error),
+            InboundError::Lock(error) | InboundError::Ticket(error) => Self::Lock(error),
+            other => Self::Internal(other.to_string()),
+        }
+    }
+}
+
+fn host_as_intelligence(channel_id: &ChannelId) -> RoomKitError {
+    RoomKitError::Value(format!(
+        "Channel {:?} is a host channel: it can be attached as a transport only, never as an \
+         intelligence channel",
+        channel_id.as_str()
+    ))
+}
+
+fn internal_visibility() -> RoomKitError {
+    RoomKitError::Value("only the framework writes the visibility internal".to_owned())
+}
+
+impl From<LifecycleError> for RoomKitError {
+    fn from(error: LifecycleError) -> Self {
+        match error {
+            LifecycleError::RoomNotFound(room_id) => Self::RoomNotFound(room_id),
+            LifecycleError::ChannelNotBound {
+                room_id,
+                channel_id,
+            } => Self::ChannelNotFound {
+                room_id,
+                channel_id,
+            },
+            LifecycleError::InternalVisibility => internal_visibility(),
+            LifecycleError::HostAsIntelligence(channel_id) => host_as_intelligence(&channel_id),
+            LifecycleError::TransitionRefused {
+                room_id,
+                transition,
+                status,
+            } => Self::TransitionRefused {
+                room_id,
+                status,
+                transition: transition_name(transition),
+            },
+            LifecycleError::Store(error) => store_failure(error),
+            LifecycleError::Lock(error) => Self::Lock(error),
+            other => Self::Internal(other.to_string()),
+        }
+    }
+}
+
+impl From<MutationError> for RoomKitError {
+    fn from(error: MutationError) -> Self {
+        match error {
+            MutationError::RoomNotFound(room_id) => Self::RoomNotFound(room_id),
+            MutationError::OtherRoom { room_id, record } => Self::Value(format!(
+                "commit_event into {room_id} got an event of room {record}"
+            )),
+            MutationError::Refused { room_id, .. } => Self::RoomClosed { room_id },
+            MutationError::Store(error) => store_failure(error),
+            MutationError::Lock(error) => Self::Lock(error),
+            MutationError::ReentryLoopCap(room_id) => Self::ReentryLoopCap(room_id),
+            other => Self::Internal(other.to_string()),
+        }
+    }
+}
+
+impl From<ConfigError> for RoomKitError {
+    fn from(error: ConfigError) -> Self {
+        match error {
+            ConfigError::DuplicateChannel(channel_id) => Self::ChannelAlreadyRegistered(channel_id),
+            ConfigError::UnknownChannel(channel_id) => Self::ChannelNotRegistered(channel_id),
+            other @ (ConfigError::ReservedChannelType { .. } | _) => Self::Value(other.to_string()),
+        }
+    }
+}
+
+impl From<RegistrationError> for RoomKitError {
+    fn from(error: RegistrationError) -> Self {
+        Self::Value(error.to_string())
+    }
+}
+
+impl From<ModelError> for RoomKitError {
+    fn from(error: ModelError) -> Self {
+        Self::Value(error.to_string())
+    }
+}
+
+impl From<ProtocolError> for RoomKitError {
+    fn from(error: ProtocolError) -> Self {
+        Self::Internal(format!("the driver broke the effect protocol: {error}"))
+    }
+}
+
+impl From<StoreError> for RoomKitError {
+    fn from(error: StoreError) -> Self {
+        match error {
+            StoreError::RoomAlreadyExists(room_id) => Self::RoomAlreadyExists(room_id),
+            StoreError::RoomNotFound(room_id) => Self::RoomNotFound(room_id),
+            StoreError::IdentityNotFound(identity_id) => Self::IdentityNotFound(identity_id),
+            StoreError::AddressLinked {
+                channel_type,
+                address,
+                identity_id,
+            } => Self::AddressLinked {
+                channel_type,
+                address,
+                identity_id,
+            },
+            StoreError::EventNotFound(event_id) => Self::EventNotFound(event_id),
+            StoreError::IdempotencyKeyTaken {
+                room_id,
+                channel_id,
+                key,
+            } => Self::IdempotencyKeyTaken {
+                room_id,
+                channel_id,
+                key,
+            },
+            StoreError::Value(message) => Self::Value(message),
+            StoreError::Unavailable(failure) => Self::Store(failure),
+            // Refusals Python's store makes no class of (lot 4 removes
+            // them): the store's error, as a dependency's.
+            other @ (StoreError::ParticipantExists { .. }
+            | StoreError::ParticipantNotFound { .. }
+            | StoreError::IdentityExists(_)
+            | StoreError::IndexTaken { .. }) => Self::Store(StoreFailure::new(other)),
+        }
+    }
 }
 
 /// `error`'s message, then each of its causes', joined by `: `: what a log
@@ -137,7 +521,7 @@ mod tests {
     /// carries the cause the store met.
     #[test]
     fn a_kit_error_s_chain_carries_the_store_s_cause() {
-        let error = KitError::Store(StoreError::unavailable("connection refused"));
+        let error = RoomKitError::from(StoreError::unavailable("connection refused"));
         assert_eq!(
             (error.to_string(), with_causes(&error)),
             (
@@ -147,13 +531,16 @@ mod tests {
         );
     }
 
-    /// A protocol error is shown once: as the source of the kit's error.
+    /// A protocol error is a defect of the crate, shown once.
     #[test]
-    fn a_kit_error_s_chain_shows_a_protocol_error_once() {
-        let error = KitError::Protocol(answered_twice());
+    fn a_protocol_error_is_internal() {
+        let error = RoomKitError::from(answered_twice());
         assert_eq!(
             with_causes(&error),
-            format!("the driver broke the effect protocol: {}", answered_twice())
+            format!(
+                "internal error: the driver broke the effect protocol: {}",
+                answered_twice()
+            )
         );
     }
 
@@ -170,5 +557,48 @@ mod tests {
         check
             .complete(lock, HoldOutcome::Locked.into())
             .unwrap_err()
+    }
+
+    /// RFC §10.5 and Python's `_raise_unless_committed`: a direct entry's
+    /// refusal before its commit, by its class.
+    #[test]
+    fn an_entry_s_refusal_reads_as_python_s_class() {
+        let room_id = RoomId::new("room_1").unwrap();
+        let channel_id = ChannelId::new("ws").unwrap();
+        let read = |reason: &str| {
+            RoomKitError::of_entry(
+                InboundError::Refused {
+                    reason: reason.to_owned(),
+                },
+                &room_id,
+                &channel_id,
+            )
+        };
+        assert_eq!(
+            [
+                "room_closed",
+                "process_timeout",
+                "source_unbound",
+                "not_original_author",
+                "reentry_loop_cap"
+            ]
+            .map(read),
+            [
+                RoomKitError::RoomClosed {
+                    room_id: room_id.clone()
+                },
+                RoomKitError::ProcessTimeout {
+                    room_id: room_id.clone()
+                },
+                RoomKitError::ChannelNotFound {
+                    room_id: room_id.clone(),
+                    channel_id: channel_id.clone()
+                },
+                RoomKitError::ChangeRefused {
+                    reason: "not_original_author".to_owned()
+                },
+                RoomKitError::ReentryLoopCap(room_id.clone()),
+            ]
+        );
     }
 }

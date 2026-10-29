@@ -10,10 +10,10 @@
 //! `billing`. Its first event, `evt_1` at index 0, is the customer's "My card
 //! was declined"; an instruction is `evt_2`.
 
-use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit_core::model::{
     ChannelId, ChannelOutput, EventContent, EventId, EventStatus, EventType, HookResult,
     InboundMessage, InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId,

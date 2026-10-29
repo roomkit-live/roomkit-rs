@@ -5,11 +5,11 @@
 //! The simulated driver checks on every run that the operation ended with
 //! the room lock released.
 
-use roomkit_core::model::hook::{AllowOptions, BlockOptions};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use roomkit_core::model::hook::{AllowOptions, BlockOptions};
 use roomkit_core::model::{
     Access, BindingUpdate, ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput,
     ChannelType, DirectEvent, ErrorRecord, EventType, HookResult, InjectedEvent, Room, RoomStatus,

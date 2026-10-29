@@ -486,7 +486,7 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// Refuses a missing room with [`StoreError::RoomNotFound`], and a query
-    /// [`EventQuery::validate`] refuses with [`StoreError::InvalidArgument`].
+    /// [`EventQuery::validate`] refuses with [`StoreError::Value`].
     fn list_events(
         &self,
         room_id: &RoomId,

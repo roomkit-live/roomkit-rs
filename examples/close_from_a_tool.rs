@@ -28,8 +28,8 @@ use roomkit::model::{
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, CreateRoomOptions, KitError,
-    ProcessInboundOptions, RoomKit,
+    AttachChannelOptions, Channel, ChannelDeclaration, CreateRoomOptions, ProcessInboundOptions,
+    RoomKit, RoomKitError,
 };
 use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -113,7 +113,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let refused = kit
         .create_room(CreateRoomOptions::default())
         .await
-        .is_err_and(|error| matches!(error, KitError::ShutDown));
+        .is_err_and(|error| matches!(error, RoomKitError::KitClosed));
     let closed = closed.entries();
     println!("The tool's close: {closed:?}; the service's own close took {second:?}.");
     println!("The pager: {:?}", pager.closes.entries());

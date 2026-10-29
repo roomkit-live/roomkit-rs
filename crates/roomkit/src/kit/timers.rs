@@ -17,7 +17,7 @@ use roomkit_core::rules::timers;
 use super::RoomKit;
 use super::options::{CheckAllTimersOptions, CheckRoomTimersOptions};
 use crate::driver;
-use crate::error::{KitError, with_causes};
+use crate::error::{RoomKitError, with_causes};
 use crate::store::{ConversationStore, RoomFilter};
 
 impl<S: ConversationStore> RoomKit<S> {
@@ -30,13 +30,13 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist or is
-    /// not of the organization `options` names, nothing written.
+    /// Returns [`RoomKitError::RoomNotFound`] when the room does not exist or
+    /// is not of the organization `options` names, nothing written.
     pub async fn check_room_timers(
         &self,
         room_id: &RoomId,
         options: CheckRoomTimersOptions,
-    ) -> Result<Room, KitError> {
+    ) -> Result<Room, RoomKitError> {
         let check = CheckTimers::new(self.config(), room_id.clone(), options.organization_id);
         let checked = driver::run(&self.inner, "check_room_timers", check).await??;
         Ok(checked.room)
@@ -51,13 +51,13 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Store`] when the store cannot list the rooms,
-    /// and [`KitError::ShutDown`] once the kit is shut down, which stops a
+    /// Returns [`RoomKitError::Store`] when the store cannot list the rooms,
+    /// and [`RoomKitError::KitClosed`] once the kit is shut down, which stops a
     /// check under way before its next room.
     pub async fn check_all_timers(
         &self,
         options: CheckAllTimersOptions,
-    ) -> Result<Vec<Room>, KitError> {
+    ) -> Result<Vec<Room>, RoomKitError> {
         self.inner.open()?;
         let filter = RoomFilter {
             timers_armed: true,
@@ -92,19 +92,19 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::ShutDown`] once the kit is shut down.
+    /// Returns [`RoomKitError::KitClosed`] once the kit is shut down.
     async fn check_listed(
         &self,
         room: &Room,
         environment: &Arc<dyn Environment + Send + Sync>,
         organization_id: Option<String>,
-    ) -> Result<Option<Room>, KitError> {
+    ) -> Result<Option<Room>, RoomKitError> {
         let check = CheckTimers::new(self.config(), room.id.clone(), organization_id);
         let environment = Arc::clone(environment);
         match driver::run_on(&self.inner, environment, "check_all_timers", check).await {
             Ok(Ok(checked)) if !checked.transitions.is_empty() => return Ok(Some(checked.room)),
             Ok(Ok(_)) => {}
-            Err(KitError::ShutDown) => return Err(KitError::ShutDown),
+            Err(RoomKitError::KitClosed) => return Err(RoomKitError::KitClosed),
             Ok(Err(error)) => tracing::warn!(
                 target: "roomkit::timers",
                 room_id = %room.id,

@@ -9,10 +9,10 @@
 )]
 
 mod fake;
-use roomkit::model::hook::AllowOptions;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelId, ChannelType, ErrorRecord, EventType, InboundMessage, RoomEvent, RoomId, TextContent,
     Timestamp,

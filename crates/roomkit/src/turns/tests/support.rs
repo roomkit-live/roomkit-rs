@@ -21,8 +21,8 @@ use crate::stream::{DeliveryStream, ResponseItem};
 use crate::testing::RecordingTransport;
 use crate::turns::observe::{Carried, Fate};
 use crate::{
-    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, KitError,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, current_turn,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitError, RoomKitOptions, SendEventOptions, current_turn,
 };
 
 pub(super) fn channel(id: &str) -> ChannelId {
@@ -61,7 +61,7 @@ pub(super) async fn bind(kit: &RoomKit, channel: impl Channel) {
 }
 
 /// Alice writes `text` by SMS.
-pub(super) async fn says(kit: &RoomKit, text: &str) -> Result<InboundResult, KitError> {
+pub(super) async fn says(kit: &RoomKit, text: &str) -> Result<InboundResult, RoomKitError> {
     let message = InboundMessage::new(channel("sms"), "+15550001", TextContent::new(text));
     kit.process_inbound(
         message,

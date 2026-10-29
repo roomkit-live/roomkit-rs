@@ -16,8 +16,8 @@ use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CloseRoomOptions,
     CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
     DetachChannelOptions, HookExecution, HookSpec, HookTrigger, HostChannel, InboundResult,
-    KitError, MuteOptions, PostOptions, ProcessInboundOptions, SendEventOptions, SetAccessOptions,
-    SetVisibilityOptions, UnmuteOptions, UpdateEventOptions,
+    MuteOptions, PostOptions, ProcessInboundOptions, RoomKitError, SendEventOptions,
+    SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateEventOptions,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -83,7 +83,7 @@ fn inbound_result(result: &InboundResult) -> Value {
 fn finish<T>(
     run: &Run,
     call: &str,
-    outcome: Result<T, KitError>,
+    outcome: Result<T, RoomKitError>,
     dumped: impl FnOnce(&T) -> Value,
 ) -> Called {
     match outcome {
@@ -243,7 +243,7 @@ async fn lifecycle_call(
                     .store()
                     .get_room(&room)
                     .await
-                    .map_err(KitError::from),
+                    .map_err(RoomKitError::from),
                 Err(error) => Err(error),
             };
             finish(run, name, outcome, dump)
@@ -252,7 +252,9 @@ async fn lifecycle_call(
         "unregister_channel" => {
             let channel = channel_id(spec)?;
             let unregistered = run.kit().unregister_channel(&channel);
-            finish(run, name, Ok::<_, KitError>(unregistered), |_| Value::Null)
+            finish(run, name, Ok::<_, RoomKitError>(unregistered), |_| {
+                Value::Null
+            })
         }
         "register_hook" => finish(run, name, register_hook(run, &spec["hook"])?, |()| {
             Value::Null
@@ -429,7 +431,7 @@ pub(crate) fn register_channel(
 pub(crate) fn register_hook(
     run: &std::sync::Arc<Run>,
     hook: &Value,
-) -> Result<Result<(), KitError>, Unreadable> {
+) -> Result<Result<(), RoomKitError>, Unreadable> {
     let trigger: HookTrigger = field(hook, "trigger")?;
     let execution: HookExecution = optional(hook, "execution")?.unwrap_or(HookExecution::Sync);
     if trigger.is_tool_trigger() {

@@ -2,11 +2,11 @@
 //! (RFC §6.4 "The tools of earlier turns"), through the kit: each round
 //! reads at its place, as the assistant's calls then their results, the
 //! way the turn itself sent it.
-use roomkit::model::hook::{AllowOptions, ModifyOptions};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::{AllowOptions, ModifyOptions};
 use roomkit::model::{EventContent, EventType, HookResult, Metadata};
 use roomkit::transcript::{Message, Role};
 use roomkit::{HookExecution, HookSpec, HookTrigger, ToolVerdict, UpdateEventOptions};

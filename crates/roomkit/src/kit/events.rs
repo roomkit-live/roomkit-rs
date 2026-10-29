@@ -11,7 +11,7 @@ use super::RoomKit;
 use super::options::{DeleteEventOptions, UpdateEventOptions};
 use crate::context::ExecutionContext;
 use crate::driver;
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::store::ConversationStore;
 
 impl<S: ConversationStore> RoomKit<S> {
@@ -36,15 +36,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Mutation`] when the store or the room lock fails,
-    /// and with [`MutationError::ReentryLoopCap`](crate::MutationError::ReentryLoopCap)
+    /// Returns the store's or the room lock's failure, and
+    /// [`RoomKitError::ReentryLoopCap`]
     /// when a hook's body is past its cascade's hook calls, nothing written.
     pub async fn update_event(
         &self,
         room_id: &RoomId,
         event_id: &EventId,
         options: UpdateEventOptions,
-    ) -> Result<Option<RoomEvent>, KitError> {
+    ) -> Result<Option<RoomEvent>, RoomKitError> {
         let updates = EventUpdates {
             content: options.content,
             source: options.source,
@@ -77,15 +77,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Mutation`] when the store or the room lock fails,
-    /// and with [`MutationError::ReentryLoopCap`](crate::MutationError::ReentryLoopCap)
+    /// Returns the store's or the room lock's failure, and
+    /// [`RoomKitError::ReentryLoopCap`]
     /// when a hook's body is past its cascade's hook calls, nothing removed.
     pub async fn delete_event(
         &self,
         room_id: &RoomId,
         event_id: &EventId,
         options: DeleteEventOptions,
-    ) -> Result<Vec<EventId>, KitError> {
+    ) -> Result<Vec<EventId>, RoomKitError> {
         let operation = DeleteEvent::new(
             self.config(),
             room_id.clone(),
@@ -108,7 +108,7 @@ impl<S: ConversationStore> RoomKit<S> {
         event_id: &EventId,
         updates: EventUpdates,
         organization_id: Option<String>,
-    ) -> Result<Option<RoomEvent>, KitError> {
+    ) -> Result<Option<RoomEvent>, RoomKitError> {
         let operation = UpdateEvent::new(
             self.config(),
             room_id.clone(),

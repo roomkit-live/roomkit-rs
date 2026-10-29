@@ -8,9 +8,9 @@
 //! The kit's timeout is ten seconds; a slow effect takes eleven on the
 //! simulated clock. The room holds the customer's `sms` and the advisor's
 //! `ws`.
-use roomkit_core::model::hook::AllowOptions;
 use std::time::Duration;
 
+use roomkit_core::model::hook::AllowOptions;
 use roomkit_core::model::{
     ChannelType, EditContent, EditSource, EventContent, EventStatus, EventType, HookResult,
     InboundMessage, InjectedEvent, RoomId, Task, TaskId, TextContent, Timestamp,

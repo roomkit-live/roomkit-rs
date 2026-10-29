@@ -6,13 +6,13 @@
 //! refused.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-use roomkit::model::hook::AllowOptions;
 use std::future::{Future, pending};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
@@ -20,8 +20,8 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CheckAllTimersOptions,
-    CreateRoomOptions, GetTimelineOptions, HookExecution, HookSpec, HookTrigger, KitError,
-    PauseRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, text_of,
+    CreateRoomOptions, GetTimelineOptions, HookExecution, HookSpec, HookTrigger, PauseRoomOptions,
+    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, SendEventOptions, text_of,
 };
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -286,7 +286,7 @@ async fn close_aborts_what_outlives_the_lane_grace() {
 }
 
 /// Decision 15: a call stuck in a SYNC hook before its commit when the kit
-/// closes is ended at the grace: its caller receives `ShutDown`, nothing of
+/// closes is ended at the grace: its caller receives `KitClosed`, nothing of
 /// its message stored, as Python's caller is refused with nothing stored
 /// (tasks/probes/step5-lot1/fixpass.out P1).
 #[tokio::test(start_paused = true)]
@@ -314,7 +314,7 @@ async fn close_ends_a_call_stuck_before_its_commit() {
                 .iter()
                 .any(|event| text_of(&event.content) == "Bonjour"))
         ),
-        (Some(KitError::ShutDown), Ok(false))
+        (Some(RoomKitError::KitClosed), Ok(false))
     );
 }
 
@@ -362,8 +362,8 @@ async fn a_call_while_the_close_drains_is_taken_its_delivery_dropped() {
             true,
             Ok((true, Some("kit_closed".to_owned()))),
             true,
-            Some(KitError::ShutDown),
-            Some(KitError::ShutDown)
+            Some(RoomKitError::KitClosed),
+            Some(RoomKitError::KitClosed)
         )
     );
 }
@@ -703,7 +703,7 @@ fn in_room() -> ProcessInboundOptions {
 }
 
 /// `Bonjour` into `room_1`, on a task of its own.
-fn spawn_bonjour(kit: &RoomKit) -> JoinHandle<Result<roomkit::InboundResult, KitError>> {
+fn spawn_bonjour(kit: &RoomKit) -> JoinHandle<Result<roomkit::InboundResult, RoomKitError>> {
     let kit = kit.clone();
     tokio::spawn(async move {
         kit.process_inbound(
@@ -760,11 +760,11 @@ async fn a_call_made_after_the_close_is_refused() {
         (refused, registered),
         (
             (
-                Some(KitError::ShutDown),
-                Some(KitError::ShutDown),
-                Some(KitError::ShutDown),
-                Some(KitError::ShutDown),
-                Some(KitError::ShutDown)
+                Some(RoomKitError::KitClosed),
+                Some(RoomKitError::KitClosed),
+                Some(RoomKitError::KitClosed),
+                Some(RoomKitError::KitClosed),
+                Some(RoomKitError::KitClosed)
             ),
             true
         )

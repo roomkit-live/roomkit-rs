@@ -88,11 +88,11 @@ impl EventQuery {
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::InvalidArgument`] saying what is wrong.
+    /// Returns [`StoreError::Value`] saying what is wrong.
     pub fn validate(&self) -> Result<(), StoreError> {
         if self.after_index.is_some() && self.before_index.is_some() {
-            return Err(StoreError::InvalidArgument(
-                "after_index and before_index are mutually exclusive",
+            return Err(StoreError::Value(
+                "after_index and before_index are mutually exclusive".to_owned(),
             ));
         }
         self.event_filter
@@ -170,18 +170,18 @@ impl EventFilter {
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::InvalidArgument`] saying what is wrong.
+    /// Returns [`StoreError::Value`] saying what is wrong.
     pub fn validate(&self) -> Result<(), StoreError> {
         if let (Some(after), Some(before)) = (self.after_time, self.before_time)
             && after >= before
         {
-            return Err(StoreError::InvalidArgument(
-                "after_time must be before before_time",
+            return Err(StoreError::Value(
+                "after_time must be before before_time".to_owned(),
             ));
         }
         if self.top_level_only && self.parent_event_id.is_some() {
-            return Err(StoreError::InvalidArgument(
-                "top_level_only and parent_event_id are mutually exclusive",
+            return Err(StoreError::Value(
+                "top_level_only and parent_event_id are mutually exclusive".to_owned(),
             ));
         }
         Ok(())

@@ -43,7 +43,7 @@ use tokio::task::{JoinError, JoinHandle};
 use super::Leases;
 use super::calls::{self, Written};
 use crate::context::{ExecutionContext, LeftOpen};
-use crate::error::{KitError, with_causes};
+use crate::error::{RoomKitError, with_causes};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::tasks::{Kind, Marks, Tasks};
@@ -51,7 +51,7 @@ use crate::turns;
 
 /// What an inbound call's run comes to: the operation's output, or why the
 /// kit's call failed.
-pub(crate) type InboundOutput = Result<Result<InboundResult, InboundError>, KitError>;
+pub(crate) type InboundOutput = Result<Result<InboundResult, InboundError>, RoomKitError>;
 
 /// What an inbound call's run gave its caller: its output, and, for a call
 /// answered at its decision because it deferred its delivery, the run going
@@ -209,7 +209,7 @@ impl Record {
     /// turn's stream open reads the turn's end ([`read_left_open`]). A call
     /// whose own commit still ran reads what the write came to, once it
     /// ends, as Python's caller does: its event, stored and never
-    /// delivered, `kit_closed`. [`KitError::ShutDown`] for a call nothing of
+    /// delivered, `kit_closed`. [`RoomKitError::KitClosed`] for a call nothing of
     /// which was stored.
     pub(crate) async fn aborted(&self) -> InboundOutput {
         let decided = self
@@ -259,7 +259,7 @@ impl Record {
     /// The result of a call aborted while the commit that decides it ran:
     /// once the write ended, the call as that commit decides it, its event
     /// never delivered, or the store's error for a write that failed, as
-    /// the run would have read them; `ShutDown` for a call that never
+    /// the run would have read them; `KitClosed` for a call that never
     /// reached that commit.
     async fn committed(&self) -> InboundOutput {
         let committing = self
@@ -268,14 +268,14 @@ impl Record {
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         let Some((mut result, mut written)) = committing else {
-            return Err(KitError::ShutDown);
+            return Err(RoomKitError::KitClosed);
         };
         let outcome = calls::outcome_of(&mut written).await;
         if let Outcome::Failed(error) = outcome {
             return Ok(Err(InboundError::Store(error)));
         }
         if outcome != Outcome::Store(StoreOutcome::Committed) {
-            return Err(KitError::ShutDown);
+            return Err(RoomKitError::KitClosed);
         }
         if !result.blocked {
             result.cancellation_reason = Some(KIT_CLOSED.to_owned());
@@ -396,7 +396,7 @@ impl Caller {
             return;
         };
         let answered = match refused {
-            Some(room_id) => Err(KitError::Reentrant {
+            Some(room_id) => Err(RoomKitError::ReentrantCall {
                 room_id: room_id.clone(),
                 call,
             }),
@@ -500,10 +500,10 @@ impl Caller {
 ///
 /// # Errors
 ///
-/// As [`run`](super::run), and [`KitError::Reentrant`] for such a lock, or
+/// As [`run`](super::run), and [`RoomKitError::ReentrantCall`] for such a lock, or
 /// the lock of a room its context stands in the admission order of;
-/// [`KitError::ShutDown`] when the kit's shutdown ended the run, and
-/// [`KitError::Cancelled`] when the runtime cancelled it, as it does when it
+/// [`RoomKitError::KitClosed`] when the kit's shutdown ended the run, and
+/// [`RoomKitError::Cancelled`] when the runtime cancelled it, as it does when it
 /// shuts down.
 pub(crate) async fn run_inbound<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
@@ -541,7 +541,7 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     // The kit tracks the run. Dropped, the handle detaches it: the run
     // itself stops when its caller is gone before the call's decision.
     let Some(mut task) = inner.tasks.spawn(Kind::Work, context.scope(run)) else {
-        return Ran::ended(Err(KitError::ShutDown));
+        return Ran::ended(Err(RoomKitError::KitClosed));
     };
     tokio::select! {
         biased;
@@ -610,7 +610,7 @@ fn cut_at_its_end(output: InboundOutput, cut: bool, record: &Record) -> InboundO
 fn refused_once_sealed(output: InboundOutput, sealed: bool) -> InboundOutput {
     let refused = |error: &ErrorRecord| sealed && error.error_type == calls::SHUT_DOWN;
     match output {
-        Ok(Err(InboundError::Store(error))) if refused(&error) => Err(KitError::ShutDown),
+        Ok(Err(InboundError::Store(error))) if refused(&error) => Err(RoomKitError::KitClosed),
         Ok(Ok(mut result)) if result.error.as_ref().is_some_and(refused) => {
             result.error = None;
             result
@@ -640,7 +640,7 @@ fn charged(inbound: Inbound, room_id: Option<&RoomId>, context: &ExecutionContex
 /// The output of a run's task that ended: its own, the close's cut read at
 /// its end; for one the kit's close aborted, as `tasks` tell, what its
 /// `record` reports ([`Record::aborted`]); for one the runtime cancelled,
-/// [`KitError::Cancelled`].
+/// [`RoomKitError::Cancelled`].
 pub(crate) async fn ended(
     joined: Result<InboundOutput, JoinError>,
     record: &Record,
@@ -652,6 +652,6 @@ pub(crate) async fn ended(
         // caller receives it as it would from a run it drove itself.
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
         Err(aborted) if tasks.ended_by_close(aborted.id()) => record.aborted().await,
-        Err(_cancelled) => Err(KitError::Cancelled),
+        Err(_cancelled) => Err(RoomKitError::Cancelled),
     }
 }

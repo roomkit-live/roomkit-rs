@@ -9,10 +9,10 @@
 //!
 //! The room holds the customer's `sms` and the advisor's `ws`. The off-lock
 //! hook is `scanner`; `policy` needs the lock.
-use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit_core::model::{
     EditContent, EditSource, ErrorRecord, EventContent, EventStatus, EventType, HookResult,
     InboundMessage, InjectedEvent, Observation, ObservationId, ParticipantId, RoomContext,

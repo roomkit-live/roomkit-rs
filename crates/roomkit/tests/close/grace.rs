@@ -8,10 +8,10 @@
 //! it, writes "Thinking" then calls a tool of 30 s, and the kit is closed
 //! from outside at 0.1 s, so that the lanes go idle just before or after
 //! the grace ends at 5.1 s.
-use roomkit::model::hook::AllowOptions;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookResult, RoomId};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, RoomKit,

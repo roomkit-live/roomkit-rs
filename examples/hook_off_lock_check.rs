@@ -13,16 +13,16 @@
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-use roomkit::model::hook::AllowOptions;
 use std::error::Error;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId, TextContent};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger,
-    InboundResult, KitError, ProcessInboundOptions, RoomKit, RoomKitOptions, text_of,
+    InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, text_of,
 };
 
 use shared::{Checks, Log};
@@ -69,7 +69,7 @@ struct Chat {
 }
 
 impl Chat {
-    async fn says(self, text: &'static str) -> Result<InboundResult, KitError> {
+    async fn says(self, text: &'static str) -> Result<InboundResult, RoomKitError> {
         let message = InboundMessage::new(self.user, "user", TextContent::new(text));
         self.kit
             .process_inbound(

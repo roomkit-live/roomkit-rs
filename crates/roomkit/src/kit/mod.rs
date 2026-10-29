@@ -58,7 +58,7 @@ use crate::context;
 use crate::cursors::RoomCursors;
 use crate::driver;
 use crate::environment::SystemEnvironment;
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::hooks::HookHandler;
 use crate::inbound::InboundResult;
 use crate::locks::RoomMutexes;
@@ -247,7 +247,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// was posted in, read under the channel's chat key (RFC §5.7). Called
     /// from under a room's lock or in its admission order, by a hook, an
     /// off-lock hook's body or a parse, a message routed back into that room
-    /// fails with [`KitError::Reentrant`]: its room is known only once
+    /// fails with [`RoomKitError::ReentrantCall`]: its room is known only once
     /// routed, too late for the call to be adopted (RFC §13.5).
     ///
     /// Inbound messages of one room overlap up to the room lock: they
@@ -296,17 +296,17 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Inbound`] when the pipeline refused or failed the
-    /// message before committing it, with
-    /// [`InboundError::RoomNotFound`](crate::InboundError::RoomNotFound) for
-    /// a room of another organization and the router's failure among
-    /// others, and [`KitError::Reentrant`] for a call that would wait for
-    /// itself.
+    /// Returns the error that failed the message before its commit:
+    /// [`RoomKitError::RoomNotFound`] for a room of another organization,
+    /// [`RoomKitError::ChannelNotRegistered`], [`RoomKitError::Router`] for
+    /// the router's failure, [`RoomKitError::Channel`] for its parse's, among
+    /// others; and [`RoomKitError::ReentrantCall`] for a call that would wait
+    /// for itself. A refusal is no error: the result says it.
     pub async fn process_inbound(
         &self,
         mut message: InboundMessage,
         options: ProcessInboundOptions,
-    ) -> Result<InboundResult, KitError> {
+    ) -> Result<InboundResult, RoomKitError> {
         let ProcessInboundOptions {
             room_id,
             defer_delivery,
@@ -330,7 +330,7 @@ impl<S: ConversationStore> RoomKit<S> {
             let ran =
                 driver::run_inbound(&self.inner, PROCESS_INBOUND, None, routed, defer_delivery)
                     .await;
-            Entered::ran(ran)?
+            Entered::ran(ran, RoomKitError::from)?
         };
         Ok(entered.into_result(defer_delivery, &self.inner.tasks))
     }
@@ -362,10 +362,10 @@ impl<S> Inner<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::ShutDown`] once [`RoomKit::close`] sealed the kit.
-    pub(crate) fn open(&self) -> Result<(), KitError> {
+    /// Returns [`RoomKitError::KitClosed`] once [`RoomKit::close`] sealed the kit.
+    pub(crate) fn open(&self) -> Result<(), RoomKitError> {
         if self.tasks.is_sealed() {
-            return Err(KitError::ShutDown);
+            return Err(RoomKitError::KitClosed);
         }
         Ok(())
     }

@@ -22,8 +22,8 @@ use roomkit::testing::{EchoAgent, SequentialEnvironment, kit_with_environment};
 use roomkit::{
     Addressing, AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ChannelOf,
     CloseRoomOptions, ConversationStore, CreateRoomOptions, DefaultInboundRoomRouter,
-    DefaultInboundRoomRouterOptions, HookTrigger, InMemoryStore, InboundError, InboundRoomRouter,
-    KitError, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions, RouteOptions,
+    DefaultInboundRoomRouterOptions, HookTrigger, InMemoryStore, InboundRoomRouter,
+    ProcessInboundOptions, RoomFilter, RoomKit, RoomKitError, RoomKitOptions, RouteOptions,
     RouterError, RouterFuture, WeakRoomKit, text_of,
 };
 use tokio::sync::{Barrier, Notify};
@@ -557,10 +557,10 @@ async fn a_failing_router_fails_the_message_with_nothing_written() {
     assert_eq!(
         (failed, rooms.len(), sms.sent().len()),
         (
-            Err(KitError::Inbound(InboundError::Routing(ErrorRecord::new(
+            Err(RoomKitError::Router(ErrorRecord::new(
                 "RouterError",
                 "the CRM is unreachable"
-            )))),
+            ))),
             0,
             0
         )

@@ -78,10 +78,6 @@ pub enum LifecycleError {
         /// The room's status, as the transition found it.
         status: RoomStatus,
     },
-    /// The room metadata key belongs to the namespace the implementation
-    /// reserves (RFC §10.6.5, gap G-049).
-    #[error("room metadata key {0:?} is reserved by the implementation")]
-    ReservedMetadataKey(String),
     /// The store refused or failed the change.
     #[error("the store failed: {0:?}")]
     Store(ErrorRecord),

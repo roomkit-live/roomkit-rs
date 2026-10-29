@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use futures_util::stream::{FuturesUnordered, SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use roomkit::model::{InboundMessage, ParticipantId, RoomId, TextContent};
-use roomkit::{DeliveryHandle, InboundResult, KitError, ProcessInboundOptions};
+use roomkit::{DeliveryHandle, InboundResult, ProcessInboundOptions, RoomKitError};
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite;
@@ -32,7 +32,7 @@ pub const STOPPED: &str = "the server stopped before the answer";
 
 /// What a message came to: refused or decided at once, or once its
 /// delivery ran.
-type Told = Result<InboundResult, KitError>;
+type Told = Result<InboundResult, RoomKitError>;
 
 /// The longest conversation id, user id and name a connection may give, in
 /// characters, and what the server answers a connection that names one
@@ -312,7 +312,7 @@ fn tell(registration: &Registration, user: &ParticipantId, outcome: Told) {
             TURN_FAILED
         }
         // Refused once the kit is sealed.
-        Err(KitError::ShutDown) => {
+        Err(RoomKitError::KitClosed) => {
             println!("  the server stopped before {:?}'s answer", user.as_str());
             STOPPED
         }

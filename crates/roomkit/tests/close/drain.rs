@@ -4,7 +4,6 @@
 //! lanes drain runs within their grace; once the lanes are idle, the
 //! turns still running are cut then, what they said read and stored, as
 //! the Python implementation's `turns.close` follows its `lanes.aclose`.
-use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +13,7 @@ use std::time::Duration;
 
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{ChannelBinding, ChannelOutput, ChannelType, HookResult, RoomContext, RoomId};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,

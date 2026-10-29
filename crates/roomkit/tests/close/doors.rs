@@ -1,13 +1,13 @@
 //! RFC §12.10.4: a close from the kit's own work neither waits for that
 //! work nor cuts it, and the work stores and delivers nothing once the kit
 //! is sealed, as Python's `test_kit_close_doors.py`.
-use roomkit::model::hook::AllowOptions;
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{ChannelBinding, ChannelOutput, HookResult, RoomContext, RoomEvent, RoomId};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,

@@ -5,13 +5,13 @@
 //! the call there while its caller goes.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-use roomkit::model::hook::{AllowOptions, BlockOptions};
 use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventDirection, EventId, EventSource, EventStatus, EventUpdates, HookResult, Identity,
@@ -22,8 +22,8 @@ use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
     ConversationStore, CreateRoomOptions, EventFilter, EventQuery, FrameworkEvent, HookExecution,
-    HookSpec, HookTrigger, InMemoryStore, InboundError, KitError, ProcessInboundOptions,
-    RoomCounters, RoomFilter, RoomKit, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
+    HookSpec, HookTrigger, InMemoryStore, ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit,
+    RoomKitError, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
 };
 use tokio::sync::{Notify, broadcast};
 
@@ -233,7 +233,7 @@ impl ConversationStore for GatedStore {
             self.committing.notify_one();
             self.go.notified().await;
             if self.fails.load(Ordering::SeqCst) {
-                return Err(StoreError::InvalidArgument("the database is gone"));
+                return Err(StoreError::Value("the database is gone".to_owned()));
             }
             assert!(
                 !self.panics.load(Ordering::SeqCst),
@@ -428,7 +428,7 @@ fn every_row() -> EventQuery {
 async fn slow_commit(
     kit: &RoomKit<GatedStore>,
     after: Duration,
-) -> tokio::task::JoinHandle<Result<roomkit::InboundResult, KitError>> {
+) -> tokio::task::JoinHandle<Result<roomkit::InboundResult, RoomKitError>> {
     let call = {
         let kit = kit.clone();
         tokio::spawn(async move {
@@ -609,12 +609,10 @@ async fn a_waiting_caller_whose_commit_fails_reads_the_store_s_error() {
             .await
             .unwrap()
             .unwrap();
-        read.push(match ended {
-            Err(KitError::Inbound(InboundError::Store(error))) => Some(error.error_type),
-            _ => None,
-        });
+        read.push(ended.err());
     }
-    assert_eq!(read, vec![Some("InvalidArgument".to_owned()); 2]);
+    let refused = || Some(RoomKitError::Value("the database is gone".to_owned()));
+    assert_eq!(read, vec![refused(), refused()]);
 }
 
 /// RMK-1010 item 4: the close names the writes it leaves running at each
@@ -831,7 +829,7 @@ fn sms_into(room: RoomId, text: &str) -> (InboundMessage, ProcessInboundOptions)
 fn slow_into_room_1(
     kit: &RoomKit<GatedStore>,
     after: Duration,
-) -> tokio::task::JoinHandle<Result<roomkit::InboundResult, KitError>> {
+) -> tokio::task::JoinHandle<Result<roomkit::InboundResult, RoomKitError>> {
     let (committing, go) = (
         Arc::clone(&kit.store().committing),
         Arc::clone(&kit.store().go),
@@ -1047,7 +1045,7 @@ async fn a_run_its_caller_stops_polling_holds_the_close_for_its_write_only() {
 }
 
 /// A commit whose write panics is answered as any call that panicked: the
-/// caller reads the store's error `Panic`, as it did before the writes ran
+/// caller reads the store's failure, a panic, as it did before the writes ran
 /// as tasks of their own (647277b).
 #[tokio::test(start_paused = true)]
 async fn a_commit_whose_write_panics_reads_as_a_panic() {
@@ -1056,15 +1054,15 @@ async fn a_commit_whose_write_panics_reads_as_a_panic() {
     let call = slow_commit(&kit, Duration::ZERO).await;
     let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
     let read = match ended {
-        Err(KitError::Inbound(InboundError::Store(error))) => Some(error.error_type),
+        Err(RoomKitError::Store(failure)) => Some(failure.to_string()),
         _ => None,
     };
-    assert_eq!(read.as_deref(), Some("Panic"));
+    assert_eq!(read.as_deref(), Some("the call panicked"));
 }
 
 /// `Bonjour` into `room_1` once `kit`'s `BEFORE_BROADCAST` hook is one that
 /// signals `hanging` and never answers, then the kit's close: whether the
-/// caller reads `ShutDown`, and whether the room holds `Bonjour`.
+/// caller reads `KitClosed`, and whether the room holds `Bonjour`.
 async fn closed_while_its_hook_hangs(kit: &RoomKit<GatedStore>, hanging: &Notify) -> (bool, bool) {
     let call = {
         let kit = kit.clone();
@@ -1084,13 +1082,13 @@ async fn closed_while_its_hook_hangs(kit: &RoomKit<GatedStore>, hanging: &Notify
     closing(kit).await;
     let ended = tokio::time::timeout(BOUND, call).await.unwrap().unwrap();
     (
-        matches!(ended, Err(KitError::ShutDown)),
+        matches!(ended, Err(RoomKitError::KitClosed)),
         stored(kit, "Bonjour").await,
     )
 }
 
 /// RMK-1010 item 41: a call the close cuts before its own commit reads
-/// `ShutDown`, nothing of it stored, though its run committed another
+/// `KitClosed`, nothing of it stored, though its run committed another
 /// event first: here an entry its hook injected into the room, adopted and
 /// committed ahead of the call's event. The caller never reads that event
 /// as its own.

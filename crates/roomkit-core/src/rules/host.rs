@@ -1,8 +1,6 @@
 //! The host's own voice (RFC §10.5): who a post may speak as.
 
-use crate::model::{
-    ChannelCategory, ChannelDirection, ChannelId, ChannelType, Participant, ParticipantId,
-};
+use crate::model::{ChannelCategory, ChannelId, ChannelType, Participant, ParticipantId};
 
 /// Whom a post's `participant_id` names, as a turn's sender is read (RFC
 /// §5.5): an id names its participant only on the channels the room
@@ -59,19 +57,15 @@ pub(crate) fn host_as_intelligence(channel_type: &ChannelType, category: Channel
     channel_type == &ChannelType::HOST && category == ChannelCategory::Intelligence
 }
 
-/// Whether a channel declared of `channel_type`, as `category` and
-/// `direction`, claims a type reserved for what it does not do: `system`,
-/// the framework's own records', which no channel may claim, and `host`,
-/// which only a host channel may, a transport whose direction is `INBOUND`
-/// (RFC §6.2, §10.5, Appendix A.14.1). Its registration is refused.
-pub(crate) fn claims_reserved_type(
-    channel_type: &ChannelType,
-    category: ChannelCategory,
-    direction: ChannelDirection,
-) -> bool {
+/// Whether a channel declared of `channel_type` claims the type reserved
+/// for the framework's own records, `system`, which no channel may claim:
+/// the application's words are never a `SYSTEM` source (RFC §5.3). Its
+/// registration is refused. A channel of type `host` is registered whatever
+/// its category and direction, as the Python implementation registers it
+/// (step 5, point 4): attached as an intelligence channel, it is refused
+/// ([`host_as_intelligence`]).
+pub(crate) fn claims_reserved_type(channel_type: &ChannelType) -> bool {
     channel_type == &ChannelType::SYSTEM
-        || (channel_type == &ChannelType::HOST
-            && (category != ChannelCategory::Transport || direction != ChannelDirection::Inbound))
 }
 
 #[cfg(test)]

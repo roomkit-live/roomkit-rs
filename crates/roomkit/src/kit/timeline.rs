@@ -5,7 +5,7 @@ use roomkit_core::model::{RoomEvent, RoomId};
 
 use super::RoomKit;
 use super::options::{GetRoomOptions, GetTimelineOptions};
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::store::ConversationStore;
 
 impl<S: ConversationStore> RoomKit<S> {
@@ -21,17 +21,17 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Store`] with [`StoreError::RoomNotFound`] when the
-    /// room is not found, with [`StoreError::InvalidArgument`] when the
+    /// Returns [`RoomKitError::Store`] with [`StoreError::RoomNotFound`] when the
+    /// room is not found, with [`StoreError::Value`] when the
     /// options name both cursors, and when the store fails a read.
     ///
     /// [`StoreError::RoomNotFound`]: crate::StoreError::RoomNotFound
-    /// [`StoreError::InvalidArgument`]: crate::StoreError::InvalidArgument
+    /// [`StoreError::Value`]: crate::StoreError::Value
     pub async fn get_timeline(
         &self,
         room_id: &RoomId,
         options: GetTimelineOptions,
-    ) -> Result<Vec<RoomEvent>, KitError> {
+    ) -> Result<Vec<RoomEvent>, RoomKitError> {
         let room = GetRoomOptions {
             organization_id: options.organization_id.clone(),
         };

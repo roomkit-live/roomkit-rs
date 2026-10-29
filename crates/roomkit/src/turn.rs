@@ -19,7 +19,7 @@ use tokio::task::AbortHandle;
 use crate::RoomKit;
 use crate::channel::{BoxFuture, DynChannel};
 use crate::context::ExecutionContext;
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::stream::ResponseStream;
@@ -177,20 +177,20 @@ impl TurnHost {
     /// # Errors
     ///
     /// As `send_event`, the kit's error rebuilt when it carries no data;
-    /// [`KitError::Turn`] for any other, for a link that failed, and for a
+    /// [`RoomKitError::Turn`] for any other, for a link that failed, and for a
     /// call after the turn that the owner refuses: one made once a later
     /// turn of the agent was sent in the room.
-    pub async fn send_event(&self, event: DirectEvent) -> Result<RoomEvent, KitError> {
+    pub async fn send_event(&self, event: DirectEvent) -> Result<RoomEvent, RoomKitError> {
         let floor = ExecutionContext::current().turn_depth().unwrap_or(0);
         let arguments = send_event_arguments(&self.shared.room_id, event, floor)
-            .map_err(|why| KitError::Turn(TurnError::new("TypeError", why.0)))?;
+            .map_err(|why| RoomKitError::Turn(TurnError::new("TypeError", why.0)))?;
         let sent = self
             .shared
             .link
             .verb(crate::turns::SEND_EVENT, arguments, floor)
             .await?;
         serde_json::from_value(sent).map_err(|error| {
-            KitError::Turn(TurnError::new(
+            RoomKitError::Turn(TurnError::new(
                 "frame_invalid",
                 format!("the event sent could not be read: {error}"),
             ))
@@ -468,7 +468,7 @@ pub(crate) trait TurnKit: Send + Sync {
         &self,
         room_id: RoomId,
         event: DirectEvent,
-    ) -> BoxFuture<'static, Result<RoomEvent, KitError>>;
+    ) -> BoxFuture<'static, Result<RoomEvent, RoomKitError>>;
 
     /// The tool hooks of `trigger` that fire for calls of `source`: its
     /// SYNC chain in chain order, then its observers.
@@ -506,10 +506,10 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         &self,
         room_id: RoomId,
         event: DirectEvent,
-    ) -> BoxFuture<'static, Result<RoomEvent, KitError>> {
+    ) -> BoxFuture<'static, Result<RoomEvent, RoomKitError>> {
         let kit = self.upgrade().map(|inner| RoomKit { inner });
         Box::pin(async move {
-            let kit = kit.ok_or(KitError::ShutDown)?;
+            let kit = kit.ok_or(RoomKitError::KitClosed)?;
             kit.inject(&room_id, None, event).await
         })
     }

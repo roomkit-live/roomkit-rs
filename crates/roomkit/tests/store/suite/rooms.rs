@@ -12,7 +12,7 @@ use super::{counters, event, room_id, with_room};
 async fn a_room_id_cannot_be_created_twice() {
     let store = with_room().await;
     let again = store.create_room(Room::new(room_id())).await;
-    assert_eq!(again, Err(StoreError::RoomExists(room_id())));
+    assert_eq!(again, Err(StoreError::RoomAlreadyExists(room_id())));
 }
 
 /// A room is read back as it was written, every field.

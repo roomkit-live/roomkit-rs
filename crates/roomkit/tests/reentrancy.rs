@@ -12,7 +12,6 @@
     reason = "a test fails on a broken fixture"
 )]
 
-use roomkit::model::hook::AllowOptions;
 use std::future::{Future, ready};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
@@ -20,19 +19,20 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, EventStatus, EventType, HookResult, InboundMessage, RoomContext,
-    RoomEvent, RoomId, RoomStatus, TextContent, Timestamp,
+    EditContent, EventContent, EventDirection, EventId, EventSource, EventStatus, EventType,
+    HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, RoomStatus, TextContent, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
     CommitEventOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, EventDraft,
-    FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundError, InboundRoomRouter,
-    KitError, MutationError, MuteOptions, ProcessInboundOptions, RoomFilter, RoomKit,
-    RoomKitOptions, RouteOptions, RouterFuture, SendEventOptions, UpdateEventOptions,
-    default_inbound_event, keep_context, text_of,
+    FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundRoomRouter, MuteOptions,
+    ProcessInboundOptions, RoomFilter, RoomKit, RoomKitError, RoomKitOptions, RouteOptions,
+    RouterFuture, SendEventOptions, UpdateEventOptions, default_inbound_event, keep_context,
+    text_of,
 };
 use tokio::sync::Notify;
 
@@ -223,7 +223,7 @@ async fn room_with(options: RoomKitOptions) -> (RoomKit, RecordingTransport) {
 }
 
 /// Runs `message` into `room_1`, failing the test past [`BOUND`].
-async fn send(kit: &RoomKit, text: &str) -> Result<roomkit::InboundResult, KitError> {
+async fn send(kit: &RoomKit, text: &str) -> Result<roomkit::InboundResult, RoomKitError> {
     tokio::time::timeout(
         BOUND,
         kit.process_inbound(message(text), in_room(room_id())),
@@ -985,10 +985,7 @@ async fn a_call_naming_another_organization_draws_nothing_on_the_budget() {
                         ..in_room(room_id())
                     };
                     let refused = kit.process_inbound(message("other"), other).await;
-                    not_found += usize::from(matches!(
-                        refused,
-                        Err(KitError::Inbound(InboundError::RoomNotFound(_)))
-                    ));
+                    not_found += usize::from(matches!(refused, Err(RoomKitError::RoomNotFound(_))));
                 }
                 let last = kit
                     .process_inbound(message("last"), in_room(room_id()))
@@ -2203,7 +2200,7 @@ async fn a_call_that_could_only_wait_for_itself_fails() {
             result.event.map(|event| event.index)
         ),
         (
-            Some(Some(KitError::Reentrant {
+            Some(Some(RoomKitError::ReentrantCall {
                 room_id: room_id(),
                 call: "process_inbound",
             })),
@@ -2254,7 +2251,7 @@ async fn a_parse_that_routes_a_message_back_into_its_room_fails() {
         .await
         .unwrap_or_else(|_| panic!("the parse recursed"))
         .unwrap();
-    let reentrant = KitError::Reentrant {
+    let reentrant = RoomKitError::ReentrantCall {
         room_id: room_id(),
         call: "process_inbound",
     };
@@ -2301,7 +2298,7 @@ async fn an_off_lock_hook_routing_back_a_message_no_check_fires_for_fails() {
     })
     .unwrap();
     let result = send(&kit, "hello").await.unwrap();
-    let reentrant = KitError::Reentrant {
+    let reentrant = RoomKitError::ReentrantCall {
         room_id: room_id(),
         call: "process_inbound",
     };
@@ -2574,9 +2571,7 @@ async fn a_turn_s_call_meets_its_own_process_timeout() {
         ),
         (
             Some(EventStatus::Delivered),
-            Some(Some(KitError::Inbound(InboundError::Refused {
-                reason: "process_timeout".to_owned()
-            }))),
+            Some(Some(RoomKitError::ProcessTimeout { room_id: room_id() })),
             vec![
                 "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
                 "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
@@ -2926,9 +2921,58 @@ mod send_event {
             .await;
         assert_eq!(
             refused,
-            Err(KitError::Inbound(InboundError::Refused {
-                reason: "room_closed".to_owned()
-            }))
+            Err(RoomKitError::RoomClosed { room_id: room_id() })
+        );
+    }
+
+    /// RFC §10.5, §17.2, and Python's probe
+    /// `tasks/probes/step5-lot2/send_event_errors.py`: a refusal before the
+    /// commit reads as Python's class for it, nothing written: another
+    /// organization's room as `RoomNotFoundError`, an edit of a missing
+    /// target as `ChangeRefusedError`, an instruction naming no agent as
+    /// `ValueError`.
+    #[tokio::test]
+    async fn its_refusals_read_as_python_s_classes() {
+        let (kit, _) = room().await;
+        let (room, ws) = (room_id(), channel("ws"));
+        let send = |content: EventContent, options: SendEventOptions| {
+            kit.send_event(&room, &ws, content, options)
+        };
+        let scoped = SendEventOptions {
+            organization_id: Some("clinic".to_owned()),
+            ..Default::default()
+        };
+        let edit = EditContent::new(EventId::new("missing").unwrap(), TextContent::new("y"));
+        let edited = SendEventOptions {
+            event_type: EventType::Edit,
+            ..Default::default()
+        };
+        let instruction = SendEventOptions {
+            event_type: EventType::Instruction,
+            ..Default::default()
+        };
+        let refused = [
+            send(TextContent::new("x").into(), scoped).await,
+            send(edit.into(), edited).await,
+            send(TextContent::new("do it").into(), instruction).await,
+        ]
+        .map(Result::err);
+        assert_eq!(
+            (refused, timeline(&kit).await.len()),
+            (
+                [
+                    Some(RoomKitError::RoomNotFound(room_id())),
+                    Some(RoomKitError::ChangeRefused {
+                        reason: "target_event_not_found".to_owned()
+                    }),
+                    Some(RoomKitError::Value(
+                        "An INSTRUCTION must name an agent it directs (addressed_to): an \
+                         intelligence channel the kit registers"
+                            .to_owned()
+                    )),
+                ],
+                3
+            )
         );
     }
 
@@ -2951,9 +2995,10 @@ mod send_event {
         assert_eq!(
             (refused, timeline(&kit).await),
             (
-                Err(KitError::Inbound(InboundError::Refused {
-                    reason: "source_unbound".to_owned()
-                })),
+                Err(RoomKitError::ChannelNotFound {
+                    room_id: room_id(),
+                    channel_id: channel("ws")
+                }),
                 vec![
                     "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
                     "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
@@ -2979,7 +3024,7 @@ mod send_event {
         assert_eq!(
             (refused, timeline(&kit).await),
             (
-                Err(KitError::Inbound(InboundError::RoomNotFound(room_id()))),
+                Err(RoomKitError::RoomNotFound(room_id())),
                 vec![
                     "#0 system delivered Channel sms attached (read_write, all)".to_owned(),
                     "#1 system delivered Channel ws attached (read_write, all)".to_owned(),
@@ -3076,13 +3121,17 @@ async fn commit_event_under_a_key_its_channel_holds_is_refused() {
         .await
         .unwrap()
         .map(|event| event.id);
-    let error_type = match refused {
-        Err(KitError::Mutation(MutationError::Store(record))) => record.error_type,
-        other => panic!("the record was not refused as a duplicate key: {other:?}"),
-    };
     assert_eq!(
-        (error_type.as_str(), held, timeline(&kit).await.len()),
-        ("IdempotencyKeyTaken", Some(sent.id), 4)
+        (refused.err(), held, timeline(&kit).await.len()),
+        (
+            Some(RoomKitError::IdempotencyKeyTaken {
+                room_id: room_id(),
+                channel_id: channel("ws"),
+                key: "WS1".to_owned()
+            }),
+            Some(sent.id),
+            4
+        )
     );
 }
 

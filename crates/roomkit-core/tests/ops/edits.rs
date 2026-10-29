@@ -7,10 +7,10 @@
 //! and deletes natively, and an SMS-like `sms` that does neither. Its first
 //! event, `evt_1` at index 0, is `+15551234567`'s "I need 5000$".
 
-use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use roomkit_core::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit_core::model::{
     ChannelOutput, CompositeContent, DeleteContent, DeleteType, DirectEvent, EditContent,
     EditSource, EventContent, EventId, EventStatus, EventType, EventUpdates, HookResult,

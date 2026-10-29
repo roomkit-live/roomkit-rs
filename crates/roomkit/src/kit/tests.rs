@@ -6,13 +6,13 @@
 //! run the real driver against them. They also run the driver on an
 //! operation that breaks the protocol, and a call on a runtime that shuts
 //! down under it.
-use roomkit_core::model::hook::AllowOptions;
 use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit_core::model::hook::AllowOptions;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
@@ -30,7 +30,7 @@ use super::{
 use crate::InboundResult;
 use crate::channel::{Channel, ChannelError};
 use crate::driver;
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::store::ConversationStore;
 use crate::testing::RecordingTransport;
 
@@ -306,7 +306,7 @@ impl Operation for WaitsForNothing {
 async fn a_run_waiting_for_an_effect_never_asked_for_stalls() {
     let kit = RoomKit::new(RoomKitOptions::default());
     let stalled = driver::run(&kit.inner, "test", WaitsForNothing).await;
-    assert_eq!(stalled, Err(KitError::Stalled));
+    assert_eq!(stalled, Err(driver::stalled()));
 }
 
 /// A call whose run the runtime cancels, as a runtime shutting down does,
@@ -340,7 +340,7 @@ fn a_call_whose_runtime_shuts_down_under_it_is_cancelled() {
     let cancelled = runtime().block_on(call);
     assert_eq!(
         (started.is_err(), cancelled.map(|result| result.event)),
-        (true, Err(KitError::Cancelled))
+        (true, Err(RoomKitError::Cancelled))
     );
 }
 

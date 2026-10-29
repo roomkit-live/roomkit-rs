@@ -13,7 +13,7 @@ use serde_json::Value;
 use tokio::sync::{Notify, oneshot};
 use uuid::Uuid;
 
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::turn::TurnKit;
 use crate::turns::codec::{encode_end, encode_end_item, encode_start};
 use crate::turns::error::{TurnError, rebuild_kit_error};
@@ -218,7 +218,7 @@ pub(crate) struct TurnFacts {
 }
 
 /// The answer a verb waits for.
-type Answer = oneshot::Sender<Result<Value, KitError>>;
+type Answer = oneshot::Sender<Result<Value, RoomKitError>>;
 
 /// The way a turn's host reaches its owner (RFC §10.6.5).
 pub(crate) struct HostLink {
@@ -267,13 +267,13 @@ impl HostLink {
     /// # Errors
     ///
     /// What the verb raised on the owner, rebuilt; a link's failure, or a
-    /// verb refused, as [`KitError::Turn`].
+    /// verb refused, as [`RoomKitError::Turn`].
     pub(crate) async fn verb(
         &self,
         verb: &str,
         arguments: Metadata,
         floor: u32,
-    ) -> Result<Value, KitError> {
+    ) -> Result<Value, RoomKitError> {
         let call_id = Uuid::new_v4().simple().to_string();
         let (answer, answered) = oneshot::channel();
         {
@@ -299,7 +299,7 @@ impl HostLink {
         };
         if let Err(Uncarried(why)) = self.sender.send(&frame) {
             self.withdraw(&call_id, false);
-            return Err(KitError::Turn(TurnError::new(
+            return Err(RoomKitError::Turn(TurnError::new(
                 "TypeError",
                 format!("the arguments of verb {verb:?} cannot cross the turn backend: {why}"),
             )));
@@ -311,7 +311,7 @@ impl HostLink {
         let result = answered.await;
         withdrawn.disarm();
         result.unwrap_or_else(|_gone| {
-            Err(KitError::Turn(TurnError::new(
+            Err(RoomKitError::Turn(TurnError::new(
                 "owner_lost",
                 "the turn ended before the verb was answered",
             )))
@@ -320,9 +320,9 @@ impl HostLink {
 
     /// Runs `verb` as work the turn began, after it ended (RFC §10.6.3
     /// `room_call`).
-    async fn between_turns(&self, verb: &str, arguments: Metadata) -> Result<Value, KitError> {
+    async fn between_turns(&self, verb: &str, arguments: Metadata) -> Result<Value, RoomKitError> {
         let Some(turns) = self.turns.upgrade() else {
-            return Err(KitError::ShutDown);
+            return Err(RoomKitError::KitClosed);
         };
         let message = OwnerMessage::RoomCall {
             call_id: Uuid::new_v4().simple().to_string(),
@@ -357,7 +357,7 @@ impl HostLink {
             .map(|(_, answer)| answer)
             .collect();
         for answer in pending {
-            drop(answer.send(Err(KitError::Turn(error.clone()))));
+            drop(answer.send(Err(RoomKitError::Turn(error.clone()))));
         }
         self.settled.notify_waiters();
     }

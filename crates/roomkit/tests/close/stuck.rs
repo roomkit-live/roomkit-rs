@@ -1,16 +1,16 @@
 //! RFC §12.10.4: what waits behind spared work is dropped at once, rather
 //! than drained for the close's grace, and a turn the close cuts holds it
 //! only until its reader's read is committed.
-use roomkit::model::hook::AllowOptions;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{HookResult, RoomId};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, KitError,
-    RoomKit, text_of,
+    AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, RoomKit,
+    RoomKitError, text_of,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
@@ -97,8 +97,8 @@ async fn a_message_waiting_on_the_lock_a_close_runs_under_is_refused_at_once() {
         (
             Some(true),
             true,
-            Some(Err(KitError::ShutDown)),
-            Some(Err(KitError::ShutDown)),
+            Some(Err(RoomKitError::KitClosed)),
+            Some(Err(RoomKitError::KitClosed)),
             Vec::<String>::new()
         )
     );
@@ -260,9 +260,9 @@ async fn a_message_coming_behind_a_spared_lock_or_ticket_as_the_close_drains_is_
         (
             needs_lock,
             (
-                (Some(Err(KitError::ShutDown)), 5),
+                (Some(Err(RoomKitError::KitClosed)), 5),
                 (Some(true), 20),
-                Some(Err(KitError::ShutDown)),
+                Some(Err(RoomKitError::KitClosed)),
                 Some(ok(None, None)),
             ),
         )
@@ -356,8 +356,8 @@ async fn a_message_behind_a_spared_admission_ticket_is_refused_at_once() {
         (
             Some(true),
             true,
-            Some(Err(KitError::ShutDown)),
-            Some(Err(KitError::ShutDown)),
+            Some(Err(RoomKitError::KitClosed)),
+            Some(Err(RoomKitError::KitClosed)),
             Vec::<String>::new()
         )
     );

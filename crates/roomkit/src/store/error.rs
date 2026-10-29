@@ -87,9 +87,9 @@ impl Eq for StoreFailure {}
 #[derive(Debug, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum StoreError {
-    /// A room with the id exists already.
+    /// A room with the id exists already, Python's `RoomAlreadyExistsError`.
     #[error("room {0} exists already")]
-    RoomExists(RoomId),
+    RoomAlreadyExists(RoomId),
     /// No room has the id.
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
@@ -157,14 +157,14 @@ pub enum StoreError {
         /// The key.
         key: String,
     },
-    /// A read's arguments cannot be served together, as the Python
-    /// implementation's `ValueError` says: a timeline read's two cursors,
+    /// A read's arguments cannot be served together, the Python
+    /// implementation's `ValueError`: a timeline read's two cursors,
     /// which exclude each other (RFC §14.1), or a filter that admits
     /// nothing by construction ([`EventQuery::validate`]).
     ///
     /// [`EventQuery::validate`]: super::EventQuery::validate
     #[error("{0}")]
-    InvalidArgument(&'static str),
+    Value(String),
     /// The store could not be reached or failed: the error it met is the
     /// cause ([`std::error::Error::source`]), which the message leaves to
     /// a reader of the chain, the kit's record of a failed call among
@@ -184,7 +184,7 @@ impl StoreError {
     /// its causes': `the store failed: connection refused`.
     pub(crate) fn to_record(&self) -> ErrorRecord {
         let error_type = match self {
-            Self::RoomExists(_) => "RoomExists",
+            Self::RoomAlreadyExists(_) => "RoomAlreadyExists",
             Self::RoomNotFound(_) => "RoomNotFound",
             Self::ParticipantExists { .. } => "ParticipantExists",
             Self::ParticipantNotFound { .. } => "ParticipantNotFound",
@@ -194,7 +194,7 @@ impl StoreError {
             Self::EventNotFound(_) => "EventNotFound",
             Self::IndexTaken { .. } => "IndexTaken",
             Self::IdempotencyKeyTaken { .. } => "IdempotencyKeyTaken",
-            Self::InvalidArgument(_) => "InvalidArgument",
+            Self::Value(_) => "Value",
             Self::Unavailable(_) => "StoreUnavailable",
         };
         ErrorRecord::new(error_type, error::with_causes(self))

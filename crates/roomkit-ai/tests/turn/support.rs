@@ -1,8 +1,8 @@
 //! A room with an SMS transport and an AI agent on a scripted model.
-use roomkit::model::hook::AllowOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, HookResult, InboundMessage, Metadata,
     RoomContext, RoomEvent, RoomId, TextContent,

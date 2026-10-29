@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use roomkit::{Channel, ChannelDeclaration, KitError, RoomKit, RoomKitOptions};
+use roomkit::{Channel, ChannelDeclaration, RoomKit, RoomKitError, RoomKitOptions};
 use tokio::sync::Notify;
 
 use crate::support::{BOUND, channel, transport};
@@ -158,7 +158,7 @@ async fn a_close_after_a_failed_one_returns_the_same_failure() {
     kit.register_channel(b.clone()).unwrap();
     let first = tokio::time::timeout(BOUND, kit.close()).await.unwrap();
     let later = tokio::time::timeout(BOUND, kit.close()).await.unwrap();
-    let failed = || KitError::ChannelsFailedToClose {
+    let failed = || RoomKitError::ExceptionGroup {
         failures: vec![(channel("a"), "this channel's close panics".to_owned())],
     };
     assert_eq!(
@@ -210,7 +210,7 @@ async fn a_channel_close_that_panics_before_its_future_fails_the_same_way() {
     kit.register_channel(b.clone()).unwrap();
     let first = tokio::time::timeout(BOUND, kit.close()).await.unwrap();
     let later = tokio::time::timeout(BOUND, kit.close()).await.unwrap();
-    let failed = || KitError::ChannelsFailedToClose {
+    let failed = || RoomKitError::ExceptionGroup {
         failures: vec![(
             channel("a"),
             "this channel's close panics before its future".to_owned(),
@@ -269,5 +269,5 @@ fn a_close_after_its_shutdown_was_cut_says_so() {
         .build()
         .unwrap();
     let later = second.block_on(async { tokio::time::timeout(BOUND, kit.close()).await });
-    assert_eq!(later.unwrap(), Err(KitError::ShutdownCancelled));
+    assert_eq!(later.unwrap(), Err(RoomKitError::ShutdownCancelled));
 }

@@ -5,13 +5,13 @@
 //! it, with nothing written; and its key.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-use roomkit::model::hook::AllowOptions;
 use std::future::{Future, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     Access, AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId,
     ChannelMediaType, ChannelOutput, ChannelType, EventContent, EventDirection, EventId,
@@ -21,11 +21,10 @@ use roomkit::model::{
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
-    CommitEventOptions, ConfigError, ConversationStore, CreateRoomOptions, DetachChannelOptions,
-    EventFilter, EventQuery, FrameworkEvent, HookExecution, HookSpec, HookTrigger, HostChannel,
-    InMemoryStore, InboundError, KitError, LifecycleError, PostOptions, ProcessInboundOptions,
-    RoomCounters, RoomFilter, RoomKit, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
-    text_of,
+    CommitEventOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, EventFilter,
+    EventQuery, FrameworkEvent, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore,
+    PostOptions, ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit, RoomKitError,
+    RoomKitOptions, SendEventOptions, StoreError, TargetUpdate, text_of,
 };
 use tokio::sync::Notify;
 
@@ -488,9 +487,7 @@ async fn a_first_post_waits_for_the_room_lock_within_process_timeout() {
     assert_eq!(
         (refused, after == before, timed_out, sms.sent().len()),
         (
-            Err(KitError::Inbound(InboundError::Refused {
-                reason: "process_timeout".to_owned()
-            })),
+            Err(RoomKitError::ProcessTimeout { room_id: room_id() }),
             true,
             1,
             0
@@ -642,63 +639,61 @@ type Arguments = fn(&mut PostOptions);
 
 /// The posts refused before anything is written, with what sets each one
 /// up and its error (RFC §10.5).
-fn refusals() -> Vec<(&'static str, Setup, Arguments, KitError)> {
-    let refused = |reason: &str| {
-        KitError::Inbound(InboundError::Refused {
-            reason: reason.to_owned(),
-        })
+fn refusals() -> Vec<(&'static str, Setup, Arguments, RoomKitError)> {
+    let closed = || RoomKitError::RoomClosed { room_id: room_id() };
+    let unbound = || RoomKitError::ChannelNotFound {
+        room_id: room_id(),
+        channel_id: channel("host"),
     };
-    let not_found = || KitError::Inbound(InboundError::RoomNotFound(room_id()));
-    let unreached = |speaker: &str, reached_elsewhere| {
-        KitError::Inbound(InboundError::ParticipantNotFound {
-            room_id: room_id(),
-            participant_id: ParticipantId::new(speaker).unwrap(),
-            channel_id: channel("host"),
-            reached_elsewhere,
-        })
+    let not_found = || RoomKitError::RoomNotFound(room_id());
+    let unreached = |speaker: &str, reached_elsewhere| RoomKitError::ParticipantNotFound {
+        room_id: room_id(),
+        participant_id: ParticipantId::new(speaker).unwrap(),
+        channel_id: channel("host"),
+        reached_elsewhere,
+    };
+    let not_a_host = |id: &str| {
+        RoomKitError::Value(format!(
+            "post() speaks from a channel of type HOST; {id:?} is not one"
+        ))
     };
     vec![
         (
             "a channel of another type",
             Setup::Nothing,
             |post| post.channel_id = Some(channel("sms")),
-            KitError::Inbound(InboundError::NotAHostChannel(channel("sms"))),
+            not_a_host("sms"),
         ),
         (
             "an unregistered channel",
             Setup::Nothing,
             |post| post.channel_id = Some(channel("ghost")),
-            KitError::Inbound(InboundError::UnknownChannel(channel("ghost"))),
+            RoomKitError::ChannelNotRegistered(channel("ghost")),
         ),
         (
             "host taken by another type",
             Setup::TakeTheHostId,
             |_| {},
-            KitError::Inbound(InboundError::NotAHostChannel(channel("host"))),
+            not_a_host("host"),
         ),
-        (
-            "a closed room",
-            Setup::Close,
-            |_| {},
-            refused("room_closed"),
-        ),
+        ("a closed room", Setup::Close, |_| {}, closed()),
         (
             "a detached host channel",
             Setup::DetachAfterAPost,
             |_| {},
-            refused("source_unbound"),
+            unbound(),
         ),
         (
             "a replay into a room closed since",
             Setup::CloseAfterAPost,
             |post| post.idempotency_key = Some("notice".to_owned()),
-            refused("room_closed"),
+            closed(),
         ),
         (
             "a replay after a detach",
             Setup::DetachAfterAPost,
             |post| post.idempotency_key = Some("notice".to_owned()),
-            refused("source_unbound"),
+            unbound(),
         ),
         (
             "another organization's room",
@@ -785,8 +780,8 @@ async fn a_refused_speaker_is_told_why() {
         );
     }
     assert!(
-        told[0].ends_with("ghost names nobody of the room")
-            && told[1].ends_with("names a participant reached through other channels only"),
+        told[0].contains("\"ghost\" names nobody of the room")
+            && told[1].contains("names a participant reached through other channels only"),
         "{told:?}"
     );
 }
@@ -865,9 +860,11 @@ async fn a_message_on_the_host_channel_is_refused_before_anything_is_written() {
         .await
         .unwrap();
     let refused = || {
-        Err(KitError::Inbound(InboundError::InboundOnHostChannel(
-            channel("host"),
-        )))
+        Err(RoomKitError::Value(
+            "Channel \"host\" is a host channel and receives no external payload: the host \
+             speaks through RoomKit.post() or send_event()"
+                .to_owned(),
+        ))
     };
     assert_eq!(
         (named, routed, rooms.len(), written(&kit).await == before),
@@ -875,49 +872,46 @@ async fn a_message_on_the_host_channel_is_refused_before_anything_is_written() {
     );
 }
 
-/// A channel of type `channel_type`, as `category` and `direction`.
-struct Claiming(ChannelType, ChannelCategory, ChannelDirection);
+/// A channel `id` of type `channel_type`, as `category` and `direction`.
+struct Claiming(&'static str, ChannelType, ChannelCategory, ChannelDirection);
 
 impl Channel for Claiming {
     fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration::new(channel("claiming"), self.0.clone(), self.1, self.2)
+        ChannelDeclaration::new(channel(self.0), self.1.clone(), self.2, self.3)
     }
 }
 
-/// RFC §6.2, §10.5: `system` is the framework's own records' type, which
-/// no channel claims, and `host` a host channel's, a transport whose
-/// direction is `INBOUND`: a channel claiming either otherwise is refused
-/// at its registration, and a host channel is registered.
+/// RFC §5.3: `system` is the framework's own records' type, which no
+/// channel claims: its registration is refused, as a `ValueError`. A
+/// channel of type `host` registers whatever its category and direction,
+/// as the Python implementation registers it (step 5, point 4, probe
+/// `tasks/probes/step5-lot2/host_type_registration.py`).
 #[tokio::test]
-async fn a_channel_claiming_a_reserved_type_is_refused() {
+async fn only_a_channel_claiming_the_system_type_is_refused() {
     use ChannelCategory::{Intelligence, Transport};
     use ChannelDirection::{Bidirectional, Inbound};
     let kit = RoomKit::new(RoomKitOptions::default());
     let claims = [
-        Claiming(ChannelType::HOST, Intelligence, Inbound),
-        Claiming(ChannelType::HOST, Transport, Bidirectional),
-        Claiming(ChannelType::SYSTEM, Transport, Inbound),
+        Claiming("host_agent", ChannelType::HOST, Intelligence, Inbound),
+        Claiming("host_both", ChannelType::HOST, Transport, Bidirectional),
+        Claiming("system", ChannelType::SYSTEM, Transport, Inbound),
     ];
-    let refused: Vec<Result<(), KitError>> = claims
+    let registered: Vec<Result<(), RoomKitError>> = claims
         .into_iter()
         .map(|claim| kit.register_channel(claim))
         .collect();
-    let reserved = |channel_type: ChannelType| {
-        Err(KitError::Config(ConfigError::ReservedChannelType {
-            channel_id: channel("claiming"),
-            channel_type,
-        }))
-    };
     assert_eq!(
         (
-            refused,
+            registered,
             kit.register_channel(HostChannel::with_id(channel("desk")))
         ),
         (
             vec![
-                reserved(ChannelType::HOST),
-                reserved(ChannelType::HOST),
-                reserved(ChannelType::SYSTEM)
+                Ok(()),
+                Ok(()),
+                Err(RoomKitError::Value(
+                    "channel system claims the reserved type system".to_owned()
+                ))
             ],
             Ok(())
         )
@@ -942,9 +936,11 @@ async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
     assert_eq!(
         (attached.err(), binding_of(&kit, "host").await.is_none()),
         (
-            Some(KitError::Lifecycle(LifecycleError::HostAsIntelligence(
-                channel("host")
-            ))),
+            Some(RoomKitError::Value(
+                "Channel \"host\" is a host channel: it can be attached as a transport only, \
+                 never as an intelligence channel"
+                    .to_owned()
+            )),
             true
         )
     );
@@ -1388,9 +1384,7 @@ async fn a_first_post_s_attach_spends_the_deadline_its_message_shares() {
             sms.sent().len()
         ),
         (
-            Err(KitError::Inbound(InboundError::Refused {
-                reason: "process_timeout".to_owned()
-            })),
+            Err(RoomKitError::ProcessTimeout { room_id: room_id() }),
             true,
             1,
             0,
@@ -1446,9 +1440,7 @@ async fn a_first_post_s_read_of_its_room_waits_within_process_timeout() {
     assert_eq!(
         (refused, written(&kit).await == before, sms.sent().len()),
         (
-            Err(KitError::Inbound(InboundError::Refused {
-                reason: "process_timeout".to_owned()
-            })),
+            Err(RoomKitError::ProcessTimeout { room_id: room_id() }),
             true,
             0
         )

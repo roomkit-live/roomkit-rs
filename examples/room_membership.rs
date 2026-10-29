@@ -16,10 +16,10 @@
 //! ```
 
 #![expect(clippy::print_stdout, reason = "an example prints what it ran")]
-use roomkit::model::hook::AllowOptions;
 use std::error::Error;
 use std::process::ExitCode;
 
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelId, ChannelType, DeleteContent, DeleteType, EventContent, EventId, EventType,
     HookResult, InboundMessage, Participant, ParticipantId, ParticipantRole, ParticipantStatus,

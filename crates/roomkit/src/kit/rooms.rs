@@ -13,7 +13,7 @@ use super::options::{
     ReopenRoomOptions, ResumeRoomOptions,
 };
 use crate::driver;
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::store::{ConversationStore, StoreError};
 
 impl<S: ConversationStore> RoomKit<S> {
@@ -32,8 +32,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room exists already.
-    pub async fn create_room(&self, options: CreateRoomOptions) -> Result<Room, KitError> {
+    /// Returns [`RoomKitError::RoomAlreadyExists`] when the room exists
+    /// already, nothing written, as Python raises `RoomAlreadyExistsError`.
+    pub async fn create_room(&self, options: CreateRoomOptions) -> Result<Room, RoomKitError> {
         let inner = &self.inner;
         let environment = inner.environment();
         let config = self.config();
@@ -47,22 +48,29 @@ impl<S: ConversationStore> RoomKit<S> {
             metadata: options.metadata,
             ..Room::at(room_id, environment.now())
         };
+        let room_id = room.id.clone();
         let create = CreateRoom::new(config, room);
-        Ok(driver::run_on(inner, environment, "create_room", create).await??)
+        let created = driver::run_on(inner, environment, "create_room", create).await?;
+        created.map_err(|error| match RoomKitError::from(error) {
+            taken if taken.recorded_refusal() == Some("RoomAlreadyExists") => {
+                RoomKitError::RoomAlreadyExists(room_id)
+            }
+            error => error,
+        })
     }
 
     /// The room `room_id`, as the store holds it.
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Store`] with [`StoreError::RoomNotFound`] when the
+    /// Returns [`RoomKitError::Store`] with [`StoreError::RoomNotFound`] when the
     /// room does not exist or is not of the organization `options` names
     /// (RFC §17.2), and when the store fails the read.
     pub async fn get_room(
         &self,
         room_id: &RoomId,
         options: GetRoomOptions,
-    ) -> Result<Room, KitError> {
+    ) -> Result<Room, RoomKitError> {
         let room = self.store().get_room(room_id).await?;
         room.filter(|room| organizations::admits(options.organization_id.as_deref(), room))
             .ok_or_else(|| StoreError::RoomNotFound(room_id.clone()).into())
@@ -75,7 +83,7 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         room_id: &RoomId,
         organization_id: Option<&str>,
-    ) -> Result<(), KitError> {
+    ) -> Result<(), RoomKitError> {
         let Some(organization_id) = organization_id else {
             return Ok(());
         };
@@ -91,15 +99,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist or is
-    /// not of the organization `options` names, and
-    /// `LifecycleError::TransitionRefused`, nothing written, when it is
+    /// Returns [`RoomKitError::RoomNotFound`] when the room does not exist or
+    /// is not of the organization `options` names, and
+    /// [`RoomKitError::TransitionRefused`], nothing written, when it is
     /// CLOSED or ARCHIVED (gap G-074).
     pub async fn pause_room(
         &self,
         room_id: &RoomId,
         options: PauseRoomOptions,
-    ) -> Result<Room, KitError> {
+    ) -> Result<Room, RoomKitError> {
         let pause = PauseRoom::new(self.config(), room_id.clone(), options.organization_id);
         let pause = match room_work(room_id) {
             Some((draw, floor)) => pause.made_in(draw, floor),
@@ -118,7 +126,7 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         room_id: &RoomId,
         options: ResumeRoomOptions,
-    ) -> Result<Room, KitError> {
+    ) -> Result<Room, RoomKitError> {
         let resume = ResumeRoom::new(self.config(), room_id.clone(), options.organization_id);
         let resume = match room_work(room_id) {
             Some((draw, floor)) => resume.made_in(draw, floor),
@@ -132,15 +140,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist or is
-    /// not of the organization `options` names, and
-    /// `LifecycleError::TransitionRefused`, nothing written, when it is not
+    /// Returns [`RoomKitError::RoomNotFound`] when the room does not exist or
+    /// is not of the organization `options` names, and
+    /// [`RoomKitError::TransitionRefused`], nothing written, when it is not
     /// CLOSED: an archived room is never left (gap G-074).
     pub async fn reopen_room(
         &self,
         room_id: &RoomId,
         options: ReopenRoomOptions,
-    ) -> Result<Room, KitError> {
+    ) -> Result<Room, RoomKitError> {
         let reopen = ReopenRoom::new(self.config(), room_id.clone(), options.organization_id);
         let reopen = match room_work(room_id) {
             Some((draw, floor)) => reopen.made_in(draw, floor),
@@ -154,15 +162,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist or is
-    /// not of the organization `options` names, and
-    /// `LifecycleError::TransitionRefused`, nothing written, when it is
+    /// Returns [`RoomKitError::RoomNotFound`] when the room does not exist or
+    /// is not of the organization `options` names, and
+    /// [`RoomKitError::TransitionRefused`], nothing written, when it is
     /// ARCHIVED: an archived room is never left (gap G-074).
     pub async fn close_room(
         &self,
         room_id: &RoomId,
         options: CloseRoomOptions,
-    ) -> Result<Room, KitError> {
+    ) -> Result<Room, RoomKitError> {
         let close = CloseRoom::new(self.config(), room_id.clone(), options.organization_id);
         let close = match room_work(room_id) {
             Some((draw, floor)) => close.made_in(draw, floor),
@@ -177,13 +185,13 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist or is
+    /// Returns [`RoomKitError::RoomNotFound`] when the room does not exist or is
     /// not of the organization `options` names.
     pub async fn archive_room(
         &self,
         room_id: &RoomId,
         options: ArchiveRoomOptions,
-    ) -> Result<Room, KitError> {
+    ) -> Result<Room, RoomKitError> {
         let archive = ArchiveRoom::new(self.config(), room_id.clone(), options.organization_id);
         let archive = match room_work(room_id) {
             Some((draw, floor)) => archive.made_in(draw, floor),

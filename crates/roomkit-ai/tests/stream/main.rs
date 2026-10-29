@@ -4,7 +4,6 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod access;
-use roomkit::model::hook::AllowOptions;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -14,6 +13,7 @@ use std::time::Duration;
 
 use futures_core::Stream;
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     DirectEvent, EventContent, EventType, HookResult, InboundMessage, RoomContext, RoomEvent,

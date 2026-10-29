@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use super::pipe::LinkFailure;
 use super::wire::WireError;
-use crate::error::KitError;
+use crate::error::RoomKitError;
 
 /// At most this many causes cross with an error.
 const CAUSES_KEPT: usize = 16;
@@ -20,7 +20,7 @@ const CAUSES_KEPT: usize = 16;
 pub(crate) const CHANNEL_ERROR: &str = "ChannelError";
 
 /// The kind a kit's error crosses as, its variant among its attributes.
-const KIT_ERROR: &str = "KitError";
+const KIT_ERROR: &str = "RoomKitError";
 
 /// The attribute that names a kit error's variant.
 const VARIANT: &str = "variant";
@@ -35,7 +35,7 @@ pub(crate) const TURN_LINK_ERROR: &str = "TurnLinkError";
 ///
 /// `kind` is a link's failure reason (`no_executor`, `executor_lost`,
 /// `owner_lost`, `frame_lost`, `frame_invalid`, `backend_closed`), or the
-/// kind of the error the other side raised as it named it (`KitError`,
+/// kind of the error the other side raised as it named it (`RoomKitError`,
 /// `PermissionError`, ...); `message` says what failed, for logs and hooks,
 /// never for a model.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
@@ -131,7 +131,7 @@ pub(crate) fn to_record(error: &WireError) -> ErrorRecord {
 }
 
 /// `error`, a kit's, as it crosses: its variant among its attributes.
-pub(crate) fn kit_error(error: &KitError) -> WireError {
+pub(crate) fn kit_error(error: &RoomKitError) -> WireError {
     let mut record = one(KIT_ERROR, error.to_string());
     let (variant, fields) = variant_of(error);
     record
@@ -144,55 +144,70 @@ pub(crate) fn kit_error(error: &KitError) -> WireError {
 /// The kit error a crossed error is: a variant that carries no data, or an
 /// unknown channel, as itself; any other as a [`TurnError`] keeping its
 /// kind and message.
-pub(crate) fn rebuild_kit_error(error: &WireError) -> KitError {
+pub(crate) fn rebuild_kit_error(error: &WireError) -> RoomKitError {
     if error.kind == KIT_ERROR
         && let Some(rebuilt) = rebuilt_variant(error)
     {
         return rebuilt;
     }
-    KitError::Turn(TurnError::new(error.kind.clone(), error.message.clone()))
+    RoomKitError::Turn(TurnError::new(error.kind.clone(), error.message.clone()))
 }
 
-fn rebuilt_variant(error: &WireError) -> Option<KitError> {
+fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
     let variant = error.attributes.get(VARIANT)?.as_str()?;
     Some(match variant {
-        "ShutDown" => KitError::ShutDown,
-        "ShutdownCancelled" => KitError::ShutdownCancelled,
-        "Cancelled" => KitError::Cancelled,
-        "Stalled" => KitError::Stalled,
-        "NoEvent" => KitError::NoEvent,
-        "UnknownChannel" => {
+        "KitClosed" => RoomKitError::KitClosed,
+        "ShutdownCancelled" => RoomKitError::ShutdownCancelled,
+        "Cancelled" => RoomKitError::Cancelled,
+        "Internal" => RoomKitError::Internal(
+            error
+                .message
+                .strip_prefix("internal error: ")
+                .unwrap_or(&error.message)
+                .to_owned(),
+        ),
+        "ChannelNotRegistered" => {
             let id = error.attributes.get("channel_id")?.as_str()?;
-            KitError::UnknownChannel(ChannelId::new(id).ok()?)
+            RoomKitError::ChannelNotRegistered(ChannelId::new(id).ok()?)
         }
         _ => return None,
     })
 }
 
 /// A kit error's variant name, and the fields a rebuild reads.
-fn variant_of(error: &KitError) -> (&'static str, Metadata) {
+fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
     let mut fields = Metadata::new();
     let variant = match error {
-        KitError::Inbound(_) => "Inbound",
-        KitError::Lifecycle(_) => "Lifecycle",
-        KitError::Mutation(_) => "Mutation",
-        KitError::Config(_) => "Config",
-        KitError::Registration(_) => "Registration",
-        KitError::UnknownChannel(channel_id) => {
+        RoomKitError::RoomNotFound(_) => "RoomNotFound",
+        RoomKitError::RoomAlreadyExists(_) => "RoomAlreadyExists",
+        RoomKitError::RoomClosed { .. } => "RoomClosed",
+        RoomKitError::TransitionRefused { .. } => "TransitionRefused",
+        RoomKitError::ProcessTimeout { .. } => "ProcessTimeout",
+        RoomKitError::ChangeRefused { .. } => "ChangeRefused",
+        RoomKitError::ReentrantCall { .. } => "ReentrantCall",
+        RoomKitError::ReentryLoopCap(_) => "ReentryLoopCap",
+        RoomKitError::ChannelNotFound { .. } => "ChannelNotFound",
+        RoomKitError::ChannelNotRegistered(channel_id) => {
             fields.insert("channel_id".to_owned(), Value::from(channel_id.as_str()));
-            "UnknownChannel"
+            "ChannelNotRegistered"
         }
-        KitError::Store(_) => "Store",
-        KitError::Reentrant { .. } => "Reentrant",
-        KitError::Abandoned { .. } => "Abandoned",
-        KitError::Protocol(_) => "Protocol",
-        KitError::Stalled => "Stalled",
-        KitError::Cancelled => "Cancelled",
-        KitError::NoEvent => "NoEvent",
-        KitError::ShutDown => "ShutDown",
-        KitError::ChannelsFailedToClose { .. } => "ChannelsFailedToClose",
-        KitError::ShutdownCancelled => "ShutdownCancelled",
-        KitError::Turn(_) => "Turn",
+        RoomKitError::ChannelAlreadyRegistered(_) => "ChannelAlreadyRegistered",
+        RoomKitError::ParticipantNotFound { .. } => "ParticipantNotFound",
+        RoomKitError::IdentityNotFound(_) => "IdentityNotFound",
+        RoomKitError::AddressLinked { .. } => "AddressLinked",
+        RoomKitError::EventNotFound(_) => "EventNotFound",
+        RoomKitError::IdempotencyKeyTaken { .. } => "IdempotencyKeyTaken",
+        RoomKitError::Value(_) => "Value",
+        RoomKitError::Cancelled => "Cancelled",
+        RoomKitError::ExceptionGroup { .. } => "ExceptionGroup",
+        RoomKitError::KitClosed => "KitClosed",
+        RoomKitError::ShutdownCancelled => "ShutdownCancelled",
+        RoomKitError::Store(_) => "Store",
+        RoomKitError::Lock(_) => "Lock",
+        RoomKitError::Channel { .. } => "Channel",
+        RoomKitError::Router(_) => "Router",
+        RoomKitError::Turn(_) => "Turn",
+        RoomKitError::Internal(_) => "Internal",
     };
     (variant, fields)
 }
@@ -248,19 +263,19 @@ mod tests {
     /// class; any other as a stand-in keeping its kind and message.
     #[test]
     fn a_kit_error_comes_back_as_itself_or_as_a_turn_error() {
-        let unknown = || KitError::UnknownChannel(ChannelId::new("sms").unwrap());
-        let reentrant = || KitError::Reentrant {
+        let unknown = || RoomKitError::ChannelNotRegistered(ChannelId::new("sms").unwrap());
+        let reentrant = || RoomKitError::ReentrantCall {
             room_id: roomkit_core::model::RoomId::new("room_1").unwrap(),
             call: "send_event",
         };
-        let rebuilt = [KitError::ShutDown, unknown(), reentrant()]
+        let rebuilt = [RoomKitError::KitClosed, unknown(), reentrant()]
             .map(|error| rebuild_kit_error(&kit_error(&error)));
         assert_eq!(
             rebuilt,
             [
-                KitError::ShutDown,
+                RoomKitError::KitClosed,
                 unknown(),
-                KitError::Turn(TurnError::new("KitError", reentrant().to_string()))
+                RoomKitError::Turn(TurnError::new("RoomKitError", reentrant().to_string()))
             ]
         );
     }

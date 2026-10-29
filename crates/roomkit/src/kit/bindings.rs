@@ -15,8 +15,8 @@ use super::options::{
     UnmuteOptions, UpdateBindingMetadataOptions,
 };
 use crate::driver;
-use crate::error::KitError;
-use crate::store::{ConversationStore, StoreError};
+use crate::error::RoomKitError;
+use crate::store::ConversationStore;
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Attaches a registered channel to a room with the binding `options`
@@ -34,18 +34,18 @@ impl<S: ConversationStore> RoomKit<S> {
     /// # Errors
     ///
     /// Refuses in the Python implementation's order (`channel_ops.py`):
-    /// [`KitError::Lifecycle`] for the visibility `internal`, which only the
-    /// framework writes (gap G-041); then [`KitError::Lifecycle`] when the
-    /// room does not exist or is not of the organization `options` names;
-    /// then [`KitError::UnknownChannel`] for a channel not registered; then
-    /// [`KitError::Lifecycle`] for a host channel bound as an intelligence
-    /// channel (RFC §6.2, §10.5).
+    /// [`RoomKitError::Value`] for the visibility `internal`, which only the
+    /// framework writes (gap G-041); then [`RoomKitError::RoomNotFound`] when
+    /// the room does not exist or is not of the organization `options`
+    /// names; then [`RoomKitError::ChannelNotRegistered`] for a channel not
+    /// registered; then [`RoomKitError::Value`] for a host channel bound as
+    /// an intelligence channel (RFC §6.2, §10.5).
     pub async fn attach_channel(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
         options: AttachChannelOptions,
-    ) -> Result<ChannelBinding, KitError> {
+    ) -> Result<ChannelBinding, RoomKitError> {
         if options.visibility == Visibility::Internal {
             return Err(LifecycleError::InternalVisibility.into());
         }
@@ -79,15 +79,12 @@ impl<S: ConversationStore> RoomKit<S> {
         room_id: &RoomId,
         channel_id: &ChannelId,
         organization_id: Option<String>,
-    ) -> KitError {
+    ) -> RoomKitError {
         match self
             .get_room(room_id, GetRoomOptions { organization_id })
             .await
         {
-            Ok(_) => KitError::UnknownChannel(channel_id.clone()),
-            Err(KitError::Store(StoreError::RoomNotFound(missing))) => {
-                LifecycleError::RoomNotFound(missing).into()
-            }
+            Ok(_) => RoomKitError::ChannelNotRegistered(channel_id.clone()),
             Err(error) => error,
         }
     }
@@ -101,7 +98,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room is not of the
+    /// Returns [`RoomKitError::RoomNotFound`] when the room is not of the
     /// organization `options` names, or does not exist and the call names
     /// one.
     pub async fn detach_channel(
@@ -109,7 +106,7 @@ impl<S: ConversationStore> RoomKit<S> {
         room_id: &RoomId,
         channel_id: &ChannelId,
         options: DetachChannelOptions,
-    ) -> Result<bool, KitError> {
+    ) -> Result<bool, RoomKitError> {
         let scoped = options.organization_id.is_some();
         let detach = DetachChannel::new(
             self.config(),
@@ -142,14 +139,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Lifecycle`] when the room does not exist, is not
-    /// of the organization `options` names, or does not bind the channel.
+    /// Returns [`RoomKitError::RoomNotFound`] when the room does not exist or
+    /// is not of the organization `options` names, and
+    /// [`RoomKitError::ChannelNotFound`] when it does not bind the channel.
     pub async fn mute(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
         options: MuteOptions,
-    ) -> Result<ChannelBinding, KitError> {
+    ) -> Result<ChannelBinding, RoomKitError> {
         let update = BindingUpdate::mute();
         self.update_binding(room_id, channel_id, update, options.organization_id)
             .await
@@ -166,7 +164,7 @@ impl<S: ConversationStore> RoomKit<S> {
         room_id: &RoomId,
         channel_id: &ChannelId,
         options: UnmuteOptions,
-    ) -> Result<ChannelBinding, KitError> {
+    ) -> Result<ChannelBinding, RoomKitError> {
         let update = BindingUpdate::unmute();
         self.update_binding(room_id, channel_id, update, options.organization_id)
             .await
@@ -184,7 +182,7 @@ impl<S: ConversationStore> RoomKit<S> {
         channel_id: &ChannelId,
         access: Access,
         options: SetAccessOptions,
-    ) -> Result<ChannelBinding, KitError> {
+    ) -> Result<ChannelBinding, RoomKitError> {
         let update = BindingUpdate {
             access: Some(access),
             ..BindingUpdate::default()
@@ -197,7 +195,7 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// As [`mute`](Self::mute), and [`KitError::Lifecycle`] for the
+    /// As [`mute`](Self::mute), and [`RoomKitError::Value`] for the
     /// visibility `internal`, which only the framework writes (gap G-041).
     pub async fn set_visibility(
         &self,
@@ -205,7 +203,7 @@ impl<S: ConversationStore> RoomKit<S> {
         channel_id: &ChannelId,
         visibility: Visibility,
         options: SetVisibilityOptions,
-    ) -> Result<ChannelBinding, KitError> {
+    ) -> Result<ChannelBinding, RoomKitError> {
         let update = BindingUpdate::visibility(visibility);
         self.update_binding(room_id, channel_id, update, options.organization_id)
             .await
@@ -223,7 +221,7 @@ impl<S: ConversationStore> RoomKit<S> {
         channel_id: &ChannelId,
         metadata: Metadata,
         options: UpdateBindingMetadataOptions,
-    ) -> Result<ChannelBinding, KitError> {
+    ) -> Result<ChannelBinding, RoomKitError> {
         let update = BindingUpdate {
             metadata,
             ..BindingUpdate::default()
@@ -236,17 +234,16 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Store`] with `RoomNotFound` when the room is not
+    /// Returns [`RoomKitError::Store`] with `RoomNotFound` when the room is not
     /// of the organization `options` names, or does not exist and the call
-    /// names one, and [`KitError::Lifecycle`] with
-    /// [`LifecycleError::ChannelNotBound`] when the room does not bind the
-    /// channel.
+    /// names one, and [`RoomKitError::ChannelNotFound`] when the room does
+    /// not bind the channel.
     pub async fn get_binding(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
         options: GetBindingOptions,
-    ) -> Result<ChannelBinding, KitError> {
+    ) -> Result<ChannelBinding, RoomKitError> {
         let bindings = self
             .list_bindings(
                 room_id,
@@ -258,11 +255,9 @@ impl<S: ConversationStore> RoomKit<S> {
         bindings
             .into_iter()
             .find(|binding| &binding.channel_id == channel_id)
-            .ok_or_else(|| {
-                KitError::Lifecycle(LifecycleError::ChannelNotBound {
-                    room_id: room_id.clone(),
-                    channel_id: channel_id.clone(),
-                })
+            .ok_or_else(|| RoomKitError::ChannelNotFound {
+                room_id: room_id.clone(),
+                channel_id: channel_id.clone(),
             })
     }
 
@@ -272,14 +267,14 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Store`] with `RoomNotFound` when the room is not
+    /// Returns [`RoomKitError::Store`] with `RoomNotFound` when the room is not
     /// of the organization `options` names, or does not exist and the call
     /// names one, and when the store fails the read.
     pub async fn list_bindings(
         &self,
         room_id: &RoomId,
         options: ListBindingsOptions,
-    ) -> Result<Vec<ChannelBinding>, KitError> {
+    ) -> Result<Vec<ChannelBinding>, RoomKitError> {
         self.reached(room_id, options.organization_id.as_deref())
             .await?;
         Ok(self.store().list_bindings(room_id).await?)
@@ -297,7 +292,7 @@ impl<S: ConversationStore> RoomKit<S> {
         &self,
         room_id: &RoomId,
         options: ListMembersOptions,
-    ) -> Result<Vec<Participant>, KitError> {
+    ) -> Result<Vec<Participant>, RoomKitError> {
         self.reached(room_id, options.organization_id.as_deref())
             .await?;
         let mut members = self.store().list_participants(room_id).await?;
@@ -316,7 +311,7 @@ impl<S: ConversationStore> RoomKit<S> {
         channel_id: &ChannelId,
         update: BindingUpdate,
         organization_id: Option<String>,
-    ) -> Result<ChannelBinding, KitError> {
+    ) -> Result<ChannelBinding, RoomKitError> {
         let operation = UpdateBinding::new(
             self.config(),
             room_id.clone(),

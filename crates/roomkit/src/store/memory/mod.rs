@@ -252,7 +252,7 @@ impl ConversationStore for InMemoryStore {
     async fn create_room(&self, room: Room) -> Result<(), StoreError> {
         let mut rooms = self.rooms();
         if rooms.contains_key(&room.id) {
-            return Err(StoreError::RoomExists(room.id));
+            return Err(StoreError::RoomAlreadyExists(room.id));
         }
         rooms.insert(
             room.id.clone(),

@@ -14,7 +14,7 @@ use futures_core::Stream;
 use roomkit::model::{ChannelId, Metadata, RoomContext, ToolCall};
 use roomkit::transcript::Role;
 use roomkit::{
-    HookExecution, HookTrigger, KitError, ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict,
+    HookExecution, HookTrigger, RoomKitError, ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -229,7 +229,7 @@ pub(crate) fn register_tool_hook(
     spec: &Value,
     trigger: HookTrigger,
     execution: HookExecution,
-) -> Result<Result<(), KitError>, String> {
+) -> Result<Result<(), RoomKitError>, String> {
     if let Some(member) = NOT_FOR_TOOL_HOOKS.iter().find(|m| spec.get(**m).is_some()) {
         return Err(format!("{member}: a tool hook takes none"));
     }

@@ -25,9 +25,9 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CloseRoomOptions,
-    ConversationStore, CreateRoomOptions, FrameworkEvent, HookTrigger, InboundResult, KitError,
-    LifecycleError, PauseRoomOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions,
-    RoomKit, TransitionReason, text_of,
+    ConversationStore, CreateRoomOptions, FrameworkEvent, HookTrigger, InboundResult,
+    PauseRoomOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,
+    RoomKitError, TransitionReason, text_of,
 };
 
 use shared::{Checks, Clock, Log};
@@ -181,9 +181,7 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
         refused.iter().all(|result| {
             matches!(
                 result,
-                Err(KitError::Lifecycle(
-                    LifecycleError::TransitionRefused { .. }
-                ))
+                Err(RoomKitError::TransitionRefused { .. })
             )
         }) && archived_again.status == RoomStatus::Archived,
     );

@@ -7,11 +7,11 @@
 mod history;
 mod servers;
 mod support;
-use roomkit::model::hook::AllowOptions;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelType, DirectEvent, EventContent, EventType, InboundMessage, Metadata, RoomEvent,
     TextContent, ToolCallContent, ToolCallOutcome,
@@ -19,8 +19,8 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
-    HookTrigger, KitError, MuteOptions, ProcessInboundOptions, RegistrationError, RoomKit,
-    RoomKitOptions, SendEventOptions, ToolUse, ToolVerdict, current_turn,
+    HookTrigger, MuteOptions, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
+    SendEventOptions, ToolUse, ToolVerdict, current_turn,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, ToolDefinition, ToolError, ToolOutput, Tools};
@@ -98,12 +98,7 @@ async fn a_tool_trigger_takes_no_event_hook() {
     let registered = room.kit.hook(spec, |_event, _context| async {
         Ok(roomkit::model::HookResult::allow(AllowOptions::default()))
     });
-    assert!(matches!(
-        registered,
-        Err(KitError::Registration(
-            RegistrationError::PayloadMismatch { .. }
-        ))
-    ));
+    assert!(matches!(registered, Err(RoomKitError::Value(_))));
 }
 
 /// RFC §9.3: each SYNC hook reads the result as the one before left it;

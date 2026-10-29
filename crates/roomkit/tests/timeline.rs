@@ -9,8 +9,8 @@ use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId, TextContent};
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, GetTimelineOptions, KitError, ProcessInboundOptions,
-    RoomKit, RoomKitOptions, StoreError, text_of,
+    AttachChannelOptions, CreateRoomOptions, GetTimelineOptions, ProcessInboundOptions, RoomKit,
+    RoomKitError, RoomKitOptions, text_of,
 };
 
 fn room_id() -> RoomId {
@@ -105,8 +105,8 @@ async fn a_room_that_does_not_exist_or_is_another_organization_s_is_not_found() 
             own.map(|events| events.len()).ok()
         ),
         (
-            Some(KitError::Store(StoreError::RoomNotFound(missing))),
-            Some(KitError::Store(StoreError::RoomNotFound(room_id()))),
+            Some(RoomKitError::RoomNotFound(missing)),
+            Some(RoomKitError::RoomNotFound(room_id())),
             Some(4)
         )
     );
@@ -125,8 +125,5 @@ async fn get_timeline_reads_the_room_before_the_query() {
         ..Default::default()
     };
     let read = kit.get_timeline(&missing, both_cursors).await;
-    assert_eq!(
-        read,
-        Err(KitError::Store(StoreError::RoomNotFound(missing)))
-    );
+    assert_eq!(read, Err(RoomKitError::RoomNotFound(missing)));
 }

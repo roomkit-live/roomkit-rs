@@ -104,16 +104,15 @@ pub mod model {
     pub use roomkit_core::model::{HOST_CHANNEL_ID, MAX_COMPOSITE_DEPTH, ToolCall};
 }
 pub use roomkit_core::ops::{
-    CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, ConfigError, FrameworkEvent,
-    InboundError, LifecycleChange, LifecycleError, LifecyclePayload, MutationError, ProtocolError,
-    RefusedOperation, TransitionReason, default_inbound_event,
+    CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, FrameworkEvent, LifecycleChange,
+    LifecyclePayload, RefusedOperation, TransitionReason, default_inbound_event,
 };
 pub use roomkit_core::rules::addresses::{
     AddressForm, Addressing, CountryCode, InvalidCountryCode,
 };
 pub use roomkit_core::rules::edits::{is_deleted, is_edited};
 pub use roomkit_core::rules::hook_registry::{
-    HookExecution, HookFilter, HookId, HookSpec, HookTrigger, RegistrationError,
+    HookExecution, HookFilter, HookId, HookSpec, HookTrigger,
 };
 pub use roomkit_core::rules::instructions::turn_context;
 pub use roomkit_core::rules::lifecycle::Transition;
@@ -123,7 +122,7 @@ pub use roomkit_core::rules::{visibility_allows, visible_events};
 
 pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::context::keep_context;
-pub use self::error::KitError;
+pub use self::error::RoomKitError;
 pub use self::hooks::{HookError, HookFuture, HookHandler, HookReturn};
 pub use self::host::HostChannel;
 pub use self::inbound::{DeliveryHandle, InboundResult};

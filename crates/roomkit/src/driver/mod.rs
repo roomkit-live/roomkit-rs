@@ -23,7 +23,7 @@
 //! The driver never waits for what its own context holds: a lock its
 //! context holds a lease on or stands in the admission order of, asked by
 //! an inbound call, or a ticket's turn in a room's admission order its
-//! context stands in, fails the call with [`KitError::Reentrant`], since
+//! context stands in, fails the call with [`RoomKitError::ReentrantCall`], since
 //! that run waits for this one. An effect
 //! that carries a deadline (RFC §13.6) is given up on past it: a lock or a
 //! turn waited for is not taken, a call in flight is dropped, and the
@@ -54,7 +54,7 @@ use self::inbound::Caller;
 pub(crate) use self::inbound::{InboundOutput, Ran, Record, ended, run_inbound};
 use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::tasks::Marks;
@@ -93,15 +93,15 @@ impl Clocks {
 ///
 /// # Errors
 ///
-/// Returns [`KitError::ShutDown`] once the kit is shut down, and
-/// [`KitError::Reentrant`] when the operation waited for a ticket's turn in
+/// Returns [`RoomKitError::KitClosed`] once the kit is shut down, and
+/// [`RoomKitError::ReentrantCall`] when the operation waited for a ticket's turn in
 /// an admission order its own execution context stands in, which was
 /// refused; a protocol error or a stall is a defect of this crate.
 pub(crate) async fn run<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     operation: O,
-) -> Result<O::Output, KitError> {
+) -> Result<O::Output, RoomKitError> {
     run_on(inner, inner.environment(), call, operation).await
 }
 
@@ -117,7 +117,7 @@ pub(crate) async fn run_on<S: ConversationStore, O: Operation>(
     environment: Arc<dyn Environment + Send + Sync>,
     call: &'static str,
     operation: O,
-) -> Result<O::Output, KitError> {
+) -> Result<O::Output, RoomKitError> {
     inner.open()?;
     drive(inner, environment, call, operation, Leases::Granted, None).await
 }
@@ -136,7 +136,7 @@ async fn drive<S: ConversationStore, O: Operation>(
     operation: O,
     leases: Leases,
     caller: Option<&mut Caller>,
-) -> Result<O::Output, KitError> {
+) -> Result<O::Output, RoomKitError> {
     let (shared, adoptions) = RunShared::new();
     let driver = Driver {
         calls: JoinSet::new(),
@@ -251,7 +251,7 @@ enum Event<'kit> {
 }
 
 impl<'kit, S: ConversationStore> Driver<'kit, S> {
-    async fn drive<O: Operation>(mut self, mut operation: O) -> Result<O::Output, KitError> {
+    async fn drive<O: Operation>(mut self, mut operation: O) -> Result<O::Output, RoomKitError> {
         loop {
             let step = operation.poll(&*self.environment);
             for notice in step.notices {
@@ -340,7 +340,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         &mut self,
         operation: &mut O,
         effects: Vec<Effect>,
-    ) -> Result<bool, KitError> {
+    ) -> Result<bool, RoomKitError> {
         let mut answered = false;
         for effect in effects {
             if let Some((id, outcome)) = self.start(effect) {
@@ -357,7 +357,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// before the call's decision expires the operation, whose requests
     /// within the call's bound the run then drops: the operation goes on to
     /// its end, detached (decision 1 of step 2b, gap G-076).
-    async fn wait<O: Operation>(&mut self, operation: &mut O) -> Result<(), KitError> {
+    async fn wait<O: Operation>(&mut self, operation: &mut O) -> Result<(), RoomKitError> {
         loop {
             match self.next_event().await {
                 Some(Event::CallerGone) => {
@@ -390,7 +390,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     return Ok(());
                 }
                 // The operation waits for effects that were never issued.
-                None => return Err(KitError::Stalled),
+                None => return Err(stalled()),
             }
         }
     }
@@ -777,9 +777,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
 
     /// The operation's output, or the refusal of a wait on what the run's
     /// own context holds.
-    fn finish<T>(mut self, output: T) -> Result<T, KitError> {
+    fn finish<T>(mut self, output: T) -> Result<T, RoomKitError> {
         match self.refused.take() {
-            Some(room_id) => Err(KitError::Reentrant {
+            Some(room_id) => Err(RoomKitError::ReentrantCall {
                 room_id,
                 call: self.call,
             }),
@@ -812,4 +812,12 @@ async fn within<T>(deadline: Option<Instant>, future: impl Future<Output = T>) -
         Some(deadline) => tokio::time::timeout_at(deadline, future).await.ok(),
         None => Some(future.await),
     }
+}
+
+/// What a run that waits for effects the driver never received fails with,
+/// or one answered for a call it never made: a defect of this crate.
+pub(crate) fn stalled() -> RoomKitError {
+    RoomKitError::Internal(
+        "an operation's run stalled: it waited for effects the driver never received".to_owned(),
+    )
 }

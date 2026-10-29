@@ -151,8 +151,8 @@ async fn both_cursors_are_refused() {
     };
     assert_eq!(
         store.list_events(&room_id(), &both).await,
-        Err(StoreError::InvalidArgument(
-            "after_index and before_index are mutually exclusive"
+        Err(StoreError::Value(
+            "after_index and before_index are mutually exclusive".to_owned()
         ))
     );
 }
@@ -404,8 +404,8 @@ async fn a_filter_that_admits_nothing_by_construction_is_refused() {
                 store.get_event_count(&room_id(), Some(filter)).await
             ),
             (
-                Err(StoreError::InvalidArgument(reason)),
-                Err(StoreError::InvalidArgument(reason))
+                Err(StoreError::Value(reason.to_owned())),
+                Err(StoreError::Value(reason.to_owned()))
             )
         );
     }

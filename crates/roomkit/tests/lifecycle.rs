@@ -5,11 +5,11 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
-use roomkit::model::hook::AllowOptions;
 use std::future::{Future, ready};
 use std::sync::Arc;
 use std::time::Duration;
 
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     Access, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
     ChannelType, InboundMessage, Metadata, Participant, ParticipantId, ParticipantStatus,
@@ -22,9 +22,9 @@ use roomkit::{
     AttachChannelOptions, CHANNEL_NOT_REGISTERED, Channel, ChannelDeclaration, ChannelError,
     CheckAllTimersOptions, CheckRoomTimersOptions, CloseRoomOptions, ConversationStore,
     CreateRoomOptions, DetachChannelOptions, FrameworkEvent, GetBindingOptions, HookTrigger,
-    InboundError, KitError, LifecycleError, ListMembersOptions, MuteOptions, ProcessInboundOptions,
-    ReopenRoomOptions, RoomKit, RoomKitOptions, SetAccessOptions, SetVisibilityOptions,
-    TransitionReason, UnmuteOptions, UpdateBindingMetadataOptions,
+    ListMembersOptions, MuteOptions, ProcessInboundOptions, ReopenRoomOptions, RoomKit,
+    RoomKitError, RoomKitOptions, SetAccessOptions, SetVisibilityOptions, TransitionReason,
+    UnmuteOptions, UpdateBindingMetadataOptions,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -441,9 +441,7 @@ mod unregistering {
             .await;
         assert_eq!(
             refused,
-            Err(KitError::Inbound(InboundError::UnknownChannel(channel(
-                "sms"
-            ))))
+            Err(RoomKitError::ChannelNotRegistered(channel("sms")))
         );
     }
 
@@ -762,6 +760,23 @@ mod creating {
             .collect();
         assert_eq!(bound, ["ai"]);
     }
+
+    /// RFC §14.3: a room created twice is refused, nothing written, as
+    /// Python's `RoomAlreadyExistsError` (probe
+    /// `tasks/probes/step5-lot2/store_refusals.py`).
+    #[tokio::test]
+    async fn a_room_created_twice_is_refused_as_existing_already() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let options = || CreateRoomOptions {
+            room_id: Some(room_id()),
+            ..Default::default()
+        };
+        kit.create_room(options()).await.unwrap();
+        assert_eq!(
+            kit.create_room(options()).await.err(),
+            Some(RoomKitError::RoomAlreadyExists(room_id()))
+        );
+    }
 }
 
 mod metadata_updates {
@@ -956,15 +971,17 @@ mod bindings {
         assert_eq!(
             refused,
             vec![
-                Some(KitError::Lifecycle(LifecycleError::InternalVisibility)),
-                Some(KitError::Lifecycle(LifecycleError::RoomNotFound(
-                    missing.clone()
-                ))),
-                Some(KitError::Lifecycle(LifecycleError::RoomNotFound(missing))),
-                Some(KitError::UnknownChannel(channel("ghost"))),
-                Some(KitError::Lifecycle(LifecycleError::HostAsIntelligence(
-                    channel("host")
-                ))),
+                Some(RoomKitError::Value(
+                    "only the framework writes the visibility internal".to_owned()
+                )),
+                Some(RoomKitError::RoomNotFound(missing.clone())),
+                Some(RoomKitError::RoomNotFound(missing)),
+                Some(RoomKitError::ChannelNotRegistered(channel("ghost"))),
+                Some(RoomKitError::Value(
+                    "Channel \"host\" is a host channel: it can be attached as a transport \
+                     only, never as an intelligence channel"
+                        .to_owned()
+                )),
             ]
         );
     }
@@ -1036,10 +1053,10 @@ mod bindings {
         assert_eq!(
             kit.get_binding(&room_id(), &channel("ws"), GetBindingOptions::default())
                 .await,
-            Err(KitError::Lifecycle(LifecycleError::ChannelNotBound {
+            Err(RoomKitError::ChannelNotFound {
                 room_id: room_id(),
                 channel_id: channel("ws")
-            }))
+            })
         );
     }
 

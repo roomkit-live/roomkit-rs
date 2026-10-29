@@ -32,8 +32,8 @@ use roomkit::model::{
     ChannelId, InboundMessage, Metadata, Participant, ParticipantId, RoomId, TextContent,
 };
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, InboundError, KitError,
-    PostOptions, ProcessInboundOptions, RoomKit,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, PostOptions, ProcessInboundOptions,
+    RoomKit, RoomKitError,
 };
 
 use shared::{Checks, ScriptedAgent, SmsNumber, print_timeline, timeline};
@@ -176,10 +176,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "a post as the customer is refused, nothing sent",
-        matches!(
-            refused,
-            Err(KitError::Inbound(InboundError::ParticipantNotFound { .. }))
-        ),
+        matches!(refused, Err(RoomKitError::ParticipantNotFound { .. })),
     );
     Ok(checks.finish())
 }

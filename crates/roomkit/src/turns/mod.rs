@@ -70,7 +70,7 @@ use self::wire::{
     RoomCallResult,
 };
 use crate::context::ExecutionContext;
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::tasks::{Marks, Unit};
 use crate::turn::TurnKit;
 
@@ -532,7 +532,7 @@ impl Turns {
         self: &Arc<Self>,
         kit: Arc<dyn TurnKit>,
         message: OwnerMessage,
-    ) -> Result<serde_json::Value, KitError> {
+    ) -> Result<serde_json::Value, RoomKitError> {
         let observers = self.observers();
         let parsed: OwnerMessageEnvelope = cross(
             &observers,
@@ -607,8 +607,8 @@ fn cross<T: Serialize + serde::de::DeserializeOwned>(
     observers: &Observers,
     carried: Carried,
     message: &T,
-) -> Result<T, KitError> {
-    let failed = |why: String| KitError::Turn(TurnError::new("frame_invalid", why));
+) -> Result<T, RoomKitError> {
+    let failed = |why: String| RoomKitError::Turn(TurnError::new("frame_invalid", why));
     let raw = serde_json::to_string(message).map_err(|error| failed(error.to_string()))?;
     if raw.len() > MAX_MESSAGE_BYTES {
         return Err(failed(format!(

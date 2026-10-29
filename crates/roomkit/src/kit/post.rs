@@ -2,11 +2,11 @@
 //! embeds the kit says in a room in its own name.
 
 use roomkit_core::model::{ChannelId, EventContent, RoomEvent, RoomId};
-use roomkit_core::ops::{ConfigError, Entry};
+use roomkit_core::ops::Entry;
 
 use super::RoomKit;
 use super::options::PostOptions;
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::host::HostChannel;
 use crate::store::ConversationStore;
 
@@ -36,24 +36,21 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Inbound`], nothing written, with
-    /// [`InboundError::UnknownChannel`](crate::InboundError::UnknownChannel)
-    /// for a channel no one registered,
-    /// [`InboundError::NotAHostChannel`](crate::InboundError::NotAHostChannel)
-    /// for one of another type or for the id `host` held by one,
-    /// [`InboundError::RoomNotFound`](crate::InboundError::RoomNotFound),
-    /// [`InboundError::ParticipantNotFound`](crate::InboundError::ParticipantNotFound)
-    /// for a speaker the host channel does not reach, and
-    /// [`InboundError::Refused`](crate::InboundError::Refused) as
-    /// `send_event`'s: `room_closed`, `source_unbound` for a room the host
-    /// channel was detached from, `process_timeout`; or with what
-    /// `send_event` raises.
+    /// As Python's `post` raises, nothing written:
+    /// [`RoomKitError::ChannelNotRegistered`] for a channel no one
+    /// registered, [`RoomKitError::Value`] for one of another type or for
+    /// the id `host` held by one, [`RoomKitError::RoomNotFound`],
+    /// [`RoomKitError::ParticipantNotFound`] for a speaker the host channel
+    /// does not reach, and `send_event`'s refusals:
+    /// [`RoomKitError::RoomClosed`], [`RoomKitError::ChannelNotFound`] for a
+    /// room the host channel was detached from,
+    /// [`RoomKitError::ProcessTimeout`]; or what `send_event` raises.
     pub async fn post(
         &self,
         room_id: &RoomId,
         content: impl Into<EventContent>,
         options: PostOptions,
-    ) -> Result<RoomEvent, KitError> {
+    ) -> Result<RoomEvent, RoomKitError> {
         let content = content.into();
         if options.channel_id.is_none() {
             self.register_host_channel()?;
@@ -65,19 +62,19 @@ impl<S: ConversationStore> RoomKit<S> {
             post: Box::new(options.post(content)),
         };
         let entered = self.enter(entry, POST, false).await?;
-        entered.result.event.ok_or(KitError::NoEvent)
+        entered.result.event.ok_or_else(super::inject::no_event)
     }
 
     /// Registers the kit's own host channel, when no channel holds its id:
     /// a concurrent first post's registration stands. A channel of another
     /// type that holds the id is the post's to refuse.
-    fn register_host_channel(&self) -> Result<(), KitError> {
+    fn register_host_channel(&self) -> Result<(), RoomKitError> {
         let host = ChannelId::host();
         if self.config().channel(&host).is_some() {
             return Ok(());
         }
         match self.register_channel(HostChannel::new()) {
-            Err(KitError::Config(ConfigError::DuplicateChannel(_))) | Ok(()) => Ok(()),
+            Err(RoomKitError::ChannelAlreadyRegistered(_)) | Ok(()) => Ok(()),
             Err(error) => Err(error),
         }
     }

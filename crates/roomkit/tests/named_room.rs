@@ -6,12 +6,12 @@
 //! caller's organization, and the participants the host stores.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-use roomkit::model::hook::AllowOptions;
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     HookResult, InboundMessage, Metadata, Participant, ParticipantId, RoomContext, RoomEvent,
@@ -22,8 +22,8 @@ use roomkit::testing::{
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundError,
-    KitError, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions,
+    CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger, ProcessInboundOptions,
+    RoomFilter, RoomKit, RoomKitError, RoomKitOptions,
 };
 use tokio::sync::{Notify, broadcast, mpsc};
 
@@ -177,10 +177,7 @@ async fn a_room_of_another_organization_is_not_found_with_nothing_written() {
             refused,
             kit.store().list_bindings(&room_id()).await.unwrap().len()
         ),
-        (
-            Err(KitError::Inbound(InboundError::RoomNotFound(room_id()))),
-            0
-        )
+        (Err(RoomKitError::RoomNotFound(room_id())), 0)
     );
 }
 

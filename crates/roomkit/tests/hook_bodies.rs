@@ -13,12 +13,12 @@
 //! does not stop fails at once rather than run forever.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-use roomkit::model::hook::AllowOptions;
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     DeleteContent, EditContent, EventContent, EventDirection, EventId, EventSource, EventType,
@@ -27,8 +27,8 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, DeleteEventOptions, HookTrigger, InboundResult, InboundRoomRouter, KitError,
-    MutationError, PostOptions, ProcessInboundOptions, RoomKit, RoomKitOptions, RouteOptions,
+    CreateRoomOptions, DeleteEventOptions, HookTrigger, InboundResult, InboundRoomRouter,
+    PostOptions, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, RouteOptions,
     RouterFuture, SendEventOptions, UpdateEventOptions, keep_context, text_of,
 };
 
@@ -637,7 +637,7 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
         .await
         .unwrap();
     let mut events = kit.subscribe();
-    let failures: Kept<KitError> = kept();
+    let failures: Kept<RoomKitError> = kept();
     let (hook_kit, hook_failures) = (kit.clone(), Arc::clone(&failures));
     kit.observe("judge", HookTrigger::AfterBroadcast, move |event, _| {
         let (kit, failures) = (hook_kit.clone(), Arc::clone(&hook_failures));
@@ -781,7 +781,7 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
     for deleting in [false, true] {
         let kit = room(1).await;
         // A refused change's error, or `None` for a message stored capped.
-        let refused: Kept<Option<KitError>> = kept();
+        let refused: Kept<Option<RoomKitError>> = kept();
         let ran: Kept<()> = kept();
         let trigger = if deleting {
             HookTrigger::OnEventDeleted
@@ -862,7 +862,7 @@ async fn a_hook_changing_its_room_on_every_change_stops_at_the_cap() {
         let expected = if deleting {
             (BUDGET / 2 + 1, vec![None])
         } else {
-            let capped = KitError::Mutation(MutationError::ReentryLoopCap(room_id()));
+            let capped = RoomKitError::ReentryLoopCap(room_id());
             (BUDGET + 1, vec![Some(capped)])
         };
         assert_eq!(
@@ -898,7 +898,7 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
             )
             .await
             .unwrap();
-        let refused: Kept<KitError> = kept();
+        let refused: Kept<RoomKitError> = kept();
         let (hook_kit, hook_refused) = (kit.clone(), Arc::clone(&refused));
         kit.observe("bulk", HookTrigger::AfterBroadcast, move |event, _| {
             let (kit, refused, spare) = (
@@ -956,7 +956,7 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
                 len(&agent.asked)
             ),
             (
-                vec![KitError::Mutation(MutationError::ReentryLoopCap(room_id()))],
+                vec![RoomKitError::ReentryLoopCap(room_id())],
                 Some("hi".to_owned()),
                 1
             ),
@@ -970,7 +970,7 @@ async fn a_direct_change_past_the_cap_writes_nothing() {
 struct Updating {
     kit: RoomKit,
     target: Arc<Mutex<Option<EventId>>>,
-    failures: Kept<KitError>,
+    failures: Kept<RoomKitError>,
 }
 
 impl Channel for Updating {
@@ -1006,7 +1006,7 @@ impl Channel for Updating {
     }
 }
 
-async fn update_sixty_times(kit: &RoomKit, target: &EventId, failures: &Kept<KitError>) {
+async fn update_sixty_times(kit: &RoomKit, target: &EventId, failures: &Kept<RoomKitError>) {
     for n in 0..60 {
         let mut metadata = roomkit::model::Metadata::new();
         metadata.insert("n".to_owned(), n.into());
@@ -1028,7 +1028,7 @@ async fn update_sixty_times(kit: &RoomKit, target: &EventId, failures: &Kept<Kit
 async fn work_outside_a_hook_body_draws_nothing() {
     for locked_hook in [false, true] {
         let kit = room(1).await;
-        let failures: Kept<KitError> = kept();
+        let failures: Kept<RoomKitError> = kept();
         let target_id = Arc::new(Mutex::new(None));
         if locked_hook {
             let (hook_kit, hook_failures, hook_target) =
@@ -1224,7 +1224,7 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
             }
         })
         .unwrap();
-        let failures: Kept<KitError> = kept();
+        let failures: Kept<RoomKitError> = kept();
         let (hook_kit, hook_failures, hook_target) =
             (kit.clone(), Arc::clone(&failures), target.clone());
         let mut spec = roomkit::HookSpec::new(

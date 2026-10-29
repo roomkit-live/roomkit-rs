@@ -12,11 +12,11 @@
 //! invariants hold for the interleavings it met, not for every one.
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
-use roomkit::model::hook::AllowOptions;
 use std::sync::Arc;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelId, ChannelType, EventStatus, EventType, HookResult, InboundMessage, RoomId, TextContent,
 };

@@ -1,12 +1,12 @@
 //! The scripted parts of a scenario: gates, reactions, channels and hooks
 //! (roomkit-specs `conformance/README.md`, "Scripted channels", "Scripted
 //! hooks"), built on the tokio runtime.
-use roomkit::model::hook::AllowOptions;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
+use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelOutput, ChannelType, HookResult, InboundMessage, RoomContext, RoomEvent,

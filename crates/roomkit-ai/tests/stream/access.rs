@@ -1,11 +1,11 @@
 //! What a streaming channel reads once the room no longer lets it read
 //! the answer, or once a row's visibility keeps the row from it (RFC §6.1,
 //! §7.2, §7.5, §12.2 step 14s; review of step 4 milestone 6).
-use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit::model::{EventStatus, EventType, HookResult, Visibility};
 use roomkit::{
     DetachChannelOptions, HookExecution, HookSpec, HookTrigger, MuteOptions, RoomKit,

@@ -10,7 +10,7 @@ use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTr
 
 use super::{RoomKit, write};
 use crate::channel::{Channel, DynChannel};
-use crate::error::KitError;
+use crate::error::RoomKitError;
 use crate::hooks::{HookError, HookHandler, HookReturn, Observer};
 use crate::registered::{Registered, RegisteredChannel};
 use crate::store::ConversationStore;
@@ -21,9 +21,10 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Config`] when a channel with its id is registered
-    /// already.
-    pub fn register_channel(&self, channel: impl Channel) -> Result<(), KitError> {
+    /// Returns [`RoomKitError::ChannelAlreadyRegistered`] when a channel with
+    /// its id is registered already, and [`RoomKitError::Value`] for a
+    /// channel claiming the type `system` (RFC §5.3).
+    pub fn register_channel(&self, channel: impl Channel) -> Result<(), RoomKitError> {
         let declaration = Channel::declaration(&channel);
         let registered = FrameworkEvent::channel_registered(
             declaration.channel_id.clone(),
@@ -36,7 +37,7 @@ impl<S: ConversationStore> RoomKit<S> {
             // The channel is in place before an operation can see its
             // declaration.
             write(&self.inner.channels).insert(channel_id, channel);
-            Ok::<(), KitError>(())
+            Ok::<(), RoomKitError>(())
         })?;
         self.inner.publish(registered);
         Ok(())
@@ -78,7 +79,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// called with, so they need no annotation:
     ///
     /// ```
-    /// # fn register(kit: &roomkit::RoomKit) -> Result<(), roomkit::KitError> {
+    /// # fn register(kit: &roomkit::RoomKit) -> Result<(), roomkit::RoomKitError> {
     /// use roomkit::model::HookResult;
     /// use roomkit::model::hook::{AllowOptions, BlockOptions};
     /// use roomkit::{HookExecution, HookSpec, HookTrigger, text_of};
@@ -107,9 +108,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Registration`] when the registration breaks a rule
-    /// of RFC §9.1, and for a tool trigger (`PayloadMismatch`).
-    pub fn hook<F, Fut>(&self, spec: HookSpec, handler: F) -> Result<HookId, KitError>
+    /// Returns [`RoomKitError::Value`] when the registration breaks a rule of
+    /// RFC §9.1, and for a tool trigger.
+    pub fn hook<F, Fut>(&self, spec: HookSpec, handler: F) -> Result<HookId, RoomKitError>
     where
         F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = HookReturn> + Send + 'static,
@@ -122,19 +123,19 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Registration`] when the registration breaks a rule
+    /// Returns [`RoomKitError::Value`] when the registration breaks a rule
     /// of RFC §9.1.
     pub fn hook_handler(
         &self,
         spec: HookSpec,
         handler: impl HookHandler,
-    ) -> Result<HookId, KitError> {
+    ) -> Result<HookId, RoomKitError> {
         let handler: Arc<dyn HookHandler> = Arc::new(handler);
         let id = self.inner.try_change_config(|config| {
             let id = config.hooks.register(spec)?;
             // The handler is in place before an operation can see the hook.
             write(&self.inner.hooks).insert(id, handler);
-            Ok::<HookId, KitError>(id)
+            Ok::<HookId, RoomKitError>(id)
         })?;
         Ok(id)
     }
@@ -144,8 +145,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Registration`] when the name is taken.
-    pub fn before_broadcast<F, Fut>(&self, name: &str, handler: F) -> Result<HookId, KitError>
+    /// Returns [`RoomKitError::Value`] when the name is taken.
+    pub fn before_broadcast<F, Fut>(&self, name: &str, handler: F) -> Result<HookId, RoomKitError>
     where
         F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = HookReturn> + Send + 'static,
@@ -162,13 +163,13 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Registration`] when the name is taken.
+    /// Returns [`RoomKitError::Value`] when the name is taken.
     pub fn observe<F, Fut>(
         &self,
         name: &str,
         trigger: HookTrigger,
         handler: F,
-    ) -> Result<HookId, KitError>
+    ) -> Result<HookId, RoomKitError>
     where
         F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -189,7 +190,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// An approval that holds the call until a person answers:
     ///
     /// ```
-    /// # fn register(kit: &roomkit::RoomKit) -> Result<(), roomkit::KitError> {
+    /// # fn register(kit: &roomkit::RoomKit) -> Result<(), roomkit::RoomKitError> {
     /// use std::time::Duration;
     /// use roomkit::{ToolHookSpec, ToolUse};
     ///
@@ -206,12 +207,12 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Registration`] when the name is taken.
+    /// Returns [`RoomKitError::Value`] when the name is taken.
     pub fn before_tool_use<F, Fut>(
         &self,
         spec: impl Into<ToolHookSpec>,
         handler: F,
-    ) -> Result<HookId, KitError>
+    ) -> Result<HookId, RoomKitError>
     where
         F: Fn(ToolCallEvent, RoomContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<ToolUse, HookError>> + Send + 'static,
@@ -231,12 +232,12 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Registration`] when the name is taken.
+    /// Returns [`RoomKitError::Value`] when the name is taken.
     pub fn on_tool_call<F, Fut>(
         &self,
         spec: impl Into<ToolHookSpec>,
         handler: F,
-    ) -> Result<HookId, KitError>
+    ) -> Result<HookId, RoomKitError>
     where
         F: Fn(ToolCallEvent, RoomContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<ToolVerdict, HookError>> + Send + 'static,
@@ -256,12 +257,12 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`KitError::Registration`] when the name is taken.
+    /// Returns [`RoomKitError::Value`] when the name is taken.
     pub fn observe_tool_calls<F, Fut>(
         &self,
         spec: impl Into<ToolHookSpec>,
         handler: F,
-    ) -> Result<HookId, KitError>
+    ) -> Result<HookId, RoomKitError>
     where
         F: Fn(ToolCallEvent, RoomContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -273,12 +274,12 @@ impl<S: ConversationStore> RoomKit<S> {
     }
 
     /// Registers the tool hook `spec` with `handler`.
-    fn tool_hook(&self, spec: HookSpec, handler: ToolHandler) -> Result<HookId, KitError> {
+    fn tool_hook(&self, spec: HookSpec, handler: ToolHandler) -> Result<HookId, RoomKitError> {
         self.inner.try_change_config(|config| {
             let id = config.hooks.register_tool_hook(spec)?;
             // The handler is in place before a turn can see the hook.
             write(&self.inner.tool_hooks).insert(id, handler);
-            Ok::<HookId, KitError>(id)
+            Ok::<HookId, RoomKitError>(id)
         })
     }
 }
