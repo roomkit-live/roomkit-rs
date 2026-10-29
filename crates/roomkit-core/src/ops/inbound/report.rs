@@ -85,7 +85,7 @@ pub(super) fn target_changed(
     context: &RoomContext,
     budget: &ReentryBudget,
 ) {
-    let trigger = if change.event_type == EventType::Delete {
+    let trigger = if change.r#type == EventType::Delete {
         HookTrigger::OnEventDeleted
     } else {
         HookTrigger::OnEventUpdated
@@ -105,11 +105,10 @@ pub(super) fn tasks_created(cx: &mut Cx<'_>, tasks: &[Task], context: &RoomConte
 /// The payload of `ON_TASK_CREATED`: a system event whose data names the
 /// task, as a lifecycle hook's names the change.
 fn task_payload(cx: &mut Cx<'_>, task: &Task) -> RoomEvent {
-    let source = EventSource::new(
-        ChannelId::system(),
-        ChannelType::SYSTEM,
-        EventDirection::Outbound,
-    );
+    let source = EventSource {
+        direction: EventDirection::Outbound,
+        ..EventSource::new(ChannelId::system(), ChannelType::SYSTEM)
+    };
     let mut data = Metadata::new();
     data.insert("task_id".to_owned(), task.id.as_str().into());
     data.insert("title".to_owned(), task.title.clone().into());
@@ -119,7 +118,7 @@ fn task_payload(cx: &mut Cx<'_>, task: &Task) -> RoomEvent {
         data,
     });
     let now = cx.env.now();
-    RoomEvent::new(
+    RoomEvent::at(
         cx.env.new_event_id(),
         task.room_id.clone(),
         EventType::TaskCreated,
@@ -162,7 +161,7 @@ pub(super) fn room_refused_as(
             event_id: event.id.clone(),
             status,
             operation,
-            event_type: event.event_type,
+            event_type: event.r#type,
         },
     );
 }

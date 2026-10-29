@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    Access, ChannelId, ChannelType, EventDirection, EventSource, EventType, InboundMessage,
-    Metadata, RoomEvent, RoomId, RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
+    Access, ChannelId, ChannelType, EventSource, InboundMessage, Metadata, RoomEvent, RoomId,
+    RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
@@ -78,19 +78,12 @@ async fn room_of(owner: Option<&str>) -> (RoomKit, Arc<SequentialEnvironment>) {
 
 /// A record of `room_1`, from its WebSocket.
 fn record(text: &str) -> RoomEvent {
-    let source = EventSource::new(
-        channel("ws"),
-        ChannelType::WEBSOCKET,
-        EventDirection::Inbound,
-    );
-    RoomEvent::new(
-        "record_1".parse().unwrap(),
-        room_id(),
-        EventType::Message,
-        source,
-        TextContent::new(text).into(),
-        Timestamp::UNIX_EPOCH,
-    )
+    let source = EventSource::new(channel("ws"), ChannelType::WEBSOCKET);
+    RoomEvent {
+        id: "record_1".parse().unwrap(),
+        created_at: Timestamp::UNIX_EPOCH,
+        ..RoomEvent::new(room_id(), source, TextContent::new(text))
+    }
 }
 
 fn hi() -> InboundMessage {

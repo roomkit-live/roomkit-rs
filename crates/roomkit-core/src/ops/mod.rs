@@ -51,6 +51,9 @@ mod rooting;
 mod section;
 
 pub use config::{ChannelDeclaration, ConfigError, KitConfig};
+#[cfg(feature = "system-environment")]
+#[doc(hidden)]
+pub use environment::SystemEnvironment;
 pub use environment::{Environment, SequentialEnvironment};
 pub use events::{CommitRecord, DeleteEvent, MutationError, UpdateEvent};
 pub use framework_events::{ChainDepthData, FrameworkEvent, RefusedOperation, TransitionReason};

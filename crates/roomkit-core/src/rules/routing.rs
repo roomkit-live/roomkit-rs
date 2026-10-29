@@ -728,9 +728,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::model::{
-        ChannelDirection, EventDirection, EventId, EventSource, EventType, TextContent, Timestamp,
-    };
+    use crate::model::{ChannelDirection, EventId, EventSource, EventType, TextContent, Timestamp};
     use crate::rules::addresses::{CountryCode, PHONE_NUMBER};
 
     const ALICE: &str = "+15550000001";
@@ -1300,18 +1298,14 @@ mod tests {
         use pretty_assertions::assert_eq;
 
         fn event(channel_id: &str, author: Option<&str>, status: EventStatus) -> RoomEvent {
-            let mut source = EventSource::new(
-                channel(channel_id),
-                ChannelType::SMS,
-                EventDirection::Inbound,
-            );
+            let mut source = EventSource::new(channel(channel_id), ChannelType::SMS);
             source.participant_id = author.map(|author| ParticipantId::new(author).unwrap());
-            let mut event = RoomEvent::new(
+            let mut event = RoomEvent::at(
                 EventId::new("evt_1").unwrap(),
                 RoomId::new("room_1").unwrap(),
                 EventType::Message,
                 source,
-                TextContent::new("Hi").into(),
+                TextContent::new("Hi"),
                 Timestamp::UNIX_EPOCH,
             );
             event.status = status;

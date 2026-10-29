@@ -314,7 +314,7 @@ impl Channel for Logging {
             let line = match item {
                 Ok(StreamItem::Text(text)) => format!("text {text:?}"),
                 Ok(StreamItem::Row(row)) => {
-                    format!("row {:?} {:?}", row.event_type, text_of(&row.content))
+                    format!("row {:?} {:?}", row.r#type, text_of(&row.content))
                 }
                 Ok(_) => "other".to_owned(),
                 Err(error) => format!("error {error}"),
@@ -396,7 +396,7 @@ async fn text_written_inside_a_call_crosses_in_order() {
     let stored: Vec<String> = events
         .iter()
         .filter(|event| event.source.channel_id == channel("ai"))
-        .map(|event| format!("{:?} {:?}", event.event_type, text_of(&event.content)))
+        .map(|event| format!("{:?} {:?}", event.r#type, text_of(&event.content)))
         .collect();
     let lines = |lines: &[&str]| {
         lines

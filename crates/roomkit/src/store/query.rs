@@ -207,10 +207,10 @@ impl EventFilter {
         let source = &event.source;
         event_types
             .as_ref()
-            .is_none_or(|types| types.contains(&event.event_type))
+            .is_none_or(|types| types.contains(&event.r#type))
             && exclude_types
                 .as_ref()
-                .is_none_or(|types| !types.contains(&event.event_type))
+                .is_none_or(|types| !types.contains(&event.r#type))
             && visibility
                 .as_ref()
                 .is_none_or(|visibility| &event.visibility == visibility)

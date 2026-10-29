@@ -108,7 +108,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             && shared::timeline(&kit, &appointment)
                 .await?
                 .iter()
-                .all(|event| event.event_type == EventType::ChannelAttached),
+                .all(|event| event.r#type == EventType::ChannelAttached),
     );
     let alices = text(&kit, sms.id(), ALICE, "Confirming tomorrow.").await?;
     checks.expect(

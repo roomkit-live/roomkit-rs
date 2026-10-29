@@ -123,7 +123,7 @@ pub(crate) fn activated_in(events: &[RoomEvent], agent: &ChannelId) -> Vec<Strin
     events
         .iter()
         .filter(|event| {
-            event.event_type == EventType::ToolCallEnd
+            event.r#type == EventType::ToolCallEnd
                 && &event.source.channel_id == agent
                 // The agent writes its rows outbound: one that entered the
                 // room inbound under its id is no call it made.
@@ -179,18 +179,19 @@ mod tests {
         row.arguments = arguments;
         row.result = json!("{\"name\": \"doc-helper\"}");
         row.outcome = Some(ToolCallOutcome::Served);
-        RoomEvent::new(
-            EventId::new("evt_1").unwrap(),
-            RoomId::new("room_1").unwrap(),
-            EventType::ToolCallEnd,
-            EventSource::new(
-                ChannelId::new("assistant").unwrap(),
-                ChannelType::AI,
-                direction,
-            ),
-            EventContent::ToolCall(row),
-            Timestamp::UNIX_EPOCH,
-        )
+        RoomEvent {
+            id: EventId::new("evt_1").unwrap(),
+            r#type: EventType::ToolCallEnd,
+            created_at: Timestamp::UNIX_EPOCH,
+            ..RoomEvent::new(
+                RoomId::new("room_1").unwrap(),
+                EventSource {
+                    direction,
+                    ..EventSource::new(ChannelId::new("assistant").unwrap(), ChannelType::AI)
+                },
+                EventContent::ToolCall(row),
+            )
+        }
     }
 
     /// RFC §24.4: only the agent's own rows count, which it writes

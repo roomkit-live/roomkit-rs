@@ -30,6 +30,50 @@ pub trait Environment {
     fn new_room_id(&self) -> RoomId;
 }
 
+/// The system clock, at millisecond precision, and random version 4 UUIDs as
+/// ids: the environment of a kit, and of the model's filling constructors
+/// (`RoomEvent::new`, `Room::new`, ...), which fill what the Python
+/// implementation's model defaults fill. Compiled under the
+/// `system-environment` feature only: the core's operations read their
+/// clock from the environment their run started with, never this one.
+#[cfg(feature = "system-environment")]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemEnvironment;
+
+#[cfg(feature = "system-environment")]
+impl Environment for SystemEnvironment {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the system environment is where the kit reads the wall clock"
+    )]
+    fn now(&self) -> Timestamp {
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
+            .and_then(|millis| Timestamp::from_unix_millis(millis).ok());
+        millis.unwrap_or_else(|| {
+            tracing::error!(
+                target: "roomkit::environment",
+                "the system clock is outside the supported range; using the Unix epoch"
+            );
+            Timestamp::UNIX_EPOCH
+        })
+    }
+
+    fn new_event_id(&self) -> EventId {
+        EventId::from_u128(uuid::Uuid::new_v4().as_u128())
+    }
+
+    fn new_observation_id(&self) -> ObservationId {
+        ObservationId::from_u128(uuid::Uuid::new_v4().as_u128())
+    }
+
+    fn new_room_id(&self) -> RoomId {
+        RoomId::from_u128(uuid::Uuid::new_v4().as_u128())
+    }
+}
+
 /// A shared environment: a host keeps a handle on the environment its kit
 /// reads, to move a test's clock while the kit runs.
 impl<E: Environment + ?Sized> Environment for Arc<E> {

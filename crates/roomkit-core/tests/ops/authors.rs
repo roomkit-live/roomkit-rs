@@ -4,8 +4,8 @@
 //! `core/_authors.py`), computed for the same room, sources and names.
 
 use roomkit_core::model::{
-    ChannelType, EventDirection, EventSource, EventType, EventUpdates, HookResult, Metadata,
-    Participant, ParticipantId, RoomEvent, TextContent, Timestamp,
+    ChannelType, EventSource, EventType, EventUpdates, HookResult, Metadata, Participant,
+    ParticipantId, RoomEvent, TextContent, Timestamp,
 };
 use roomkit_core::ops::UpdateEvent;
 use roomkit_core::rules::hook_chain::HookOutcome;
@@ -160,15 +160,14 @@ fn a_room_with_no_register_has_it_rebuilt_from_its_whole_timeline() {
         ("old_1", "+15550009", "Alice"),
         ("old_2", "+15550009", "Alice"),
     ] {
-        let mut source =
-            EventSource::new(channel("sms"), ChannelType::SMS, EventDirection::Inbound);
+        let mut source = EventSource::new(channel("sms"), ChannelType::SMS);
         source.participant_id = Some(ParticipantId::new(sender).unwrap());
-        let mut earlier = RoomEvent::new(
+        let mut earlier = RoomEvent::at(
             id.parse().unwrap(),
             room_id(),
             EventType::Message,
             source,
-            TextContent::new("Hi").into(),
+            TextContent::new("Hi"),
             Timestamp::UNIX_EPOCH,
         );
         earlier
@@ -223,14 +222,14 @@ fn a_blocked_message_takes_no_author_and_loses_the_one_it_came_with() {
 fn a_record_committed_outside_the_pipeline_carries_its_author() {
     let mut sim = Sim::new();
     sim.transport("sms");
-    let mut source = EventSource::new(channel("sms"), ChannelType::SMS, EventDirection::Inbound);
+    let mut source = EventSource::new(channel("sms"), ChannelType::SMS);
     source.participant_id = Some(ParticipantId::new("+15551234567").unwrap());
-    let mut record = RoomEvent::new(
+    let mut record = RoomEvent::at(
         "rec_1".parse().unwrap(),
         room_id(),
         EventType::Message,
         source,
-        TextContent::new("Noted").into(),
+        TextContent::new("Noted"),
         Timestamp::UNIX_EPOCH,
     );
     record

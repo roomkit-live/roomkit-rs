@@ -1,7 +1,5 @@
 //! Events: everything that happens in a room (RFC §4.3, §5.2, §8.5).
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -96,10 +94,13 @@ pub enum EventStatus {
 }
 
 /// The direction an event travelled (RFC §5.2): one way, never both.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum EventDirection {
-    /// From outside into the room.
+    /// From outside into the room, the default.
+    #[default]
     Inbound,
     /// From the room towards outside.
     Outbound,
@@ -112,7 +113,8 @@ pub struct EventSource {
     pub channel_id: ChannelId,
     /// That channel's type.
     pub channel_type: ChannelType,
-    /// The direction the event travelled.
+    /// The direction the event travelled, `inbound` by default.
+    #[serde(default)]
     pub direction: EventDirection,
     /// The human behind the event, when there is one.
     #[serde(default)]
@@ -135,16 +137,14 @@ pub struct EventSource {
 }
 
 impl EventSource {
-    /// A source with no participant, provider data or verification.
-    pub fn new(
-        channel_id: ChannelId,
-        channel_type: ChannelType,
-        direction: EventDirection,
-    ) -> Self {
+    /// An inbound source with no participant, provider data or
+    /// verification; an outbound one is written by struct update,
+    /// `EventSource { direction: EventDirection::Outbound, ..EventSource::new(…) }`.
+    pub fn new(channel_id: ChannelId, channel_type: ChannelType) -> Self {
         Self {
             channel_id,
             channel_type,
-            direction,
+            direction: EventDirection::Inbound,
             participant_id: None,
             verification: None,
             external_id: None,
@@ -153,48 +153,6 @@ impl EventSource {
             provider_message_id: None,
         }
     }
-}
-
-/// How much of a response the people it reached took in (RFC §8.5).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum ConsumptionState {
-    /// Taken in whole.
-    Consumed,
-    /// Taken in part.
-    Partial,
-    /// Delivered, but nothing of it reached the person.
-    Unconsumed,
-}
-
-/// One delivering channel's record of a response's consumption (RFC §8.5).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Consumption {
-    /// The least consumed state of the channel's participants, or the
-    /// channel's own when it cannot tell them apart.
-    pub state: ConsumptionState,
-    /// When the state was last recorded.
-    pub at: Timestamp,
-    /// How far, by channel: `played_ms`, `played_percentage`.
-    #[serde(default)]
-    pub detail: Metadata,
-    /// Each participant's record; empty when the channel cannot tell them
-    /// apart.
-    #[serde(default)]
-    pub participants: BTreeMap<ParticipantId, ParticipantConsumption>,
-}
-
-/// One participant's record of a response's consumption (RFC §8.5).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ParticipantConsumption {
-    /// How much the participant took in.
-    pub state: ConsumptionState,
-    /// When the state was last recorded.
-    pub at: Timestamp,
-    /// How far.
-    #[serde(default)]
-    pub detail: Metadata,
 }
 
 /// A record of something that happened in a room (RFC §5.2).
@@ -206,9 +164,10 @@ pub struct RoomEvent {
     pub id: EventId,
     /// The room it belongs to.
     pub room_id: RoomId,
-    /// What kind of event it is.
-    #[serde(rename = "type")]
-    pub event_type: EventType,
+    /// What kind of event it is, `message` by default: Python's `type`, a
+    /// raw identifier in Rust.
+    #[serde(rename = "type", default)]
+    pub r#type: EventType,
     /// Where it came from.
     pub source: EventSource,
     /// What it says.
@@ -250,9 +209,6 @@ pub struct RoomEvent {
     /// The event this response answers (RFC §8.5).
     #[serde(default)]
     pub responds_to: Option<EventId>,
-    /// Whether each delivering channel's people took it in (RFC §8.5).
-    #[serde(default)]
-    pub consumption: BTreeMap<ChannelId, Consumption>,
     /// The integrator's external reference.
     #[serde(default)]
     pub correlation_id: Option<String>,
@@ -274,22 +230,42 @@ pub struct RoomEvent {
 }
 
 impl RoomEvent {
-    /// A pending event with the RFC defaults: visible to all, unaddressed,
-    /// chain depth 0, index 0 until it is committed.
-    pub fn new(
+    /// A pending `message` event with the RFC defaults, a fresh id and the
+    /// current instant, as the Python implementation's model defaults fill
+    /// them: visible to all, unaddressed, chain depth 0, index 0 until it is
+    /// committed. A caller sets the other fields by struct update.
+    #[cfg(feature = "system-environment")]
+    pub fn new(room_id: RoomId, source: EventSource, content: impl Into<EventContent>) -> Self {
+        use crate::ops::{Environment, SystemEnvironment};
+        let environment = SystemEnvironment;
+        Self::at(
+            environment.new_event_id(),
+            room_id,
+            EventType::Message,
+            source,
+            content,
+            environment.now(),
+        )
+    }
+
+    /// [`RoomEvent::new`] with its id, type and instant given: what the
+    /// core's operations build from their environment. Outside the public
+    /// API.
+    #[doc(hidden)]
+    pub fn at(
         id: EventId,
         room_id: RoomId,
-        event_type: EventType,
+        r#type: EventType,
         source: EventSource,
-        content: EventContent,
+        content: impl Into<EventContent>,
         created_at: Timestamp,
     ) -> Self {
         Self {
             id,
             room_id,
-            event_type,
+            r#type,
             source,
-            content,
+            content: content.into(),
             status: EventStatus::Pending,
             blocked_by: None,
             visibility: Visibility::All,
@@ -299,7 +275,6 @@ impl RoomEvent {
             chain_depth: 0,
             parent_event_id: None,
             responds_to: None,
-            consumption: BTreeMap::new(),
             correlation_id: None,
             idempotency_key: None,
             created_at,
@@ -319,16 +294,12 @@ mod tests {
     use crate::model::TextContent;
 
     fn event() -> RoomEvent {
-        RoomEvent::new(
+        RoomEvent::at(
             EventId::new("evt_1").unwrap(),
             RoomId::new("room_1").unwrap(),
             EventType::Message,
-            EventSource::new(
-                ChannelId::new("sms").unwrap(),
-                ChannelType::SMS,
-                EventDirection::Inbound,
-            ),
-            TextContent::new("Bonjour").into(),
+            EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS),
+            TextContent::new("Bonjour"),
             Timestamp::UNIX_EPOCH,
         )
     }
@@ -346,6 +317,21 @@ mod tests {
             "room_id": "room_1",
             "type": "message",
             "source": { "channel_id": "sms", "channel_type": "sms", "direction": "inbound" },
+            "content": { "type": "text", "body": "Bonjour" },
+            "created_at": "1970-01-01T00:00:00Z",
+        }))
+        .unwrap();
+        assert_eq!(parsed, event());
+    }
+
+    /// Python's model defaults: an event without `type` is a message, a
+    /// source without `direction` inbound.
+    #[test]
+    fn an_event_without_type_and_direction_reads_message_and_inbound() {
+        let parsed: RoomEvent = serde_json::from_value(json!({
+            "id": "evt_1",
+            "room_id": "room_1",
+            "source": { "channel_id": "sms", "channel_type": "sms" },
             "content": { "type": "text", "body": "Bonjour" },
             "created_at": "1970-01-01T00:00:00Z",
         }))

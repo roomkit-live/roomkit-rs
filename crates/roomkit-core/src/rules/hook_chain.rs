@@ -278,16 +278,15 @@ mod tests {
     }
 
     fn injected() -> InjectedEvent {
-        InjectedEvent::stored_only(RoomEvent::new(
+        InjectedEvent::stored_only(RoomEvent::at(
             EventId::new("evt_9").unwrap(),
             RoomId::new("room_1").unwrap(),
             EventType::Message,
-            EventSource::new(
-                ChannelId::new("system").unwrap(),
-                ChannelType::SYSTEM,
-                EventDirection::Outbound,
-            ),
-            TextContent::new("notice").into(),
+            EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(ChannelId::new("system").unwrap(), ChannelType::SYSTEM)
+            },
+            TextContent::new("notice"),
             Timestamp::UNIX_EPOCH,
         ))
     }

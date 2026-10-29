@@ -187,7 +187,7 @@ impl Segments {
 
     /// `row` is stored: the last message, and the record when it carries it.
     pub(super) fn stored(&mut self, row: &RoomEvent) {
-        if row.event_type != EventType::Message {
+        if row.r#type != EventType::Message {
             return;
         }
         if self.owed && row.metadata.contains_key(LOOP_END_REASON) {
@@ -232,7 +232,7 @@ impl Segments {
     /// with the response's id: the pipeline gives it its id, its depth and
     /// its instant, and makes it answer the event the response answers.
     fn draft(&self, event_type: EventType, content: EventContent) -> RoomEvent {
-        let mut row = RoomEvent::new(
+        let mut row = RoomEvent::at(
             self.answers.id.clone(),
             self.answers.room_id.clone(),
             event_type,
@@ -259,23 +259,19 @@ mod tests {
     use super::*;
 
     fn segments() -> Segments {
-        let source = EventSource::new(
-            ChannelId::new("agent").unwrap(),
-            ChannelType::AI,
-            EventDirection::Outbound,
-        );
-        let answers = RoomEvent::new(
-            EventId::new("evt_1").unwrap(),
-            RoomId::new("room_1").unwrap(),
-            EventType::Message,
-            EventSource::new(
-                ChannelId::new("sms").unwrap(),
-                ChannelType::SMS,
-                EventDirection::Inbound,
-            ),
-            TextContent::new("Hi").into(),
-            Timestamp::from_unix_millis(0).unwrap(),
-        );
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(ChannelId::new("agent").unwrap(), ChannelType::AI)
+        };
+        let answers = RoomEvent {
+            id: EventId::new("evt_1").unwrap(),
+            created_at: Timestamp::from_unix_millis(0).unwrap(),
+            ..RoomEvent::new(
+                RoomId::new("room_1").unwrap(),
+                EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS),
+                TextContent::new("Hi"),
+            )
+        };
         Segments::new(source, answers)
     }
 
@@ -290,7 +286,7 @@ mod tests {
         rows.iter()
             .map(|row| {
                 (
-                    row.event_type,
+                    row.r#type,
                     roomkit_core::rules::transcoding::text_of(&row.content),
                 )
             })
@@ -314,7 +310,7 @@ mod tests {
         assert_eq!(
             (
                 texts(&started)[0].clone(),
-                started[1].event_type,
+                started[1].r#type,
                 last.metadata.get("loop_end_reason").cloned(),
                 segments.owed_record(),
             ),
@@ -365,7 +361,7 @@ mod tests {
                 let EventContent::ToolCall(call) = &row.content else {
                     unreachable!()
                 };
-                (row.event_type, Some(call.status))
+                (row.r#type, Some(call.status))
             })
             .collect();
         assert_eq!(

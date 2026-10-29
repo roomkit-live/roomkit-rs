@@ -527,11 +527,13 @@ mod an_injected_event {
     #[test]
     fn never_reaches_its_own_source() {
         let mut from_sms = notice_event("inj_1", "Echo");
-        from_sms.source = roomkit_core::model::EventSource::new(
-            channel("sms"),
-            roomkit_core::model::ChannelType::SMS,
-            roomkit_core::model::EventDirection::Outbound,
-        );
+        from_sms.source = roomkit_core::model::EventSource {
+            direction: roomkit_core::model::EventDirection::Outbound,
+            ..roomkit_core::model::EventSource::new(
+                channel("sms"),
+                roomkit_core::model::ChannelType::SMS,
+            )
+        };
         let mut sim = injecting_room(from_sms, "sms");
         sim.send(trigger_at_depth(0)).unwrap();
         assert_eq!(sim.traced("on_event sms"), Vec::<&str>::new());

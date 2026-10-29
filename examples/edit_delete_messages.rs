@@ -276,7 +276,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     checks.expect(
         "the agent reads the edit, its history corrected",
         read.is_some_and(|turn| {
-            turn.event.event_type == EventType::Edit
+            turn.event.r#type == EventType::Edit
                 && turn.history.contains(&"I need 50000$".to_owned())
         }),
     );

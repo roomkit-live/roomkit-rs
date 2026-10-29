@@ -489,11 +489,7 @@ mod tests {
     use super::*;
 
     fn sms_source() -> EventSource {
-        EventSource::new(
-            ChannelId::new("sms").unwrap(),
-            ChannelType::SMS,
-            EventDirection::Inbound,
-        )
+        EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS)
     }
 
     fn sync_hook(name: &str, priority: i32) -> HookSpec {

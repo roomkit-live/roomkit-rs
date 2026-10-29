@@ -136,7 +136,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "Alice receives the round's text and the answer by SMS, and no tool-call row",
         sms.deliveries()
             .iter()
-            .map(|delivery| delivery.event.event_type)
+            .map(|delivery| delivery.event.r#type)
             .eq([EventType::Message, EventType::Message])
             && sms.texts().first().map(String::as_str) == Some("Let me look into order 42.")
             && sms
@@ -336,7 +336,7 @@ impl Error for DatabaseError {}
 fn end_rows(timeline: &[RoomEvent]) -> Vec<&ToolCallContent> {
     timeline
         .iter()
-        .filter(|event| event.event_type == EventType::ToolCallEnd)
+        .filter(|event| event.r#type == EventType::ToolCallEnd)
         .filter_map(|event| {
             let EventContent::ToolCall(row) = &event.content else {
                 return None;
@@ -351,7 +351,7 @@ fn end_rows(timeline: &[RoomEvent]) -> Vec<&ToolCallContent> {
 fn kinds(timeline: &[RoomEvent]) -> Vec<EventType> {
     timeline
         .iter()
-        .map(|event| event.event_type)
+        .map(|event| event.r#type)
         .filter(|kind| {
             matches!(
                 kind,
@@ -374,13 +374,13 @@ fn print_rows(timeline: &[RoomEvent]) {
     println!("The room holds:");
     for event in timeline {
         let EventContent::ToolCall(row) = &event.content else {
-            if event.event_type == EventType::Message {
+            if event.r#type == EventType::Message {
                 let text = roomkit::text_of(&event.content);
                 println!("  #{} {}: {text:?}", event.index, event.source.channel_id);
             }
             continue;
         };
-        if event.event_type == EventType::ToolCallEnd {
+        if event.r#type == EventType::ToolCallEnd {
             let read = row.result.as_str().unwrap_or_default();
             println!(
                 "  #{} end   {} {:?}: {read}",

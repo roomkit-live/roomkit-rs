@@ -175,9 +175,9 @@ impl Channel for Streaming {
                 }
                 Ok(StreamItem::Row(row)) => {
                     let text = roomkit::text_of(&row.content);
-                    self.note(Read::Row(row.event_type, text, row.index));
+                    self.note(Read::Row(row.r#type, text, row.index));
                     if matches!(self.stop, Stop::AtACallsStart)
-                        && row.event_type == EventType::ToolCallStart
+                        && row.r#type == EventType::ToolCallStart
                     {
                         return Ok(ChannelOutput::default());
                     }
@@ -399,7 +399,7 @@ impl Room {
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned);
                 (
-                    event.event_type,
+                    event.r#type,
                     roomkit::text_of(&event.content),
                     cancelled,
                     reason,
@@ -420,7 +420,7 @@ impl Room {
         self.web
             .deliveries()
             .into_iter()
-            .map(|delivery| (delivery.event.event_type, delivery.event.index))
+            .map(|delivery| (delivery.event.r#type, delivery.event.index))
             .collect()
     }
 }
@@ -428,7 +428,7 @@ impl Room {
 fn end_of(timeline: &[RoomEvent]) -> ToolCallContent {
     timeline
         .iter()
-        .find_map(|event| match (&event.content, event.event_type) {
+        .find_map(|event| match (&event.content, event.r#type) {
             (EventContent::ToolCall(call), EventType::ToolCallEnd) => Some(call.clone()),
             _ => None,
         })
@@ -460,7 +460,7 @@ async fn a_streaming_target_reads_the_deltas_then_each_row_the_store_holds() {
     let spec = HookSpec::new("judge", HookTrigger::BeforeBroadcast, HookExecution::Sync);
     room.kit
         .hook(spec, move |event, _context| {
-            noting.lock().unwrap().push(event.event_type);
+            noting.lock().unwrap().push(event.r#type);
             async { Ok(HookResult::allow()) }
         })
         .unwrap();
@@ -637,7 +637,7 @@ async fn a_reader_that_stops_while_a_call_runs_lets_it_finish_and_asks_no_more()
     );
     let end_index = timeline
         .iter()
-        .find(|event| event.event_type == EventType::ToolCallEnd)
+        .find(|event| event.r#type == EventType::ToolCallEnd)
         .map(|event| event.index)
         .unwrap();
     assert_eq!(room.ws.delivered(), [3, end_index]);
@@ -756,7 +756,7 @@ async fn a_streaming_channel_that_fails_while_a_call_runs_lets_it_finish() {
     );
     let end_index = timeline
         .iter()
-        .find(|event| event.event_type == EventType::ToolCallEnd)
+        .find(|event| event.r#type == EventType::ToolCallEnd)
         .map(|event| event.index)
         .unwrap();
     assert_eq!(room.ws.delivered(), [3, end_index]);
@@ -838,13 +838,7 @@ async fn an_event_a_tool_sends_is_stored_after_the_round_s_text_and_start() {
         .await
         .into_iter()
         .filter(|event| event.index > 2)
-        .map(|event| {
-            format!(
-                "{:?} {}",
-                event.event_type,
-                roomkit::text_of(&event.content)
-            )
-        })
+        .map(|event| format!("{:?} {}", event.r#type, roomkit::text_of(&event.content)))
         .collect();
     assert_eq!(
         order,

@@ -627,8 +627,7 @@ mod tests {
 
     use super::*;
     use crate::model::{
-        ChannelId, EventDirection, EventId, EventSource, ParticipantId, Room, RoomId, TextContent,
-        Timestamp,
+        ChannelId, EventId, EventSource, ParticipantId, Room, RoomId, TextContent, Timestamp,
     };
 
     fn room() -> RoomContext {
@@ -645,18 +644,14 @@ mod tests {
         } else {
             ChannelType::WEBSOCKET
         };
-        let mut source = EventSource::new(
-            ChannelId::new(channel).unwrap(),
-            channel_type,
-            EventDirection::Inbound,
-        );
+        let mut source = EventSource::new(ChannelId::new(channel).unwrap(), channel_type);
         source.participant_id = Some(ParticipantId::new(sender).unwrap());
-        let mut event = RoomEvent::new(
+        let mut event = RoomEvent::at(
             EventId::new("evt_1").unwrap(),
             RoomId::new("room_1").unwrap(),
             crate::model::EventType::Message,
             source,
-            TextContent::new("hi").into(),
+            TextContent::new("hi"),
             Timestamp::UNIX_EPOCH,
         );
         if let Some(name) = name {

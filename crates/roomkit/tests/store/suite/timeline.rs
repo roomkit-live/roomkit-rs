@@ -222,7 +222,7 @@ fn varied() -> Vec<RoomEvent> {
             let mut varied = event(index);
             varied.created_at = at(i64::try_from(index).unwrap());
             match index {
-                1 => varied.event_type = EventType::System,
+                1 => varied.r#type = EventType::System,
                 2 => {
                     varied.source.channel_id = channel("ws");
                     varied.source.channel_type = ChannelType::WEBSOCKET;

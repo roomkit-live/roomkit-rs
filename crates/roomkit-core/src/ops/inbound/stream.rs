@@ -313,7 +313,7 @@ impl StreamRead {
             return None;
         };
         if !delivers_to(plan, skips) {
-            let message = event.event_type == EventType::Message;
+            let message = event.r#type == EventType::Message;
             return Some(if message { ROW_WITHHELD } else { ROW_HIDDEN });
         }
         plan.transports
@@ -348,16 +348,15 @@ fn answer_plan(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Option<De
     if permissions::write_refusal(responder).is_some() {
         return None;
     }
-    let answer = RoomEvent::new(
+    let answer = RoomEvent::at(
         job.answers.id.clone(),
         job.answers.room_id.clone(),
         EventType::Message,
-        EventSource::new(
-            responder.channel_id.clone(),
-            responder.channel_type.clone(),
-            EventDirection::Outbound,
-        ),
-        TextContent::new("").into(),
+        EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(responder.channel_id.clone(), responder.channel_type.clone())
+        },
+        TextContent::new(""),
         job.answers.created_at,
     );
     let answer = stamp::stamp_response(answer, responder, &job.answers, job.answers.id.clone());

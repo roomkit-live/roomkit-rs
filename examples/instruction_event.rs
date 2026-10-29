@@ -122,7 +122,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "the instruction is directed at the advisor, which answers it",
         introduced
             .event
-            .is_some_and(|event| event.event_type == EventType::Instruction)
+            .is_some_and(|event| event.r#type == EventType::Instruction)
             && turns
                 .first()
                 .is_some_and(|turn| text_of(&turn.event.content) == INTRODUCE)
@@ -139,7 +139,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "the room never stores an instruction",
         timeline
             .iter()
-            .all(|event| event.event_type != EventType::Instruction),
+            .all(|event| event.r#type != EventType::Instruction),
     );
     checks.expect(
         "the answer records the instruction's fingerprint, never its text",

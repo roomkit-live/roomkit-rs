@@ -53,21 +53,15 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::model::{
-        ChannelId, ChannelType, EventDirection, EventSource, EventType, TextContent, Timestamp,
-    };
+    use crate::model::{ChannelId, ChannelType, EventSource, EventType, TextContent, Timestamp};
 
     fn event(id: &str, room: &str, parent: Option<&str>) -> RoomEvent {
-        let mut event = RoomEvent::new(
+        let mut event = RoomEvent::at(
             EventId::new(id).unwrap(),
             RoomId::new(room).unwrap(),
             EventType::Message,
-            EventSource::new(
-                ChannelId::new("sms").unwrap(),
-                ChannelType::SMS,
-                EventDirection::Inbound,
-            ),
-            TextContent::new("hi").into(),
+            EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS),
+            TextContent::new("hi"),
             Timestamp::UNIX_EPOCH,
         );
         event.parent_event_id = parent.map(|parent| EventId::new(parent).unwrap());

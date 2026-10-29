@@ -319,7 +319,6 @@ async fn a_rewrite_keeps_everything_python_wrote() {
             Vec::<String>::new(),
             [
                 "data.capabilities.rate_limit",
-                "data.consumption",
                 "data.rate_limit.burst",
             ]
             .map(str::to_owned)

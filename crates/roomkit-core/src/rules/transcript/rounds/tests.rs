@@ -17,12 +17,11 @@ const AGENT: &str = "assistant";
 /// `tool`, in the turn `turn`: its `correlation_id`, and the trigger it
 /// answers.
 fn row(kind: EventType, index: u64, id: &str, tool: &str, turn: &str) -> RoomEvent {
-    let source = EventSource::new(
-        ChannelId::new(AGENT).unwrap(),
-        ChannelType::AI,
-        EventDirection::Outbound,
-    );
-    let mut event = RoomEvent::new(
+    let source = EventSource {
+        direction: EventDirection::Outbound,
+        ..EventSource::new(ChannelId::new(AGENT).unwrap(), ChannelType::AI)
+    };
+    let mut event = RoomEvent::at(
         EventId::new(format!("evt_{index}")).unwrap(),
         RoomId::new("room_1").unwrap(),
         kind,

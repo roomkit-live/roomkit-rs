@@ -200,20 +200,19 @@ impl EchoAgent {
         } else {
             self.reply.clone()
         };
-        let source = EventSource::new(
-            self.declaration.channel_id.clone(),
-            ChannelType::AI,
-            EventDirection::Outbound,
-        );
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(self.declaration.channel_id.clone(), ChannelType::AI)
+        };
         // The pipeline gives every response a fresh id, its room and its
         // depth (gap G-024), and makes it answer the event that asked: the id
         // written here is a placeholder.
-        RoomEvent::new(
+        RoomEvent::at(
             event.id.clone(),
             event.room_id.clone(),
             EventType::Message,
             source,
-            TextContent::new(text).into(),
+            TextContent::new(text),
             event.created_at,
         )
     }

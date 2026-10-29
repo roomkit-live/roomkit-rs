@@ -140,14 +140,18 @@ impl Channel for Answering {
             return ready(Ok(ChannelOutput::default()));
         }
         push(&self.asked, event.clone());
-        let answer = RoomEvent::new(
-            event.id.clone(),
-            event.room_id.clone(),
-            EventType::Message,
-            EventSource::new(self.id.clone(), ChannelType::AI, EventDirection::Outbound),
-            TextContent::new("Answer.").into(),
-            event.created_at,
-        );
+        let answer = RoomEvent {
+            id: event.id.clone(),
+            created_at: event.created_at,
+            ..RoomEvent::new(
+                event.room_id.clone(),
+                EventSource {
+                    direction: EventDirection::Outbound,
+                    ..EventSource::new(self.id.clone(), ChannelType::AI)
+                },
+                TextContent::new("Answer."),
+            )
+        };
         ready(Ok(ChannelOutput::respond(vec![answer])))
     }
 }
@@ -162,7 +166,7 @@ async fn a_hook_posting_after_every_event_stops_at_the_cap() {
     kit.observe("notice", HookTrigger::AfterBroadcast, move |event, _| {
         let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
         async move {
-            if event.event_type == EventType::Message && len(&posted) <= 2 * BUDGET {
+            if event.r#type == EventType::Message && len(&posted) <= 2 * BUDGET {
                 let notice = PostOptions::default();
                 let event = kit
                     .post(
@@ -205,7 +209,7 @@ async fn an_observer_of_before_broadcast_posting_on_every_event_stops_at_the_cap
     kit.observe("notice", HookTrigger::BeforeBroadcast, move |event, _| {
         let (kit, posted) = (hook_kit.clone(), Arc::clone(&hook_posted));
         async move {
-            if event.event_type == EventType::Message && len(&posted) <= 2 * BUDGET {
+            if event.r#type == EventType::Message && len(&posted) <= 2 * BUDGET {
                 let notice = PostOptions::default();
                 let event = kit
                     .post(
@@ -328,7 +332,7 @@ async fn a_hook_opening_a_room_after_every_event_stops_at_the_cap() {
             Arc::clone(&hook_calls),
         );
         async move {
-            if event.event_type == EventType::Message && len(&calls) <= 2 * BUDGET {
+            if event.r#type == EventType::Message && len(&calls) <= 2 * BUDGET {
                 push(&calls, ());
                 let result: InboundResult = kit
                     .process_inbound(message("again"), ProcessInboundOptions::default())
@@ -679,7 +683,7 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
         .await
         .unwrap()
         .into_iter()
-        .filter(|event| event.event_type == EventType::Message)
+        .filter(|event| event.r#type == EventType::Message)
         .map(|event| {
             let source = event.source.channel_id.as_str().to_owned();
             (source, event.chain_depth, event.blocked_by)

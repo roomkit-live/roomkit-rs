@@ -88,7 +88,7 @@ async fn an_echo_agent_answers_an_instruction_the_room_never_stores() {
     let stored = timeline(&kit).await;
     assert_eq!(
         (
-            instruction.event_type,
+            instruction.r#type,
             sms.texts(),
             stored.len(),
             stored[0].responds_to.as_ref(),

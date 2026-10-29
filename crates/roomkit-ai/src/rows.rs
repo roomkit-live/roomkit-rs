@@ -111,7 +111,7 @@ impl Rows<'_> {
         // The pipeline gives each response its own id, depth and instant,
         // and makes it answer the event that asked: what is written here
         // is a placeholder.
-        let row = RoomEvent::new(
+        let row = RoomEvent::at(
             self.trigger.id.clone(),
             self.trigger.room_id.clone(),
             event_type,

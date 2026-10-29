@@ -1466,7 +1466,7 @@ async fn messages(kit: &RoomKit) -> Vec<String> {
         .await
         .unwrap()
         .iter()
-        .filter(|event| event.event_type == EventType::Message)
+        .filter(|event| event.r#type == EventType::Message)
         .map(|event| format!("#{} {}", event.index, event.source.channel_id))
         .collect()
 }
@@ -2623,16 +2623,15 @@ async fn a_turn_s_calls_draw_on_the_reentry_budget_of_the_cascade_that_delivers(
                         .unwrap();
                     *last_call.lock().unwrap() = Some((injected.status, injected.blocked_by));
                 }
-                let source =
-                    EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
-                let reply = RoomEvent::new(
-                    "ai_reply".parse().unwrap(),
-                    room_id(),
-                    EventType::Message,
-                    source,
-                    TextContent::new("Hello back").into(),
-                    Timestamp::UNIX_EPOCH,
-                );
+                let source = EventSource {
+                    direction: EventDirection::Outbound,
+                    ..EventSource::new(channel("ai"), ChannelType::AI)
+                };
+                let reply = RoomEvent {
+                    id: "ai_reply".parse().unwrap(),
+                    created_at: Timestamp::UNIX_EPOCH,
+                    ..RoomEvent::new(room_id(), source, TextContent::new("Hello back"))
+                };
                 Ok(ChannelOutput::respond(vec![reply]))
             })
         }),
@@ -3017,19 +3016,12 @@ mod send_event {
 
 /// The record `id` the console's channel holds, as `commit_event` takes it.
 fn console_record(id: &str, text: &str) -> RoomEvent {
-    let source = EventSource::new(
-        channel("ws"),
-        ChannelType::WEBSOCKET,
-        EventDirection::Inbound,
-    );
-    RoomEvent::new(
-        id.parse().unwrap(),
-        room_id(),
-        EventType::Message,
-        source,
-        TextContent::new(text).into(),
-        Timestamp::UNIX_EPOCH,
-    )
+    let source = EventSource::new(channel("ws"), ChannelType::WEBSOCKET);
+    RoomEvent {
+        id: id.parse().unwrap(),
+        created_at: Timestamp::UNIX_EPOCH,
+        ..RoomEvent::new(room_id(), source, TextContent::new(text))
+    }
 }
 
 /// RFC §10.5: `commit_event` commits a record no one receives.

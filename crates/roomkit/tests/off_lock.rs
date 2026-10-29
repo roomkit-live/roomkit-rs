@@ -17,9 +17,8 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, ChannelType, EventDirection, EventSource, EventStatus, EventType, HookResult,
-    InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, RoomStatus, TextContent,
-    Timestamp,
+    ChannelId, ChannelType, EventDirection, EventSource, EventStatus, HookResult, InboundMessage,
+    InjectedEvent, Observation, RoomEvent, RoomId, RoomStatus, TextContent, Timestamp,
 };
 use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
 use roomkit::{
@@ -436,18 +435,18 @@ fn has_sin(text: &str) -> bool {
 
 /// A notice from the framework, for the scanner to inject.
 fn notice(text: &str, now: Timestamp) -> RoomEvent {
-    RoomEvent::new(
-        "placeholder".parse().unwrap(),
-        room_id(),
-        EventType::Message,
-        EventSource::new(
-            channel("system"),
-            ChannelType::SYSTEM,
-            EventDirection::Outbound,
-        ),
-        TextContent::new(text).into(),
-        now,
-    )
+    RoomEvent {
+        id: "placeholder".parse().unwrap(),
+        created_at: now,
+        ..RoomEvent::new(
+            room_id(),
+            EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(channel("system"), ChannelType::SYSTEM)
+            },
+            TextContent::new(text),
+        )
+    }
 }
 
 /// What B.2 leaves: the timeline, what each side received, the

@@ -550,8 +550,8 @@ where
 #[cfg(test)]
 mod tests {
     use roomkit_core::model::{
-        ChannelDirection, ChannelId, ChannelType, EventDirection, EventSource, EventType, Room,
-        RoomContext, RoomEvent, TextContent, Timestamp,
+        ChannelDirection, ChannelId, ChannelType, EventSource, Room, RoomContext, RoomEvent,
+        TextContent, Timestamp,
     };
     use roomkit_core::ops::{
         ChannelDeclaration, CheckTimers, KitConfig, Next, Operation, SequentialEnvironment,
@@ -763,15 +763,12 @@ mod tests {
             category,
             ChannelDirection::Bidirectional,
         );
-        let source = EventSource::new(channel, ChannelType::AI, EventDirection::Inbound);
-        let mut event = RoomEvent::new(
-            "evt_1".parse().unwrap(),
-            room_id(),
-            EventType::Message,
-            source,
-            TextContent::new("Hi").into(),
-            Timestamp::UNIX_EPOCH,
-        );
+        let source = EventSource::new(channel, ChannelType::AI);
+        let mut event = RoomEvent {
+            id: "evt_1".parse().unwrap(),
+            created_at: Timestamp::UNIX_EPOCH,
+            ..RoomEvent::new(room_id(), source, TextContent::new("Hi"))
+        };
         event.chain_depth = depth;
         Effect {
             id: effect(),

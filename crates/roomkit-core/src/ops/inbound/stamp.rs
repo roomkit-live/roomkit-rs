@@ -26,11 +26,7 @@ pub fn default_inbound_event(
     id: EventId,
     now: Timestamp,
 ) -> RoomEvent {
-    let mut source = EventSource::new(
-        message.channel_id.clone(),
-        channel.channel_type.clone(),
-        EventDirection::Inbound,
-    );
+    let mut source = EventSource::new(message.channel_id.clone(), channel.channel_type.clone());
     source.provider.clone_from(&channel.provider_name);
     source.participant_id = ParticipantId::new(message.sender_id.clone()).ok();
     source.external_id.clone_from(&message.external_id);
@@ -38,7 +34,7 @@ pub fn default_inbound_event(
     source
         .provider_message_id
         .clone_from(&message.provider_message_id);
-    let mut event = RoomEvent::new(
+    let mut event = RoomEvent::at(
         id.clone(),
         room_id,
         message.event_type,
@@ -65,7 +61,7 @@ pub(crate) fn stamp_trigger(
     id: EventId,
 ) -> RoomEvent {
     event.id = id;
-    event.event_type = message.event_type;
+    event.r#type = message.event_type;
     event.chain_depth = message.chain_depth;
     event.visibility = message.visibility.clone();
     event.addressed_to.clone_from(&message.addressed_to);
@@ -106,11 +102,14 @@ pub(crate) fn stamp_direct(
     } else {
         EventDirection::Inbound
     };
-    let mut source = EventSource::new(direct.channel_id, channel.channel_type.clone(), direction);
+    let mut source = EventSource {
+        direction,
+        ..EventSource::new(direct.channel_id, channel.channel_type.clone())
+    };
     source.provider = direct.provider.or_else(|| channel.provider_name.clone());
     source.participant_id = direct.participant_id;
     let created_at = direct.created_at.unwrap_or(now);
-    let mut event = RoomEvent::new(
+    let mut event = RoomEvent::at(
         id,
         room_id,
         direct.event_type,
@@ -125,7 +124,7 @@ pub(crate) fn stamp_direct(
     event.parent_event_id = direct.parent_event_id;
     event.idempotency_key = direct.idempotency_key;
     event.metadata.clone_from(&direct.metadata);
-    if event.event_type == EventType::Instruction {
+    if event.r#type == EventType::Instruction {
         instructions::stamp(&mut event, &direct.metadata, direct.standalone);
     }
     instructions::clear_fingerprint(&mut event);
@@ -168,11 +167,10 @@ pub(crate) fn stamp_response(
             "a response named another channel as its source; the responder is its source, \
              and nothing of the claimed one is kept (gaps G-022, G-035)"
         );
-        response.source = EventSource::new(
-            responder.channel_id.clone(),
-            responder.channel_type.clone(),
-            EventDirection::Outbound,
-        );
+        response.source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(responder.channel_id.clone(), responder.channel_type.clone())
+        };
     }
     response.id = id;
     response.room_id = trigger.room_id.clone();
@@ -290,7 +288,7 @@ pub(crate) fn keep_identity(
     }
     modified.id = original.id.clone();
     modified.room_id = original.room_id.clone();
-    modified.event_type = original.event_type;
+    modified.r#type = original.r#type;
     modified.source = original.source.clone();
     modified.index = original.index;
     modified.chain_depth = original.chain_depth;
@@ -301,7 +299,6 @@ pub(crate) fn keep_identity(
     modified.created_at = original.created_at;
     modified.status = original.status;
     modified.blocked_by.clone_from(&original.blocked_by);
-    modified.consumption.clone_from(&original.consumption);
     modified
         .delivery_results
         .clone_from(&original.delivery_results);
@@ -368,17 +365,16 @@ pub(crate) fn error_event(
     category: &str,
     now: Timestamp,
 ) -> RoomEvent {
-    let source = EventSource::new(
-        channel.channel_id.clone(),
-        channel.channel_type.clone(),
-        EventDirection::Outbound,
-    );
-    let mut event = RoomEvent::new(
+    let source = EventSource {
+        direction: EventDirection::Outbound,
+        ..EventSource::new(channel.channel_id.clone(), channel.channel_type.clone())
+    };
+    let mut event = RoomEvent::at(
         id,
         trigger.room_id.clone(),
         EventType::System,
         source,
-        TextContent::new(error.message.clone()).into(),
+        TextContent::new(error.message.clone()),
         now,
     );
     event.chain_depth = chain_depth::response_depth(trigger);
@@ -625,11 +621,10 @@ mod tests {
         let stamped = stamp_response(claiming_the_sender_s_source(), &ai(), &trigger(), fresh());
         assert_eq!(
             stamped.source,
-            EventSource::new(
-                ChannelId::new("ai").unwrap(),
-                ChannelType::AI,
-                EventDirection::Outbound
-            )
+            EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(ChannelId::new("ai").unwrap(), ChannelType::AI)
+            }
         );
     }
 
@@ -723,7 +718,7 @@ mod tests {
 
     fn edit_of(target: &str, text: &str) -> RoomEvent {
         let mut edit = trigger();
-        edit.event_type = EventType::Edit;
+        edit.r#type = EventType::Edit;
         edit.content = EventContent::Edit(EditContent {
             target_event_id: EventId::new(target).unwrap(),
             new_content: Box::new(TextContent::new(text).into()),
@@ -758,7 +753,7 @@ mod tests {
     fn a_modified_delete_keeps_its_target_and_its_type_and_takes_the_reason() {
         let delete = |target: &str, delete_type, reason: Option<&str>| {
             let mut event = trigger();
-            event.event_type = EventType::Delete;
+            event.r#type = EventType::Delete;
             event.content = EventContent::Delete(DeleteContent {
                 target_event_id: EventId::new(target).unwrap(),
                 delete_type,

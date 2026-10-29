@@ -361,7 +361,7 @@ pub(crate) fn keep_tool_rows_to(
 /// Whether `event` is a tool call's start or end row.
 fn is_tool_call_row(event: &RoomEvent) -> bool {
     matches!(
-        event.event_type,
+        event.r#type,
         EventType::ToolCallStart | EventType::ToolCallEnd
     )
 }
@@ -458,8 +458,8 @@ fn solicits(
 mod tests {
     use super::*;
     use crate::model::{
-        Access, ChannelDirection, ChannelId, ChannelType, EventContent, EventDirection, EventId,
-        EventSource, EventType, RoomId, Timestamp,
+        Access, ChannelDirection, ChannelId, ChannelType, EventContent, EventId, EventSource,
+        EventType, RoomId, Timestamp,
     };
 
     fn channel(id: &str) -> ChannelId {
@@ -490,16 +490,12 @@ mod tests {
     }
 
     fn event_from(source: &ChannelBinding) -> RoomEvent {
-        RoomEvent::new(
+        RoomEvent::at(
             EventId::new("evt_1").unwrap(),
             RoomId::new("room_1").unwrap(),
             EventType::Message,
-            EventSource::new(
-                source.channel_id.clone(),
-                source.channel_type.clone(),
-                EventDirection::Inbound,
-            ),
-            TextContent::new("hello").into(),
+            EventSource::new(source.channel_id.clone(), source.channel_type.clone()),
+            TextContent::new("hello"),
             Timestamp::UNIX_EPOCH,
         )
     }
@@ -693,7 +689,7 @@ mod tests {
             let mut event = event_from(&transport("sms"));
             event.id = id(edit_id);
             event.index = 1;
-            event.event_type = EventType::Edit;
+            event.r#type = EventType::Edit;
             event.content = EventContent::Edit(EditContent {
                 target_event_id: id("evt_1"),
                 new_content: Box::new(TextContent::new(text).into()),
@@ -707,7 +703,7 @@ mod tests {
             let mut event = event_from(&transport("sms"));
             event.id = id(delete_id);
             event.index = 2;
-            event.event_type = EventType::Delete;
+            event.r#type = EventType::Delete;
             event.content = EventContent::Delete(DeleteContent {
                 target_event_id: id("evt_1"),
                 delete_type: DeleteType::Sender,
@@ -1289,7 +1285,7 @@ mod tests {
         fn a_tool_call_row_asks_no_agent_below_or_at_the_limit() {
             let bindings = [agent("analyst"), agent("writer"), transport("web")];
             let mut row = event_from(&bindings[0]);
-            row.event_type = EventType::ToolCallStart;
+            row.r#type = EventType::ToolCallStart;
             let below = plan(&row, &bindings);
             row.chain_depth = 4;
             let at_limit = plan(&row, &bindings);

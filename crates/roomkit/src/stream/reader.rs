@@ -122,11 +122,10 @@ pub(crate) async fn read<S: ConversationStore>(
     let channel = target
         .as_ref()
         .and_then(|target| Some((inner.channel(&target.binding.channel_id)?, target.clone())));
-    let source = EventSource::new(
-        responder.channel_id.clone(),
-        responder.channel_type.clone(),
-        EventDirection::Outbound,
-    );
+    let source = EventSource {
+        direction: EventDirection::Outbound,
+        ..EventSource::new(responder.channel_id.clone(), responder.channel_type.clone())
+    };
     let mut producer = Producer {
         room_id: answers.room_id.clone(),
         segments: Segments::new(source, answers),
@@ -642,7 +641,7 @@ impl Producer {
     /// Hands `row` to the operation, which commits it; the target reads it
     /// in the stream when it reads the stream's rows of its kind.
     async fn commit(&mut self, row: RoomEvent) {
-        let tool_row = row.event_type != EventType::Message;
+        let tool_row = row.r#type != EventType::Message;
         let streamed = match self.reads {
             Reads::Target { tool_rows } => !tool_row || tool_rows,
             Reads::Nobody | Reads::Lost => false,

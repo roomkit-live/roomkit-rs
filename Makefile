@@ -7,9 +7,9 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"$$/\1/p' Cargo.toml).0
 # The examples: every file of examples/, each declared in examples/Cargo.toml.
 EXAMPLES := $(sort $(basename $(notdir $(wildcard examples/*.rs))))
 
-.PHONY: all fmt fmt-check clippy test doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin api-test api-parity
+.PHONY: all fmt fmt-check clippy test test-core doc deny check-core-deps examples msrv msrv-toolchain hooks conformance-sync conformance-check sqlite-fixture turns-fixture api-sync api-check-pin api-test api-parity
 
-all: conformance-check api-check-pin api-test fmt-check clippy test doc deny check-core-deps examples
+all: conformance-check api-check-pin api-test fmt-check clippy test test-core doc deny check-core-deps examples
 
 fmt:
 	$(CARGO) fmt --all
@@ -22,6 +22,13 @@ clippy:
 
 test:
 	$(CARGO) test --workspace --all-features --locked
+
+# The core's suite on its default features: without `system-environment`,
+# so that no operation and no core test builds a record with the model's
+# filling constructors, which read the system clock (docs/steps/step-05.md,
+# lot 2). `test` runs it with every feature, as the workspace builds it.
+test-core:
+	$(CARGO) test --package roomkit-core --locked
 
 doc:
 	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps --all-features --locked

@@ -162,7 +162,7 @@ impl Room {
             .unwrap();
         timeline
             .into_iter()
-            .filter(|event| event.event_type == EventType::ToolCallEnd)
+            .filter(|event| event.r#type == EventType::ToolCallEnd)
             .filter_map(|event| {
                 let EventContent::ToolCall(row) = event.content else {
                     return None;

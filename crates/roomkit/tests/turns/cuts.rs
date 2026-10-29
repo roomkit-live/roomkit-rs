@@ -111,7 +111,7 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
         .await
         .unwrap()
         .into_iter()
-        .find(|event| event.event_type == EventType::ToolCallEnd)
+        .find(|event| event.r#type == EventType::ToolCallEnd)
         .map(|event| {
             if let EventContent::ToolCall(row) = event.content {
                 (row.outcome, row.error)

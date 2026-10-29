@@ -1906,32 +1906,30 @@ pub(crate) fn respond(channel_id: &str, event: &RoomEvent, text: &str) -> Channe
 
 /// A text response from `channel_id` to `event`, as a channel writes it.
 pub(crate) fn response(channel_id: &str, event: &RoomEvent, text: &str) -> RoomEvent {
-    RoomEvent::new(
+    RoomEvent::at(
         EventId::new(format!("{channel_id}_re_{}", event.id)).unwrap(),
         event.room_id.clone(),
         EventType::Message,
-        EventSource::new(
-            channel(channel_id),
-            ChannelType::AI,
-            EventDirection::Outbound,
-        ),
-        TextContent::new(text).into(),
+        EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(channel(channel_id), ChannelType::AI)
+        },
+        TextContent::new(text),
         event.created_at,
     )
 }
 
 /// An event a hook injects, from the framework's `system` source.
 pub(crate) fn notice_event(id: &str, text: &str) -> RoomEvent {
-    RoomEvent::new(
+    RoomEvent::at(
         EventId::new(id).unwrap(),
         room_id(),
         EventType::Message,
-        EventSource::new(
-            channel("system"),
-            ChannelType::SYSTEM,
-            EventDirection::Outbound,
-        ),
-        TextContent::new(text).into(),
+        EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(channel("system"), ChannelType::SYSTEM)
+        },
+        TextContent::new(text),
         Timestamp::UNIX_EPOCH,
     )
 }

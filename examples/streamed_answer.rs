@@ -139,8 +139,8 @@ impl Channel for Screen {
                 }
                 StreamItem::Row(row) => {
                     let text = text_of(&row.content);
-                    println!("  screen: #{} {:?} {text:?}", row.index, row.event_type);
-                    self.read.push(Read::Row(row.event_type, row.index, text));
+                    println!("  screen: #{} {:?} {text:?}", row.index, row.r#type);
+                    self.read.push(Read::Row(row.r#type, row.index, text));
                 }
                 _ => {}
             }
@@ -244,7 +244,7 @@ fn rows(timeline: &[RoomEvent]) -> Vec<(EventType, String)> {
     timeline
         .iter()
         .filter(|event| event.source.channel_id.as_str() == "assistant")
-        .map(|event| (event.event_type, text_of(&event.content)))
+        .map(|event| (event.r#type, text_of(&event.content)))
         .collect()
 }
 
@@ -287,7 +287,7 @@ fn check_mia(
                 kinds.push(*kind);
                 let held = timeline
                     .iter()
-                    .any(|event| event.index == *index && event.event_type == *kind);
+                    .any(|event| event.index == *index && event.r#type == *kind);
                 segments_join &= held;
             }
         }

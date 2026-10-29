@@ -23,7 +23,7 @@ async fn ending_on(end: Metadata) -> (Option<String>, Option<Value>) {
         .unwrap()
         .into_iter()
         .rfind(|event| {
-            event.event_type == EventType::Message && event.source.channel_id.as_str() == "ai"
+            event.r#type == EventType::Message && event.source.channel_id.as_str() == "ai"
         })
         .map(|event| Value::Object(event.metadata));
     (result.error.map(|error| error.message), last)

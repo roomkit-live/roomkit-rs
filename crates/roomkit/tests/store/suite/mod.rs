@@ -15,8 +15,8 @@ mod timeline;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EditContent,
-    EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, ParticipantId,
-    Room, RoomEvent, RoomId, RoomUpdates, TextContent, Timestamp,
+    EventContent, EventId, EventSource, EventStatus, EventType, ParticipantId, Room, RoomEvent,
+    RoomId, RoomUpdates, TextContent, Timestamp,
 };
 use roomkit::{ConversationStore, RoomCounters};
 
@@ -36,14 +36,15 @@ pub(crate) fn event_id(id: &str) -> EventId {
 
 /// `evt_{index}` of `room_1`, a text from SMS.
 pub(crate) fn event(index: u64) -> RoomEvent {
-    let mut event = RoomEvent::new(
-        event_id(&format!("evt_{index}")),
-        room_id(),
-        EventType::Message,
-        EventSource::new(channel("sms"), ChannelType::SMS, EventDirection::Inbound),
-        TextContent::new("hi").into(),
-        Timestamp::UNIX_EPOCH,
-    );
+    let mut event = RoomEvent {
+        id: event_id(&format!("evt_{index}")),
+        created_at: Timestamp::UNIX_EPOCH,
+        ..RoomEvent::new(
+            room_id(),
+            EventSource::new(channel("sms"), ChannelType::SMS),
+            TextContent::new("hi"),
+        )
+    };
     event.index = index;
     event
 }
@@ -65,7 +66,7 @@ pub(crate) fn reply(index: u64, parent: u64) -> RoomEvent {
 /// `evt_{index}`, an edit of `evt_{target}`.
 pub(crate) fn edit_of(index: u64, target: u64) -> RoomEvent {
     let mut edit = event(index);
-    edit.event_type = EventType::Edit;
+    edit.r#type = EventType::Edit;
     edit.content = EventContent::Edit(EditContent::new(
         event_id(&format!("evt_{target}")),
         TextContent::new("corrected"),

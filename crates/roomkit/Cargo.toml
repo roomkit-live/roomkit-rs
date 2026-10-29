@@ -9,7 +9,9 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-roomkit-core.workspace = true
+# The model's filling constructors, which read the system clock (step 5,
+# lot 2).
+roomkit-core = { workspace = true, features = ["system-environment"] }
 # The `Stream` a turn's response and a streaming delivery are read as (step
 # 4, decision 11).
 futures-core.workspace = true

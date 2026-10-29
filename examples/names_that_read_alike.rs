@@ -64,7 +64,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let timeline = shared::timeline(&kit, &room).await?;
     let ranks: Vec<(String, u64)> = timeline
         .iter()
-        .filter(|event| event.event_type == EventType::Message)
+        .filter(|event| event.r#type == EventType::Message)
         .filter_map(|event| {
             let author = event.metadata.get("author")?;
             let name = author.get("name")?.as_str()?.to_owned();

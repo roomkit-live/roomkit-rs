@@ -42,17 +42,16 @@ pub(crate) fn not_asked_record(
     agent: &ChannelBinding,
     now: Timestamp,
 ) -> RoomEvent {
-    let source = EventSource::new(
-        agent.channel_id.clone(),
-        agent.channel_type.clone(),
-        EventDirection::Outbound,
-    );
-    let mut record = RoomEvent::new(
+    let source = EventSource {
+        direction: EventDirection::Outbound,
+        ..EventSource::new(agent.channel_id.clone(), agent.channel_type.clone())
+    };
+    let mut record = RoomEvent::at(
         id,
         trigger.room_id.clone(),
         EventType::Message,
         source,
-        TextContent::new("").into(),
+        TextContent::new(""),
         now,
     );
     record.status = EventStatus::Blocked;
@@ -224,16 +223,15 @@ mod tests {
     use crate::model::{ChannelCategory, ChannelDirection, ChannelId, ChannelType, RoomId};
 
     fn trigger(chain_depth: u32) -> RoomEvent {
-        let mut event = RoomEvent::new(
+        let mut event = RoomEvent::at(
             EventId::new("evt_4").unwrap(),
             RoomId::new("room_1").unwrap(),
             EventType::Message,
-            EventSource::new(
-                ChannelId::new("analyst").unwrap(),
-                ChannelType::AI,
-                EventDirection::Outbound,
-            ),
-            TextContent::new("Good report.").into(),
+            EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(ChannelId::new("analyst").unwrap(), ChannelType::AI)
+            },
+            TextContent::new("Good report."),
             Timestamp::UNIX_EPOCH,
         );
         event.chain_depth = chain_depth;

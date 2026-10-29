@@ -101,7 +101,7 @@ pub(crate) fn stamp(instruction: &mut RoomEvent, caller: &Metadata, standalone: 
 /// Whether `event` is an instruction that stands alone (RFC §10.1.1 rule
 /// 7).
 pub(crate) fn is_standalone(event: &RoomEvent) -> bool {
-    event.event_type == EventType::Instruction
+    event.r#type == EventType::Instruction
         && event.metadata.get(STANDALONE) == Some(&Value::Bool(true))
 }
 
@@ -120,7 +120,7 @@ pub(crate) fn is_standalone(event: &RoomEvent) -> bool {
 /// hook's to change.
 pub(crate) fn keep_checked(original: &RoomEvent, modified: &mut RoomEvent) {
     keep_fingerprint(original, modified);
-    if original.event_type != EventType::Instruction {
+    if original.r#type != EventType::Instruction {
         return;
     }
     modified.visibility = original.visibility.clone();
@@ -239,7 +239,7 @@ impl Fingerprint {
 /// other trigger the key is removed: a response to a message records no
 /// instruction (gap G-065).
 pub(crate) fn mark_response(response: &mut RoomEvent, trigger: &RoomEvent) {
-    if trigger.event_type != EventType::Instruction {
+    if trigger.r#type != EventType::Instruction {
         return clear_fingerprint(response);
     }
     let fingerprint = Fingerprint::of_instruction(trigger);
@@ -265,9 +265,9 @@ mod tests {
 
     use super::*;
     use crate::model::{
-        ChannelType, CompositeContent, EventContent, EventDirection, EventId, EventSource,
-        Latitude, LocationContent, Longitude, Room, RoomId, SystemContent, TemplateContent,
-        TextContent, Timestamp, ToolCallContent, ToolCallStatus,
+        ChannelType, CompositeContent, EventContent, EventId, EventSource, Latitude,
+        LocationContent, Longitude, Room, RoomId, SystemContent, TemplateContent, TextContent,
+        Timestamp, ToolCallContent, ToolCallStatus,
     };
 
     fn channel(id: &str) -> ChannelId {
@@ -275,16 +275,12 @@ mod tests {
     }
 
     fn instruction(text: &str) -> RoomEvent {
-        RoomEvent::new(
+        RoomEvent::at(
             EventId::new("evt_1").unwrap(),
             RoomId::new("room_1").unwrap(),
             EventType::Instruction,
-            EventSource::new(
-                channel("app"),
-                ChannelType::WEBSOCKET,
-                EventDirection::Inbound,
-            ),
-            TextContent::new(text).into(),
+            EventSource::new(channel("app"), ChannelType::WEBSOCKET),
+            TextContent::new(text),
             Timestamp::UNIX_EPOCH,
         )
     }
@@ -412,7 +408,7 @@ mod tests {
     #[test]
     fn a_message_never_stands_alone_whatever_its_metadata() {
         let mut event = instruction("Hi");
-        event.event_type = EventType::Message;
+        event.r#type = EventType::Message;
         event.metadata.insert(STANDALONE.to_owned(), json!(true));
         assert!(!is_standalone(&event));
     }
@@ -475,7 +471,7 @@ mod tests {
         #[test]
         fn a_modify_keeps_a_response_s_fingerprint() {
             let mut response = instruction("Hello, I am the assistant.");
-            response.event_type = EventType::Message;
+            response.r#type = EventType::Message;
             mark_response(&mut response, &original());
             let mut modified = response.clone();
             modified
@@ -491,7 +487,7 @@ mod tests {
         #[test]
         fn a_modify_cannot_remove_a_response_s_fingerprint() {
             let mut response = instruction("Hello, I am the assistant.");
-            response.event_type = EventType::Message;
+            response.r#type = EventType::Message;
             mark_response(&mut response, &original());
             let mut modified = response.clone();
             modified.metadata.clear();
@@ -507,7 +503,7 @@ mod tests {
         #[test]
         fn a_modify_removing_a_key_that_is_no_fingerprint_stays_removed() {
             let mut message = instruction("Hi");
-            message.event_type = EventType::Message;
+            message.r#type = EventType::Message;
             message
                 .metadata
                 .insert(INSTRUCTION.to_owned(), json!("Offer a refund."));
@@ -522,7 +518,7 @@ mod tests {
         #[test]
         fn a_modify_cannot_write_the_key_on_an_event_holding_none() {
             let mut message = instruction("Hi");
-            message.event_type = EventType::Message;
+            message.r#type = EventType::Message;
             let mut modified = message.clone();
             modified
                 .metadata
@@ -534,7 +530,7 @@ mod tests {
         #[test]
         fn a_modify_of_a_message_keeps_what_the_hook_wrote() {
             let mut message = instruction("Hi");
-            message.event_type = EventType::Message;
+            message.r#type = EventType::Message;
             let mut modified = message.clone();
             modified.visibility = Visibility::Transport;
             keep_checked(&message, &mut modified);
@@ -782,7 +778,7 @@ mod tests {
 
         fn answer() -> RoomEvent {
             let mut event = instruction("Hello, I am the assistant.");
-            event.event_type = EventType::Message;
+            event.r#type = EventType::Message;
             event
         }
 

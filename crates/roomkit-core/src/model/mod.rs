@@ -48,10 +48,7 @@ pub use context::RoomContext;
 pub use delivery::{DeliveryError, DeliveryResult, DeliveryStatus, ProviderResult};
 pub use direct::DirectEvent;
 pub use error::ModelError;
-pub use event::{
-    Consumption, ConsumptionState, EventDirection, EventSource, EventStatus, EventType,
-    ParticipantConsumption, RoomEvent,
-};
+pub use event::{EventDirection, EventSource, EventStatus, EventType, RoomEvent};
 pub use hook::{HookDecision, HookResult, InjectedEvent};
 pub use identity::Identity;
 pub use ids::{

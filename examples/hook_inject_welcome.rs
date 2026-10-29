@@ -31,23 +31,20 @@ use shared::{Checks, Log};
 /// A system welcome to `newcomer`, delivered to it only, for the hook to
 /// inject beside `event`, the newcomer's first message.
 fn welcome(event: &RoomEvent, newcomer: &ChannelId) -> InjectedEvent {
-    let source = EventSource::new(
-        ChannelId::system(),
-        ChannelType::SYSTEM,
-        EventDirection::Outbound,
-    );
+    let source = EventSource {
+        direction: EventDirection::Outbound,
+        ..EventSource::new(ChannelId::system(), ChannelType::SYSTEM)
+    };
     let mut welcome = SystemContent::new(format!("Welcome to {}, {newcomer}!", event.room_id));
     welcome.code = Some("welcome".to_owned());
     let content = EventContent::System(welcome);
     // The pipeline gives every injected event a fresh id and its index.
-    let welcome = RoomEvent::new(
-        event.id.clone(),
-        event.room_id.clone(),
-        EventType::System,
-        source,
-        content,
-        event.created_at,
-    );
+    let welcome = RoomEvent {
+        id: event.id.clone(),
+        r#type: EventType::System,
+        created_at: event.created_at,
+        ..RoomEvent::new(event.room_id.clone(), source, content)
+    };
     InjectedEvent::to_channels(welcome, vec![newcomer.clone()])
 }
 
@@ -172,11 +169,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "the welcomes are stored as system events from the framework",
         timeline
             .iter()
-            .filter(|event| event.event_type == EventType::System)
+            .filter(|event| event.r#type == EventType::System)
             .all(|event| event.source.channel_id == ChannelId::system())
             && timeline
                 .iter()
-                .filter(|event| event.event_type == EventType::System)
+                .filter(|event| event.r#type == EventType::System)
                 .count()
                 == 2,
     );

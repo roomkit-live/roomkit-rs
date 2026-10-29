@@ -580,7 +580,7 @@ mod update_binding {
             .iter()
             .map(|event| {
                 (
-                    event.event_type,
+                    event.r#type,
                     event.source.channel_id.to_string(),
                     event.visibility.clone(),
                 )

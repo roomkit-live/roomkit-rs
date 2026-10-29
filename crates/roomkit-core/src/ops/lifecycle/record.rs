@@ -10,8 +10,8 @@
 //! of the transition itself (RFC §5.1).
 
 use crate::model::{
-    ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventStatus, RoomContext,
-    RoomEvent, Visibility,
+    ChannelId, ChannelType, EventContent, EventSource, EventStatus, RoomContext, RoomEvent,
+    Visibility,
 };
 use crate::ops::Cx;
 use crate::ops::protocol::{EffectId, RoomCounters, StoreRequest};
@@ -30,12 +30,8 @@ pub(crate) fn commit(
         return None;
     }
     let room = &mut context.room;
-    let source = EventSource::new(
-        ChannelId::system(),
-        ChannelType::SYSTEM,
-        EventDirection::Inbound,
-    );
-    let mut event = RoomEvent::new(
+    let source = EventSource::new(ChannelId::system(), ChannelType::SYSTEM);
+    let mut event = RoomEvent::at(
         cx.env.new_event_id(),
         room.id.clone(),
         record.event_type(),

@@ -5,8 +5,7 @@ use std::future::{Future, ready};
 
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, EventDirection, EventSource, EventType, RoomContext, RoomEvent,
-    TextContent,
+    ChannelOutput, ChannelType, EventDirection, EventSource, RoomContext, RoomEvent, TextContent,
 };
 use roomkit::{Channel, ChannelDeclaration, ChannelError, text_of, turn_context};
 
@@ -84,20 +83,16 @@ impl ScriptedAgent {
     fn answer(&self, event: &RoomEvent) -> Option<RoomEvent> {
         let read = text_of(&event.content);
         let (_, reply) = self.script.iter().find(|(line, _)| *line == read)?;
-        let source = EventSource::new(
-            self.declaration.channel_id.clone(),
-            ChannelType::AI,
-            EventDirection::Outbound,
-        );
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(self.declaration.channel_id.clone(), ChannelType::AI)
+        };
         // The pipeline gives the response its own id, room and depth, and
         // makes it answer the event that asked.
         Some(RoomEvent::new(
-            event.id.clone(),
             event.room_id.clone(),
-            EventType::Message,
             source,
-            TextContent::new(*reply).into(),
-            event.created_at,
+            TextContent::new(*reply),
         ))
     }
 }

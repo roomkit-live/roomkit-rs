@@ -10,19 +10,17 @@
     reason = "the fixture helpers fail the test on a malformed fixture"
 )]
 
-use std::collections::BTreeMap;
-
 use pretty_assertions::assert_eq;
 use roomkit_core::model::{
     Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCategory, ChannelDirection,
-    ChannelId, ChannelMediaType, ChannelOutput, ChannelType, Confidence, Consumption,
-    ConsumptionState, DeleteContent, DeleteType, DeliveryError, DeliveryResult, DeliveryStatus,
-    EditContent, EditSource, EventContent, EventDirection, EventId, EventSource, EventStatus,
-    EventType, HookResult, IdentificationStatus, Identity, InboundMessage, InjectedEvent, Latitude,
-    LocationContent, Longitude, MediaContent, Metadata, Observation, ObservationId, Participant,
-    ParticipantId, ParticipantRole, ParticipantStatus, RichContent, Room, RoomEvent, RoomId,
-    RoomStatus, RoomTimers, SystemContent, Task, TaskId, TaskStatus, TemplateContent, TextContent,
-    Timestamp, ToolCallContent, VerificationStatus, VideoContent, Visibility,
+    ChannelId, ChannelMediaType, ChannelOutput, ChannelType, Confidence, DeleteContent, DeleteType,
+    DeliveryError, DeliveryResult, DeliveryStatus, EditContent, EditSource, EventContent, EventId,
+    EventSource, EventStatus, EventType, HookResult, IdentificationStatus, Identity,
+    InboundMessage, InjectedEvent, Latitude, LocationContent, Longitude, MediaContent, Metadata,
+    Observation, ObservationId, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
+    RichContent, Room, RoomEvent, RoomId, RoomStatus, RoomTimers, SystemContent, Task, TaskId,
+    TaskStatus, TemplateContent, TextContent, Timestamp, ToolCallContent, VerificationStatus,
+    VideoContent, Visibility,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -64,7 +62,7 @@ fn channel(id: &str) -> ChannelId {
 }
 
 fn full_event() -> RoomEvent {
-    let mut source = EventSource::new(channel("sms"), ChannelType::SMS, EventDirection::Inbound);
+    let mut source = EventSource::new(channel("sms"), ChannelType::SMS);
     source.participant_id = Some(ParticipantId::new("p_jean").unwrap());
     source.verification = Some(VerificationStatus::Unverified);
     source.external_id = Some("ext_9".to_owned());
@@ -72,12 +70,12 @@ fn full_event() -> RoomEvent {
     source.raw_payload = metadata(json!({ "Body": "Bonjour" }));
     source.provider_message_id = Some("SM123".to_owned());
 
-    let mut event = RoomEvent::new(
+    let mut event = RoomEvent::at(
         EventId::new("evt_2").unwrap(),
         room_id(),
         EventType::Message,
         source,
-        TextContent::new("Bonjour").into(),
+        TextContent::new("Bonjour"),
         at("2026-10-22T14:03:00Z"),
     );
     event.status = EventStatus::Delivered;
@@ -89,15 +87,6 @@ fn full_event() -> RoomEvent {
     event.chain_depth = 1;
     event.parent_event_id = Some(EventId::new("evt_0").unwrap());
     event.responds_to = Some(EventId::new("evt_1").unwrap());
-    event.consumption = BTreeMap::from([(
-        channel("ws_advisor"),
-        Consumption {
-            state: ConsumptionState::Consumed,
-            at: at("2026-10-22T14:03:05Z"),
-            detail: Metadata::new(),
-            participants: BTreeMap::new(),
-        },
-    )]);
     event.correlation_id = Some("crm_77".to_owned());
     event.idempotency_key = Some("msg_SM123".to_owned());
     event.metadata = metadata(json!({ "edited": false }));
@@ -132,14 +121,6 @@ fn full_event_form() -> Value {
         "chain_depth": 1,
         "parent_event_id": "evt_0",
         "responds_to": "evt_1",
-        "consumption": {
-            "ws_advisor": {
-                "state": "consumed",
-                "at": "2026-10-22T14:03:05Z",
-                "detail": {},
-                "participants": {},
-            },
-        },
         "correlation_id": "crm_77",
         "idempotency_key": "msg_SM123",
         "created_at": "2026-10-22T14:03:00Z",

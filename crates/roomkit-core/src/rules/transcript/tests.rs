@@ -61,18 +61,14 @@ impl Timeline {
             "web" => ChannelType::WEBSOCKET,
             _ => ChannelType::AI,
         };
-        let mut source = EventSource::new(
-            ChannelId::new(channel).unwrap(),
-            channel_type,
-            EventDirection::Inbound,
-        );
+        let mut source = EventSource::new(ChannelId::new(channel).unwrap(), channel_type);
         source.participant_id = sender.map(|sender| ParticipantId::new(sender).unwrap());
-        let mut event = RoomEvent::new(
+        let mut event = RoomEvent::at(
             EventId::new(format!("evt_{}", self.count)).unwrap(),
             RoomId::new("room_1").unwrap(),
             event_type,
             source,
-            TextContent::new(text).into(),
+            TextContent::new(text),
             Timestamp::UNIX_EPOCH,
         );
         if let Some(name) = name {

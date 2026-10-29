@@ -42,14 +42,18 @@ fn event(index: u64, channel: &str, content: EventContent, turn: Option<&str>) -
     } else {
         (ChannelType::SMS, EventDirection::Inbound)
     };
-    let mut event = RoomEvent::new(
-        EventId::new(format!("evt_{index}")).unwrap(),
-        room_id(),
-        EventType::Message,
-        EventSource::new(id(channel), channel_type, direction),
-        content,
-        Timestamp::UNIX_EPOCH,
-    );
+    let mut event = RoomEvent {
+        id: EventId::new(format!("evt_{index}")).unwrap(),
+        created_at: Timestamp::UNIX_EPOCH,
+        ..RoomEvent::new(
+            room_id(),
+            EventSource {
+                direction,
+                ..EventSource::new(id(channel), channel_type)
+            },
+            content,
+        )
+    };
     event.index = index;
     event.status = EventStatus::Delivered;
     if let Some(turn) = turn {
@@ -64,9 +68,9 @@ fn event(index: u64, channel: &str, content: EventContent, turn: Option<&str>) -
 fn row(index: u64, turn: &str, result: Option<&str>) -> RoomEvent {
     let mut call = ToolCallContent::new("lookup_order", "c1");
     let mut row = event(index, "assistant", TextContent::new("").into(), Some(turn));
-    row.event_type = EventType::ToolCallStart;
+    row.r#type = EventType::ToolCallStart;
     if let Some(result) = result {
-        row.event_type = EventType::ToolCallEnd;
+        row.r#type = EventType::ToolCallEnd;
         call.result = json!(result);
         call.status = ToolCallStatus::Completed;
         call.outcome = Some(ToolCallOutcome::Served);

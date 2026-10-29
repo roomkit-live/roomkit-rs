@@ -33,7 +33,7 @@ use self::support::{Room, channel, every_row, room_id, served};
 fn end_row<'a>(timeline: &'a [RoomEvent], id: &str) -> &'a ToolCallContent {
     timeline
         .iter()
-        .filter(|event| event.event_type == EventType::ToolCallEnd)
+        .filter(|event| event.r#type == EventType::ToolCallEnd)
         .find_map(|event| {
             let EventContent::ToolCall(row) = &event.content else {
                 return None;
@@ -317,7 +317,7 @@ async fn a_round_runs_its_first_thirty_two_calls_only() {
         .timeline()
         .await
         .iter()
-        .filter(|event| event.event_type == EventType::ToolCallEnd)
+        .filter(|event| event.r#type == EventType::ToolCallEnd)
         .filter_map(|event| {
             let EventContent::ToolCall(row) = &event.content else {
                 return None;
@@ -630,7 +630,7 @@ async fn a_messaging_transport_is_handed_no_tool_row_and_a_websocket_is() {
         transport
             .deliveries()
             .iter()
-            .map(|delivery| delivery.event.event_type)
+            .map(|delivery| delivery.event.r#type)
             .collect()
     };
     assert_eq!(

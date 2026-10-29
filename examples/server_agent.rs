@@ -351,7 +351,7 @@ fn check_the_lookup(checks: &mut Checks, bob_turn: &[Value], timeline: &[RoomEve
         })
         .collect();
     let recorded = timeline.iter().find(|event| {
-        event.event_type == EventType::Message
+        event.r#type == EventType::Message
             && ANSWERS
                 .get(1)
                 .is_some_and(|answer| text_of(&event.content) == *answer)
@@ -359,7 +359,7 @@ fn check_the_lookup(checks: &mut Checks, bob_turn: &[Value], timeline: &[RoomEve
     checks.expect(
         "the file holds the call's start and end rows, and the turn's record on its answer",
         rows.iter()
-            .map(|event| event.event_type)
+            .map(|event| event.r#type)
             .eq([EventType::ToolCallStart, EventType::ToolCallEnd])
             && recorded.is_some_and(|answer| {
                 answer.metadata.get("loop_end_reason") == Some(&json!("completed"))
@@ -889,7 +889,7 @@ async fn timeline_in(
 fn messages_of(timeline: &[RoomEvent]) -> Vec<String> {
     timeline
         .iter()
-        .filter(|event| event.event_type == EventType::Message)
+        .filter(|event| event.r#type == EventType::Message)
         .map(|event| text_of(&event.content))
         .collect()
 }

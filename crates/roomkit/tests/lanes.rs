@@ -326,7 +326,7 @@ async fn first_event_processed(
         .unwrap();
     let first = timeline
         .iter()
-        .find(|event| event.event_type == EventType::Message)
+        .find(|event| event.r#type == EventType::Message)
         .unwrap()
         .id
         .clone();
@@ -455,15 +455,19 @@ impl Channel for SlowAgent {
             agent.go.notified().await;
             unfinished.answered = true;
             agent.log.lock().unwrap().push("answered");
-            let source = EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
-            let answer = RoomEvent::new(
-                event.id.clone(),
-                event.room_id.clone(),
-                EventType::Message,
-                source,
-                TextContent::new("late answer").into(),
-                event.created_at,
-            );
+            let source = EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(channel("ai"), ChannelType::AI)
+            };
+            let answer = RoomEvent {
+                id: event.id.clone(),
+                created_at: event.created_at,
+                ..RoomEvent::new(
+                    event.room_id.clone(),
+                    source,
+                    TextContent::new("late answer"),
+                )
+            };
             Ok(ChannelOutput::respond(vec![answer]))
         }
     }
@@ -526,7 +530,7 @@ async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_e
         .await
         .unwrap()
         .into_iter()
-        .filter(|event| event.event_type == EventType::Message)
+        .filter(|event| event.r#type == EventType::Message)
         .map(|event| (text_of(&event.content), event.status))
         .collect();
     assert_eq!(

@@ -357,7 +357,7 @@ async fn every_row_of_a_turn_carries_the_turn_s_own_correlation_id() {
         timeline
             .iter()
             .filter(|row| row.responds_to.as_ref() == Some(&triggers[trigger].id))
-            .map(|row| row.event_type)
+            .map(|row| row.r#type)
             .collect::<Vec<_>>()
     };
     assert_eq!(
@@ -423,7 +423,7 @@ async fn a_deleted_start_row_ends_its_round_in_the_next_turn() {
     let start = timeline
         .iter()
         .find(|row| {
-            row.event_type == EventType::ToolCallStart
+            row.r#type == EventType::ToolCallStart
                 && matches!(&row.content, EventContent::ToolCall(call) if call.tool_id == "c2")
         })
         .unwrap();

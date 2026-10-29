@@ -187,7 +187,7 @@ async fn the_probe_s_turn_carries_python_s_messages() {
         .filter(|event| event.index > 1)
         .map(|event| {
             (
-                event.event_type,
+                event.r#type,
                 roomkit::text_of(&event.content),
                 event.chain_depth,
             )

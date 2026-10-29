@@ -126,7 +126,7 @@ async fn as_seen(kit: &RoomKit, ws: &RecordingTransport, index: usize) -> (bool,
         .unwrap();
     let messages: Vec<_> = timeline
         .iter()
-        .filter(|event| event.event_type == EventType::Message)
+        .filter(|event| event.r#type == EventType::Message)
         .collect();
     let texts: Vec<String> = messages
         .iter()

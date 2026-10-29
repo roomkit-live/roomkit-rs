@@ -268,7 +268,7 @@ async fn check_the_failed_connections(
 fn end_rows(timeline: &[RoomEvent]) -> Vec<&ToolCallContent> {
     timeline
         .iter()
-        .filter(|event| event.event_type == EventType::ToolCallEnd)
+        .filter(|event| event.r#type == EventType::ToolCallEnd)
         .filter_map(|event| {
             let EventContent::ToolCall(row) = &event.content else {
                 return None;

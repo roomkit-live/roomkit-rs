@@ -13,9 +13,9 @@ use std::time::Duration;
 
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, DeleteContent, EditContent, EditSource, EventContent,
-    EventDirection, EventId, EventSource, EventType, HookResult, InboundMessage, RoomContext,
-    RoomEvent, RoomId, TextContent, Timestamp,
+    ChannelOutput, ChannelType, DeleteContent, EditContent, EditSource, EventContent, EventId,
+    EventSource, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
+    TextContent, Timestamp,
 };
 use roomkit::testing::{
     Environment, RecordingTransport, SequentialEnvironment, kit_with_environment,
@@ -318,7 +318,7 @@ mod an_edit {
         let target = target(&room.kit).await.unwrap();
         assert_eq!(
             (
-                result.event.map(|event| (event.index, event.event_type)),
+                result.event.map(|event| (event.index, event.r#type)),
                 target.content.clone(),
                 Some(is_edited(&target))
             ),
@@ -359,7 +359,7 @@ mod an_edit {
         send(&room.kit, edit_from(CUSTOMER, "I need 50000$")).await;
         let (event, history) = room.agent.read().last().cloned().unwrap();
         assert_eq!(
-            (event.event_type, history),
+            (event.r#type, history),
             (
                 EventType::Edit,
                 vec![
@@ -384,7 +384,7 @@ mod an_edit {
         assert_eq!(
             (
                 event.content,
-                newest.event_type,
+                newest.r#type,
                 matches!(newest.content, EventContent::Edit(_))
             ),
             (
@@ -415,7 +415,7 @@ mod an_edit {
         let mut updated = observed(&room.kit, HookTrigger::OnEventUpdated);
         room.kit
             .before_broadcast("no_edits", |event, _| async move {
-                Ok(if event.event_type == EventType::Edit {
+                Ok(if event.r#type == EventType::Edit {
                     HookResult::block("edits are closed")
                 } else {
                     HookResult::allow()
@@ -516,7 +516,7 @@ mod a_delete {
         send(&room.kit, delete()).await;
         let (event, history) = room.agent.read().last().cloned().unwrap();
         assert_eq!(
-            (event.event_type, history),
+            (event.r#type, history),
             (
                 EventType::Delete,
                 vec![String::new(), "[Message deleted]".to_owned()]
@@ -655,18 +655,15 @@ mod a_direct_call {
             )
             .await
             .unwrap();
-        let mut record = RoomEvent::new(
-            EventId::new("snap_1").unwrap(),
-            room_id(),
-            EventType::Message,
-            EventSource::new(
-                channel("ws"),
-                ChannelType::WEBSOCKET,
-                EventDirection::Inbound,
-            ),
-            TextContent::new("Snapshot").into(),
-            Timestamp::UNIX_EPOCH,
-        );
+        let mut record = RoomEvent {
+            id: EventId::new("snap_1").unwrap(),
+            created_at: Timestamp::UNIX_EPOCH,
+            ..RoomEvent::new(
+                room_id(),
+                EventSource::new(channel("ws"), ChannelType::WEBSOCKET),
+                TextContent::new("Snapshot"),
+            )
+        };
         record.parent_event_id = Some(reply);
         room.kit
             .commit_event(&room_id(), record, CommitEventOptions::default())
@@ -865,7 +862,7 @@ mod changes_at_once {
             .before_broadcast("slow_scan", move |event, _| {
                 let holding = Arc::clone(&holding);
                 async move {
-                    if event.event_type == EventType::Edit {
+                    if event.r#type == EventType::Edit {
                         holding.notify_one();
                         tokio::time::sleep(Duration::from_millis(50)).await;
                     }
@@ -897,9 +894,7 @@ mod changes_at_once {
             (
                 edited.event.map(|event| event.index),
                 removed,
-                left.iter()
-                    .map(|event| event.event_type)
-                    .collect::<Vec<_>>()
+                left.iter().map(|event| event.r#type).collect::<Vec<_>>()
             ),
             (
                 Some(5),

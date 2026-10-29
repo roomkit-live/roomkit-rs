@@ -125,8 +125,8 @@ fn the_fixture_is_the_one_its_generator_wrote() {
 
 /// RFC §1.4, §10.6.3: every message Python's in-memory backend carried for
 /// the turn is read, and writing it back loses none of the members the RFC
-/// defines. The rewrite adds the members of the RFC Python does not model
-/// (an event's `consumption`, a channel's `rate_limit`), and drops the four
+/// defines. The rewrite adds the member of the RFC Python does not model
+/// (a channel's `rate_limit`), and drops the four
 /// a Python channel's capabilities write that the RFC does not list, its
 /// audio and video formats and durations (docs/rfc-gaps.md, "Found in step
 /// 4, milestone 7").
@@ -169,8 +169,6 @@ fn every_message_python_carried_reads_and_rewrites_with_nothing_lost() {
             [
                 "binding.capabilities.rate_limit",
                 "context.bindings[].capabilities.rate_limit",
-                "context.recent_events[].consumption",
-                "event.consumption",
             ]
             .map(str::to_owned)
             .into()

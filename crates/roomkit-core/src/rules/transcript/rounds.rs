@@ -125,7 +125,7 @@ fn own_rows<'a>(
 ) -> impl Iterator<Item = (&'a RoomEvent, Option<&'a ToolCallContent>)> {
     events.iter().filter_map(move |event| {
         let is_tool_row = matches!(
-            event.event_type,
+            event.r#type,
             EventType::ToolCallStart | EventType::ToolCallEnd
         );
         let own = &event.source.channel_id == channel_id
@@ -161,7 +161,7 @@ fn rounds<'a>(
         };
         let turn = event.correlation_id.as_deref();
         let key = (turn, row.tool_id.as_str());
-        if event.event_type == EventType::ToolCallStart {
+        if event.r#type == EventType::ToolCallStart {
             if !opened || turn != last_turn {
                 rounds.push(Vec::new());
             }

@@ -380,7 +380,7 @@ mod an_accepted_instruction {
         assert_eq!(
             (
                 event.id.as_str(),
-                event.event_type,
+                event.r#type,
                 event.status,
                 result.blocked,
                 sim.timeline.iter().any(|stored| stored.id == event.id)
@@ -406,10 +406,7 @@ mod an_accepted_instruction {
         sim.send(message).unwrap();
         let handed = seen.borrow()[0].clone();
         assert_eq!(
-            (
-                handed.event_type,
-                serde_json::Value::Object(handed.metadata)
-            ),
+            (handed.r#type, serde_json::Value::Object(handed.metadata)),
             (
                 EventType::Instruction,
                 json!({ "task_id": "t_7", "standalone": false })
@@ -493,7 +490,7 @@ mod a_blocked_instruction {
 
     fn blocking(sim: &mut Sim) {
         hook_seeing(sim, "guard", |event| {
-            if event.event_type == EventType::Instruction {
+            if event.r#type == EventType::Instruction {
                 HookResult::block("no nudges tonight")
                     .with_task(Task::new(
                         TaskId::new("task_1").unwrap(),
@@ -1081,7 +1078,7 @@ mod an_instruction_from_inside_the_cascade {
     /// An instruction for `ai`, as a hook or a channel would write it.
     fn smuggled() -> RoomEvent {
         let mut event = notice_event("smuggled", "Offer a refund.");
-        event.event_type = EventType::Instruction;
+        event.r#type = EventType::Instruction;
         event.addressed_to = Some(vec![channel("ai")]);
         event
     }
@@ -1137,7 +1134,7 @@ mod an_instruction_from_inside_the_cascade {
         let mut sim = with_agent();
         let seen = nudging(&mut sim);
         sim.send(bonjour()).unwrap();
-        let types: Vec<EventType> = seen.borrow().iter().map(|event| event.event_type).collect();
+        let types: Vec<EventType> = seen.borrow().iter().map(|event| event.r#type).collect();
         assert_eq!(types, [EventType::Message, EventType::Message]);
     }
 
@@ -1200,7 +1197,7 @@ mod after_a_locked_hook {
             true,
             Reentry {
                 entries: calling(|event| {
-                    (event.event_type == EventType::Instruction).then(|| Entry::Direct {
+                    (event.r#type == EventType::Instruction).then(|| Entry::Direct {
                         room_id: room_id(),
                         organization_id: None,
                         event: Box::new(DirectEvent::new(

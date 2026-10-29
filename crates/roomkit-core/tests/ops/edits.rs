@@ -197,7 +197,7 @@ mod an_accepted_edit {
         let result = sim.send(edit()).unwrap();
         let committed = result.event.unwrap();
         assert_eq!(
-            (committed.index, committed.event_type, committed.status),
+            (committed.index, committed.r#type, committed.status),
             (1, EventType::Edit, EventStatus::Delivered)
         );
     }
@@ -771,7 +771,7 @@ mod an_agent_s_response {
                     return Ok(ChannelOutput::default());
                 };
                 let mut correction = response("ai", event, "");
-                correction.event_type = EventType::Edit;
+                correction.r#type = EventType::Edit;
                 correction.content = EventContent::Edit(EditContent {
                     edit_source: Some(EditSource::Sender),
                     ..EditContent::new(target_event_id, TextContent::new("Hello"))
@@ -839,7 +839,7 @@ mod a_hook {
     /// The framework's delete of `evt_1`, claiming `delete_type`.
     fn moderation_delete(delete_type: DeleteType) -> RoomEvent {
         let mut delete = notice_event("placeholder", "");
-        delete.event_type = EventType::Delete;
+        delete.r#type = EventType::Delete;
         let mut content = DeleteContent {
             delete_type,
             ..DeleteContent::new(id("evt_1"))
@@ -1004,7 +1004,7 @@ mod a_hook {
         let delete = stored(&sim, "evt_3");
         assert_eq!(
             (
-                delete.event_type,
+                delete.r#type,
                 delete.visibility.to_string(),
                 sim.traced("deliver")
             ),
@@ -1506,7 +1506,7 @@ mod a_target_changed_by_a_hook {
             true,
             Reentry {
                 entries: calling(|event| {
-                    (event.event_type == EventType::Edit).then(|| {
+                    (event.r#type == EventType::Edit).then(|| {
                         let mut delete = DirectEvent::new(
                             channel("wa"),
                             EventContent::Delete(DeleteContent::new(id("evt_1"))),
@@ -1645,7 +1645,7 @@ mod a_mutation_trigger {
             true,
             Reentry {
                 entries: calling(|event| {
-                    (event.event_type == EventType::Edit).then(|| Entry::Direct {
+                    (event.r#type == EventType::Edit).then(|| Entry::Direct {
                         room_id: room_id(),
                         organization_id: None,
                         event: Box::new(DirectEvent::new(
@@ -1692,7 +1692,7 @@ mod a_mutation_trigger {
         let of_the_target = filtered(&mut sim, "of_wa", "wa");
         filtered(&mut sim, "of_system", "system");
         let mut correction = notice_event("placeholder", "");
-        correction.event_type = EventType::Edit;
+        correction.r#type = EventType::Edit;
         correction.content = EventContent::Edit(EditContent {
             edit_source: Some(EditSource::System),
             ..EditContent::new(id("evt_1"), TextContent::new("I need [redacted]"))

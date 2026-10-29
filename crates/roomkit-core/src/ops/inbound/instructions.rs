@@ -134,7 +134,7 @@ pub(super) fn without_instructions(
     injected
         .into_iter()
         .filter(|injected| {
-            let instruction = injected.event.event_type == EventType::Instruction;
+            let instruction = injected.event.r#type == EventType::Instruction;
             if instruction {
                 tracing::warn!(
                     target: "roomkit::core::inbound",
@@ -155,7 +155,7 @@ pub(super) fn without_instructions(
 /// words, so an agent never directs another agent this way, and an
 /// instruction never lands in the timeline as a channel's response.
 pub(super) fn reenters(response: &RoomEvent, responder: &ChannelId, trigger: &RoomEvent) -> bool {
-    if response.event_type != EventType::Instruction {
+    if response.r#type != EventType::Instruction {
         return true;
     }
     tracing::warn!(

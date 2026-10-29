@@ -88,10 +88,7 @@ async fn read<S: ConversationStore>(
     let mut history = store
         .list_events(&event.room_id, &messages_up_to(event, messages))
         .await?;
-    if !matches!(
-        event.event_type,
-        EventType::Message | EventType::Instruction
-    ) {
+    if !matches!(event.r#type, EventType::Message | EventType::Instruction) {
         history.push(stored(store, event).await);
     }
     let latest_rows = EventQuery {
@@ -131,7 +128,7 @@ async fn stored<S: ConversationStore>(store: &S, event: &RoomEvent) -> RoomEvent
 /// stored, holds the index the room's next event takes; an event the store
 /// never numbered bounds nothing.
 fn messages_up_to(event: &RoomEvent, filter: EventFilter) -> EventQuery {
-    let bound = if event.event_type == EventType::Instruction {
+    let bound = if event.r#type == EventType::Instruction {
         event.index
     } else {
         event.index.saturating_add(1)
@@ -179,31 +176,24 @@ mod tests {
         let (event_type, source, content) = match channel {
             None => (
                 EventType::Message,
-                EventSource::new(
-                    ChannelId::new("sms").unwrap(),
-                    ChannelType::SMS,
-                    EventDirection::Inbound,
-                ),
+                EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS),
                 TextContent::new(format!("message {index}")).into(),
             ),
             Some(channel) => (
                 EventType::ToolCallStart,
-                EventSource::new(
-                    ChannelId::new(channel).unwrap(),
-                    ChannelType::AI,
-                    EventDirection::Outbound,
-                ),
+                EventSource {
+                    direction: EventDirection::Outbound,
+                    ..EventSource::new(ChannelId::new(channel).unwrap(), ChannelType::AI)
+                },
                 EventContent::ToolCall(ToolCallContent::new("lookup", format!("c{index}"))),
             ),
         };
-        let mut event = RoomEvent::new(
-            EventId::new(format!("evt_{index}")).unwrap(),
-            room_id(),
-            event_type,
-            source,
-            content,
-            Timestamp::UNIX_EPOCH,
-        );
+        let mut event = RoomEvent {
+            id: EventId::new(format!("evt_{index}")).unwrap(),
+            r#type: event_type,
+            created_at: Timestamp::UNIX_EPOCH,
+            ..RoomEvent::new(room_id(), source, content)
+        };
         event.index = index;
         event
     }
@@ -238,7 +228,7 @@ mod tests {
         let messages = read
             .recent_events
             .iter()
-            .filter(|event| event.event_type == EventType::Message)
+            .filter(|event| event.r#type == EventType::Message)
             .count();
         (indexes, messages)
     }
@@ -272,7 +262,7 @@ mod tests {
     async fn a_trigger_that_is_no_message_is_the_history_s_newest_event() {
         let mut events: Vec<RoomEvent> = (0..4).map(|index| event(index, None)).collect();
         let mut delete = event(4, None);
-        delete.event_type = EventType::Delete;
+        delete.r#type = EventType::Delete;
         events.push(delete.clone());
         let store = store(events).await;
         assert_eq!(read_by(&store, &delete).await, (vec![0, 1, 2, 3, 4], 4));
@@ -284,7 +274,7 @@ mod tests {
     #[tokio::test]
     async fn the_trigger_is_read_as_stored_or_else_as_handed() {
         let mut delete = event(2, None);
-        delete.event_type = EventType::Delete;
+        delete.r#type = EventType::Delete;
         let store = store(vec![event(0, None), event(1, None), delete.clone()]).await;
         let mut copy = delete.clone();
         copy.content = TextContent::new("[Message deleted]").into();
@@ -306,7 +296,7 @@ mod tests {
     async fn an_instruction_reads_the_messages_before_its_index() {
         let store = store((0..4).map(|index| event(index, None)).collect()).await;
         let mut instruction = event(3, None);
-        instruction.event_type = EventType::Instruction;
+        instruction.r#type = EventType::Instruction;
         assert_eq!(read_by(&store, &instruction).await, (vec![0, 1, 2], 3));
     }
 }

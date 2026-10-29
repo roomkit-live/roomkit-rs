@@ -248,8 +248,7 @@ mod tests {
     use super::*;
     use crate::model::TextContent;
     use crate::model::{
-        ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventDirection, EventId,
-        EventType, RoomId,
+        ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventId, EventType, RoomId,
     };
 
     fn room() -> Room {
@@ -331,16 +330,12 @@ mod tests {
     }
 
     fn event() -> RoomEvent {
-        let mut event = RoomEvent::new(
+        let mut event = RoomEvent::at(
             EventId::new("evt_3").unwrap(),
             RoomId::new("room_1").unwrap(),
             EventType::Message,
-            EventSource::new(
-                ChannelId::new("wa").unwrap(),
-                ChannelType::WHATSAPP,
-                EventDirection::Inbound,
-            ),
-            TextContent::new("I need 5000$").into(),
+            EventSource::new(ChannelId::new("wa").unwrap(), ChannelType::WHATSAPP),
+            TextContent::new("I need 5000$"),
             Timestamp::UNIX_EPOCH,
         );
         event.metadata.insert("crm".to_owned(), json!("c_1"));

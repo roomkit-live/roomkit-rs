@@ -410,8 +410,7 @@ fn parse(carried: CarriedRequest) -> Result<TurnRequest, String> {
 #[cfg(test)]
 mod tests {
     use roomkit_core::model::{
-        ChannelId, ChannelType, EventDirection, EventId, EventSource, EventType, RoomEvent, RoomId,
-        TextContent, Timestamp,
+        ChannelId, ChannelType, EventId, EventSource, RoomEvent, RoomId, TextContent, Timestamp,
     };
 
     use super::*;
@@ -421,19 +420,16 @@ mod tests {
     #[test]
     fn a_request_past_its_bound_is_refused_before_it_is_parsed() {
         let at: Timestamp = "2026-10-26T12:00:00Z".parse().unwrap();
-        let source = EventSource::new(
-            ChannelId::new("sms").unwrap(),
-            ChannelType::SMS,
-            EventDirection::Inbound,
-        );
-        let event = RoomEvent::new(
-            EventId::new("evt_1").unwrap(),
-            RoomId::new("room_1").unwrap(),
-            EventType::Message,
-            source,
-            TextContent::new("Hi").into(),
-            at,
-        );
+        let source = EventSource::new(ChannelId::new("sms").unwrap(), ChannelType::SMS);
+        let event = RoomEvent {
+            id: EventId::new("evt_1").unwrap(),
+            created_at: at,
+            ..RoomEvent::new(
+                RoomId::new("room_1").unwrap(),
+                source,
+                TextContent::new("Hi"),
+            )
+        };
         let carried = CarriedRequest {
             rest: " ".repeat(MAX_MESSAGE_BYTES + 1),
             event,

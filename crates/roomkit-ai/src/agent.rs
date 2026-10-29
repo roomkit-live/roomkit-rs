@@ -297,8 +297,7 @@ impl<P: AiProvider> AiAgent<P> {
     /// instruction, never one of its own (RFC §6.4).
     fn answers(&self, event: &RoomEvent) -> bool {
         &event.source.channel_id != self.id()
-            && (event.event_type == EventType::Message
-                || event.event_type == EventType::Instruction)
+            && (event.r#type == EventType::Message || event.r#type == EventType::Instruction)
     }
 
     /// The system prompt of a turn in `context`'s room: the agent's own,
@@ -322,7 +321,10 @@ impl<P: AiProvider> AiAgent<P> {
 
     /// The source of the agent's rows.
     fn source(&self) -> EventSource {
-        EventSource::new(self.id().clone(), ChannelType::AI, EventDirection::Outbound)
+        EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(self.id().clone(), ChannelType::AI)
+        }
     }
 }
 
@@ -391,7 +393,7 @@ impl<P: AiProvider> Channel for AiAgent<P> {
 /// Whether `event` is an instruction that stands alone, which reads none
 /// of the room's working state (RFC §10.1.1 rule 7).
 fn stands_alone(event: &RoomEvent) -> bool {
-    event.event_type == EventType::Instruction
+    event.r#type == EventType::Instruction
         && event.metadata.get(STANDALONE) == Some(&Value::Bool(true))
 }
 

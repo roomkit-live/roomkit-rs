@@ -21,8 +21,7 @@ use std::process::ExitCode;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent, RoomId,
-    TextContent,
+    EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -74,20 +73,20 @@ impl Agent {
 
     /// The agent's answer to `event`.
     fn answer(&self, event: &RoomEvent) -> RoomEvent {
-        let source = EventSource::new(
-            self.declaration.channel_id.clone(),
-            ChannelType::AI,
-            EventDirection::Outbound,
-        );
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(self.declaration.channel_id.clone(), ChannelType::AI)
+        };
         // The pipeline gives the answer its own id, room and depth.
-        RoomEvent::new(
-            event.id.clone(),
-            event.room_id.clone(),
-            EventType::Message,
-            source,
-            TextContent::new("Your refund was issued yesterday.").into(),
-            event.created_at,
-        )
+        RoomEvent {
+            id: event.id.clone(),
+            created_at: event.created_at,
+            ..RoomEvent::new(
+                event.room_id.clone(),
+                source,
+                TextContent::new("Your refund was issued yesterday."),
+            )
+        }
     }
 }
 

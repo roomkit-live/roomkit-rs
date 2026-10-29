@@ -158,7 +158,7 @@ pub(crate) enum Author {
 /// check: the commit would write it on the target, or a channel would apply
 /// it natively.
 pub fn mutation(event: &RoomEvent) -> Result<Option<Mutation<'_>>, EditRefusal> {
-    match (event.event_type, &event.content) {
+    match (event.r#type, &event.content) {
         (EventType::Edit, EventContent::Edit(edit)) if !holds_change(&edit.new_content) => {
             Ok(Some(Mutation::Edit(edit)))
         }
@@ -225,7 +225,7 @@ fn check_target<'target>(
     let targetable = target.room_id == event.room_id
         && target.status != EventStatus::Blocked
         && !is_deleted(target)
-        && !matches!(target.event_type, EventType::Edit | EventType::Delete);
+        && !matches!(target.r#type, EventType::Edit | EventType::Delete);
     if targetable {
         Ok(target)
     } else {
@@ -402,18 +402,14 @@ mod tests {
 
     /// A message of `room_1` from `sender` on the WhatsApp channel `wa`.
     fn message_from(sender: Option<&str>) -> RoomEvent {
-        let mut source = EventSource::new(
-            channel("wa"),
-            ChannelType::WHATSAPP,
-            EventDirection::Inbound,
-        );
+        let mut source = EventSource::new(channel("wa"), ChannelType::WHATSAPP);
         source.participant_id = sender.map(participant_id);
-        let mut event = RoomEvent::new(
+        let mut event = RoomEvent::at(
             EventId::new("evt_3").unwrap(),
             RoomId::new("room_1").unwrap(),
             EventType::Message,
             source,
-            TextContent::new("I need 5000$").into(),
+            TextContent::new("I need 5000$"),
             Timestamp::UNIX_EPOCH,
         );
         event.status = EventStatus::Delivered;
@@ -444,7 +440,7 @@ mod tests {
     fn change(event_type: EventType, content: EventContent, sender: Option<&str>) -> RoomEvent {
         let mut event = message_from(sender);
         event.id = EventId::new("evt_7").unwrap();
-        event.event_type = event_type;
+        event.r#type = event_type;
         event.content = content;
         event.status = EventStatus::Pending;
         event
@@ -813,8 +809,10 @@ mod tests {
         #[test]
         fn an_agent_may_edit_its_own_response() {
             let mut response = target();
-            response.source =
-                EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
+            response.source = EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(channel("ai"), ChannelType::AI)
+            };
             let mut edit = edit_from(ALICE);
             edit.source = response.source.clone();
             assert_eq!(
@@ -830,8 +828,10 @@ mod tests {
             let mut jean = member(ALICE, "wa", ParticipantRole::Member);
             jean.connected_via.push(channel("ai"));
             let mut edit = edit_from(ALICE);
-            edit.source =
-                EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
+            edit.source = EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(channel("ai"), ChannelType::AI)
+            };
             edit.source.participant_id = Some(participant_id(ALICE));
             assert_eq!(
                 checked(&edit, Some(&target()), Origin::Channel, &[jean]),
@@ -842,16 +842,20 @@ mod tests {
         #[test]
         fn an_agent_may_not_edit_another_channel_s_message() {
             let mut edit = edit_from(ALICE);
-            edit.source =
-                EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
+            edit.source = EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(channel("ai"), ChannelType::AI)
+            };
             assert_eq!(by_channel(&edit), Err(EditRefusal::NotOriginalAuthor));
         }
 
         #[test]
         fn a_sender_may_not_edit_an_agent_s_response() {
             let mut response = target();
-            response.source =
-                EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
+            response.source = EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(channel("ai"), ChannelType::AI)
+            };
             assert_eq!(
                 checked(&edit_from(ALICE), Some(&response), Origin::Channel, &[]),
                 Err(EditRefusal::NotOriginalAuthor)
@@ -940,8 +944,10 @@ mod tests {
             let mut marie = member(BOB, "ai", ParticipantRole::Agent);
             marie.connected_via.push(channel("wa"));
             let mut delete = delete_from(BOB, DeleteType::Admin);
-            delete.source =
-                EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
+            delete.source = EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(channel("ai"), ChannelType::AI)
+            };
             delete.source.participant_id = Some(participant_id(BOB));
             assert_eq!(
                 checked(&delete, Some(&target()), Origin::Channel, &[marie]),
@@ -971,11 +977,7 @@ mod tests {
 
         fn from_the_system_channel(content: EventContent, event_type: EventType) -> RoomEvent {
             let mut event = change(event_type, content, None);
-            event.source = EventSource::new(
-                ChannelId::system(),
-                ChannelType::SYSTEM,
-                EventDirection::Inbound,
-            );
+            event.source = EventSource::new(ChannelId::system(), ChannelType::SYSTEM);
             event
         }
 

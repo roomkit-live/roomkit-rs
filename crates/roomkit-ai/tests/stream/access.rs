@@ -210,7 +210,7 @@ async fn a_hook_hiding_the_tool_rows_leaves_the_text_streaming() {
     );
     room.kit
         .hook(spec, |mut event, _context| async move {
-            if event.event_type == EventType::Message {
+            if event.r#type == EventType::Message {
                 return Ok(HookResult::allow());
             }
             event.visibility = Visibility::channels([channel("web")]).unwrap();

@@ -383,11 +383,13 @@ impl TurnHost {
     /// The kit's hooks on `trigger` for this agent's calls, its SYNC chain
     /// in chain order, then its observers.
     fn hooks(&self, trigger: HookTrigger) -> Vec<(HookSpec, ToolHandler)> {
-        let source = EventSource::new(
-            self.shared.channel_id.clone(),
-            self.shared.channel_type.clone(),
-            EventDirection::Outbound,
-        );
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(
+                self.shared.channel_id.clone(),
+                self.shared.channel_type.clone(),
+            )
+        };
         self.shared.kit.tool_hooks(trigger, &source)
     }
 

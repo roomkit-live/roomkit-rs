@@ -14,9 +14,9 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates, HookResult,
-    Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId, Room,
-    RoomContext, RoomEvent, RoomId, RoomUpdates, Task, TextContent, Timestamp,
+    EventDirection, EventId, EventSource, EventStatus, EventUpdates, HookResult, Identity,
+    IdentityId, InboundMessage, Observation, Participant, ParticipantId, Room, RoomContext,
+    RoomEvent, RoomId, RoomUpdates, Task, TextContent, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -657,19 +657,12 @@ async fn the_writes_left_running_and_failing_are_logged() {
 
 /// A record from the WebSocket channel, for `commit_event`.
 fn record(text: &str) -> RoomEvent {
-    let source = EventSource::new(
-        channel("ws"),
-        ChannelType::WEBSOCKET,
-        EventDirection::Inbound,
-    );
-    RoomEvent::new(
-        "record_1".parse().unwrap(),
-        room_id(),
-        EventType::Message,
-        source,
-        TextContent::new(text).into(),
-        Timestamp::UNIX_EPOCH,
-    )
+    let source = EventSource::new(channel("ws"), ChannelType::WEBSOCKET);
+    RoomEvent {
+        id: "record_1".parse().unwrap(),
+        created_at: Timestamp::UNIX_EPOCH,
+        ..RoomEvent::new(room_id(), source, TextContent::new(text))
+    }
 }
 
 /// Python's third wait for the writes, 5 s from the channels' close
@@ -930,15 +923,15 @@ impl Channel for Agent {
             return Ok(ChannelOutput::default());
         }
         tokio::time::sleep(self.turn).await;
-        let source = EventSource::new(channel("agent"), ChannelType::AI, EventDirection::Outbound);
-        let answer = RoomEvent::new(
-            event.id.clone(),
-            event.room_id.clone(),
-            EventType::Message,
-            source,
-            TextContent::new("Answer").into(),
-            event.created_at,
-        );
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(channel("agent"), ChannelType::AI)
+        };
+        let answer = RoomEvent {
+            id: event.id.clone(),
+            created_at: event.created_at,
+            ..RoomEvent::new(event.room_id.clone(), source, TextContent::new("Answer"))
+        };
         Ok(ChannelOutput::respond(vec![answer]))
     }
 }

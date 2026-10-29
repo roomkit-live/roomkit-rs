@@ -44,7 +44,7 @@ pub(super) fn delivered(
     register: Option<Metadata>,
 ) -> Committing {
     event.status = EventStatus::Delivered;
-    if event.event_type == EventType::Instruction {
+    if event.r#type == EventType::Instruction {
         // Delivered to the agents it names, with the index step 8 showed its
         // hooks, which the next event takes (RFC §10.1.1 rule 5).
         return Committing {
@@ -151,7 +151,7 @@ pub(super) fn blocked(
         reason,
         context: Box::new(context.clone()),
     };
-    if event.event_type == EventType::Instruction {
+    if event.r#type == EventType::Instruction {
         return Committing {
             effect: None,
             result,

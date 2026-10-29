@@ -12,8 +12,8 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelId, ChannelType, EventDirection, EventSource, EventStatus, EventType, HookResult,
-    InboundMessage, InjectedEvent, Observation, RoomEvent, RoomId, TextContent, Timestamp,
+    ChannelId, ChannelType, EventDirection, EventSource, EventStatus, HookResult, InboundMessage,
+    InjectedEvent, Observation, RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -35,19 +35,10 @@ fn has_sin(text: &str) -> bool {
 
 /// An event from the framework itself, for the hook to inject.
 fn notice(text: &str, now: Timestamp) -> Result<RoomEvent, Box<dyn Error>> {
-    Ok(RoomEvent::new(
-        // The pipeline gives every injected event a fresh id.
-        "placeholder".parse()?,
-        RoomId::new("room_1")?,
-        EventType::Message,
-        EventSource::new(
-            ChannelId::new("system")?,
-            ChannelType::SYSTEM,
-            EventDirection::Outbound,
-        ),
-        TextContent::new(text).into(),
-        now,
-    ))
+    Ok(
+        RoomEvent { id: // The pipeline gives every injected event a fresh id.
+        "placeholder".parse()?, created_at: now, ..RoomEvent::new(RoomId::new("room_1")?, EventSource { direction: EventDirection::Outbound, ..EventSource::new(ChannelId::new("system")?, ChannelType::SYSTEM) }, TextContent::new(text)) },
+    )
 }
 
 #[tokio::main]

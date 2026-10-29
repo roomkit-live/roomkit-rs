@@ -15,9 +15,9 @@ use pretty_assertions::assert_eq;
 use roomkit::model::{
     Access, AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId,
     ChannelMediaType, ChannelOutput, ChannelType, EventContent, EventDirection, EventId,
-    EventSource, EventType, EventUpdates, HookResult, Identity, IdentityId, InboundMessage,
-    Metadata, Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId,
-    RoomUpdates, Task, TextContent, Timestamp,
+    EventSource, EventUpdates, HookResult, Identity, IdentityId, InboundMessage, Metadata,
+    Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
+    Task, TextContent, Timestamp,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
@@ -138,14 +138,18 @@ impl Channel for Agent {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(event.clone());
-        let answer = RoomEvent::new(
-            event.id.clone(),
-            event.room_id.clone(),
-            EventType::Message,
-            EventSource::new(self.id.clone(), ChannelType::AI, EventDirection::Outbound),
-            text(self.reply),
-            event.created_at,
-        );
+        let answer = RoomEvent {
+            id: event.id.clone(),
+            created_at: event.created_at,
+            ..RoomEvent::new(
+                event.room_id.clone(),
+                EventSource {
+                    direction: EventDirection::Outbound,
+                    ..EventSource::new(self.id.clone(), ChannelType::AI)
+                },
+                text(self.reply),
+            )
+        };
         ready(Ok(ChannelOutput::respond(vec![answer])))
     }
 }
@@ -493,14 +497,15 @@ async fn a_first_post_waits_for_the_room_lock_within_process_timeout() {
 
 /// A record of the SMS channel saying `body`, for `commit_event`.
 fn record(body: &str) -> RoomEvent {
-    RoomEvent::new(
-        EventId::new("record_1").unwrap(),
-        room_id(),
-        EventType::Message,
-        EventSource::new(channel("sms"), ChannelType::SMS, EventDirection::Inbound),
-        text(body),
-        Timestamp::UNIX_EPOCH,
-    )
+    RoomEvent {
+        id: EventId::new("record_1").unwrap(),
+        created_at: Timestamp::UNIX_EPOCH,
+        ..RoomEvent::new(
+            room_id(),
+            EventSource::new(channel("sms"), ChannelType::SMS),
+            text(body),
+        )
+    }
 }
 
 /// RFC §10.5, §19.3: the host's words are a person's message: a post

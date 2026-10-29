@@ -9,8 +9,8 @@ use std::time::Duration;
 use futures_core::Stream;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, EventType, InboundMessage, Metadata, RoomContext, RoomEvent,
-    RoomId, TextContent,
+    EventDirection, EventSource, InboundMessage, Metadata, RoomContext, RoomEvent, RoomId,
+    TextContent,
 };
 use roomkit_core::ops::ChannelDeclaration;
 use serde_json::Value;
@@ -214,15 +214,15 @@ impl Channel for Waiting {
             .lock()
             .unwrap()
             .push(("answered", self.since.elapsed()));
-        let source = EventSource::new(channel("ai"), ChannelType::AI, EventDirection::Outbound);
-        let answer = RoomEvent::new(
-            event.id.clone(),
-            event.room_id.clone(),
-            EventType::Message,
-            source,
-            TextContent::new("Done.").into(),
-            event.created_at,
-        );
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(channel("ai"), ChannelType::AI)
+        };
+        let answer = RoomEvent {
+            id: event.id.clone(),
+            created_at: event.created_at,
+            ..RoomEvent::new(event.room_id.clone(), source, TextContent::new("Done."))
+        };
         Ok(ChannelOutput::respond(vec![answer]))
     }
 }

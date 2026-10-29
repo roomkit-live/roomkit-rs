@@ -260,11 +260,10 @@ fn observers(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) -> 
 /// channel, and the reason of a transition its timer made, as
 /// [`LifecyclePayload`] writes and reads them.
 fn payload(cx: &mut Cx<'_>, reported: Reported<'_>, room_id: &RoomId) -> RoomEvent {
-    let source = EventSource::new(
-        ChannelId::system(),
-        ChannelType::SYSTEM,
-        EventDirection::Outbound,
-    );
+    let source = EventSource {
+        direction: EventDirection::Outbound,
+        ..EventSource::new(ChannelId::system(), ChannelType::SYSTEM)
+    };
     let lifecycle = LifecyclePayload {
         change: reported.change(),
         room_id: room_id.clone(),
@@ -274,7 +273,7 @@ fn payload(cx: &mut Cx<'_>, reported: Reported<'_>, room_id: &RoomId) -> RoomEve
     };
     let content = EventContent::System(lifecycle.content());
     let now = cx.env.now();
-    RoomEvent::new(
+    RoomEvent::at(
         cx.env.new_event_id(),
         room_id.clone(),
         EventType::System,

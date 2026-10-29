@@ -117,7 +117,7 @@ impl LifecyclePayload {
             return None;
         };
         let from_the_framework =
-            event.event_type == EventType::System && event.source.channel_id == ChannelId::system();
+            event.r#type == EventType::System && event.source.channel_id == ChannelId::system();
         if !from_the_framework {
             return None;
         }
@@ -198,15 +198,14 @@ mod tests {
 
     /// A system event from `source` carrying `content`.
     fn event(source: &str, content: SystemContent) -> RoomEvent {
-        RoomEvent::new(
+        RoomEvent::at(
             EventId::new("evt_1").unwrap(),
             room_id(),
             EventType::System,
-            EventSource::new(
-                ChannelId::new(source).unwrap(),
-                ChannelType::SYSTEM,
-                EventDirection::Outbound,
-            ),
+            EventSource {
+                direction: EventDirection::Outbound,
+                ..EventSource::new(ChannelId::new(source).unwrap(), ChannelType::SYSTEM)
+            },
             EventContent::System(content),
             Timestamp::UNIX_EPOCH,
         )

@@ -512,7 +512,7 @@ async fn an_event_is_found_whichever_room_holds_it() {
 async fn a_delete_s_commit_marks_its_target_s_edits_deleted() {
     let store = with_events(vec![event(0), edit_of(1, 0), event(2), edit_of(3, 2)]).await;
     let mut delete = event(4);
-    delete.event_type = EventType::Delete;
+    delete.r#type = EventType::Delete;
     delete.content = EventContent::Delete(DeleteContent::new(event_id("evt_0")));
     let updates = EventUpdates {
         metadata: Some([("deleted".to_owned(), json!(true))].into_iter().collect()),

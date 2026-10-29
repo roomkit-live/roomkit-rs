@@ -194,7 +194,7 @@ async fn by_hand(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn Err
             && shared::timeline(kit, &room)
                 .await?
                 .iter()
-                .filter(|event| event.event_type == EventType::Message)
+                .filter(|event| event.r#type == EventType::Message)
                 .count()
                 == 3,
     );

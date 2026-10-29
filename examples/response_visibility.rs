@@ -32,8 +32,8 @@ use std::process::ExitCode;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent, RoomId,
-    TextContent, Visibility,
+    EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
+    Visibility,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -61,22 +61,18 @@ impl Assistant {
     }
 
     fn answer(&self, question: &RoomEvent) -> RoomEvent {
-        let source = EventSource::new(
-            self.declaration.channel_id.clone(),
-            ChannelType::AI,
-            EventDirection::Outbound,
-        );
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(self.declaration.channel_id.clone(), ChannelType::AI)
+        };
         let text = format!("Answer to {:?}", text_of(&question.content));
         // The pipeline gives the answer its own id, room and depth, and
         // narrows it to where the question's answers may go.
-        RoomEvent::new(
-            question.id.clone(),
-            question.room_id.clone(),
-            EventType::Message,
-            source,
-            TextContent::new(text).into(),
-            question.created_at,
-        )
+        RoomEvent {
+            id: question.id.clone(),
+            created_at: question.created_at,
+            ..RoomEvent::new(question.room_id.clone(), source, TextContent::new(text))
+        }
     }
 }
 

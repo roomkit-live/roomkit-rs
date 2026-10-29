@@ -78,7 +78,7 @@ pub(crate) fn write_row(
         event.id.as_str(),
         event.room_id.as_str(),
         records::integer(event.index)?,
-        records::name(&event.event_type)?,
+        records::name(&event.r#type)?,
         records::name(&event.visibility)?,
         event.source.channel_id.as_str(),
         event.source.channel_type.as_str(),

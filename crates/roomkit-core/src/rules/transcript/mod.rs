@@ -224,7 +224,7 @@ impl Turn {
     /// The turn's input: `event`, an instruction never attributed to a
     /// speaker.
     fn input(event: &RoomEvent, authors: &mut Authors<'_>) -> Self {
-        let instruction = event.event_type == EventType::Instruction;
+        let instruction = event.r#type == EventType::Instruction;
         Self {
             role: Role::User,
             text: text_of(&event.content),
@@ -296,9 +296,7 @@ fn place(turns: &mut [Turn], rounds: Vec<ToolRound>, before: Option<u64>) {
 /// room accepted and has not deleted. An edit is read on the message it
 /// changed; a lifecycle record, a receipt or a reaction is no turn.
 fn is_conversation(event: &RoomEvent) -> bool {
-    event.event_type == EventType::Message
-        && event.status != EventStatus::Blocked
-        && !is_deleted(event)
+    event.r#type == EventType::Message && event.status != EventStatus::Blocked && !is_deleted(event)
 }
 
 /// `turns` with each copy of a runtime mark replaced (RFC §6.4): in each

@@ -285,7 +285,7 @@ fn fields_of(event: &RoomEvent, stream_id: Option<&str>) -> Map<String, Value> {
         "room_id": event.room_id,
         "id": event.id,
         "index": event.index,
-        "type": event.event_type,
+        "type": event.r#type,
         "from": event.source.channel_id,
         "participant_id": event.source.participant_id,
         "text": text_of(&event.content),

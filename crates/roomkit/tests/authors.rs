@@ -134,7 +134,7 @@ async fn names_that_read_alike_are_ranked_as_the_python_implementation_ranks_the
         .await
         .unwrap()
         .into_iter()
-        .filter(|event| event.event_type == EventType::Message)
+        .filter(|event| event.r#type == EventType::Message)
         .map(|event| event.metadata.get("author").cloned())
         .collect();
     let expected: Vec<Option<Value>> = SENT
