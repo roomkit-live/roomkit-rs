@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from api_parity.mapping import Entry, Mapping, variant_name
+from api_parity.mapping import Entry, Literal, Mapping, snake_name, variant_name
 from api_parity.sides import Python, Surface, python_signature
 
 # What a struct a caller builds that keeps `#[non_exhaustive]` is found with.
@@ -86,6 +86,7 @@ class Comparison:
             else:
                 self._item(item, python)
             results[path] = ItemResult(path, item["kind"], python, findings=self.findings[before:])
+        self._stale_rules()
         return results
 
     def python_of(self, item: dict) -> str | None:
@@ -97,13 +98,33 @@ class Comparison:
         if entry is not None:
             self.applied.add(id(entry))
             return entry.python
+        builtin = self.rules.builtin(item["path"])
+        if builtin is not None:
+            return BUILTIN + builtin.python
+        literal = self.rules.literals.get(item["path"])
+        if item["kind"] == "enum" and literal is not None:
+            return literal.field
         module, _, name = item["path"].rpartition("::")
-        if name in self.rules.builtins:
-            return BUILTIN + self.rules.builtins[name]
-        if item["kind"] == "enum" and name in self.rules.literals:
-            return self.rules.literals[name]
         wanted = name if item["kind"] in ("fn", "constant") else self.rules.python_type_name(name)
         return self.python.find(self.rules.packages_for(module), wanted)
+
+    def _stale_rules(self) -> None:
+        """A rule naming a Rust item, a variant or a member that is gone is
+        a finding no entry covers: the rules stay those of the surface."""
+        items = self.surface.items
+        named = [("builtins", path) for path in self.rules.builtins]
+        named += [("literals", path) for path in self.rules.literals]
+        for table, path in named:
+            if path not in items:
+                self._find("rust", path, f"listed in [rules] {table}: no such Rust item", path, None)
+        for path in self.rules.error_families:
+            item = items.get(path)
+            if item is None or item["kind"] != "enum" or "Error" not in item.get("impls", []):
+                self._find("rust", path, "listed in [rules] error_families: no such error enum", path, None)
+        for path in self.rules.builtin_payloads:
+            owner, _, variant = path.rpartition("::")
+            if variant not in [found["name"] for found in items.get(owner, {}).get("variants", [])]:
+                self._find("rust", path, "listed in [rules] builtin_payloads: no such Rust variant", owner, None)
 
     def own_members(self, path: str) -> list[Finding]:
         """An options struct's own methods and constants: its fields stand
@@ -143,11 +164,11 @@ class Comparison:
 
     def _item(self, item: dict, python: str) -> None:
         if python.startswith(BUILTIN):
-            return  # a strong type or an error a builtin stands for: no member to compare
-        if item["path"].rpartition("::")[2] in self.rules.literals:
-            # A `Literal`'s values are not in the snapshot: its field is.
-            if not self.python.exists(python):
-                self._find("rust", item["path"], f"a Literal of {python}: no such Python field", item["path"], python)
+            self._builtin_members(item, python)
+            return
+        literal = self.rules.literals.get(item["path"])
+        if literal is not None:
+            self._literal(item, literal)
             return
         spec = self.python.specs.get(python)
         if spec is None:
@@ -162,6 +183,39 @@ class Comparison:
             self._params(item["path"], item["signature"], python, spec["__call__"], (item["path"], python))
         else:
             self._find("rust", item["path"], f"a function: {python} is a class", item["path"], python)
+
+    def _builtin_members(self, item: dict, python: str) -> None:
+        """A builtin has no member to compare: each Rust member is one the
+        architecture table maps to an operation of the builtin, which
+        `[rules] builtins` lists. An error's variants are the messages of
+        the exception it stands for."""
+        builtin = self.rules.builtin(item["path"])
+        if builtin is None:
+            return  # a variant's builtin exception: no item
+        path = item["path"]
+        present = [member["name"] for kind in ("methods", "constants") for member in item.get(kind, [])]
+        for name in present:
+            if name not in builtin.members:
+                detail = f"a member of a {python} type: no row of the architecture table lists it ([rules] builtins)"
+                self._find("rust", f"{path}::{name}", detail, path, python)
+        for name in builtin.members:
+            if name not in present:
+                self._find("rust", f"{path}::{name}", "listed in [rules] builtins: no such Rust member", path, python)
+
+    def _literal(self, item: dict, literal: Literal) -> None:
+        """A `Literal`'s field is in the snapshot, its values are not: they
+        are `[rules] literals`', each a variant's `snake_case` name."""
+        path = item["path"]
+        if not self.python.exists(literal.field):
+            self._find("rust", path, f"a Literal of {literal.field}: no such Python field", path, literal.field)
+            return
+        variants = {snake_name(variant["name"]): variant["name"] for variant in item.get("variants", [])}
+        for value, variant in variants.items():
+            if value not in literal.values:
+                self._find("rust", f"{path}::{variant}", f"no value of the Literal of {literal.field}", path, literal.field)
+        for value in literal.values:
+            if value not in variants:
+                self._find("python", literal.field, f"the Literal's value {value!r}: no Rust variant", path, literal.field)
 
     def _class(self, item: dict, python: str, spec: dict) -> None:
         cls = _Class(
@@ -213,32 +267,68 @@ class Comparison:
 
     def _error_family(self, item: dict, cls: _Class) -> None:
         """An error enum is its Python base class, each variant one of its
-        exception classes: `X` the class `XError`, or the family's
-        `<Stem>XError` (`SkillError::Parse`, `SkillParseError`), or a
-        builtin exception. A variant's named fields are the class's
-        constructor's parameters, when the class has one; a class without
-        takes a message, whatever the variant carries."""
+        exception classes: `X` the family's `<Stem>XError`
+        (`SkillError::Parse`, `SkillParseError`), or else the class
+        `XError`, each name in Python's acronym casing, or a builtin
+        exception. The class must be of the family `[rules] error_families`
+        lists for the enum, and each class it lists must have its variant.
+        A variant's named fields are the class's constructor's parameters
+        when the class has one; a class without takes a message, and its
+        variant carries the fields the family lists for it, no other."""
+        family = self.rules.error_families.get(cls.path)
+        if family is None:
+            self._find("rust", cls.path, "an error enum: no family in [rules] error_families", cls.path, cls.python)
         stem = cls.path.rpartition("::")[2].removesuffix("Error")
         packages = self.rules.packages_for(cls.path.rpartition("::")[0])
+        stood_for: set[str] = set()
         for variant in item.get("variants", []):
             name = variant["name"]
             cls.used.add(name)
             if name in self.rules.builtin_errors:
                 continue
-            python = self.python.find(packages, f"{name}Error") or self.python.find(packages, f"{stem}{name}Error")
             path = f"{cls.path}::{name}"
+            python = self._exception_class(packages, stem, name)
             if python is None:
                 self._find("rust", path, "an error variant: no Python exception class", cls.path, cls.python)
                 continue
-            init = self.python.specs.get(python, {}).get("__init__")
-            if init is None:
+            if family is not None and python not in family:
+                detail = f"{python} is no class of the {cls.python} family ([rules] error_families)"
+                self._find("rust", path, detail, cls.path, cls.python)
                 continue
-            params = [param.name for param in python_signature(init)]
-            fields = [field_["name"] for field_ in variant.get("fields", [])]
-            for missing in (param for param in params if param not in fields):
-                self._find("python", f"{python}.__init__({missing})", f"no field of {path}", cls.path, cls.python)
-            for extra in (field_ for field_ in fields if field_ not in params):
-                self._find("rust", f"{path}::{extra}", f"no parameter of {python}", cls.path, cls.python)
+            stood_for.add(python)
+            self._error_fields(cls, variant, python, (family or {}).get(python, ()))
+        for python in family or {}:
+            if python not in stood_for:
+                self._find("python", python, f"a class of the {cls.python} family: no Rust variant", cls.path, cls.python)
+
+    def _exception_class(self, packages: list[str], stem: str, name: str) -> str | None:
+        """The exception class a variant `name` of an enum `<Stem>Error`
+        stands for: the family's name first, then the bare one."""
+        for wanted in (f"{stem}{name}Error", f"{name}Error"):
+            found = self.python.find(packages, self.rules.python_type_name(wanted))
+            if found is not None:
+                return found
+        return None
+
+    def _error_fields(self, cls: _Class, variant: dict, python: str, carried: tuple[str, ...]) -> None:
+        path = f"{cls.path}::{variant['name']}"
+        fields = [field_["name"] for field_ in variant.get("fields", [])]
+        init = self.python.specs.get(python, {}).get("__init__")
+        if init is None:
+            for extra in (field_ for field_ in fields if field_ not in carried):
+                detail = f"no parameter of {python}, which takes a message, nor a field [rules] error_families lists"
+                self._find("rust", f"{path}::{extra}", detail, cls.path, cls.python)
+            for gone in (field_ for field_ in carried if field_ not in fields):
+                self._find("rust", f"{path}::{gone}", "listed in [rules] error_families: no such field", cls.path, cls.python)
+            return
+        if carried:
+            detail = f"listed in [rules] error_families: {python} has a constructor, whose parameters are compared"
+            self._find("rust", path, detail, cls.path, cls.python)
+        params = [param.name for param in python_signature(init)]
+        for missing in (param for param in params if param not in fields):
+            self._find("python", f"{python}.__init__({missing})", f"no field of {path}", cls.path, cls.python)
+        for extra in (field_ for field_ in fields if field_ not in params):
+            self._find("rust", f"{path}::{extra}", f"no parameter of {python}", cls.path, cls.python)
 
     def _enum_member(self, cls: _Class, member: str) -> None:
         rust = cls.members.get(member)
@@ -319,16 +409,20 @@ class Comparison:
     def _union_tag(self, path: str, param) -> bool:
         """Python's `type='text'` of a content: the tag of the tagged union
         the Rust type is a variant of (`EventContent::Text(TextContent)`),
-        no field or parameter of its own."""
+        no field or parameter of its own. The enum stands for a Python
+        union: a name the snapshot exports and describes as no class."""
         if param.name != "type" or not (param.default or "").startswith("'"):
             return False
         name = path.rpartition("::")[2]
         return any(
-            variant["decl"].endswith(f"({name})")
+            self._is_union(item)
             for item in self.surface.items.values()
-            if item["kind"] == "enum"
-            for variant in item.get("variants", [])
+            if item["kind"] == "enum" and any(variant["decl"].endswith(f"({name})") for variant in item.get("variants", []))
         )
+
+    def _is_union(self, item: dict) -> bool:
+        python = self.python_of(item)
+        return python is not None and not python.startswith(BUILTIN) and python not in self.python.specs
 
     def _model_without_new(self, cls: _Class, init: list, default: bool) -> None:
         """A model Rust builds by struct literal alone cannot take Python's
@@ -375,13 +469,11 @@ class Comparison:
                 self._find("rust", f"{cls.path}::{name}", "no Python member", cls.path, cls.python)
 
     def _builtin_payload(self, cls: _Class, variant: str) -> bool:
-        """A variant carrying a strong type stands for Python's value of
-        that builtin, no member: `Visibility::Channels(ChannelSet)`, Python's
-        list of channels."""
-        item = self.surface.items[cls.path]
-        decls = [found["decl"] for found in item.get("variants", []) if found["name"] == variant]
-        payload = re.fullmatch(r"\w+\((\w+)\)", decls[0]) if decls else None
-        return payload is not None and payload.group(1) in self.rules.builtins
+        """A variant `[rules] builtin_payloads` lists stands for Python's
+        value of the builtin it carries, no member:
+        `Visibility::Channels(ChannelSet)`, Python's comma-joined list of
+        channels."""
+        return f"{cls.path}::{variant}" in self.rules.builtin_payloads
 
     def _params(self, rust_path: str, method: dict, python_path: str, member_spec: list, owner: tuple, renames=None) -> None:
         """A method's parameters against Python's: a positional one for each

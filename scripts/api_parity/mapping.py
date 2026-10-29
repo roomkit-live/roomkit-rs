@@ -31,10 +31,44 @@ def variant_name(variant: str) -> str:
     return "_".join(token.upper() for token in tokens(variant))
 
 
+def snake_name(variant: str) -> str:
+    """A variant `CamelCase` as the `snake_case` value it serializes to."""
+    return "_".join(token.lower() for token in tokens(variant))
+
+
 # The tables of [rules], and those of them that lot 2 of step 5 added, which
 # a mapping may leave out.
-_RULES = {"acronyms", "duration_suffix", "packages", "builtins", "literals", "builtin_errors"}
+_RULES = {
+    "acronyms",
+    "duration_suffix",
+    "packages",
+    "builtins",
+    "builtin_payloads",
+    "literals",
+    "builtin_errors",
+    "error_families",
+}
 _RULES_REQUIRED = {"acronyms", "duration_suffix", "packages"}
+
+
+@dataclass(frozen=True)
+class Builtin:
+    """A Rust type that stands for a Python builtin (decision 4): its name,
+    and the Rust members the architecture table maps to the builtin's
+    operations."""
+
+    python: str
+    members: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Literal:
+    """A Rust enum that stands for a Python `Literal`: the field it types,
+    `pkg.Class.__init__(field)`, and the Literal's values, read from the
+    Python source, which the snapshot does not hold."""
+
+    field: str
+    values: tuple[str, ...]
 
 
 @dataclass
@@ -42,36 +76,44 @@ class Rules:
     acronyms: list[tuple[list[str], str]]
     duration_suffix: str
     packages: dict[str, list[str]]
-    # A Rust type that stands for a Python builtin (decision 4): a strong
-    # type, the error a validator raises; the builtin's name.
-    builtins: dict[str, str] = field(default_factory=dict)
-    # A Rust enum that stands for a Python `Literal`: the field it types,
-    # `pkg.Class.__init__(field)`.
-    literals: dict[str, str] = field(default_factory=dict)
+    # By the Rust type's path.
+    builtins: dict[str, Builtin] = field(default_factory=dict)
+    # The variants carrying a builtin that stand for Python's value of it,
+    # by path (`roomkit::model::Visibility::Channels`).
+    builtin_payloads: tuple[str, ...] = ()
+    # By the Rust enum's path.
+    literals: dict[str, Literal] = field(default_factory=dict)
     # An error variant that stands for a Python builtin exception.
     builtin_errors: dict[str, str] = field(default_factory=dict)
+    # By the Rust error enum's path: the Python exception classes its
+    # variants stand for, each with the fields its variant may carry when
+    # the class takes a message alone (no `__init__` of its own). The
+    # snapshot holds no class's bases, so a family is written here.
+    error_families: dict[str, dict[str, tuple[str, ...]]] = field(default_factory=dict)
 
     @classmethod
     def from_table(cls, table: dict) -> Rules:
         if not _RULES_REQUIRED <= set(table) <= _RULES:
             raise ParityError(
-                f"[rules] holds acronyms, duration_suffix and packages, and may hold builtins, literals "
-                f"and builtin_errors, not {sorted(table)}"
+                f"[rules] holds acronyms, duration_suffix and packages, and may hold {', '.join(sorted(_RULES - _RULES_REQUIRED))}, "
+                f"not {sorted(table)}"
             )
         acronyms = sorted(
             ((tokens(rust), python) for rust, python in table["acronyms"].items()), key=lambda pair: -len(pair[0])
         )
-        for literal, python in table.get("literals", {}).items():
-            if not _PYTHON_NAME.fullmatch(python) or "(" not in python:
-                raise ParityError(f"[rules] literals: {literal} names pkg.Class.__init__(field), not {python}")
         return cls(
             acronyms,
             table["duration_suffix"],
             dict(table["packages"]),
-            dict(table.get("builtins", {})),
-            dict(table.get("literals", {})),
+            {path: _builtin(path, raw) for path, raw in table.get("builtins", {}).items()},
+            tuple(_rust_paths("builtin_payloads", table.get("builtin_payloads", []))),
+            {path: _literal(path, raw) for path, raw in table.get("literals", {}).items()},
             dict(table.get("builtin_errors", {})),
+            {path: _family(path, raw) for path, raw in table.get("error_families", {}).items()},
         )
+
+    def builtin(self, path: str) -> Builtin | None:
+        return self.builtins.get(path)
 
     def python_type_name(self, rust: str) -> str:
         """A Rust type's name with its acronyms in Python's casing."""
@@ -95,6 +137,36 @@ class Rules:
             if listed is not None:
                 return listed
         raise ParityError(f"[rules.packages] lists no package for {module}")
+
+
+def _rust_paths(table: str, paths: list) -> list[str]:
+    for path in paths:
+        if not isinstance(path, str) or "::" not in path:
+            raise ParityError(f"[rules] {table}: {path!r} is no Rust path")
+    return list(paths)
+
+
+def _builtin(path: str, raw: dict) -> Builtin:
+    _rust_paths("builtins", [path])
+    if not isinstance(raw, dict) or set(raw) - {"python", "members"} or "python" not in raw:
+        raise ParityError(f"[rules] builtins: {path} is {{ python = name, members = [...] }}, not {raw!r}")
+    return Builtin(raw["python"], tuple(raw.get("members", [])))
+
+
+def _literal(path: str, raw: dict) -> Literal:
+    _rust_paths("literals", [path])
+    if not isinstance(raw, dict) or set(raw) != {"field", "values"}:
+        raise ParityError(f"[rules] literals: {path} is {{ field = pkg.Class.__init__(field), values = [...] }}")
+    if not _PYTHON_NAME.fullmatch(raw["field"]) or "(" not in raw["field"]:
+        raise ParityError(f"[rules] literals: {path} names pkg.Class.__init__(field), not {raw['field']}")
+    return Literal(raw["field"], tuple(raw["values"]))
+
+
+def _family(path: str, raw: dict) -> dict[str, tuple[str, ...]]:
+    _rust_paths("error_families", [path])
+    if not isinstance(raw, dict) or not all(_PYTHON_NAME.fullmatch(name) for name in raw):
+        raise ParityError(f"[rules] error_families: {path} maps each Python class to the fields its variant carries")
+    return {name: tuple(fields) for name, fields in raw.items()}
 
 
 @dataclass

@@ -26,20 +26,13 @@
 acronyms = { Ai = "AI", OpenAi = "OpenAI", Mcp = "MCP", Sqlite = "SQLite" }
 # What a `Duration` drops from a Python name (decision 3).
 duration_suffix = "_seconds"
-# The Rust types a Python builtin stands for, read as that builtin with no
-# member compared (decision 4; the architecture table's "Types and values"
-# and "Errors"): the strong ids, values and maps, and the errors a
-# validator raises, and the aliases of what a channel or a router raises,
-# Python's `Exception`. A variant carrying one is Python's value of it
-# (`Visibility::Channels(ChannelSet)`).
-builtins = { ChannelError = "Exception", RouterError = "Exception", RoomId = "str", EventId = "str", ChannelId = "str", ParticipantId = "str", IdentityId = "str", TaskId = "str", ObservationId = "str", CountryCode = "str", ChannelSet = "list[str]", Timestamp = "datetime", Metadata = "dict", Confidence = "float", Latitude = "float", Longitude = "float", ModelError = "ValueError", InvalidCountryCode = "ValueError" }
-# The Rust enums a Python `Literal` stands for, by the field it types
-# (decision 4; a nameless literal takes its field's name).
-literals = { HookAction = "roomkit.HookResult.__init__(action)", DeliveryResultStatus = "roomkit.DeliveryResult.__init__(status)", RichFormat = "roomkit.models.RichContent.__init__(format)", ToolCallStatus = "roomkit.ToolCallContent.__init__(status)", EditSource = "roomkit.models.EditContent.__init__(edit_source)" }
 # The error variants a Python builtin exception stands for (convention 5),
 # the variant the builtin's name without `Error`; `ExceptionGroup` the
 # answer of a close whose channels failed (decided 2026-10-29).
 builtin_errors = { Value = "ValueError", Cancelled = "asyncio.CancelledError", ExceptionGroup = "ExceptionGroup" }
+# The variants carrying a builtin that stand for Python's value of it, no
+# member: Python's visibility naming channels is a comma-joined `str`.
+builtin_payloads = ["roomkit::model::Visibility::Channels"]
 
 # The Python packages a Rust module's items are looked for in, in order. A
 # module not listed takes its closest listed parent's.
@@ -52,6 +45,73 @@ roomkit_ai = ["roomkit.providers.ai", "roomkit", "roomkit.tools", "roomkit.skill
 roomkit_openai = ["roomkit.providers.openai"]
 roomkit_mcp = ["roomkit.tools"]
 roomkit_sqlite = ["roomkit", "roomkit.store"]
+
+# The Rust types a Python builtin stands for (decision 4; the architecture
+# table's "Types and values" and "Errors"), by path: the strong ids, values
+# and maps, the errors a validator raises, and the aliases of what a channel
+# or a router raises, Python's `Exception`. A type's `members` are those the
+# architecture table maps to the builtin's operations (`str(id)` is
+# `as_str()`); any other member is a finding. An error's variants are the
+# messages of the exception it stands for.
+[rules.builtins]
+"roomkit::ChannelError" = { python = "Exception" }
+"roomkit::RouterError" = { python = "Exception" }
+"roomkit::model::RoomId" = { python = "str", members = ["new", "as_str"] }
+"roomkit::model::EventId" = { python = "str", members = ["new", "as_str"] }
+"roomkit::model::ChannelId" = { python = "str", members = ["new", "as_str"] }
+"roomkit::model::ParticipantId" = { python = "str", members = ["new", "as_str"] }
+"roomkit::model::IdentityId" = { python = "str", members = ["new", "as_str"] }
+"roomkit::model::TaskId" = { python = "str", members = ["new", "as_str"] }
+"roomkit::model::ObservationId" = { python = "str", members = ["new", "as_str"] }
+"roomkit::CountryCode" = { python = "str", members = ["new", "as_str"] }
+"roomkit::model::ChannelSet" = { python = "str", members = ["new", "contains", "iter"] }
+"roomkit::model::Timestamp" = { python = "datetime", members = ["from_unix_millis", "as_unix_millis", "checked_add", "duration_since", "UNIX_EPOCH"] }
+"roomkit::model::Metadata" = { python = "dict" }
+"roomkit::model::Confidence" = { python = "float", members = ["new", "value", "FULL"] }
+"roomkit::model::Latitude" = { python = "float", members = ["new", "degrees"] }
+"roomkit::model::Longitude" = { python = "float", members = ["new", "degrees"] }
+"roomkit::model::ModelError" = { python = "ValueError" }
+"roomkit::InvalidCountryCode" = { python = "ValueError" }
+
+# The Rust enums a Python `Literal` stands for, by path: the field it types
+# (decision 4; a nameless literal takes its field's name) and the Literal's
+# values, read from the Python source (the snapshot holds none), each a
+# variant's snake_case name.
+[rules.literals]
+"roomkit::model::HookAction" = { field = "roomkit.HookResult.__init__(action)", values = ["allow", "block", "modify"] }
+"roomkit::model::DeliveryResultStatus" = { field = "roomkit.DeliveryResult.__init__(status)", values = ["sent", "queued", "failed"] }
+"roomkit::model::RichFormat" = { field = "roomkit.models.RichContent.__init__(format)", values = ["html", "markdown"] }
+"roomkit::model::ToolCallStatus" = { field = "roomkit.ToolCallContent.__init__(status)", values = ["pending", "completed", "failed"] }
+
+# The Python exception classes each error enum's variants stand for, by the
+# enum's path, read from the Python source (the snapshot holds no class's
+# bases; tasks/probes/step5-lot2/error_families.py): a variant's class must
+# be listed, and each class listed must have its variant. A class with a
+# constructor has its parameters compared; one that takes a message alone
+# lists the fields its variant carries, the values its message names (the
+# architecture table's "Errors").
+[rules.error_families."roomkit::RoomKitError"]
+"roomkit.RoomNotFoundError" = []
+"roomkit.RoomAlreadyExistsError" = []
+"roomkit.RoomClosedError" = ["room_id"]
+"roomkit.TransitionRefusedError" = []
+"roomkit.ProcessTimeoutError" = ["room_id"]
+"roomkit.ChangeRefusedError" = []
+"roomkit.ReentrantCallError" = ["room_id", "call"]
+"roomkit.ReentryLoopCapError" = []
+"roomkit.ChannelNotFoundError" = ["room_id", "channel_id"]
+"roomkit.ChannelNotRegisteredError" = []
+"roomkit.ChannelAlreadyRegisteredError" = []
+"roomkit.ParticipantNotFoundError" = ["room_id", "participant_id", "channel_id", "reached_elsewhere"]
+"roomkit.IdentityNotFoundError" = []
+"roomkit.AddressLinkedError" = ["channel_type", "address", "identity_id"]
+"roomkit.EventNotFoundError" = []
+"roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
+
+[rules.error_families."roomkit_ai::SkillError"]
+"roomkit.skills.SkillDiscoveryError" = []
+"roomkit.skills.SkillParseError" = []
+"roomkit.skills.SkillValidationError" = []
 
 # The architecture table's mappings that a rule gives no name to.
 
@@ -234,6 +294,12 @@ members = ["new", "as_str"]
 approved = "2026-10-27"
 until = "roomkit.ChannelType.__init__"
 reason = "decision 19: ChannelType stays open, Rust is right and Python aligns (RMK-1010 item 1, RMK-986); until Python's open ChannelType gains its constructor"
+
+[[exception]]
+rust = "roomkit::model::EditSource"
+approved = "2026-10-27"
+until = "roomkit.models.EditSource"
+reason = "decision 19: edit_source stays an enum, Rust is right and Python aligns (Python's field is str | None, no Literal); until Python's enum of the field's values"
 
 [[exception]]
 rust = "roomkit_ai::SkillError"
@@ -1246,6 +1312,12 @@ lot = 5
 rust = "roomkit_ai::Skill"
 members = ["license", "compatibility"]
 reason = "lot 5: Skill, SkillMetadata and SkillRegistry in Python's names"
+
+[[pending]]
+lot = 5
+rust = "roomkit_ai::SkillError"
+members = ["Discovery::path", "Discovery::reason", "Parse::skill", "Parse::reason", "Validation::skill", "Validation::reasons"]
+reason = "lot 5: SkillError keeps its variants under the error naming rule (convention 5); Python's classes take a message, and the fields each variant carries are lot 5's to list in [rules] error_families or drop"
 
 [[pending]]
 lot = 5

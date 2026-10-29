@@ -139,11 +139,19 @@ class Surface:
         base, member, param = self.split(path)
         item = self.items.get(base)
         if item is None:
-            return False
+            return self._variant_field(path)
         if member is None:
             return param is None or param in names(item.get("signature", {}).get("params", []))
         found = member_of(item, member)
         return found is not None and (param is None or param in names(found.get("params", [])))
+
+
+    def _variant_field(self, path: str) -> bool:
+        """`crate::Enum::Variant::field`, a named field of an enum's variant."""
+        rest, _, field_ = path.rpartition("::")
+        enum, _, variant = rest.rpartition("::")
+        found = member_of(self.items.get(enum, {}), variant)
+        return found is not None and field_ in [named["name"] for named in found.get("fields", [])]
 
 
 def member_of(item: dict, name: str) -> dict | None:
