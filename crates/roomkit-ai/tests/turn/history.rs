@@ -69,7 +69,7 @@ async fn two_turns<P: AiProvider>(agent: AiAgent<P>) {
     let room = Room::with_agent(agent.with_tools(tools()).unwrap()).await;
     room.says("first question").await;
     room.says("second question").await;
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
 }
 
 /// The checks on what the model read: the second turn reads the first
@@ -171,7 +171,7 @@ async fn a_hook_s_rewrite_is_what_is_replayed() {
         .unwrap();
     room.says("first").await;
     room.says("second").await;
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
     let read: Vec<Vec<String>> = model
         .requests()
         .iter()
@@ -263,7 +263,7 @@ async fn a_turn_of_thirty_calls_leaves_its_question_and_last_calls_to_the_next()
     for text in ["first question", "second question", "third question"] {
         room.says(text).await;
     }
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
     let requests = model.requests();
     let mut second = vec!["user first question".to_owned()];
     second.extend(round_of(&ids[22..]));
@@ -292,7 +292,7 @@ async fn twelve_turns_of_two_calls_leave_every_message_and_the_last_calls() {
     for n in 0..13 {
         room.says(&format!("question {n}")).await;
     }
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
     let mut expected = Vec::new();
     for n in 0..12 {
         expected.push(format!("user question {n}"));
@@ -337,7 +337,7 @@ async fn every_row_of_a_turn_carries_the_turn_s_own_correlation_id() {
         .unwrap();
     room.says("first").await;
     room.says("second").await;
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
     let timeline = room.timeline().await;
     let triggers: Vec<_> = timeline
         .iter()
@@ -439,7 +439,7 @@ async fn a_deleted_start_row_ends_its_round_in_the_next_turn() {
         .unwrap()
         .unwrap();
     room.says("second question").await;
-    room.kit.close().await;
+    room.kit.close().await.unwrap();
     let mut expected = vec!["user first question".to_owned()];
     expected.extend(round_of(&ids[..1]));
     expected.extend(round_of(&ids[2..]));

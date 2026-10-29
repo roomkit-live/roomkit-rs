@@ -227,7 +227,7 @@ async fn a_restarted_kit_replays_the_rounds_its_file_holds() {
     let kit = kit_on(&file, first, true).await;
     says(&kit, "first").await;
     says(&kit, "second").await;
-    kit.close().await;
+    kit.close().await.unwrap();
     drop(kit);
     let after = ScriptedProvider::new([ScriptedRound::answering("Three.")]);
     let kit = kit_on(&file, after.clone(), false).await;
@@ -237,7 +237,7 @@ async fn a_restarted_kit_replays_the_rounds_its_file_holds() {
         ..EventQuery::default()
     };
     let timeline = kit.store().list_events(&room_id(), &query).await.unwrap();
-    kit.close().await;
+    kit.close().await.unwrap();
     let turn_of = |index: usize| timeline[index].correlation_id.clone().unwrap();
     assert_eq!(
         [3, 4, 5, 7, 8, 9].map(|index| timeline[index].correlation_id.clone()),

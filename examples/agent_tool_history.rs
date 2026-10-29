@@ -63,7 +63,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             println!("Assistant: {answer}");
         }
     }
-    kit.close().await;
+    kit.close().await?;
 
     let requests = endpoint
         .fake()
