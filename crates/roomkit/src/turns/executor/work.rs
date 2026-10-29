@@ -103,7 +103,6 @@ pub(super) async fn work(
             flow: &flow,
             rounds: 0,
             starting: false,
-            sent: false,
         };
         Box::pin(pump.serve(stream)).await;
     }
@@ -122,9 +121,6 @@ struct Pump<'a> {
     /// rounds.
     rounds: u64,
     starting: bool,
-    /// Whether the stream sent an item: a wait for a pull is then a wait
-    /// on the reader, which has it.
-    sent: bool,
 }
 
 impl Pump<'_> {
@@ -137,16 +133,18 @@ impl Pump<'_> {
             if !self.flow.is_granted() && !self.flush() {
                 return;
             }
-            self.turn.wait_on_reader(self.sent);
+            // A wait for a pull, an item sent, is a wait on the reader,
+            // which has it: whoever sent it, the pump or the heartbeat
+            // sending the burst first, the sender knows.
+            self.turn.wait_on_reader(self.sender.sent_items());
             self.flow.granted().await;
             self.turn.wait_on_reader(false);
             if self.flow.closing() {
                 return;
             }
             let (read, closing, flushed) = self.read(&mut stream).await;
-            match flushed {
-                Ok(flushed) => self.sent |= flushed,
-                Err(why) => return refuse(self.sender, "stream item", &why),
+            if let Err(why) = flushed {
+                return refuse(self.sender, "stream item", &why);
             }
             let reported = self
                 .host
@@ -167,12 +165,9 @@ impl Pump<'_> {
 
     /// Sends the burst kept, the stream about to wait for a pull: whether
     /// the stream goes on.
-    fn flush(&mut self) -> bool {
+    fn flush(&self) -> bool {
         match self.sender.flush() {
-            Ok(flushed) => {
-                self.sent |= flushed;
-                true
-            }
+            Ok(_) => true,
             Err(why) => {
                 refuse(self.sender, "stream item", &why);
                 false
@@ -264,10 +259,7 @@ impl Pump<'_> {
             }
         };
         match sent {
-            Ok(()) => {
-                self.sent = true;
-                true
-            }
+            Ok(()) => true,
             Err(why) => {
                 refuse(self.sender, "stream item", &why);
                 false
