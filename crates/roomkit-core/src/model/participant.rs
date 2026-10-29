@@ -77,8 +77,11 @@ pub enum VerificationStatus {
 
 /// A human, or a system identity, in a room (RFC §5.5).
 ///
-/// AI and integration channels are not participants: they are channels.
+/// AI and integration channels are not participants: they are channels. As
+/// in the Python implementation, a participant read lists its primary
+/// channel first in `connected_via`, once.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "ParticipantWire")]
 pub struct Participant {
     /// The participant's id, unique within its room.
     pub id: ParticipantId,
@@ -125,8 +128,19 @@ pub struct Participant {
 }
 
 impl Participant {
-    /// An active member joining through `channel_id`, identity pending.
-    pub fn new(
+    /// An active member joining through `channel_id` now, identity
+    /// pending, as the Python implementation's model defaults fill
+    /// `joined_at`. A caller sets the other fields by struct update.
+    #[cfg(feature = "system-environment")]
+    pub fn new(id: ParticipantId, room_id: RoomId, channel_id: ChannelId) -> Self {
+        use crate::ops::{Environment, SystemEnvironment};
+        Self::at(id, room_id, channel_id, SystemEnvironment.now())
+    }
+
+    /// [`Participant::new`] joining at `joined_at`: what the core's
+    /// operations build. Outside the public API.
+    #[doc(hidden)]
+    pub fn at(
         id: ParticipantId,
         room_id: RoomId,
         channel_id: ChannelId,
@@ -152,6 +166,68 @@ impl Participant {
     }
 }
 
+/// A participant as it is read: [`Participant`]'s fields, before its
+/// primary channel is put first in `connected_via`.
+#[derive(Deserialize)]
+struct ParticipantWire {
+    id: ParticipantId,
+    room_id: RoomId,
+    channel_id: ChannelId,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    role: ParticipantRole,
+    #[serde(default)]
+    status: ParticipantStatus,
+    #[serde(default)]
+    identification: IdentificationStatus,
+    #[serde(default)]
+    identity_id: Option<IdentityId>,
+    #[serde(default)]
+    candidates: Option<Vec<IdentityId>>,
+    #[serde(default)]
+    connected_via: Vec<ChannelId>,
+    #[serde(default)]
+    external_id: Option<String>,
+    #[serde(default)]
+    resolved_at: Option<Timestamp>,
+    #[serde(default)]
+    resolved_by: Option<String>,
+    joined_at: Timestamp,
+    #[serde(default)]
+    metadata: Metadata,
+}
+
+impl From<ParticipantWire> for Participant {
+    fn from(wire: ParticipantWire) -> Self {
+        // Python's `_include_primary_channel`: the primary channel first,
+        // each channel once, in the order of first sight.
+        let mut connected_via = vec![wire.channel_id.clone()];
+        for channel_id in wire.connected_via {
+            if !connected_via.contains(&channel_id) {
+                connected_via.push(channel_id);
+            }
+        }
+        Self {
+            id: wire.id,
+            room_id: wire.room_id,
+            channel_id: wire.channel_id,
+            display_name: wire.display_name,
+            role: wire.role,
+            status: wire.status,
+            identification: wire.identification,
+            identity_id: wire.identity_id,
+            candidates: wire.candidates,
+            connected_via,
+            external_id: wire.external_id,
+            resolved_at: wire.resolved_at,
+            resolved_by: wire.resolved_by,
+            joined_at: wire.joined_at,
+            metadata: wire.metadata,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -162,13 +238,31 @@ mod tests {
     #[test]
     fn a_new_participant_is_connected_via_its_primary_channel() {
         let sms = ChannelId::new("sms").unwrap();
-        let participant = Participant::new(
+        let participant = Participant::at(
             ParticipantId::new("p_jean").unwrap(),
             RoomId::new("room_1").unwrap(),
             sms.clone(),
             Timestamp::UNIX_EPOCH,
         );
         assert_eq!(participant.connected_via, vec![sms]);
+    }
+
+    /// Python's `_include_primary_channel`: a participant read lists its
+    /// primary channel first, each channel once.
+    #[test]
+    fn a_participant_read_lists_its_primary_channel_first_once() {
+        let read: Participant = serde_json::from_value(json!({
+            "id": "p_jean",
+            "room_id": "room_1",
+            "channel_id": "sms",
+            "connected_via": ["ws", "sms", "ws", "email"],
+            "joined_at": "1970-01-01T00:00:00Z",
+        }))
+        .unwrap();
+        assert_eq!(
+            read.connected_via,
+            ["sms", "ws", "email"].map(|id| ChannelId::new(id).unwrap())
+        );
     }
 
     #[test]

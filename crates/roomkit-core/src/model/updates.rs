@@ -252,14 +252,14 @@ mod tests {
     };
 
     fn room() -> Room {
-        let mut room = Room::new(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH);
+        let mut room = Room::at(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH);
         room.event_count = 3;
         room.metadata.insert("crm".to_owned(), json!("c_1"));
         room
     }
 
     fn binding() -> ChannelBinding {
-        let mut binding = ChannelBinding::new(
+        let mut binding = ChannelBinding::at(
             ChannelId::new("ws_observer").unwrap(),
             RoomId::new("room_1").unwrap(),
             ChannelType::WEBSOCKET,

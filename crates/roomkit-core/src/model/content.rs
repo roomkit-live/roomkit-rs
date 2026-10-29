@@ -414,7 +414,7 @@ impl TryFrom<AudioContentWire> for AudioContent {
 /// A duration a content declares: not negative, as Python's `ge=0.0`.
 fn duration(seconds: Option<f64>) -> Result<Option<f64>, ModelError> {
     match seconds {
-        Some(value) if !(value >= 0.0) => Err(ModelError::OutOfRange {
+        Some(value) if value.is_nan() || value < 0.0 => Err(ModelError::OutOfRange {
             name: "duration_seconds",
             value,
             min: 0.0,

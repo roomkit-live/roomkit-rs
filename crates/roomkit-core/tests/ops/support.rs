@@ -153,7 +153,7 @@ impl StoredRoom {
     /// The record of a room the store does not hold.
     fn missing(room_id: RoomId) -> Self {
         Self {
-            room: Room::new(room_id, Timestamp::UNIX_EPOCH),
+            room: Room::at(room_id, Timestamp::UNIX_EPOCH),
             exists: false,
             bindings: Vec::new(),
             participants: Vec::new(),
@@ -320,9 +320,10 @@ pub(crate) fn room_id() -> RoomId {
 
 /// The capabilities of every channel the simulated driver registers: text.
 fn text_only() -> ChannelCapabilities {
-    let mut capabilities = ChannelCapabilities::default();
-    capabilities.media_types = [ChannelMediaType::Text].into();
-    capabilities
+    ChannelCapabilities {
+        media_types: [ChannelMediaType::Text].into(),
+        ..ChannelCapabilities::default()
+    }
 }
 
 impl Sim {
@@ -331,7 +332,7 @@ impl Sim {
         Self {
             env: SequentialEnvironment::new(Timestamp::from_unix_millis(START_MILLIS).unwrap()),
             config: KitConfig::new(),
-            room: Room::new(room_id(), Timestamp::UNIX_EPOCH),
+            room: Room::at(room_id(), Timestamp::UNIX_EPOCH),
             bindings: Vec::new(),
             participants: Vec::new(),
             timeline: Vec::new(),
@@ -1901,7 +1902,11 @@ fn echo(id: &str, reply: &'static str) -> OnEvent {
 /// An output answering `event` with one text response from `channel_id`,
 /// addressed to nobody in particular.
 pub(crate) fn respond(channel_id: &str, event: &RoomEvent, text: &str) -> ChannelOutput {
-    ChannelOutput::respond(vec![response(channel_id, event, text)])
+    ChannelOutput {
+        responded: true,
+        response_events: vec![response(channel_id, event, text)],
+        ..ChannelOutput::empty()
+    }
 }
 
 /// A text response from `channel_id` to `event`, as a channel writes it.

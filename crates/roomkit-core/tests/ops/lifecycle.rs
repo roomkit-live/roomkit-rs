@@ -30,7 +30,7 @@ use roomkit_core::rules::transcoding::text_of;
 use crate::support::{Answer, Reentry, Sim, after_start, calling, channel, notice_event, room_id};
 
 fn sms_binding() -> ChannelBinding {
-    ChannelBinding::new(
+    ChannelBinding::at(
         channel("sms"),
         room_id(),
         ChannelType::SMS,
@@ -62,7 +62,7 @@ mod create_room {
     #[test]
     fn stores_the_room_and_emits_room_created() {
         let mut sim = Sim::without_rooms();
-        let room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
+        let room = Room::at(room_id(), Timestamp::UNIX_EPOCH);
         let created = sim.run(CreateRoom::new(sim.shared_config(), room.clone()));
         assert_eq!(
             (created, sim.framework_event_names()),
@@ -77,7 +77,7 @@ mod create_room {
     fn awaits_its_on_room_created_hooks_then_emits_room_created() {
         let mut sim = Sim::without_rooms();
         sim.observer("welcome", HookTrigger::OnRoomCreated);
-        let room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
+        let room = Room::at(room_id(), Timestamp::UNIX_EPOCH);
         sim.run(CreateRoom::new(sim.shared_config(), room)).unwrap();
         assert_eq!(
             (sim.async_triggers(), sim.journal),
@@ -101,7 +101,7 @@ mod create_room {
         let mut sim = Sim::without_rooms();
         sim.observer("welcome", HookTrigger::OnRoomCreated);
         sim.failing_effect = Some("await on_room_created");
-        let room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
+        let room = Room::at(room_id(), Timestamp::UNIX_EPOCH);
         let created = sim.run(CreateRoom::new(sim.shared_config(), room.clone()));
         assert_eq!(created, Ok(room));
     }
@@ -109,7 +109,7 @@ mod create_room {
     #[test]
     fn asks_for_no_hook_when_none_observes_the_trigger() {
         let mut sim = Sim::without_rooms();
-        let room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
+        let room = Room::at(room_id(), Timestamp::UNIX_EPOCH);
         sim.run(CreateRoom::new(sim.shared_config(), room)).unwrap();
         assert_eq!(sim.trace, ["store room room_1 Active"]);
     }
@@ -119,7 +119,7 @@ mod create_room {
     #[test]
     fn with_a_reserved_metadata_key_drops_it_and_writes_the_rest() {
         let mut sim = Sim::without_rooms();
-        let mut room = Room::new(room_id(), Timestamp::UNIX_EPOCH);
+        let mut room = Room::at(room_id(), Timestamp::UNIX_EPOCH);
         room.metadata.insert(
             attachment::REVOCATIONS_KEY.to_owned(),
             serde_json::json!([]),
@@ -277,7 +277,7 @@ mod attach_channel {
     #[test]
     fn of_a_host_channel_as_an_intelligence_channel_is_refused_once_the_room_is_read() {
         let mut sim = Sim::new();
-        let binding = ChannelBinding::new(
+        let binding = ChannelBinding::at(
             channel("host"),
             room_id(),
             ChannelType::HOST,

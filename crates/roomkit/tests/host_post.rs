@@ -150,7 +150,11 @@ impl Channel for Agent {
                 text(self.reply),
             )
         };
-        ready(Ok(ChannelOutput::respond(vec![answer])))
+        ready(Ok(ChannelOutput {
+            responded: true,
+            response_events: vec![answer],
+            ..ChannelOutput::empty()
+        }))
     }
 }
 
@@ -256,7 +260,6 @@ fn participant(id: &str, channel_id: &str) -> Participant {
         ParticipantId::new(id).unwrap(),
         room_id(),
         channel(channel_id),
-        Timestamp::UNIX_EPOCH,
     )
 }
 

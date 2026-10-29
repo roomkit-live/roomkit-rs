@@ -63,7 +63,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             if !found {
                 return Ok(HookResult::allow());
             }
-            let observation = Observation::new(
+            let observation = Observation::at(
                 "obs_sin".parse()?,
                 context.room.id.clone(),
                 customer_id.clone(),

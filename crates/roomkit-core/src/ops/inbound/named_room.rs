@@ -321,7 +321,7 @@ impl NamedRoom {
 
     /// Creates the room with the id, in the caller's organization.
     fn create(&mut self, cx: &mut Cx<'_>) -> Progress<Named> {
-        let mut room = Room::new(self.room_id.clone(), cx.env.now());
+        let mut room = Room::at(self.room_id.clone(), cx.env.now());
         room.organization_id.clone_from(&self.organization_id);
         room.agent_response_policy = cx.config.agent_response_policy;
         let effect = cx.io.issue(StoreRequest::CreateRoom { room: room.clone() });

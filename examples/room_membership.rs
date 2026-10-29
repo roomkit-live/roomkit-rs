@@ -87,16 +87,11 @@ impl Team {
         name: &str,
         role: ParticipantRole,
     ) -> Result<Participant, Box<dyn Error>> {
-        let joining = Participant::new(
-            ParticipantId::new(id)?,
-            self.room.clone(),
-            self.ws.clone(),
-            self.clock.now(),
-        );
         let member = Participant {
             display_name: Some(name.to_owned()),
             role,
-            ..joining
+            joined_at: self.clock.now(),
+            ..Participant::new(ParticipantId::new(id)?, self.room.clone(), self.ws.clone())
         };
         self.kit.store().create_participant(member.clone()).await?;
         Ok(member)

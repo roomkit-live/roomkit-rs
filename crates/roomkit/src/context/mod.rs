@@ -775,10 +775,7 @@ mod tests {
             request: ChannelRequest::OnEvent {
                 binding: declaration.binding(room_id(), Timestamp::UNIX_EPOCH),
                 event,
-                context: Box::new(RoomContext::new(Room::new(
-                    room_id(),
-                    Timestamp::UNIX_EPOCH,
-                ))),
+                context: Box::new(RoomContext::new(Room::new(room_id()))),
             }
             .into(),
             deadline: None,

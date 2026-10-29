@@ -119,10 +119,11 @@ impl Channel for Reader {
 
 /// Text, with edits and deletes delivered natively.
 fn edits_natively() -> ChannelCapabilities {
-    let mut capabilities = ChannelCapabilities::default();
-    capabilities.supports_edit = true;
-    capabilities.supports_delete = true;
-    capabilities
+    ChannelCapabilities {
+        supports_edit: true,
+        supports_delete: true,
+        ..ChannelCapabilities::default()
+    }
 }
 
 /// The room of Appendix B.6: the customer on WhatsApp, an advisor on a

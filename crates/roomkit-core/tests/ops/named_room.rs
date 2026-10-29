@@ -8,9 +8,9 @@
 //! the lane left and the room lock released.
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelType, DeliveryStatus, ErrorRecord,
-    InboundMessage, Participant, ParticipantId, Room, RoomId, RoomStatus, TextContent, Timestamp,
-    Visibility,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelType, DeliveryResultStatus,
+    ErrorRecord, InboundMessage, Participant, ParticipantId, Room, RoomId, RoomStatus, TextContent,
+    Timestamp, Visibility,
 };
 use roomkit_core::ops::{ChannelDeclaration, FrameworkEvent, InboundError};
 use roomkit_core::rules::addresses::CountryCode;
@@ -312,7 +312,7 @@ mod a_missing_room {
     #[test]
     fn created_meanwhile_is_taken_as_a_room_that_exists() {
         let mut sim = no_room_yet();
-        sim.created_meanwhile = Some(Room::new(room_id(), after_start(0)));
+        sim.created_meanwhile = Some(Room::at(room_id(), after_start(0)));
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
         assert_eq!(
             (
@@ -331,7 +331,7 @@ mod a_missing_room {
     #[test]
     fn created_meanwhile_by_another_organization_fails_the_message() {
         let mut sim = no_room_yet();
-        let mut clinic = Room::new(room_id(), after_start(0));
+        let mut clinic = Room::at(room_id(), after_start(0));
         clinic.organization_id = Some("clinic".to_owned());
         sim.created_meanwhile = Some(clinic);
         let sent = sim.send_to("room_1", Some("bank"), Sim::message("sms", "Bonjour"));
@@ -404,7 +404,7 @@ mod another_organization {
     #[test]
     fn is_checked_in_whichever_room_the_message_names() {
         let mut sim = bank_room();
-        let mut clinic = Room::new(RoomId::new("room_2").unwrap(), Timestamp::UNIX_EPOCH);
+        let mut clinic = Room::at(RoomId::new("room_2").unwrap(), Timestamp::UNIX_EPOCH);
         clinic.organization_id = Some("clinic".to_owned());
         sim.seed_room(clinic);
         let sent = sim.send_to("room_2", Some("bank"), Sim::message("sms", "Bonjour"));
@@ -693,7 +693,7 @@ mod a_recipient {
             (
                 1,
                 Vec::<&str>::new(),
-                DeliveryStatus::Failed,
+                DeliveryResultStatus::Failed,
                 Some("no_recipient")
             )
         );
@@ -784,7 +784,7 @@ mod the_participants {
     fn with_jean() -> (Sim, Participant) {
         let mut sim = Sim::new();
         sim.transport("sms");
-        let jean = Participant::new(
+        let jean = Participant::at(
             ParticipantId::new("p_jean").unwrap(),
             room_id(),
             channel("sms"),

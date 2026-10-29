@@ -77,7 +77,7 @@ fn a_named_sender_s_message_carries_its_author_and_the_commit_writes_the_registe
 fn a_registered_participant_keeps_the_name_a_sender_reads_like() {
     let mut sim = Sim::new();
     sim.transport("sms");
-    let mut alice = Participant::new(
+    let mut alice = Participant::at(
         ParticipantId::new("p_1").unwrap(),
         room_id(),
         channel("ws"),

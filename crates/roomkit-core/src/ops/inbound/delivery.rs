@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use super::queues::Lineage;
 use super::stamp;
 use crate::model::{
-    ChannelBinding, ChannelId, ChannelOutput, DeliveryError, DeliveryResult, DeliveryStatus,
+    ChannelBinding, ChannelId, ChannelOutput, DeliveryError, DeliveryResult, DeliveryResultStatus,
     ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
 };
 use crate::ops::protocol::{
@@ -568,7 +568,7 @@ impl DeliverySet {
             channel_id.clone(),
             DeliveryResult {
                 channel_id,
-                status: DeliveryStatus::Failed,
+                status: DeliveryResultStatus::Failed,
                 provider_message_id: None,
                 error: Some(DeliveryError {
                     code: NO_RECIPIENT.to_owned(),
@@ -596,7 +596,7 @@ impl DeliverySet {
             channel_id.clone(),
             DeliveryResult {
                 channel_id,
-                status: DeliveryStatus::Failed,
+                status: DeliveryResultStatus::Failed,
                 provider_message_id: None,
                 error: Some(DeliveryError {
                     code: error.error_type.clone(),
@@ -734,9 +734,9 @@ fn delivery_result(
     let result = DeliveryResult {
         channel_id,
         status: if refusal.is_some() {
-            DeliveryStatus::Failed
+            DeliveryResultStatus::Failed
         } else {
-            DeliveryStatus::Sent
+            DeliveryResultStatus::Sent
         },
         provider_message_id: provider_result
             .as_ref()

@@ -87,10 +87,7 @@ fn row(index: u64, turn: &str, result: Option<&str>) -> RoomEvent {
 async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id() {
     let file = TempFile::new("tool-rows-overlap");
     let store = SqliteStore::open(file.path()).await.unwrap();
-    store
-        .create_room(Room::new(room_id(), Timestamp::UNIX_EPOCH))
-        .await
-        .unwrap();
+    store.create_room(Room::new(room_id())).await.unwrap();
     let events = [
         event(0, "sms", TextContent::new("Order 42?").into(), None),
         row(1, "A", None),
@@ -123,7 +120,7 @@ async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id(
         turns,
         [None, Some("A"), Some("B"), Some("A"), Some("B"), None]
     );
-    let mut context = RoomContext::new(Room::new(room_id(), Timestamp::UNIX_EPOCH));
+    let mut context = RoomContext::new(Room::new(room_id()));
     context.recent_events.clone_from(&timeline);
     let read = conversation(&id("assistant"), &timeline[5], &context, 50, |_| true);
     let call = |id: &str| {

@@ -276,12 +276,11 @@ async fn a_member_is_found_by_an_address_linked_to_their_identity() {
         ParticipantId::new("p_jean").unwrap(),
         jeans.clone(),
         channel("sms"),
-        Timestamp::UNIX_EPOCH,
     );
     jean.identity_id = Some(IdentityId::new("id_jean").unwrap());
     kit.store().create_participant(jean).await.unwrap();
     kit.store()
-        .create_identity(Identity::new(IdentityId::new("id_jean").unwrap(), None))
+        .create_identity(Identity::new(IdentityId::new("id_jean").unwrap()))
         .await
         .unwrap();
     kit.store()
@@ -313,12 +312,11 @@ async fn an_address_moved_to_another_identity_routes_to_its_new_person() {
             ParticipantId::new(format!("p_{person}")).unwrap(),
             room_id.clone(),
             channel("sms"),
-            Timestamp::UNIX_EPOCH,
         );
         member.identity_id = Some(identity_id.clone());
         kit.store().create_participant(member).await.unwrap();
         kit.store()
-            .create_identity(Identity::new(identity_id, None))
+            .create_identity(Identity::new(identity_id))
             .await
             .unwrap();
     }

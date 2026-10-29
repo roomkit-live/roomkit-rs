@@ -24,7 +24,7 @@ struct Timeline {
 
 impl Timeline {
     fn new() -> Self {
-        let mut context = RoomContext::new(Room::new(
+        let mut context = RoomContext::new(Room::at(
             RoomId::new("room_1").unwrap(),
             Timestamp::UNIX_EPOCH,
         ));
@@ -33,7 +33,7 @@ impl Timeline {
             ("web", ChannelType::WEBSOCKET, ChannelCategory::Transport),
             (AGENT, ChannelType::AI, ChannelCategory::Intelligence),
         ] {
-            context.bindings.push(ChannelBinding::new(
+            context.bindings.push(ChannelBinding::at(
                 ChannelId::new(channel).unwrap(),
                 RoomId::new("room_1").unwrap(),
                 channel_type,
@@ -145,7 +145,7 @@ impl Timeline {
 
     /// A participant reached on `channel`, named `name`.
     fn joins(&mut self, id: &str, channel: &str, name: &str, role: ParticipantRole) {
-        let mut person = Participant::new(
+        let mut person = Participant::at(
             ParticipantId::new(id).unwrap(),
             RoomId::new("room_1").unwrap(),
             ChannelId::new(channel).unwrap(),

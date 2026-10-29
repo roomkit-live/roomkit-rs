@@ -363,7 +363,7 @@ mod an_off_lock_block {
     fn refused_by_a_gate_drops_the_check_s_side_effects() {
         let mut sim = scanned(|| {
             HookResult::block("SIN detected")
-                .with_task(Task::new(
+                .with_task(Task::at(
                     TaskId::new("task_1").unwrap(),
                     room_id(),
                     "Call back",
@@ -397,7 +397,7 @@ mod the_side_effects_of_both_phases {
             "scanner",
             answering(|| {
                 HookResult::allow()
-                    .with_task(Task::new(
+                    .with_task(Task::at(
                         TaskId::new("task_1").unwrap(),
                         room_id(),
                         "Review the message",
@@ -413,7 +413,7 @@ mod the_side_effects_of_both_phases {
             "policy",
             answering(|| {
                 HookResult::allow()
-                    .with_observation(Observation::new(
+                    .with_observation(Observation::at(
                         ObservationId::new("obs_1").unwrap(),
                         room_id(),
                         channel("sms"),

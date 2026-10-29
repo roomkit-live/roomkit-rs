@@ -172,7 +172,7 @@ pub(super) fn people_taking_part(
     channel_id: &ChannelId,
     authors: &Authors<'_>,
 ) -> usize {
-    let Some(reader) = context.binding(channel_id) else {
+    let Some(reader) = context.get_binding(channel_id) else {
         return 0;
     };
     authors
@@ -199,7 +199,7 @@ fn takes_part(role: ParticipantRole) -> bool {
 /// Whether `person`'s messages reach `reader` (RFC §7.5).
 fn reaches(person: &Participant, context: &RoomContext, reader: &ChannelBinding) -> bool {
     person.connected_via.iter().any(|channel| {
-        context.binding(channel).is_some_and(|binding| {
+        context.get_binding(channel).is_some_and(|binding| {
             binding
                 .visibility
                 .admits(&reader.channel_id, reader.category)

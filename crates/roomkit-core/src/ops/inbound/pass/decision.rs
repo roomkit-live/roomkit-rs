@@ -432,7 +432,7 @@ impl CommitPass {
             return Ok(plan);
         }
         let source = context
-            .binding(&event.source.channel_id)
+            .get_binding(&event.source.channel_id)
             .ok_or(WriteRefusal::Unbound)?;
         if let Some(refusal) = permissions::write_refusal(source) {
             return Err(refusal);

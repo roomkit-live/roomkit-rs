@@ -1049,12 +1049,8 @@ mod bindings {
             ("ana", ParticipantStatus::Active),
             ("ben", ParticipantStatus::Left),
         ] {
-            let mut person = Participant::new(
-                ParticipantId::new(id).unwrap(),
-                room_id(),
-                sms.id().clone(),
-                Timestamp::UNIX_EPOCH,
-            );
+            let mut person =
+                Participant::new(ParticipantId::new(id).unwrap(), room_id(), sms.id().clone());
             person.status = status;
             kit.store().create_participant(person).await.unwrap();
         }

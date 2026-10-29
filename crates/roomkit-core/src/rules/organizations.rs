@@ -20,7 +20,7 @@ mod tests {
     use crate::model::{RoomId, Timestamp};
 
     fn room_of(organization: Option<&str>) -> Room {
-        let mut room = Room::new(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH);
+        let mut room = Room::at(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH);
         room.organization_id = organization.map(str::to_owned);
         room
     }

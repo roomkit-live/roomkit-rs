@@ -146,9 +146,8 @@ fn messages_up_to(event: &RoomEvent, filter: EventFilter) -> EventQuery {
 mod tests {
     use pretty_assertions::assert_eq;
     use roomkit_core::model::{
-        ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventContent, EventDirection,
-        EventId, EventSource, EventStatus, Room, RoomId, RoomUpdates, TextContent, Timestamp,
-        ToolCallContent,
+        ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource, EventStatus,
+        Room, RoomId, RoomUpdates, TextContent, Timestamp, ToolCallContent,
     };
     use roomkit_core::ops::RoomCounters;
 
@@ -160,14 +159,7 @@ mod tests {
     }
 
     fn binding(channel: &str, channel_type: ChannelType) -> ChannelBinding {
-        ChannelBinding::new(
-            ChannelId::new(channel).unwrap(),
-            room_id(),
-            channel_type,
-            ChannelCategory::Transport,
-            ChannelDirection::Bidirectional,
-            Timestamp::UNIX_EPOCH,
-        )
+        ChannelBinding::new(ChannelId::new(channel).unwrap(), room_id(), channel_type)
     }
 
     /// The room's event at `index`: a message on `sms`, or a tool-call row
@@ -201,10 +193,7 @@ mod tests {
     /// A store holding `room_1` and `events`, committed in their order.
     async fn store(events: Vec<RoomEvent>) -> InMemoryStore {
         let store = InMemoryStore::new();
-        store
-            .create_room(Room::new(room_id(), Timestamp::UNIX_EPOCH))
-            .await
-            .unwrap();
+        store.create_room(Room::new(room_id())).await.unwrap();
         for event in events {
             let counters = RoomCounters {
                 event_count: event.index + 1,
@@ -221,7 +210,7 @@ mod tests {
     /// are messages.
     async fn read_by(store: &InMemoryStore, trigger: &RoomEvent) -> (Vec<u64>, usize) {
         let agent = binding("agent", ChannelType::AI);
-        let mut context = RoomContext::new(Room::new(room_id(), Timestamp::UNIX_EPOCH));
+        let mut context = RoomContext::new(Room::new(room_id()));
         context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
         let read = turn_context(store, &agent, trigger, context).await;
         let indexes = read.recent_events.iter().map(|event| event.index).collect();
@@ -279,7 +268,7 @@ mod tests {
         let mut copy = delete.clone();
         copy.content = TextContent::new("[Message deleted]").into();
         let agent = binding("agent", ChannelType::AI);
-        let mut context = RoomContext::new(Room::new(room_id(), Timestamp::UNIX_EPOCH));
+        let mut context = RoomContext::new(Room::new(room_id()));
         context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
         let read = turn_context(&store, &agent, &copy, context.clone()).await;
         assert_eq!(read.recent_events.last(), Some(&delete));

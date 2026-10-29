@@ -80,7 +80,7 @@ pub mod model {
         Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCapabilities,
         ChannelCategory, ChannelDirection, ChannelId, ChannelMediaType, ChannelOutput, ChannelSet,
         ChannelType, CompositeContent, Confidence, DeleteContent, DeleteType, DeliveryError,
-        DeliveryResult, DeliveryStatus, DirectEvent, EditContent, EditSource, ErrorRecord,
+        DeliveryResult, DeliveryResultStatus, DirectEvent, EditContent, EditSource, ErrorRecord,
         EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates,
         HookDecision, HookResult, IdentificationStatus, Identity, IdentityId, InboundMessage,
         InjectedEvent, Latitude, LocationContent, Longitude, MediaContent, Metadata, ModelError,

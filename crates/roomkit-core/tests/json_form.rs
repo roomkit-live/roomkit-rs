@@ -14,8 +14,8 @@ use pretty_assertions::assert_eq;
 use roomkit_core::model::{
     Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCategory, ChannelDirection,
     ChannelId, ChannelMediaType, ChannelOutput, ChannelType, Confidence, DeleteContent, DeleteType,
-    DeliveryError, DeliveryResult, DeliveryStatus, EditContent, EditSource, EventContent, EventId,
-    EventSource, EventStatus, EventType, HookResult, IdentificationStatus, Identity,
+    DeliveryError, DeliveryResult, DeliveryResultStatus, EditContent, EditSource, EventContent,
+    EventId, EventSource, EventStatus, EventType, HookResult, IdentificationStatus, Identity,
     InboundMessage, InjectedEvent, Latitude, LocationContent, Longitude, MediaContent, Metadata,
     Observation, ObservationId, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
     RichContent, Room, RoomEvent, RoomId, RoomStatus, RoomTimers, SystemContent, Task, TaskId,
@@ -162,7 +162,7 @@ fn a_room_event_s_empty_visibilities_read_none() {
 
 #[test]
 fn room() {
-    let mut room = Room::new(room_id(), at("2026-10-22T14:00:00Z"));
+    let mut room = Room::at(room_id(), at("2026-10-22T14:00:00Z"));
     room.organization_id = Some("org_1".to_owned());
     room.status = RoomStatus::Paused;
     room.updated_at = at("2026-10-22T14:30:00Z");
@@ -204,7 +204,7 @@ fn room() {
 
 #[test]
 fn channel_binding() {
-    let mut binding = ChannelBinding::new(
+    let mut binding = ChannelBinding::at(
         channel("ws_advisor"),
         room_id(),
         ChannelType::WEBSOCKET,
@@ -251,14 +251,17 @@ fn channel_binding() {
                 "supported_media_types": [],
                 "max_media_size_bytes": null,
                 "supports_audio": false,
+                "max_audio_duration_seconds": null,
+                "supported_audio_formats": [],
                 "supports_video": false,
+                "max_video_duration_seconds": null,
+                "supported_video_formats": [],
                 "supports_threading": false,
                 "supports_typing": false,
                 "supports_read_receipts": false,
                 "supports_reactions": false,
                 "supports_edit": true,
                 "supports_delete": false,
-                "rate_limit": null,
                 "custom": {},
             },
             "rate_limit": null,
@@ -270,7 +273,7 @@ fn channel_binding() {
 
 #[test]
 fn participant() {
-    let mut participant = Participant::new(
+    let mut participant = Participant::at(
         ParticipantId::new("p_jean").unwrap(),
         room_id(),
         channel("sms"),
@@ -308,11 +311,16 @@ fn participant() {
 /// RFC §5.6: the addresses an identity uses are keyed by channel type.
 #[test]
 fn identity() {
-    let mut identity = Identity::new("id_jean".parse().unwrap(), Some("bank".to_owned()));
+    let mut identity = Identity {
+        organization_id: Some("bank".to_owned()),
+        ..Identity::new("id_jean".parse().unwrap())
+    };
     identity.display_name = Some("Jean Tremblay".to_owned());
     identity.link(ChannelType::SMS, "+15551234567");
     identity.link(ChannelType::EMAIL, "jean@example.com");
     identity.external_id = Some("crm_42".to_owned());
+    identity.email = Some("jean@example.com".to_owned());
+    identity.external_ids = [("hubspot".to_owned(), "h_7".to_owned())].into();
 
     assert_json_form(
         &identity,
@@ -320,11 +328,14 @@ fn identity() {
             "id": "id_jean",
             "organization_id": "bank",
             "display_name": "Jean Tremblay",
+            "email": "jean@example.com",
+            "phone": null,
             "channel_addresses": {
                 "sms": ["+15551234567"],
                 "email": ["jean@example.com"],
             },
             "external_id": "crm_42",
+            "external_ids": { "hubspot": "h_7" },
             "metadata": {},
         }),
     );
@@ -364,7 +375,7 @@ fn inbound_message() {
 
 #[test]
 fn task_and_observation() {
-    let mut task = Task::new(
+    let mut task = Task::at(
         TaskId::new("task_1").unwrap(),
         room_id(),
         "Call the customer back",
@@ -372,7 +383,7 @@ fn task_and_observation() {
     );
     task.status = TaskStatus::InProgress;
     task.assigned_to = Some("advisor_2".to_owned());
-    let mut observation = Observation::new(
+    let mut observation = Observation::at(
         ObservationId::new("obs_1").unwrap(),
         room_id(),
         channel("pii_scanner"),
@@ -413,7 +424,7 @@ fn task_and_observation() {
 fn delivery_result() {
     let result = DeliveryResult {
         channel_id: channel("sms"),
-        status: DeliveryStatus::Failed,
+        status: DeliveryResultStatus::Failed,
         provider_message_id: None,
         error: Some(DeliveryError {
             code: "no_recipient".to_owned(),
@@ -443,7 +454,11 @@ fn delivery_result() {
 
 #[test]
 fn channel_output() {
-    let output = ChannelOutput::respond(vec![full_event()]);
+    let output = ChannelOutput {
+        responded: true,
+        response_events: vec![full_event()],
+        ..ChannelOutput::empty()
+    };
     let mut form = json!({
         "responded": true,
         "response_events": [],

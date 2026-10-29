@@ -347,7 +347,7 @@ impl App {
                 .await?;
         }
         if store.get_participant(room_id, user).await?.is_none() {
-            let mut person = Participant::new(
+            let mut person = Participant::at(
                 user.clone(),
                 room_id.clone(),
                 self.websocket.id().clone(),

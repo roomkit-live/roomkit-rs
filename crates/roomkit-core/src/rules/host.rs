@@ -90,7 +90,7 @@ mod tests {
     }
 
     fn on(participant: &str, channel_id: &str) -> Participant {
-        Participant::new(
+        Participant::at(
             id(participant),
             RoomId::new("r").unwrap(),
             channel(channel_id),

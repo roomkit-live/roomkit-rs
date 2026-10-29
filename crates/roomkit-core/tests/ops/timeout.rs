@@ -223,7 +223,7 @@ mod expiring_during {
         sim.before_broadcast(
             "triage",
             Box::new(|_| {
-                let task = Task::new(
+                let task = Task::at(
                     TaskId::new("task_1").unwrap(),
                     room_id(),
                     "Call back",

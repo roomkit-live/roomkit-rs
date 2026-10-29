@@ -73,18 +73,11 @@ async fn open_order(
     kit.attach_channel(room, sms.id(), customer).await?;
     kit.attach_channel(room, assistant.id(), AttachChannelOptions::default())
         .await?;
-    let now = kit
-        .store()
-        .get_room(room)
-        .await?
-        .map(|room| room.created_at);
-    let joined = now.unwrap_or(roomkit::model::Timestamp::UNIX_EPOCH);
     let member = |id: &str, channel: &str| -> Result<Participant, Box<dyn Error>> {
         Ok(Participant::new(
             ParticipantId::new(id)?,
             room.clone(),
             ChannelId::new(channel)?,
-            joined,
         ))
     };
     kit.store()

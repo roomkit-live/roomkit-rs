@@ -88,7 +88,11 @@ impl Channel for Assistant {
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         let output = if text_of(&event.content).ends_with('?') {
-            ChannelOutput::respond(vec![self.answer(&event)])
+            ChannelOutput {
+                responded: true,
+                response_events: vec![self.answer(&event)],
+                ..ChannelOutput::empty()
+            }
         } else {
             ChannelOutput::default()
         };

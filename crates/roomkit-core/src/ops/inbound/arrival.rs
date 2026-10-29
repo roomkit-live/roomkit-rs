@@ -492,7 +492,7 @@ impl Arrival {
     /// (RFC §7.5 rule 8), and no event when the room does not bind it (RFC
     /// §10.1 step 3).
     fn receiver_context(&self, context: RoomContext) -> Box<RoomContext> {
-        Box::new(match context.binding(&self.message.channel_id) {
+        Box::new(match context.get_binding(&self.message.channel_id) {
             Some(receiver) => permissions::context_for(receiver, &context),
             None => RoomContext {
                 recent_events: Vec::new(),

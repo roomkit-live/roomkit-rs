@@ -24,6 +24,8 @@ pub enum RoomStatus {
 impl RoomStatus {
     /// Whether the room accepts a new event. A closed or archived room MUST
     /// refuse one at every point where its timeline can grow (RFC §5.1).
+    /// Hidden: the Python implementation reads the statuses inline.
+    #[doc(hidden)]
     pub fn accepts_events(self) -> bool {
         match self {
             Self::Active | Self::Paused => true,
@@ -61,8 +63,11 @@ pub struct RoomTimers {
 
 /// A conversation space where channels connect and events flow (RFC §5.1).
 ///
-/// A room holds no message content: its events are in its timeline.
+/// A room holds no message content: its events are in its timeline. As in
+/// the Python implementation, a room read with no event has no latest
+/// index: a `0` stored by an older writer names no event.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "RoomWire")]
 pub struct Room {
     /// The room's id.
     pub id: RoomId,
@@ -126,9 +131,70 @@ fn delivery_cursor<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D:
     Ok(cursor)
 }
 
+/// A room as it is read: [`Room`]'s fields, before the latest index of a
+/// room with no event is cleared.
+#[derive(Deserialize)]
+struct RoomWire {
+    id: RoomId,
+    #[serde(default)]
+    organization_id: Option<String>,
+    #[serde(default)]
+    status: RoomStatus,
+    created_at: Timestamp,
+    updated_at: Timestamp,
+    #[serde(default)]
+    closed_at: Option<Timestamp>,
+    #[serde(default)]
+    paused_at: Option<Timestamp>,
+    #[serde(default)]
+    timers: RoomTimers,
+    #[serde(default)]
+    agent_response_policy: AgentResponsePolicy,
+    #[serde(default)]
+    metadata: Metadata,
+    #[serde(default)]
+    event_count: u64,
+    #[serde(default)]
+    latest_index: Option<u64>,
+    #[serde(default = "no_delivery", deserialize_with = "delivery_cursor")]
+    delivered_index: i64,
+}
+
+impl From<RoomWire> for Room {
+    fn from(wire: RoomWire) -> Self {
+        Self {
+            id: wire.id,
+            organization_id: wire.organization_id,
+            status: wire.status,
+            created_at: wire.created_at,
+            updated_at: wire.updated_at,
+            closed_at: wire.closed_at,
+            paused_at: wire.paused_at,
+            timers: wire.timers,
+            agent_response_policy: wire.agent_response_policy,
+            metadata: wire.metadata,
+            event_count: wire.event_count,
+            // Python's `_no_index_without_events`.
+            latest_index: wire.latest_index.filter(|_| wire.event_count > 0),
+            delivered_index: wire.delivered_index,
+        }
+    }
+}
+
 impl Room {
-    /// An active, empty room created at `now`.
-    pub fn new(id: RoomId, now: Timestamp) -> Self {
+    /// An active, empty room created now, as the Python implementation's
+    /// model defaults fill `created_at` and `updated_at`. A caller sets the
+    /// other fields by struct update.
+    #[cfg(feature = "system-environment")]
+    pub fn new(id: RoomId) -> Self {
+        use crate::ops::{Environment, SystemEnvironment};
+        Self::at(id, SystemEnvironment.now())
+    }
+
+    /// An active, empty room created at `now`: what the core's operations
+    /// build from their environment. Outside the public API.
+    #[doc(hidden)]
+    pub fn at(id: RoomId, now: Timestamp) -> Self {
         Self {
             id,
             organization_id: None,
@@ -154,6 +220,21 @@ mod tests {
 
     use super::*;
 
+    /// Python's `_no_index_without_events`: a room read with no event has
+    /// no latest index.
+    #[test]
+    fn a_room_read_with_no_event_has_no_latest_index() {
+        let read: Room = serde_json::from_value(json!({
+            "id": "room_1",
+            "created_at": "1970-01-01T00:00:00Z",
+            "updated_at": "1970-01-01T00:00:00Z",
+            "event_count": 0,
+            "latest_index": 0,
+        }))
+        .unwrap();
+        assert_eq!(read.latest_index, None);
+    }
+
     #[test]
     fn a_paused_room_accepts_events() {
         assert!(RoomStatus::Paused.accepts_events());
@@ -171,7 +252,7 @@ mod tests {
 
     #[test]
     fn a_new_room_is_active_and_empty() {
-        let room = Room::new(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH);
+        let room = Room::at(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH);
         assert_eq!(
             (room.status, room.event_count, room.latest_index),
             (RoomStatus::Active, 0, None)

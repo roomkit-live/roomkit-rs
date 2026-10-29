@@ -229,7 +229,11 @@ impl Channel for EchoAgent {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        ready(Ok(ChannelOutput::respond(vec![self.reply_to(&event)])))
+        ready(Ok(ChannelOutput {
+            responded: true,
+            response_events: vec![self.reply_to(&event)],
+            ..ChannelOutput::empty()
+        }))
     }
 }
 

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelBinding, ChannelId, Metadata, Participant, Room, RoomEvent};
+use super::{ChannelBinding, ChannelId, ChannelType, Metadata, Participant, Room, RoomEvent};
 
 /// A room's state as one reader receives it (RFC §10.1 step 3).
 ///
@@ -45,9 +45,83 @@ impl RoomContext {
 
     /// The room's binding of `channel_id`, if it binds the channel: a room
     /// binds a channel once at most (RFC §5.7).
-    pub fn binding(&self, channel_id: &ChannelId) -> Option<&ChannelBinding> {
+    pub fn get_binding(&self, channel_id: &ChannelId) -> Option<&ChannelBinding> {
         self.bindings
             .iter()
             .find(|binding| &binding.channel_id == channel_id)
+    }
+
+    /// Every binding but `exclude_channel_id`'s.
+    pub fn other_channels(&self, exclude_channel_id: &ChannelId) -> Vec<&ChannelBinding> {
+        self.bindings
+            .iter()
+            .filter(|binding| &binding.channel_id != exclude_channel_id)
+            .collect()
+    }
+
+    /// The bindings of `channel_type`'s channels.
+    pub fn channels_by_type(&self, channel_type: &ChannelType) -> Vec<&ChannelBinding> {
+        self.bindings
+            .iter()
+            .filter(|binding| &binding.channel_type == channel_type)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+    use crate::model::{ChannelCategory, ChannelDirection, RoomId, Timestamp};
+
+    fn context() -> RoomContext {
+        let room_id = RoomId::new("room_1").unwrap();
+        let binding = |id: &str, channel_type: ChannelType| {
+            ChannelBinding::at(
+                ChannelId::new(id).unwrap(),
+                room_id.clone(),
+                channel_type,
+                ChannelCategory::Transport,
+                ChannelDirection::Bidirectional,
+                Timestamp::UNIX_EPOCH,
+            )
+        };
+        RoomContext {
+            bindings: vec![
+                binding("sms", ChannelType::SMS),
+                binding("ws", ChannelType::WEBSOCKET),
+                binding("sms_2", ChannelType::SMS),
+            ],
+            ..RoomContext::new(Room::at(room_id.clone(), Timestamp::UNIX_EPOCH))
+        }
+    }
+
+    fn ids(bindings: &[&ChannelBinding]) -> Vec<String> {
+        bindings
+            .iter()
+            .map(|binding| binding.channel_id.to_string())
+            .collect()
+    }
+
+    /// Python's `get_binding`, `other_channels` and `channels_by_type`.
+    #[test]
+    fn a_context_finds_its_bindings_as_python_s_does() {
+        let context = context();
+        let sms = ChannelId::new("sms").unwrap();
+        assert_eq!(
+            (
+                context
+                    .get_binding(&sms)
+                    .map(|binding| binding.channel_id.to_string()),
+                ids(&context.other_channels(&sms)),
+                ids(&context.channels_by_type(&ChannelType::SMS)),
+            ),
+            (
+                Some("sms".to_owned()),
+                vec!["ws".to_owned(), "sms_2".to_owned()],
+                vec!["sms".to_owned(), "sms_2".to_owned()],
+            )
+        );
     }
 }

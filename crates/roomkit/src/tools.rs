@@ -28,7 +28,6 @@ use crate::hooks::HookError;
 /// `BEFORE_TOOL_USE` reads a call that has not run: no outcome, a `null`
 /// result. `ON_TOOL_CALL` reads every call once it ended.
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct ToolCallEvent {
     /// The agent whose turn makes the call.
     pub channel_id: ChannelId,

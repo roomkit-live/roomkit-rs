@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use roomkit_core::model::{
-    ChannelOutput, DeliveryStatus, ErrorRecord, EventId, EventStatus, EventType, HookResult,
+    ChannelOutput, DeliveryResultStatus, ErrorRecord, EventId, EventStatus, EventType, HookResult,
     InjectedEvent, Observation, ObservationId, RoomEvent, RoomStatus, Task, TaskId, TextContent,
     Timestamp, Visibility,
 };
@@ -88,12 +88,12 @@ mod an_allowed_message {
     fn reports_the_delivery_to_each_transport() {
         let mut sim = room();
         let result = sim.send(Sim::message("sms", "Bonjour")).unwrap();
-        let delivered: Vec<(&str, DeliveryStatus)> = result
+        let delivered: Vec<(&str, DeliveryResultStatus)> = result
             .delivery_results
             .values()
             .map(|delivery| (delivery.channel_id.as_str(), delivery.status))
             .collect();
-        assert_eq!(delivered, [("ws", DeliveryStatus::Sent)]);
+        assert_eq!(delivered, [("ws", DeliveryResultStatus::Sent)]);
     }
 
     #[test]
@@ -119,7 +119,11 @@ mod an_allowed_message {
             Box::new(|event, _| {
                 let mut reply = response("ai", event, "Hello back");
                 reply.id = event.id.clone();
-                Ok(ChannelOutput::respond(vec![reply]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![reply],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
@@ -139,7 +143,11 @@ mod an_allowed_message {
                 let mut reply = response("ai", event, "Hello back");
                 reply.source = event.source.clone();
                 reply.source.provider_message_id = Some("SM42".to_owned());
-                Ok(ChannelOutput::respond(vec![reply]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![reply],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(Sim::message("sms", "Bonjour")).unwrap();
@@ -195,7 +203,7 @@ mod an_allowed_message {
         sim.before_broadcast(
             "triage",
             Box::new(|_| {
-                let task = Task::new(
+                let task = Task::at(
                     TaskId::new("task_1").unwrap(),
                     room_id(),
                     "Call back",
@@ -251,7 +259,7 @@ mod a_blocked_message {
                 if !text.contains("123-456-789") {
                     return HookOutcome::Returned(HookResult::allow());
                 }
-                let observation = Observation::new(
+                let observation = Observation::at(
                     ObservationId::new("obs_sin").unwrap(),
                     room_id(),
                     channel("sms"),
@@ -545,7 +553,7 @@ mod an_injected_event {
         sim.transport_with(
             "desk",
             Box::new(|_, _| {
-                let task = Task::new(
+                let task = Task::at(
                     TaskId::new("task_1").unwrap(),
                     room_id(),
                     "Read it",
@@ -948,7 +956,7 @@ mod metadata_updates {
         sim.agent(
             "crm",
             Box::new(|_, _| {
-                let task = Task::new(
+                let task = Task::at(
                     TaskId::new("task_1").unwrap(),
                     room_id(),
                     "Call back",
@@ -1339,7 +1347,11 @@ mod a_duplicate_message {
             Box::new(|event, _| {
                 let mut reply = response("ai", event, "Hello back");
                 reply.idempotency_key = Some("SM123".to_owned());
-                Ok(ChannelOutput::respond(vec![reply]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![reply],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(keyed("Bonjour")).unwrap();
@@ -1557,7 +1569,11 @@ mod a_response_visibility {
             let text = format!("Re: {}", text_of(&event.content));
             let mut answer = response("ai", event, &text);
             answer.visibility = own.parse().unwrap();
-            Ok(ChannelOutput::respond(vec![answer]))
+            Ok(ChannelOutput {
+                responded: true,
+                response_events: vec![answer],
+                ..ChannelOutput::empty()
+            })
         })
     }
 
@@ -1746,7 +1762,11 @@ mod a_response_visibility {
             let text = format!("Re: {}", text_of(&event.content));
             let mut answer = response("ai", event, &text);
             answer.response_visibility = scope.map(|scope| scope.parse().unwrap());
-            Ok(ChannelOutput::respond(vec![answer]))
+            Ok(ChannelOutput {
+                responded: true,
+                response_events: vec![answer],
+                ..ChannelOutput::empty()
+            })
         })
     }
 
@@ -2023,7 +2043,11 @@ mod the_reentry_budget {
                         reply
                     })
                     .collect();
-                Ok(ChannelOutput::respond(responses))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: responses,
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(Sim::message("sms", "Tell me everything")).unwrap();
@@ -2057,7 +2081,10 @@ mod a_failure_after_the_commit {
                     .get("ws")
                     .map(|delivery| delivery.status)
             ),
-            (Some(EventStatus::Delivered), Some(DeliveryStatus::Failed))
+            (
+                Some(EventStatus::Delivered),
+                Some(DeliveryResultStatus::Failed)
+            )
         );
     }
 
@@ -2663,7 +2690,7 @@ mod a_thread_parent {
     #[test]
     fn naming_no_event_of_the_room_is_dropped() {
         let mut sim = threaded();
-        sim.seed_room(Room::new(
+        sim.seed_room(Room::at(
             RoomId::new("room_2").unwrap(),
             Timestamp::UNIX_EPOCH,
         ));
@@ -2702,7 +2729,11 @@ mod a_thread_parent {
                 }
                 let mut answer = response("advisor", event, "In the reply's thread");
                 answer.parent_event_id = Some(id("evt_reply"));
-                Ok(ChannelOutput::respond(vec![answer]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![answer],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(Sim::message("sms", "Hello")).unwrap();
@@ -2753,7 +2784,11 @@ mod a_thread_parent {
                 }
                 let mut answer = response("advisor", event, "Answered");
                 answer.parent_event_id = Some(id("evt_reply"));
-                Ok(ChannelOutput::respond(vec![answer]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![answer],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(replying("Thanks", "evt_reply")).unwrap();

@@ -57,12 +57,10 @@ async fn a_binding_of_a_missing_room_is_refused() {
 }
 
 fn jean() -> Participant {
-    Participant::new(
-        participant_id("p_jean"),
-        room_id(),
-        channel("sms"),
-        Timestamp::UNIX_EPOCH,
-    )
+    Participant {
+        joined_at: Timestamp::UNIX_EPOCH,
+        ..Participant::new(participant_id("p_jean"), room_id(), channel("sms"))
+    }
 }
 
 #[tokio::test]

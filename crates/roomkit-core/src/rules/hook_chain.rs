@@ -269,7 +269,7 @@ mod tests {
     }
 
     fn task(id: &str) -> Task {
-        Task::new(
+        Task::at(
             TaskId::new(id).unwrap(),
             RoomId::new("room_1").unwrap(),
             "follow up",

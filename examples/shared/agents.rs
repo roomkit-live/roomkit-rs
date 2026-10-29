@@ -109,7 +109,11 @@ impl Channel for ScriptedAgent {
         context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         let output = match self.answer(&event) {
-            Some(answer) => ChannelOutput::respond(vec![answer]),
+            Some(answer) => ChannelOutput {
+                responded: true,
+                response_events: vec![answer],
+                ..ChannelOutput::empty()
+            },
             None => ChannelOutput::default(),
         };
         let history = turn_context(&event, context)

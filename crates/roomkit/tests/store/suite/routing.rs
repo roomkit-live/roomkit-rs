@@ -22,10 +22,12 @@ async fn bound(named: &[(&str, Option<&str>)]) -> Store {
     for (offset, (room, correspondent)) in named.iter().enumerate() {
         let room_id = RoomId::new(*room).unwrap();
         let created = Timestamp::from_unix_millis(i64::try_from(offset).unwrap() * 1000).unwrap();
-        store
-            .create_room(Room::new(room_id.clone(), created))
-            .await
-            .unwrap();
+        let room = Room {
+            created_at: created,
+            updated_at: created,
+            ..Room::new(room_id.clone())
+        };
+        store.create_room(room).await.unwrap();
         let mut binding = binding("sms");
         binding.room_id = room_id;
         binding.participant_id = correspondent.map(participant_id);
@@ -124,12 +126,10 @@ async fn the_newest_room_either_name_finds_wins() {
 }
 
 fn jean() -> Participant {
-    Participant::new(
-        participant_id("p_jean"),
-        room_id(),
-        channel("sms"),
-        Timestamp::UNIX_EPOCH,
-    )
+    Participant {
+        joined_at: Timestamp::UNIX_EPOCH,
+        ..Participant::new(participant_id("p_jean"), room_id(), channel("sms"))
+    }
 }
 
 #[tokio::test]
@@ -169,24 +169,17 @@ async fn a_participant_reached_through_another_channel_finds_no_room() {
 async fn listing_the_rooms_a_channel_reaches_skips_the_others() {
     let store = bound(&[("bound", None)]).await;
     let joined = RoomId::new("joined").unwrap();
-    store
-        .create_room(Room::new(joined.clone(), Timestamp::UNIX_EPOCH))
-        .await
-        .unwrap();
+    store.create_room(Room::new(joined.clone())).await.unwrap();
     store
         .create_participant(Participant::new(
             participant_id(ALICE),
             joined,
             channel("sms"),
-            Timestamp::UNIX_EPOCH,
         ))
         .await
         .unwrap();
     store
-        .create_room(Room::new(
-            RoomId::new("elsewhere").unwrap(),
-            Timestamp::UNIX_EPOCH,
-        ))
+        .create_room(Room::new(RoomId::new("elsewhere").unwrap()))
         .await
         .unwrap();
     let filter = RoomFilter {

@@ -776,7 +776,7 @@ mod tests {
     /// An ACTIVE room `id` created `seconds` after the epoch, with nothing.
     fn room(id: &str, seconds: i64) -> Candidate {
         Candidate {
-            room: Room::new(
+            room: Room::at(
                 RoomId::new(id).unwrap(),
                 Timestamp::from_unix_millis(seconds * 1000).unwrap(),
             ),
@@ -787,7 +787,7 @@ mod tests {
     }
 
     fn sms_binding(room_id: &RoomId, channel_id: &str) -> ChannelBinding {
-        ChannelBinding::new(
+        ChannelBinding::at(
             channel(channel_id),
             room_id.clone(),
             ChannelType::SMS,
@@ -834,7 +834,7 @@ mod tests {
     }
 
     fn member(id: &str, room: &Candidate, channel_id: &str) -> Participant {
-        Participant::new(
+        Participant::at(
             ParticipantId::new(id).unwrap(),
             room.room.id.clone(),
             channel(channel_id),
@@ -1793,7 +1793,7 @@ mod tests {
         }
 
         fn participant(id: &str) -> Participant {
-            Participant::new(
+            Participant::at(
                 ParticipantId::new(id).unwrap(),
                 RoomId::new("room_1").unwrap(),
                 channel("sms"),

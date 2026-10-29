@@ -45,7 +45,7 @@ pub use content::{
     ToolCallOutcome, ToolCallStatus, VideoContent,
 };
 pub use context::RoomContext;
-pub use delivery::{DeliveryError, DeliveryResult, DeliveryStatus, ProviderResult};
+pub use delivery::{DeliveryError, DeliveryResult, DeliveryResultStatus, ProviderResult};
 pub use direct::DirectEvent;
 pub use error::ModelError;
 pub use event::{EventDirection, EventSource, EventStatus, EventType, RoomEvent};

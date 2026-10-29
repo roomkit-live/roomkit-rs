@@ -81,6 +81,16 @@ pub enum ModelError {
         max: f64,
     },
 
+    /// A number that must be greater than 0 is not, as the Python
+    /// implementation's `gt=0` refuses it.
+    #[error("{name} {value} is not greater than 0")]
+    NotPositive {
+        /// The field.
+        name: &'static str,
+        /// The refused value.
+        value: f64,
+    },
+
     /// A media URL is refused when its content is built (RFC §6.4): `reason`
     /// is the Python implementation's message.
     #[error("{reason}: {value:?}")]

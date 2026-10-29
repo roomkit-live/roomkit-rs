@@ -78,8 +78,9 @@ impl Bank {
     ) -> Result<IdentityId, Box<dyn Error>> {
         let identity_id = IdentityId::new(id)?;
         let identity = Identity {
+            organization_id: Some(BANK.to_owned()),
             display_name: Some(name.to_owned()),
-            ..Identity::new(identity_id.clone(), Some(BANK.to_owned()))
+            ..Identity::new(identity_id.clone())
         };
         let store = self.kit.store();
         store.create_identity(identity).await?;
@@ -134,11 +135,11 @@ impl Bank {
         let room_id = self.open(room, AttachChannelOptions::default()).await?;
         let member = Participant {
             identity_id: Some(identity_id.clone()),
+            joined_at: self.clock.now(),
             ..Participant::new(
                 ParticipantId::new(format!("member_{identity_id}"))?,
                 room_id.clone(),
                 self.sms.id().clone(),
-                self.clock.now(),
             )
         };
         self.kit.store().create_participant(member).await?;

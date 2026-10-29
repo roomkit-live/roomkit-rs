@@ -124,7 +124,11 @@ impl Channel for Agent {
                 event: sent,
                 delivered_yet,
             });
-            Ok(ChannelOutput::respond(vec![answer]))
+            Ok(ChannelOutput {
+                responded: true,
+                response_events: vec![answer],
+                ..ChannelOutput::empty()
+            })
         }
     }
 }

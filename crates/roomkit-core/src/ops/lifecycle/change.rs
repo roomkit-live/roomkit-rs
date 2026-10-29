@@ -393,7 +393,7 @@ pub(crate) fn store_updated(
 /// The room's binding of `channel_id`.
 fn bound(context: &RoomContext, channel_id: &ChannelId) -> Result<ChannelBinding, LifecycleError> {
     context
-        .binding(channel_id)
+        .get_binding(channel_id)
         .cloned()
         .ok_or_else(|| LifecycleError::ChannelNotBound {
             room_id: context.room.id.clone(),

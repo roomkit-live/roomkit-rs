@@ -468,7 +468,11 @@ impl Channel for SlowAgent {
                     TextContent::new("late answer"),
                 )
             };
-            Ok(ChannelOutput::respond(vec![answer]))
+            Ok(ChannelOutput {
+                responded: true,
+                response_events: vec![answer],
+                ..ChannelOutput::empty()
+            })
         }
     }
 }

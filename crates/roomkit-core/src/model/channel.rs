@@ -150,29 +150,38 @@ impl AsRef<str> for ChannelType {
 }
 
 /// What a channel does (RFC §4.2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelCategory {
-    /// Carries messages to and from external systems or humans.
+    /// Carries messages to and from external systems or humans, the
+    /// default.
+    #[default]
     Transport,
     /// Processes events and produces responses or insights.
     Intelligence,
 }
 
 /// What a channel can do physically (RFC §4.2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelDirection {
     /// Receives from outside only.
     Inbound,
     /// Sends to outside only.
     Outbound,
-    /// Receives and sends.
+    /// Receives and sends, the default.
+    #[default]
     Bidirectional,
 }
 
 impl ChannelDirection {
-    /// Whether the channel receives from outside.
+    /// Whether the channel receives from outside. Hidden: the Python
+    /// implementation reads the directions inline.
+    #[doc(hidden)]
     pub fn receives(self) -> bool {
         match self {
             Self::Inbound | Self::Bidirectional => true,
@@ -180,7 +189,8 @@ impl ChannelDirection {
         }
     }
 
-    /// Whether the channel sends to outside.
+    /// Whether the channel sends to outside. Hidden, as `receives` is.
+    #[doc(hidden)]
     pub fn sends(self) -> bool {
         match self {
             Self::Outbound | Self::Bidirectional => true,
@@ -213,6 +223,7 @@ pub enum ChannelMediaType {
 impl ChannelMediaType {
     /// Every media type, as a channel that carries any declares them (a
     /// host channel, RFC §10.5).
+    #[doc(hidden)]
     pub fn all() -> BTreeSet<Self> {
         // The match lists every type: a type added to the enum fails to
         // build until it is listed here too.
@@ -249,7 +260,6 @@ impl ChannelMediaType {
     clippy::struct_excessive_bools,
     reason = "mirrors the RFC §5.8 record field for field"
 )]
-#[non_exhaustive]
 pub struct ChannelCapabilities {
     /// The content categories the channel carries.
     pub media_types: BTreeSet<ChannelMediaType>,
@@ -276,8 +286,16 @@ pub struct ChannelCapabilities {
     pub max_media_size_bytes: Option<u64>,
     /// Audio.
     pub supports_audio: bool,
+    /// The longest audio the channel takes, in seconds, `None` for any.
+    pub max_audio_duration_seconds: Option<u64>,
+    /// The audio formats the channel takes; empty takes every format.
+    pub supported_audio_formats: Vec<String>,
     /// Video.
     pub supports_video: bool,
+    /// The longest video the channel takes, in seconds, `None` for any.
+    pub max_video_duration_seconds: Option<u64>,
+    /// The video formats the channel takes; empty takes every format.
+    pub supported_video_formats: Vec<String>,
     /// Threads.
     pub supports_threading: bool,
     /// Typing indicators.
@@ -290,14 +308,14 @@ pub struct ChannelCapabilities {
     pub supports_edit: bool,
     /// Native deletes (RFC §10.3).
     pub supports_delete: bool,
-    /// The channel's own rate limit.
-    pub rate_limit: Option<RateLimit>,
     /// Extensible capabilities.
     pub custom: Metadata,
 }
 
 impl ChannelCapabilities {
-    /// Whether the channel carries `media_type`.
+    /// Whether the channel carries `media_type`. Hidden: the Python
+    /// implementation reads `media_types` inline.
+    #[doc(hidden)]
     pub fn carries(&self, media_type: ChannelMediaType) -> bool {
         self.media_types.contains(&media_type)
     }
@@ -318,30 +336,87 @@ impl Default for ChannelCapabilities {
             supported_media_types: Vec::new(),
             max_media_size_bytes: None,
             supports_audio: false,
+            max_audio_duration_seconds: None,
+            supported_audio_formats: Vec::new(),
             supports_video: false,
+            max_video_duration_seconds: None,
+            supported_video_formats: Vec::new(),
             supports_threading: false,
             supports_typing: false,
             supports_read_receipts: false,
             supports_reactions: false,
             supports_edit: false,
             supports_delete: false,
-            rate_limit: None,
             custom: Metadata::new(),
         }
     }
 }
 
-/// A rate limit (RFC §13.3).
+/// A rate limit (RFC §13.3), the Python implementation's members.
+///
+/// A limit is greater than 0, as Python's `gt=0.0`: deserialization refuses
+/// another, and so does a kit's `attach_channel`, since a struct literal
+/// runs no check.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-#[non_exhaustive]
+#[serde(try_from = "RateLimitWire")]
 pub struct RateLimit {
     /// The maximum events per second.
     pub max_per_second: Option<f64>,
     /// The maximum events per minute.
     pub max_per_minute: Option<f64>,
-    /// The burst allowance.
-    pub burst: Option<u32>,
+    /// The maximum events per hour.
+    pub max_per_hour: Option<f64>,
+}
+
+impl RateLimit {
+    /// Refuses a limit that is not greater than 0, `NaN` included, naming
+    /// the first such field. Outside the public API: the kit's
+    /// `attach_channel` runs it on the limit it is given.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelError::NotPositive`] for a limit `<= 0`.
+    #[doc(hidden)]
+    pub fn check(&self) -> Result<(), ModelError> {
+        [
+            ("max_per_second", self.max_per_second),
+            ("max_per_minute", self.max_per_minute),
+            ("max_per_hour", self.max_per_hour),
+        ]
+        .into_iter()
+        .find_map(|(name, limit)| {
+            limit
+                .filter(|value| value.is_nan() || *value <= 0.0)
+                .map(|value| ModelError::NotPositive { name, value })
+        })
+        .map_or(Ok(()), Err)
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the Python implementation's names"
+)]
+struct RateLimitWire {
+    max_per_second: Option<f64>,
+    max_per_minute: Option<f64>,
+    max_per_hour: Option<f64>,
+}
+
+impl TryFrom<RateLimitWire> for RateLimit {
+    type Error = ModelError;
+
+    fn try_from(wire: RateLimitWire) -> Result<Self, Self::Error> {
+        let limit = Self {
+            max_per_second: wire.max_per_second,
+            max_per_minute: wire.max_per_minute,
+            max_per_hour: wire.max_per_hour,
+        };
+        limit.check()?;
+        Ok(limit)
+    }
 }
 
 #[cfg(test)]
@@ -350,6 +425,30 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Python's `gt=0.0`: a limit read must be greater than 0.
+    #[test]
+    fn a_rate_limit_not_above_zero_is_refused_when_read() {
+        let read = [
+            json!({ "max_per_second": 0.0 }),
+            json!({ "max_per_hour": -1.0 }),
+        ]
+        .map(|json| serde_json::from_value::<RateLimit>(json).map_err(|e| e.to_string()));
+        let kept: RateLimit = serde_json::from_value(json!({ "max_per_hour": 60.0 })).unwrap();
+        assert_eq!(
+            (read, kept),
+            (
+                [
+                    Err("max_per_second 0 is not greater than 0".to_owned()),
+                    Err("max_per_hour -1 is not greater than 0".to_owned()),
+                ],
+                RateLimit {
+                    max_per_hour: Some(60.0),
+                    ..RateLimit::default()
+                }
+            )
+        );
+    }
 
     /// A type is an open name (docs/rfc-gaps.md, "Found by step 4's shared
     /// SQLite file"): a well-known one, one the Python implementation writes

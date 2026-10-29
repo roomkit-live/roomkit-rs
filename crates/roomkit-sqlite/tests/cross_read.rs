@@ -276,8 +276,8 @@ async fn rewrite_everything(store: &SqliteStore) {
 
 /// Every record Python wrote is read, and rewriting each loses none of its
 /// members, changes no indexed column, and leaves every other table as it
-/// was. A rewrite adds only the members of the RFC Python does not model
-/// (docs/rfc-gaps.md, "Found by step 4's shared SQLite file").
+/// was, and adds none: both implementations model the same members since
+/// step 5, lot 2.
 #[tokio::test]
 async fn a_rewrite_keeps_everything_python_wrote() {
     let file = copy();
@@ -315,16 +315,7 @@ async fn a_rewrite_keeps_everything_python_wrote() {
     };
     assert_eq!(
         (lost, added, row_counts(&after)),
-        (
-            Vec::<String>::new(),
-            [
-                "data.capabilities.rate_limit",
-                "data.rate_limit.burst",
-            ]
-            .map(str::to_owned)
-            .into(),
-            row_counts(&before)
-        )
+        (Vec::<String>::new(), BTreeSet::new(), row_counts(&before))
     );
 }
 

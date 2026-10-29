@@ -47,10 +47,11 @@ const MESSAGES: [&str; 6] = [
 
 /// Text, with edits and deletes delivered natively (RFC §5.8, §6.6).
 fn edits_natively() -> ChannelCapabilities {
-    let mut capabilities = ChannelCapabilities::default();
-    capabilities.supports_edit = true;
-    capabilities.supports_delete = true;
-    capabilities
+    ChannelCapabilities {
+        supports_edit: true,
+        supports_delete: true,
+        ..ChannelCapabilities::default()
+    }
 }
 
 /// A mutation trigger that fired: the trigger, its payload, and the id of

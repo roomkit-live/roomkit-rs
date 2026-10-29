@@ -1928,7 +1928,7 @@ mod an_entry_whose_caller_did_not_wait {
                 if text_of(&event.content) != text {
                     return Ok(ChannelOutput::default());
                 }
-                let task = roomkit_core::model::Task::new(
+                let task = roomkit_core::model::Task::at(
                     "task_1".parse().unwrap(),
                     room_id(),
                     "Follow up",
@@ -2816,7 +2816,11 @@ mod the_visibility_internal {
             Box::new(|event, _| {
                 let mut answer = response("ai", event, "Noted");
                 answer.visibility = Visibility::Internal;
-                Ok(ChannelOutput::respond(vec![answer]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![answer],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(hello()).unwrap();

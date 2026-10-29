@@ -24,6 +24,8 @@ pub enum Access {
 
 impl Access {
     /// Whether the channel receives the room's events (RFC §7.5 rule 1).
+    /// Hidden: the Python implementation reads the members inline.
+    #[doc(hidden)]
     pub fn reads(self) -> bool {
         match self {
             Self::ReadWrite | Self::ReadOnly => true,
@@ -32,6 +34,8 @@ impl Access {
     }
 
     /// Whether the channel's events may be broadcast (RFC §7.5 rule 2).
+    /// Hidden, as `reads` is.
+    #[doc(hidden)]
     pub fn writes(self) -> bool {
         match self {
             Self::ReadWrite | Self::WriteOnly => true,
@@ -40,41 +44,36 @@ impl Access {
     }
 }
 
-/// How a failed delivery is retried (RFC §13.2).
+/// How a failed delivery is retried (RFC §13.2), with the Python
+/// implementation's defaults: 3 retries, the first after 1 s, each delay
+/// doubled up to 60 s, for every retryable error.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
+#[serde(default)]
 pub struct RetryPolicy {
     /// The maximum number of retries.
     pub max_retries: u32,
     /// The delay before the first retry, in seconds.
     pub base_delay_seconds: f64,
     /// The multiplier applied per attempt.
-    #[serde(default = "default_exponential_base")]
     pub exponential_base: f64,
     /// The cap on any delay, in seconds.
     pub max_delay_seconds: f64,
-    /// The error codes eligible for a retry, `None` for every retryable error.
-    #[serde(default)]
+    /// The names of the error types that may be retried, as the Python
+    /// implementation reads them; `None` retries any error that does not
+    /// refuse it itself.
     pub retryable_errors: Option<Vec<String>>,
 }
 
-impl RetryPolicy {
-    /// Up to `max_retries` retries, the first after `base_delay_seconds`,
-    /// each delay doubled up to `max_delay_seconds`, for every retryable
-    /// error.
-    pub fn new(max_retries: u32, base_delay_seconds: f64, max_delay_seconds: f64) -> Self {
+impl Default for RetryPolicy {
+    fn default() -> Self {
         Self {
-            max_retries,
-            base_delay_seconds,
-            exponential_base: default_exponential_base(),
-            max_delay_seconds,
+            max_retries: 3,
+            base_delay_seconds: 1.0,
+            exponential_base: 2.0,
+            max_delay_seconds: 60.0,
             retryable_errors: None,
         }
     }
-}
-
-fn default_exponential_base() -> f64 {
-    2.0
 }
 
 /// A channel attached to a room, with its permissions (RFC §5.7).
@@ -87,9 +86,11 @@ pub struct ChannelBinding {
     /// The channel's type.
     pub channel_type: ChannelType,
     /// How the channel takes part: its own category unless the attachment
-    /// named one.
+    /// named one; `transport` by default.
+    #[serde(default)]
     pub category: ChannelCategory,
-    /// What the channel can do physically.
+    /// What the channel can do physically, `bidirectional` by default.
+    #[serde(default)]
     pub direction: ChannelDirection,
     /// Whether it reads, writes, both or neither.
     #[serde(default)]
@@ -129,9 +130,27 @@ pub struct ChannelBinding {
 }
 
 impl ChannelBinding {
-    /// A binding with the RFC defaults: read-write, unmuted, visible to all,
-    /// no correspondent, text-only capabilities.
-    pub fn new(
+    /// A binding with the Python implementation's defaults, attached now:
+    /// a bidirectional transport, read-write, unmuted, visible to all, no
+    /// correspondent, text-only capabilities. A caller sets the other fields
+    /// by struct update.
+    #[cfg(feature = "system-environment")]
+    pub fn new(channel_id: ChannelId, room_id: RoomId, channel_type: ChannelType) -> Self {
+        use crate::ops::{Environment, SystemEnvironment};
+        Self::at(
+            channel_id,
+            room_id,
+            channel_type,
+            ChannelCategory::default(),
+            ChannelDirection::default(),
+            SystemEnvironment.now(),
+        )
+    }
+
+    /// [`ChannelBinding::new`] with its category, direction and instant
+    /// given: what the core's operations build. Outside the public API.
+    #[doc(hidden)]
+    pub fn at(
         channel_id: ChannelId,
         room_id: RoomId,
         channel_type: ChannelType,
@@ -159,6 +178,19 @@ impl ChannelBinding {
             metadata: Metadata::new(),
         }
     }
+
+    /// Whether the binding's direction delivers to the outside (RFC §4.2),
+    /// Python's property `sends`: a transport is delivered to only when it
+    /// sends.
+    pub fn sends(&self) -> bool {
+        self.direction.sends()
+    }
+
+    /// Whether the binding may write into the room (RFC §7.5), Python's
+    /// property `can_write`: its access writes and it is not muted.
+    pub fn can_write(&self) -> bool {
+        self.access.writes() && !self.muted
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +199,31 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Python's properties `sends` and `can_write`.
+    #[test]
+    fn a_binding_sends_by_its_direction_and_writes_unless_muted() {
+        let binding = ChannelBinding::at(
+            ChannelId::new("sms").unwrap(),
+            RoomId::new("room_1").unwrap(),
+            ChannelType::SMS,
+            ChannelCategory::Transport,
+            ChannelDirection::Inbound,
+            Timestamp::UNIX_EPOCH,
+        );
+        let muted = ChannelBinding {
+            muted: true,
+            direction: ChannelDirection::Bidirectional,
+            ..binding.clone()
+        };
+        assert_eq!(
+            [
+                (binding.sends(), binding.can_write()),
+                (muted.sends(), muted.can_write())
+            ],
+            [(false, true), (true, false)]
+        );
+    }
 
     #[test]
     fn read_only_access_reads() {
@@ -191,14 +248,43 @@ mod tests {
         );
     }
 
+    /// Python's `RetryPolicy()`: 3, 1.0, 60.0, 2.0, every error; a member
+    /// left out reads its default.
     #[test]
-    fn a_retry_policy_defaults_its_exponential_base_to_two() {
-        let policy: RetryPolicy = serde_json::from_value(json!({
-            "max_retries": 3,
-            "base_delay_seconds": 0.5,
-            "max_delay_seconds": 10.0,
+    fn a_retry_policy_takes_python_s_defaults() {
+        let read: RetryPolicy = serde_json::from_value(json!({ "max_retries": 5 })).unwrap();
+        assert_eq!(
+            (serde_json::to_value(RetryPolicy::default()).unwrap(), read),
+            (
+                json!({
+                    "max_retries": 3,
+                    "base_delay_seconds": 1.0,
+                    "exponential_base": 2.0,
+                    "max_delay_seconds": 60.0,
+                    "retryable_errors": null,
+                }),
+                RetryPolicy {
+                    max_retries: 5,
+                    ..RetryPolicy::default()
+                }
+            )
+        );
+    }
+
+    /// Python's model defaults: a binding without `category` and
+    /// `direction` is a bidirectional transport.
+    #[test]
+    fn a_binding_without_category_and_direction_reads_a_bidirectional_transport() {
+        let read: ChannelBinding = serde_json::from_value(json!({
+            "channel_id": "sms",
+            "room_id": "room_1",
+            "channel_type": "sms",
+            "attached_at": "1970-01-01T00:00:00Z",
         }))
         .unwrap();
-        assert!((policy.exponential_base - 2.0).abs() < f64::EPSILON);
+        assert_eq!(
+            (read.category, read.direction),
+            (ChannelCategory::Transport, ChannelDirection::Bidirectional)
+        );
     }
 }

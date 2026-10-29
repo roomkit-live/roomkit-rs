@@ -426,7 +426,7 @@ mod tests {
     }
 
     fn ai() -> ChannelBinding {
-        ChannelBinding::new(
+        ChannelBinding::at(
             ChannelId::new("ai").unwrap(),
             RoomId::new("room_1").unwrap(),
             ChannelType::AI,

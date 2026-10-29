@@ -656,7 +656,7 @@ mod tests {
     }
 
     fn binding_with(metadata: Value) -> ChannelBinding {
-        let mut binding = ChannelBinding::new(
+        let mut binding = ChannelBinding::at(
             ChannelId::new("sms").unwrap(),
             RoomId::new("room_1").unwrap(),
             ChannelType::SMS,

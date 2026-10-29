@@ -20,7 +20,6 @@ const DEFAULT_CONTEXT_WINDOW: usize = 50;
 /// A registered channel, as the core knows it: its declaration, never the
 /// object behind it (RFC §10.6.2).
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct ChannelDeclaration {
     /// The channel's id.
     pub channel_id: ChannelId,
@@ -141,7 +140,7 @@ impl ChannelDeclaration {
     /// visible to all, naming no correspondent and no recipient, with the
     /// channel's capabilities (RFC §5.7).
     pub fn binding(&self, room_id: RoomId, attached_at: Timestamp) -> ChannelBinding {
-        let mut binding = ChannelBinding::new(
+        let mut binding = ChannelBinding::at(
             self.channel_id.clone(),
             room_id,
             self.channel_type.clone(),

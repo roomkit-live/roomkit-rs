@@ -52,8 +52,18 @@ pub struct Task {
 }
 
 impl Task {
-    /// A pending, unassigned task.
-    pub fn new(
+    /// A pending, unassigned task created now, as the Python
+    /// implementation's model defaults fill `created_at`. A caller sets the
+    /// other fields by struct update.
+    #[cfg(feature = "system-environment")]
+    pub fn new(id: TaskId, room_id: RoomId, title: impl Into<String>) -> Self {
+        use crate::ops::{Environment, SystemEnvironment};
+        Self::at(id, room_id, title, SystemEnvironment.now())
+    }
+
+    /// [`Task::new`] created at `created_at`. Outside the public API.
+    #[doc(hidden)]
+    pub fn at(
         id: TaskId,
         room_id: RoomId,
         title: impl Into<String>,
@@ -97,8 +107,24 @@ pub struct Observation {
 }
 
 impl Observation {
-    /// An uncategorized observation with full confidence.
+    /// An uncategorized observation with full confidence, created now, as
+    /// the Python implementation's model defaults fill `created_at`. A
+    /// caller sets the other fields by struct update.
+    #[cfg(feature = "system-environment")]
     pub fn new(
+        id: ObservationId,
+        room_id: RoomId,
+        channel_id: ChannelId,
+        content: impl Into<String>,
+    ) -> Self {
+        use crate::ops::{Environment, SystemEnvironment};
+        Self::at(id, room_id, channel_id, content, SystemEnvironment.now())
+    }
+
+    /// [`Observation::new`] created at `created_at`. Outside the public
+    /// API.
+    #[doc(hidden)]
+    pub fn at(
         id: ObservationId,
         room_id: RoomId,
         channel_id: ChannelId,

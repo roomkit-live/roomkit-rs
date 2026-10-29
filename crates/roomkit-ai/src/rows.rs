@@ -126,7 +126,11 @@ impl Rows<'_> {
         let mut output = if self.events.is_empty() {
             ChannelOutput::default()
         } else {
-            ChannelOutput::respond(self.events)
+            ChannelOutput {
+                responded: true,
+                response_events: self.events,
+                ..ChannelOutput::empty()
+            }
         };
         output.error = error.map(|error| ErrorRecord::new("ChannelError", error.to_string()));
         output

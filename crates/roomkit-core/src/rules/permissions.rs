@@ -471,7 +471,7 @@ mod tests {
             ChannelCategory::Transport => ChannelType::WEBSOCKET,
             ChannelCategory::Intelligence => ChannelType::AI,
         };
-        ChannelBinding::new(
+        ChannelBinding::at(
             channel(id),
             RoomId::new("room_1").unwrap(),
             channel_type,
@@ -715,7 +715,7 @@ mod tests {
         fn context(recent_events: Vec<RoomEvent>) -> RoomContext {
             RoomContext {
                 recent_events,
-                ..RoomContext::new(Room::new(
+                ..RoomContext::new(Room::at(
                     RoomId::new("room_1").unwrap(),
                     Timestamp::UNIX_EPOCH,
                 ))
@@ -884,7 +884,7 @@ mod tests {
             RoomContext {
                 bindings,
                 recent_events,
-                ..RoomContext::new(Room::new(
+                ..RoomContext::new(Room::at(
                     RoomId::new("room_1").unwrap(),
                     Timestamp::UNIX_EPOCH,
                 ))

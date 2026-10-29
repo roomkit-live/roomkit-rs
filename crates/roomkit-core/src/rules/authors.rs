@@ -631,7 +631,7 @@ mod tests {
     };
 
     fn room() -> RoomContext {
-        RoomContext::new(Room::new(
+        RoomContext::new(Room::at(
             RoomId::new("room_1").unwrap(),
             Timestamp::UNIX_EPOCH,
         ))

@@ -14,9 +14,9 @@ mod routing;
 mod timeline;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType, EditContent,
-    EventContent, EventId, EventSource, EventStatus, EventType, ParticipantId, Room, RoomEvent,
-    RoomId, RoomUpdates, TextContent, Timestamp,
+    ChannelBinding, ChannelId, ChannelType, EditContent, EventContent, EventId, EventSource,
+    EventStatus, EventType, ParticipantId, Room, RoomEvent, RoomId, RoomUpdates, TextContent,
+    Timestamp,
 };
 use roomkit::{ConversationStore, RoomCounters};
 
@@ -88,10 +88,7 @@ pub(crate) fn counters(index: u64) -> RoomCounters {
 /// An empty store holding `room_1`.
 pub(crate) async fn with_room() -> Store {
     let store = crate::store().await;
-    store
-        .create_room(Room::new(room_id(), Timestamp::UNIX_EPOCH))
-        .await
-        .unwrap();
+    store.create_room(Room::new(room_id())).await.unwrap();
     store
 }
 
@@ -115,14 +112,10 @@ pub(crate) fn ids(events: &[RoomEvent]) -> Vec<String> {
 
 /// `room_1`'s binding of an SMS channel `id`, naming no one.
 pub(crate) fn binding(id: &str) -> ChannelBinding {
-    ChannelBinding::new(
-        channel(id),
-        room_id(),
-        ChannelType::SMS,
-        ChannelCategory::Transport,
-        ChannelDirection::Bidirectional,
-        Timestamp::UNIX_EPOCH,
-    )
+    ChannelBinding {
+        attached_at: Timestamp::UNIX_EPOCH,
+        ..ChannelBinding::new(channel(id), room_id(), ChannelType::SMS)
+    }
 }
 
 pub(crate) fn participant_id(id: &str) -> ParticipantId {

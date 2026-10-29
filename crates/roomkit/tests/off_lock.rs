@@ -481,13 +481,15 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
                 if !found {
                     return HookReturn::Ok(HookResult::allow());
                 }
-                let observation = Observation::new(
-                    "obs_sin".parse()?,
-                    context.room.id.clone(),
-                    channel("sms_customer"),
-                    "SIN sent by SMS",
-                    event.created_at,
-                );
+                let observation = Observation {
+                    created_at: event.created_at,
+                    ..Observation::new(
+                        "obs_sin".parse()?,
+                        context.room.id.clone(),
+                        channel("sms_customer"),
+                        "SIN sent by SMS",
+                    )
+                };
                 Ok(HookResult::block("SIN detected")
                     .inject(InjectedEvent::to_channels(
                         to_customer,

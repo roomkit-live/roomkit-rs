@@ -22,6 +22,12 @@ pub struct Identity {
     /// The human-readable name.
     #[serde(default)]
     pub display_name: Option<String>,
+    /// The person's email address.
+    #[serde(default)]
+    pub email: Option<String>,
+    /// The person's phone number.
+    #[serde(default)]
+    pub phone: Option<String>,
     /// The addresses it uses, by channel type: `{sms: ["+15551234"], email:
     /// ["john@example.com"]}`.
     #[serde(default)]
@@ -29,26 +35,35 @@ pub struct Identity {
     /// A CRM's or another system's reference.
     #[serde(default)]
     pub external_id: Option<String>,
+    /// Other systems' references, by system.
+    #[serde(default)]
+    pub external_ids: BTreeMap<String, String>,
     /// Integrator-defined data.
     #[serde(default)]
     pub metadata: Metadata,
 }
 
 impl Identity {
-    /// An identity of `organization_id` with no name and no address yet.
-    pub fn new(id: IdentityId, organization_id: Option<String>) -> Self {
+    /// An identity of no organization, with no name and no address yet. A
+    /// caller sets the other fields by struct update.
+    pub fn new(id: IdentityId) -> Self {
         Self {
             id,
-            organization_id,
+            organization_id: None,
             display_name: None,
+            email: None,
+            phone: None,
             channel_addresses: BTreeMap::new(),
             external_id: None,
+            external_ids: BTreeMap::new(),
             metadata: Metadata::new(),
         }
     }
 
     /// Whether the identity uses `address` on channels of `channel_type`,
-    /// compared as written.
+    /// compared as written. Hidden: the stores use it, and Python has no
+    /// such helper.
+    #[doc(hidden)]
     pub fn uses(&self, channel_type: &ChannelType, address: &str) -> bool {
         self.channel_addresses
             .get(channel_type)
@@ -56,7 +71,8 @@ impl Identity {
     }
 
     /// Links `address` on channels of `channel_type` to the identity; an
-    /// address linked already is kept once.
+    /// address linked already is kept once. Hidden, as `uses` is.
+    #[doc(hidden)]
     pub fn link(&mut self, channel_type: ChannelType, address: &str) {
         if self.uses(&channel_type, address) {
             return;
@@ -69,7 +85,8 @@ impl Identity {
 
     /// Removes `address` on channels of `channel_type` from the identity;
     /// an address it does not use changes nothing. A channel type left
-    /// with no address is dropped.
+    /// with no address is dropped. Hidden, as `uses` is.
+    #[doc(hidden)]
     pub fn unlink(&mut self, channel_type: &ChannelType, address: &str) {
         let Some(addresses) = self.channel_addresses.get_mut(channel_type) else {
             return;
@@ -89,7 +106,10 @@ mod tests {
     use super::*;
 
     fn jean() -> Identity {
-        Identity::new(IdentityId::new("id_jean").unwrap(), Some("bank".to_owned()))
+        Identity {
+            organization_id: Some("bank".to_owned()),
+            ..Identity::new(IdentityId::new("id_jean").unwrap())
+        }
     }
 
     #[test]

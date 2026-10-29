@@ -344,7 +344,7 @@ fn target(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Option<StreamT
 /// (RFC §7.5 rule 2) or is no longer bound.
 fn answer_plan(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Option<DeliveryPlan> {
     let bindings = &context.bindings;
-    let responder = context.binding(&job.responder.channel_id)?;
+    let responder = context.get_binding(&job.responder.channel_id)?;
     if permissions::write_refusal(responder).is_some() {
         return None;
     }

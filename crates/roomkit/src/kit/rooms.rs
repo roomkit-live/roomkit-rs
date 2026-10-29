@@ -45,7 +45,7 @@ impl<S: ConversationStore> RoomKit<S> {
                 .agent_response_policy
                 .unwrap_or(config.agent_response_policy),
             metadata: options.metadata,
-            ..Room::new(room_id, environment.now())
+            ..Room::at(room_id, environment.now())
         };
         let create = CreateRoom::new(config, room);
         Ok(driver::run_on(inner, environment, "create_room", create).await??)

@@ -70,7 +70,7 @@ fn room_1_taken_meanwhile() -> Sim {
         channel("sms"),
         ParticipantId::new(OTHER).unwrap(),
     ));
-    sim.seed_room(Room::new(room_2(), Timestamp::UNIX_EPOCH));
+    sim.seed_room(Room::at(room_2(), Timestamp::UNIX_EPOCH));
     sim
 }
 
@@ -169,13 +169,13 @@ mod a_routed_message {
         let mut sim = Sim::without_rooms();
         sim.unbound_transport("sms", ChannelType::SMS);
         sim.attach("sms");
-        sim.created_meanwhile = Some(Room::new(room_id(), after_start(0)));
+        sim.created_meanwhile = Some(Room::at(room_id(), after_start(0)));
         sim.recorded_meanwhile = Some((
             room_id(),
             channel("sms"),
             ParticipantId::new(OTHER).unwrap(),
         ));
-        sim.seed_room(Room::new(room_2(), Timestamp::UNIX_EPOCH));
+        sim.seed_room(Room::at(room_2(), Timestamp::UNIX_EPOCH));
         sim.routes_to(Some("room_1"));
         sim.routes_to(Some("room_2"));
         let one = budget_of(1);
@@ -203,7 +203,7 @@ mod a_room_created_meanwhile {
     fn keeps_the_charge_and_leaves_the_cascade_a_budget_of_its_own() {
         let mut sim = Sim::without_rooms();
         sim.unbound_transport("sms", ChannelType::SMS);
-        sim.created_meanwhile = Some(Room::new(room_id(), after_start(0)));
+        sim.created_meanwhile = Some(Room::at(room_id(), after_start(0)));
         sim.before_broadcast(
             "notify",
             Box::new(|event| {

@@ -29,7 +29,6 @@ const SHORTEST: Duration = Duration::from_millis(1);
 ///
 /// A value under a millisecond is taken as a millisecond.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct TurnTimeouts {
     /// How long the owner waits for an executor to take a turn.
     pub accept: Duration,

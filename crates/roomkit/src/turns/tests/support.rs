@@ -223,7 +223,11 @@ impl Channel for Waiting {
             created_at: event.created_at,
             ..RoomEvent::new(event.room_id.clone(), source, TextContent::new("Done."))
         };
-        Ok(ChannelOutput::respond(vec![answer]))
+        Ok(ChannelOutput {
+            responded: true,
+            response_events: vec![answer],
+            ..ChannelOutput::empty()
+        })
     }
 }
 

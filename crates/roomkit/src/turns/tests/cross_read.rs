@@ -124,12 +124,10 @@ fn the_fixture_is_the_one_its_generator_wrote() {
 }
 
 /// RFC §1.4, §10.6.3: every message Python's in-memory backend carried for
-/// the turn is read, and writing it back loses none of the members the RFC
-/// defines. The rewrite adds the member of the RFC Python does not model
-/// (a channel's `rate_limit`), and drops the four
-/// a Python channel's capabilities write that the RFC does not list, its
-/// audio and video formats and durations (docs/rfc-gaps.md, "Found in step
-/// 4, milestone 7").
+/// the turn is read, and writing it back loses none of its members and adds
+/// none: both implementations model a channel's capabilities with the same
+/// members since step 5, lot 2 (its audio and video formats and durations,
+/// no `rate_limit`).
 #[test]
 fn every_message_python_carried_reads_and_rewrites_with_nothing_lost() {
     let (mut lost, mut added) = (Vec::new(), BTreeSet::new());
@@ -150,28 +148,8 @@ fn every_message_python_carried_reads_and_rewrites_with_nothing_lost() {
     };
     let lost: BTreeSet<String> = lost.iter().map(|path| member(path)).collect();
     let added: BTreeSet<String> = added.iter().map(|path| member(path)).collect();
-    let python_only = [
-        "max_audio_duration_seconds lost: null",
-        "max_video_duration_seconds lost: null",
-        "supported_audio_formats lost: []",
-        "supported_video_formats lost: []",
-    ];
-    let lost_expected: BTreeSet<String> =
-        ["binding.capabilities", "context.bindings[].capabilities"]
-            .iter()
-            .flat_map(|record| python_only.map(|member| format!("{record}.{member}")))
-            .collect();
     assert_eq!(
         (lines.len(), lost, added),
-        (
-            27,
-            lost_expected,
-            [
-                "binding.capabilities.rate_limit",
-                "context.bindings[].capabilities.rate_limit",
-            ]
-            .map(str::to_owned)
-            .into()
-        )
+        (27, BTreeSet::new(), BTreeSet::new())
     );
 }

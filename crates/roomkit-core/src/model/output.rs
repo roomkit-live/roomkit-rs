@@ -33,13 +33,11 @@ pub struct ChannelOutput {
 }
 
 impl ChannelOutput {
-    /// An output that answers the event with `events`.
-    pub fn respond(events: Vec<RoomEvent>) -> Self {
-        Self {
-            responded: true,
-            response_events: events,
-            ..Self::default()
-        }
+    /// An output that answers nothing, Python's `ChannelOutput.empty()`:
+    /// the same as [`Default`]. An answer is written by struct update,
+    /// `ChannelOutput { responded: true, response_events, ..ChannelOutput::empty() }`.
+    pub fn empty() -> Self {
+        Self::default()
     }
 }
 
@@ -74,6 +72,13 @@ mod tests {
 
     #[test]
     fn a_responding_output_has_responded() {
-        assert!(ChannelOutput::respond(Vec::new()).responded);
+        assert!(
+            ChannelOutput {
+                responded: true,
+                response_events: Vec::new(),
+                ..ChannelOutput::empty()
+            }
+            .responded
+        );
     }
 }

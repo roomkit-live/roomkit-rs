@@ -2632,7 +2632,11 @@ async fn a_turn_s_calls_draw_on_the_reentry_budget_of_the_cascade_that_delivers(
                     created_at: Timestamp::UNIX_EPOCH,
                     ..RoomEvent::new(room_id(), source, TextContent::new("Hello back"))
                 };
-                Ok(ChannelOutput::respond(vec![reply]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![reply],
+                    ..ChannelOutput::empty()
+                })
             })
         }),
     );

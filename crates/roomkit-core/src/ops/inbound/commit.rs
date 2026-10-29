@@ -177,7 +177,7 @@ pub(super) fn blocked(
 /// does not (gap G-036). A muted or read-only source's record is narrowed
 /// so, and a reader that sees it later sees no more than it would have.
 pub(super) fn stored_visibility(event: &RoomEvent, context: &RoomContext) -> Visibility {
-    context.binding(&event.source.channel_id).map_or_else(
+    context.get_binding(&event.source.channel_id).map_or_else(
         || event.visibility.clone(),
         |source| permissions::effective_visibility(&event.visibility, source, &context.bindings),
     )

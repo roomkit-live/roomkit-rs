@@ -242,10 +242,7 @@ async fn a_commit_whose_target_is_gone_writes_nothing() {
 async fn a_commit_whose_target_is_another_room_s_is_refused() {
     let store = with_thread().await;
     let other = RoomId::new("room_2").unwrap();
-    store
-        .create_room(Room::new(other.clone(), Timestamp::UNIX_EPOCH))
-        .await
-        .unwrap();
+    store.create_room(Room::new(other.clone())).await.unwrap();
     let mut elsewhere = event(0);
     elsewhere.id = event_id("evt_elsewhere");
     elsewhere.room_id = other;
@@ -344,10 +341,7 @@ async fn an_update_of_a_missing_event_is_refused() {
 async fn a_delete_in_another_room_removes_nothing() {
     let store = with_thread().await;
     let other = RoomId::new("room_2").unwrap();
-    store
-        .create_room(Room::new(other.clone(), Timestamp::UNIX_EPOCH))
-        .await
-        .unwrap();
+    store.create_room(Room::new(other.clone())).await.unwrap();
     let removed = store
         .delete_event(&other, &event_id("evt_0"), true)
         .await
@@ -488,10 +482,7 @@ async fn a_delete_of_a_missing_event_removes_nothing() {
 async fn an_event_is_found_whichever_room_holds_it() {
     let store = with_room().await;
     let other = RoomId::new("room_2").unwrap();
-    store
-        .create_room(Room::new(other.clone(), Timestamp::UNIX_EPOCH))
-        .await
-        .unwrap();
+    store.create_room(Room::new(other.clone())).await.unwrap();
     let mut elsewhere = event(0);
     elsewhere.room_id = other.clone();
     store

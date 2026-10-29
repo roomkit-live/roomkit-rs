@@ -150,7 +150,7 @@ mod tests {
     fn room(status: RoomStatus) -> Room {
         Room {
             status,
-            ..Room::new(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH)
+            ..Room::at(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH)
         }
     }
 

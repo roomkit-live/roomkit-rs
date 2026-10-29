@@ -492,13 +492,13 @@ mod a_blocked_instruction {
         hook_seeing(sim, "guard", |event| {
             if event.r#type == EventType::Instruction {
                 HookResult::block("no nudges tonight")
-                    .with_task(Task::new(
+                    .with_task(Task::at(
                         TaskId::new("task_1").unwrap(),
                         room_id(),
                         "nudge the customer tomorrow",
                         event.created_at,
                     ))
-                    .with_observation(Observation::new(
+                    .with_observation(Observation::at(
                         ObservationId::new("obs_1").unwrap(),
                         room_id(),
                         channel("app"),
@@ -681,7 +681,11 @@ mod the_response {
                 answer
                     .metadata
                     .insert("instruction".to_owned(), json!(TEXT));
-                Ok(ChannelOutput::respond(vec![answer]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![answer],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(instruction()).unwrap();
@@ -776,7 +780,11 @@ mod the_response {
                 let answers = (0..21)
                     .map(|_| response("ai", event, "Hello, I am the assistant."))
                     .collect();
-                Ok(ChannelOutput::respond(answers))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: answers,
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(instruction()).unwrap();
@@ -830,7 +838,11 @@ mod an_instruction_key_the_pipeline_did_not_write {
                 answer
                     .metadata
                     .insert("instruction".to_owned(), json!(TEXT));
-                Ok(ChannelOutput::respond(vec![answer]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![answer],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
     }
@@ -1149,7 +1161,11 @@ mod an_instruction_from_inside_the_cascade {
             Box::new(|_, _| {
                 let mut answer = smuggled();
                 answer.addressed_to = Some(vec![channel("billing")]);
-                Ok(ChannelOutput::respond(vec![answer]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![answer],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(instruction()).unwrap();
@@ -1166,10 +1182,14 @@ mod an_instruction_from_inside_the_cascade {
         sim.agent(
             "ai",
             Box::new(|event, _| {
-                Ok(ChannelOutput::respond(vec![
-                    smuggled(),
-                    response("ai", event, "Hello, I am the assistant."),
-                ]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![
+                        smuggled(),
+                        response("ai", event, "Hello, I am the assistant."),
+                    ],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
         sim.send(instruction()).unwrap();

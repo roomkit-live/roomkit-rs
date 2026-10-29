@@ -393,7 +393,7 @@ mod an_accepted_delete {
     #[test]
     fn by_an_owner_removes_another_sender_s_message() {
         let mut sim = room();
-        let mut owner = Participant::new(
+        let mut owner = Participant::at(
             ParticipantId::new(OTHER).unwrap(),
             room_id(),
             channel("wa"),
@@ -584,7 +584,7 @@ mod a_refused_change {
         let mut elsewhere = stored(&sim, "evt_1").clone();
         elsewhere.id = id("evt_9");
         elsewhere.room_id = RoomId::new("room_2").unwrap();
-        sim.seed_room(Room::new(
+        sim.seed_room(Room::at(
             RoomId::new("room_2").unwrap(),
             Timestamp::UNIX_EPOCH,
         ));
@@ -763,7 +763,11 @@ mod an_agent_s_response {
                     matches!(&event.content, EventContent::Text(text) if text.body == "typo?");
                 if !typo {
                     if matches!(event.content, EventContent::Text(_)) {
-                        return Ok(ChannelOutput::respond(vec![response("ai", event, "Helo")]));
+                        return Ok(ChannelOutput {
+                            responded: true,
+                            response_events: vec![response("ai", event, "Helo")],
+                            ..ChannelOutput::empty()
+                        });
                     }
                     return Ok(ChannelOutput::default());
                 }
@@ -776,7 +780,11 @@ mod an_agent_s_response {
                     edit_source: Some(EditSource::Sender),
                     ..EditContent::new(target_event_id, TextContent::new("Hello"))
                 });
-                Ok(ChannelOutput::respond(vec![correction]))
+                Ok(ChannelOutput {
+                    responded: true,
+                    response_events: vec![correction],
+                    ..ChannelOutput::empty()
+                })
             }),
         );
     }
@@ -1165,7 +1173,7 @@ mod a_direct_update {
         let mut elsewhere = stored(&sim, "evt_1").clone();
         elsewhere.id = id("evt_9");
         elsewhere.room_id = RoomId::new("room_2").unwrap();
-        sim.seed_room(Room::new(
+        sim.seed_room(Room::at(
             RoomId::new("room_2").unwrap(),
             Timestamp::UNIX_EPOCH,
         ));
@@ -1463,7 +1471,7 @@ mod a_direct_delete {
         let mut elsewhere = stored(&sim, "evt_3").clone();
         elsewhere.id = id("evt_9");
         elsewhere.room_id = RoomId::new("room_2").unwrap();
-        sim.seed_room(Room::new(
+        sim.seed_room(Room::at(
             RoomId::new("room_2").unwrap(),
             Timestamp::UNIX_EPOCH,
         ));

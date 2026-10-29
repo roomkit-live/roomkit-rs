@@ -486,7 +486,7 @@ async fn a_channel_that_panics_fails_its_delivery_and_the_kit_goes_on() {
         .map(|delivery| delivery.status);
     assert_eq!(
         (broken, sms.texts().len()),
-        (Some(roomkit::model::DeliveryStatus::Failed), 1)
+        (Some(roomkit::model::DeliveryResultStatus::Failed), 1)
     );
 }
 

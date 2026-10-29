@@ -198,7 +198,6 @@ async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
         ParticipantId::new("+15551234567").unwrap(),
         room_id(),
         channel("sms"),
-        Timestamp::UNIX_EPOCH,
     );
     kit.store().create_participant(jean.clone()).await.unwrap();
     let (seen, mut read) = mpsc::unbounded_channel();

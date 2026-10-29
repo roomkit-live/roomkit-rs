@@ -77,7 +77,7 @@ pub(crate) fn not_asked_observation(
         response_depth(trigger),
         max_chain_depth
     );
-    let mut observation = Observation::new(
+    let mut observation = Observation::at(
         id,
         trigger.room_id.clone(),
         agent.channel_id.clone(),
@@ -239,7 +239,7 @@ mod tests {
     }
 
     fn writer() -> ChannelBinding {
-        ChannelBinding::new(
+        ChannelBinding::at(
             ChannelId::new("writer").unwrap(),
             RoomId::new("room_1").unwrap(),
             ChannelType::AI,

@@ -98,7 +98,7 @@ pub fn revoked(room: &Room, channel: &ChannelId) -> bool {
 /// detached from the room, never over a binding the room has (RFC §7.5 rule
 /// 7), and never to a room whose status refuses the message (gap G-053).
 pub(crate) fn may_attach_automatically(context: &RoomContext, channel: &ChannelId) -> bool {
-    let bound = context.binding(channel).is_some();
+    let bound = context.get_binding(channel).is_some();
     !bound && !revoked(&context.room, channel) && context.room.status.accepts_events()
 }
 
@@ -190,7 +190,7 @@ mod tests {
     }
 
     fn room() -> Room {
-        Room::new(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH)
+        Room::at(RoomId::new("room_1").unwrap(), Timestamp::UNIX_EPOCH)
     }
 
     fn revoked_room() -> Room {
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn a_bound_channel_is_never_attached_automatically_over_its_binding() {
         let mut context = RoomContext::new(room());
-        context.bindings.push(ChannelBinding::new(
+        context.bindings.push(ChannelBinding::at(
             sms(),
             context.room.id.clone(),
             ChannelType::SMS,

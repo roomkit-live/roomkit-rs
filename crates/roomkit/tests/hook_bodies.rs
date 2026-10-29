@@ -152,7 +152,11 @@ impl Channel for Answering {
                 TextContent::new("Answer."),
             )
         };
-        ready(Ok(ChannelOutput::respond(vec![answer])))
+        ready(Ok(ChannelOutput {
+            responded: true,
+            response_events: vec![answer],
+            ..ChannelOutput::empty()
+        }))
     }
 }
 

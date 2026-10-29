@@ -82,7 +82,7 @@ mod tests {
     }
 
     fn room(inactive_after_seconds: Option<u64>, closed_after_seconds: Option<u64>) -> Room {
-        let mut room = Room::new(RoomId::new("room_1").unwrap(), at(0));
+        let mut room = Room::at(RoomId::new("room_1").unwrap(), at(0));
         room.timers = RoomTimers {
             inactive_after_seconds,
             closed_after_seconds,

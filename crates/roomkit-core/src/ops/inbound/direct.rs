@@ -69,7 +69,7 @@ impl DirectCall {
     /// Why the room as `context` holds it refuses `event` as the caller's
     /// room: it binds no channel the event names.
     pub(super) fn unbound(event: &RoomEvent, context: &RoomContext) -> Option<InboundError> {
-        let bound = context.binding(&event.source.channel_id).is_some();
+        let bound = context.get_binding(&event.source.channel_id).is_some();
         (!bound).then(|| InboundError::Refused {
             reason: WriteRefusal::Unbound.blocked_by().to_owned(),
         })

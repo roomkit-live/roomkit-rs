@@ -18,7 +18,10 @@ fn id(id: &str) -> IdentityId {
 
 /// The identity `id` of `organization`, using ALICE's number on SMS.
 fn identity(name: &str, organization: Option<&str>) -> Identity {
-    let mut identity = Identity::new(id(name), organization.map(str::to_owned));
+    let mut identity = Identity {
+        organization_id: organization.map(str::to_owned),
+        ..Identity::new(id(name))
+    };
     identity.link(ChannelType::SMS, ALICE);
     identity
 }
@@ -108,16 +111,14 @@ async fn an_address_another_identity_of_the_organization_uses_is_refused() {
 async fn an_identity_id_cannot_be_created_twice() {
     let store = holding(vec![identity("id_alice", None)]).await;
     assert_eq!(
-        store
-            .create_identity(Identity::new(id("id_alice"), None))
-            .await,
+        store.create_identity(Identity::new(id("id_alice"))).await,
         Err(StoreError::IdentityExists(id("id_alice")))
     );
 }
 
 #[tokio::test]
 async fn a_linked_address_resolves_to_its_identity() {
-    let store = holding(vec![Identity::new(id("id_jean"), None)]).await;
+    let store = holding(vec![Identity::new(id("id_jean"))]).await;
     store
         .link_address(&id("id_jean"), ChannelType::SMS, ALICE, None)
         .await
@@ -127,7 +128,11 @@ async fn a_linked_address_resolves_to_its_identity() {
 
 #[tokio::test]
 async fn linking_to_an_identity_of_another_organization_is_refused() {
-    let store = holding(vec![Identity::new(id("id_jean"), Some("bank".to_owned()))]).await;
+    let store = holding(vec![Identity {
+        organization_id: Some("bank".to_owned()),
+        ..Identity::new(id("id_jean"))
+    }])
+    .await;
     assert_eq!(
         store
             .link_address(&id("id_jean"), ChannelType::SMS, ALICE, Some("clinic"))
@@ -139,11 +144,7 @@ async fn linking_to_an_identity_of_another_organization_is_refused() {
 /// RFC §5.6: moving an address is an unlink, then a link.
 #[tokio::test]
 async fn an_unlinked_address_can_be_linked_to_another_identity() {
-    let store = holding(vec![
-        identity("id_one", None),
-        Identity::new(id("id_two"), None),
-    ])
-    .await;
+    let store = holding(vec![identity("id_one", None), Identity::new(id("id_two"))]).await;
     store
         .unlink_address(&id("id_one"), ChannelType::SMS, ALICE, None)
         .await
@@ -199,11 +200,7 @@ async fn unlinking_from_an_unknown_identity_is_refused() {
 
 #[tokio::test]
 async fn linking_an_address_another_identity_of_the_organization_uses_is_refused() {
-    let store = holding(vec![
-        identity("id_one", None),
-        Identity::new(id("id_two"), None),
-    ])
-    .await;
+    let store = holding(vec![identity("id_one", None), Identity::new(id("id_two"))]).await;
     assert!(matches!(
         store
             .link_address(&id("id_two"), ChannelType::SMS, ALICE, None)

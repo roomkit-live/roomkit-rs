@@ -138,7 +138,7 @@ fn record_sender(
     record: &SenderRecord,
     context: Box<RoomContext>,
 ) -> Decision<Recorded> {
-    let current = context.binding(&record.binding.channel_id).cloned();
+    let current = context.get_binding(&record.binding.channel_id).cloned();
     let kept = routing::kept_by_status(
         context.room.status,
         &record.sender,

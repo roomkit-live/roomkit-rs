@@ -11,9 +11,7 @@ use super::{counters, event, room_id, with_room};
 #[tokio::test]
 async fn a_room_id_cannot_be_created_twice() {
     let store = with_room().await;
-    let again = store
-        .create_room(Room::new(room_id(), Timestamp::UNIX_EPOCH))
-        .await;
+    let again = store.create_room(Room::new(room_id())).await;
     assert_eq!(again, Err(StoreError::RoomExists(room_id())));
 }
 
@@ -21,7 +19,7 @@ async fn a_room_id_cannot_be_created_twice() {
 #[tokio::test]
 async fn a_room_is_read_as_it_was_written() {
     let store = crate::store().await;
-    let mut room = Room::new(room_id(), Timestamp::from_unix_millis(1_250).unwrap());
+    let mut room = Room::new(room_id());
     room.organization_id = Some("org_1".to_owned());
     room.timers = RoomTimers {
         inactive_after_seconds: Some(60),
@@ -183,7 +181,7 @@ async fn a_room_s_private_state_is_kept_apart() {
 #[tokio::test]
 async fn listing_rooms_with_timers_armed_skips_the_others() {
     let store = with_room().await;
-    let mut timed = Room::new(RoomId::new("room_2").unwrap(), Timestamp::UNIX_EPOCH);
+    let mut timed = Room::new(RoomId::new("room_2").unwrap());
     timed.timers = RoomTimers {
         inactive_after_seconds: Some(60),
         ..RoomTimers::default()
@@ -208,10 +206,12 @@ async fn listing_rooms_without_a_filter_returns_them_oldest_first() {
     let store = crate::store().await;
     for (id, millis) in [("late", 2_000), ("early", 1_000)] {
         let created = Timestamp::from_unix_millis(millis).unwrap();
-        store
-            .create_room(Room::new(RoomId::new(id).unwrap(), created))
-            .await
-            .unwrap();
+        let room = Room {
+            created_at: created,
+            updated_at: created,
+            ..Room::new(RoomId::new(id).unwrap())
+        };
+        store.create_room(room).await.unwrap();
     }
     let listed = store.list_rooms(&RoomFilter::default()).await.unwrap();
     assert_eq!(
@@ -232,7 +232,7 @@ async fn listing_rooms_by_organization_and_status_skips_the_others() {
         ("clinic_active", Some("clinic"), RoomStatus::Active),
         ("none_active", None, RoomStatus::Active),
     ] {
-        let mut room = Room::new(RoomId::new(id).unwrap(), Timestamp::UNIX_EPOCH);
+        let mut room = Room::new(RoomId::new(id).unwrap());
         room.organization_id = organization.map(str::to_owned);
         room.status = status;
         store.create_room(room).await.unwrap();

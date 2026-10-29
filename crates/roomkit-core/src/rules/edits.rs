@@ -473,7 +473,7 @@ mod tests {
     }
 
     fn member(id: &str, channel_id: &str, role: ParticipantRole) -> Participant {
-        let mut participant = Participant::new(
+        let mut participant = Participant::at(
             participant_id(id),
             RoomId::new("room_1").unwrap(),
             channel(channel_id),

@@ -1,8 +1,9 @@
 //! A record's JSON in its row's `data` column, and the values of its
 //! indexed columns.
 //!
-//! The Python implementation writes members roomkit-rs does not model (an
-//! identity's `email`, a capability's `supported_audio_formats`). Rewriting
+//! The Python implementation may write members roomkit-rs does not model (a
+//! channel type no implementation lists among an identity's addresses, a
+//! member a later version adds). Rewriting
 //! a row keeps them: the members the stored JSON holds and the record's
 //! serialization lacks are put back, at the levels where the model has a
 //! structure of its own. The record's maps (`metadata`, `raw_payload`, ...)
@@ -36,13 +37,7 @@ impl Kind {
         match self {
             Self::Room => &["", "/timers"],
             Self::Event => &["", "/source"],
-            Self::Binding => &[
-                "",
-                "/capabilities",
-                "/capabilities/rate_limit",
-                "/rate_limit",
-                "/retry_policy",
-            ],
+            Self::Binding => &["", "/capabilities", "/rate_limit", "/retry_policy"],
             Self::Participant | Self::Identity | Self::Task | Self::Observation => &[""],
         }
     }

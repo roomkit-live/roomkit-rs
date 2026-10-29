@@ -249,7 +249,7 @@ mod a_routed_sender {
     fn named_by_the_binding_through_their_membership_lands_in_their_room() {
         let mut sim = routed_to_room_1();
         sim.bindings[0].participant_id = Some(ParticipantId::new("p_jean").unwrap());
-        let mut jean = Participant::new(
+        let mut jean = Participant::at(
             ParticipantId::new("p_jean").unwrap(),
             room_id(),
             channel("sms"),
@@ -257,7 +257,7 @@ mod a_routed_sender {
         );
         jean.identity_id = Some(IdentityId::new("id_jean").unwrap());
         sim.participants.push(jean);
-        let mut identity = Identity::new(IdentityId::new("id_jean").unwrap(), None);
+        let mut identity = Identity::new(IdentityId::new("id_jean").unwrap());
         identity.link(ChannelType::SMS, SENDER);
         sim.identities.push(identity);
         sim.route(None, Sim::message("sms", "Bonjour")).unwrap();
@@ -391,7 +391,7 @@ mod a_binding_taken_meanwhile {
     #[test]
     fn lands_in_the_room_routing_finds_the_second_time() {
         let mut sim = taken();
-        let mut second = Room::new(RoomId::new("room_2").unwrap(), Timestamp::UNIX_EPOCH);
+        let mut second = Room::at(RoomId::new("room_2").unwrap(), Timestamp::UNIX_EPOCH);
         second.metadata.insert("crm".to_owned(), json!("c_2"));
         sim.seed_room(second);
         sim.routes_to(Some("room_2"));
@@ -513,7 +513,7 @@ mod a_room_that_heard_another_sender_meanwhile {
     #[test]
     fn whose_member_is_the_sender_is_their_conversation_and_records_them() {
         let mut sim = heard_meanwhile();
-        sim.participants.push(Participant::new(
+        sim.participants.push(Participant::at(
             ParticipantId::new(SENDER).unwrap(),
             room_id(),
             channel("sms"),
@@ -531,7 +531,7 @@ mod a_room_that_heard_another_sender_meanwhile {
     #[test]
     fn having_another_member_joined_through_the_channel_routes_the_message_once_more() {
         let mut sim = routed_to_room_1();
-        sim.participants.push(Participant::new(
+        sim.participants.push(Participant::at(
             ParticipantId::new(OTHER).unwrap(),
             room_id(),
             channel("sms"),
@@ -669,7 +669,7 @@ mod a_routed_room_paused_by_its_lock {
     #[test]
     fn whose_member_reached_through_the_channel_is_the_sender_takes_the_message() {
         let mut sim = paused(routed_to_room_1());
-        sim.participants.push(Participant::new(
+        sim.participants.push(Participant::at(
             ParticipantId::new(SENDER).unwrap(),
             room_id(),
             channel("sms"),
@@ -845,7 +845,7 @@ mod no_room_found {
     #[test]
     fn whose_fresh_id_another_room_holds_fails_the_message() {
         let mut sim = no_room_yet();
-        sim.seed_room(Room::new(
+        sim.seed_room(Room::at(
             RoomId::new("new_room_1").unwrap(),
             Timestamp::UNIX_EPOCH,
         ));
@@ -919,10 +919,10 @@ mod the_router_s_query {
     use pretty_assertions::assert_eq;
 
     fn identity(id: &str, organization: Option<&str>) -> Identity {
-        let mut identity = Identity::new(
-            IdentityId::new(id).unwrap(),
-            organization.map(str::to_owned),
-        );
+        let mut identity = Identity {
+            organization_id: organization.map(str::to_owned),
+            ..Identity::new(IdentityId::new(id).unwrap())
+        };
         identity.link(ChannelType::SMS, SENDER);
         identity
     }

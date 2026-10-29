@@ -70,7 +70,7 @@ impl SectionChange for HostAttach {
         if !context.room.status.accepts_events() {
             return Err(HostRefusal::Closed);
         }
-        if context.binding(channel_id).is_some() {
+        if context.get_binding(channel_id).is_some() {
             return Ok(Decision::unwritten(HostAttached::Kept));
         }
         if attachment::revoked(&context.room, channel_id) {
@@ -214,7 +214,7 @@ impl HostPost {
         if let Some(refusal) = self.unreached_speaker(&context) {
             return failed(refusal);
         }
-        if context.binding(&self.event.source.channel_id).is_some() {
+        if context.get_binding(&self.event.source.channel_id).is_some() {
             return Progress::Done(Ok(()));
         }
         let change = HostAttach(self.binding.clone());
