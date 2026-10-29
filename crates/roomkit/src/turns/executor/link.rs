@@ -18,10 +18,14 @@ use crate::turn::TurnKit;
 use crate::turns::codec::{encode_end, encode_end_item, encode_start};
 use crate::turns::error::{TurnError, rebuild_kit_error};
 use crate::turns::pipe::Uncarried;
-use crate::turns::wire::{CallContext, Frame, OwnerMessage, WireError};
+use crate::turns::wire::{CallContext, Frame, Item, OwnerMessage, WireError};
 use crate::turns::{MemoryTurn, Turns, lock};
 
-/// The frames of one turn, sent in order.
+/// The frames of one turn, sent in order, its text deltas by burst: the
+/// deltas the channel's stream yields without waiting between them cross
+/// as one item, their text joined and their number told, sent before any
+/// other frame of the turn and as soon as the stream waits, as the Python
+/// implementation's `FrameSender` sends them (RFC §10.6.4).
 #[derive(Debug)]
 pub(crate) struct FrameSender {
     turn: Arc<MemoryTurn>,
@@ -37,6 +41,8 @@ struct Sent {
     open: Vec<(u64, String)>,
     /// The fixed arguments sent for each open call's start, by its frame.
     fixed: HashMap<u64, Metadata>,
+    /// The text deltas kept for the burst, in order.
+    burst: Vec<String>,
 }
 
 impl FrameSender {
@@ -47,13 +53,46 @@ impl FrameSender {
         }
     }
 
-    /// Sends `frame`: its number. A sender silenced sends nothing.
+    /// Sends `frame` after the text kept before it: its number. A sender
+    /// silenced sends nothing.
     pub(crate) fn send(&self, frame: &Frame) -> Result<u64, Uncarried> {
-        let sent = lock(&self.state);
+        let mut sent = lock(&self.state);
         if sent.silenced {
             return Ok(0);
         }
+        self.send_burst(&mut sent)?;
         self.turn.frames.put(frame)
+    }
+
+    /// Keeps the delta `text` for the burst, sent once the stream waits
+    /// ([`flush`](Self::flush)) or before the next frame.
+    pub(crate) fn add_text(&self, text: String) {
+        lock(&self.state).burst.push(text);
+    }
+
+    /// Sends the burst kept, the stream about to wait: whether one went.
+    pub(crate) fn flush(&self) -> Result<bool, Uncarried> {
+        let mut sent = lock(&self.state);
+        if sent.silenced {
+            return Ok(false);
+        }
+        self.send_burst(&mut sent)
+    }
+
+    /// Sends the deltas kept as one item, their text joined, the item
+    /// telling their number when it is more than one: whether it went.
+    fn send_burst(&self, sent: &mut Sent) -> Result<bool, Uncarried> {
+        if sent.burst.is_empty() {
+            return Ok(false);
+        }
+        let texts = std::mem::take(&mut sent.burst);
+        let deltas = u32::try_from(texts.len()).ok().filter(|&deltas| deltas > 1);
+        let item = Item::Text {
+            text: texts.concat(),
+            deltas,
+        };
+        self.turn.frames.put(&Frame::Item { item })?;
+        Ok(true)
     }
 
     /// Sends nothing more: the owner is lost.
@@ -69,6 +108,7 @@ impl FrameSender {
         if sent.silenced {
             return Ok(());
         }
+        self.send_burst(&mut sent)?;
         let seq = self.turn.frames.put(&Frame::Item { item })?;
         sent.open.push((seq, tool_id));
         Ok(())
@@ -81,6 +121,7 @@ impl FrameSender {
         if sent.silenced {
             return Ok(());
         }
+        self.send_burst(&mut sent)?;
         let start = take_open(&mut sent, &end.tool_id);
         let item = encode_end_item(end, start);
         self.turn.frames.put(&Frame::Item { item }).map(drop)
@@ -92,6 +133,9 @@ impl FrameSender {
     pub(crate) fn send_ended(&self, end: ToolCallContent) {
         let mut sent = lock(&self.state);
         if sent.silenced {
+            return;
+        }
+        if self.send_burst(&mut sent).is_err() {
             return;
         }
         let Some(start) = take_open(&mut sent, &end.tool_id) else {
@@ -117,20 +161,25 @@ impl FrameSender {
         if sent.silenced {
             return Ok(());
         }
-        let Sent { open, fixed, .. } = &mut *sent;
-        for (start, tool_id) in open.iter() {
-            let Some(arguments) = ran_with.get(tool_id) else {
-                continue;
-            };
-            if fixed.get(start) == Some(arguments) {
-                continue;
-            }
+        let unsent: Vec<(u64, Metadata)> = sent
+            .open
+            .iter()
+            .filter_map(|(start, tool_id)| {
+                let arguments = ran_with.get(tool_id)?;
+                (sent.fixed.get(start) != Some(arguments)).then(|| (*start, arguments.clone()))
+            })
+            .collect();
+        if unsent.is_empty() {
+            return Ok(());
+        }
+        self.send_burst(&mut sent)?;
+        for (start, arguments) in unsent {
             let frame = Frame::ToolArgs {
-                start: *start,
+                start,
                 arguments: arguments.clone(),
             };
             self.turn.frames.put(&frame)?;
-            fixed.insert(*start, arguments.clone());
+            sent.fixed.insert(start, arguments);
         }
         Ok(())
     }

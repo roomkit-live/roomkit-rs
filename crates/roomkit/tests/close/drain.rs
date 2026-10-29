@@ -7,6 +7,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use roomkit::model::{ChannelBinding, ChannelOutput, ChannelType, HookResult, Roo
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, DeliveryStream, EventQuery, HookExecution, HookSpec, HookTrigger, RoomKit,
-    RoomKitOptions, text_of,
+    RoomKitOptions, StreamItem, text_of,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -339,12 +340,17 @@ async fn a_stream_read_while_the_close_waits_for_a_cut_one_is_cut_in_turn() {
 /// reading `kit_closed`; past the grace the run is aborted while the
 /// commit runs, the answer stored all the same and never delivered, and
 /// the call reads `kit_closed` too, as Python's, whose close waits for the
-/// commit (`rmk1017-lightreview3/lr3_probe_py.out` N2). On 181eaa5 the
-/// 6 s row read no reason.
+/// commit (`rmk1017-lightreview3/lr3_probe_py.out` N2). A commit of 12 s
+/// outlives the close's bound: the close returns at 10 s, the answer
+/// stored once the write ends, after it, where Python's close waits for it
+/// without bound. On 181eaa5 the 6 s row read no reason; with the cut past
+/// the grace waiting again for the turn cut once the lanes were idle, the
+/// 12 s row's close held until the write ended
+/// (`rmk1017-lightreview5/x_cut_again.out`).
 #[tokio::test(start_paused = true)]
 async fn an_answer_committed_past_the_grace_reads_as_dropped() {
     let mut rows = Vec::new();
-    for commit in [3, 6] {
+    for commit in [3, 6, 12] {
         let store = SlowCommits::delaying("A.", room_id(), Duration::from_secs(commit));
         let witness = Witness::slow("One.", Duration::from_secs(1));
         let kit = kit_on(RoomKit::new(RoomKitOptions::with_store(store)), &witness).await;
@@ -358,17 +364,32 @@ async fn an_answer_committed_past_the_grace_reads_as_dropped() {
             .unwrap()
             .unwrap();
         let took = started.elapsed().as_millis() / 100;
-        rows.push((commit, took, ended(one).await, stored(&kit).await));
+        let at_the_return = stored(&kit).await;
+        rows.push((
+            commit,
+            took,
+            at_the_return,
+            ended(one).await,
+            stored(&kit).await,
+        ));
     }
-    let row = |commit, took| {
+    let row = |commit, took, at_the_return: &[&str]| {
         (
             commit,
             took,
+            texts(at_the_return),
             Some(ok(Some("kit_closed"), None)),
             texts(&["One.", "A."]),
         )
     };
-    assert_eq!(rows, [row(3, 39), row(6, 69)]);
+    assert_eq!(
+        rows,
+        [
+            row(3, 39, &["One.", "A."]),
+            row(6, 69, &["One.", "A."]),
+            row(12, 100, &["One."])
+        ]
+    );
 }
 
 /// RFC §12.10.4 (RMK-1017, light review 4, nit 3): N2's shape, a SYNC hook
@@ -412,12 +433,40 @@ async fn a_blocked_answer_committed_past_the_grace_reads_no_reason() {
     assert_eq!(rows, [row(0, 9), row(6, 69)]);
 }
 
-/// A streaming WebSocket target that reads the first item of a stream,
-/// then stalls 30 s before it reads the rest.
-#[derive(Clone)]
-struct Stalling;
+/// How a [`Receiving`] target reads its stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pace {
+    /// It reads the first item, then stalls 30 s before it reads the rest.
+    Stall,
+    /// It reads the next item 10 ms after the last one.
+    Ms10,
+    /// It reads the next item at once.
+    Now,
+}
 
-impl Channel for Stalling {
+/// A streaming WebSocket target that keeps the texts it received, reading
+/// at its pace.
+#[derive(Clone)]
+struct Receiving {
+    pace: Pace,
+    received: Arc<Mutex<Vec<String>>>,
+}
+
+impl Receiving {
+    fn new(pace: Pace) -> Self {
+        Self {
+            pace,
+            received: Arc::default(),
+        }
+    }
+
+    /// The texts it received, joined.
+    fn received(&self) -> String {
+        self.received.lock().unwrap().concat()
+    }
+}
+
+impl Channel for Receiving {
     fn declaration(&self) -> ChannelDeclaration {
         let mut declaration = transport("ws");
         declaration.supports_streaming_delivery = true;
@@ -431,9 +480,17 @@ impl Channel for Stalling {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
-        drop(stream.next().await);
-        tokio::time::sleep(Duration::from_secs(30)).await;
-        while stream.next().await.is_some() {}
+        while let Some(item) = stream.next().await {
+            if let Ok(StreamItem::Text(text)) = item {
+                self.received.lock().unwrap().push(text);
+            }
+            let pause = match self.pace {
+                Pace::Stall => Duration::from_secs(30),
+                Pace::Ms10 => Duration::from_millis(10),
+                Pace::Now => continue,
+            };
+            tokio::time::sleep(pause).await;
+        }
         Ok(ChannelOutput::default())
     }
 }
@@ -467,7 +524,7 @@ async fn stalled(before: Duration) -> Vec<Stalled> {
     for left in [Left::Stream, Left::Deltas, Left::Tool] {
         let witness = Witness::slow("One.", before);
         let kit = kit_with(&witness).await;
-        kit.register_channel(Stalling).unwrap();
+        kit.register_channel(Receiving::new(Pace::Stall)).unwrap();
         kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())
             .await
             .unwrap();
@@ -502,11 +559,87 @@ fn stalled_rows(took: u128) -> Vec<Stalled> {
             vec![(handed.to_owned(), true)],
         )
     };
+    // The deltas' first burst: the 64 the first pull grants, as one item.
+    let words: Vec<String> = (0..64).map(|n| format!("w{n} ")).collect();
+    let burst = words.concat();
     vec![
         row(Left::Stream, "Think"),
-        row(Left::Deltas, "w0 "),
+        row(Left::Deltas, &burst),
         row(Left::Tool, "Thinking"),
     ]
+}
+
+/// N6 and N7's shapes, each run once, the target reading at `pace`, the
+/// witness taking `before` to deliver "One.", the kit closed from outside
+/// at `close_at`: whether what `room_1` stores of the answer is exactly
+/// what the target received, marked `cancelled`, the call reading
+/// `kit_closed`.
+async fn stores_what_it_received(pace: Pace, before: Duration, close_at: Duration) -> bool {
+    let witness = Witness::slow("One.", before);
+    let kit = kit_with(&witness).await;
+    let target = Receiving::new(pace);
+    kit.register_channel(target.clone()).unwrap();
+    kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    let left = if pace == Pace::Stall {
+        Left::Stream
+    } else {
+        Left::Deltas
+    };
+    attach_left(&kit, left).await;
+    let call = spawn_message(&kit, "One.", room_id());
+    tokio::time::sleep(close_at).await;
+    tokio::time::timeout(Duration::from_secs(60), kit.close())
+        .await
+        .unwrap()
+        .unwrap();
+    let call = ended(call).await.unwrap();
+    let received = target.received();
+    !received.is_empty()
+        && call == ok(Some("kit_closed"), None)
+        && answers(&kit).await == [(received, true)]
+}
+
+/// RFC §12.2 step 13s (RMK-1017, light review 5, fix 1): the text a cut
+/// stream's reader stores is exactly the text its target received, never
+/// one handed to a target dropped before it took it. N6's stalled target
+/// and N7's flood to a target reading every 10 ms, each run 40 times; on
+/// 8a2ca47 the target of 10 of 40 runs never got "Think", which was stored
+/// all the same (`rmk1017-lightreview5/lr5_paused_head.out` N6R).
+#[tokio::test(start_paused = true)]
+async fn a_cut_target_s_stored_text_is_what_it_received() {
+    let mut wrong = Vec::new();
+    for pace in [Pace::Stall, Pace::Ms10] {
+        for run in 0..40 {
+            let right =
+                stores_what_it_received(pace, Duration::from_secs(1), Duration::from_millis(100))
+                    .await;
+            if !right {
+                wrong.push((pace, run));
+            }
+        }
+    }
+    assert_eq!(wrong, []);
+}
+
+/// The same on a multi-thread runtime, 20 runs each, the witness taking
+/// 50 ms, the kit closed at 20 ms; on 8a2ca47, 8 of 40 runs of N6 went
+/// wrong (`lr5_threads_head.out`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cut_target_s_stored_text_is_what_it_received_on_threads() {
+    let mut wrong = Vec::new();
+    for pace in [Pace::Stall, Pace::Ms10] {
+        for run in 0..20 {
+            let right =
+                stores_what_it_received(pace, Duration::from_millis(50), Duration::from_millis(20))
+                    .await;
+            if !right {
+                wrong.push((pace, run));
+            }
+        }
+    }
+    assert_eq!(wrong, []);
 }
 
 /// RFC §10.6.8, §12.2 step 13s (RMK-1017, light review 4, N6): the turn
@@ -532,4 +665,42 @@ async fn a_cut_turn_s_stalled_target_holds_the_close_no_longer_on_threads() {
         .map(|(left, took, call, answers)| (left, u128::from(took < 10), call, answers))
         .collect();
     assert_eq!(rows, stalled_rows(1));
+}
+
+/// RFC §12.2 step 13s (RMK-1017, light review 5, fix 1): a healthy target
+/// reads on once the turn is cut: N1's tool shape, the answer streamed to
+/// a target that pulls each item at once; the turn cut once the lanes are
+/// idle, its reader polled once before each check, the target reads
+/// "Thinking", and the tool call it opened is stored with its end, as
+/// Python stores them (`rmk1017-fix6/py_n1_tool_now.out`). With the
+/// drained read checking for a pull without polling its reader first, the
+/// read stopped at once, "Thinking" stored alone, marked `cancelled`
+/// (`rmk1017-fix6/mutation_yield.out`).
+#[tokio::test(start_paused = true)]
+async fn a_healthy_target_reads_on_once_its_turn_is_cut() {
+    let witness = Witness::slow("One.", Duration::from_secs(1));
+    let kit = kit_with(&witness).await;
+    let target = Receiving::new(Pace::Now);
+    kit.register_channel(target.clone()).unwrap();
+    kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())
+        .await
+        .unwrap();
+    attach_left(&kit, Left::Tool).await;
+    let call = spawn_message(&kit, "One.", room_id());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    kit.close().await.unwrap();
+    let call = ended(call).await.unwrap();
+    let row = |text: &str| (text.to_owned(), false);
+    assert_eq!(
+        (call, target.received(), answers(&kit).await),
+        (
+            ok(Some("kit_closed"), None),
+            "Thinking".to_owned(),
+            vec![
+                row("Thinking"),
+                row("[Tool call: slow]"),
+                row("[Tool call: slow]")
+            ]
+        )
+    );
 }

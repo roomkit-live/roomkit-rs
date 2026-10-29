@@ -4,7 +4,10 @@
 //! any other item without a later pull, each item sent after the arguments
 //! its calls' gates fixed.
 
+use std::future::{Future, poll_fn};
+use std::pin::pin;
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 
 use tokio::sync::Notify;
 
@@ -45,6 +48,13 @@ impl Flow {
 
     fn closing(&self) -> bool {
         lock(&self.gate).closing
+    }
+
+    /// Whether the stream may read an item now, or its reader closed it:
+    /// `granted` would not wait.
+    fn is_granted(&self) -> bool {
+        let gate = lock(&self.gate);
+        gate.granted() || gate.closing
     }
 }
 
@@ -118,16 +128,26 @@ struct Pump<'a> {
 }
 
 impl Pump<'_> {
-    /// Advances `stream` until its end, a failure or a close.
+    /// Advances `stream` until its end, a failure or a close, its text
+    /// deltas sent by burst: those read without a wait between them go as
+    /// one item once the stream waits, for its channel or for a pull, or
+    /// before any other frame (`FrameSender`).
     async fn serve(&mut self, mut stream: ResponseStream) {
         loop {
+            if !self.flow.is_granted() && !self.flush() {
+                return;
+            }
             self.turn.wait_on_reader(self.sent);
             self.flow.granted().await;
             self.turn.wait_on_reader(false);
             if self.flow.closing() {
                 return;
             }
-            let (read, closing) = self.read(&mut stream).await;
+            let (read, closing, flushed) = self.read(&mut stream).await;
+            match flushed {
+                Ok(flushed) => self.sent |= flushed,
+                Err(why) => return refuse(self.sender, "stream item", &why),
+            }
             let reported = self
                 .host
                 .with_ran_with(|ran_with| self.sender.report_args(ran_with));
@@ -142,22 +162,47 @@ impl Pump<'_> {
             if !self.send(read) {
                 return;
             }
-            self.sent = true;
+        }
+    }
+
+    /// Sends the burst kept, the stream about to wait for a pull: whether
+    /// the stream goes on.
+    fn flush(&mut self) -> bool {
+        match self.sender.flush() {
+            Ok(flushed) => {
+                self.sent |= flushed;
+                true
+            }
+            Err(why) => {
+                refuse(self.sender, "stream item", &why);
+                false
+            }
         }
     }
 
     /// Reads one item, in the context of the stream's first reader and
-    /// within the turn's host; whether the reader closed meanwhile.
-    async fn read(&self, stream: &mut ResponseStream) -> (Read, bool) {
+    /// within the turn's host; whether the reader closed meanwhile, and
+    /// whether the burst kept went, the stream waiting for its channel.
+    async fn read(&self, stream: &mut ResponseStream) -> (Read, bool, Result<bool, Uncarried>) {
         lock(&self.flow.gate).start_read();
         let next = crate::stream::next_item(stream);
-        self.turn.wait_on_channel(true);
-        let read = self
-            .turn
-            .stream_context()
-            .scope(self.host.clone().scope(next))
-            .await;
-        self.turn.wait_on_channel(false);
+        let mut next = pin!(
+            self.turn
+                .stream_context()
+                .scope(self.host.clone().scope(next))
+        );
+        let mut flushed = Ok(false);
+        let read = match poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx))).await {
+            Poll::Ready(read) => read,
+            Poll::Pending => {
+                // The stream waits: the burst kept goes now.
+                flushed = self.sender.flush();
+                self.turn.wait_on_channel(true);
+                let read = next.await;
+                self.turn.wait_on_channel(false);
+                read
+            }
+        };
         let mut gate = lock(&self.flow.gate);
         gate.end_read();
         match &read {
@@ -165,7 +210,7 @@ impl Pump<'_> {
             Some(Ok(_)) | None => gate.read_other(),
             Some(Err(_)) => {}
         }
-        (read, gate.closing)
+        (read, gate.closing, flushed)
     }
 
     /// An item read once the reader closed the stream: a call's end still
@@ -177,13 +222,14 @@ impl Pump<'_> {
         }
     }
 
-    /// Sends what `read` gave; whether the stream goes on.
+    /// Sends what `read` gave, a text delta kept for the burst; whether
+    /// the stream goes on.
     fn send(&mut self, read: Read) -> bool {
         let sent = match read {
             Some(Ok(ResponseItem::Text(text))) => {
                 self.starting = false;
-                let item = Item::Text { text, deltas: None };
-                self.sender.send(&Frame::Item { item }).map(drop)
+                self.sender.add_text(text);
+                return true;
             }
             Some(Ok(ResponseItem::ToolStart(start))) => {
                 if !self.starting {
@@ -218,7 +264,10 @@ impl Pump<'_> {
             }
         };
         match sent {
-            Ok(()) => true,
+            Ok(()) => {
+                self.sent = true;
+                true
+            }
             Err(why) => {
                 refuse(self.sender, "stream item", &why);
                 false

@@ -18,6 +18,9 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+# The conformance runner's paced model, which the suite includes from
+# roomkit.
+futures-core.workspace = true
 pretty_assertions.workspace = true
 # The conformance runner's scripted agent, which the suite includes from
 # roomkit.

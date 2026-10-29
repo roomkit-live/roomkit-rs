@@ -4,8 +4,12 @@
 //! through the kit's typed registrations.
 
 use std::future::pending;
+use std::pin::Pin;
 use std::sync::{Arc, Weak};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
+
+use futures_core::Stream;
 
 use roomkit::model::{ChannelId, Metadata, RoomContext, ToolCall};
 use roomkit::transcript::Role;
@@ -14,7 +18,8 @@ use roomkit::{
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
-    AiAgent, AiRequest, ToolContext, ToolDefinition, ToolError, ToolOutput, ToolPolicy, Tools,
+    AiAgent, AiProvider, AiRequest, ProviderError, ProviderEvent, ProviderStream, ToolContext,
+    ToolDefinition, ToolError, ToolOutput, ToolPolicy, Tools,
 };
 use serde_json::{Value, json};
 
@@ -31,10 +36,53 @@ const NOT_FOR_TOOL_HOOKS: [&str; 5] = [
     "needs_lock",
 ];
 
+/// A scenario's scripted model: `ScriptedProvider`'s script, the model
+/// waiting between two of a round's deltas, so that a reader is handed
+/// each apart (deltas yielded without waiting may cross as one, RFC
+/// §10.6.4; `conformance/README.md`, "Scripted agents").
+pub(crate) struct Paced(ScriptedProvider);
+
+impl AiProvider for Paced {
+    fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
+        Box::pin(PacedStream {
+            inner: self.0.generate(request),
+            held: None,
+            after_text: false,
+        })
+    }
+}
+
+/// A scripted generation's events, each text delta that follows another
+/// held for one poll.
+struct PacedStream<'a> {
+    inner: ProviderStream<'a>,
+    held: Option<Result<ProviderEvent, ProviderError>>,
+    after_text: bool,
+}
+
+impl Stream for PacedStream<'_> {
+    type Item = Result<ProviderEvent, ProviderError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some(held) = this.held.take() {
+            return Poll::Ready(Some(held));
+        }
+        let next = ready!(this.inner.as_mut().poll_next(cx));
+        let text = matches!(next, Some(Ok(ProviderEvent::Text(_))));
+        if text && this.after_text {
+            // The model waits before this delta: it goes on the next poll.
+            this.held = next;
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+        this.after_text = text;
+        Poll::Ready(next)
+    }
+}
+
 /// The scripted agent `spec` describes, and its model.
-pub(crate) fn scripted_agent(
-    spec: &Value,
-) -> Result<(AiAgent<ScriptedProvider>, ScriptedProvider), String> {
+pub(crate) fn scripted_agent(spec: &Value) -> Result<(AiAgent<Paced>, ScriptedProvider), String> {
     let id = ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
     let rounds = spec["model"]["rounds"]
         .as_array()
@@ -43,7 +91,7 @@ pub(crate) fn scripted_agent(
         .map(round)
         .collect::<Result<Vec<_>, _>>()?;
     let model = ScriptedProvider::new(rounds);
-    let mut agent = AiAgent::new(id, model.clone())
+    let mut agent = AiAgent::new(id, Paced(model.clone()))
         .with_tools(tools(spec))
         .map_err(|e| e.to_string())?;
     if let Some(policy) = spec.get("tool_policy") {

@@ -28,8 +28,10 @@
 //! a direct update (`ON_EVENT_UPDATED` fires) made in the room's work.
 
 use std::collections::VecDeque;
+use std::future::{Future, poll_fn};
 use std::pin::pin;
 use std::sync::Arc;
+use std::task::Poll;
 
 use roomkit_core::model::{
     ChannelBinding, ChannelOutput, ErrorRecord, EventDirection, EventId, EventSource, EventType,
@@ -156,30 +158,7 @@ pub(crate) async fn read<S: ConversationStore>(
         let _signalled = done.send(());
         read
     };
-    let mut reader = Box::pin(reader);
-    let mut read = None;
-    {
-        let mut serving = pin!(producer.serve(pulled, reader_done, stops));
-        tokio::select! {
-            done = &mut reader => {
-                read = Some(done);
-                serving.await;
-            }
-            () = &mut serving => {}
-        }
-    }
-    let read = match read {
-        Some(read) => read,
-        // The kit's close cuts the reader with the turn, as the Python
-        // implementation cancels its stream readers: a streaming target
-        // that reads on no more holds nothing, and what it was handed is
-        // stored (RFC §12.2 step 13s).
-        None if producer.cut == Some(KIT_CLOSED) => {
-            drop(reader);
-            Ok(ChannelOutput::default())
-        }
-        None => reader.await,
-    };
+    let read = producer.read_by(reader, pulled, reader_done, stops).await;
     let output = producer.finish(read).await;
     if let Some((event_id, metadata)) = producer.segments.owed_record() {
         write_record(inner, &producer.room_id, &event_id, metadata).await;
@@ -270,6 +249,45 @@ struct Producer {
 }
 
 impl Producer {
+    /// Answers the pulls of `reader`, the stream's target or the driver's
+    /// drain, until both are done: what the reader returned. The reader is
+    /// polled first, so that what was handed it is taken before the
+    /// producer's end is seen. The kit's close cuts the reader with the
+    /// turn, as the Python implementation cancels its stream readers: a
+    /// streaming target that reads on no more holds nothing, its
+    /// `deliver_stream()` dropped once polled one last time, so that what
+    /// it was handed it took, and that text is stored (RFC §12.2 step
+    /// 13s).
+    async fn read_by(
+        &mut self,
+        reader: impl Future<Output = Result<ChannelOutput, ChannelError>>,
+        pulls: mpsc::UnboundedReceiver<oneshot::Sender<Pulled>>,
+        reader_done: oneshot::Receiver<()>,
+        stops: Stops,
+    ) -> Result<ChannelOutput, ChannelError> {
+        let mut reader = Box::pin(reader);
+        {
+            let mut serving = pin!(self.serve(pulls, reader_done, stops));
+            tokio::select! {
+                biased;
+                read = &mut reader => {
+                    serving.await;
+                    return read;
+                }
+                () = &mut serving => {}
+            }
+        }
+        if self.cut != Some(KIT_CLOSED) {
+            return reader.await;
+        }
+        let last = poll_fn(|cx| Poll::Ready(reader.as_mut().poll(cx))).await;
+        drop(reader);
+        match last {
+            Poll::Ready(read) => read,
+            Poll::Pending => Ok(ChannelOutput::default()),
+        }
+    }
+
     /// Answers the reader's pulls, until it stops or is handed the end, or
     /// `stop` stops the read, the turn cut from outside: the reader then
     /// reads the stream's end, and the response is settled as a stopped

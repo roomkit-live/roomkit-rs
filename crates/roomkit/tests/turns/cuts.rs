@@ -179,7 +179,9 @@ impl Channel for Leaving {
 
 /// RFC §10.6.4, §12.2 step 13s: a streaming reader that leaves mid-answer
 /// crosses as `close`, the reader's close, not a cancel; the turn ends,
-/// and what it was handed is stored `cancelled`.
+/// and what it was handed is stored `cancelled`: the answer's two deltas,
+/// yielded together, crossed as one item (RMK-1017, as Python's
+/// `FrameSender`), which the reader was handed whole.
 #[tokio::test(start_paused = true)]
 async fn a_streaming_reader_that_leaves_crosses_as_close() {
     let kit = RoomKit::new(RoomKitOptions::default());
@@ -242,7 +244,7 @@ async fn a_streaming_reader_that_leaves_crosses_as_close() {
             true,
             false,
             Some("frame end"),
-            vec![("The answer ".to_owned(), Some(Value::Bool(true)))]
+            vec![("The answer is 42.".to_owned(), Some(Value::Bool(true)))]
         )
     );
 }

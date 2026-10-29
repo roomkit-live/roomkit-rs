@@ -13,8 +13,10 @@ use crate::turns::pulls::PULL_WINDOW;
 
 /// A streaming target that reads one delta of an answer of ten thousand,
 /// then stops pulling: the executor reads ahead within the window the
-/// owner granted, 64 deltas, and waits there, the turn alive and beating,
-/// until the kit's close cuts it.
+/// owner granted, 64 deltas, sent as one burst, the stream yielding them
+/// without a wait (RMK-1017, as the Python implementation's
+/// `FrameSender`), and waits there, the turn alive and beating, until the
+/// kit's close cuts it.
 #[tokio::test(start_paused = true)]
 async fn a_reader_that_stops_pulling_holds_the_executor_at_its_window() {
     let agent = Streaming::new(10_000);
@@ -29,7 +31,7 @@ async fn a_reader_that_stops_pulling_holds_the_executor_at_its_window() {
     kit.close().await.unwrap();
     assert_eq!(
         (still_reading, produced, items, pulls),
-        (true, window(), window(), 1)
+        (true, window(), 1, 1)
     );
 }
 

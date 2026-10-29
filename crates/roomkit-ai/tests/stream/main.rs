@@ -193,7 +193,10 @@ impl Channel for Streaming {
 }
 
 /// A provider answering each generation with the next round of its
-/// script, one event per read, its stream saying when it is dropped.
+/// script, one event per read, waiting between two text pieces so that a
+/// reader is handed each apart, as the conformance scenarios' models do
+/// (pieces yielded without a wait cross as one, RFC §10.6.4), its stream
+/// saying when it is dropped.
 #[derive(Clone, Default)]
 struct Pieces {
     rounds: Arc<Mutex<VecDeque<ScriptedRound>>>,
@@ -214,10 +217,15 @@ impl Pieces {
     }
 }
 
-/// A generation's events, read one at a time.
+/// A generation's events, read one at a time, a wait before each text
+/// piece that follows another.
 struct Events {
-    events: VecDeque<Result<ProviderEvent, String>>,
+    queue: VecDeque<Result<ProviderEvent, String>>,
     dropped: Arc<AtomicUsize>,
+    /// Whether the last event read was a text piece.
+    after_text: bool,
+    /// Whether the stream waited before the next text piece.
+    waited: bool,
 }
 
 impl Drop for Events {
@@ -231,9 +239,18 @@ impl Stream for Events {
 
     fn poll_next(
         self: Pin<&mut Self>,
-        _context: &mut std::task::Context<'_>,
+        context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        let next = self.get_mut().events.pop_front();
+        let this = self.get_mut();
+        let text_next = matches!(this.queue.front(), Some(Ok(ProviderEvent::Text(_))));
+        if text_next && this.after_text && !this.waited {
+            this.waited = true;
+            context.waker().wake_by_ref();
+            return std::task::Poll::Pending;
+        }
+        this.waited = false;
+        let next = this.queue.pop_front();
+        this.after_text = matches!(next, Some(Ok(ProviderEvent::Text(_))));
         std::task::Poll::Ready(next.map(|event| event.map_err(Into::into)))
     }
 }
@@ -266,8 +283,10 @@ impl AiProvider for Pieces {
             }
         }
         Box::pin(Events {
-            events,
+            queue: events,
             dropped: Arc::clone(&self.dropped),
+            after_text: false,
+            waited: false,
         })
     }
 }
@@ -959,17 +978,19 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
             )
             .await
     });
-    for piece in ["The ", "answer "] {
+    // Each piece once the reader read the one before: pieces fed together
+    // would cross as one (RFC §10.6.4).
+    for (before, piece) in ["The ", "answer "].into_iter().enumerate() {
         feed.send(ProviderEvent::Text(piece.to_owned())).unwrap();
+        let read = async {
+            while ws.read().len() <= before {
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), read)
+            .await
+            .unwrap();
     }
-    let read_both = async {
-        while ws.read().len() < 2 {
-            tokio::task::yield_now().await;
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(5), read_both)
-        .await
-        .unwrap();
     // The caller leaves: its call's turns are cut.
     caller.abort();
     let _gone = caller.await;

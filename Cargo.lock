@@ -1269,6 +1269,7 @@ dependencies = [
 name = "roomkit-sqlite"
 version = "0.1.0"
 dependencies = [
+ "futures-core",
  "pretty_assertions",
  "roomkit",
  "roomkit-ai",
