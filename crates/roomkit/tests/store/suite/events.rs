@@ -3,8 +3,8 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelId, DeleteContent, EventContent, EventStatus, EventType, EventUpdates, MediaContent,
-    Room, RoomEvent, RoomId, TextContent, Timestamp,
+    ChannelId, CompositeContent, DeleteContent, EditContent, EventContent, EventStatus, EventType,
+    EventUpdates, MediaContent, Room, RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::{ConversationStore, EventFilter, EventQuery, StoreError, TargetUpdate};
 use serde_json::json;
@@ -151,13 +151,23 @@ async fn a_link_s_scheme_is_written_in_lower_case() {
 
 /// A content its model refuses, which a struct literal can hold, is
 /// refused by every write that would store it, nothing written: a commit,
-/// a commit's update of its target, an update. Stored, it would fail every
-/// later read of the timeline.
+/// of the content itself, a composite holding it among its parts or an edit
+/// to it; a commit's update of its target; an update. Stored, it would
+/// fail every later read of the timeline.
 #[tokio::test]
 async fn a_content_its_model_refuses_is_never_written() {
     let store = with_events(vec![event(0)]).await;
-    let mut media = event(1);
-    media.content = javascript_media();
+    let with_content = |content: EventContent| RoomEvent {
+        content,
+        ..event(1)
+    };
+    let media = with_content(javascript_media());
+    let composite = with_content(
+        CompositeContent::new(vec![TextContent::new("see").into(), javascript_media()])
+            .unwrap()
+            .into(),
+    );
+    let edit_to_it = with_content(EditContent::new(event_id("evt_0"), javascript_media()).into());
     let edit = edit_of(1, 0);
     let target = TargetUpdate {
         event_id: event_id("evt_0"),
@@ -172,6 +182,8 @@ async fn a_content_its_model_refuses_is_never_written() {
     };
     let refused = [
         store.commit(media, counters(1), None).await,
+        store.commit(composite, counters(1), None).await,
+        store.commit(edit_to_it, counters(1), None).await,
         store.commit(edit, counters(1), Some(target)).await,
         store
             .update_event(&event_id("evt_0"), updates)
@@ -185,6 +197,8 @@ async fn a_content_its_model_refuses_is_never_written() {
         ),
         (
             [
+                Err(javascript_refused()),
+                Err(javascript_refused()),
                 Err(javascript_refused()),
                 Err(javascript_refused()),
                 Err(javascript_refused())
