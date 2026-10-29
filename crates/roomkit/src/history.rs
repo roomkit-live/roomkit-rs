@@ -30,9 +30,9 @@ const TOOL_ROWS: u64 = 60;
 
 /// `context`, the one the pipeline hands `binding`'s channel for its turn
 /// on `event`, with its history read from `store`: the room's latest
-/// messages up to `event`, `event` itself the newest when it is a stored
-/// event of another type (an edit, a delete), and the channel's own latest
-/// tool-call rows. A store that cannot be read leaves the history as the
+/// messages up to `event`, `event` itself the newest, as stored, when it is
+/// an event of another type (an edit, a delete), and the channel's own
+/// latest tool-call rows. A store that cannot be read leaves the history as the
 /// pipeline handed it, with a warning: the turn goes on.
 pub(crate) async fn turn_context<S: ConversationStore>(
     store: &S,
@@ -92,7 +92,7 @@ async fn read<S: ConversationStore>(
         event.event_type,
         EventType::Message | EventType::Instruction
     ) {
-        history.push(event.clone());
+        history.push(stored(store, event).await);
     }
     let latest_rows = EventQuery {
         limit: TOOL_ROWS,
@@ -103,6 +103,27 @@ async fn read<S: ConversationStore>(
     history.extend(store.list_events(&event.room_id, &latest_rows).await?);
     history.sort_by_key(|event| event.index);
     Ok(history)
+}
+
+/// `event` as the store keeps it, which a turn's history reads: a target
+/// that does not take its content natively is handed a transcoded copy (an
+/// edit as a correction's text), which no history holds, as the Python
+/// implementation's context holds the stored event. A read that fails, or
+/// finds nothing, leaves the copy, with a warning.
+async fn stored<S: ConversationStore>(store: &S, event: &RoomEvent) -> RoomEvent {
+    let why = match store.get_event(&event.id).await {
+        Ok(Some(stored)) => return stored,
+        Ok(None) => "the store holds no such event".to_owned(),
+        Err(error) => error.to_string(),
+    };
+    tracing::warn!(
+        target: "roomkit::turns",
+        room_id = %event.room_id,
+        event_id = %event.id,
+        error = %why,
+        "could not read the turn's event as stored: its history reads the copy it was handed"
+    );
+    event.clone()
 }
 
 /// The query of the room's latest messages that `event`'s turn reads:
@@ -254,6 +275,27 @@ mod tests {
         events.push(delete.clone());
         let store = store(events).await;
         assert_eq!(read_by(&store, &delete).await, (vec![0, 1, 2, 3, 4], 4));
+    }
+
+    /// The history holds the trigger as the store keeps it, not the copy
+    /// its target was handed; a trigger the store does not hold leaves the
+    /// copy.
+    #[tokio::test]
+    async fn the_trigger_is_read_as_stored_or_else_as_handed() {
+        let mut delete = event(2, None);
+        delete.event_type = EventType::Delete;
+        let store = store(vec![event(0, None), event(1, None), delete.clone()]).await;
+        let mut copy = delete.clone();
+        copy.content = EventContent::text("[Message deleted]");
+        let agent = binding("agent", ChannelType::AI);
+        let mut context = RoomContext::new(Room::new(room_id(), Timestamp::UNIX_EPOCH));
+        context.bindings = vec![binding("sms", ChannelType::SMS), agent.clone()];
+        let read = turn_context(&store, &agent, &copy, context.clone()).await;
+        assert_eq!(read.recent_events.last(), Some(&delete));
+        let mut unknown = copy.clone();
+        unknown.id = EventId::new("evt_unknown").unwrap();
+        let read = turn_context(&store, &agent, &unknown, context).await;
+        assert_eq!(read.recent_events.last(), Some(&unknown));
     }
 
     /// An instruction, never stored, holds the index the room's next event

@@ -43,15 +43,35 @@ fn room_id() -> RoomId {
 type Reading = (RoomEvent, Vec<String>);
 
 /// An agent that reads what it is asked and says nothing, keeping each
-/// event with the history it was handed.
+/// event with the history it was handed, as texts and whole. It takes
+/// edits and deletes natively unless it is `plain`.
 #[derive(Clone, Default)]
 struct Reader {
     read: Arc<Mutex<Vec<Reading>>>,
+    histories: Arc<Mutex<Vec<Vec<RoomEvent>>>>,
+    plain: bool,
 }
 
 impl Reader {
+    /// A reader that takes no edit nor delete natively: it is handed them
+    /// as their text forms.
+    fn plain() -> Self {
+        Self {
+            plain: true,
+            ..Self::default()
+        }
+    }
+
     fn read(&self) -> Vec<Reading> {
         self.read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Each history it was handed, whole.
+    fn histories(&self) -> Vec<Vec<RoomEvent>> {
+        self.histories
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -66,7 +86,11 @@ impl Channel for Reader {
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         );
-        declaration.capabilities = edits_natively();
+        declaration.capabilities = if self.plain {
+            ChannelCapabilities::default()
+        } else {
+            edits_natively()
+        };
         declaration
     }
 
@@ -81,6 +105,10 @@ impl Channel for Reader {
             .iter()
             .map(|event| text_of(&event.content))
             .collect();
+        self.histories
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(context.recent_events.clone());
         self.read
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -156,13 +184,17 @@ impl Environment for Setup {
 }
 
 async fn room() -> Fixture {
+    room_with(Reader::default()).await
+}
+
+/// The room, its agent `agent`.
+async fn room_with(agent: Reader) -> Fixture {
     let setup = Setup::new();
     let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&setup));
     let wa = RecordingTransport::new(channel("wa"), ChannelType::WHATSAPP);
     let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET)
         .with_capabilities(edits_natively());
     let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
-    let agent = Reader::default();
     kit.register_channel(wa).unwrap();
     kit.register_channel(ws.clone()).unwrap();
     kit.register_channel(sms.clone()).unwrap();
@@ -334,6 +366,31 @@ mod an_edit {
                     "I need 50000$".to_owned(),
                     "Correction: I need 50000$".to_owned()
                 ]
+            )
+        );
+    }
+
+    /// An agent that takes no edit natively is handed the edit as its
+    /// correction's text, and reads the edit in its history as the store
+    /// keeps it, as the Python implementation's context holds it (light
+    /// review 2, `names_and_transcoded.out`).
+    #[tokio::test]
+    async fn is_in_the_history_as_stored_for_an_agent_that_takes_no_edit() {
+        let room = room_with(Reader::plain()).await;
+        send(&room.kit, edit_from(CUSTOMER, "I need 50000$")).await;
+        let (event, _) = room.agent.read().last().cloned().unwrap();
+        let history = room.agent.histories().last().cloned().unwrap();
+        let newest = history.last().unwrap();
+        assert_eq!(
+            (
+                event.content,
+                newest.event_type,
+                matches!(newest.content, EventContent::Edit(_))
+            ),
+            (
+                EventContent::text("Correction: I need 50000$"),
+                EventType::Edit,
+                true
             )
         );
     }
