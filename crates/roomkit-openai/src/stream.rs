@@ -14,15 +14,16 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::Stream;
-use roomkit_ai::{AiRequest, Done, ProviderError, ProviderEvent, ProviderStream};
+use roomkit_ai::{AiRequest, ProviderError, ProviderEvent, ProviderStream};
 
 use crate::agent::{ANSWER_LIMIT, OpenAiProvider, read_body};
+use crate::config::OpenAiApi;
 use crate::error::OpenAiError;
 use crate::sse::Events;
-use crate::wire::{self, Folding};
+use crate::wire;
 
-/// The `data` of the event that ends a completion's stream.
-const DONE: &str = "[DONE]";
+mod folding;
+use folding::Folding;
 
 /// What a generation hands the loop next.
 type Item = Result<ProviderEvent, ProviderError>;
@@ -129,12 +130,15 @@ impl<'a> Reading<'a> {
             self.phase = Phase::Streaming(Box::new(Streamed {
                 response,
                 events: Events::new(ANSWER_LIMIT),
-                folding: Folding::default(),
+                folding: Folding::new(self.provider.api()),
             }));
             return Ok(());
         }
         let body = read_body(response).await?;
-        let whole = wire::response(&body, self.provider.secret())?;
+        let whole = match self.provider.api() {
+            OpenAiApi::ChatCompletions => wire::response(&body, self.provider.secret())?,
+            OpenAiApi::Responses => crate::responses::body(&body, self.provider.secret())?,
+        };
         if !whole.text.is_empty() {
             self.ready.push_back(ProviderEvent::Text(whole.text));
         }
@@ -155,22 +159,16 @@ impl<'a> Reading<'a> {
         let secret = self.provider.secret();
         loop {
             let Some(chunk) = response.chunk().await.map_err(OpenAiError::request)? else {
-                let last = events.finish()?;
-                if let Some(data) = last.filter(|data| data != DONE)
-                    && let Some(text) = folding.take(&data, secret)?
+                if let Some(data) = events.finish()?
+                    && folding.take(&data, secret, &mut self.ready)?
                 {
-                    self.ready.push_back(ProviderEvent::Text(text));
-                }
-                self.end(folding);
-                return Ok(());
-            };
-            for data in events.feed(&chunk)? {
-                if data == DONE {
-                    self.end(folding);
                     return Ok(());
                 }
-                if let Some(text) = folding.take(&data, secret)? {
-                    self.ready.push_back(ProviderEvent::Text(text));
+                return folding.eof(&mut self.ready);
+            };
+            for data in events.feed(&chunk)? {
+                if folding.take(&data, secret, &mut self.ready)? {
+                    return Ok(());
                 }
             }
             if !self.ready.is_empty() {
@@ -182,14 +180,6 @@ impl<'a> Reading<'a> {
                 return Ok(());
             }
         }
-    }
-
-    /// The answer is over: its calls, folded, then its end.
-    fn end(&mut self, folding: Folding) {
-        let (calls, done): (_, Done) = folding.finish();
-        self.ready
-            .extend(calls.into_iter().map(ProviderEvent::ToolCall));
-        self.ready.push_back(ProviderEvent::Done(done));
     }
 }
 

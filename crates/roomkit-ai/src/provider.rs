@@ -123,6 +123,10 @@ pub struct Done {
     /// What it used: integer counters by name (`input_tokens`,
     /// `output_tokens`...).
     pub usage: Metadata,
+    /// Provider-owned data for replaying a tool round (RFC §6.7,
+    /// `AIResponse.metadata`). The loop copies it to the assistant message,
+    /// never to the room's displayed or stored text.
+    pub metadata: Metadata,
 }
 
 impl Done {
@@ -131,6 +135,7 @@ impl Done {
         Self {
             finish_reason,
             usage,
+            metadata: Metadata::new(),
         }
     }
 }

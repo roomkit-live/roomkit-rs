@@ -13,14 +13,11 @@ use roomkit_ai::{
     AiAgent, AiError, AiProvider, AiRequest, ProviderStream, SkillRegistry, ToolPolicy, Toolset,
 };
 
-use crate::config::OpenAiConfig;
+use crate::config::{OpenAiApi, OpenAiConfig};
 use crate::error::OpenAiError;
 use crate::names;
 use crate::stream;
 use crate::wire::{self, CompletionRequest};
-
-/// The path a completion is asked at, after the base URL.
-const COMPLETIONS_PATH: &str = "/chat/completions";
 
 /// The longest answer a generation reads, in bytes: far more than a
 /// completion's text and calls take.
@@ -201,7 +198,7 @@ impl fmt::Debug for OpenAiAgent {
 }
 
 /// The provider of an OpenAI-compatible endpoint: one generation is one
-/// Chat Completions call, streamed (server-sent events), its text handed to
+/// Chat Completions or Responses call, streamed (server-sent events), its text handed to
 /// the loop as it arrives; an endpoint that answers a whole completion
 /// instead is read whole.
 pub(crate) struct OpenAiProvider {
@@ -213,7 +210,7 @@ pub(crate) struct OpenAiProvider {
 impl OpenAiProvider {
     /// The provider `config` names.
     fn new(config: OpenAiConfig) -> Result<Self, OpenAiError> {
-        let endpoint = endpoint(&config.base_url)?;
+        let endpoint = endpoint(&config.base_url, config.api)?;
         // An API endpoint has no use for a redirect, which could carry the
         // key to another scheme of the same host.
         let client = reqwest::Client::builder()
@@ -228,6 +225,10 @@ impl OpenAiProvider {
         })
     }
 
+    pub(crate) fn api(&self) -> OpenAiApi {
+        self.config.api
+    }
+
     /// The API key, which no error repeats.
     pub(crate) fn secret(&self) -> &str {
         &self.config.api_key
@@ -236,7 +237,22 @@ impl OpenAiProvider {
     /// The answer to `request`, once its head says it succeeded: an error
     /// answer's body is read, bounded, into its error.
     pub(crate) async fn ask(&self, request: &AiRequest) -> Result<reqwest::Response, OpenAiError> {
-        let body = CompletionRequest::new(&self.config.model, request);
+        let body = match self.config.api {
+            OpenAiApi::ChatCompletions => {
+                let mut value =
+                    serde_json::to_value(CompletionRequest::new(&self.config.model, request))
+                        .map_err(|_| OpenAiError::Malformed {
+                            reason: "could not encode request".into(),
+                        })?;
+                if let Some(effort) = &self.config.reasoning_effort
+                    && let Some(fields) = value.as_object_mut()
+                {
+                    fields.insert("reasoning_effort".into(), effort.clone().into());
+                }
+                value
+            }
+            OpenAiApi::Responses => crate::responses::request(&self.config, request)?,
+        };
         let mut call = self.client.post(self.endpoint.clone()).json(&body);
         if !self.config.api_key.is_empty() {
             call = call.bearer_auth(&self.config.api_key);
@@ -282,10 +298,10 @@ pub(crate) async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>
     Ok(body)
 }
 
-/// The completions endpoint under `base_url`: `/chat/completions` after
-/// its path. A base URL with a query or a fragment is refused, since the
+/// The selected API endpoint under `base_url`, appended after its path.
+/// A base URL with a query or a fragment is refused, since the
 /// path would follow them instead.
-fn endpoint(base_url: &str) -> Result<reqwest::Url, OpenAiError> {
+fn endpoint(base_url: &str, api: OpenAiApi) -> Result<reqwest::Url, OpenAiError> {
     let refused = |reason: &str| OpenAiError::BaseUrl {
         reason: reason.to_owned(),
     };
@@ -293,10 +309,10 @@ fn endpoint(base_url: &str) -> Result<reqwest::Url, OpenAiError> {
     let base = reqwest::Url::parse(base_url).map_err(|_| not_http())?;
     if base.query().is_some() || base.fragment().is_some() {
         return Err(refused(
-            "it has a query or a fragment, which /chat/completions cannot follow",
+            "it has a query or a fragment, which the API path cannot follow",
         ));
     }
-    let joined = format!("{}{COMPLETIONS_PATH}", base_url.trim_end_matches('/'));
+    let joined = format!("{}{}", base_url.trim_end_matches('/'), api.path());
     let url = reqwest::Url::parse(&joined).map_err(|_| not_http())?;
     match url.scheme() {
         "http" | "https" => Ok(url),
@@ -313,7 +329,7 @@ mod tests {
     #[test]
     fn the_endpoint_is_the_base_url_s_chat_completions() {
         assert_eq!(
-            endpoint("https://api.openai.com/v1/").map(String::from),
+            endpoint("https://api.openai.com/v1/", OpenAiApi::ChatCompletions).map(String::from),
             Ok("https://api.openai.com/v1/chat/completions".to_owned())
         );
     }
@@ -322,7 +338,10 @@ mod tests {
     fn a_base_url_that_is_no_http_url_is_refused() {
         for base_url in ["api.openai.com/v1", "ftp://example.com", ""] {
             assert!(
-                matches!(endpoint(base_url), Err(OpenAiError::BaseUrl { .. })),
+                matches!(
+                    endpoint(base_url, OpenAiApi::ChatCompletions),
+                    Err(OpenAiError::BaseUrl { .. })
+                ),
                 "{base_url}"
             );
         }
@@ -334,7 +353,7 @@ mod tests {
             "https://example.openai.azure.com/openai/deployments/d?api-version=2024-10-21",
             "https://api.openai.com/v1#chat",
         ] {
-            let refused = endpoint(base_url);
+            let refused = endpoint(base_url, OpenAiApi::ChatCompletions);
             assert!(
                 matches!(refused, Err(OpenAiError::BaseUrl { .. })),
                 "{base_url}: {refused:?}"
@@ -344,7 +363,11 @@ mod tests {
 
     #[test]
     fn a_refused_base_url_is_not_repeated() {
-        let error = endpoint("ftp://user:pass@example.com/?token=abc").unwrap_err();
+        let error = endpoint(
+            "ftp://user:pass@example.com/?token=abc",
+            OpenAiApi::ChatCompletions,
+        )
+        .unwrap_err();
         let printed = format!("{error} {error:?}");
         assert!(
             !printed.contains("pass") && !printed.contains("abc"),

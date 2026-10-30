@@ -123,7 +123,9 @@ A service depends on `roomkit` and on the crates it needs beside it:
   the host's directories, an MCP server's instructions, and a scripted
   provider for tests.
 - `roomkit-openai`: `OpenAiAgent`, `roomkit-ai`'s AI channel over an
-  OpenAI-compatible Chat Completions endpoint.
+  OpenAI-compatible Chat Completions endpoint, or stateless Responses with
+  `OpenAiConfig::with_api(OpenAiApi::Responses)` on `main` (unreleased).
+  Both support streamed text and function tools.
 - `roomkit-sqlite`: `SqliteStore`, a store in one SQLite file, on the Python
   implementation's schema, for one process at a time: either
   implementation reads a file the other wrote, as long as its channel

@@ -11,6 +11,27 @@ const DEFAULT_HISTORY: usize = 50;
 /// of its answer.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// The HTTP API spoken by the provider. Selection is explicit; no fallback
+/// changes protocols or repeats a failed generation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OpenAiApi {
+    /// OpenAI-compatible Chat Completions, including local endpoints.
+    #[default]
+    ChatCompletions,
+    /// Stateless Responses with streamed text, function tools and reasoning replay.
+    Responses,
+}
+
+impl OpenAiApi {
+    pub(crate) fn path(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "/chat/completions",
+            Self::Responses => "/responses",
+        }
+    }
+}
+
 /// The endpoint an agent calls, the model it asks, its system prompt, how
 /// much of the room it sends and how long it waits.
 ///
@@ -21,6 +42,8 @@ pub struct OpenAiConfig {
     pub(crate) base_url: String,
     pub(crate) api_key: String,
     pub(crate) model: String,
+    pub(crate) api: OpenAiApi,
+    pub(crate) reasoning_effort: Option<String>,
     pub(crate) system_prompt: Option<String>,
     pub(crate) history: usize,
     pub(crate) timeout: Duration,
@@ -44,10 +67,29 @@ impl OpenAiConfig {
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
+            api: OpenAiApi::default(),
+            reasoning_effort: None,
             system_prompt: None,
             history: DEFAULT_HISTORY,
             timeout: DEFAULT_TIMEOUT,
         }
+    }
+
+    /// Select Chat Completions or Responses, keeping the same API root and
+    /// bearer credential. Responses uses `store: false` and `stream: true`.
+    #[must_use]
+    pub fn with_api(mut self, api: OpenAiApi) -> Self {
+        self.api = api;
+        self
+    }
+
+    /// Set the model's reasoning effort. Responses writes `reasoning.effort`;
+    /// Chat Completions writes `reasoning_effort`. Omit this setting to keep
+    /// the provider's default; the endpoint validates supported effort names.
+    #[must_use]
+    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = Some(effort.into());
+        self
     }
 
     /// The base URL as it may be shown, in a log or on a screen: its
@@ -100,6 +142,8 @@ impl fmt::Debug for OpenAiConfig {
             .field("base_url", &self.shown_base_url())
             .field("api_key", &api_key)
             .field("model", &self.model)
+            .field("api", &self.api)
+            .field("reasoning_effort", &self.reasoning_effort)
             .field("system_prompt", &self.system_prompt)
             .field("history", &self.history)
             .field("timeout", &self.timeout)
