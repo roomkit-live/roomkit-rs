@@ -1,14 +1,33 @@
-//! What connecting to an MCP server fails with.
+//! What connecting to or configuring an MCP server fails with.
 
 use std::time::Duration;
 
-/// What connecting to an MCP server failed with. Whatever it failed at, the
-/// server's process was stopped and waited for before the error is
-/// returned (RFC §21.2). A message the server's words make up is bounded,
-/// and harmless where it is shown (see [`Handshake`](Self::Handshake)).
+/// A connection or host configuration failure. A failed connection stops and
+/// waits for its server before returning (RFC §21.2). A configuration error
+/// on a cloned handle leaves the other handles' connection open. Server text
+/// in an error is bounded and has terminal controls removed (see
+/// [`Handshake`](Self::Handshake)); it can still contain private server data,
+/// so hosts should classify errors before showing or recording them.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum McpError {
+    /// An HTTP transport failure, with no URL, headers or response body.
+    #[error("MCP HTTP connection failed: {reason} (status {status:?})")]
+    Http {
+        /// HTTP status when a response was received.
+        status: Option<u16>,
+        /// Safe category supplied by the transport, never server text.
+        reason: &'static str,
+    },
+    /// A host label or explicit tool selection is invalid (RFC §21.2).
+    #[error("invalid MCP tool configuration: {reason}")]
+    Configuration {
+        /// The violated rule; never server content or credentials.
+        reason: &'static str,
+    },
+    /// The host cancelled connecting. The process has been stopped and reaped.
+    #[error("MCP connection cancelled")]
+    Cancelled,
     /// The command cannot start a process: an empty program, or an
     /// environment variable whose name is empty or holds `=` or a NUL, or
     /// whose value holds a NUL.

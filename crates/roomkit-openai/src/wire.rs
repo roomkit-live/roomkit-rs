@@ -41,7 +41,7 @@ struct StreamOptions {
 struct WireMessage<'a> {
     role: &'static str,
     /// The text; `null` for an assistant's message that only calls.
-    content: Option<&'a str>,
+    content: Option<Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tool_calls: Vec<WireCall<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,7 +89,7 @@ impl<'a> CompletionRequest<'a> {
             .filter(|prompt| !prompt.is_empty())
             .map(|prompt| WireMessage {
                 role: "system",
-                content: Some(prompt),
+                content: Some(Value::String(prompt.into())),
                 tool_calls: Vec::new(),
                 tool_call_id: None,
             });
@@ -136,7 +136,23 @@ fn wire_message(message: &Message) -> WireMessage<'_> {
         })
         .collect();
     // An assistant's message that only calls has no text.
-    let content = Some(message.text.as_str()).filter(|text| calls.is_empty() || !text.is_empty());
+    let content = if message.images.is_empty() || message.role != Role::User {
+        Some(message.text.as_str())
+            .filter(|text| calls.is_empty() || !text.is_empty())
+            .map(|text| Value::String(text.into()))
+    } else {
+        let mut parts = vec![serde_json::json!({"type":"text","text":message.text})];
+        parts.extend(
+            message
+                .images
+                .iter()
+                .filter(|image| image.is_resolved())
+                .map(
+                    |image| serde_json::json!({"type":"image_url","image_url":{"url":image.url()}}),
+                ),
+        );
+        Some(Value::Array(parts))
+    };
     WireMessage {
         role: role(message.role),
         content,
@@ -205,10 +221,10 @@ struct AnswerFunction {
 /// What a completion used.
 #[derive(Debug, Deserialize)]
 struct Usage {
-    #[serde(default, deserialize_with = "nullable")]
-    prompt_tokens: i64,
-    #[serde(default, deserialize_with = "nullable")]
-    completion_tokens: i64,
+    #[serde(default)]
+    prompt_tokens: Option<u64>,
+    #[serde(default)]
+    completion_tokens: Option<u64>,
     #[serde(default)]
     prompt_tokens_details: Option<PromptDetails>,
 }
@@ -216,7 +232,7 @@ struct Usage {
 #[derive(Debug, Deserialize)]
 struct PromptDetails {
     #[serde(default, deserialize_with = "nullable")]
-    cached_tokens: i64,
+    cached_tokens: u64,
 }
 
 /// A member that reads `null` as absent: its type's default, a count of 0,
@@ -431,16 +447,15 @@ fn usage_of(usage: Usage) -> Metadata {
         .map(|details| details.cached_tokens)
         .unwrap_or_default();
     let mut counted = Metadata::new();
-    counted.insert(
-        "input_tokens".to_owned(),
-        Value::from(usage.prompt_tokens.saturating_sub(cached).max(0)),
-    );
-    counted.insert(
-        "output_tokens".to_owned(),
-        Value::from(usage.completion_tokens),
-    );
-    if cached > 0 {
-        counted.insert("cache_read_input_tokens".to_owned(), Value::from(cached));
+    if let Some(prompt) = usage.prompt_tokens {
+        let cached = cached.min(prompt);
+        counted.insert("input_tokens".to_owned(), Value::from(prompt - cached));
+        if cached > 0 {
+            counted.insert("cache_read_input_tokens".to_owned(), Value::from(cached));
+        }
+    }
+    if let Some(output) = usage.completion_tokens {
+        counted.insert("output_tokens".to_owned(), Value::from(output));
     }
     counted
 }
@@ -565,7 +580,7 @@ mod tests {
     }
 
     /// An OpenAI-compatible server may write `null` for any member it
-    /// leaves out: each reads as absent, a count as 0, a call's id made by
+    /// leaves out: each reads as absent, a call's id made by
     /// the loop.
     #[test]
     fn a_completion_s_nulls_read_as_absent() {
@@ -580,7 +595,7 @@ mod tests {
             (read.calls, Value::Object(read.done.usage)),
             (
                 vec![ProviderToolCall::new("", "lookup", "")],
-                serde_json::json!({ "input_tokens": 0, "output_tokens": 7 })
+                serde_json::json!({ "output_tokens": 7 })
             )
         );
     }
@@ -660,5 +675,39 @@ mod tests {
         let body = br#"{"choices": "sk-1"}"#;
         let error = response(body, "sk-1").unwrap_err();
         assert!(!error.to_string().contains("sk-1"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    #[test]
+    fn author_images_use_native_parts_in_both_protocols() {
+        let mut message = Message::new(Role::User, "Describe this image");
+        message.images.push(
+            roomkit::transcript::Image::new("data:image/png;base64,AQIDBA==", "image/png").unwrap(),
+        );
+        let request = AiRequest::new(None, vec![message], vec![]);
+        let chat =
+            serde_json::to_value(CompletionRequest::new("vision-fixture", &request)).unwrap();
+        assert_eq!(
+            chat.pointer("/messages/0/content/0/text"),
+            Some(&Value::String("Describe this image".into()))
+        );
+        assert_eq!(
+            chat.pointer("/messages/0/content/1/type"),
+            Some(&Value::String("image_url".into()))
+        );
+        let config =
+            crate::OpenAiConfig::new("http://localhost/v1", "", "vision-fixture").with_vision(true);
+        let response = crate::responses::request(&config, &request).unwrap();
+        assert_eq!(
+            response.pointer("/input/0/content/1/type"),
+            Some(&Value::String("input_image".into()))
+        );
+        assert_eq!(
+            response.pointer("/input/0/content/1/image_url"),
+            chat.pointer("/messages/0/content/1/image_url/url")
+        );
     }
 }

@@ -225,6 +225,31 @@ impl DeliveryHandle {
             }
     }
 
+    /// Request cancellation of this detached call's turns (RFC §10.1).
+    ///
+    /// This is idempotent and never aborts committed event delivery or closes
+    /// the kit. It stops generation and tool handlers in this call's cascade;
+    /// completed external effects and application-detached tasks remain.
+    /// Returns false for an already finished call or an adopted call whose
+    /// delivery belongs to its parent operation. Dropping a handle or a waiter
+    /// still does not cancel anything.
+    ///
+    /// A true result only acknowledges the request. Await [`Self::wait`] from
+    /// outside the call's room work to observe joined cleanup and the terminal
+    /// `caller_cancelled` result; failures must still be inspected.
+    pub fn request_cancel(&self) -> bool {
+        if self.done() {
+            return false;
+        }
+        match &self.shared.following {
+            Following::Run { record, .. } => {
+                record.request_cancel();
+                true
+            }
+            Following::Adopted(_) | Following::Nothing => false,
+        }
+    }
+
     /// Waits until the delivery is over, then reports the call as one that
     /// waited for it would have: its `delivery_results`, `error`,
     /// `response_metadata`, `response_events` and `cancellation_reason`

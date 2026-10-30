@@ -6,6 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Integrate the compatibility features on the current main API, preserving
+  tool-call intents, shutdown semantics and last-generation usage together.
+
 - A tool call's intent, the sentence the model writes for the person with each
   call (RFC §6.4, RMK-1040), as Python's `AIChannel(tool_call_intents=True)`:
   `AiAgent::with_tool_call_intents(true)` (and `OpenAiAgent`'s) shows each
@@ -15,6 +18,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rows and the turn wire, written only when set. A closed schema no longer
   refuses the property; a tool whose schema declares it keeps it; the model
   reads its calls back with their intent. Off by default.
+
+- Add optional Streamable HTTP MCP connections with JSON/SSE replies, explicit
+  headers, bounded messages, cancellable discovery and session cleanup. Redirects
+  and automatic tool replay after session expiry are disabled. Long-running tools
+  retain the caller's execution deadline when they delay their HTTP headers.
+
+- MCP connections support host labels, per-handle tool selection, transport status
+  and joined cancellation during startup.
+
+- Preserve bounded author images separately from transcript text. Vision-enabled
+  agents resolve opaque references through a room-scoped host resolver, and the
+  OpenAI adapter sends native image parts in Chat Completions and Responses.
+
+- Add explicit cancellation requests on detached delivery handles, using scoped
+  cascade cleanup while preserving committed events and shared providers.
 
 - Accept omitted optional tool namespaces in Responses output for a single configured
   namespace; still reject explicit foreign namespaces and restore the configured
@@ -26,6 +44,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Resolve renewable OpenAI bearer credentials before each generation through a
   host-owned token source, with safe account errors. Responses can group tools
   under a namespace and rejects calls outside the configured namespace.
+
+
+- AI turn records expose last-generation usage, model identity and accounting
+  completeness separately from cumulative usage. Missing OpenAI token counts
+  remain unknown instead of becoming zero. (RMK-1029)
 
 The public API in the Python implementation's terms (step 5, lot 1: the
 kit, its construction and its calls; lot 2: the model and the errors).
@@ -414,6 +437,7 @@ kit, its construction and its calls; lot 2: the model and the errors).
   `KitClosedError.code` and `.retryable` (`kit_closed`, retryable) and
   `ProviderDeliveryError.code` and `.retryable`; `None` for an error whose
   Python class carries neither (RMK-1030).
+
 - `roomkit-openai`: opt into stateless Responses with `OpenAiApi::Responses`,
   including streamed text, function calls, ordered encrypted reasoning replay
   within a tool loop, usage counters and terminal failure reporting. Chat

@@ -51,7 +51,9 @@
 
 mod agent;
 mod error;
+mod images;
 mod provider;
+pub use images::ImageResolver;
 mod rows;
 mod server_instructions;
 mod skills;

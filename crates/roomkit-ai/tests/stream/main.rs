@@ -1099,3 +1099,43 @@ fn every_row() -> roomkit::EventQuery {
         ..roomkit::EventQuery::default()
     }
 }
+
+#[tokio::test]
+async fn streamed_usage_record_keeps_last_generation_separate() {
+    let rounds = vec![
+        ScriptedRound::calling("Checking.", [("c1", "lookup_order", "{}")]).with_usage(
+            json!({"input_tokens": 100, "output_tokens": 10})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+        ScriptedRound::answering("Done.").with_usage(
+            json!({"input_tokens": 40, "cache_read_input_tokens": 80, "output_tokens": 7})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+    ];
+    let (room, _) = Room::new(
+        rounds,
+        lookup(Arc::new(AtomicUsize::new(0)), None),
+        Streaming::new(Stop::Never),
+    )
+    .await;
+    room.says("Check.").await;
+    let rows = room
+        .kit
+        .store()
+        .list_events(&room_id(), &every_row())
+        .await
+        .unwrap();
+    let record = &rows
+        .iter()
+        .find(|row| row.metadata.contains_key("ai_last_usage"))
+        .unwrap()
+        .metadata;
+    assert_eq!(record["ai_last_usage"]["input_tokens"], 40);
+    assert_eq!(record["ai_usage"]["input_tokens"], 140);
+    assert_eq!(record["ai_usage_complete"], true);
+    room.kit.close().await.unwrap();
+}

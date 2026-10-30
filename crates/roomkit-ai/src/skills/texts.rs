@@ -11,7 +11,8 @@ use serde_json::Value;
 /// runs here (this implementation runs none).
 pub(crate) const PREAMBLE: &str = "You have access to Agent Skills — specialized knowledge \
 packages. Use the activate_skill tool to load a skill's full instructions before using it. \
-Available skills are listed below. Note: Script execution is not available in this environment.";
+Available skills are listed below. The skill loader does not execute scripts. \
+Use only tools provided by the host for any execution, subject to its permissions.";
 
 /// The heading of the active skills' instructions in the system prompt.
 pub(crate) const ACTIVE_HEADING: &str = "# Active skill instructions (binding rules)";

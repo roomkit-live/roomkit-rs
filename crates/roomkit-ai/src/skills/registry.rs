@@ -182,6 +182,31 @@ impl SkillRegistry {
         self.skills.is_empty()
     }
 
+    /// Copies the registry, optionally narrowed to `names` (RFC §24.3).
+    /// Instructions and resolved paths are kept without reading files again.
+    /// Unknown names are omitted; the source registry is unchanged.
+    #[must_use]
+    pub fn copy(&self, names: Option<&[String]>) -> Self {
+        Self {
+            skills: self
+                .skills
+                .iter()
+                .filter(|skill| names.is_none_or(|names| names.contains(&skill.name)))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// The tools [`crate::AiAgent::with_skills`] registers for this registry.
+    /// An empty registry registers no tools (RFC §24.3).
+    pub fn tool_definitions(&self) -> Vec<crate::ToolDefinition> {
+        if self.is_empty() {
+            Vec::new()
+        } else {
+            super::tools::SkillTools::definitions()
+        }
+    }
+
     /// The manifest every system prompt carries (RFC §24.3
     /// `to_prompt_xml()`): an `<available_skills>` block naming each skill
     /// with its description, license and compatibility, their text escaped

@@ -1159,13 +1159,17 @@ version = "3.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8be15815186873ea063bf005011d16c356804973489e40c39116ae3a2878d1f"
 dependencies = [
+ "base64 0.23.1",
+ "bytes",
  "chrono",
  "futures",
+ "http",
  "indexmap",
  "libc",
  "pin-project-lite",
  "serde",
  "serde_json",
+ "sse-stream",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -1240,12 +1244,16 @@ dependencies = [
 name = "roomkit-mcp"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "futures-util",
  "nix",
  "pretty_assertions",
+ "reqwest",
  "rmcp",
  "roomkit",
  "roomkit-ai",
  "serde_json",
+ "sse-stream",
  "thiserror",
  "tokio",
  "tracing",
@@ -1495,6 +1503,19 @@ checksum = "36bd8e29bf08189a005b2df1df99823aa0861cabe9044e5f31ed54ca292ee618"
 dependencies = [
  "cc",
  "rsqlite-vfs",
+]
+
+[[package]]
+name = "sse-stream"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c25ac7aff0abd1dbc474536e40416e1102c7dd9bfba0b9861c6d357f835dcfb4"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http-body",
+ "http-body-util",
+ "pin-project-lite",
 ]
 
 [[package]]

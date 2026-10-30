@@ -177,6 +177,20 @@ fn record_of(end: &LoopEnd) -> Metadata {
     let mut record = Metadata::new();
     record.insert(LOOP_END_REASON.to_owned(), Value::from(end.reason.as_str()));
     record.insert(AI_USAGE.to_owned(), Value::Object(end.usage.clone()));
+    record.insert(
+        "ai_last_usage".to_owned(),
+        end.last_usage.clone().map_or(Value::Null, Value::Object),
+    );
+    record.insert(
+        "ai_usage_complete".to_owned(),
+        Value::Bool(end.usage_complete),
+    );
+    if let Some(model) = &end.model {
+        record.insert("ai_model".to_owned(), Value::String(model.clone()));
+    }
+    if let Some(provider) = &end.provider {
+        record.insert("ai_provider".to_owned(), Value::String(provider.clone()));
+    }
     record
 }
 

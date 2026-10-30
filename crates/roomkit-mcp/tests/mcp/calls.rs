@@ -100,3 +100,58 @@ async fn a_call_after_the_close_fails() {
         "{failed:?}"
     );
 }
+
+/// RFC §21.2: labels and selections are per handle and enforced at dispatch.
+#[tokio::test]
+async fn labelled_selection_routes_only_its_tools_and_preserves_other_handles() {
+    let server = connected("normal").await;
+    let left = server
+        .clone()
+        .with_label("left")
+        .unwrap()
+        .with_tool_names(&["echo".into()])
+        .unwrap();
+    let right = server
+        .clone()
+        .with_label("right")
+        .unwrap()
+        .with_tool_names(&["echo".into()])
+        .unwrap();
+    assert_eq!(
+        left.tools()
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["mcp__left__echo"]
+    );
+    let context = || ToolContext::new(room_id(), channel("assistant"));
+    assert_eq!(
+        left.call(call("mcp__left__echo", &json!({"text":"left"})), context())
+            .await,
+        Ok(ToolOutput::Text("left".into()))
+    );
+    assert_eq!(
+        right
+            .call(
+                call("mcp__right__echo", &json!({"text":"right"})),
+                context()
+            )
+            .await,
+        Ok(ToolOutput::Text("right".into()))
+    );
+    for name in ["echo", "mcp__right__echo", "mcp__left__fails"] {
+        assert!(left.call(call(name, &json!({})), context()).await.is_err());
+    }
+    for label in ["", "bad__alias", "tail_", "two words"] {
+        assert!(server.clone().with_label(label).is_err());
+    }
+    assert!(server.clone().with_tool_names(&["missing".into()]).is_err());
+    assert_eq!(
+        server.clone().with_tool_names(&[]).unwrap().tools(),
+        Vec::new()
+    );
+    assert!(server.is_connected());
+    left.close().await;
+    assert!(!right.is_connected());
+    assert_eq!(server.process_id(), None);
+}

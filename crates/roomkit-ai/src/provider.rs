@@ -35,6 +35,17 @@ pub trait AiProvider: Send + Sync + 'static {
         None
     }
 
+    /// Configured model identity for usage attribution, when known. This is
+    /// not a model capacity or a token estimate.
+    fn model(&self) -> Option<&str> {
+        None
+    }
+
+    /// Whether the host configured a model accepting image input (RFC §6.4).
+    fn supports_vision(&self) -> bool {
+        false
+    }
+
     /// One generation answering `request`.
     fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a>;
 }

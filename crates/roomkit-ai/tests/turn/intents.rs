@@ -107,7 +107,12 @@ async fn off_nothing_is_taken_from_a_call() {
 #[tokio::test]
 async fn a_call_s_intent_rides_apart_from_its_arguments() {
     let call = json!({ "command": "ls", "_roomkit_intent": format!("  {INTENT}\n") });
-    let model = ScriptedProvider::new([calling(&call), ScriptedRound::answering("Done.")]);
+    let first_usage = json!({ "input_tokens": 10, "output_tokens": 2 });
+    let last_usage = json!({ "input_tokens": 20, "output_tokens": 4 });
+    let model = ScriptedProvider::new([
+        calling(&call).with_usage(first_usage.as_object().unwrap().clone()),
+        ScriptedRound::answering("Done.").with_usage(last_usage.as_object().unwrap().clone()),
+    ]);
     let received = Arc::default();
     let room = Room::equipped(model.clone(), shell(&received, closed()), |agent| {
         agent.with_tool_call_intents(true)
@@ -168,6 +173,21 @@ async fn a_call_s_intent_rides_apart_from_its_arguments() {
         written,
         [json!({ "command": "ls", "_roomkit_intent": INTENT })]
     );
+    // The same loop extracts intents and keeps the last generation apart
+    // from cumulative usage (RMK-1040 and RMK-1029).
+    let record = room
+        .timeline()
+        .await
+        .into_iter()
+        .find(|row| row.metadata.contains_key("ai_last_usage"))
+        .unwrap()
+        .metadata;
+    assert_eq!(record["ai_last_usage"], last_usage);
+    assert_eq!(
+        record["ai_usage"],
+        json!({ "input_tokens": 30, "output_tokens": 6 })
+    );
+    assert_eq!(record["ai_usage_complete"], true);
 }
 
 /// A later turn reads the earlier call as the turn that made it did.

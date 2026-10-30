@@ -43,6 +43,7 @@ pub struct OpenAiConfig {
     pub(crate) api_key: String,
     pub(crate) token_source: Option<std::sync::Arc<dyn crate::TokenSource>>,
     pub(crate) model: String,
+    pub(crate) vision: bool,
     pub(crate) api: OpenAiApi,
     pub(crate) tool_namespace: Option<(String, String)>,
     pub(crate) reasoning_effort: Option<String>,
@@ -52,6 +53,14 @@ pub struct OpenAiConfig {
 }
 
 impl OpenAiConfig {
+    /// Declare that the configured model accepts image input (RFC §6.4).
+    /// Disabled by default; this does not infer capabilities from a model name.
+    #[must_use]
+    pub fn with_vision(mut self, enabled: bool) -> Self {
+        self.vision = enabled;
+        self
+    }
+
     /// A configuration calling `{base_url}/chat/completions` with `api_key`
     /// as its bearer token, asking `model`. The base URL is the API's root,
     /// `https://api.openai.com/v1` for OpenAI's, with no query or fragment;
@@ -70,6 +79,7 @@ impl OpenAiConfig {
             api_key: api_key.into(),
             token_source: None,
             model: model.into(),
+            vision: false,
             api: OpenAiApi::default(),
             reasoning_effort: None,
             tool_namespace: None,
@@ -172,6 +182,7 @@ impl fmt::Debug for OpenAiConfig {
             .field("api_key", &api_key)
             .field("model", &self.model)
             .field("api", &self.api)
+            .field("vision", &self.vision)
             .field("tool_namespace", &self.tool_namespace)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("system_prompt", &self.system_prompt)

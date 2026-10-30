@@ -50,7 +50,7 @@
 //! phases. That provider state is separate from room history; later user turns
 //! rebuild the ordinary transcript, including earlier calls and their results.
 //! This path supports text and function
-//! tools, not hosted tools or multimodal input. OAuth login, token refresh and
+//! tools and opt-in author image input, not hosted tools. OAuth login, token refresh and
 //! credential persistence are host responsibilities.
 
 mod agent;

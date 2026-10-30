@@ -11,7 +11,7 @@ for conversations between humans, AI agents and programs.
 > direct injection, the reentrant lock and the turn backend, on a tokio
 > runtime; where it differs from the Python implementation is recorded in
 > [docs/rfc-gaps.md](docs/rfc-gaps.md). Beside it, an AI agent with tools,
-> streamed answers, skills and MCP servers over stdio (`roomkit-ai`,
+> streamed answers, skills and MCP servers over stdio or Streamable HTTP (`roomkit-ai`,
 > `roomkit-mcp`), on an OpenAI-compatible endpoint (`roomkit-openai`), and
 > a SQLite store on the Python implementation's schema (`roomkit-sqlite`).
 > The API will change before 1.0 ([the roadmap](docs/roadmap.md)).
@@ -132,8 +132,11 @@ A service depends on `roomkit` and on the crates it needs beside it:
   types are ones Python lists, but the two never share a file live. A type
   of your own (`ChannelType::new("slack")`) makes its room unreadable to
   Python until Python opens its type (RMK-986).
-- `roomkit-mcp`: `McpCommand` and `McpServer`, the tools of an MCP server
-  started over stdio, served to an AI agent as a `Toolset`.
+- `roomkit-mcp`: `McpCommand`, optional `McpHttp` and `McpServer`, the tools of
+  an MCP server over stdio or Streamable HTTP, served to an AI agent as a `Toolset`.
+  Enable `features = ["http"]` for remote endpoints. HTTP supports JSON/SSE
+  replies and explicit authentication headers; OAuth and legacy HTTP+SSE are
+  not included. `close()` drains the worker and attempts bounded session deletion.
 
 `roomkit-core` is the sans-IO core: the RFC's model, rules and pipeline
 operations, with no I/O and no async runtime. It is no service's API: what
