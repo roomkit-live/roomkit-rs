@@ -15,7 +15,7 @@
 use std::future::{Future, ready};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -31,8 +31,8 @@ use roomkit::{
     CommitEventOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, EventDraft,
     FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundRoomRouter, MuteOptions,
     ProcessInboundOptions, RoomFilter, RoomKit, RoomKitError, RoomKitOptions, RouteOptions,
-    RouterFuture, SendEventOptions, UpdateEventOptions, default_inbound_event, keep_context,
-    text_of,
+    RouterFuture, SendEventOptions, UpdateEventOptions, WeakRoomKit, default_inbound_event,
+    keep_context, text_of,
 };
 use tokio::sync::Notify;
 
@@ -626,6 +626,12 @@ async fn waited_from_a_hook(needs_lock: bool) -> (Vec<String>, Vec<String>, Vec<
     (waited, delivered_to(&later), texts)
 }
 
+on_both_runtimes!(
+    an_adopted_call_s_wait_reads_the_answers_its_cascade_delivered,
+    an_adopted_call_s_wait_reads_the_answers_its_cascade_delivered_on_threads,
+    adopted_calls_read_their_answers
+);
+
 /// Python's `InboundResult.response_events` for a call the room's work
 /// adopted (probe `tasks/probes/step5-lot2-review-A/not_ported_inbound.py`,
 /// case 2): a deferred call a locked `BEFORE_BROADCAST` hook makes into the
@@ -641,19 +647,6 @@ async fn waited_from_a_hook(needs_lock: bool) -> (Vec<String>, Vec<String>, Vec<
 /// `tasks/probes/step5-lot2/adopted_answers_off_lock.py`), which lot 3
 /// brings. A handle kept unwaited by the off-lock hook reads its answers or
 /// not depending on the runtime's scheduling, and is not pinned here.
-#[tokio::test]
-async fn an_adopted_call_s_wait_reads_the_answers_its_cascade_delivered() {
-    adopted_calls_read_their_answers().await;
-}
-
-/// [`an_adopted_call_s_wait_reads_the_answers_its_cascade_delivered`] on a
-/// runtime of several threads, where it reads the same.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_adopted_call_s_wait_reads_the_same_on_several_threads() {
-    adopted_calls_read_their_answers().await;
-}
-
-/// The adopted calls' answers, under the lock and off it.
 async fn adopted_calls_read_their_answers() {
     let under_lock = answers_of_an_adopted_call(true).await;
     let off_lock = answers_of_an_adopted_call(false).await;
@@ -711,6 +704,103 @@ async fn answers_of_an_adopted_call(needs_lock: bool) -> (Vec<String>, Vec<Strin
     let waited = seen.lock().unwrap().clone();
     kit.close().await.unwrap();
     (waited, answers(&later), answers(&hello))
+}
+
+/// A transport that unregisters the channel `ai` when it is told of the
+/// event `side`, before the agent's turn on it is asked.
+struct UnregisteringAi {
+    kit: Arc<OnceLock<WeakRoomKit>>,
+}
+
+impl Channel for UnregisteringAi {
+    fn declaration(&self) -> ChannelDeclaration {
+        let mut declaration = ChannelDeclaration::new(
+            channel("gate"),
+            ChannelType::WEBSOCKET,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        );
+        declaration.recipient_key = None;
+        declaration
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        if text_of(&event.content) == "side"
+            && let Some(kit) = self.kit.get().and_then(WeakRoomKit::upgrade)
+        {
+            kit.unregister_channel(&channel("ai"));
+        }
+        ready(Ok(ChannelOutput::default()))
+    }
+}
+
+/// Python's `_report_root_pass` for a call the room's work adopted: a
+/// deferred call a locked `BEFORE_BROADCAST` hook makes, addressed to `ai`,
+/// whose channel is unregistered before its turn, reads at its commit no
+/// address unavailable, and once waited `ai` unavailable, its delivery
+/// result failed `channel_not_registered` (light review A, U3).
+#[tokio::test]
+async fn an_adopted_call_s_wait_reads_its_agent_unregistered_before_its_turn() {
+    let (kit, _audit) = room().await;
+    let gate = UnregisteringAi {
+        kit: Arc::new(OnceLock::new()),
+    };
+    gate.kit.set(kit.downgrade()).unwrap();
+    kit.register_channel(gate).unwrap();
+    kit.register_channel(EchoAgent::new(channel("ai"), "You said: "))
+        .unwrap();
+    for id in ["gate", "ai"] {
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let adopted = Arc::new(Mutex::new(Vec::new()));
+    let (hook_kit, hook_adopted) = (kit.clone(), Arc::clone(&adopted));
+    kit.hook(before_broadcast("side", true), move |event, _| {
+        let (kit, adopted) = (hook_kit.clone(), Arc::clone(&hook_adopted));
+        async move {
+            if text_of(&event.content) == "hello" {
+                let mut side = message("side");
+                side.addressed_to = Some(vec![channel("ai")]);
+                let deferred = ProcessInboundOptions {
+                    defer_delivery: true,
+                    ..in_room(room_id())
+                };
+                let result = kit.process_inbound(side, deferred).await?;
+                adopted
+                    .lock()
+                    .unwrap()
+                    .push((result.unavailable_targets, result.delivery.unwrap()));
+            }
+            Ok(HookResult::allow(AllowOptions::default()))
+        }
+    })
+    .unwrap();
+    send(&kit, "hello").await.unwrap();
+    let (at_commit, handle) = adopted.lock().unwrap().pop().unwrap();
+    let waited = tokio::time::timeout(BOUND, handle.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    let failed = waited
+        .delivery_results
+        .get("ai")
+        .and_then(|delivered| delivered.error.as_ref())
+        .map(|error| error.code.clone());
+    kit.close().await.unwrap();
+    assert_eq!(
+        (at_commit, waited.unavailable_targets, failed),
+        (
+            Some(vec![]),
+            Some(vec![channel("ai")]),
+            Some("channel_not_registered".to_owned())
+        )
+    );
 }
 
 /// The texts of the answers `result` reports.
