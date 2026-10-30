@@ -27,9 +27,10 @@ acronyms = { Ai = "AI", OpenAi = "OpenAI", Mcp = "MCP", Sqlite = "SQLite" }
 # What a `Duration` drops from a Python name (decision 3).
 duration_suffix = "_seconds"
 # The error variants a Python builtin exception stands for (convention 5),
-# the variant the builtin's name without `Error`; `ExceptionGroup` the
-# answer of a close whose channels failed (decided 2026-10-29).
-builtin_errors = { Value = "ValueError", Cancelled = "asyncio.CancelledError", ExceptionGroup = "ExceptionGroup" }
+# by the variant's path, the variant the builtin's name without `Error`;
+# `ExceptionGroup` the answer of a close whose channels failed (decided
+# 2026-10-29).
+builtin_errors = { "roomkit::RoomKitError::Value" = "ValueError", "roomkit::RoomKitError::Cancelled" = "asyncio.CancelledError", "roomkit::RoomKitError::ExceptionGroup" = "ExceptionGroup" }
 # The variants carrying a builtin that stand for Python's value of it, no
 # member: Python's visibility naming channels is a comma-joined `str`.
 builtin_payloads = ["roomkit::model::Visibility::Channels"]
@@ -89,23 +90,24 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 # be listed, and each class listed must have its variant. A class with a
 # constructor has its parameters compared; one that takes a message alone
 # lists the fields its variant carries, the values its message names (the
-# architecture table's "Errors").
+# architecture table's "Errors"), a tuple variant's payload by position
+# (`0`), as rustdoc names a tuple's fields.
 [rules.error_families."roomkit::RoomKitError"]
-"roomkit.RoomNotFoundError" = []
-"roomkit.RoomAlreadyExistsError" = []
+"roomkit.RoomNotFoundError" = ["0"]
+"roomkit.RoomAlreadyExistsError" = ["0"]
 "roomkit.RoomClosedError" = ["room_id"]
 "roomkit.TransitionRefusedError" = []
 "roomkit.ProcessTimeoutError" = ["room_id"]
 "roomkit.ChangeRefusedError" = []
-"roomkit.ReentrantCallError" = ["room_id", "call"]
-"roomkit.ReentryLoopCapError" = []
+"roomkit.ReentrantCallError" = ["room_id"]
+"roomkit.ReentryLoopCapError" = ["0"]
 "roomkit.ChannelNotFoundError" = ["room_id", "channel_id"]
-"roomkit.ChannelNotRegisteredError" = []
-"roomkit.ChannelAlreadyRegisteredError" = []
+"roomkit.ChannelNotRegisteredError" = ["0"]
+"roomkit.ChannelAlreadyRegisteredError" = ["0"]
 "roomkit.ParticipantNotFoundError" = ["room_id", "participant_id", "channel_id", "reached_elsewhere"]
-"roomkit.IdentityNotFoundError" = []
-"roomkit.AddressLinkedError" = ["channel_type", "address", "identity_id"]
-"roomkit.EventNotFoundError" = []
+"roomkit.IdentityNotFoundError" = ["0"]
+"roomkit.AddressLinkedError" = ["channel_type"]
+"roomkit.EventNotFoundError" = ["0"]
 "roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
 "roomkit.ProviderDeliveryError" = []
 

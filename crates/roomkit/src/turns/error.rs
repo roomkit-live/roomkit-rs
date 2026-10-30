@@ -267,7 +267,6 @@ mod tests {
         let unknown = || RoomKitError::ChannelNotRegistered(ChannelId::new("sms").unwrap());
         let reentrant = || RoomKitError::ReentrantCall {
             room_id: roomkit_core::model::RoomId::new("room_1").unwrap(),
-            call: "send_event",
         };
         let rebuilt = [RoomKitError::KitClosed, unknown(), reentrant()]
             .map(|error| rebuild_kit_error(&kit_error(&error)));

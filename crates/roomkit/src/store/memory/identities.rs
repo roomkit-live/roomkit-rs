@@ -109,8 +109,6 @@ impl Identities {
         match self.holder(organization, channel_type, address) {
             Some(holder) if &holder.id != owner => Err(StoreError::AddressLinked {
                 channel_type: channel_type.clone(),
-                address: address.to_owned(),
-                identity_id: holder.id.clone(),
             }),
             Some(_) | None => Ok(()),
         }

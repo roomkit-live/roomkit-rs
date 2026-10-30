@@ -116,15 +116,13 @@ pub enum StoreError {
     #[error("no identity {0} in the organization")]
     IdentityNotFound(IdentityId),
     /// Another identity of the organization uses the address on channels of
-    /// the type already (RFC §14.1, gap G-060).
-    #[error("the {channel_type:?} address {address} belongs to identity {identity_id} already")]
+    /// the type already (RFC §14.1, gap G-060), as Python's store raises
+    /// `AddressLinkedError`: the address, which the caller passed, and the
+    /// identity that holds it, another's, are left out.
+    #[error("This {channel_type} address is linked to another identity of the organization")]
     AddressLinked {
         /// The channel type.
         channel_type: ChannelType,
-        /// The address.
-        address: String,
-        /// The identity that uses it.
-        identity_id: IdentityId,
     },
     /// No event has the id (RFC §14.1 `update_event`), or the target of
     /// an edit or a delete is gone by its commit.

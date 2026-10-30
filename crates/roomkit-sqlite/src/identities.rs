@@ -84,8 +84,6 @@ fn check_free(
     match holder(connection, channel_type, address, organization)? {
         Some(holder) if &holder != owner => Err(StoreError::AddressLinked {
             channel_type: channel_type.clone(),
-            address: address.to_owned(),
-            identity_id: holder,
         }
         .into()),
         Some(_) | None => Ok(()),

@@ -217,8 +217,15 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .link_address(&jean, ChannelType::SMS, MARIE, Some(BANK))
         .await;
     checks.expect(
-        "an address belongs to one identity of the organization: Marie's number cannot be Jean's",
-        matches!(taken, Err(StoreError::AddressLinked { identity_id, .. }) if identity_id == marie),
+        "an address belongs to one identity of the organization: Marie's number cannot be Jean's, \
+         and the refusal names neither the number nor Marie's identity",
+        matches!(
+            &taken,
+            Err(StoreError::AddressLinked { channel_type }) if *channel_type == ChannelType::SMS
+        ) && taken.as_ref().is_err_and(|refusal| {
+            let told = refusal.to_string();
+            !told.contains(MARIE) && !told.contains(marie.as_str())
+        }),
     );
 
     println!("Jean gives his work phone to Marie: the bank unlinks it from him, links it to her.");

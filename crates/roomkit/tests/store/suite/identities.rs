@@ -101,8 +101,6 @@ async fn an_address_another_identity_of_the_organization_uses_is_refused() {
             .await,
         Err(StoreError::AddressLinked {
             channel_type: ChannelType::SMS,
-            address: ALICE.to_owned(),
-            identity_id: id("id_one"),
         })
     );
 }

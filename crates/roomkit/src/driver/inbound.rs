@@ -437,7 +437,6 @@ impl Caller {
         let answered = match refused {
             Some(room_id) => Err(RoomKitError::ReentrantCall {
                 room_id: room_id.clone(),
-                call,
             }),
             None => Ok(decided.result),
         };

@@ -83,7 +83,8 @@ class Rules:
     builtin_payloads: tuple[str, ...] = ()
     # By the Rust enum's path.
     literals: dict[str, Literal] = field(default_factory=dict)
-    # An error variant that stands for a Python builtin exception.
+    # An error variant that stands for a Python builtin exception, by the
+    # variant's path (`roomkit::RoomKitError::Value`).
     builtin_errors: dict[str, str] = field(default_factory=dict)
     # By the Rust error enum's path: the Python exception classes its
     # variants stand for, each with the fields its variant may carry when
@@ -101,6 +102,8 @@ class Rules:
         acronyms = sorted(
             ((tokens(rust), python) for rust, python in table["acronyms"].items()), key=lambda pair: -len(pair[0])
         )
+        builtin_errors = dict(table.get("builtin_errors", {}))
+        _rust_paths("builtin_errors", list(builtin_errors))
         return cls(
             acronyms,
             table["duration_suffix"],
@@ -108,7 +111,7 @@ class Rules:
             {path: _builtin(path, raw) for path, raw in table.get("builtins", {}).items()},
             tuple(_rust_paths("builtin_payloads", table.get("builtin_payloads", []))),
             {path: _literal(path, raw) for path, raw in table.get("literals", {}).items()},
-            dict(table.get("builtin_errors", {})),
+            builtin_errors,
             {path: _family(path, raw) for path, raw in table.get("error_families", {}).items()},
         )
 

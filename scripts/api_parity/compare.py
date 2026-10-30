@@ -74,6 +74,7 @@ class Comparison:
                 self.member_maps.setdefault(item, {})[(owner, python_member or "")] = entry
         self.applied: set[int] = set()
         self.options_used: set[str] = set()
+        self.families_read: set[str] = set()
         self.findings: list[Finding] = []
 
     def run(self) -> dict[str, ItemResult]:
@@ -121,10 +122,15 @@ class Comparison:
             item = items.get(path)
             if item is None or item["kind"] != "enum" or "Error" not in item.get("impls", []):
                 self._find("rust", path, "listed in [rules] error_families: no such error enum", path, None)
-        for path in self.rules.builtin_payloads:
+            elif path not in self.families_read:
+                detail = "listed in [rules] error_families: the enum stands for no Python class whose family is read"
+                self._find("rust", path, detail, path, None)
+        variants = [("builtin_payloads", path) for path in self.rules.builtin_payloads]
+        variants += [("builtin_errors", path) for path in self.rules.builtin_errors]
+        for table, path in variants:
             owner, _, variant = path.rpartition("::")
             if variant not in [found["name"] for found in items.get(owner, {}).get("variants", [])]:
-                self._find("rust", path, "listed in [rules] builtin_payloads: no such Rust variant", owner, None)
+                self._find("rust", path, f"listed in [rules] {table}: no such Rust variant", owner, None)
 
     def own_members(self, path: str) -> list[Finding]:
         """An options struct's own methods and constants: its fields stand
@@ -193,7 +199,7 @@ class Comparison:
         if builtin is None:
             return  # a variant's builtin exception: no item
         path = item["path"]
-        present = [member["name"] for kind in ("methods", "constants") for member in item.get(kind, [])]
+        present = [member["name"] for kind in ("methods", "constants", "fields") for member in item.get(kind, [])]
         for name in present:
             if name not in builtin.members:
                 detail = f"a member of a {python} type: no row of the architecture table lists it ([rules] builtins)"
@@ -276,6 +282,7 @@ class Comparison:
         when the class has one; a class without takes a message, and its
         variant carries the fields the family lists for it, no other."""
         family = self.rules.error_families.get(cls.path)
+        self.families_read.add(cls.path)
         if family is None:
             self._find("rust", cls.path, "an error enum: no family in [rules] error_families", cls.path, cls.python)
         stem = cls.path.rpartition("::")[2].removesuffix("Error")
@@ -284,7 +291,7 @@ class Comparison:
         for variant in item.get("variants", []):
             name = variant["name"]
             cls.used.add(name)
-            if name in self.rules.builtin_errors:
+            if f"{cls.path}::{name}" in self.rules.builtin_errors:
                 continue
             path = f"{cls.path}::{name}"
             python = self._exception_class(packages, stem, name)
@@ -312,7 +319,7 @@ class Comparison:
 
     def _error_fields(self, cls: _Class, variant: dict, python: str, carried: tuple[str, ...]) -> None:
         path = f"{cls.path}::{variant['name']}"
-        fields = [field_["name"] for field_ in variant.get("fields", [])]
+        fields = _variant_fields(variant)
         init = self.python.specs.get(python, {}).get("__init__")
         if init is None:
             for extra in (field_ for field_ in fields if field_ not in carried):
@@ -410,14 +417,19 @@ class Comparison:
         """Python's `type='text'` of a content: the tag of the tagged union
         the Rust type is a variant of (`EventContent::Text(TextContent)`),
         no field or parameter of its own. The enum stands for a Python
-        union: a name the snapshot exports and describes as no class."""
+        union, a name the snapshot exports and describes as no class, and
+        the tag is the variant's `snake_case` name."""
         if param.name != "type" or not (param.default or "").startswith("'"):
             return False
         name = path.rpartition("::")[2]
         return any(
             self._is_union(item)
             for item in self.surface.items.values()
-            if item["kind"] == "enum" and any(variant["decl"].endswith(f"({name})") for variant in item.get("variants", []))
+            if item["kind"] == "enum"
+            and any(
+                variant["decl"].endswith(f"({name})") and param.default == f"'{snake_name(variant['name'])}'"
+                for variant in item.get("variants", [])
+            )
         )
 
     def _is_union(self, item: dict) -> bool:
@@ -525,6 +537,21 @@ class Comparison:
                 _RustParam(f["name"], f["type"], False, f"{options['path']}::{f['name']}") for f in options.get("fields", [])
             ]
         return found
+
+
+def _variant_fields(variant: dict) -> list[str]:
+    """A variant's named fields, or a tuple variant's payload by position,
+    as rustdoc names a tuple's fields (`RoomNotFound(RoomId)`: `0`)."""
+    named = [field_["name"] for field_ in variant.get("fields", [])]
+    payload = re.fullmatch(r"\w+\((.*)\)", variant.get("decl", ""))
+    if named or payload is None or not payload.group(1).strip():
+        return named
+    depth, count = 0, 1
+    for character in payload.group(1):
+        depth += character in "<([{"
+        depth -= character in ">)]}"
+        count += character == "," and depth == 0
+    return [str(position) for position in range(count)]
 
 
 def _camel(snake: str) -> str:

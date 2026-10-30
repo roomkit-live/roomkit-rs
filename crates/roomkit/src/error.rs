@@ -73,13 +73,15 @@ pub enum RoomKitError {
     /// Python's `ReentrantCallError`: a call made from inside a room's own
     /// work, under its lock or in its admission order, could not be adopted
     /// (RFC §13.5, §9.5.1 Reentrance): a message routed back into the room,
-    /// whose room is known only once routed. Nothing was written.
-    #[error("{call} from inside room {room_id}'s own work would wait for itself")]
+    /// whose room is known only once routed. Nothing was written. Its
+    /// message is Python's, which names the room alone.
+    #[error(
+        "A message routed into room {room_id} from its own work (under its lock, in an off-lock \
+         hook or a parse) cannot be adopted: name the room to send into it"
+    )]
     ReentrantCall {
         /// The room whose lock or admission order the caller holds.
         room_id: RoomId,
-        /// The kit's call.
-        call: &'static str,
     },
     /// Python's `ReentryLoopCapError`: a change from a hook's body is past
     /// the reentry budget it runs on (RFC §8.3, §9.5.1). Nothing was
@@ -138,15 +140,13 @@ pub enum RoomKitError {
     #[error("no identity {0} in the organization")]
     IdentityNotFound(IdentityId),
     /// Python's `AddressLinkedError`: another identity of the organization
-    /// uses the address on channels of the type already (RFC §5.6).
-    #[error("the {channel_type} address {address} belongs to identity {identity_id} already")]
+    /// uses the address on channels of the type already (RFC §5.6). As
+    /// Python's, it leaves out the address, which the caller passed, and
+    /// the identity that holds it, another's.
+    #[error("This {channel_type} address is linked to another identity of the organization")]
     AddressLinked {
         /// The channel type.
         channel_type: ChannelType,
-        /// The address.
-        address: String,
-        /// The identity that uses it.
-        identity_id: IdentityId,
     },
     /// Python's `EventNotFoundError`: the event, or a change's target, is
     /// not in its room (RFC §14.3).
@@ -528,15 +528,7 @@ impl From<StoreError> for RoomKitError {
             StoreError::RoomAlreadyExists(room_id) => Self::RoomAlreadyExists(room_id),
             StoreError::RoomNotFound(room_id) => Self::RoomNotFound(room_id),
             StoreError::IdentityNotFound(identity_id) => Self::IdentityNotFound(identity_id),
-            StoreError::AddressLinked {
-                channel_type,
-                address,
-                identity_id,
-            } => Self::AddressLinked {
-                channel_type,
-                address,
-                identity_id,
-            },
+            StoreError::AddressLinked { channel_type } => Self::AddressLinked { channel_type },
             StoreError::EventNotFound(event_id) => Self::EventNotFound(event_id),
             StoreError::IdempotencyKeyTaken {
                 room_id,
@@ -654,6 +646,36 @@ mod tests {
                     reason: "not_original_author".to_owned()
                 },
                 RoomKitError::ReentryLoopCap(room_id.clone()),
+            ]
+        );
+    }
+
+    /// `ReentrantCallError` and `AddressLinkedError` name only what
+    /// Python's messages name (`_reentrance.py`, `store/base.py`'s
+    /// `address_linked`): the room; the channel type, never the address
+    /// the caller passed nor the identity that holds it.
+    #[test]
+    fn a_refusal_names_what_python_s_message_names() {
+        let room_id = RoomId::new("room_1").unwrap();
+        let told = [
+            RoomKitError::ReentrantCall { room_id }.to_string(),
+            RoomKitError::AddressLinked {
+                channel_type: ChannelType::SMS,
+            }
+            .to_string(),
+            StoreError::AddressLinked {
+                channel_type: ChannelType::SMS,
+            }
+            .to_string(),
+        ];
+        let linked = "This sms address is linked to another identity of the organization";
+        assert_eq!(
+            told,
+            [
+                "A message routed into room room_1 from its own work (under its lock, in an \
+                 off-lock hook or a parse) cannot be adopted: name the room to send into it",
+                linked,
+                linked
             ]
         );
     }

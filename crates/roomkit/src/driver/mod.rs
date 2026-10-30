@@ -786,10 +786,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// own context holds.
     fn finish<T>(mut self, output: T) -> Result<T, RoomKitError> {
         match self.refused.take() {
-            Some(room_id) => Err(RoomKitError::ReentrantCall {
-                room_id,
-                call: self.call,
-            }),
+            Some(room_id) => Err(RoomKitError::ReentrantCall { room_id }),
             None => Ok(output),
         }
     }

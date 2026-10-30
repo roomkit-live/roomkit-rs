@@ -52,10 +52,10 @@ The rules, which apply with no entry:
 - a Rust type `[rules] builtins` names by its path stands for that Python
   builtin (a strong id `str`, `Timestamp` `datetime`, `Metadata` `dict`,
   a validator's error `ValueError`, a raised exception's alias
-  `Exception`): its methods and associated constants are the `members`
-  the rule lists, each a row of the architecture table mapping an
-  operation of the builtin, any other a finding; an error's variants are
-  the exception's messages. A variant `[rules] builtin_payloads` lists
+  `Exception`): its methods, associated constants and public fields are
+  the `members` the rule lists, each a row of the architecture table
+  mapping an operation of the builtin, any other a finding; an error's
+  variants are the exception's messages. A variant `[rules] builtin_payloads` lists
   is Python's value of the builtin it carries
   (`Visibility::Channels(ChannelSet)`), no member;
 - a Rust enum `[rules] literals` names by its path stands for the Python
@@ -64,26 +64,29 @@ The rules, which apply with no entry:
   Literal's values the rule lists, read from the Python source;
 - a content's `type='text'` is the tag of the tagged union its Rust type
   is a variant of (`EventContent::Text(TextContent)`), no field, when that
-  enum stands for a Python union: a name the snapshot exports and
-  describes as no class;
+  enum stands for a Python union, a name the snapshot exports and
+  describes as no class, and the tag is the variant's `snake_case` name;
 - an error enum (one implementing `Error`) is its Python base class, each
   variant one of its exception classes: `X` the family's `<Stem>XError`
   (`SkillError::Parse`, `SkillParseError`), or else the class `XError`,
   each in Python's acronym casing, or a builtin exception `[rules]
-  builtin_errors` names. `[rules] error_families` lists, by the enum's
-  path, the classes its variants stand for (the snapshot holds no
-  bases): a variant's class must be listed, each class listed must have
-  its variant, and an error enum with no family is a finding. A variant's
-  named fields are compared with the class's `__init__` when the class
-  has one; a class that takes a message alone lists the fields its
-  variant carries;
+  builtin_errors` names by the variant's path. `[rules] error_families`
+  lists, by the enum's path, the classes its variants stand for (the
+  snapshot holds no bases): a variant's class must be listed, each class
+  listed must have its variant, an error enum with no family is a
+  finding, and so is a family no Python class's comparison reads (an enum
+  with no Python base, or one a builtin stands for). A variant's fields,
+  a tuple variant's payload by position (`0`), are compared with the
+  class's `__init__` when the class has one, no field listed for it; a
+  class that takes a message alone lists the fields its variant carries;
 - a rule naming a Rust item, variant or member that is gone is a finding
   no entry covers.
 
-Known limits: an error enum with no Python base (`StoreError`) has its
-variants read by no rule; `[rules] builtin_errors` is keyed by a variant's
-name, whatever its enum; a `Literal`'s values and a family's classes are
-read from the Python source by hand, the snapshot holding neither.
+Known limits: an error enum with no Python base (`StoreError`) and no
+family listed has its variants read by no rule; a `Literal`'s values and a
+family's classes are read from the Python source by hand, the snapshot
+holding neither; a union is any name the snapshot exports and does not
+describe, its variants' tags telling it from another such name.
 
 What a rule does not give, an entry of `api/mapping.toml` does: `[[map]]`
 names the Python counterpart, `[[exception]]` an approved Rust form,

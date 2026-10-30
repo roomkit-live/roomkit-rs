@@ -2386,10 +2386,7 @@ async fn a_call_that_could_only_wait_for_itself_fails() {
             result.event.map(|event| event.index)
         ),
         (
-            Some(Some(RoomKitError::ReentrantCall {
-                room_id: room_id(),
-                call: "process_inbound",
-            })),
+            Some(Some(RoomKitError::ReentrantCall { room_id: room_id() })),
             Some(3)
         )
     );
@@ -2437,10 +2434,7 @@ async fn a_parse_that_routes_a_message_back_into_its_room_fails() {
         .await
         .unwrap_or_else(|_| panic!("the parse recursed"))
         .unwrap();
-    let reentrant = RoomKitError::ReentrantCall {
-        room_id: room_id(),
-        call: "process_inbound",
-    };
+    let reentrant = RoomKitError::ReentrantCall { room_id: room_id() };
     let stored = timeline(&kit).await.len();
     assert_eq!(
         (
@@ -2484,10 +2478,7 @@ async fn an_off_lock_hook_routing_back_a_message_no_check_fires_for_fails() {
     })
     .unwrap();
     let result = send(&kit, "hello").await.unwrap();
-    let reentrant = RoomKitError::ReentrantCall {
-        room_id: room_id(),
-        call: "process_inbound",
-    };
+    let reentrant = RoomKitError::ReentrantCall { room_id: room_id() };
     let stored = timeline(&kit).await.len();
     assert_eq!(
         (

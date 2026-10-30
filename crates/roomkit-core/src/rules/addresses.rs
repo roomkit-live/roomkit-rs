@@ -120,10 +120,11 @@ impl Addressing {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CountryCode(String);
 
-/// A value that is not a country code.
+/// A value that is not a country code: Python's `ValueError`, which says
+/// what it refused in its message and holds no field.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 #[error("{0:?} is not a country code: one to three digits, the first not 0")]
-pub struct InvalidCountryCode(pub String);
+pub struct InvalidCountryCode(String);
 
 impl CountryCode {
     /// The country code `code`, written with or without its `+` (`1`,

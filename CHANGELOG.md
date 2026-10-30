@@ -84,6 +84,13 @@ kit, its construction and its calls; lot 2: the model and the errors).
   and `is_block` go. A block without a reason is refused when read, and
   one built by literal reads as a hook that raised Python's `ValueError`,
   as a modify without its event does.
+- `RoomKitError::ReentrantCall` and `AddressLinked` carry the values
+  Python's messages name, and read as Python's: `ReentrantCall { room_id }`
+  ("A message routed into room ... cannot be adopted: name the room to
+  send into it"), `AddressLinked { channel_type }` ("This sms address is
+  linked to another identity of the organization"), as does
+  `StoreError::AddressLinked`, which no longer tells a caller the address
+  it passed nor another identity's id.
 - A call's `delivery_results` reports every target that failed, as the
   Python implementation's does: a transport whose `on_event()` or
   `deliver()` raised, and an agent whose turn raised or answered an error,
