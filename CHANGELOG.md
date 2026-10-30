@@ -8,7 +8,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add optional Streamable HTTP MCP connections with JSON/SSE replies, explicit
   headers, bounded messages, cancellable discovery and session cleanup. Redirects
-  and automatic tool replay after session expiry are disabled.
+  and automatic tool replay after session expiry are disabled. Long-running tools
+  retain the caller's execution deadline when they delay their HTTP headers.
 
 - MCP connections support host labels, per-handle tool selection, transport status
   and joined cancellation during startup.

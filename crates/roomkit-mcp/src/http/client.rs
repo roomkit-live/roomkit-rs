@@ -107,11 +107,14 @@ impl Client {
         request
     }
     async fn send(&self, request: RequestBuilder) -> Result<Response, Error> {
-        tokio::time::timeout(Duration::from_secs(10), request.send())
+        // A tool may send its headers only when its result is ready. Startup
+        // and per-call deadlines belong to the caller; DELETE has its own bound.
+        request
+            .send()
             .await
-            .map_err(|_| self.error(None, "HTTP response headers timed out"))?
             .map_err(|_| self.error(None, "HTTP connection failed"))
     }
+
     fn error(&self, status: Option<u16>, reason: &'static str) -> Error {
         Error::Client(self.failure.record(status, reason))
     }

@@ -144,6 +144,9 @@ async fn handle(
     if name == "tools/call" && shared.mode == "expired" {
         return StatusCode::NOT_FOUND.into_response();
     }
+    if name == "tools/call" && shared.mode == "delayed" {
+        tokio::time::sleep(Duration::from_millis(10_100)).await;
+    }
     let result = match name {
         "initialize" => {
             json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"},"instructions":"Fixture instructions"})
@@ -220,6 +223,12 @@ async fn sse_replies_and_session_cleanup() {
 #[tokio::test]
 async fn stateless_server_needs_no_session() {
     roundtrip("stateless").await;
+}
+#[tokio::test]
+async fn a_long_tool_can_delay_response_headers_past_the_connection_timeout() {
+    tokio::time::timeout(Duration::from_secs(15), roundtrip("delayed"))
+        .await
+        .unwrap();
 }
 #[tokio::test]
 async fn authorization_failure_omits_credentials_and_response_body() {
