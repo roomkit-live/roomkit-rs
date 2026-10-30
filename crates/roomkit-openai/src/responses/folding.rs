@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 #[derive(Default)]
 pub(crate) struct Folding {
     text: String,
+    items: super::items::Items,
     pub(crate) namespace: Option<String>,
 }
 
@@ -27,6 +28,8 @@ impl Folding {
         let value: Value = serde_json::from_str(data)
             .map_err(|_| wire::malformed("invalid Responses event JSON"))?;
         match value.get("type").and_then(Value::as_str) {
+            Some("response.output_item.added") => self.items.record(&value, false)?,
+            Some("response.output_item.done") => self.items.record(&value, true)?,
             Some("response.output_text.delta" | "response.refusal.delta") => {
                 let delta = value
                     .get("delta")
@@ -36,9 +39,10 @@ impl Folding {
                 ready.push_back(ProviderEvent::Text(delta.to_owned()));
             }
             Some("response.completed" | "response.incomplete") => {
-                let response = value
+                let mut response = value
                     .get("response")
-                    .ok_or_else(|| wire::malformed("terminal Responses event has no response"))?;
+                    .ok_or_else(|| wire::malformed("terminal Responses event has no response"))?
+                    .clone();
                 let expected = value
                     .get("type")
                     .and_then(Value::as_str)
@@ -48,8 +52,9 @@ impl Folding {
                         "Responses terminal event and status disagree",
                     ));
                 }
-                wire::validate_namespace(response, self.namespace.as_deref())?;
-                let whole = wire::response(response, secret)?;
+                self.items.finish(&mut response)?;
+                wire::validate_namespace(&response, self.namespace.as_deref())?;
+                let whole = wire::response(&response, secret)?;
                 let suffix = whole.text.strip_prefix(self.text.as_str()).ok_or_else(|| {
                     wire::malformed("Responses terminal text differs from its streamed text")
                 })?;

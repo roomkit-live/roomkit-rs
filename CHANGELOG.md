@@ -6,6 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Assemble Responses output from completed item events when a successful terminal
+  event omits its output, preserving text, tool calls, reasoning and usage.
+
 - Resolve renewable OpenAI bearer credentials before each generation through a
   host-owned token source, with safe account errors. Responses can group tools
   under a namespace and rejects calls outside the configured namespace.
