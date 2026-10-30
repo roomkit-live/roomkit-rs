@@ -279,10 +279,13 @@ impl RoomKitError {
     /// an error whose class carries no code reads as its code, as Python's
     /// `_delivery_error` reads `error_type_name` (`RoomNotFoundError`,
     /// `ShutdownCancelledError`, `ValueError`): a variant's class is its
-    /// name with the `Error` suffix, a builtin's its own; a variant that
-    /// carries an exception the store, the lock manager, a channel or the
-    /// router raised names the class its record holds, `ChannelError` when
-    /// it holds none; a turn's, `TurnLinkError` for a link's failure.
+    /// name with the `Error` suffix, a builtin's its own; a defect, where
+    /// Python asserts, `AssertionError`; a variant that carries an
+    /// exception the lock manager, a channel or the router raised names the
+    /// class its record holds; a turn's, `TurnLinkError` for a link's
+    /// failure. A store's failure keeps `ChannelError`: a boxed driver
+    /// error, or a refusal Python's store has no class for, its
+    /// `StoreError::Value` reading `ValueError` as `Value`.
     pub(crate) fn class_name(&self) -> String {
         match self {
             Self::Value(_) => "ValueError".to_owned(),
@@ -292,7 +295,8 @@ impl RoomKitError {
                 record.error_type.clone()
             }
             Self::Turn(error) => error.to_record().error_type,
-            Self::Store(_) | Self::Internal(_) => turns::CHANNEL_ERROR.to_owned(),
+            Self::Internal(_) => "AssertionError".to_owned(),
+            Self::Store(_) => turns::CHANNEL_ERROR.to_owned(),
             Self::RoomNotFound(_)
             | Self::RoomAlreadyExists(_)
             | Self::RoomClosed { .. }

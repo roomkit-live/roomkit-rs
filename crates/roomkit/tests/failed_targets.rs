@@ -112,6 +112,7 @@ impl Channel for Failing {
             "deliver_kit_closed" => Err(RoomKitError::KitClosed.into()),
             "deliver_room_not_found" => Err(RoomKitError::RoomNotFound(room_id()).into()),
             "deliver_shutdown_cancelled" => Err(RoomKitError::ShutdownCancelled.into()),
+            "deliver_internal" => Err(RoomKitError::Internal("a defect".to_owned()).into()),
             "sms_refused" => Ok(ChannelOutput {
                 provider_result: Some(refusal(Some("pm-2"), "blocked", json!({ "code": "30007" }))),
                 ..ChannelOutput::empty()
@@ -122,13 +123,14 @@ impl Channel for Failing {
 }
 
 /// The targets of the probe's room, each named for how it fails.
-const TARGETS: [&str; 10] = [
+const TARGETS: [&str; 11] = [
     "on_event_refused",
     "on_event_plain",
     "deliver_refused",
     "deliver_kit_closed",
     "deliver_room_not_found",
     "deliver_shutdown_cancelled",
+    "deliver_internal",
     "sms_refused",
     "sms_no_recipient",
     "raising",
@@ -215,8 +217,10 @@ fn failed(
 /// a plain exception, a boxed error having none. A kit error reads its
 /// class's code, `kit_closed`, or else its Python class's name, as Python's
 /// (`rmk1030-rs-review-B/light/py_delivery_error_code.out`; maintainer's
-/// decision Q2, 2026-10-30); on d192534 `RoomNotFoundError` and
-/// `ShutdownCancelledError` read `ChannelError`.
+/// decision Q2, 2026-10-30), a defect Python's assertion,
+/// `AssertionError`; on d192534 `RoomNotFoundError` and
+/// `ShutdownCancelledError` read `ChannelError`, and on b626fbb a defect
+/// did.
 #[tokio::test]
 async fn each_failed_target_is_reported_as_python_reports_it() {
     let (reported, unavailable) = reported().await;
@@ -270,6 +274,16 @@ async fn each_failed_target_is_reported_as_python_reports_it() {
             (
                 "ShutdownCancelledError",
                 &RoomKitError::ShutdownCancelled.to_string(),
+                true,
+            ),
+            None,
+            None,
+        ),
+        failed(
+            "deliver_internal",
+            (
+                "AssertionError",
+                &RoomKitError::Internal("a defect".to_owned()).to_string(),
                 true,
             ),
             None,
