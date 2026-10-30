@@ -16,7 +16,7 @@ use roomkit_core::rules::lifecycle::Transition;
 use thiserror::Error;
 
 use crate::store::{StoreError, StoreFailure};
-use crate::turns::TurnError;
+use crate::turns::{self, TurnError};
 
 /// Why a kit call failed: the Python implementation's `RoomKitError`, each
 /// variant named after one of its exception classes without the `Error`
@@ -273,6 +273,46 @@ impl RoomKitError {
     #[must_use]
     pub fn retryable(&self) -> Option<bool> {
         self.declared().map(|declared| declared.retryable)
+    }
+
+    /// The name of the error's Python class, which a delivery failing with
+    /// an error whose class carries no code reads as its code, as Python's
+    /// `_delivery_error` reads `error_type_name` (`RoomNotFoundError`,
+    /// `ShutdownCancelledError`, `ValueError`): a variant's class is its
+    /// name with the `Error` suffix, a builtin's its own; a variant that
+    /// carries an exception the store, the lock manager, a channel or the
+    /// router raised names the class its record holds, `ChannelError` when
+    /// it holds none; a turn's, `TurnLinkError` for a link's failure.
+    pub(crate) fn class_name(&self) -> String {
+        match self {
+            Self::Value(_) => "ValueError".to_owned(),
+            Self::Cancelled => "CancelledError".to_owned(),
+            Self::ExceptionGroup { .. } => "ExceptionGroup".to_owned(),
+            Self::Lock(record) | Self::Router(record) | Self::Channel { error: record, .. } => {
+                record.error_type.clone()
+            }
+            Self::Turn(error) => error.to_record().error_type,
+            Self::Store(_) | Self::Internal(_) => turns::CHANNEL_ERROR.to_owned(),
+            Self::RoomNotFound(_)
+            | Self::RoomAlreadyExists(_)
+            | Self::RoomClosed { .. }
+            | Self::TransitionRefused { .. }
+            | Self::ProcessTimeout { .. }
+            | Self::ChangeRefused { .. }
+            | Self::ReentrantCall { .. }
+            | Self::ReentryLoopCap(_)
+            | Self::ChannelNotFound { .. }
+            | Self::ChannelNotRegistered(_)
+            | Self::ChannelAlreadyRegistered(_)
+            | Self::ParticipantNotFound { .. }
+            | Self::IdentityNotFound(_)
+            | Self::AddressLinked { .. }
+            | Self::EventNotFound(_)
+            | Self::IdempotencyKeyTaken { .. }
+            | Self::ProviderDelivery { .. }
+            | Self::KitClosed
+            | Self::ShutdownCancelled => format!("{}Error", turns::variant_name(self)),
+        }
     }
 
     /// The code and the flag the error's Python class carries, as its

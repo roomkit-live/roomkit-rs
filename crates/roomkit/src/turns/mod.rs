@@ -51,7 +51,7 @@ use uuid::Uuid;
 
 pub(crate) use self::codec::send_event_arguments;
 pub use self::error::TurnError;
-pub(crate) use self::error::{TURN_LINK_ERROR, record_of};
+pub(crate) use self::error::{CHANNEL_ERROR, TURN_LINK_ERROR, record_of, variant_name};
 pub(crate) use self::executor::HostLink;
 use self::memory::Request;
 pub(crate) use self::memory::{CarriedRequest, MemoryTurn};
@@ -424,7 +424,7 @@ pub(crate) fn closed() -> ErrorRecord {
 /// A request that cannot cross.
 fn uncarried(why: &str) -> ErrorRecord {
     ErrorRecord::new(
-        error::CHANNEL_ERROR,
+        CHANNEL_ERROR,
         format!("the turn's request cannot cross the turn backend: {why}"),
     )
 }

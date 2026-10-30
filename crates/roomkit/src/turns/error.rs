@@ -175,6 +175,12 @@ fn rebuilt_variant(error: &WireError) -> Option<RoomKitError> {
 }
 
 /// A kit error's variant name, and the fields a rebuild reads.
+/// The variant `error` is, by its name: the name of its Python class but
+/// for the `Error` suffix (decision 9 of step 5).
+pub(crate) fn variant_name(error: &RoomKitError) -> &'static str {
+    variant_of(error).0
+}
+
 fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
     let mut fields = Metadata::new();
     let variant = match error {
