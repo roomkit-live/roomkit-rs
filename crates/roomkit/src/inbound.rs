@@ -310,8 +310,9 @@ impl Shared {
     }
 
     /// The decided result, with what an adopted call's delivery set
-    /// reported and the answers its cascade delivered, `delivered`; with none, the adopting run over without it,
-    /// the delivery reads as one the kit's close dropped, when it closes.
+    /// reported and the answers its cascade delivered, `delivered`; with
+    /// none, the adopting run over without it, the delivery reads as one
+    /// the kit's close dropped, when it closes.
     fn backfilled(&self, delivered: Option<ops::InboundResult>) -> ops::InboundResult {
         let mut result = self.decided.clone();
         let Some(delivered) = delivered else {

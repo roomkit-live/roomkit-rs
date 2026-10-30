@@ -633,13 +633,28 @@ async fn waited_from_a_hook(needs_lock: bool) -> (Vec<String>, Vec<String>, Vec<
 /// outer call reads its own, never the adopted call's. The hook's own wait
 /// returns unwaited.
 ///
-/// Off the lock, the call is adopted from the outer call's admission work:
-/// its answers' passes wait for the outer call's pass, which waits for the
-/// hook, so its wait returns once its delivery set is over, without them,
-/// where Python's reads `['A1']` (probe
-/// `tasks/probes/step5-lot2/adopted_answers_off_lock.py`).
+/// Off the lock, the hook waits for the call during the outer call's
+/// admission: the adopted call's delivery set ends before the outer call's
+/// passes run, so its report is told at once, without its answers, whose
+/// passes wait for the outer call's own pass; the later wait reads that
+/// report. Python's reads `['A1']` both times (probe
+/// `tasks/probes/step5-lot2/adopted_answers_off_lock.py`), which lot 3
+/// brings. A handle kept unwaited by the off-lock hook reads its answers or
+/// not depending on the runtime's scheduling, and is not pinned here.
 #[tokio::test]
 async fn an_adopted_call_s_wait_reads_the_answers_its_cascade_delivered() {
+    adopted_calls_read_their_answers().await;
+}
+
+/// [`an_adopted_call_s_wait_reads_the_answers_its_cascade_delivered`] on a
+/// runtime of several threads, where it reads the same.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_adopted_call_s_wait_reads_the_same_on_several_threads() {
+    adopted_calls_read_their_answers().await;
+}
+
+/// The adopted calls' answers, under the lock and off it.
+async fn adopted_calls_read_their_answers() {
     let under_lock = answers_of_an_adopted_call(true).await;
     let off_lock = answers_of_an_adopted_call(false).await;
     let answer = |text: &str| vec![format!("You said: {text}")];

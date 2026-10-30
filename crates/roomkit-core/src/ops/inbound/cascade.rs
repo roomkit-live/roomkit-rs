@@ -496,10 +496,14 @@ impl Machine {
 
     /// Tells the caller of each adopted entry whose cascade is over what
     /// its delivery set reported, with the answers its cascade delivered
-    /// (RFC §10.1 step 18). An entry adopted from the call's admission work
-    /// is told once its delivery set is over: its answers' passes wait for
-    /// the call's own pass, which may wait for this report, so they are not
-    /// among them.
+    /// (RFC §10.1 step 18). Whether the report waits for those answers
+    /// depends on the call's stage when the entry's delivery set ends, not
+    /// on where the entry was adopted: while the call's own passes do not
+    /// run yet (its admission, an off-lock hook's wait among it), the
+    /// entry's answers' passes wait for the call's own pass, which may wait
+    /// for this report, so the entry is told at once, without them; once
+    /// they run, the report waits for its answers. Python's report carries
+    /// them whatever the stage (lot 3).
     pub(super) fn report_adopted_deliveries(&mut self, cx: &mut Cx<'_>) {
         let passing = matches!(self.stage.current(), Stage::Cascade | Stage::Ending(_));
         let over: Vec<EntryId> = self
