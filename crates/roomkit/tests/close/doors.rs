@@ -505,3 +505,65 @@ async fn a_spared_run_delivers_nothing_once_the_kit_is_sealed() {
         (Some(true), true, Vec::<String>::new())
     );
 }
+
+/// How many times each tests below runs the observer door.
+const OBSERVER_RUNS: usize = 20;
+
+/// What the observer door comes to, `runs` times: an ASYNC
+/// `BEFORE_BROADCAST` observer closes the kit, and each run reads what its
+/// close answered, the call, what the room stores and what the witness
+/// received, counted by outcome.
+async fn observer_door_runs(runs: usize) -> std::collections::BTreeMap<String, usize> {
+    let mut outcomes = std::collections::BTreeMap::new();
+    for _ in 0..runs {
+        let witness = Witness::new();
+        let (kit, closer, call) = open(Door::Observer, &witness, false).await;
+        let returned = closer.returned_once_closed().await;
+        let call = ended(call).await;
+        roomkit::testing::idle(&kit).await;
+        let outcome = format!(
+            "{returned:?} {call:?} {:?} {:?}",
+            stored(&kit).await,
+            witness.delivered()
+        );
+        *outcomes.entry(outcome).or_insert(0) += 1;
+    }
+    outcomes
+}
+
+/// The one outcome of the observer door, as Python's
+/// (`rmk1030-rs-review-B/py_probe.out`, observer door): the close returns,
+/// the call reads `kit_closed`, "Bye." is stored and the witness receives
+/// it, `runs` times.
+fn delivered_every_time(runs: usize) -> std::collections::BTreeMap<String, usize> {
+    let outcome = format!(
+        "{:?} {:?} {:?} {:?}",
+        Some(true),
+        Some(ok(Some("kit_closed"), None)),
+        ["Bye."],
+        ["Bye."]
+    );
+    std::collections::BTreeMap::from([(outcome, runs)])
+}
+
+/// RFC §9.3, §12.10.4: an ASYNC `BEFORE_BROADCAST` observer that closes the
+/// kit finds its event's set delivering: its hooks fire once the lane
+/// answered the set's place, so the close gives the set its grace, as
+/// Python's (maintainer's decision R1, 2026-10-30), on a runtime of one
+/// thread.
+#[tokio::test(start_paused = true)]
+async fn an_observer_closing_the_kit_finds_its_set_delivering() {
+    let outcomes = observer_door_runs(OBSERVER_RUNS).await;
+    assert_eq!(outcomes, delivered_every_time(OBSERVER_RUNS));
+}
+
+/// The same on a runtime of threads, where the observer may run beside the
+/// set's run: it fires only once the lane answered the set's place, so the
+/// outcome never depends on the runtime. On e5973d6 the observer fired as
+/// the pass released its lock, before the set's turn, and its close
+/// dropped the set in some runs (`rmk1030-rs/pass1/observer_threads_before.out`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_observer_closing_the_kit_finds_its_set_delivering_on_threads() {
+    let outcomes = observer_door_runs(OBSERVER_RUNS).await;
+    assert_eq!(outcomes, delivered_every_time(OBSERVER_RUNS));
+}

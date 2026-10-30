@@ -17,7 +17,7 @@ use super::super::commit::{self, Committing};
 use super::super::delivery::Placement;
 use super::super::queues::Lineage;
 use super::super::stamp;
-use super::{CommitPass, PassOrigin, PassResult, State, Verdict};
+use super::{CommitPass, Observed, PassOrigin, PassResult, State, Verdict};
 use crate::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, Visibility};
 use crate::ops::protocol::{
     AnswerOf, HoldOutcome, HoldRequest, Outcome, StoreRequest, TargetUpdate,
@@ -111,7 +111,7 @@ impl CommitPass {
             ChainDecision::Allowed => None,
         };
         if blocked.is_none() {
-            self.observed = Some(Box::new((payload.clone(), (*context).clone())));
+            self.observed = Some(Box::new(Observed::new(cx, &payload, &context)));
         }
         let unchanged = (!asked).then_some(context);
         let verdict = Verdict { payload, blocked };
@@ -122,22 +122,6 @@ impl CommitPass {
                 verdict: Box::new(verdict),
             },
         }
-    }
-
-    /// The ASYNC hooks of `BEFORE_BROADCAST` observe `payload`, the event
-    /// its chain allowed, as the work of the cascade the pass works for
-    /// while they run (RFC §9.2, §9.5.1; decided in step 3 milestone 2): a
-    /// call a body makes into the room draws one of the cascade's hook
-    /// calls, refused past them, as an `AFTER_BROADCAST` body's does, so an
-    /// observer that posts on every event it observes stops at the cap.
-    pub(super) fn observe(cx: &mut Cx<'_>, payload: &RoomEvent, context: &RoomContext) {
-        let trigger = HookTrigger::BeforeBroadcast;
-        // A pass always works for a cascade; none lent, the bodies are work
-        // of their own.
-        let Some(budget) = cx.io.work().cloned() else {
-            return cx.fire_observers(trigger, payload, context);
-        };
-        cx.fire_as_cascade_work(trigger, payload, context, &budget, 0);
     }
 
     /// The room read again, as the hooks left it.

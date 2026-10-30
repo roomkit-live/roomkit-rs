@@ -383,8 +383,8 @@ impl Door {
     }
 
     /// Whether the witness reads "Bye.": not when the commit refused it.
-    /// An observer closing the kit runs once the delivery set took its
-    /// place in the room's lane, as Python's (`py_doors.out`,
+    /// An observer closing the kit runs once the lane answered its
+    /// delivery set's place, as Python's (`py_doors.out`,
     /// `rmk1030-rs-review-B/py_probe.out` observer door), so its set
     /// delivers within the close's grace; on 01c8420 it ran as the commit
     /// was written and the close dropped the set.

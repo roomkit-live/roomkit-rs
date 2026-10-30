@@ -46,8 +46,10 @@ use crate::ops::lifecycle::gate::{Applied, Pending, TimerHooks};
 use crate::ops::protocol::{EffectId, EntryId, HoldRequest, Outcome, StoreRequest};
 use crate::ops::rooting::Rooting;
 use crate::ops::{self, Abort, Cx, Progress};
+use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::edits::EditRefusal;
 use crate::rules::hook_chain::HookChain;
+use crate::rules::hook_registry::HookTrigger;
 use crate::rules::permissions::DeliveryPlan;
 
 use super::chain::HookRun;
@@ -170,6 +172,54 @@ pub(super) struct PassReport {
     pub(super) placement: Placement,
     /// Whose cascade the pass belongs to.
     pub(super) lineage: Lineage,
+    /// The ASYNC hooks of `BEFORE_BROADCAST` to fire once the lane answers
+    /// the delivered event's place: its delivery set's.
+    pub(super) observed: Option<Box<Observed>>,
+}
+
+/// The ASYNC hooks of `BEFORE_BROADCAST` observing the event its chain
+/// allowed, as the SYNC hooks left it (RFC §9.2, §9.3), fired once its
+/// delivery set's place in the room's lane is answered, its turn or the
+/// lane closed (RFC §12.10.4), or once the pass is over when the event
+/// takes no such place: an observer that closes the kit finds the set
+/// placed, delivering within the close's grace, as the Python
+/// implementation's observers, fired at the chain's end, first run once
+/// the set is in the lane, whatever the runtime's threads.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Observed {
+    payload: RoomEvent,
+    context: RoomContext,
+    /// The cascade's budget the pass worked within, which the bodies draw
+    /// on (RFC §9.5.1); none, they are work of their own.
+    budget: Option<ReentryBudget>,
+}
+
+impl Observed {
+    /// The hooks observing `payload`, the event its chain allowed, in
+    /// `context`, as the work of the cascade the pass works for while they
+    /// run (RFC §9.2, §9.5.1; decided in step 3 milestone 2): a call a body
+    /// makes into the room draws one of the cascade's hook calls, refused
+    /// past them, as an `AFTER_BROADCAST` body's does, so an observer that
+    /// posts on every event it observes stops at the cap. A pass always
+    /// works for a cascade; none lent, the bodies are work of their own.
+    pub(super) fn new(cx: &Cx<'_>, payload: &RoomEvent, context: &RoomContext) -> Self {
+        Self {
+            payload: payload.clone(),
+            context: context.clone(),
+            budget: cx.io.work().cloned(),
+        }
+    }
+
+    /// Fires the hooks.
+    pub(super) fn fire(self, cx: &mut Cx<'_>) {
+        let trigger = HookTrigger::BeforeBroadcast;
+        match &self.budget {
+            Some(budget) => {
+                cx.fire_as_cascade_work(trigger, &self.payload, &self.context, budget, 0);
+            }
+            None => cx.fire_observers(trigger, &self.payload, &self.context),
+        }
+    }
 }
 
 /// One event's pass through the locked section.
@@ -199,10 +249,10 @@ pub(super) struct CommitPass {
     /// The hooks of the timer transitions its gate applied, fired once the
     /// lock is released (RFC §5.1 When).
     timer_hooks: TimerHooks,
-    /// The event the chain allowed and the room its hooks were handed, which
-    /// the ASYNC hooks of `BEFORE_BROADCAST` observe once the pass is over,
-    /// its event's place in the room's lane taken (RFC §9.2, §9.3).
-    observed: Option<Box<(RoomEvent, RoomContext)>>,
+    /// The ASYNC hooks of `BEFORE_BROADCAST` observing the event the chain
+    /// allowed, until the pass hands them to its event's delivery set, or
+    /// fires them.
+    observed: Option<Box<Observed>>,
 }
 
 /// What the hooks decided, which the pass applies once it has read the room
@@ -459,6 +509,7 @@ impl CommitPass {
             release_error: self.release_error.take(),
             placement: self.placement,
             lineage: self.lineage,
+            observed: self.observed.take(),
         }))
     }
 
@@ -522,14 +573,15 @@ impl CommitPass {
     }
 
     /// Releases the room's lock before reporting `result` (RFC §10.1 step 13).
-    /// The ASYNC hooks of `BEFORE_BROADCAST` observe the event its chain
-    /// allowed then, once its delivery set took its place in the room's
-    /// lane, as the Python implementation's observers, fired at the chain's
-    /// end, first run once the set is in the lane.
+    /// The ASYNC hooks of `BEFORE_BROADCAST` are handed to the delivery set
+    /// of an event that took its place in the room's lane, which fires them
+    /// once the lane answers that place ([`Observed`]); for any other end
+    /// of the pass, they fire now.
     fn release(&mut self, cx: &mut Cx<'_>, result: Result<PassResult, Abort>) -> State {
-        if let Some(observed) = self.observed.take() {
-            let (payload, context) = *observed;
-            Self::observe(cx, &payload, &context);
+        let placed = self.placement == Placement::Taken
+            && matches!(result, Ok(PassResult::Delivered { .. }));
+        if !placed && let Some(observed) = self.observed.take() {
+            observed.fire(cx);
         }
         let effect = cx.io.issue(HoldRequest::ReleaseLock {
             room_id: self.event.room_id.clone(),
