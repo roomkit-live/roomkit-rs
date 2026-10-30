@@ -260,9 +260,9 @@ kit, its construction and its calls; lot 2: the model and the errors).
   backend takes no more turns, the channels close once, one after the
   other, what their closes started is cut, work still running after its
   cut is named in one warning, and the kit is sealed. The close takes the
-  grace, plus the channels' closes, plus at most 1 s three times: with a
-  send, a write, an observer and a hook holding its room's lock that never
-  end, it took 15 s, and takes 5 s. A write is no longer waited for three
+  grace, plus the turn backend's unwind, plus the channels' closes, plus
+  at most 1 s twice: with a send, a write, an observer and a hook holding
+  its room's lock that never end, it took 15 s, and takes 5 s. A write is no longer waited for three
   times and left running past the close: a commit of 7 s whose caller left
   is cut at 5 s, never stored. A failure the close causes is logged at
   debug; a write that fails on its own once its caller is gone is still
@@ -329,15 +329,15 @@ kit, its construction and its calls; lot 2: the model and the errors).
   read-back that failed, where a message's or a `send_event`'s abort
   logged nothing.
 - The ASYNC hooks of `BEFORE_BROADCAST` observe an event once its pass is
-  over, its delivery set placed in the room's lane, as Python's observers
-  first run once the set is in the lane, and a set placed first, the lane
-  idle, runs from its placement, which the close no longer drops: an
+  over, its delivery set placed in the room's lane, and a set placed
+  first, the lane idle, runs from its placement, which the close does not
+  drop, the rule the Python implementation aligns on (RMK-1030): an
   observer that closes the kit finds its set delivering, given the
   close's grace, its call reading `kit_closed` with the target `sent`,
   where the close dropped the set, or, placed behind another, queued,
-  dropped, on a runtime of one thread or of several. A queued set's
-  observers run while the set ahead delivers, as Python's. Outside a
-  close the order is the same.
+  dropped, on a runtime of one thread or of several, whatever the store.
+  A queued set's observers run while the set ahead delivers, as Python's.
+  Outside a close the order is the same.
 - A turn a tool closes the kit from fails a sibling tool's verb waiting
   for its owner, `owner_lost`, as Python's `TurnLinkError` reads, where
   the verb waited for an answer nobody read, the executor outliving the
@@ -346,8 +346,10 @@ kit, its construction and its calls; lot 2: the model and the errors).
   `cancelled` on its text, beside `cancelled`, as Python's does.
 - A delivery that fails with `RoomKitError::KitClosed`, a send whose call
   into the closing kit was refused, reads code `kit_closed`, retryable,
-  as Python's delivery reads `KitClosedError.code`, where it read
-  `ChannelError`.
+  as Python's delivery reads `KitClosedError.code`, and one that fails
+  with any other `RoomKitError` reads its Python class's name
+  (`RoomNotFoundError`, `ShutdownCancelledError`), as Python's reads the
+  error's type, where both read `ChannelError`.
 - A task the kit's work spawns, that calls the kit and waits on its own
   room, is spawned with `keep_context`, the Rust form of Python's
   `create_task` copying its context; spawned plainly, it blocks.

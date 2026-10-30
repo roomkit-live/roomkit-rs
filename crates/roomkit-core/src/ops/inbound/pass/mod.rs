@@ -177,11 +177,9 @@ pub(super) struct PassReport {
 /// The ASYNC hooks of `BEFORE_BROADCAST` observing the event its chain
 /// allowed, as the SYNC hooks left it (RFC §9.2, §9.3), fired once the pass
 /// is over, its event's place in the room's lane taken: running when the
-/// lane was idle, queued behind the sets ahead otherwise, as the Python
-/// implementation's observers, fired at the chain's end, first run once
-/// the set is in the lane. An observer that closes the kit finds the set
-/// delivering, given the close's grace, or queued, dropped (RFC
-/// §12.10.4), whatever the runtime's threads.
+/// lane was idle, queued behind the sets ahead otherwise. An observer that
+/// closes the kit finds the set delivering, given the close's grace, or
+/// queued, dropped (RFC §12.10.4), whatever the runtime's threads.
 #[derive(Debug)]
 pub(super) struct Observed {
     payload: RoomEvent,
