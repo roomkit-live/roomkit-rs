@@ -38,8 +38,8 @@
 //!   connection go out together, flushed once, and a frame alone at once.
 //!   A client that stops reading is dropped, reader included, once one
 //!   send waits 5 seconds; a stop gives the connections 10 seconds, then
-//!   closes the kit, which drains what still runs for up to 5 seconds
-//!   (`RoomKit::close`).
+//!   closes the kit, which cuts every turn at once and gives what still
+//!   runs 5 seconds before it cuts it (`RoomKit::close`).
 //! - The agent's answer streams (RFC §6.1, §12.2 steps 13s and 14s): a
 //!   connection opened with `&stream=1` receives its text as the model
 //!   writes it, `{"type": "delta", "stream_id": "...", "text": "..."}`
@@ -227,7 +227,7 @@ const ANNOUNCED: u64 = 1 << 20;
 const SMALL_BUFFER: u32 = 4096;
 
 /// How long a check waits for a connection to end or a server to stop: a
-/// stop's grace and its kit's close drain included.
+/// stop's grace and its kit's close included.
 const STOP_PATIENCE: Duration = Duration::from_secs(15);
 
 /// How long a client waits for an answer: a real model's included.

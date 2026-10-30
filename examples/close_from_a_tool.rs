@@ -115,7 +115,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         .create_room(CreateRoomOptions::default())
         .await
         .is_err_and(|error| matches!(error, RoomKitError::KitClosed));
-    let closed = closed.entries();
+    // The tool runs on once its close returned, beside the message's call:
+    // its note may come after the call's end.
+    let closed = tokio::time::timeout(Duration::from_secs(5), closed.wait_for(1))
+        .await
+        .unwrap_or_default();
     println!("The tool's close: {closed:?}; the service's own close took {second:?}.");
     println!("The pager: {:?}", pager.closes.entries());
     let mut checks = Checks::default();
