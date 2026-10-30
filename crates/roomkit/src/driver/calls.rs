@@ -21,6 +21,7 @@ use tokio::task::JoinSet;
 
 use crate::channel::{ChannelError, EventDraft};
 use crate::context::{ExecutionContext, HookBody, RunShared};
+use crate::error::RoomKitError;
 use crate::hooks;
 use crate::kit::Inner;
 use crate::router;
@@ -515,7 +516,20 @@ fn observe<S: ConversationStore>(
 fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
     match result {
         Ok(output) => checked_output(Box::new(output)),
-        Err(error) => Outcome::Failed(ErrorRecord::new("ChannelError", error.to_string())),
+        Err(error) => channel_failed(&error),
+    }
+}
+
+/// What a channel's `on_event()` or `deliver()` failing with `error` reads
+/// as: the provider's refusal it carries, when it is the kit's
+/// `ProviderDelivery`, Python's `ProviderDeliveryError`; any other a
+/// failure of type `ChannelError`, a boxed error having no class name.
+fn channel_failed(error: &ChannelError) -> Outcome {
+    match error.downcast_ref::<RoomKitError>() {
+        Some(RoomKitError::ProviderDelivery { result }) => {
+            ChannelOutcome::ProviderDelivery(Box::new(result.clone())).into()
+        }
+        Some(_) | None => Outcome::Failed(ErrorRecord::new("ChannelError", error.to_string())),
     }
 }
 

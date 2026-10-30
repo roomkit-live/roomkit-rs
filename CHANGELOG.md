@@ -84,6 +84,19 @@ kit, its construction and its calls; lot 2: the model and the errors).
   and `is_block` go. A block without a reason is refused when read, and
   one built by literal reads as a hook that raised Python's `ValueError`,
   as a modify without its event does.
+- A call's `delivery_results` reports every target that failed, as the
+  Python implementation's does: a transport whose `on_event()` or
+  `deliver()` raised, and an agent whose turn raised or answered an error,
+  failed with the code `ChannelError` (a boxed error has no class name;
+  Python writes the class's), retryable. A channel returns Python's
+  `ProviderDeliveryError` as `RoomKitError::ProviderDelivery { result }`,
+  read as Python reads it: the code `result.metadata["code"]`, else
+  `result.error`, else `ProviderDeliveryFailed`; retryable as
+  `metadata["retryable"]` says when a bool, else retryable; the result
+  kept. A provider's refusal reads the same (it was `provider_refused`,
+  not retryable), a deliver that raised is retryable (it was not), and a
+  binding with no recipient reads Python's `NoRecipientError`: message
+  `no_recipient`, its provider result kept.
 - `InboundResult` gains Python's `duplicate` (a replayed key),
   `unavailable_targets` (the addresses no turn reached: the committed plan
   asks none of them, or the agent's channel was unregistered before its

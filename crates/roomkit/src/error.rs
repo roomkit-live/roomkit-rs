@@ -5,8 +5,8 @@
 use std::fmt::{self, Write as _};
 
 use roomkit_core::model::{
-    ChannelId, ChannelType, ErrorRecord, EventId, IdentityId, ModelError, ParticipantId, RoomId,
-    RoomStatus,
+    ChannelId, ChannelType, DeliveryError, ErrorRecord, EventId, IdentityId, ModelError,
+    ParticipantId, ProviderResult, RoomId, RoomStatus,
 };
 use roomkit_core::ops::{ConfigError, InboundError, LifecycleError, MutationError, ProtocolError};
 use roomkit_core::rules::hook_registry::RegistrationError;
@@ -163,6 +163,19 @@ pub enum RoomKitError {
         channel_id: ChannelId,
         /// The key.
         key: String,
+    },
+    /// Python's `ProviderDeliveryError(result)`: a provider's explicit
+    /// refusal, which a channel's `on_event()` or `deliver()` returns as its
+    /// error, boxed as a [`ChannelError`](crate::ChannelError). The
+    /// delivery's result reads it as Python's does (RFC §5.13): the code
+    /// `result.metadata["code"]`, else `result.error`, else
+    /// `ProviderDeliveryFailed`; retryable as `result.metadata["retryable"]`
+    /// says when it is a bool, else retryable; `result` kept. Its message is
+    /// `result.error`, else `provider_send_failed`.
+    #[error("{}", DeliveryError::of_provider(result).message)]
+    ProviderDelivery {
+        /// The provider's answer.
+        result: ProviderResult,
     },
     /// Python's builtin `ValueError`: an argument the call refuses, as the
     /// Python implementation's message says.

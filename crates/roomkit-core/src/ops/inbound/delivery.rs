@@ -28,8 +28,8 @@ use crate::model::{
     ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
 };
 use crate::ops::protocol::{
-    CHANNEL_NOT_REGISTERED, ChannelRequest, EffectId, EntryId, HoldRequest, KIT_CLOSED, Outcome,
-    TURN_CUT,
+    CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, EntryId, HoldRequest,
+    KIT_CLOSED, Outcome, TURN_CUT,
 };
 use crate::ops::{Cx, Progress};
 use crate::rules::chain_depth::ReentryBudget;
@@ -359,14 +359,20 @@ impl DeliverySet {
             );
             return self.progress(cx);
         };
-        match call {
-            Call::OnEvent => match outcome.into_turn_output() {
+        match (call, outcome) {
+            (Call::OnEvent, Outcome::Channel(ChannelOutcome::ProviderDelivery(result))) => {
+                self.on_event_refused(cx, index, *result);
+            }
+            (Call::Deliver, Outcome::Channel(ChannelOutcome::ProviderDelivery(result))) => {
+                self.on_delivery_refused(index, *result);
+            }
+            (Call::OnEvent, outcome) => match outcome.into_turn_output() {
                 Ok((output, streamed)) => {
                     self.on_output(cx, index, *output, streamed.then_some(effect));
                 }
                 Err(error) => self.on_event_failed(cx, index, &error),
             },
-            Call::Deliver => match outcome.into_output() {
+            (Call::Deliver, outcome) => match outcome.into_output() {
                 Ok(output) => self.on_delivered(index, *output),
                 Err(error) => self.on_delivery_failed(index, &error),
             },
@@ -456,7 +462,8 @@ impl DeliverySet {
                 .response_metadata
                 .extend(output.response_metadata);
             if let Some(error) = &output.error {
-                self.turn_failed(cx, index, error);
+                let failed = DeliveryResult::raised(responder.channel_id.clone(), error);
+                self.turn_failed(cx, index, error, failed);
             }
         }
         match streamed.filter(|_| is_agent) {
@@ -509,16 +516,56 @@ impl DeliverySet {
         if self.kind == SetKind::Injected {
             return;
         }
+        let failed = DeliveryResult::raised(target.binding.channel_id.clone(), error);
         if target.role == Role::Agent {
-            self.turn_failed(cx, index, error);
+            self.turn_failed(cx, index, error, failed);
         } else {
-            self.fail(index, error.message.clone());
+            self.report_failure(index, failed);
         }
     }
 
+    /// A target's `on_event()` raised Python's `ProviderDeliveryError`, the
+    /// provider's refusal `result`: a failure as any raised, its delivery
+    /// result reading what the refusal declares.
+    fn on_event_refused(&mut self, cx: &mut Cx<'_>, index: usize, result: ProviderResult) {
+        let Some(target) = self.targets.get(index) else {
+            return;
+        };
+        if self.kind == SetKind::Injected {
+            return;
+        }
+        let failed = DeliveryResult::refused(target.binding.channel_id.clone(), result);
+        if target.role == Role::Agent {
+            let message = failed.error.as_ref().map(|error| error.message.clone());
+            let error = ErrorRecord::new("ProviderDeliveryError", message.unwrap_or_default());
+            self.turn_failed(cx, index, &error, failed);
+        } else {
+            self.report_failure(index, failed);
+        }
+    }
+
+    /// A transport's `deliver()` raised Python's `ProviderDeliveryError`,
+    /// the provider's refusal `result`.
+    fn on_delivery_refused(&mut self, index: usize, result: ProviderResult) {
+        let Some(target) = self.targets.get(index) else {
+            return;
+        };
+        let failed = DeliveryResult::refused(target.binding.channel_id.clone(), result);
+        self.report_failure(index, failed);
+    }
+
     /// An intelligence target's turn failed (RFC §9.2 `ON_ERROR`, category
-    /// `generation`): the event stays delivered, the error is reported.
-    fn turn_failed(&mut self, cx: &mut Cx<'_>, index: usize, error: &ErrorRecord) {
+    /// `generation`): the event stays delivered, the error is reported, and
+    /// so is the target's delivery, `failed`, as the Python implementation
+    /// reports a target its broadcast's errors name. A turn whose failure
+    /// comes in its stream, as an AI channel's, is no failed delivery.
+    fn turn_failed(
+        &mut self,
+        cx: &mut Cx<'_>,
+        index: usize,
+        error: &ErrorRecord,
+        failed: DeliveryResult,
+    ) {
         let Some(target) = self.targets.get(index) else {
             return;
         };
@@ -538,7 +585,22 @@ impl DeliverySet {
         if self.outcome.error.is_none() {
             self.outcome.error = Some(error.clone());
         }
-        self.fail(index, error.message.clone());
+        self.report_failure(index, failed);
+    }
+
+    /// Reports a target's failed delivery, `failed`, among the set's
+    /// delivery results and its failures, its error's message, as the
+    /// Python implementation's `_delivery_results` reports each target its
+    /// broadcast's errors name (RFC §5.13).
+    fn report_failure(&mut self, index: usize, failed: DeliveryResult) {
+        let message = failed
+            .error
+            .as_ref()
+            .map_or_else(String::new, |error| error.message.clone());
+        self.outcome
+            .delivery_results
+            .insert(failed.channel_id.clone(), failed);
+        self.fail(index, message);
     }
 
     /// A transport's `deliver()` returned: sent, unless its provider refused.
@@ -547,16 +609,28 @@ impl DeliverySet {
             return;
         };
         let channel_id = target.binding.channel_id.clone();
-        let (result, refusal) = delivery_result(channel_id.clone(), output.provider_result);
-        self.outcome
-            .delivery_results
-            .insert(channel_id.clone(), result);
         self.collect_metadata(&channel_id, output.metadata_updates);
         self.outcome.tasks.extend(output.tasks);
         self.outcome.observations.extend(output.observations);
-        match refusal {
-            Some(message) => self.fail(index, message),
-            None => self.outcome.delivered.push(channel_id),
+        match output.provider_result {
+            // A provider's refusal is the Python implementation's
+            // `ProviderDeliveryError`, which its transport raises.
+            Some(result) if !result.success => {
+                self.report_failure(index, DeliveryResult::refused(channel_id, result));
+            }
+            provider_result => {
+                let sent = DeliveryResult {
+                    provider_message_id: provider_result
+                        .as_ref()
+                        .and_then(|result| result.provider_message_id.clone()),
+                    provider_result,
+                    ..DeliveryResult::new(channel_id.clone(), DeliveryResultStatus::Sent)
+                };
+                self.outcome
+                    .delivery_results
+                    .insert(channel_id.clone(), sent);
+                self.outcome.delivered.push(channel_id);
+            }
         }
     }
 
@@ -575,22 +649,19 @@ impl DeliverySet {
             recipient_key = %key,
             "the binding has no recipient; the delivery is refused before any send"
         );
-        self.outcome.delivery_results.insert(
-            channel_id.clone(),
-            DeliveryResult {
-                channel_id,
-                status: DeliveryResultStatus::Failed,
-                provider_message_id: None,
-                error: Some(DeliveryError {
-                    code: NO_RECIPIENT.to_owned(),
-                    message: format!("the binding has no recipient under {key:?}"),
-                    retryable: false,
-                }),
-                retry_after: None,
-                provider_result: None,
-            },
-        );
-        self.fail(index, NO_RECIPIENT.to_owned());
+        // Python's `NoRecipientError(channel_id, recipient_key)`, a
+        // `ProviderDeliveryError` of the refusal it builds.
+        let mut metadata = Metadata::new();
+        metadata.insert("code".to_owned(), NO_RECIPIENT.into());
+        metadata.insert("retryable".to_owned(), false.into());
+        metadata.insert("channel_id".to_owned(), channel_id.as_str().into());
+        metadata.insert("recipient_key".to_owned(), key.into());
+        let refusal = ProviderResult {
+            error: Some(NO_RECIPIENT.to_owned()),
+            metadata,
+            ..ProviderResult::new(false)
+        };
+        self.report_failure(index, DeliveryResult::refused(channel_id, refusal));
     }
 
     /// A transport's `deliver()` raised; or the driver holds the channel no
@@ -602,23 +673,8 @@ impl DeliverySet {
         let Some(target) = self.targets.get(index) else {
             return;
         };
-        let channel_id = target.binding.channel_id.clone();
-        self.outcome.delivery_results.insert(
-            channel_id.clone(),
-            DeliveryResult {
-                channel_id,
-                status: DeliveryResultStatus::Failed,
-                provider_message_id: None,
-                error: Some(DeliveryError {
-                    code: error.error_type.clone(),
-                    message: error.message.clone(),
-                    retryable: false,
-                }),
-                retry_after: None,
-                provider_result: None,
-            },
-        );
-        self.fail(index, error.message.clone());
+        let failed = DeliveryResult::raised(target.binding.channel_id.clone(), error);
+        self.report_failure(index, failed);
     }
 
     /// Keeps a target's room metadata updates, a side effect collected
@@ -744,40 +800,4 @@ fn targets_of(plan: &DeliveryPlan, event: &RoomEvent, context: &RoomContext) -> 
             role,
         })
         .collect()
-}
-
-/// The result of a delivery the transport returned from, with the
-/// provider's refusal when it did not accept the message (RFC §5.13).
-fn delivery_result(
-    channel_id: ChannelId,
-    provider_result: Option<ProviderResult>,
-) -> (DeliveryResult, Option<String>) {
-    let refusal = provider_result
-        .as_ref()
-        .filter(|result| !result.success)
-        .map(|result| {
-            result
-                .error
-                .clone()
-                .unwrap_or_else(|| "the provider refused the message".to_owned())
-        });
-    let result = DeliveryResult {
-        channel_id,
-        status: if refusal.is_some() {
-            DeliveryResultStatus::Failed
-        } else {
-            DeliveryResultStatus::Sent
-        },
-        provider_message_id: provider_result
-            .as_ref()
-            .and_then(|result| result.provider_message_id.clone()),
-        error: refusal.clone().map(|message| DeliveryError {
-            code: "provider_refused".to_owned(),
-            message,
-            retryable: false,
-        }),
-        retry_after: None,
-        provider_result,
-    };
-    (result, refusal)
 }

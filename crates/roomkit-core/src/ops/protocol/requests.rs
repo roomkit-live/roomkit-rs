@@ -6,7 +6,8 @@ use std::time::Duration;
 use super::{EffectId, RoomCounters, TargetUpdate};
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventId, EventUpdates,
-    Identity, InboundMessage, Observation, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    Identity, InboundMessage, Observation, ProviderResult, Room, RoomContext, RoomEvent, RoomId,
+    RoomUpdates, Task,
 };
 use crate::rules::hook_chain::HookOutcome;
 use crate::rules::hook_registry::{HookId, HookTrigger};
@@ -288,7 +289,8 @@ pub enum ChannelRequest {
         id: EventId,
     },
     /// Call the channel's `on_event()` (RFC §6.1). For an intelligence
-    /// channel this is a turn (RFC §10.6). Answer [`ChannelOutcome::Output`], or
+    /// channel this is a turn (RFC §10.6). Answer [`ChannelOutcome::Output`],
+    /// [`ChannelOutcome::ProviderDelivery`] for a provider's refusal, or
     /// [`Outcome::Failed`] with the error type [`CHANNEL_NOT_REGISTERED`](super::CHANNEL_NOT_REGISTERED)
     /// for a channel the driver no longer holds.
     OnEvent {
@@ -300,7 +302,8 @@ pub enum ChannelRequest {
         context: Box<RoomContext>,
     },
     /// Call the channel's `deliver()` (RFC §6.1). Answer
-    /// [`ChannelOutcome::Output`], or [`Outcome::Failed`] with the error type
+    /// [`ChannelOutcome::Output`], [`ChannelOutcome::ProviderDelivery`] for a
+    /// provider's refusal, or [`Outcome::Failed`] with the error type
     /// [`CHANNEL_NOT_REGISTERED`](super::CHANNEL_NOT_REGISTERED) for a channel the driver no longer holds.
     Deliver {
         /// The channel's binding.
@@ -496,6 +499,12 @@ pub enum ChannelOutcome {
     /// stores ([`ChannelRequest::ReadStream`]), and the output's own
     /// `response_events` are none.
     Streamed(Box<ChannelOutput>),
+    /// The call failed with the provider's explicit refusal, the Python
+    /// implementation's `ProviderDeliveryError(result)`: its delivery result
+    /// reads the code and retryability the refusal declares, and keeps it
+    /// (RFC §5.13). An answer of [`ChannelRequest::OnEvent`] and
+    /// [`ChannelRequest::Deliver`].
+    ProviderDelivery(Box<ProviderResult>),
 }
 
 /// The driver's answer to a [`HookRequest`].

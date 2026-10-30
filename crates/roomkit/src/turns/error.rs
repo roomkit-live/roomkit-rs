@@ -197,6 +197,7 @@ fn variant_of(error: &RoomKitError) -> (&'static str, Metadata) {
         RoomKitError::AddressLinked { .. } => "AddressLinked",
         RoomKitError::EventNotFound(_) => "EventNotFound",
         RoomKitError::IdempotencyKeyTaken { .. } => "IdempotencyKeyTaken",
+        RoomKitError::ProviderDelivery { .. } => "ProviderDelivery",
         RoomKitError::Value(_) => "Value",
         RoomKitError::Cancelled => "Cancelled",
         RoomKitError::ExceptionGroup { .. } => "ExceptionGroup",

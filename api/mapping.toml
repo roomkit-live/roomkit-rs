@@ -107,6 +107,7 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit.AddressLinkedError" = ["channel_type", "address", "identity_id"]
 "roomkit.EventNotFoundError" = []
 "roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
+"roomkit.ProviderDeliveryError" = []
 
 [rules.error_families."roomkit_ai::SkillError"]
 "roomkit.skills.SkillDiscoveryError" = []

@@ -6,7 +6,9 @@ use super::{
     ChannelOutcome, ChannelRequest, EffectId, HoldOutcome, HoldRequest, HookAnswer, HookRequest,
     Outcome, ProtocolError, Request, StoreOutcome, StoreRequest,
 };
-use crate::model::{ChannelOutput, ErrorRecord, Identity, RoomContext, RoomEvent, RoomId};
+use crate::model::{
+    ChannelOutput, DeliveryError, ErrorRecord, Identity, RoomContext, RoomEvent, RoomId,
+};
 use crate::rules::hook_chain::HookOutcome;
 
 /// The kind of a request, which `Io` keeps until the request is answered,
@@ -153,7 +155,11 @@ impl RequestKind {
             Self::HandleInbound => matches!(outcome, Outcome::Channel(ChannelOutcome::Parsed(_))),
             Self::ChannelCall => matches!(
                 outcome,
-                Outcome::Channel(ChannelOutcome::Output(_) | ChannelOutcome::Streamed(_))
+                Outcome::Channel(
+                    ChannelOutcome::Output(_)
+                        | ChannelOutcome::Streamed(_)
+                        | ChannelOutcome::ProviderDelivery(_)
+                )
             ),
             Self::RunHook => matches!(outcome, Outcome::Hook(HookAnswer::Ran(_))),
             Self::RunObservers => matches!(outcome, Outcome::Hook(HookAnswer::Observed)),
@@ -369,6 +375,12 @@ impl Outcome {
     fn into_failure(self) -> ErrorRecord {
         match self {
             Self::Failed(error) => error,
+            // A provider's refusal fails the call as Python's
+            // `ProviderDeliveryError` raised.
+            Self::Channel(ChannelOutcome::ProviderDelivery(result)) => ErrorRecord::new(
+                "ProviderDeliveryError",
+                DeliveryError::of_provider(&result).message,
+            ),
             other => {
                 debug_assert!(
                     false,
@@ -412,6 +424,7 @@ impl Outcome {
             Self::Channel(ChannelOutcome::Parsed(_)) => "Parsed",
             Self::Channel(ChannelOutcome::Output(_)) => "Output",
             Self::Channel(ChannelOutcome::Streamed(_)) => "Streamed",
+            Self::Channel(ChannelOutcome::ProviderDelivery(_)) => "ProviderDelivery",
             Self::Hook(HookAnswer::Ran(_)) => "Ran",
             Self::Hook(HookAnswer::Observed) => "Observed",
             Self::Routed(_) => "Routed",
