@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A tool call's intent, the sentence the model writes for the person with each
+  call (RFC §6.4, RMK-1040), as Python's `AIChannel(tool_call_intents=True)`:
+  `AiAgent::with_tool_call_intents(true)` (and `OpenAiAgent`'s) shows each
+  tool's schema with the optional `_roomkit_intent` property, takes it out of
+  a call's arguments before its start and its gate, and carries it, normalized,
+  as `ToolCall::intent` and `ToolCallContent::intent`: on the hooks' event, both
+  rows and the turn wire, written only when set. A closed schema no longer
+  refuses the property; a tool whose schema declares it keeps it; the model
+  reads its calls back with their intent. Off by default.
+
 - Accept omitted optional tool namespaces in Responses output for a single configured
   namespace; still reject explicit foreign namespaces and restore the configured
   namespace on replay.

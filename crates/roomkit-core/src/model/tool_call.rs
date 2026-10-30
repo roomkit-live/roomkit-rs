@@ -28,6 +28,11 @@ pub struct ToolCall {
     /// The call's arguments.
     #[serde(default)]
     pub arguments: Metadata,
+    /// What the call does, in the sentence its model wrote for the person,
+    /// with an agent's `tool_call_intents` on (RFC §6.4): taken out of its
+    /// arguments, display text only; `None` when the model wrote none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
 }
 
 impl ToolCall {
@@ -37,6 +42,7 @@ impl ToolCall {
             id: id.into(),
             name: name.into(),
             arguments,
+            intent: None,
         }
     }
 }

@@ -152,6 +152,15 @@ impl OpenAiAgent {
             agent: self.agent.with_tool_timeout(bound),
         }
     }
+
+    /// The same agent, its model writing each call's intent for the person
+    /// (RFC §6.4; see [`AiAgent::with_tool_call_intents`]). Off by default.
+    #[must_use]
+    pub fn with_tool_call_intents(self, on: bool) -> Self {
+        Self {
+            agent: self.agent.with_tool_call_intents(on),
+        }
+    }
 }
 
 impl Channel for OpenAiAgent {

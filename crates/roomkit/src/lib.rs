@@ -118,6 +118,10 @@ pub use roomkit_core::rules::lifecycle::Transition;
 pub use roomkit_core::rules::transcoding::text_of;
 pub use roomkit_core::rules::transcript;
 pub use roomkit_core::rules::{visibility_allows, visible_events};
+// Outside the public API: the Python implementation keeps it private, and the
+// agent's crate reads it across crates (RFC §6.4).
+#[doc(hidden)]
+pub use roomkit_core::rules::tool_intent;
 
 pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::context::keep_context;

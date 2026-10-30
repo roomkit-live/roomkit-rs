@@ -184,6 +184,7 @@ fn record_of(end: &LoopEnd) -> Metadata {
 fn start_row(call: &ToolCall) -> ToolCallContent {
     let mut row = ToolCallContent::new(call.name.clone(), call.id.clone());
     row.arguments.clone_from(&call.arguments);
+    row.intent.clone_from(&call.intent);
     row
 }
 
@@ -192,6 +193,7 @@ fn start_row(call: &ToolCall) -> ToolCallContent {
 fn end_row(end: ToolEnd) -> ToolCallContent {
     let mut row = ToolCallContent::new(end.call.name, end.call.id);
     row.arguments = end.call.arguments;
+    row.intent = end.call.intent;
     let served = end.outcome == ToolCallOutcome::Served;
     row.status = if served {
         ToolCallStatus::Completed

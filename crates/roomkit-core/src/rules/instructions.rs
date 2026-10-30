@@ -713,6 +713,7 @@ mod tests {
                     structured_content: None,
                     outcome: None,
                     refused_but_ran: false,
+                    intent: None,
                 })
             };
             let notice = || EventContent::System(SystemContent::new("Call transferred."));

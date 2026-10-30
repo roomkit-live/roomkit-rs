@@ -161,6 +161,8 @@ pub(crate) struct ToolEnd {
     pub(crate) outcome: Option<ToolCallOutcome>,
     #[serde(default)]
     pub(crate) refused_but_ran: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) intent: Option<String>,
 }
 
 /// One item of a turn's stream (RFC §10.6.3 `item`), named by its `kind`.
@@ -184,6 +186,8 @@ pub(crate) enum Item {
         arguments: Metadata,
         #[serde(default)]
         ran_with: Option<Metadata>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        intent: Option<String>,
     },
     /// A call's end, naming the frame of its start.
     ToolEnd {
@@ -205,6 +209,8 @@ pub(crate) enum Item {
         outcome: Option<ToolCallOutcome>,
         #[serde(default)]
         refused_but_ran: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        intent: Option<String>,
     },
     /// The loop goes on after a round that ended without a call.
     SegmentBreak,

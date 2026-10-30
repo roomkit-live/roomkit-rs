@@ -801,6 +801,11 @@ pub struct ToolCallContent {
     /// The call ran although RoomKit refused it (RFC §9.3).
     #[serde(default)]
     pub refused_but_ran: bool,
+    /// What the call does, in the sentence its model wrote for the person
+    /// (RFC §6.4): written only when set, so a row without one reads as
+    /// before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
 }
 
 impl ToolCallContent {
@@ -818,6 +823,7 @@ impl ToolCallContent {
             structured_content: None,
             outcome: None,
             refused_but_ran: false,
+            intent: None,
         }
     }
 }
@@ -911,6 +917,7 @@ mod tests {
                 structured_content: None,
                 outcome: None,
                 refused_but_ran: false,
+                intent: None,
             }),
         ];
         let tags: Vec<String> = contents.iter().map(tag_of).collect();

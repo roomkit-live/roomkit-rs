@@ -31,6 +31,10 @@ enum Stage {
 
 /// An item of a turn's stream, as the owner reads it.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "an item is moved once, from its frame to the reader; a segment break is rare"
+)]
 pub(crate) enum RemoteItem {
     /// An item a channel's response yields.
     Item(ResponseItem),
@@ -203,11 +207,12 @@ impl OwnerTurn {
                 tool_name,
                 tool_id,
                 arguments,
+                intent,
                 ..
             } => {
                 self.window.read_other();
                 self.open.push((seq, tool_id.clone()));
-                let start = decode_start(tool_name, tool_id, arguments);
+                let start = decode_start(tool_name, tool_id, arguments, intent);
                 Read::Item(RemoteItem::Item(ResponseItem::ToolStart(start)))
             }
             Item::ToolEnd {
@@ -222,6 +227,7 @@ impl OwnerTurn {
                 structured_content,
                 outcome,
                 refused_but_ran,
+                intent,
             } => {
                 self.window.read_other();
                 self.close_start(start, &tool_id);
@@ -236,6 +242,7 @@ impl OwnerTurn {
                     structured_content,
                     outcome,
                     refused_but_ran,
+                    intent,
                 });
                 Read::Item(RemoteItem::Item(ResponseItem::ToolEnd(end)))
             }

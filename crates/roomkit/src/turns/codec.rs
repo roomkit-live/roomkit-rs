@@ -52,6 +52,7 @@ pub(crate) fn encode_start(start: ToolCallContent) -> Item {
         tool_id: start.tool_id,
         arguments: start.arguments,
         ran_with: None,
+        intent: start.intent,
     }
 }
 
@@ -70,6 +71,7 @@ pub(crate) fn encode_end_item(end: ToolCallContent, start: Option<u64>) -> Item 
         structured_content: end.structured_content,
         outcome: end.outcome,
         refused_but_ran: end.refused_but_ran,
+        intent: end.intent,
     }
 }
 
@@ -86,6 +88,7 @@ pub(crate) fn encode_end(end: ToolCallContent) -> ToolEnd {
         structured_content: end.structured_content,
         outcome: end.outcome,
         refused_but_ran: end.refused_but_ran,
+        intent: end.intent,
     }
 }
 
@@ -94,9 +97,11 @@ pub(crate) fn decode_start(
     tool_name: String,
     tool_id: String,
     arguments: Metadata,
+    intent: Option<String>,
 ) -> ToolCallContent {
     let mut start = ToolCallContent::new(tool_name, tool_id);
     start.arguments = arguments;
+    start.intent = intent;
     start
 }
 
@@ -115,6 +120,7 @@ pub(crate) fn decode_end(end: ToolEnd) -> ToolCallContent {
     row.structured_content = end.structured_content;
     row.outcome = end.outcome;
     row.refused_but_ran = end.refused_but_ran;
+    row.intent = end.intent;
     row
 }
 

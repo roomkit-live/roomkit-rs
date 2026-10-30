@@ -568,6 +568,7 @@ mod tests {
             structured_content: None,
             outcome: None,
             refused_but_ran: false,
+            intent: None,
         });
         assert_eq!(transcode(&content, &text_only()), content);
     }

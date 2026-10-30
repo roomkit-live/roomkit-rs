@@ -246,9 +246,12 @@ fn replayed_round(round: usize, calls: &[Call<'_>], chosen: &Chosen<'_>) -> Opti
     let made = shown
         .iter()
         .map(|(call, id, _)| {
-            // The arguments the model wrote: the start row's.
+            // The arguments the model wrote: the start row's, with its intent
+            // beside them, which the loop writes back among them (RFC §6.4).
             let arguments = call.start.arguments.clone();
-            ToolCall::new(*id, call.start.tool_name.clone(), arguments)
+            let mut made = ToolCall::new(*id, call.start.tool_name.clone(), arguments);
+            made.intent.clone_from(&call.start.intent);
+            made
         })
         .collect();
     let mut messages = vec![Message::assistant_calls("", made)];

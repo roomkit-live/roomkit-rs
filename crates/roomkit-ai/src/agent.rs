@@ -98,6 +98,7 @@ pub struct AiAgent<P> {
     server_instructions: ServerInstructions,
     history: usize,
     skills: Option<Arc<SkillTools>>,
+    tool_call_intents: bool,
 }
 
 impl<P> Clone for AiAgent<P> {
@@ -112,6 +113,7 @@ impl<P> Clone for AiAgent<P> {
             server_instructions: self.server_instructions.clone(),
             history: self.history,
             skills: self.skills.clone(),
+            tool_call_intents: self.tool_call_intents,
         }
     }
 }
@@ -141,6 +143,7 @@ impl<P: AiProvider> AiAgent<P> {
             server_instructions: ServerInstructions::default(),
             history: DEFAULT_HISTORY,
             skills: None,
+            tool_call_intents: false,
         }
     }
 
@@ -293,6 +296,18 @@ impl<P: AiProvider> AiAgent<P> {
         self
     }
 
+    /// The same agent, its model writing with each call one short sentence
+    /// for the person, saying what the call does (RFC §6.4): each tool's
+    /// schema is shown with the optional `_roomkit_intent` property, which
+    /// the loop takes out of the call's arguments before its gate and
+    /// carries as the call's `intent`, on its hooks' event and its rows. A
+    /// tool whose own schema declares the property keeps it. Off by default.
+    #[must_use]
+    pub fn with_tool_call_intents(mut self, on: bool) -> Self {
+        self.tool_call_intents = on;
+        self
+    }
+
     /// Whether the agent takes a turn on `event`: a message or an
     /// instruction, never one of its own (RFC §6.4).
     fn answers(&self, event: &RoomEvent) -> bool {
@@ -373,6 +388,7 @@ impl<P: AiProvider> Channel for AiAgent<P> {
             system_prompt,
             turn: turn.clone(),
             context: tools,
+            intents: self.tool_call_intents,
         };
         let items = looped.run(messages);
         match turn {
@@ -405,6 +421,7 @@ impl<P> fmt::Debug for AiAgent<P> {
             .field("policy", &self.policy)
             .field("bounds", &self.bounds)
             .field("skills", &self.skills.is_some())
+            .field("tool_call_intents", &self.tool_call_intents)
             .finish_non_exhaustive()
     }
 }

@@ -347,29 +347,36 @@ mod tests {
     }
 
     /// RFC §12.2 step 13s: a call announced and not ended is closed
-    /// `failed`, and one whose start was never written gets its start first.
+    /// `failed`, and one whose start was never written gets its start first;
+    /// each end keeps its call's intent (RFC §6.4).
     #[test]
     fn an_open_call_is_closed_failed_its_start_written_first_when_it_was_not() {
         let mut segments = segments();
         segments.handed();
-        segments.start(ToolCallContent::new("lookup", "call_1"));
+        let mut first = ToolCallContent::new("lookup", "call_1");
+        first.intent = Some("I look it up.".to_owned());
+        segments.start(first);
         segments.opened_unwritten(ToolCallContent::new("lookup", "call_2"));
         let closed = segments.close_open("cancelled", |_| None);
-        let kinds: Vec<(EventType, Option<ToolCallStatus>)> = closed
+        let kinds: Vec<(EventType, ToolCallStatus, Option<&str>)> = closed
             .iter()
             .map(|row| {
                 let EventContent::ToolCall(call) = &row.content else {
                     unreachable!()
                 };
-                (row.r#type, Some(call.status))
+                (row.r#type, call.status, call.intent.as_deref())
             })
             .collect();
         assert_eq!(
             kinds,
             [
-                (EventType::ToolCallEnd, Some(ToolCallStatus::Failed)),
-                (EventType::ToolCallStart, Some(ToolCallStatus::Pending)),
-                (EventType::ToolCallEnd, Some(ToolCallStatus::Failed)),
+                (
+                    EventType::ToolCallEnd,
+                    ToolCallStatus::Failed,
+                    Some("I look it up.")
+                ),
+                (EventType::ToolCallStart, ToolCallStatus::Pending, None),
+                (EventType::ToolCallEnd, ToolCallStatus::Failed, None),
             ]
         );
     }

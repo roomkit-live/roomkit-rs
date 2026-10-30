@@ -152,6 +152,10 @@ name = "close_from_a_tool"
 path = "close_from_a_tool.rs"
 
 [[example]]
+name = "tool_call_intent"
+path = "tool_call_intent.rs"
+
+[[example]]
 name = "close_with_work_in_flight"
 path = "close_with_work_in_flight.rs"
 

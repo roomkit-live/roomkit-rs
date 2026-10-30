@@ -24,6 +24,7 @@
 //! | [`idempotency`] | §13.4: a blank idempotency key is no key |
 //! | `host` | §10.5: who a post of the host's own voice may speak as |
 //! | [`instructions`] | §10.1.1: what an instruction must be before anything is read, what a modify keeps of it, what its turn reads, and its responses' fingerprint |
+//! | [`tool_intent`] | §6.4: a tool call's intent, the reserved property it rides in, how its value is normalized and how a replay shows it |
 //! | [`transcript`] | §6.4, §10.1.1 rule 6: the conversation an intelligence channel's turn reads, each message in its author's role, labelled by its speaker when several speak, an instruction marked as the application's, and no copy of the runtime's marks; a block text from outside cannot close |
 //!
 //! The crate's own `threads` (§5.2, §10.1 step 8) gives the thread root an
@@ -55,6 +56,7 @@ pub(crate) mod records;
 pub mod routing;
 pub(crate) mod threads;
 pub mod timers;
+pub mod tool_intent;
 pub mod transcoding;
 pub mod transcript;
 mod unicode;

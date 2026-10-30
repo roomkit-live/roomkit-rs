@@ -5,6 +5,7 @@
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
 mod history;
+mod intents;
 mod servers;
 mod support;
 use std::sync::{Arc, Mutex};

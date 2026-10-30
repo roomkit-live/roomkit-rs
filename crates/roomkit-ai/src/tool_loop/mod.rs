@@ -14,6 +14,7 @@
 
 mod calls;
 mod generation;
+mod intents;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -117,6 +118,8 @@ pub(crate) struct Loop<P> {
     /// The kit's turn, whose hooks each call runs; `None` outside the kit.
     pub(crate) turn: Option<TurnHost>,
     pub(crate) context: ToolContext,
+    /// Whether the model writes each call's intent (RFC §6.4).
+    pub(crate) intents: bool,
 }
 
 impl<P: AiProvider> Loop<P> {
@@ -132,19 +135,21 @@ impl<P: AiProvider> Loop<P> {
         mut messages: Vec<Message>,
         out: Yielder<Result<TurnItem, ProviderError>>,
     ) {
-        let declared = self.toolbox.declared(&self.policy);
+        let declared = self.shown_tools(self.toolbox.declared(&self.policy));
         let mut usage = Metadata::new();
         let mut had_tool_round = false;
         for round in 0..=self.bounds.max_rounds {
             let request = AiRequest::new(
                 self.system_prompt.clone(),
-                messages.clone(),
+                self.shown_messages(&messages),
                 declared.clone(),
             );
-            let generation = match Generation::read(&*self.provider, &request, round, &out).await {
-                Ok(generation) => generation,
-                Err(error) => return failed(round, usage, error, &out).await,
-            };
+            let mut generation =
+                match Generation::read(&*self.provider, &request, round, &out).await {
+                    Ok(generation) => generation,
+                    Err(error) => return failed(round, usage, error, &out).await,
+                };
+            self.take_intents(&mut generation.calls);
             add_usage(&mut usage, &generation.done.usage);
             if generation.calls.is_empty() {
                 let reason = final_reason(&generation, had_tool_round);
