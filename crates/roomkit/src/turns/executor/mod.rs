@@ -235,8 +235,11 @@ impl Executor {
     /// inside cut (RFC §12.10.4): the owner is told at once the turn ended,
     /// and hears nothing more of it, nor is its silence counted; the work
     /// runs on, the call awaiting the close with it, its stream closed
-    /// after the read under way, which nobody pulls any more. Its verbs
-    /// cross outside the turn from now on, which the closing kit refuses.
+    /// after the read under way, which nobody pulls any more. A verb that
+    /// waits for its owner's answer fails `owner_lost`, as the Python
+    /// implementation's `TurnLinkError` reads, a sibling tool's among them;
+    /// its verbs cross outside the turn from now on, which the closing kit
+    /// refuses.
     async fn let_go(
         &self,
         work: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
@@ -246,6 +249,7 @@ impl Executor {
         drop(self.send(&Frame::End));
         self.sender.silence();
         link.close();
+        link.fail_all(&let_go());
         lock(&flow.gate).close();
         flow.wake.notify_one();
         if let Some(work) = work {
@@ -261,10 +265,7 @@ impl Executor {
         link.close();
         match cut {
             Some(Cut::LetGo) => {
-                link.fail_all(&TurnError::new(
-                    "backend_closed",
-                    "the turn's owner let it go as the kit closed",
-                ));
+                link.fail_all(&let_go());
                 return;
             }
             None | Some(Cut::Closed) => {
@@ -293,6 +294,13 @@ impl Executor {
     fn send(&self, frame: &Frame) -> Result<u64, Uncarried> {
         self.sender.send(frame)
     }
+}
+
+/// What a verb of a turn its executor let go of fails with: the turn ended
+/// without its owner, `owner_lost`, as the Python implementation's
+/// `TurnLinkError` reads (RFC §10.6.8, §12.10.4).
+fn let_go() -> TurnError {
+    TurnError::new("owner_lost", "the turn's owner let it go as the kit closed")
 }
 
 /// The executor's heartbeat (RFC §10.6.8), sent every interval from a task

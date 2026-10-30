@@ -9,8 +9,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{EventContent, EventType, TextContent, ToolCallStatus};
 use roomkit::{
-    ConversationStore, EventQuery, InMemoryStore, ProcessInboundOptions, RoomKit, SendEventOptions,
-    TurnTimeouts, keep_context,
+    AttachChannelOptions, ConversationStore, EventQuery, InMemoryStore, ProcessInboundOptions,
+    RoomKit, SendEventOptions, TurnTimeouts, keep_context,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
@@ -292,4 +292,136 @@ async fn a_tool_awaiting_the_close_runs_on_and_logs_nothing_after_it() {
     roomkit::testing::idle(&kit).await;
 
     assert_eq!(after, Vec::<String>::new());
+}
+
+/// An agent in `r` whose round runs `a_close`, which closes the kit once
+/// `entered` is told, beside `b_send`, which sends a note through its turn
+/// and notes what that verb came to in `notes`; a SYNC hook holds the
+/// note's pass a second, telling `entered`.
+async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
+    use roomkit::model::DirectEvent;
+    use roomkit::model::HookResult;
+    use roomkit::model::hook::AllowOptions;
+    use roomkit::{HookExecution, HookSpec, HookTrigger, current_turn};
+
+    let entered = Arc::new(Notify::new());
+    let told = Arc::clone(&entered);
+    let spec = HookSpec::new(
+        "slow_note",
+        HookTrigger::BeforeBroadcast,
+        HookExecution::Sync,
+    );
+    kit.hook(spec, move |event, _context| {
+        let told = Arc::clone(&told);
+        let ours = roomkit::text_of(&event.content) == "note";
+        async move {
+            if ours {
+                told.notify_one();
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Ok(HookResult::allow(AllowOptions::default()))
+        }
+    })
+    .unwrap();
+    let (weak, noting_a, noting_b) = (kit.downgrade(), Arc::clone(notes), Arc::clone(notes));
+    let tools = Tools::new()
+        .tool(
+            ToolDefinition::new("a_close", "Close.", json!({ "type": "object" })),
+            move |_call, _context| {
+                let (weak, waiting, noting) =
+                    (weak.clone(), Arc::clone(&entered), Arc::clone(&noting_a));
+                async move {
+                    waiting.notified().await;
+                    if let Some(kit) = weak.upgrade() {
+                        let closed = kit.close().await;
+                        noting.lock().unwrap().push(format!("a closed {closed:?}"));
+                    }
+                    Ok(ToolOutput::Text("closed".to_owned()))
+                }
+            },
+        )
+        .tool(
+            ToolDefinition::new("b_send", "Send.", json!({ "type": "object" })),
+            move |_call, _context| {
+                let noting = Arc::clone(&noting_b);
+                async move {
+                    let turn = current_turn().unwrap();
+                    let note = DirectEvent::new(channel("agent"), TextContent::new("note"));
+                    let read = match turn.send_event(note).await {
+                        Ok(_) => "sent".to_owned(),
+                        Err(roomkit::RoomKitError::Turn(error)) => error.kind,
+                        Err(error) => format!("{error:?}"),
+                    };
+                    noting.lock().unwrap().push(format!("b {read}"));
+                    Ok(ToolOutput::Text("sent".to_owned()))
+                }
+            },
+        );
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "a_close", "{}"), ("c2", "b_send", "{}")]),
+        ScriptedRound::answering("Done."),
+    ]);
+    let agent = roomkit_ai::AiAgent::new(channel("agent"), model)
+        .with_tools(tools)
+        .unwrap()
+        .with_tool_timeout(None);
+    kit.register_channel(agent).unwrap();
+    kit.attach_channel(
+        &room("r"),
+        &channel("agent"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+}
+
+/// RFC §12.10.4, §10.6.8: a tool awaits `close()` in its turn while its
+/// sibling in the same model round awaits a turn verb its owner still
+/// runs, a SYNC hook holding it: the turn is let go, and the sibling's verb
+/// fails at once, `owner_lost`, as the Python implementation's
+/// `TurnLinkError` reads (`rmk1030-rs/pass1/py_sibling_verb.out`); both
+/// calls get their end row, `failed`, `kit_closed`, the verb's event is not
+/// stored, and the kit's work ends with the close. On 01c8420 the sibling
+/// waited for an answer nobody read any more, its executor outliving the
+/// close (`rmk1030-rs-review-A/probe6.out`).
+#[tokio::test(start_paused = true)]
+async fn a_sibling_verb_awaiting_its_owner_as_a_tool_closes_the_kit_fails_owner_lost() {
+    let kit = kit_of(InMemoryStore::default(), &[&Holding::new("ws", [])], &["r"]).await;
+    let notes: Arc<Mutex<Vec<String>>> = Arc::default();
+    sibling_agent(&kit, &notes).await;
+    let started = tokio::time::Instant::now();
+    let call = tokio::time::timeout(
+        Duration::from_secs(30),
+        kit.process_inbound(said("Go."), into("r")),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), kit.close())
+        .await
+        .unwrap()
+        .unwrap();
+    let idle = tokio::time::timeout(Duration::from_secs(60), roomkit::testing::idle(&kit))
+        .await
+        .is_ok();
+    let mut notes = notes.lock().unwrap().clone();
+    notes.sort();
+    assert_eq!(
+        (
+            call.cancellation_reason.as_deref(),
+            (idle, started.elapsed() < Duration::from_secs(1)),
+            notes,
+            ends(&kit).await,
+            crate::held::stored(&kit, "r")
+                .await
+                .contains(&"note".to_owned()),
+        ),
+        (
+            Some("kit_closed"),
+            (true, true),
+            vec!["a closed Ok(())".to_owned(), "b owner_lost".to_owned()],
+            vec![(ToolCallStatus::Failed, Some("kit_closed".to_owned())); 2],
+            false,
+        )
+    );
 }
