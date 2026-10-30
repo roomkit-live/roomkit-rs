@@ -50,6 +50,10 @@ type Row = (EventType, Value, Option<String>, Option<ToolCallOutcome>);
 /// What a hook saw of a call: its arguments and its intent.
 type Seen = Arc<Mutex<Vec<(Value, Option<String>)>>>;
 
+/// What the kit's observers read of each call: its tool, its outcome, its
+/// intent.
+type Reported = Arc<Mutex<Vec<(String, Option<ToolCallOutcome>, Option<String>)>>>;
+
 /// Each tool row of the room.
 async fn rows(room: &Room) -> Vec<Row> {
     room.timeline()
@@ -78,7 +82,7 @@ async fn intents(room: &Room) -> Vec<Option<String>> {
 /// Off, nothing is taken: the schema is the tool's, the reserved key is an
 /// argument like any other, and no row carries an intent.
 #[tokio::test]
-async fn off_the_model_sees_and_the_tool_gets_what_they_did_before() {
+async fn off_nothing_is_taken_from_a_call() {
     let call = json!({ "command": "ls", "_roomkit_intent": INTENT });
     let model = ScriptedProvider::new([calling(&call), ScriptedRound::answering("Done.")]);
     let received = Arc::default();
@@ -248,4 +252,72 @@ async fn an_unusable_intent_never_fails_and_a_refusal_keeps_its_intent() {
         ]
     );
     assert_eq!(*received.lock().unwrap(), [json!({ "command": "ls" })]);
+}
+
+/// A call the approval refuses and one whose tool fails keep their intent on
+/// the report the kit's observers read.
+#[tokio::test]
+async fn a_refused_or_failed_call_is_reported_with_its_intent() {
+    let blocked = json!({ "command": "rm -rf build", "_roomkit_intent": "Je nettoie." });
+    let failing = json!({ "_roomkit_intent": "J'échoue." });
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling(
+            "",
+            [
+                ("c1", "shell", blocked.to_string().as_str()),
+                ("c2", "fail", failing.to_string().as_str()),
+            ],
+        ),
+        ScriptedRound::answering("Done."),
+    ]);
+    let received = Arc::default();
+    let tools = shell(&received, closed()).tool(
+        ToolDefinition::new("fail", "Fails", json!({ "type": "object" })),
+        |_call, _context| async { Err(roomkit_ai::ToolError::raised_as("RuntimeError", "broken")) },
+    );
+    let room = Room::equipped(model, tools, |agent| agent.with_tool_call_intents(true)).await;
+    room.kit
+        .before_tool_use("approve", |event, _context| {
+            let blocks = event.call.name == "shell";
+            async move {
+                Ok(if blocks {
+                    ToolUse::block("not now")
+                } else {
+                    ToolUse::Allow
+                })
+            }
+        })
+        .unwrap();
+    let reported: Reported = Arc::default();
+    let observed = Arc::clone(&reported);
+    room.kit
+        .observe_tool_calls("audit", move |event, _context| {
+            observed.lock().unwrap().push((
+                event.call.name.clone(),
+                event.outcome,
+                event.call.intent.clone(),
+            ));
+            async {}
+        })
+        .unwrap();
+    room.says("Clean?").await;
+    roomkit::testing::idle(&room.kit).await;
+    let mut reports = reported.lock().unwrap().clone();
+    reports.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        reports,
+        [
+            (
+                "fail".to_owned(),
+                Some(ToolCallOutcome::Failed),
+                Some("J'échoue.".to_owned())
+            ),
+            (
+                "shell".to_owned(),
+                Some(ToolCallOutcome::Refused),
+                Some("Je nettoie.".to_owned())
+            ),
+        ]
+    );
+    assert!(received.lock().unwrap().is_empty());
 }

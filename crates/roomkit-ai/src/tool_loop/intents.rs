@@ -2,6 +2,9 @@
 //! shown, the calls it makes and the conversation it reads back, when the
 //! agent asks its model for each call's intent.
 
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+
 use roomkit::tool_intent::{as_written, declares_intent, presented_parameters, take_intent};
 use roomkit::transcript::Message;
 
@@ -24,11 +27,7 @@ impl<P> Loop<P> {
                 if let Some(shown) = presented_parameters(&tool.parameters) {
                     tool.parameters = shown;
                 } else {
-                    tracing::warn!(
-                        target: "roomkit::ai",
-                        tool = %tool.name,
-                        "a tool is shown without the intent property: its schema declares it, or is no object; its calls carry no intent"
-                    );
+                    log_unpresented(&tool.name);
                 }
                 tool
             })
@@ -67,5 +66,22 @@ impl<P> Loop<P> {
                 take_intent(&mut called.call);
             }
         }
+    }
+}
+
+/// Says once per process that the tool `name` is shown without the intent
+/// property, as the reference implementation says it.
+fn log_unpresented(name: &str) {
+    static LOGGED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let first = LOGGED
+        .get_or_init(Mutex::default)
+        .lock()
+        .is_ok_and(|mut logged| logged.insert(name.to_owned()));
+    if first {
+        tracing::warn!(
+            target: "roomkit::ai",
+            tool = %name,
+            "a tool is shown without the intent property: its schema declares it, or is no object; its calls carry no intent"
+        );
     }
 }

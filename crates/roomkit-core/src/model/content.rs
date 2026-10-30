@@ -802,8 +802,8 @@ pub struct ToolCallContent {
     #[serde(default)]
     pub refused_but_ran: bool,
     /// What the call does, in the sentence its model wrote for the person
-    /// (RFC §6.4): written only when set, so a row without one reads as
-    /// before.
+    /// (RFC §6.4): written only when set, so a row of a call without one has
+    /// no `intent` key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<String>,
 }

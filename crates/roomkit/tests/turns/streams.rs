@@ -13,8 +13,8 @@ use futures_core::Stream;
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, InboundMessage,
-    Metadata, RoomContext, RoomEvent, TextContent, ToolCallContent, ToolCallStatus,
+    ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, EventContent,
+    InboundMessage, Metadata, RoomContext, RoomEvent, TextContent, ToolCallContent, ToolCallStatus,
 };
 use roomkit::testing::TurnTap;
 use roomkit::{
@@ -239,7 +239,7 @@ impl Stream for Items {
 
 /// An intelligence channel whose own stream writes text, a call's start,
 /// two deltas, the call's end, then text again, as `ResponseItem` lets a
-/// channel write it.
+/// channel write it; the call carries its intent (RFC §6.4).
 struct Writing;
 
 impl Channel for Writing {
@@ -263,8 +263,9 @@ impl Channel for Writing {
             if own {
                 return Ok(ChannelOutput::default());
             }
-            let start = ToolCallContent::new("look", "c1");
-            let mut end = ToolCallContent::new("look", "c1");
+            let mut start = ToolCallContent::new("look", "c1");
+            start.intent = Some("I look.".to_owned());
+            let mut end = start.clone();
             end.status = ToolCallStatus::Completed;
             end.result = json!("ok");
             let mut record = Metadata::new();
@@ -323,6 +324,19 @@ impl Channel for Logging {
         }
         Ok(ChannelOutput::default())
     }
+}
+
+/// The intent of each tool row of `events`.
+fn tool_intents(events: &[RoomEvent]) -> Vec<Option<String>> {
+    events
+        .iter()
+        .filter_map(|event| {
+            let EventContent::ToolCall(row) = &event.content else {
+                return None;
+            };
+            Some(row.intent.clone())
+        })
+        .collect()
 }
 
 /// The turn link's frames the tap saw, a line each, but its heartbeats and
@@ -398,6 +412,9 @@ async fn text_written_inside_a_call_crosses_in_order() {
         .filter(|event| event.source.channel_id == channel("ai"))
         .map(|event| format!("{:?} {:?}", event.r#type, text_of(&event.content)))
         .collect();
+    // The call's intent crosses the turn link with its start and its end.
+    let intent = Some("I look.".to_owned());
+    assert_eq!(tool_intents(&events), [intent.clone(), intent]);
     let lines = |lines: &[&str]| {
         lines
             .iter()
