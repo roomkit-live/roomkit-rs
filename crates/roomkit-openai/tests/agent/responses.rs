@@ -521,3 +521,33 @@ async fn inconsistent_item_streams_never_execute_tools() {
         assert_eq!(count.load(Ordering::SeqCst), 0);
     }
 }
+
+#[tokio::test]
+async fn a_single_tool_namespace_can_be_omitted_by_the_provider_and_is_restored_on_replay() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let reply = Reply::events(&[
+        json!({"type":"response.output_item.done","output_index":0,"item":call("a", r#"{"order":"42"}"#)}),
+        terminal(complete(vec![])),
+    ]);
+    let room = Room::built(
+        vec![reply, answer("Ready.")],
+        API_KEY,
+        |config| {
+            config
+                .with_api(OpenAiApi::Responses)
+                .with_tool_namespace("functions", "Tools")
+        },
+        |agent| agent.with_tools(lookup(&count)).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        room.says(&room.sms, "alice", "Alice", "Check.").await.error,
+        None
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert_eq!(room.sms.texts(), ["Ready."]);
+    assert_eq!(
+        room.fake.requests()[1].body["input"][1]["namespace"],
+        "functions"
+    );
+}

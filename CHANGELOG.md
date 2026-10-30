@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Accept omitted optional tool namespaces in Responses output for a single configured
+  namespace; still reject explicit foreign namespaces and restore the configured
+  namespace on replay.
+
 - Assemble Responses output from completed item events when a successful terminal
   event omits its output, preserving text, tool calls, reasoning and usage.
 
