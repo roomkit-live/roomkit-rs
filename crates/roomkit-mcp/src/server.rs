@@ -31,7 +31,9 @@ pub(crate) const MESSAGE_LIMIT: usize = 4 * 1024 * 1024;
 const CALL_FAILED: &str = "McpError";
 
 /// An MCP server started over stdio and connected (RFC §21.2), serving its
-/// tools to an agent as a [`Toolset`], under their bare names.
+/// tools to an agent as a [`Toolset`], under their bare names by default.
+/// [`with_label`](Self::with_label) supplies host-qualified aliases, and
+/// [`with_tool_names`](Self::with_tool_names) restricts one handle's inventory.
 ///
 /// [`McpCommand::connect`] starts the command's process, runs the MCP
 /// handshake and lists the server's tools once, following the listing's
