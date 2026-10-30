@@ -8,7 +8,9 @@ use roomkit_core::model::{
     ChannelId, ChannelType, DeliveryError, ErrorRecord, EventId, IdentityId, ModelError,
     ParticipantId, ProviderResult, RoomId, RoomStatus,
 };
-use roomkit_core::ops::{ConfigError, InboundError, LifecycleError, MutationError, ProtocolError};
+use roomkit_core::ops::{
+    ConfigError, InboundError, KIT_CLOSED, LifecycleError, MutationError, ProtocolError,
+};
 use roomkit_core::rules::hook_registry::RegistrationError;
 use roomkit_core::rules::lifecycle::Transition;
 use thiserror::Error;
@@ -247,6 +249,41 @@ pub enum RoomKitError {
 }
 
 impl RoomKitError {
+    /// The code the error's Python class carries as its `code` attribute:
+    /// `kit_closed` for [`KitClosed`](Self::KitClosed), Python's
+    /// `KitClosedError.code`; for [`ProviderDelivery`](Self::ProviderDelivery)
+    /// the code its delivery result reads (RFC §5.13), Python's
+    /// `ProviderDeliveryError.code`. `None` for any other: its Python class
+    /// carries no code, and a delivery that fails with it reads the code its
+    /// type gives.
+    #[must_use]
+    pub fn code(&self) -> Option<String> {
+        self.declared().map(|declared| declared.code)
+    }
+
+    /// Whether a retry may succeed, as the error's Python class says in its
+    /// `retryable` attribute: `true` for [`KitClosed`](Self::KitClosed), a
+    /// call or a send the close cut succeeding on another kit, Python's
+    /// `KitClosedError.retryable`; for
+    /// [`ProviderDelivery`](Self::ProviderDelivery) what its provider
+    /// declared, `true` when it declared nothing, Python's
+    /// `ProviderDeliveryError.retryable`. `None` for any other: its Python
+    /// class says nothing, and a delivery that fails with it reads
+    /// retryable.
+    #[must_use]
+    pub fn retryable(&self) -> Option<bool> {
+        self.declared().map(|declared| declared.retryable)
+    }
+
+    /// The code and the flag the error's Python class carries, as its
+    /// delivery result reads them; `None` for a class that carries none.
+    fn declared(&self) -> Option<DeliveryError> {
+        if let Self::ProviderDelivery { result } = self {
+            return Some(DeliveryError::of_provider(result));
+        }
+        matches!(self, Self::KitClosed).then(|| DeliveryError::new(KIT_CLOSED, self.to_string()))
+    }
+
     /// `error`, an entry's into `room_id` from `channel_id`, read as the
     /// Python implementation's `_raise_unless_committed` raises a refusal
     /// before the commit point (RFC §10.5): `room_closed`, `process_timeout`
@@ -575,6 +612,41 @@ mod tests {
     };
 
     use super::*;
+
+    /// The `code` and `retryable` of each error whose Python class carries
+    /// them, `KitClosedError` and `ProviderDeliveryError`, and none of any
+    /// other (RMK-1030).
+    #[test]
+    fn the_errors_whose_class_carries_a_code_say_it_and_whether_a_retry_may_succeed() {
+        let refused = |metadata: serde_json::Value| RoomKitError::ProviderDelivery {
+            result: ProviderResult {
+                error: Some("unreachable".to_owned()),
+                metadata: serde_json::from_value(metadata).unwrap(),
+                ..ProviderResult::new(false)
+            },
+        };
+        let errors = [
+            RoomKitError::KitClosed,
+            refused(serde_json::json!({ "code": "E42", "retryable": false })),
+            refused(serde_json::json!({})),
+            RoomKitError::ShutdownCancelled,
+            RoomKitError::RoomNotFound(RoomId::new("r").unwrap()),
+        ];
+        let read: Vec<(Option<String>, Option<bool>)> = errors
+            .iter()
+            .map(|error| (error.code(), error.retryable()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (Some("kit_closed".to_owned()), Some(true)),
+                (Some("E42".to_owned()), Some(false)),
+                (Some("unreachable".to_owned()), Some(true)),
+                (None, None),
+                (None, None),
+            ]
+        );
+    }
 
     /// A store failure the kit meets shows its message alone; its chain
     /// carries the cause the store met.

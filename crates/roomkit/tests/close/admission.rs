@@ -543,3 +543,88 @@ async fn the_close_returns_while_calls_keep_coming() {
         (true, true, true)
     );
 }
+
+/// A transport whose delivery, once let go, sends into its room and fails
+/// with what that call returned.
+#[derive(Clone)]
+struct Relaying {
+    kit: WeakRoomKit,
+    entered: Arc<Notify>,
+    go: Arc<Notify>,
+}
+
+impl Channel for Relaying {
+    fn declaration(&self) -> ChannelDeclaration {
+        transport("relay")
+    }
+
+    fn deliver(
+        &self,
+        event: RoomEvent,
+        _binding: roomkit::model::ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<roomkit::model::ChannelOutput, roomkit::ChannelError>> + Send
+    {
+        let this = self.clone();
+        async move {
+            this.entered.notify_one();
+            this.go.notified().await;
+            let kit = this.kit.upgrade().ok_or(RoomKitError::KitClosed)?;
+            let content = TextContent::new(format!("relayed {}", text_of(&event.content)));
+            kit.send_event(
+                &event.room_id,
+                &channel("sms"),
+                content,
+                SendEventOptions::default(),
+            )
+            .await?;
+            Ok(roomkit::model::ChannelOutput::default())
+        }
+    }
+}
+
+/// RFC §12.10.4, §5.13: a delivery that fails with the refusal a closing
+/// kit returns reads it as Python's delivery reads `KitClosedError`: failed,
+/// its code `kit_closed`, retryable, what `RoomKitError::code()` and
+/// `retryable()` give. On 01c8420 its code was `ChannelError`.
+#[tokio::test(start_paused = true)]
+async fn a_send_meeting_the_close_s_refusal_reads_its_code() {
+    let kit = kit_of(InMemoryStore::default(), &[], &["r"]).await;
+    let relay = Relaying {
+        kit: kit.downgrade(),
+        entered: Arc::default(),
+        go: Arc::default(),
+    };
+    kit.register_channel(relay.clone()).unwrap();
+    kit.attach_channel(
+        &room("r"),
+        &channel("relay"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    let call = spawn_said(&kit, "Hi.", "r");
+    relay.entered.notified().await;
+    let close = closing(&kit).await;
+    relay.go.notify_one();
+    closed(close).await;
+
+    let result = result_of(call).await;
+    let failed = result
+        .delivery_results
+        .get(&channel("relay"))
+        .map(|delivered| {
+            let error = delivered.error.as_ref();
+            (
+                delivered.status,
+                error.map(|error| (error.code.clone(), error.retryable)),
+            )
+        });
+    assert_eq!(
+        failed,
+        Some((
+            roomkit::model::DeliveryResultStatus::Failed,
+            Some(("kit_closed".to_owned(), true))
+        ))
+    );
+}

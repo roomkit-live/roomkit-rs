@@ -279,6 +279,12 @@ approved = "2026-10-27"
 reason = "the error type a Result needs for the exceptions the MCP SDK raises"
 
 [[exception]]
+rust = "roomkit::RoomKitError"
+members = ["code", "retryable"]
+approved = "2026-10-30"
+reason = "the class attributes KitClosedError.code and .retryable, and ProviderDeliveryError.code and .retryable, on the one enum whose variants are Python's classes; None for a class that carries neither (RMK-1030, decided by the maintainer on 2026-10-30)"
+
+[[exception]]
 rust = "roomkit::ConversationStore"
 members = ["delete_participant"]
 approved = "2026-10-27"

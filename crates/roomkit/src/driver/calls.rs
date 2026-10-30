@@ -520,15 +520,18 @@ fn channel_output(result: Result<ChannelOutput, ChannelError>) -> Outcome {
 
 /// What a channel's `on_event()` or `deliver()` failing with `error` reads
 /// as: the provider's refusal it carries, when it is the kit's
-/// `ProviderDelivery`, Python's `ProviderDeliveryError`; any other a
+/// `ProviderDelivery`, Python's `ProviderDeliveryError`; a kit's error
+/// whose class carries a code, `KitClosed`, a failure of that code, as
+/// Python's delivery reads an error's `code` (RFC §5.13); any other a
 /// failure of type `ChannelError`, a boxed error having no class name.
 fn channel_failed(error: &ChannelError) -> Outcome {
-    match error.downcast_ref::<RoomKitError>() {
-        Some(RoomKitError::ProviderDelivery { result }) => {
-            ChannelOutcome::ProviderDelivery(Box::new(result.clone())).into()
-        }
-        Some(_) | None => Outcome::Failed(ErrorRecord::new("ChannelError", error.to_string())),
+    let kit_error = error.downcast_ref::<RoomKitError>();
+    if let Some(RoomKitError::ProviderDelivery { result }) = kit_error {
+        return ChannelOutcome::ProviderDelivery(Box::new(result.clone())).into();
     }
+    let code = kit_error.and_then(RoomKitError::code);
+    let code = code.unwrap_or_else(|| "ChannelError".to_owned());
+    Outcome::Failed(ErrorRecord::new(code, error.to_string()))
 }
 
 /// A channel's answer, unless a response it carries holds a content its
