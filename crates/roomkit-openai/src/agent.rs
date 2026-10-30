@@ -51,6 +51,13 @@ pub struct OpenAiAgent {
 }
 
 impl OpenAiAgent {
+    /// Resolve room-authorized application image references for vision models.
+    #[must_use]
+    pub fn with_image_resolver(mut self, resolver: Arc<dyn roomkit_ai::ImageResolver>) -> Self {
+        self.agent = self.agent.with_image_resolver(resolver);
+        self
+    }
+
     /// An agent named `channel_id`, configured by `config`, serving no tool
     /// yet.
     ///
@@ -277,6 +284,9 @@ impl OpenAiProvider {
 }
 
 impl AiProvider for OpenAiProvider {
+    fn supports_vision(&self) -> bool {
+        self.config.vision
+    }
     fn name(&self) -> Option<&str> {
         Some("openai")
     }

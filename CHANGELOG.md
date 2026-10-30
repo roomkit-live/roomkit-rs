@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Preserve bounded author images separately from transcript text. Vision-enabled
+  agents resolve opaque references through a room-scoped host resolver, and the
+  OpenAI adapter sends native image parts in Chat Completions and Responses.
+
 - Add explicit cancellation requests on detached delivery handles, using scoped
   cascade cleanup while preserving committed events and shared providers.
 

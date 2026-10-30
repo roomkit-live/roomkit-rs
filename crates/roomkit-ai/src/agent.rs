@@ -100,6 +100,7 @@ pub struct AiAgent<P> {
     system_prompt: Option<String>,
     server_instructions: ServerInstructions,
     history: usize,
+    image_resolver: Option<Arc<dyn crate::ImageResolver>>,
     skills: Option<Arc<SkillTools>>,
 }
 
@@ -114,6 +115,7 @@ impl<P> Clone for AiAgent<P> {
             system_prompt: self.system_prompt.clone(),
             server_instructions: self.server_instructions.clone(),
             history: self.history,
+            image_resolver: self.image_resolver.clone(),
             skills: self.skills.clone(),
         }
     }
@@ -131,6 +133,13 @@ impl<P: AiProvider> AiAgent<P> {
             ChannelDirection::Bidirectional,
         );
         declaration.provider_name = provider.name().map(str::to_owned);
+        if provider.supports_vision() {
+            declaration
+                .capabilities
+                .media_types
+                .insert(roomkit::model::ChannelMediaType::Media);
+            declaration.capabilities.supports_media = true;
+        }
         Self {
             declaration,
             provider: Arc::new(provider),
@@ -143,8 +152,17 @@ impl<P: AiProvider> AiAgent<P> {
             system_prompt: None,
             server_instructions: ServerInstructions::default(),
             history: DEFAULT_HISTORY,
+            image_resolver: None,
             skills: None,
         }
+    }
+
+    /// Resolve application image references on every turn (RFC §6.4).
+    /// The resolver must authorize each reference for the supplied room.
+    #[must_use]
+    pub fn with_image_resolver(mut self, resolver: Arc<dyn crate::ImageResolver>) -> Self {
+        self.image_resolver = Some(resolver);
+        self
     }
 
     /// The channel's id.
@@ -357,9 +375,16 @@ impl<P: AiProvider> Channel for AiAgent<P> {
         if !self.answers(&event) {
             return Ok(ChannelOutput::default());
         }
-        let messages = conversation(self.id(), &event, &context, self.history, |name| {
+        let mut messages = conversation(self.id(), &event, &context, self.history, |name| {
             self.toolbox.in_tool_memory(name)
         });
+        crate::images::resolve(
+            &mut messages,
+            self.provider.supports_vision(),
+            self.image_resolver.as_deref(),
+            &context.room.id,
+        )
+        .await;
         let turn = current_turn();
         let stands_alone = stands_alone(&event);
         let system_prompt = self.turn_system_prompt(&context, stands_alone);

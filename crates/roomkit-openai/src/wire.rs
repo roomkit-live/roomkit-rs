@@ -41,7 +41,7 @@ struct StreamOptions {
 struct WireMessage<'a> {
     role: &'static str,
     /// The text; `null` for an assistant's message that only calls.
-    content: Option<&'a str>,
+    content: Option<Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tool_calls: Vec<WireCall<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,7 +89,7 @@ impl<'a> CompletionRequest<'a> {
             .filter(|prompt| !prompt.is_empty())
             .map(|prompt| WireMessage {
                 role: "system",
-                content: Some(prompt),
+                content: Some(Value::String(prompt.into())),
                 tool_calls: Vec::new(),
                 tool_call_id: None,
             });
@@ -136,7 +136,23 @@ fn wire_message(message: &Message) -> WireMessage<'_> {
         })
         .collect();
     // An assistant's message that only calls has no text.
-    let content = Some(message.text.as_str()).filter(|text| calls.is_empty() || !text.is_empty());
+    let content = if message.images.is_empty() || message.role != Role::User {
+        Some(message.text.as_str())
+            .filter(|text| calls.is_empty() || !text.is_empty())
+            .map(|text| Value::String(text.into()))
+    } else {
+        let mut parts = vec![serde_json::json!({"type":"text","text":message.text})];
+        parts.extend(
+            message
+                .images
+                .iter()
+                .filter(|image| image.is_resolved())
+                .map(
+                    |image| serde_json::json!({"type":"image_url","image_url":{"url":image.url()}}),
+                ),
+        );
+        Some(Value::Array(parts))
+    };
     WireMessage {
         role: role(message.role),
         content,
@@ -659,5 +675,39 @@ mod tests {
         let body = br#"{"choices": "sk-1"}"#;
         let error = response(body, "sk-1").unwrap_err();
         assert!(!error.to_string().contains("sk-1"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    #[test]
+    fn author_images_use_native_parts_in_both_protocols() {
+        let mut message = Message::new(Role::User, "Describe this image");
+        message.images.push(
+            roomkit::transcript::Image::new("data:image/png;base64,AQIDBA==", "image/png").unwrap(),
+        );
+        let request = AiRequest::new(None, vec![message], vec![]);
+        let chat =
+            serde_json::to_value(CompletionRequest::new("vision-fixture", &request)).unwrap();
+        assert_eq!(
+            chat.pointer("/messages/0/content/0/text"),
+            Some(&Value::String("Describe this image".into()))
+        );
+        assert_eq!(
+            chat.pointer("/messages/0/content/1/type"),
+            Some(&Value::String("image_url".into()))
+        );
+        let config =
+            crate::OpenAiConfig::new("http://localhost/v1", "", "vision-fixture").with_vision(true);
+        let response = crate::responses::request(&config, &request).unwrap();
+        assert_eq!(
+            response.pointer("/input/0/content/1/type"),
+            Some(&Value::String("input_image".into()))
+        );
+        assert_eq!(
+            response.pointer("/input/0/content/1/image_url"),
+            chat.pointer("/messages/0/content/1/image_url/url")
+        );
     }
 }

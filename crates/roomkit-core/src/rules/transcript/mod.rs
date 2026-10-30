@@ -29,7 +29,8 @@
 //!   never opens on the assistant's calls.
 //!
 //! Only what §6.4 requires of every AI channel is built: no note of who
-//! takes part, no memory, no tool notes, no images, no cut answers.
+//! takes part, no memory, no tool notes, no cut answers. Author images are bounded and
+//! carried separately; the runtime resolves opaque references only for vision providers.
 //!
 //! Within a turn, the tool loop extends the conversation with its rounds
 //! (RFC §6.4, Appendix A.9 `ai_message_parts`): the assistant's message that
@@ -38,6 +39,8 @@
 //! way.
 
 mod fence;
+mod images;
+pub use images::Image;
 mod marks;
 mod rounds;
 mod speakers;
@@ -90,6 +93,8 @@ pub struct Message {
     pub role: Role,
     /// What the model reads of it.
     pub text: String,
+    /// Bounded author images, kept separate from text (RFC §6.4).
+    pub images: Vec<Image>,
     /// The calls an assistant's message makes, in the order its round made
     /// them; none on any other.
     pub tool_calls: Vec<ToolCall>,
@@ -106,6 +111,7 @@ impl Message {
         Self {
             role,
             text: text.into(),
+            images: Vec::new(),
             tool_calls: Vec::new(),
             tool_call_id: None,
             metadata: crate::model::Metadata::new(),
@@ -192,7 +198,9 @@ pub fn conversation(
     };
     let labelled = labels_turns(sources, people);
     let turns = cleaned(turns, labelled);
-    rendered(turns, labelled)
+    let mut messages = rendered(turns, labelled);
+    images::bound(&mut messages);
+    messages
 }
 
 /// A turn of the conversation before it is rendered: its role, the text
@@ -202,6 +210,7 @@ pub fn conversation(
 #[derive(Clone, Debug)]
 struct Turn {
     role: Role,
+    images: Vec<Image>,
     text: String,
     speaker: Option<Speaker>,
     instruction: bool,
@@ -216,6 +225,11 @@ impl Turn {
         let own = &event.source.channel_id == channel_id;
         Self {
             role: if own { Role::Assistant } else { Role::User },
+            images: if own {
+                Vec::new()
+            } else {
+                images::collect(&event.content)
+            },
             text: text_of(&event.content),
             speaker: if own { None } else { speaker(event, authors) },
             instruction: false,
@@ -231,6 +245,11 @@ impl Turn {
         let instruction = event.event_type == EventType::Instruction;
         Self {
             role: Role::User,
+            images: if instruction {
+                Vec::new()
+            } else {
+                images::collect(&event.content)
+            },
             text: text_of(&event.content),
             speaker: if instruction {
                 None
@@ -270,7 +289,7 @@ fn past_turns(
         .iter()
         .filter(|past| past.id != event.id && is_conversation(past))
         .map(|past| Turn::past(past, channel_id, authors))
-        .filter(|turn| !turn.text.trim().is_empty())
+        .filter(|turn| !turn.text.trim().is_empty() || !turn.images.is_empty())
         .collect();
     let skip = turns.len().saturating_sub(history);
     turns.into_iter().skip(skip).collect()
@@ -332,7 +351,7 @@ fn cleaned(mut turns: Vec<Turn>, labelled: bool) -> Vec<Turn> {
     }
     let mut kept: Vec<Turn> = Vec::with_capacity(turns.len());
     for turn in turns {
-        if !turn.text.trim().is_empty() {
+        if !turn.text.trim().is_empty() || !turn.images.is_empty() {
             kept.push(turn);
         } else if let Some(before) = kept.last_mut() {
             before.rounds.extend(turn.rounds);
@@ -356,7 +375,9 @@ fn rendered(turns: Vec<Turn>, labelled: bool) -> Vec<Message> {
             }
             (_, false) => turn.text,
         };
-        messages.push(Message::new(turn.role, text));
+        let mut message = Message::new(turn.role, text);
+        message.images = turn.images;
+        messages.push(message);
         messages.extend(turn.rounds.into_iter().flat_map(|round| round.messages));
     }
     if labelled {

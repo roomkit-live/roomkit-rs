@@ -29,7 +29,22 @@ pub(super) fn append_message(input: &mut Vec<Value>, message: &Message) -> Resul
             input.push(json!({"type":"function_call_output", "call_id":id, "output":message.text}));
         }
         // Future roles stay ordinary input, never promoted to instructions.
-        Role::User | _ => input.push(json!({"role":"user", "content":message.text})),
+        Role::User | _ => {
+            let content = if message.images.is_empty() {
+                Value::String(message.text.clone())
+            } else {
+                let mut parts = vec![json!({"type":"input_text","text":message.text})];
+                parts.extend(
+                    message
+                        .images
+                        .iter()
+                        .filter(|image| image.is_resolved())
+                        .map(|image| json!({"type":"input_image","image_url":image.url()})),
+                );
+                Value::Array(parts)
+            };
+            input.push(json!({"role":"user", "content":content}));
+        }
     }
     Ok(())
 }
