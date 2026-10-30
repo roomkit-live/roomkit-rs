@@ -19,7 +19,9 @@ use super::super::queues::Lineage;
 use super::super::stamp;
 use super::{CommitPass, PassOrigin, PassResult, State, Verdict};
 use crate::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, Visibility};
-use crate::ops::protocol::{HoldOutcome, HoldRequest, Outcome, StoreRequest, TargetUpdate};
+use crate::ops::protocol::{
+    AnswerOf, HoldOutcome, HoldRequest, Outcome, StoreRequest, TargetUpdate,
+};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
 use crate::rules::authors;
@@ -462,13 +464,17 @@ impl CommitPass {
         if self.origin == PassOrigin::Trigger {
             cx.io.decides(effect, entry_result(&committing.result));
         }
-        // An answer of the call's own cascade, delivered, is one of its
-        // `response_events` (`Effect::answers`).
+        // A response delivered is one of the `response_events` of the call
+        // whose cascade it belongs to, the call's own or an adopted entry's
+        // (`Effect::answers`).
         if matches!(self.origin, PassOrigin::Response { .. })
-            && self.lineage == Lineage::Call
             && matches!(committing.result, PassResult::Delivered { .. })
         {
-            cx.io.answers(effect);
+            let of = match self.lineage {
+                Lineage::Call => AnswerOf::Call,
+                Lineage::Entry(entry) => AnswerOf::Entry(entry),
+            };
+            cx.io.answers(effect, of);
         }
         State::Committing {
             effect,

@@ -218,7 +218,8 @@ impl DeliveryHandle {
             || match &shared.following {
                 Following::Run { finished, .. } => finished.is_finished(),
                 Following::Adopted(completion) => {
-                    completion.borrow().is_some() || completion.has_changed().is_err()
+                    let delivered = &completion.delivered;
+                    delivered.borrow().is_some() || delivered.has_changed().is_err()
                 }
                 Following::Nothing => true,
             }
@@ -297,13 +298,21 @@ impl Shared {
                 }
             }
             Following::Adopted(completion) => {
-                let mut completion = completion.clone();
-                let delivered = completion
+                let mut told = completion.delivered.clone();
+                let delivered = told
                     .wait_for(Option::is_some)
                     .await
                     .ok()
                     .and_then(|delivered| delivered.clone());
-                Ended::Over(Box::new(self.backfilled(delivered)))
+                let told = delivered.is_some();
+                let mut result = self.backfilled(delivered);
+                // The adopting run over without telling it, its close's
+                // abort: the answers its cascade stored, as Python's caller
+                // reads its cascade's.
+                if !told {
+                    result.response_events = completion.answers.stored().await;
+                }
+                Ended::Over(Box::new(result))
             }
             Following::Nothing => Ended::Over(Box::new(self.decided.clone())),
         }

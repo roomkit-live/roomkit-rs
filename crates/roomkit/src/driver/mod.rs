@@ -41,8 +41,8 @@ use std::task::Poll;
 
 use roomkit_core::model::{ErrorRecord, EventId, EventStatus, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
-    Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest, InboundResult,
-    Next, Notice, Operation, Outcome, Request, Settled, StoreRequest,
+    AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
+    InboundResult, Next, Notice, Operation, Outcome, Request, Settled, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinSet};
@@ -51,7 +51,7 @@ use tokio::time::Instant;
 use self::calls::WentOn;
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::inbound::Caller;
-pub(crate) use self::inbound::{InboundOutput, Ran, Record, ended, run_inbound};
+pub(crate) use self::inbound::{InboundOutput, Ran, Record, StoredAnswers, ended, run_inbound};
 use self::indexes::Indexes;
 use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::RoomKitError;
@@ -153,6 +153,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         call_of_effect: HashMap::new(),
         callers: HashMap::new(),
         deliveries: HashMap::new(),
+        entry_answers: HashMap::new(),
         clocks: Clocks::read(&*environment),
         environment,
         refused: None,
@@ -201,6 +202,9 @@ struct Driver<'kit, S> {
     /// Where the delivery's end of each entry the operation adopted goes,
     /// until its set ran.
     deliveries: HashMap<EntryId, watch::Sender<Option<InboundResult>>>,
+    /// The answers of each adopted entry's cascade, which its handle reads
+    /// when the run ends without telling its delivery's end.
+    entry_answers: HashMap<EntryId, Arc<StoredAnswers>>,
     clocks: Clocks,
     /// The environment the run started with, which every poll of its
     /// operation and every call it makes read.
@@ -294,16 +298,23 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         id: EffectId,
         decides: Option<Box<InboundResult>>,
         commit: Option<(bool, EventId)>,
-        answer: Option<RoomEvent>,
+        answer: Option<(AnswerOf, RoomEvent)>,
         written: calls::Written,
     ) {
+        // An answer of an entry the run adopted is its handle's, whatever
+        // the run's caller.
+        if let Some((AnswerOf::Entry(entry), answer)) = &answer
+            && let Some(answers) = self.entry_answers.get(entry)
+        {
+            answers.commits(answer.clone(), written.clone());
+        }
         let Some(caller) = self.caller.as_deref() else {
             return;
         };
         if commit.is_some() {
             self.shared.wrote(&written);
         }
-        if let Some(answer) = answer {
+        if let Some((AnswerOf::Call, answer)) = answer {
             caller.answers(answer, written.clone());
         }
         match (decides, commit) {
@@ -480,7 +491,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         let mut answer = None;
         if let Request::Store(StoreRequest::Commit { event, .. }) = &request {
             commit = Some((event.status != EventStatus::Blocked, event.id.clone()));
-            answer = answers.then(|| (**event).clone());
+            answer = answers.map(|of| (of, (**event).clone()));
             self.indexes.committing(id, event);
         }
         match request {
@@ -739,11 +750,13 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             origin,
             reply,
             delivered,
+            answers,
         } = adoption;
         match operation.adopt(entry, origin) {
             Ok(id) => {
                 self.callers.insert(id, reply);
                 self.deliveries.insert(id, delivered);
+                self.entry_answers.insert(id, answers);
             }
             Err(entry) => {
                 tracing::debug!(
@@ -760,6 +773,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// Tells the caller of an adopted entry its delivery's end (RFC §10.1
     /// step 18).
     fn delivered(&mut self, delivered: Delivered) {
+        self.entry_answers.remove(&delivered.entry);
         if let Some(completion) = self.deliveries.remove(&delivered.entry) {
             completion.send_replace(Some(delivered.result));
         }

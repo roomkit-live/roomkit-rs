@@ -27,8 +27,9 @@ use std::collections::{BTreeMap, VecDeque};
 
 use self::locks::RoomLocks;
 use super::protocol::{
-    ChannelRequest, Decided, Delivered, Effect, EffectId, EntryId, HoldOutcome, HoldRequest, Next,
-    Notice, Outcome, ProtocolError, Request, RequestKind, Settled, Step, TURN_CUT,
+    AnswerOf, ChannelRequest, Decided, Delivered, Effect, EffectId, EntryId, HoldOutcome,
+    HoldRequest, Next, Notice, Outcome, ProtocolError, Request, RequestKind, Settled, Step,
+    TURN_CUT,
 };
 use super::{InboundError, InboundResult};
 use crate::model::{ErrorRecord, RoomId, Timestamp};
@@ -246,7 +247,7 @@ impl Io {
             admitted: self.admitted.clone(),
             budget,
             decides: None,
-            answers: false,
+            answers: None,
         };
         if let Some(effect) = self.locks.admit(effect) {
             self.issued.push(effect);
@@ -304,10 +305,10 @@ impl Io {
     }
 
     /// Marks `effect`, a commit issued for the next step, as storing an
-    /// answer of the call's own cascade (`Effect::answers`).
-    pub(crate) fn answers(&mut self, effect: EffectId) {
+    /// answer of `of`'s cascade (`Effect::answers`).
+    pub(crate) fn answers(&mut self, effect: EffectId, of: AnswerOf) {
         if let Some(issued) = self.issued.iter_mut().find(|issued| issued.id == effect) {
-            issued.answers = true;
+            issued.answers = Some(of);
         }
     }
 

@@ -100,10 +100,42 @@ pub(crate) struct Record {
     /// them, as [`committed`](Self::committed) reads a blocked call with no
     /// reason.
     cascade: Mutex<Vec<(EffectId, EventId, Written)>>,
-    /// The commits of the call's own answers, each with what its write came
-    /// to: what the call reports as its `response_events` once the kit's
-    /// close aborted its run, as Python's caller reads its cascade's.
-    answers: Mutex<Vec<(RoomEvent, Written)>>,
+    /// The commits of the call's own answers: what the call reports as its
+    /// `response_events` once the kit's close aborted its run.
+    answers: StoredAnswers,
+}
+
+/// The answers a call's cascade commits, each with what its write came to:
+/// what the call reports as its `response_events` when the run that
+/// delivers it ends without telling them, the kit's close aborting it, as
+/// Python's caller reads its cascade's.
+#[derive(Debug, Default)]
+pub(crate) struct StoredAnswers(Mutex<Vec<(RoomEvent, Written)>>);
+
+impl StoredAnswers {
+    /// The commit of `answer` runs, its outcome told by `written`.
+    pub(crate) fn commits(&self, answer: RoomEvent, written: Written) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((answer, written));
+    }
+
+    /// The answers whose commit stored them, in order.
+    pub(crate) async fn stored(&self) -> Vec<RoomEvent> {
+        let running: Vec<(RoomEvent, Written)> = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let mut stored = Vec::new();
+        for (answer, mut written) in running {
+            if calls::outcome_of(&mut written).await == Outcome::Store(StoreOutcome::Committed) {
+                stored.push(answer);
+            }
+        }
+        stored
+    }
 }
 
 impl Record {
@@ -167,26 +199,7 @@ impl Record {
     /// The commit of `answer`, an answer of the call's own cascade, runs,
     /// its outcome told by `written`.
     fn answers(&self, answer: RoomEvent, written: Written) {
-        self.answers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push((answer, written));
-    }
-
-    /// The call's answers whose commit stored them, in order.
-    async fn stored_answers(&self) -> Vec<RoomEvent> {
-        let running: Vec<(RoomEvent, Written)> = self
-            .answers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let mut stored = Vec::new();
-        for (answer, mut written) in running {
-            if calls::outcome_of(&mut written).await == Outcome::Store(StoreOutcome::Committed) {
-                stored.push(answer);
-            }
-        }
-        stored
+        self.answers.commits(answer, written);
     }
 
     /// The run is aborted leaving its turns' streams open, kept unread or
@@ -252,7 +265,7 @@ impl Record {
         };
         // The answers its cascade stored before the abort, as Python's
         // caller reads its cascade's `response_events`.
-        result.response_events = self.stored_answers().await;
+        result.response_events = self.answers.stored().await;
         let left_open = self
             .left_open
             .lock()

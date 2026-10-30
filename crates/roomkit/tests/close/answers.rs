@@ -60,10 +60,36 @@ impl Channel for Stuck {
 /// sees `hello`, keeping its handle; an agent echoes every message, and a
 /// second one's turn on the echo of `side` never ends. Once that turn
 /// started, the kit closes, its grace running out: the call `hello`,
-/// aborted, reads the answer its cascade stored, `You said: hello`, as
-/// Python's does.
+/// aborted, reads the answer its cascade stored, `You said: hello`, and
+/// the adopted call's handle `You said: side`, as Python's do
+/// (`close_while_held.out`). Their cancellation reasons are lot 3's:
+/// Python's read `kit_closed` and `lane_cancelled`; Rust's depend on the
+/// runtime, the handle reading `kit_closed` on a current-thread one and
+/// neither reading one on a multi-threaded one.
 #[tokio::test(start_paused = true)]
 async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
+    assert_eq!(answers_under_the_close().await, said(["hello", "side"]));
+}
+
+/// [`a_call_the_close_aborts_reads_the_answers_its_cascade_stored`] on a
+/// runtime of several threads, where the adopted call's report comes before
+/// the abort. On demand: the close's grace takes 5 s of real time. Run it
+/// with `cargo test -p roomkit --test close -- --ignored
+/// answers::a_call_the_close_aborts_reads_its_answers_on_threads`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the close's grace takes 5 s of real time, run on demand"]
+async fn a_call_the_close_aborts_reads_its_answers_on_threads() {
+    assert_eq!(answers_under_the_close().await, said(["hello", "side"]));
+}
+
+/// The echoes of `texts`.
+fn said<const N: usize>(texts: [&str; N]) -> [Vec<String>; N] {
+    texts.map(|text| vec![format!("You said: {text}")])
+}
+
+/// What the call `hello` and the adopted call's handle read of their
+/// answers, once the close aborted them.
+async fn answers_under_the_close() -> [Vec<String>; 2] {
     let started = Arc::new(Notify::new());
     let kit = RoomKit::new(RoomKitOptions::default());
     kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
@@ -112,6 +138,7 @@ async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
     tokio::time::timeout(BOUND, started.notified())
         .await
         .unwrap();
+    let handle = handles.lock().unwrap().pop().unwrap();
     tokio::time::timeout(BOUND * 4, kit.close())
         .await
         .unwrap()
@@ -121,10 +148,15 @@ async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
         .unwrap()
         .unwrap()
         .unwrap();
-    let answers: Vec<String> = outer
-        .response_events
-        .iter()
-        .map(|event| text_of(&event.content))
-        .collect();
-    assert_eq!(answers, ["You said: hello"]);
+    let adopted = tokio::time::timeout(BOUND, handle.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    [outer, adopted].map(|result| {
+        result
+            .response_events
+            .iter()
+            .map(|event| text_of(&event.content))
+            .collect()
+    })
 }

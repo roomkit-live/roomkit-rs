@@ -2,18 +2,28 @@
 //! in its admission order made it, which adopts it or declines it (RFC
 //! §13.5, §9.5.1 Reentrance, §10.1 step 18).
 
+use std::sync::Arc;
+
 use roomkit_core::ops::{EffectId, Entry, InboundError, InboundResult};
 use tokio::sync::{oneshot, watch};
 
 use super::{ExecutionContext, Frame};
+use crate::driver::StoredAnswers;
 
 /// What an adopted entry's caller receives (RFC §10.1 step 18).
 pub(crate) type EntryResult = Result<InboundResult, InboundError>;
 
 /// Where an adopted entry's caller reads its delivery's end: what the
 /// adopting run's operation reported of the entry's delivery set, once it
-/// ran; closed, with nothing, once that run is over without it.
-pub(crate) type Completion = watch::Receiver<Option<InboundResult>>;
+/// ran, closed, with nothing, once that run is over without it; and the
+/// answers the entry's cascade committed, which the caller reads then.
+#[derive(Clone, Debug)]
+pub(crate) struct Completion {
+    /// The report of the entry's delivery set.
+    pub(crate) delivered: watch::Receiver<Option<InboundResult>>,
+    /// The answers its cascade committed.
+    pub(crate) answers: Arc<StoredAnswers>,
+}
 
 /// A call into a room, handed to the run whose work made it.
 #[derive(Debug)]
@@ -26,6 +36,8 @@ pub(crate) struct Adoption {
     pub(crate) reply: oneshot::Sender<Reply>,
     /// Where its delivery's end goes, once its set ran.
     pub(crate) delivered: watch::Sender<Option<InboundResult>>,
+    /// Where its cascade's answers go, as they are committed.
+    pub(crate) answers: Arc<StoredAnswers>,
 }
 
 /// The answer of the run a call into its room was handed to.
@@ -77,12 +89,18 @@ pub(crate) async fn adopt_by_own_run(entry: Entry) -> Adopting {
 /// Hands `entry` to `frame`'s run, and waits for its decision.
 async fn hand(frame: &Frame, entry: Entry) -> Adopting {
     let (reply, answer) = oneshot::channel();
-    let (delivered, completion) = watch::channel(None);
+    let (delivered, told) = watch::channel(None);
+    let answers = Arc::new(StoredAnswers::default());
+    let completion = Completion {
+        delivered: told,
+        answers: Arc::clone(&answers),
+    };
     let adoption = Adoption {
         entry,
         origin: frame.effect,
         reply,
         delivered,
+        answers,
     };
     if let Err(unsent) = frame.run.hand(adoption) {
         // The run is over: it holds nothing of the room any more.

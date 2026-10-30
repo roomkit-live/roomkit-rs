@@ -99,11 +99,21 @@ pub struct Effect {
     /// another event among them: an entry it adopted, a channel's lifecycle
     /// record.
     pub decides: Option<Box<InboundResult>>,
-    /// Whether this request, a commit, stores an answer of the call's own
-    /// cascade, one of Python's `InboundResult.response_events`: a driver
-    /// whose run the kit's close aborts reports the answers it stored, as
-    /// Python's caller reads its cascade's. `false` for any other request.
-    pub answers: bool,
+    /// Whose answer this request, a commit, stores, one of Python's
+    /// `InboundResult.response_events`: the call's own cascade's, or an
+    /// entry's it adopted. A driver whose run the kit's close aborts reports
+    /// the answers each stored, as Python's callers read their cascades'.
+    /// `None` for any other request.
+    pub answers: Option<AnswerOf>,
+}
+
+/// The call whose cascade an answer belongs to ([`Effect::answers`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnswerOf {
+    /// The operation's own call.
+    Call,
+    /// An entry the operation adopted.
+    Entry(EntryId),
 }
 
 /// The error type of a [`ChannelRequest::OnEvent`] or [`ChannelRequest::Deliver`]
