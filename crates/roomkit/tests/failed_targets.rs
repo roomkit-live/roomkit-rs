@@ -12,8 +12,8 @@ use std::future::{Future, ready};
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    DeliveryResult, ErrorRecord, InboundMessage, Metadata, ProviderResult, RoomContext, RoomEvent,
-    RoomId, TextContent,
+    DeliveryError, DeliveryResult, DeliveryResultStatus, ErrorRecord, InboundMessage, Metadata,
+    ProviderResult, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -179,16 +179,37 @@ async fn reported() -> (Vec<Option<DeliveryResult>>, Option<Vec<ChannelId>>) {
     (reported, result.unavailable_targets)
 }
 
+/// A failed delivery to `id`, as the Python implementation's probe reads
+/// it: its code, message and retryability, the provider's message id and
+/// the provider's answer kept.
+fn failed(
+    id: &str,
+    (code, message, retryable): (&str, &str, bool),
+    provider_message_id: Option<&str>,
+    provider_result: Option<ProviderResult>,
+) -> DeliveryResult {
+    DeliveryResult {
+        channel_id: channel(id),
+        status: DeliveryResultStatus::Failed,
+        provider_message_id: provider_message_id.map(str::to_owned),
+        error: Some(DeliveryError {
+            code: code.to_owned(),
+            message: message.to_owned(),
+            retryable,
+        }),
+        retry_after: None,
+        provider_result,
+    }
+}
+
 /// The failed targets of the Python implementation's probe
-/// (`tasks/probes/step5-lot2/failed_target_results.py` and
-/// `unreached_agents.py`), each with what `delivery_results` holds of it:
-/// Python's code, message and retryability, but `ChannelError` where Python
-/// names the class of a plain exception, a boxed error having none.
+/// (`tasks/probes/step5-lot2/failed_target_results.out` and
+/// `unreached_agents.out`), each with what `delivery_results` holds of it,
+/// its values Python's: but `ChannelError` where Python names the class of
+/// a plain exception, a boxed error having none.
 #[tokio::test]
 async fn each_failed_target_is_reported_as_python_reports_it() {
     let (reported, unavailable) = reported().await;
-    let raised = |id: &str, error: &ErrorRecord| DeliveryResult::raised(channel(id), error);
-    let refused = |id: &str, result: ProviderResult| DeliveryResult::refused(channel(id), result);
     let no_recipient = json!({
         "code": "no_recipient",
         "retryable": false,
@@ -196,55 +217,45 @@ async fn each_failed_target_is_reported_as_python_reports_it() {
         "recipient_key": "phone_number",
     });
     let expected = [
-        refused(
+        failed(
             "on_event_refused",
-            refusal(
+            ("E42", "rejected", false),
+            Some("pm-1"),
+            Some(refusal(
                 Some("pm-1"),
                 "rejected",
                 json!({ "code": "E42", "retryable": false }),
-            ),
+            )),
         ),
-        raised(
+        failed(
             "on_event_plain",
-            &ErrorRecord::new("ChannelError", "socket gone"),
+            ("ChannelError", "socket gone", true),
+            None,
+            None,
         ),
-        refused("deliver_refused", refusal(None, "busy", json!({}))),
-        refused(
+        failed(
+            "deliver_refused",
+            ("busy", "busy", true),
+            None,
+            Some(refusal(None, "busy", json!({}))),
+        ),
+        failed(
             "sms_refused",
-            refusal(Some("pm-2"), "blocked", json!({ "code": "30007" })),
+            ("30007", "blocked", true),
+            Some("pm-2"),
+            Some(refusal(Some("pm-2"), "blocked", json!({ "code": "30007" }))),
         ),
-        refused(
+        failed(
             "sms_no_recipient",
-            refusal(None, "no_recipient", no_recipient),
+            ("no_recipient", "no_recipient", false),
+            None,
+            Some(refusal(None, "no_recipient", no_recipient)),
         ),
-        raised("raising", &ErrorRecord::new("ChannelError", "turn failed")),
-        raised("erring", &ErrorRecord::new("RuntimeError", "output error")),
+        failed("raising", ("ChannelError", "turn failed", true), None, None),
+        failed("erring", ("RuntimeError", "output error", true), None, None),
     ];
-    let read = |result: &Option<DeliveryResult>| {
-        let error = result.as_ref().and_then(|result| result.error.clone());
-        error.map(|error| (error.code, error.message, error.retryable))
-    };
-    let python = |code: &str, message: &str, retryable| {
-        Some((code.to_owned(), message.to_owned(), retryable))
-    };
     assert_eq!(
-        (
-            reported.iter().map(read).collect::<Vec<_>>(),
-            reported,
-            unavailable
-        ),
-        (
-            vec![
-                python("E42", "rejected", false),
-                python("ChannelError", "socket gone", true),
-                python("busy", "busy", true),
-                python("30007", "blocked", true),
-                python("no_recipient", "no_recipient", false),
-                python("ChannelError", "turn failed", true),
-                python("RuntimeError", "output error", true),
-            ],
-            expected.map(Some).to_vec(),
-            Some(Vec::new())
-        )
+        (reported, unavailable),
+        (expected.map(Some).to_vec(), Some(Vec::new()))
     );
 }
