@@ -30,7 +30,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
 use roomkit_core::model::{ErrorRecord, EventId, RoomId};
 use roomkit_core::ops::{
@@ -81,6 +81,8 @@ impl Ran {
 /// still reports the call it decided (RFC §10.1 step 18).
 #[derive(Debug, Default)]
 pub(crate) struct Record {
+    cancel_requested: AtomicBool,
+    cancel_waker: Mutex<Option<Waker>>,
     decided: Mutex<Option<InboundResult>>,
     delivering: AtomicBool,
     /// Whether the delivery set of the call's own event left its place in
@@ -103,6 +105,33 @@ pub(crate) struct Record {
 }
 
 impl Record {
+    pub(crate) fn request_cancel(&self) {
+        self.cancel_requested.store(true, Ordering::Release);
+        if let Some(waker) = self
+            .cancel_waker
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            waker.wake();
+        }
+    }
+
+    fn poll_cancel(&self, cx: &Context<'_>) -> bool {
+        // Register before checking so a concurrent request cannot lose its wake.
+        let mut waker = self
+            .cancel_waker
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if self.cancel_requested.load(Ordering::Acquire) {
+            waker.take();
+            true
+        } else {
+            waker.clone_from(&Some(cx.waker().clone()));
+            false
+        }
+    }
+
     fn decide(&self, result: &InboundResult) {
         *self.decided.lock().unwrap_or_else(PoisonError::into_inner) = Some(result.clone());
     }
@@ -414,6 +443,9 @@ impl Caller {
     /// Ready once the run sees that its caller stopped waiting, once: never
     /// for a caller answered at the decision already.
     pub(super) fn poll_gone(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        if self.departure != Departure::TurnsCut && self.record.poll_cancel(cx) {
+            return Poll::Ready(());
+        }
         let Some(answer) = self.answer.as_mut().filter(|_| !self.gone) else {
             return Poll::Pending;
         };
@@ -439,7 +471,9 @@ impl Caller {
     /// not yet (RFC §10.1: the awaited path propagates its caller's
     /// cancellation, decision 2 of step 3).
     pub(super) fn cuts(&mut self) -> bool {
-        let cuts = self.gone && self.decided && self.departure != Departure::TurnsCut;
+        let cuts = (self.gone || self.record.cancel_requested.load(Ordering::Acquire))
+            && self.decided
+            && self.departure != Departure::TurnsCut;
         if cuts {
             self.departure = Departure::TurnsCut;
         }
@@ -532,7 +566,15 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
             Some(&mut caller),
         )
         .await;
-        let output = refused_once_sealed(output, kit.tasks.is_sealed());
+        let mut output = refused_once_sealed(output, kit.tasks.is_sealed());
+        if caller.departure == Departure::TurnsCut
+            && caller.record.cancel_requested.load(Ordering::Acquire)
+            && let Ok(Ok(result)) = &mut output
+        {
+            result
+                .cancellation_reason
+                .get_or_insert_with(|| "caller_cancelled".to_owned());
+        }
         caller.log_unread_end(call, &output);
         // The run's own unit: a close called from inside it spares it.
         let cut = kit.tasks.cuts(Marks::current().innermost());

@@ -358,7 +358,7 @@ reason = "not in 0.x: voice and video"
 [[missing]]
 python = "roomkit.DeliveryHandle"
 members = ["cancel"]
-reason = "decision 7: not in 0.x, Rust has no delivery cancellation (RMK-860 is Python's)"
+reason = "Rust exposes request_cancel plus wait for owned detached runs; Python cancel and cancellation of adopted delivery are not yet mapped"
 
 [[missing]]
 python = "roomkit.InboundResult"
@@ -1974,3 +1974,8 @@ lot = 5
 python = "roomkit.SQLiteStore"
 members = ["search_events"]
 reason = "lot 5 decides: mirror SQLiteStore.search_events, or list it [[missing]] with its reason"
+
+[[exception]]
+rust = "roomkit::DeliveryHandle::request_cancel"
+approved = "2026-10-30"
+reason = "Explicit nonblocking request followed by wait for joined cleanup; RFC 10.1 permits scoped detached cancellation (architecture: Explicit cancellation of a detached call)"

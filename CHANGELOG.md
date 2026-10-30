@@ -6,6 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add explicit cancellation requests on detached delivery handles, using scoped
+  cascade cleanup while preserving committed events and shared providers.
+
 - Accept omitted optional tool namespaces in Responses output for a single configured
   namespace; still reject explicit foreign namespaces and restore the configured
   namespace on replay.

@@ -248,3 +248,61 @@ async fn a_streaming_reader_that_leaves_crosses_as_close() {
         )
     );
 }
+
+/// RFC §10.1: explicitly cancelling a deferred handle joins its running tool,
+/// retains committed rows, and leaves the kit/provider usable for another call.
+#[tokio::test]
+async fn cancelling_a_detached_handle_joins_its_tool_and_keeps_the_kit_usable() {
+    let running = Arc::new(Notify::new());
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let (started, cut) = (Arc::clone(&running), Arc::clone(&log));
+    let kit = kit(move |_call, _context| {
+        let (started, cut) = (Arc::clone(&started), Cut(Arc::clone(&cut)));
+        async move {
+            let _cut = cut;
+            started.notify_one();
+            std::future::pending::<()>().await;
+            Ok(ToolOutput::Text("never".to_owned()))
+        }
+    })
+    .await;
+    let admitted = kit
+        .process_inbound(
+            message(),
+            ProcessInboundOptions {
+                room_id: Some(room()),
+                defer_delivery: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let handle = admitted.delivery.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), running.notified())
+        .await
+        .unwrap();
+    assert!(handle.request_cancel());
+    let done = tokio::time::timeout(std::time::Duration::from_secs(5), handle.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        done.cancellation_reason.as_deref(),
+        Some("caller_cancelled")
+    );
+    assert!(done.error.is_none());
+    assert_eq!(*log.lock().unwrap(), vec!["cut"]);
+    assert!(!handle.request_cancel());
+    assert_eq!(
+        handle.wait().await.unwrap().cancellation_reason,
+        done.cancellation_reason
+    );
+    let next = asks(&kit, "Continue after cancellation.").await;
+    assert!(next.error.is_none());
+    let rows = kit.store().list_events(&room(), &received()).await.unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| roomkit::text_of(&row.content).contains("It is 42."))
+    );
+    kit.close().await.unwrap();
+}
