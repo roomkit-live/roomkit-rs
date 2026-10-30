@@ -6,6 +6,8 @@ method below.
 
 from __future__ import annotations
 
+import asyncio
+import builtins
 import re
 from dataclasses import dataclass, field
 
@@ -17,6 +19,13 @@ NON_EXHAUSTIVE = "#[non_exhaustive]: a caller outside the crate cannot build it 
 
 # The Python name a Rust item standing for a builtin reads as.
 BUILTIN = "builtins."
+
+# What a finding about the rules themselves starts with: a rule naming what
+# is gone, or what no comparison reads. No entry covers one.
+RULES_FINDING = "listed in [rules]"
+
+# The modules a builtin exception's dotted name may come from.
+_EXCEPTION_MODULES = {"asyncio": asyncio}
 
 @dataclass(frozen=True)
 class Finding:
@@ -75,6 +84,7 @@ class Comparison:
         self.applied: set[int] = set()
         self.options_used: set[str] = set()
         self.families_read: set[str] = set()
+        self.builtin_errors_read: set[str] = set()
         self.findings: list[Finding] = []
 
     def run(self) -> dict[str, ItemResult]:
@@ -131,6 +141,13 @@ class Comparison:
             owner, _, variant = path.rpartition("::")
             if variant not in [found["name"] for found in items.get(owner, {}).get("variants", [])]:
                 self._find("rust", path, f"listed in [rules] {table}: no such Rust variant", owner, None)
+            elif table == "builtin_errors" and path not in self.builtin_errors_read:
+                detail = "listed in [rules] builtin_errors: no error enum's family reads the variant"
+                self._find("rust", path, detail, owner, None)
+        for path, python in self.rules.builtin_errors.items():
+            if not _builtin_exception(python):
+                detail = f"listed in [rules] builtin_errors: {python} is no Python builtin exception"
+                self._find("rust", path, detail, path.rpartition("::")[0], python)
 
     def own_members(self, path: str) -> list[Finding]:
         """An options struct's own methods and constants: its fields stand
@@ -292,6 +309,7 @@ class Comparison:
             name = variant["name"]
             cls.used.add(name)
             if f"{cls.path}::{name}" in self.rules.builtin_errors:
+                self.builtin_errors_read.add(f"{cls.path}::{name}")
                 continue
             path = f"{cls.path}::{name}"
             python = self._exception_class(packages, stem, name)
@@ -537,6 +555,16 @@ class Comparison:
                 _RustParam(f["name"], f["type"], False, f"{options['path']}::{f['name']}") for f in options.get("fields", [])
             ]
         return found
+
+
+def _builtin_exception(name: str) -> bool:
+    """Whether `name` is an exception class of Python's builtins, or of a
+    standard module the rules name (`asyncio.CancelledError`), as the
+    interpreter that runs the report has them."""
+    module, _, attribute = name.rpartition(".")
+    owner = _EXCEPTION_MODULES.get(module) if module else builtins
+    found = getattr(owner, attribute, None) if owner is not None else None
+    return isinstance(found, type) and issubclass(found, BaseException)
 
 
 def _variant_fields(variant: dict) -> list[str]:

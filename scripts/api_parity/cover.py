@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from api_parity.compare import NON_EXHAUSTIVE, Comparison, Finding, ItemResult
+from api_parity.compare import NON_EXHAUSTIVE, RULES_FINDING, Comparison, Finding, ItemResult
 from api_parity.mapping import Entry, Mapping
 from api_parity.sides import Python, Surface, spec_hash
 
@@ -86,7 +86,11 @@ def _covers(entry: Entry, finding: Finding) -> bool:
     the item's own finding alone ("no Python name", or the alias named as a
     class), never its members: it goes dead once the item maps. An
     `[[exception]]` approves the item's form, never its `#[non_exhaustive]`,
-    which refuses the struct update a caller builds it with."""
+    which refuses the struct update a caller builds it with. No entry covers
+    a finding about the rules themselves (`listed in [rules] ...`): the
+    rules are fixed, not excused."""
+    if finding.detail.startswith(RULES_FINDING):
+        return False
     if entry.whole:
         side, path = entry.paths()[0]
         if entry.table == "exception" and finding.detail == NON_EXHAUSTIVE:

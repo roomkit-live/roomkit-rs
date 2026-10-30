@@ -761,7 +761,9 @@ class StrictRules(unittest.TestCase):
                 {**enum("roomkit::Other"), "variants": [variant("Wrap", decl="Wrap(Thing)")]},
                 struct("roomkit::Thing", fields=[("body", "String")], methods=["pub fn new(body: String) -> Thing"]),
             ],
-            {"roomkit.Thing": {"__init__": ["def", "*", "type='x'", "body"]}},
+            # The tag is the variant's name, so that only the union check
+            # tells the enum from a union (light review B, M11).
+            {"roomkit.Thing": {"__init__": ["def", "*", "type='wrap'", "body"]}},
             names={"roomkit": ["Thing"]},
         )
         self.assertEqual(found(report), [("python", "roomkit.Thing.__init__(type)"), ("rust", "roomkit::Other")])
@@ -779,15 +781,66 @@ class StrictRules(unittest.TestCase):
             },
         )
         self.assertEqual(
-            found(report),
+            sorted((finding.path, finding.detail) for finding in report.findings),
             [
-                ("rust", "roomkit::GoneError"),
-                ("rust", "roomkit::RoomKitError::Gone"),
-                ("rust", "roomkit::model::Gone"),
-                ("rust", "roomkit::model::GoneLiteral"),
-                ("rust", "roomkit::model::Visibility::Gone"),
+                ("roomkit::GoneError", "listed in [rules] error_families: no such error enum"),
+                ("roomkit::RoomKitError::Gone", "listed in [rules] builtin_errors: no such Rust variant"),
+                ("roomkit::model::Gone", "listed in [rules] builtins: no such Rust item"),
+                ("roomkit::model::GoneLiteral", "listed in [rules] literals: no such Rust item"),
+                ("roomkit::model::Visibility::Gone", "listed in [rules] builtin_payloads: no such Rust variant"),
             ],
         )
+
+    def test_a_builtin_error_is_read_on_an_error_enum_s_family_only(self) -> None:
+        # Light review B, E23, E24 and E24b: a variant of an enum that is no
+        # error, of an error enum no family reads, of one a builtin stands
+        # for; and E25, a name that is no Python builtin exception.
+        visibility = {**enum("roomkit::model::Visibility"), "variants": [variant("Channels")]}
+        report = run(
+            [
+                visibility,
+                error_enum("roomkit::StoreError", [variant("Value")]),
+                error_enum("roomkit::model::ModelError", [variant("EmptyComposite")]),
+                error_enum("roomkit::RoomKitError", [variant("Value"), variant("Odd")]),
+            ],
+            {"roomkit.RoomKitError": {}, "roomkit.Visibility": {"CHANNELS": ["member", "'channels'"]}},
+            rules={
+                "builtins": {"roomkit::model::ModelError": {"python": "ValueError"}},
+                "builtin_errors": {
+                    "roomkit::model::Visibility::Channels": "ValueError",
+                    "roomkit::StoreError::Value": "ValueError",
+                    "roomkit::model::ModelError::EmptyComposite": "ValueError",
+                    "roomkit::RoomKitError::Value": "ValueError",
+                    "roomkit::RoomKitError::Odd": "NoSuchError",
+                },
+                "error_families": {"roomkit::RoomKitError": {}},
+            },
+        )
+        unread = "listed in [rules] builtin_errors: no error enum's family reads the variant"
+        self.assertEqual(
+            sorted((finding.path, finding.detail) for finding in report.findings if "[rules]" in finding.detail),
+            [
+                ("roomkit::RoomKitError::Odd", "listed in [rules] builtin_errors: NoSuchError is no Python builtin exception"),
+                ("roomkit::StoreError::Value", unread),
+                ("roomkit::model::ModelError::EmptyComposite", unread),
+                ("roomkit::model::Visibility::Channels", unread),
+            ],
+        )
+
+    def test_a_tuple_variant_s_payload_counts_a_generic_s_comma_once(self) -> None:
+        # Light review B, N5c: `HashMap<K, V>` is one payload.
+        generic = variant("RoomNotFound", decl="RoomNotFound(HashMap<RoomId, String>)")
+        report = run(
+            [error_enum("roomkit::RoomKitError", [generic])],
+            {"roomkit.RoomKitError": {}, "roomkit.RoomNotFoundError": {}},
+            rules=self.families(**{"roomkit::RoomKitError": {"roomkit.RoomNotFoundError": ["0"]}}),
+        )
+        self.assertEqual(found(report), [])
+
+    def test_a_builtin_error_named_by_its_variant_alone_is_refused(self) -> None:
+        # Light review B, N7.
+        with self.assertRaises(parity.ParityError):
+            parity.Rules.from_table({**RULES, "builtin_errors": {"Value": "ValueError"}})
 
     def test_a_builtin_error_is_its_variant_s_path_not_its_name(self) -> None:
         # Light review B, E19: another enum's `Value` is no ValueError.
@@ -896,6 +949,26 @@ class Entries(unittest.TestCase):
             "__init__": ["def", "store=None", "stt=None"],
         }
     }
+
+    def test_an_entry_never_covers_a_finding_about_the_rules(self) -> None:
+        # Light review B, T1: a whole [[pending]] on an enum covers its "no
+        # Python name", never a family the rules list on it that nothing
+        # reads (coverprobe.py).
+        report = run(
+            [error_enum("roomkit::StoreError", [variant("Bogus")])],
+            {},
+            rules={"error_families": {"roomkit::StoreError": {"roomkit.RoomNotFoundError": []}}},
+            entries={"pending": [{"lot": "4", "rust": "roomkit::StoreError", "reason": "lot 4"}]},
+        )
+        self.assertEqual(
+            [(finding.path, finding.detail) for finding in report.uncovered],
+            [
+                (
+                    "roomkit::StoreError",
+                    "listed in [rules] error_families: the enum stands for no Python class whose family is read",
+                )
+            ],
+        )
 
     def test_each_finding_is_covered_by_its_entry(self) -> None:
         report = run(

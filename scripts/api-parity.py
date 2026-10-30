@@ -70,7 +70,8 @@ The rules, which apply with no entry:
   variant one of its exception classes: `X` the family's `<Stem>XError`
   (`SkillError::Parse`, `SkillParseError`), or else the class `XError`,
   each in Python's acronym casing, or a builtin exception `[rules]
-  builtin_errors` names by the variant's path. `[rules] error_families`
+  builtin_errors` names by the variant's path: a Python builtin exception
+  (or `asyncio`'s), on a variant of an error enum whose family is read. `[rules] error_families`
   lists, by the enum's path, the classes its variants stand for (the
   snapshot holds no bases): a variant's class must be listed, each class
   listed must have its variant, an error enum with no family is a
@@ -79,8 +80,9 @@ The rules, which apply with no entry:
   a tuple variant's payload by position (`0`), are compared with the
   class's `__init__` when the class has one, no field listed for it; a
   class that takes a message alone lists the fields its variant carries;
-- a rule naming a Rust item, variant or member that is gone is a finding
-  no entry covers.
+- a rule naming a Rust item, variant or member that is gone, or what no
+  comparison reads, is a finding (`listed in [rules] ...`) no entry covers,
+  a whole item's included.
 
 Known limits: an error enum with no Python base (`StoreError`) and no
 family listed has its variants read by no rule; a `Literal`'s values and a
