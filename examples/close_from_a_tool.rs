@@ -3,8 +3,9 @@
 //! and the model calls the agent's `shut_down` tool, which closes the kit.
 //!
 //! The tool's `close` runs inside the agent's turn, the kit's own work: the
-//! shutdown neither waits for that turn nor cuts it. It closes every
-//! channel, the operator's pager among them, and the tool's `close`
+//! shutdown neither waits for that call nor cuts it. It cuts the turn, as
+//! every turn, the tool's call left to run on, its end row stored, closes
+//! every channel, the operator's pager among them, and the tool's `close`
 //! returns then, at once, where waiting for its own turn would have held it
 //! for the close's 5 s grace before cutting it. The service's own `close`,
 //! once the message's call returned, waits for the same shutdown, which
