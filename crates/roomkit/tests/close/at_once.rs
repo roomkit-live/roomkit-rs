@@ -238,8 +238,11 @@ async fn of<S: ConversationStore>(kit: &RoomKit<S>, channel_id: &str) -> Vec<Roo
 
 /// RFC §12.10.4: a turn streaming as the kit closes is cut at once, while
 /// a send in another room still has its grace: what it streamed is stored
-/// marked `cancelled`, the call reading `kit_closed` (Python's
-/// `test_a_streaming_turn_is_cut_at_once_its_text_stored_cancelled`).
+/// marked `cancelled`, the turn's record `cancelled` on it though no target
+/// read it, the call reading `kit_closed` (Python's
+/// `test_a_streaming_turn_is_cut_at_once_its_text_stored_cancelled`, and
+/// `rmk1030-rs/py_cut_turn_record.out`). On 01c8420 the row carried no
+/// `loop_end_reason`.
 #[tokio::test(start_paused = true)]
 async fn a_streaming_turn_is_cut_at_once_its_text_stored_cancelled() {
     let held = Holding::new("ws", [("held", Hold::UntilReleased)]);
@@ -256,17 +259,15 @@ async fn a_streaming_turn_is_cut_at_once_its_text_stored_cancelled() {
     closed(close).await;
 
     let result = result.unwrap().unwrap().unwrap();
-    let answers: Vec<(String, bool)> = of(&kit, "agent")
+    let answers: Vec<(String, serde_json::Value)> = of(&kit, "agent")
         .await
         .iter()
-        .map(|event| {
-            let cancelled = event.metadata.get("cancelled") == Some(&json!(true));
-            (text_of(&event.content), cancelled)
-        })
+        .map(|event| (text_of(&event.content), json!(event.metadata)))
         .collect();
+    let record = json!({ "loop_end_reason": "cancelled", "cancelled": true });
     assert_eq!(
         (grace_runs, result.cancellation_reason.as_deref(), answers),
-        (true, Some("kit_closed"), vec![("The ".to_owned(), true)])
+        (true, Some("kit_closed"), vec![("The ".to_owned(), record)])
     );
 }
 

@@ -366,7 +366,12 @@ impl Producer {
             // The target reads the text as it comes; nobody else does.
             Some(Ok(RemoteItem::Item(ResponseItem::Text(delta)))) => match self.reads {
                 Reads::Target { .. } => self.ready.push_back(Ok(StreamItem::Text(delta))),
-                Reads::Nobody | Reads::Lost => self.segments.text(&delta),
+                // Nobody is handed the text: the turn began all the same, and
+                // a cut ends it `cancelled` (RFC §6.4).
+                Reads::Nobody | Reads::Lost => {
+                    self.segments.handed();
+                    self.segments.text(&delta);
+                }
             },
             Some(Ok(RemoteItem::Item(ResponseItem::ToolStart(start)))) => {
                 let rows = self.segments.start(start);
