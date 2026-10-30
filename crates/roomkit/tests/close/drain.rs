@@ -30,8 +30,8 @@ use tokio::time::{Instant, Sleep};
 
 use crate::store::SlowCommits;
 use crate::support::{
-    Answered, Call, Witness, attach_agent, channel, ended, kit_on, kit_with, ok, room_id,
-    spawn_message, stored, stored_in, transport,
+    Answered, BOUND, Call, Gate, Witness, attach_agent, channel, ended, kit_on, kit_with, ok,
+    room_id, spawn_message, stored, stored_in, transport,
 };
 
 /// RFC §10.6.8, §12.10.4: the close cuts at once only the turns whose
@@ -540,15 +540,32 @@ async fn answers(kit: &RoomKit) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// N6, N1's shape: the witness takes `before` to deliver "One.", the
-/// agent asked after it, its answer streamed to a target that reads its
-/// first item, then stalls 30 s; the kit is closed from outside at 0.1 s.
-/// What the close took, in tenths of a second, the call, and the answers
-/// stored, for each of what the turn does.
-async fn stalled(before: Duration) -> Vec<Stalled> {
+/// When [`stalled`] closes the kit from outside, the witness still
+/// delivering "One.".
+#[derive(Clone, Copy)]
+enum Closing {
+    /// At 0.1 s, the witness taking 1 s to deliver it.
+    AtATenth,
+    /// Once the witness's delivery began, the witness then taking 0.1 s
+    /// more.
+    WhileDelivering,
+}
+
+/// N6, N1's shape: the witness delivers "One.", the agent asked after it,
+/// its answer streamed to a target that reads its first item, then stalls
+/// 30 s; the kit is closed from outside as `closing` says, the witness
+/// still delivering. What the close took, in tenths of a second, the call,
+/// and the answers stored, for each of what the turn does.
+async fn stalled(closing: Closing) -> Vec<Stalled> {
     let mut rows = Vec::new();
     for left in [Left::Stream, Left::Deltas, Left::Tool] {
-        let witness = Witness::slow("One.", before);
+        let gate = Gate::default();
+        let witness = match closing {
+            Closing::AtATenth => Witness::slow("One.", Duration::from_secs(1)),
+            Closing::WhileDelivering => {
+                Witness::slow("One.", Duration::from_millis(100)).gated(gate.clone())
+            }
+        };
         let kit = kit_with(&witness).await;
         kit.register_channel(Receiving::new(Pace::Stall)).unwrap();
         kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())
@@ -556,7 +573,13 @@ async fn stalled(before: Duration) -> Vec<Stalled> {
             .unwrap();
         attach_left(&kit, left).await;
         let call = spawn_message(&kit, "One.", room_id());
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        match closing {
+            Closing::AtATenth => tokio::time::sleep(Duration::from_millis(100)).await,
+            Closing::WhileDelivering => {
+                tokio::time::timeout(BOUND, gate.began()).await.unwrap();
+                gate.go();
+            }
+        }
         let started = Instant::now();
         tokio::time::timeout(Duration::from_secs(60), kit.close())
             .await
@@ -678,14 +701,20 @@ async fn a_cut_target_s_stored_text_is_what_it_received_on_threads() {
 /// the call reading no reason (`lr4_probe_n6_head.out`).
 #[tokio::test(start_paused = true)]
 async fn a_cut_turn_s_stalled_target_holds_the_close_no_longer() {
-    assert_eq!(stalled(Duration::from_secs(1)).await, stalled_rows(9));
+    assert_eq!(stalled(Closing::AtATenth).await, stalled_rows(9));
 }
 
-/// The same, on a multi-thread runtime, the witness taking 0.1 s: the
-/// close returns within a second.
+/// The same, on a multi-thread runtime, the kit closed once the witness's
+/// delivery began, the witness then taking 0.1 s: the close returns within
+/// a second. Closed at 0.1 s, the witness taking 0.1 s from its start, the
+/// two timers raced: under load the witness could end first, the turn's
+/// answer then streamed before the close, and the call read no reason,
+/// its own delivery over, as `stuck::a_turn_is_cut_at_once_when_the_kit_closes`
+/// pins: 7 of 15 runs of the close tests on two cores failed so on 264b249,
+/// 5 of 15 on 526078c (`step5-lot2/ci_flake_probe.out` has the order).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_cut_turn_s_stalled_target_holds_the_close_no_longer_on_threads() {
-    let rows: Vec<_> = stalled(Duration::from_millis(100))
+    let rows: Vec<_> = stalled(Closing::WhileDelivering)
         .await
         .into_iter()
         .map(|(left, took, call, answers)| (left, u128::from(took < 10), call, answers))

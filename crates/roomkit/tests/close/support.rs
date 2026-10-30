@@ -62,7 +62,7 @@ pub(crate) fn transport(id: &str) -> ChannelDeclaration {
 /// A channel that says whether it was closed and keeps the texts it
 /// delivered, each marked when it came once the channel was closed; a
 /// closer set on it closes the kit from its first delivery, and a delivery
-/// of the text `slow` names takes its time.
+/// of the text `slow` names takes its time, once its gate let it go.
 #[derive(Clone, Default)]
 pub(crate) struct Witness {
     /// Its id, `witness` unless named.
@@ -71,6 +71,28 @@ pub(crate) struct Witness {
     delivered: Arc<Mutex<Vec<String>>>,
     pub(crate) closes_on_delivery: Arc<Mutex<Option<Closer>>>,
     slow: Option<(&'static str, Duration)>,
+    gate: Option<Gate>,
+}
+
+/// A slow delivery's gate: the witness tells the delivery began, then
+/// waits to be let go before it takes its time, so that a test acts while
+/// it delivers whatever the load, not by racing a timer against it.
+#[derive(Clone, Default)]
+pub(crate) struct Gate {
+    began: Arc<Notify>,
+    go: Arc<Notify>,
+}
+
+impl Gate {
+    /// Waits for the slow delivery to begin.
+    pub(crate) async fn began(&self) {
+        self.began.notified().await;
+    }
+
+    /// Lets the slow delivery go on to take its time.
+    pub(crate) fn go(&self) {
+        self.go.notify_one();
+    }
 }
 
 impl Witness {
@@ -83,6 +105,14 @@ impl Witness {
         Self {
             slow: Some((text, delay)),
             ..Self::default()
+        }
+    }
+
+    /// The same witness, its slow delivery held by `gate`.
+    pub(crate) fn gated(self, gate: Gate) -> Self {
+        Self {
+            gate: Some(gate),
+            ..self
         }
     }
 
@@ -136,6 +166,10 @@ impl Channel for Witness {
             if let Some((slow, delay)) = this.slow
                 && slow == text
             {
+                if let Some(gate) = &this.gate {
+                    gate.began.notify_one();
+                    gate.go.notified().await;
+                }
                 tokio::time::sleep(delay).await;
             }
             let closer = this.closes_on_delivery.lock().unwrap().take();
