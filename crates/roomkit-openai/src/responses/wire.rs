@@ -239,7 +239,10 @@ pub(super) fn validate_namespace(value: &Value, expected: Option<&str>) -> Resul
                 && (item
                     .get("namespace")
                     .is_some_and(|v| !v.is_null() && !v.is_string())
-                    || item.get("namespace").and_then(Value::as_str) != expected)
+                    || item
+                        .get("namespace")
+                        .and_then(Value::as_str)
+                        .is_some_and(|namespace| Some(namespace) != expected))
             {
                 return Err(malformed(
                     "Responses function call has an unexpected namespace",
