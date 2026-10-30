@@ -216,7 +216,9 @@ impl<P: AiProvider> Loop<P> {
             .into_iter()
             .map(|called| called.call)
             .collect();
-        let mut read = vec![Message::assistant_calls(generation.text, made)];
+        let mut assistant = Message::assistant_calls(generation.text, made);
+        assistant.metadata = generation.done.metadata;
+        let mut read = vec![assistant];
         // Before the next round's calls, which may read what these left.
         for end in &ends {
             self.toolbox.settled(&end.call, end.outcome, &self.context);

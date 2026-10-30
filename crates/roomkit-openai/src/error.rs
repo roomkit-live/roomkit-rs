@@ -12,8 +12,11 @@ use std::error::Error;
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum OpenAiError {
+    /// The host could not provide an authorized bearer credential.
+    #[error("{0}")]
+    Credential(#[from] crate::TokenError),
     /// The base URL is refused: it is no `http` or `https` URL once
-    /// `/chat/completions` follows it, or it holds a query or a fragment,
+    /// the selected API path follows it, or it holds a query or a fragment,
     /// which the path would follow instead of the URL's path (Azure's
     /// `?api-version=`). The error does not repeat the URL: a URL may carry
     /// credentials.
@@ -55,8 +58,8 @@ pub enum OpenAiError {
         /// How many bytes a turn reads at most.
         limit: usize,
     },
-    /// The provider's answer is no chat completion.
-    #[error("the provider's answer is not a chat completion: {reason}")]
+    /// The provider's answer does not match the selected API's wire format.
+    #[error("the provider's answer is malformed: {reason}")]
     Malformed {
         /// What the answer lacks.
         reason: String,

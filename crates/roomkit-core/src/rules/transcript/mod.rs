@@ -95,6 +95,9 @@ pub struct Message {
     pub tool_calls: Vec<ToolCall>,
     /// The call a tool's result answers; `None` on any other message.
     pub tool_call_id: Option<String>,
+    /// Provider-owned data carried within the current tool loop (RFC §6.7,
+    /// `AIMessage.metadata`), separate from visible text and room history.
+    pub metadata: crate::model::Metadata,
 }
 
 impl Message {
@@ -105,6 +108,7 @@ impl Message {
             text: text.into(),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            metadata: crate::model::Metadata::new(),
         }
     }
 

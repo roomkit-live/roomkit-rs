@@ -52,6 +52,33 @@ reason = "Python's **kwargs, which go to the binding's fields (the architecture 
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
 [[exception]]
+rust = "roomkit_openai::TokenSource"
+approved = "2026-10-30"
+reason = "Rust host credential source for reusable authentication; Python integration is a separate follow-up (architecture: Renewable provider credentials)"
+
+[[exception]]
+rust = "roomkit_openai::TokenFuture"
+approved = "2026-10-30"
+reason = "Rust host credential source for reusable authentication; Python integration is a separate follow-up (architecture: Renewable provider credentials)"
+
+[[exception]]
+rust = "roomkit_openai::TokenError"
+approved = "2026-10-30"
+reason = "Rust host credential source for reusable authentication; Python integration is a separate follow-up (architecture: Renewable provider credentials)"
+
+
+[[exception]]
+rust = "roomkit_openai::OpenAiApi"
+approved = "2026-10-30"
+reason = "Responses requested in Rust first; its Python counterpart is a separate follow-up (architecture: Responses support)"
+
+[[exception]]
+rust = "roomkit_openai::OpenAiConfig"
+members = ["with_api", "with_token_source", "with_tool_namespace"]
+approved = "2026-10-30"
+reason = "Responses requested in Rust first; its Python configuration is a separate follow-up (architecture: Responses support)"
+
+[[exception]]
 python = "roomkit.ChannelOutput.__init__"
 params = ["response_stream"]
 approved = "2026-10-27"
@@ -509,11 +536,11 @@ reason = "not in 0.x: the model catalogue, vision and response schemas"
 [[missing]]
 python = "roomkit.providers.openai.OpenAIConfig.__init__"
 params = [
-    "max_retries", "reasoning_effort", "supports_response_schema",
+    "max_retries", "supports_response_schema",
     "supports_response_schema_with_tools",
     "supports_reasoning_effort_with_tools",
 ]
-reason = "not in 0.x: retries, reasoning effort and response schemas of OpenAIConfig"
+reason = "not in 0.x: retries and response schemas of OpenAIConfig"
 
 # Known differences, by the lot of step 5 that removes them; lot 6 requires
 # none left. "?": the plan names no lot.
@@ -1774,7 +1801,7 @@ python = "roomkit.providers.openai.OpenAIConfig.__init__"
 params = [
     "max_tokens", "timeout", "connect_timeout", "include_stream_usage",
     "use_max_completion_tokens", "supports_custom_temperature",
-    "default_headers", "extra_body",
+    "default_headers", "extra_body", "reasoning_effort",
 ]
 reason = "lot 5, point 8: OpenAiAiProvider and Python's OpenAIConfig; OpenAiAgent and OpenAiError leave the public API"
 
@@ -1917,7 +1944,7 @@ reason = "lot 5, point 8: OpenAiAiProvider and Python's OpenAIConfig; OpenAiAgen
 [[pending]]
 lot = 5
 rust = "roomkit_openai::OpenAiConfig"
-members = ["shown_base_url", "with_system_prompt", "with_history", "with_timeout"]
+members = ["shown_base_url", "with_system_prompt", "with_history", "with_timeout", "with_reasoning_effort"]
 reason = "lot 5, point 8: OpenAiAiProvider and Python's OpenAIConfig; OpenAiAgent and OpenAiError leave the public API"
 
 [[pending]]

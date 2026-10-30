@@ -14,15 +14,16 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::Stream;
-use roomkit_ai::{AiRequest, Done, ProviderError, ProviderEvent, ProviderStream};
+use roomkit_ai::{AiRequest, ProviderError, ProviderEvent, ProviderStream};
 
 use crate::agent::{ANSWER_LIMIT, OpenAiProvider, read_body};
+use crate::config::OpenAiApi;
 use crate::error::OpenAiError;
 use crate::sse::Events;
-use crate::wire::{self, Folding};
+use crate::wire;
 
-/// The `data` of the event that ends a completion's stream.
-const DONE: &str = "[DONE]";
+mod folding;
+use folding::Folding;
 
 /// What a generation hands the loop next.
 type Item = Result<ProviderEvent, ProviderError>;
@@ -37,6 +38,7 @@ pub(crate) fn answer<'a>(
         request,
         phase: Phase::Asking,
         ready: VecDeque::new(),
+        secret: String::new(),
     };
     Box::pin(Answer {
         step: Some(Box::pin(reading.next())),
@@ -81,6 +83,8 @@ struct Reading<'a> {
     phase: Phase,
     /// The events read and not handed yet, in order.
     ready: VecDeque<ProviderEvent>,
+    /// Credential used for this response, independent of concurrent refreshes.
+    secret: String,
 }
 
 /// A streamed answer being read: its body, its events, its completion as
@@ -124,17 +128,23 @@ impl<'a> Reading<'a> {
     /// Sends the request: a streamed answer is read as it arrives, a whole
     /// completion read whole.
     async fn ask(&mut self) -> Result<(), OpenAiError> {
-        let response = self.provider.ask(self.request).await?;
+        let (response, secret) = self.provider.ask(self.request).await?;
+        self.secret = secret;
         if !is_json(&response) {
             self.phase = Phase::Streaming(Box::new(Streamed {
                 response,
                 events: Events::new(ANSWER_LIMIT),
-                folding: Folding::default(),
+                folding: Folding::new(self.provider.api(), self.provider.namespace()),
             }));
             return Ok(());
         }
         let body = read_body(response).await?;
-        let whole = wire::response(&body, self.provider.secret())?;
+        let whole = match self.provider.api() {
+            OpenAiApi::ChatCompletions => wire::response(&body, &self.secret)?,
+            OpenAiApi::Responses => {
+                crate::responses::body(&body, &self.secret, self.provider.namespace())?
+            }
+        };
         if !whole.text.is_empty() {
             self.ready.push_back(ProviderEvent::Text(whole.text));
         }
@@ -152,25 +162,19 @@ impl<'a> Reading<'a> {
             mut events,
             mut folding,
         } = streamed;
-        let secret = self.provider.secret();
+        let secret = &self.secret;
         loop {
             let Some(chunk) = response.chunk().await.map_err(OpenAiError::request)? else {
-                let last = events.finish()?;
-                if let Some(data) = last.filter(|data| data != DONE)
-                    && let Some(text) = folding.take(&data, secret)?
+                if let Some(data) = events.finish()?
+                    && folding.take(&data, secret, &mut self.ready)?
                 {
-                    self.ready.push_back(ProviderEvent::Text(text));
-                }
-                self.end(folding);
-                return Ok(());
-            };
-            for data in events.feed(&chunk)? {
-                if data == DONE {
-                    self.end(folding);
                     return Ok(());
                 }
-                if let Some(text) = folding.take(&data, secret)? {
-                    self.ready.push_back(ProviderEvent::Text(text));
+                return folding.eof(&mut self.ready);
+            };
+            for data in events.feed(&chunk)? {
+                if folding.take(&data, secret, &mut self.ready)? {
+                    return Ok(());
                 }
             }
             if !self.ready.is_empty() {
@@ -182,14 +186,6 @@ impl<'a> Reading<'a> {
                 return Ok(());
             }
         }
-    }
-
-    /// The answer is over: its calls, folded, then its end.
-    fn end(&mut self, folding: Folding) {
-        let (calls, done): (_, Done) = folding.finish();
-        self.ready
-            .extend(calls.into_iter().map(ProviderEvent::ToolCall));
-        self.ready.push_back(ProviderEvent::Done(done));
     }
 }
 

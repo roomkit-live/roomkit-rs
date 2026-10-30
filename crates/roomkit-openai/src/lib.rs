@@ -1,11 +1,10 @@
 //! An AI agent channel for RoomKit, answering through an OpenAI-compatible
-//! Chat Completions endpoint: OpenAI's, or vLLM's, OpenRouter's, DeepSeek's,
-//! Mistral's, a local server's.
+//! Chat Completions endpoint or a Responses endpoint.
 //!
 //! [`OpenAiAgent`] is an intelligence channel (RFC §6.4), `roomkit-ai`'s
-//! [`AiAgent`](roomkit_ai::AiAgent) over the Chat Completions wire: each
+//! [`AiAgent`](roomkit_ai::AiAgent) over the selected OpenAI wire: each
 //! event the room hands it is a turn, one tool loop whose generations are
-//! streamed completions (server-sent events, `stream_options.include_usage`),
+//! streamed generations (server-sent events),
 //! the text reaching a streaming channel of the room as it is written. The
 //! turn sends the agent's system prompt,
 //! then the room's recent messages as the conversation RFC §6.4 requires
@@ -35,15 +34,36 @@
 //! kit.register_channel(agent)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! Chat Completions is the default. To use stateless Responses, select it
+//! explicitly; the same base URL and bearer credential are used:
+//!
+//! ```
+//! use roomkit_openai::{OpenAiApi, OpenAiConfig};
+//! let config = OpenAiConfig::new("https://api.openai.com/v1", "sk-...", "gpt-6-luna")
+//!     .with_api(OpenAiApi::Responses)
+//!     .with_reasoning_effort("medium");
+//! ```
+//!
+//! Responses uses `store: false` and replays supported output items in order
+//! inside each tool loop, including encrypted reasoning and assistant message
+//! phases. That provider state is separate from room history; later user turns
+//! rebuild the ordinary transcript, including earlier calls and their results.
+//! This path supports text and function
+//! tools, not hosted tools or multimodal input. OAuth login, token refresh and
+//! credential persistence are host responsibilities.
 
 mod agent;
 mod config;
+mod credentials;
 mod error;
 mod names;
+mod responses;
 mod sse;
 mod stream;
 mod wire;
 
 pub use self::agent::OpenAiAgent;
-pub use self::config::OpenAiConfig;
+pub use self::config::{OpenAiApi, OpenAiConfig};
+pub use self::credentials::{TokenError, TokenFuture, TokenSource};
 pub use self::error::OpenAiError;

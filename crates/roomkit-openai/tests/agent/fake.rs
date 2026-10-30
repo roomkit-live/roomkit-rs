@@ -76,6 +76,15 @@ impl Reply {
         }
     }
 
+    /// Raw SSE data, including streams that close without a terminal event.
+    pub(crate) fn sse(body: &str) -> Self {
+        Self {
+            body: body.into(),
+            content_type: "text/event-stream",
+            ..Self::completion("")
+        }
+    }
+
     /// A streamed answer that sends `fill` again and again, `bytes` bytes
     /// of it, or until the client stops reading.
     pub(crate) fn endless(fill: &str, bytes: usize) -> Self {

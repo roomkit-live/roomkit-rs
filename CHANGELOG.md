@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Resolve renewable OpenAI bearer credentials before each generation through a
+  host-owned token source, with safe account errors. Responses can group tools
+  under a namespace and rejects calls outside the configured namespace.
+
 - AI turn records expose last-generation usage, model identity and accounting
   completeness separately from cumulative usage. Missing OpenAI token counts
   remain unknown instead of becoming zero. (RMK-1029)
@@ -233,6 +237,15 @@ kit, its construction and its calls).
   an id were paired by that trigger, one call with the other's result.
   A deleted start row ends its round in a turn run through the kit too,
   whose history hands it with its content withheld.
+
+### Added
+
+- `roomkit-openai`: opt into stateless Responses with `OpenAiApi::Responses`,
+  including streamed text, function calls, ordered encrypted reasoning replay
+  within a tool loop, usage counters and terminal failure reporting. Chat
+  Completions remains the default. `with_reasoning_effort` configures either API.
+- `roomkit-ai` and `roomkit::transcript`: provider metadata on `Done` and `Message`
+  carries a tool round's replay state without adding it to room history.
 
 ## [0.1.0] — 2026-10-27
 

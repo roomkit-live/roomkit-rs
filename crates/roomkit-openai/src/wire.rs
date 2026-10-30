@@ -480,7 +480,7 @@ pub(crate) fn status_error(status: StatusCode, body: &[u8], secret: &str) -> Ope
 
 /// `text` as an error carries it: `secret` removed wherever it appears,
 /// on one line, within `limit` characters.
-fn cleaned(text: &str, secret: &str, limit: usize) -> String {
+pub(crate) fn cleaned(text: &str, secret: &str, limit: usize) -> String {
     let removed = if secret.is_empty() {
         text.to_owned()
     } else {

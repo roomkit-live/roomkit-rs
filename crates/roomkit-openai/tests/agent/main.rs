@@ -8,7 +8,9 @@
     reason = "a test fails on a broken fixture"
 )]
 
+mod credentials;
 mod fake;
+mod responses;
 
 use std::time::Duration;
 
@@ -379,7 +381,7 @@ async fn an_answer_that_is_no_chat_completion_fails_the_turn() {
     assert!(
         error
             .message
-            .starts_with("the provider's answer is not a chat completion: "),
+            .starts_with("the provider's answer is malformed: "),
         "{error:?}"
     );
     assert_eq!(room.sms.texts(), Vec::<String>::new());
