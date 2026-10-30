@@ -248,7 +248,7 @@ async fn one_provider_has_no_reasoning_state_to_leak_to_another_room() {
 
 #[tokio::test]
 async fn a_dropped_stream_never_executes_an_announced_call() {
-    let event = json!({"type":"response.output_item.done","item":call("a", r#"{"order":"42"}"#)});
+    let event = json!({"type":"response.output_item.done","output_index":0,"item":call("a", r#"{"order":"42"}"#)});
     for reply in [
         Reply::sse(&format!("data: {event}\n\n")),
         Reply::events(&[event]),
@@ -269,7 +269,7 @@ async fn a_dropped_stream_never_executes_an_announced_call() {
 #[tokio::test]
 async fn a_failed_stream_reports_its_error_without_echoing_the_credential() {
     let reply = Reply::events(&[
-        json!({"type":"response.output_item.done","item":call("a", "{}")}),
+        json!({"type":"response.output_item.done","output_index":0,"item":call("a", "{}")}),
         json!({"type":"response.failed", "response":{"status":"failed",
             "error":{"code":"quota_exceeded", "message":"Rejected bearer sk-test"}}}),
     ]);
@@ -448,4 +448,76 @@ async fn a_call_in_an_unknown_namespace_never_executes() {
             .is_some()
     );
     assert_eq!(count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn item_events_supply_text_tools_reasoning_and_usage_when_terminal_output_is_empty() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let items = [
+        reasoning("rs_thin"),
+        message("Checking."),
+        call("thin", r#"{"order":"42"}"#),
+    ];
+    let mut events = vec![json!({"type":"response.output_text.delta","delta":"Checking."})];
+    // Out-of-order completion and an identical repeated event remain deterministic.
+    for index in [2, 0, 1, 2] {
+        events.push(
+            json!({"type":"response.output_item.done","output_index":index,"item":items[index]}),
+        );
+    }
+    events.push(terminal(complete(vec![])));
+    let final_events = [
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"message"}}),
+        json!({"type":"response.output_text.delta","delta":"Ready."}),
+        json!({"type":"response.output_item.done","output_index":0,"item":message("Ready.")}),
+        terminal(complete(vec![])),
+    ];
+    let room = configured(
+        vec![Reply::events(&events), Reply::events(&final_events)],
+        lookup(&count),
+    )
+    .await;
+    assert_eq!(
+        room.says(&room.sms, "alice", "Alice", "Check.").await.error,
+        None
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert_eq!(room.sms.texts().join(""), "Checking.Ready.");
+    let requests = room.fake.requests();
+    let input = requests[1].body["input"].as_array().unwrap();
+    assert_eq!(input[1], items[0]);
+    assert_eq!(input[2], items[1]);
+    assert_eq!(input[3]["call_id"], "thin");
+    assert_eq!(input[4]["type"], "function_call_output");
+    assert_eq!(
+        room.timeline().await.last().unwrap().metadata["ai_usage"]["output_tokens"],
+        12
+    );
+}
+
+#[tokio::test]
+async fn inconsistent_item_streams_never_execute_tools() {
+    for prefix in [
+        vec![json!({"type":"response.output_item.done","output_index":1,"item":call("a", "{}")})],
+        vec![json!({"type":"response.output_item.added","output_index":0,"item":call("a", "{}")})],
+        vec![
+            json!({"type":"response.output_item.done","output_index":0,"item":call("a", "{}")}),
+            json!({"type":"response.output_item.done","output_index":0,"item":call("b", "{}")}),
+        ],
+        vec![
+            json!({"type":"response.output_item.done","output_index":4096,"item":call("a", "{}")}),
+        ],
+    ] {
+        let count = Arc::new(AtomicUsize::new(0));
+        let mut events = prefix;
+        events.push(terminal(complete(vec![])));
+        let room = configured(vec![Reply::events(&events)], lookup(&count)).await;
+        assert!(
+            room.says(&room.sms, "alice", "Alice", "Check.")
+                .await
+                .error
+                .is_some()
+        );
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
 }
