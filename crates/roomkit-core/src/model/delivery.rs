@@ -1,5 +1,7 @@
 //! What a delivery to a channel produced (RFC §5.13).
 
+use std::fmt::Write as _;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -141,22 +143,86 @@ impl DeliveryError {
 }
 
 /// `value` as Python's `str()` writes it, when Python reads it true: a
-/// string as it is, a bool `True`, a number in Python's form, a list or an
-/// object as JSON; `None` for null, `false`, `0`, an empty string, list or
-/// object.
+/// string as it is, any other value as [`python_repr`] writes it; `None`
+/// for null, `false`, `0`, an empty string, list or object.
 fn python_str(value: &Value) -> Option<String> {
-    match value {
-        Value::Null | Value::Bool(false) => None,
-        Value::Bool(true) => Some("True".to_owned()),
-        Value::String(text) => (!text.is_empty()).then(|| text.clone()),
-        Value::Number(number) => match (number.as_i64(), number.as_u64(), number.as_f64()) {
-            (Some(integer), ..) => (integer != 0).then(|| integer.to_string()),
-            (None, Some(integer), _) => Some(integer.to_string()),
-            (None, None, float) => float.filter(|float| *float != 0.0).map(python_float),
-        },
-        Value::Array(items) => (!items.is_empty()).then(|| value.to_string()),
-        Value::Object(fields) => (!fields.is_empty()).then(|| value.to_string()),
+    let truthy = match value {
+        Value::Null | Value::Bool(false) => false,
+        Value::Bool(true) => true,
+        Value::String(text) => !text.is_empty(),
+        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => !fields.is_empty(),
+    };
+    if !truthy {
+        return None;
     }
+    Some(match value {
+        Value::String(text) => text.clone(),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+            python_repr(value)
+        }
+    })
+}
+
+/// `value` as Python's `repr()` writes the value JSON reads it as: `None`,
+/// `True`, `False`, an integer, a float in Python's form, a string quoted,
+/// a list `[1, 2]`, a dict `{'a': 1}`, its keys in the map's order.
+fn python_repr(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_owned(),
+        Value::Bool(true) => "True".to_owned(),
+        Value::Bool(false) => "False".to_owned(),
+        Value::Number(number) => match (number.as_i64(), number.as_u64(), number.as_f64()) {
+            (Some(integer), ..) => integer.to_string(),
+            (None, Some(integer), _) => integer.to_string(),
+            (None, None, Some(float)) => python_float(float),
+            (None, None, None) => number.to_string(),
+        },
+        Value::String(text) => repr_str(text),
+        Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(python_repr).collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::Object(fields) => {
+            let fields: Vec<String> = fields
+                .iter()
+                .map(|(key, value)| format!("{}: {}", repr_str(key), python_repr(value)))
+                .collect();
+            format!("{{{}}}", fields.join(", "))
+        }
+    }
+}
+
+/// `text` as Python's `repr()` of a `str` writes it: in single quotes,
+/// double ones when it holds a single quote and no double one, its
+/// backslashes, its quote and its control characters escaped.
+fn repr_str(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut written = String::from(quote);
+    for character in text.chars() {
+        match character {
+            '\\' => written.push_str("\\\\"),
+            '\n' => written.push_str("\\n"),
+            '\r' => written.push_str("\\r"),
+            '\t' => written.push_str("\\t"),
+            _ if character == quote => {
+                written.push('\\');
+                written.push(character);
+            }
+            _ if character.is_ascii_control() => {
+                // Writing to a `String` does not fail.
+                let _ = write!(written, "\\x{:02x}", u32::from(character));
+            }
+            _ => written.push(character),
+        }
+    }
+    written.push(quote);
+    written
 }
 
 fn retryable_by_default() -> bool {
@@ -230,6 +296,12 @@ mod tests {
             result(None, json!({ "code": 0, "retryable": true })),
             result(None, json!({ "code": true })),
             result(None, json!({ "code": 1.5 })),
+            result(None, json!({ "code": [1, 2] })),
+            result(None, json!({ "code": { "a": 1 } })),
+            result(
+                None,
+                json!({ "code": { "b": [1, "it's"], "c": null, "d": true, "e": 1e-5 } }),
+            ),
         ]
         .map(|result| {
             let error = DeliveryError::of_provider(&result);
@@ -248,6 +320,13 @@ mod tests {
                 python("provider_send_failed", "ProviderDeliveryFailed", true),
                 python("provider_send_failed", "True", true),
                 python("provider_send_failed", "1.5", true),
+                python("provider_send_failed", "[1, 2]", true),
+                python("provider_send_failed", "{'a': 1}", true),
+                python(
+                    "provider_send_failed",
+                    "{'b': [1, \"it's\"], 'c': None, 'd': True, 'e': 1e-05}",
+                    true
+                ),
             ]
         );
     }
