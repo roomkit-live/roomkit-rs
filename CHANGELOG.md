@@ -91,6 +91,9 @@ kit, its construction and its calls; lot 2: the model and the errors).
   linked to another identity of the organization"), as does
   `StoreError::AddressLinked`, which no longer tells a caller the address
   it passed nor another identity's id.
+- A call whose run the kit's close aborts reports the answers its cascade
+  stored as its `response_events`, as Python's caller reads them (they
+  were missing).
 - A call's `delivery_results` reports every target that failed, as the
   Python implementation's does: a transport whose `on_event()` or
   `deliver()` raised, and an agent whose turn raised or answered an error,
