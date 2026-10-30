@@ -63,9 +63,11 @@ impl<S: ConversationStore> RoomKit<S> {
     /// ([`Channel::close`](crate::Channel::close)), one after the other,
     /// once, a channel whose close panics noted and the next one closed
     /// all the same; what their closes started is cut and given a second,
-    /// and the kit is sealed. The close takes the grace, plus the channels'
-    /// closes, plus at most a second three times; work still running
-    /// then, its abort not taken yet, is named in one warning.
+    /// and the kit is sealed. The close takes the grace, plus the turn
+    /// backend's second for its turns, plus the channels' closes, plus at
+    /// most a second twice, which only work that ignores its cut spends, a
+    /// task blocked in synchronous code, which an abort reaches once it
+    /// yields; such work still running then is named in one warning.
     ///
     /// The kit has one shutdown: the first `close` starts it in a task of
     /// its own, and every `close`, concurrent or later, waits for that one,
@@ -130,9 +132,10 @@ impl<S: ConversationStore> RoomKit<S> {
         tasks.cut();
         self.unwind().await;
         // The turn backend takes no more turns; those still running are given
-        // up within an unwind of their own.
+        // up within an unwind of their own, which waits for the turns alone,
+        // as the Python implementation's turn backend's close.
         turns.close();
-        self.unwind().await;
+        self.unwind_turns().await;
         let failures = self.inner.close_channels().await;
         // What the channels' closes started is cut, its grace over.
         tasks.cut();
@@ -147,6 +150,19 @@ impl<S: ConversationStore> RoomKit<S> {
         }
         tasks.seal();
         failures
+    }
+
+    /// Lets the turns the turn backend's close gave up unwind, within
+    /// [`CUT_UNWIND`]; what is left of them then is aborted.
+    async fn unwind_turns(&self) {
+        let tasks = &self.inner.tasks;
+        if tokio::time::timeout(CUT_UNWIND, tasks.unspared_turns_idle())
+            .await
+            .is_err()
+        {
+            tasks.abort_left_turns();
+            tokio::task::yield_now().await;
+        }
     }
 
     /// Lets the work the close cut unwind, within [`CUT_UNWIND`]; what is
@@ -166,6 +182,8 @@ impl<S: ConversationStore> RoomKit<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::RoomKitOptions;
+    use crate::tasks::Kind;
 
     /// RFC §12.10.4: the production bound, pinned once: the tests run it on
     /// tokio's paused clock.
@@ -175,5 +193,19 @@ mod tests {
             (CLOSE_GRACE, CUT_UNWIND),
             (Duration::from_secs(5), Duration::from_secs(1))
         );
+    }
+
+    /// RFC §12.10.4: work that ignores its cut holds the close its grace
+    /// plus two unwinds, the turn backend's close waiting for its turns
+    /// alone, as the Python implementation's `_turns._close` does
+    /// (`rmk1030-rs-review-B/py_probe.out`, stubborn send: grace plus two
+    /// unwinds). On 01c8420 it held it three unwinds, 8 s.
+    #[tokio::test(start_paused = true)]
+    async fn work_ignoring_its_cut_holds_the_close_its_grace_and_two_unwinds() {
+        let kit = RoomKit::new(RoomKitOptions::default());
+        let _stubborn = kit.inner.tasks.track_unabortable(Kind::Observer);
+        let started = Instant::now();
+        kit.close().await.unwrap();
+        assert_eq!(started.elapsed(), CLOSE_GRACE + CUT_UNWIND + CUT_UNWIND);
     }
 }

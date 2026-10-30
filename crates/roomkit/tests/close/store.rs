@@ -27,6 +27,11 @@ pub(crate) struct StuckStore {
     hangs: Option<(&'static str, bool)>,
     /// Whether a read of an event by its id fails.
     read_back_fails: bool,
+    /// Whether a read of an event by its id never ends.
+    read_back_hangs: bool,
+    /// Once set, the writes of a room's delivery cursor left before one
+    /// never ends.
+    pub(crate) cursor_writes_left: Arc<Mutex<Option<usize>>>,
     /// Once set, a write of a room never ends; it tells `committing` it
     /// started.
     pub(crate) rooms_hang: Arc<AtomicBool>,
@@ -60,6 +65,14 @@ impl StuckStore {
     pub(crate) fn failing_read_back(self) -> Self {
         Self {
             read_back_fails: true,
+            ..self
+        }
+    }
+
+    /// The same store, whose reads of an event by its id never end.
+    pub(crate) fn hanging_read_back(self) -> Self {
+        Self {
+            read_back_hangs: true,
             ..self
         }
     }
@@ -107,6 +120,20 @@ impl ConversationStore for StuckStore {
         index: u64,
         force: bool,
     ) -> Result<bool, StoreError> {
+        let hangs = {
+            let mut left = self.cursor_writes_left.lock().unwrap();
+            match left.as_mut() {
+                Some(0) => true,
+                Some(count) => {
+                    *count -= 1;
+                    false
+                }
+                None => false,
+            }
+        };
+        if hangs {
+            self.hang("cursor").await;
+        }
         self.store
             .advance_delivered_index(room_id, index, force)
             .await
@@ -268,6 +295,9 @@ impl ConversationStore for StuckStore {
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
         if self.read_back_fails {
             return Err(StoreError::Value("the store is gone".to_owned()));
+        }
+        if self.read_back_hangs {
+            std::future::pending::<()>().await;
         }
         self.store.get_event(event_id).await
     }

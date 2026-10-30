@@ -549,15 +549,16 @@ fn record(text: &str) -> RoomEvent {
     }
 }
 
-/// A run in its caller's own task, which the caller keeps but stops
-/// polling once its write started (a `select!` whose other branch awaits
-/// the close): the close gives it its grace, a call it tracks, then its
-/// unwinds, which it cannot take unpolled, 8 s in all, and names it in its
-/// warning; its write, ended at 1 s, is stored, and the call, polled
-/// again, reads its commit back (RFC §12.10.4). On fefbfac the close
-/// waited for the write alone, 1 s.
+/// A direct call whose caller keeps its future but stops polling it once
+/// its write started (a `select!` whose other branch awaits the close):
+/// the call runs on a task of its own, as an inbound call does, so the
+/// close waits for its write alone, 1 s, and names nothing in a warning;
+/// its write is stored, and the call, polled again, reads its event (RFC
+/// §12.10.4; Python's task is always driven,
+/// `rmk1030-rs-review-B/side_by_side.txt`). On 01c8420 the call ran in its
+/// caller's task: the close took 8 s, the call named in its warning.
 #[tokio::test(start_paused = true)]
-async fn a_run_its_caller_stops_polling_holds_the_close_its_grace() {
+async fn a_call_its_caller_stops_polling_holds_the_close_no_longer() {
     let (kit, _ws) = gated_room().await;
     let room = room_id();
     let mut commit = pin!(kit.commit_event(&room, record("Slow"), CommitEventOptions::default()));
@@ -576,13 +577,8 @@ async fn a_run_its_caller_stops_polling_holds_the_close_its_grace() {
     let at_close = stored(&kit, "Slow").await;
     let ended = commit.await.map(|event| roomkit::text_of(&event.content));
     assert_eq!(
-        (
-            took >= Duration::from_secs(5) && took <= Duration::from_secs(8),
-            lines.containing("a call").len(),
-            at_close,
-            ended.ok()
-        ),
-        (true, 1, true, Some("Slow".to_owned()))
+        (took, lines.containing("").len(), at_close, ended.ok()),
+        (Duration::from_secs(1), 0, true, Some("Slow".to_owned()))
     );
 }
 

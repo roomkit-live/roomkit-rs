@@ -436,3 +436,72 @@ async fn a_spared_run_s_queued_set_is_dropped() {
         )
     );
 }
+
+/// A transport whose `on_event()` takes a second before its delivery,
+/// which it notes.
+#[derive(Clone, Default)]
+struct Late {
+    delivered: Arc<Mutex<Vec<String>>>,
+}
+
+impl Channel for Late {
+    fn declaration(&self) -> ChannelDeclaration {
+        transport("late")
+    }
+
+    async fn on_event(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        Ok(ChannelOutput::default())
+    }
+
+    fn deliver(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        self.delivered
+            .lock()
+            .unwrap()
+            .push(roomkit::text_of(&event.content));
+        async { Ok(ChannelOutput::default()) }
+    }
+}
+
+/// RFC §12.10.4: once the kit is sealed, the work a close spared delivers
+/// nothing: the witness's delivery closes the kit, the close returns at
+/// once, and a target of the same set whose `on_event()` ends a second
+/// later is never delivered to (killing `rmk1030-rs-review-A` mutant M30).
+#[tokio::test(start_paused = true)]
+async fn a_spared_run_delivers_nothing_once_the_kit_is_sealed() {
+    let witness = Witness::new();
+    let kit = kit_with(&witness).await;
+    let closer = Closer::new(&kit, &witness, false);
+    *witness.closes_on_delivery.lock().unwrap() = Some(closer.clone());
+    let late = Late::default();
+    kit.register_channel(late.clone()).unwrap();
+    kit.attach_channel(
+        &room_id(),
+        &channel("late"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    let call = spawn_message(&kit, "Bye.", room_id());
+    let returned = closer.returned_once_closed().await;
+    drop(ended(call).await);
+    roomkit::testing::idle(&kit).await;
+    assert_eq!(
+        (
+            returned,
+            sealed(&kit).await,
+            late.delivered.lock().unwrap().clone()
+        ),
+        (Some(true), true, Vec::<String>::new())
+    );
+}

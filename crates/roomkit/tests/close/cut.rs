@@ -12,13 +12,14 @@ use pretty_assertions::assert_eq;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType,
-    DeliveryResultStatus, HookResult, RoomContext, RoomEvent, RoomStatus, TextContent,
+    DeliveryResultStatus, HookResult, Observation, ObservationId, RoomContext, RoomEvent,
+    RoomStatus, TextContent,
 };
 use roomkit::testing::EchoAgent;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
-    GetRoomOptions, HookExecution, HookSpec, HookTrigger, InMemoryStore, PauseRoomOptions,
-    SendEventOptions, text_of,
+    ConversationStore, GetRoomOptions, HookExecution, HookSpec, HookTrigger, InMemoryStore,
+    PauseRoomOptions, SendEventOptions, text_of,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -119,6 +120,67 @@ async fn a_send_outlasting_the_grace_is_cut_and_reported_failed() {
     );
 }
 
+/// A transport whose `on_event()` notes an observation on each event.
+#[derive(Clone)]
+struct Noting;
+
+impl Channel for Noting {
+    fn declaration(&self) -> ChannelDeclaration {
+        crate::support::transport("noting")
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let observation = Observation::at(
+            ObservationId::from_u128(1),
+            event.room_id.clone(),
+            channel("noting"),
+            "seen",
+            event.created_at,
+        );
+        async move {
+            Ok(ChannelOutput {
+                observations: vec![observation],
+                ..ChannelOutput::empty()
+            })
+        }
+    }
+}
+
+/// RFC §12.10.4: a call the close cut past its decision, its send cut
+/// once the grace ran out, writes nothing more: the observation a target
+/// noted is never stored, as nothing else of a cut plan's aftermath runs in
+/// the Python implementation (`_report_cut`); the call reads its cut. On
+/// 01c8420 the cut run still wrote its side effects.
+#[tokio::test(start_paused = true)]
+async fn a_call_cut_past_its_decision_writes_nothing_more() {
+    let held = Holding::new("ws", [("noted", Hold::ForEver)]);
+    let kit = kit_of(InMemoryStore::default(), &[&held], &["r"]).await;
+    kit.register_channel(Noting).unwrap();
+    kit.attach_channel(
+        &room("r"),
+        &channel("noting"),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    let call = deferred(&kit, "noted", "r").await;
+    held.entered("noted").await;
+
+    closed(spawn_close(&kit)).await;
+
+    let result = call.delivery.unwrap().wait().await.unwrap();
+    let observations = kit.store().list_observations(&room("r")).await.unwrap();
+    assert_eq!(
+        (result.cancellation_reason.as_deref(), observations.len()),
+        (Some("kit_closed"), 0)
+    );
+}
+
 /// RFC §12.10.4: a commit past its caller's decision, the caller gone,
 /// gets the grace, then is cut: nothing of it is written after `close()`
 /// (Python's `test_a_write_outlasting_the_grace_is_cut_and_never_lands`).
@@ -181,40 +243,49 @@ async fn a_room_change_outlasting_the_grace_is_cut_and_never_lands() {
     );
 }
 
+/// The doors a call's commit goes through.
+const COMMITTING: [&str; 3] = ["process_inbound", "send_event", "commit_event"];
+
+/// A call of "slow" into `r` through `door`, on a task of its own: what it
+/// came to.
+fn commit_through(
+    kit: &roomkit::RoomKit<StuckStore>,
+    door: &'static str,
+) -> tokio::task::JoinHandle<String> {
+    let kit = kit.clone();
+    tokio::spawn(async move {
+        let r = room("r");
+        match door {
+            "process_inbound" => {
+                let result = kit.process_inbound(said("slow"), into("r")).await.unwrap();
+                format!(
+                    "{:?} {:?} {}",
+                    result.event.as_ref().map(|event| text_of(&event.content)),
+                    cut(&result),
+                    result.delivery_results.len()
+                )
+            }
+            "send_event" => {
+                let (content, sms) = (TextContent::new("slow"), channel("sms"));
+                let sent = kit.send_event(&r, &sms, content, SendEventOptions::default());
+                format!("{:?}", sent.await.map(|event| text_of(&event.content)))
+            }
+            _ => {
+                let committed = kit.commit_event(&r, record("slow"), CommitEventOptions::default());
+                format!("{:?}", committed.await.map(|event| text_of(&event.content)))
+            }
+        }
+    })
+}
+
 /// What a call through `door` whose commit lands as the grace runs out
 /// came to.
-async fn a_commit_landed_as_it_was_cut(door: &str) -> (String, Vec<String>, Vec<String>) {
+async fn a_commit_landed_as_it_was_cut(door: &'static str) -> (String, Vec<String>, Vec<String>) {
     let store = StuckStore::hanging("slow", true);
     let committing = Arc::clone(&store.committing);
     let held = Holding::new("ws", []);
     let kit = kit_of(store, &[&held], &["r"]).await;
-    let call = tokio::spawn({
-        let (kit, door) = (kit.clone(), door.to_owned());
-        async move {
-            let r = room("r");
-            match door.as_str() {
-                "process_inbound" => {
-                    let result = kit.process_inbound(said("slow"), into("r")).await.unwrap();
-                    format!(
-                        "{:?} {:?} {}",
-                        result.event.as_ref().map(|event| text_of(&event.content)),
-                        cut(&result),
-                        result.delivery_results.len()
-                    )
-                }
-                "send_event" => {
-                    let (content, sms) = (TextContent::new("slow"), channel("sms"));
-                    let sent = kit.send_event(&r, &sms, content, SendEventOptions::default());
-                    format!("{:?}", sent.await.map(|event| text_of(&event.content)))
-                }
-                _ => {
-                    let committed =
-                        kit.commit_event(&r, record("slow"), CommitEventOptions::default());
-                    format!("{:?}", committed.await.map(|event| text_of(&event.content)))
-                }
-            }
-        }
-    });
+    let call = commit_through(&kit, door);
     committing.notified().await;
 
     closed(spawn_close(&kit)).await;
@@ -233,7 +304,7 @@ async fn a_commit_landed_as_it_was_cut(door: &str) -> (String, Vec<String>, Vec<
 #[tokio::test(start_paused = true)]
 async fn a_call_whose_commit_landed_as_it_was_cut_reports_it_stored() {
     let mut rows = Vec::new();
-    for door in ["process_inbound", "send_event", "commit_event"] {
+    for door in COMMITTING {
         rows.push((door, a_commit_landed_as_it_was_cut(door).await));
     }
     let slow = || vec!["slow".to_owned()];
@@ -254,28 +325,54 @@ async fn a_call_whose_commit_landed_as_it_was_cut_reports_it_stored() {
     );
 }
 
-/// RFC §12.10.4: the limit of the read-back: one that fails leaves the
-/// call reported as not stored, whatever the store holds, and a warning
-/// says so (Python's
+/// RFC §12.10.4: the limit of the read-back: one that fails, or that does
+/// not end within the close's unwind, leaves the call reported as not
+/// stored, whatever the store holds, and a warning says so, through each
+/// door whose call commits (Python's
 /// `test_a_cut_commit_whose_read_back_fails_reports_nothing_stored_and_says_so`).
+/// On 01c8420 the close aborted a message or a `send_event` whose read-back
+/// hung before it timed out, and nothing was logged
+/// (`rmk1030-rs-review-A/probe1-3-5.out`).
 #[tokio::test(start_paused = true)]
 async fn a_cut_commit_whose_read_back_fails_reports_nothing_stored_and_says_so() {
-    let (logs, logging) = Warnings::capture();
-    let store = StuckStore::hanging("slow", true).failing_read_back();
-    let committing = Arc::clone(&store.committing);
-    let kit = kit_of(store, &[&Holding::new("ws", [])], &["r"]).await;
-    let call = spawn_said(&kit, "slow", "r");
-    committing.notified().await;
+    let mut rows = Vec::new();
+    for hangs in [false, true] {
+        for door in COMMITTING {
+            let (logs, logging) = Warnings::capture();
+            let store = StuckStore::hanging("slow", true);
+            let store = if hangs {
+                store.hanging_read_back()
+            } else {
+                store.failing_read_back()
+            };
+            let committing = Arc::clone(&store.committing);
+            let kit = kit_of(store, &[&Holding::new("ws", [])], &["r"]).await;
+            let call = commit_through(&kit, door);
+            committing.notified().await;
 
-    closed(spawn_close(&kit)).await;
+            closed(spawn_close(&kit)).await;
 
-    let result = result_of(call).await;
-    drop(logging);
-    let said_so = logs
-        .containing("reading it back failed")
-        .iter()
-        .any(|line| line.starts_with("WARN"));
-    assert_eq!((cut(&result), said_so), (CUT_BY_CLOSE, true));
+            let ended = tokio::time::timeout(Duration::from_secs(1), call)
+                .await
+                .map_or_else(|_| "did not end".to_owned(), Result::unwrap);
+            drop(logging);
+            let said_so = logs
+                .containing("reading it back failed")
+                .iter()
+                .filter(|line| line.starts_with("WARN"))
+                .count();
+            rows.push(((hangs, door), ended, said_so));
+        }
+    }
+    let message = format!("None {CUT_BY_CLOSE:?} 0");
+    let expected = [false, true].into_iter().flat_map(|hangs| {
+        [
+            ((hangs, "process_inbound"), message.clone(), 1),
+            ((hangs, "send_event"), "Err(KitClosed)".to_owned(), 1),
+            ((hangs, "commit_event"), "Err(KitClosed)".to_owned(), 1),
+        ]
+    });
+    assert_eq!(rows, expected.collect::<Vec<_>>());
 }
 
 /// RFC §12.10.4: the work outlasting the grace is cut before the channels
@@ -368,34 +465,51 @@ impl Channel for StuckOnAnswers {
 }
 
 /// RFC §12.10.4: a call the close cuts carries the answers its cascade
-/// stored (Python's `test_a_cut_call_carries_the_answers_already_stored`).
+/// stored (Python's `test_a_cut_call_carries_the_answers_already_stored`),
+/// its run ending on its cut, or aborted once its unwind ran out, its
+/// write of the room's delivery cursor never ending: its record reports
+/// them then (killing `rmk1030-rs-review-A` mutant M18).
 #[tokio::test(start_paused = true)]
 async fn a_cut_call_carries_the_answers_already_stored() {
-    let kit = kit_of(InMemoryStore::default(), &[&Holding::new("ws", [])], &["r"]).await;
-    let stuck = StuckOnAnswers::default();
-    kit.register_channel(EchoAgent::new(channel("ai"), "hello"))
-        .unwrap();
-    kit.register_channel(stuck.clone()).unwrap();
-    for id in ["ai", "stuck"] {
-        kit.attach_channel(&room("r"), &channel(id), AttachChannelOptions::default())
-            .await
+    let mut rows = Vec::new();
+    for cursor_hangs in [false, true] {
+        let store = StuckStore::default();
+        let cursor = Arc::clone(&store.cursor_writes_left);
+        let kit = kit_of(store, &[&Holding::new("ws", [])], &["r"]).await;
+        let stuck = StuckOnAnswers::default();
+        kit.register_channel(EchoAgent::new(channel("ai"), "hello"))
             .unwrap();
+        kit.register_channel(stuck.clone()).unwrap();
+        for id in ["ai", "stuck"] {
+            kit.attach_channel(&room("r"), &channel(id), AttachChannelOptions::default())
+                .await
+                .unwrap();
+        }
+        if cursor_hangs {
+            // The cursor of "hi" moves; the one of the answer never does.
+            *cursor.lock().unwrap() = Some(1);
+        }
+        let call = spawn_said(&kit, "hi", "r");
+        stuck.started.notified().await;
+
+        closed(spawn_close(&kit)).await;
+
+        let result = result_of(call).await;
+        let answers: Vec<String> = result
+            .response_events
+            .iter()
+            .map(|event| text_of(&event.content))
+            .collect();
+        rows.push((cursor_hangs, result.cancellation_reason, answers));
     }
-    let call = spawn_said(&kit, "hi", "r");
-    stuck.started.notified().await;
-
-    closed(spawn_close(&kit)).await;
-
-    let result = result_of(call).await;
-    let answers: Vec<String> = result
-        .response_events
-        .iter()
-        .map(|event| text_of(&event.content))
-        .collect();
-    assert_eq!(
-        (result.cancellation_reason.as_deref(), answers),
-        (Some("kit_closed"), vec!["hello".to_owned()])
-    );
+    let row = |hangs| {
+        (
+            hangs,
+            Some("kit_closed".to_owned()),
+            vec!["hello".to_owned()],
+        )
+    };
+    assert_eq!(rows, [row(false), row(true)]);
 }
 
 /// RFC §12.10.4: a send, a decided write, an observer and a hook holding

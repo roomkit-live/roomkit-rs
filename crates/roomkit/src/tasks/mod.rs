@@ -2,9 +2,9 @@
 //! can wait for them and cut them (decision 3 of step 2b, RFC §12.10.4):
 //! the inbound runs (RFC §10.1), whose caller waits for them or went on,
 //! with the tasks their turns run; the observer hooks that run after the
-//! fact (RFC §9.3); and the store's writes. The calls a kit runs in its
-//! caller's own task, a lifecycle change, a direct change of a stored
-//! event, `commit_event`, are tracked too while they run, with no task.
+//! fact (RFC §9.3); the store's writes; and the direct calls, a lifecycle
+//! change, a direct change of a stored event, `commit_event`, each run on
+//! a task of its own as an inbound call is.
 //!
 //! A task is tracked from its spawn until its future is dropped: at its end,
 //! aborted, or with the runtime. A task that spawns another one spawns it
@@ -43,8 +43,9 @@ pub(crate) enum Kind {
     /// to, the run reporting what it came to; aborted only once its
     /// unwind ran out.
     Run,
-    /// A call run in its caller's own task: its driver cuts it so; it has
-    /// no task to abort.
+    /// A direct call's run, on a task of its own: its driver cuts it as
+    /// the close tells it to, as an inbound run's; aborted only once its
+    /// unwind ran out.
     Call,
     /// A task of a turn's, its owner's or its executor's: aborted at the
     /// cut.
@@ -244,12 +245,12 @@ impl Tasks {
         Some(task)
     }
 
-    /// Tracks a call the current code runs in its own task while the guard
-    /// lives: the close's grace waits for it, sparing it when the current
-    /// code runs within work the close spares.
-    pub(crate) fn track_call(self: &Arc<Self>) -> Tracked {
+    /// Tracks work of `kind` with no task while the guard lives, which no
+    /// abort ends: the work a test makes ignore its cut.
+    #[cfg(test)]
+    pub(crate) fn track_unabortable(self: &Arc<Self>, kind: Kind) -> Tracked {
         let within = Marks::current().with(Unit::new()).units().into();
-        let key = track(&mut self.state(), Kind::Call, within);
+        let key = track(&mut self.state(), kind, within);
         Tracked {
             tasks: Arc::clone(self),
             key,
@@ -301,6 +302,12 @@ impl Tasks {
     /// included: the unwind the cut gave them ran out.
     pub(crate) fn abort_left(&self) {
         self.abort_unspared(|_| true);
+    }
+
+    /// Aborts the turns' tasks the close does not spare still running: the
+    /// unwind the turn backend's close gave them ran out.
+    pub(crate) fn abort_left_turns(&self) {
+        self.abort_unspared(|kind| kind == Kind::Turn);
     }
 
     fn abort_unspared(&self, aborts: impl Fn(Kind) -> bool) {
@@ -380,6 +387,18 @@ impl Tasks {
             |state| state.unspared().next().is_none(),
             also,
             also_changed,
+        )
+        .await;
+    }
+
+    /// Waits until no task of a turn's the close does not spare runs: the
+    /// turn backend's close waits for its turns alone.
+    pub(crate) async fn unspared_turns_idle(&self) {
+        let none = Notify::new();
+        self.wait_until(
+            |state| state.unspared().all(|running| running.kind != Kind::Turn),
+            || true,
+            &none,
         )
         .await;
     }

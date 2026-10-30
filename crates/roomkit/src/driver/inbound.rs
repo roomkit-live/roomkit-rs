@@ -31,7 +31,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
-use roomkit_core::model::{ErrorRecord, EventStatus, RoomEvent, RoomId};
+use roomkit_core::model::{ErrorRecord, EventId, EventStatus, RoomEvent, RoomId};
 use roomkit_core::ops::{
     Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, Outcome, StoreOutcome,
 };
@@ -39,6 +39,7 @@ use tokio::sync::oneshot;
 use tokio::task::{JoinError, JoinHandle};
 
 use super::calls::{self, Written};
+use super::in_flight::InFlight;
 use super::{Committed, Driven, Leases, Stop};
 use crate::context::ExecutionContext;
 use crate::error::{RoomKitError, with_causes};
@@ -83,6 +84,8 @@ pub(crate) struct Record {
     /// The commits of the call's own answers: what the call reports as its
     /// `response_events` once the kit's close aborted its run.
     answers: StoredAnswers,
+    /// The commit that decides the call, once it started.
+    in_flight: InFlight,
 }
 
 /// The answers a call's cascade commits, each with what its write came to:
@@ -130,7 +133,8 @@ impl Record {
     /// What a run the kit's close aborted reports, its unwind run out (RFC
     /// §12.10.4): the call as it was decided, with the answers its cascade
     /// stored, `kit_closed`; a call not decided yet, as one the close cut
-    /// before its commit, nothing of it stored.
+    /// before its commit, nothing of it stored, a commit it had in flight
+    /// warned of as a read-back that failed.
     pub(crate) fn aborted(&self) -> InboundResult {
         let decided = self
             .decided
@@ -138,6 +142,7 @@ impl Record {
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         let Some(mut result) = decided else {
+            self.in_flight.aborted();
             return cut_before_its_commit();
         };
         result.response_events = self.answers.stored();
@@ -228,6 +233,12 @@ impl Caller {
     /// its outcome told by `written`.
     pub(super) fn answers(&self, answer: RoomEvent, written: Written) {
         self.record.answers(answer, written);
+    }
+
+    /// The run of `call` started the commit of `event_id`, which decides the
+    /// call.
+    pub(super) fn commits(&self, call: &'static str, event_id: &EventId) {
+        self.record.in_flight.commits(call, event_id);
     }
 
     /// Whether the call is decided: its event committed, or its

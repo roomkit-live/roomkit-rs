@@ -355,3 +355,60 @@ fn every_row() -> crate::store::EventQuery {
         ..crate::store::EventQuery::default()
     }
 }
+
+/// RFC §12.10.4: the kit's own work, a cut turn's record written on its
+/// last message, waits for its room's lock through the close's grace,
+/// where a call of anyone else would be cut there at once, and is written
+/// once the lock is let go (killing `rmk1030-rs-review-A` mutant M23).
+#[tokio::test(start_paused = true)]
+async fn the_kit_s_own_write_waits_for_its_room_lock_through_the_grace() {
+    let kit = checked_room().await;
+    let options = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    let result = kit.process_inbound(message("Hi"), options).await.unwrap();
+    let event_id = result.event.unwrap().id;
+    let lock = kit.inner.locks.lock(&room_id()).await;
+    // Work the close gives its grace to, which the test ends.
+    let running = kit
+        .inner
+        .tasks
+        .track_unabortable(crate::tasks::Kind::Observer);
+    let close = tokio::spawn({
+        let kit = kit.clone();
+        async move { kit.close().await }
+    });
+    tokio::task::yield_now().await;
+    let own = tokio::spawn({
+        let (kit, event_id) = (kit.clone(), event_id.clone());
+        async move {
+            let mut metadata = roomkit_core::model::Metadata::new();
+            metadata.insert("loop_end_reason".to_owned(), "cancelled".into());
+            let updates = roomkit_core::model::EventUpdates {
+                metadata: Some(metadata),
+                ..Default::default()
+            };
+            kit.update_own(&room_id(), &event_id, updates).await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let waits = !own.is_finished();
+    drop(lock);
+    let written = tokio::time::timeout(BOUND, own).await.unwrap().unwrap();
+    drop(running);
+    tokio::time::timeout(Duration::from_secs(10), close)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let stored = kit.inner.store.get_event(&event_id).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            waits,
+            written.is_ok(),
+            stored.metadata.get("loop_end_reason").cloned()
+        ),
+        (true, true, Some("cancelled".into()))
+    );
+}

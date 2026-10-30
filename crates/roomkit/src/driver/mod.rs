@@ -31,6 +31,7 @@
 
 mod calls;
 mod holds;
+mod in_flight;
 mod inbound;
 mod indexes;
 
@@ -45,12 +46,13 @@ use roomkit_core::ops::{
     InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio::task::{self, AbortHandle, JoinError, JoinSet};
+use tokio::task::{self, AbortHandle, JoinError, JoinHandle, JoinSet};
 use tokio::time::Instant;
 
 pub(crate) use self::calls::cut_by_close;
 use self::calls::{WentOn, Written};
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
+use self::in_flight::InFlight;
 use self::inbound::Caller;
 pub(crate) use self::inbound::{InboundOutput, Ran, Record, StoredAnswers, ended, run_inbound};
 use self::indexes::Indexes;
@@ -58,7 +60,7 @@ use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::tasks::{CUT_UNWIND, Marks, Phase, Tracked};
+use crate::tasks::{Kind, Marks, Phase};
 use crate::turns::Canceller;
 
 /// The kit's clock and the runtime's, read together at a run's start: a
@@ -141,11 +143,14 @@ pub(crate) struct Committed {
 /// operation waited for a ticket's turn in an admission order its own
 /// execution context stands in, which was refused; a protocol error or a
 /// stall is a defect of this crate.
-pub(crate) async fn run<S: ConversationStore, O: Operation>(
+pub(crate) async fn run<S: ConversationStore, O: Operation + Send + 'static>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     operation: O,
-) -> Result<O::Output, RoomKitError> {
+) -> Result<O::Output, RoomKitError>
+where
+    O::Output: Send + 'static,
+{
     run_on(inner, inner.environment(), call, operation).await
 }
 
@@ -156,12 +161,15 @@ pub(crate) async fn run<S: ConversationStore, O: Operation>(
 /// # Errors
 ///
 /// As [`run`].
-pub(crate) async fn run_on<S: ConversationStore, O: Operation>(
+pub(crate) async fn run_on<S: ConversationStore, O: Operation + Send + 'static>(
     inner: &Arc<Inner<S>>,
     environment: Arc<dyn Environment + Send + Sync>,
     call: &'static str,
     operation: O,
-) -> Result<O::Output, RoomKitError> {
+) -> Result<O::Output, RoomKitError>
+where
+    O::Output: Send + 'static,
+{
     inner.open()?;
     Box::pin(run_in_its_task(inner, environment, call, operation, false))
         .await
@@ -174,11 +182,14 @@ pub(crate) async fn run_on<S: ConversationStore, O: Operation>(
 /// # Errors
 ///
 /// As [`run`], the close's cut as [`Stop::Cut`].
-pub(crate) async fn run_reading_back<S: ConversationStore, O: Operation>(
+pub(crate) async fn run_reading_back<S: ConversationStore, O: Operation + Send + 'static>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     operation: O,
-) -> Result<O::Output, Stop> {
+) -> Result<O::Output, Stop>
+where
+    O::Output: Send + 'static,
+{
     inner.open()?;
     Box::pin(run_in_its_task(
         inner,
@@ -197,11 +208,14 @@ pub(crate) async fn run_reading_back<S: ConversationStore, O: Operation>(
 /// # Errors
 ///
 /// As [`run`].
-pub(crate) async fn run_own<S: ConversationStore, O: Operation>(
+pub(crate) async fn run_own<S: ConversationStore, O: Operation + Send + 'static>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
     operation: O,
-) -> Result<O::Output, RoomKitError> {
+) -> Result<O::Output, RoomKitError>
+where
+    O::Output: Send + 'static,
+{
     if inner.tasks.is_sealed() {
         return Err(RoomKitError::KitClosed);
     }
@@ -216,34 +230,67 @@ pub(crate) async fn run_own<S: ConversationStore, O: Operation>(
     .map_err(Stop::into_error)
 }
 
-/// Runs `operation` in its caller's own task, tracked as a call the kit's
-/// close gives its grace, then cuts: at once while it waits for a room's
-/// lock, unless it is the kit's `own` work. Boxed by its callers: the
-/// operation and the run's state would make every caller's future large.
-async fn run_in_its_task<S: ConversationStore, O: Operation>(
+/// Runs `operation` on a task of its own, within its caller's execution
+/// context, as an inbound call's run is, tracked as a call the kit's close
+/// gives its grace, then cuts: at once while it waits for a room's lock,
+/// unless it is the kit's `own` work; aborted once the unwind the cut gives
+/// it ran out, a commit it had in flight then reported as a read-back that
+/// failed (RFC §12.10.4). A caller that keeps the call's future but stops
+/// polling it holds no work the close waits for; one that drops it cancels
+/// the call, its task aborted, as when the call ran in the caller's own
+/// task. Boxed by its callers: the operation and the run's state would make
+/// every caller's future large.
+async fn run_in_its_task<S: ConversationStore, O: Operation + Send + 'static>(
     inner: &Arc<Inner<S>>,
     environment: Arc<dyn Environment + Send + Sync>,
     call: &'static str,
     operation: O,
     own: bool,
-) -> Result<O::Output, Stop> {
-    let tracked = inner.tasks.track_call();
-    drive(
-        inner,
-        environment,
-        call,
-        operation,
-        Leases::Granted,
-        Driven::Call { tracked, own },
-    )
-    .await
+) -> Result<O::Output, Stop>
+where
+    O::Output: Send + 'static,
+{
+    let in_flight = Arc::new(InFlight::default());
+    let (kit, noting) = (Arc::clone(inner), Arc::clone(&in_flight));
+    let run = async move {
+        let how = Driven::Call {
+            own,
+            in_flight: noting,
+        };
+        drive(&kit, environment, call, operation, Leases::Granted, how).await
+    };
+    let context = ExecutionContext::current();
+    let Some(task) = inner.tasks.spawn(Kind::Call, context.scope(run)) else {
+        return Err(Stop::Failed(RoomKitError::KitClosed));
+    };
+    let mut task = Owned(task);
+    match (&mut task.0).await {
+        Ok(output) => output,
+        // A panic of the driver's own loop is a defect of this crate: the
+        // caller receives it as it would from a run it drove itself.
+        Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
+        Err(aborted) if inner.tasks.ended_by_close(aborted.id()) => {
+            in_flight.aborted();
+            Err(Stop::Cut(None))
+        }
+        Err(_cancelled) => Err(Stop::Failed(RoomKitError::Cancelled)),
+    }
+}
+
+/// A call's task, aborted when its caller's future is dropped.
+struct Owned<T>(JoinHandle<T>);
+
+impl<T> Drop for Owned<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// What a run is: an inbound call's, offering its decision to its caller,
-/// or a call run in its caller's own task.
+/// or a direct call's, noting the commit it has in flight.
 enum Driven<'run> {
     Inbound(&'run mut Caller),
-    Call { tracked: Tracked, own: bool },
+    Call { own: bool, in_flight: Arc<InFlight> },
 }
 
 /// Runs `operation`, made by the kit's call `call`, until it is ready,
@@ -261,9 +308,9 @@ async fn drive<S: ConversationStore, O: Operation>(
     leases: Leases,
     how: Driven<'_>,
 ) -> Result<O::Output, Stop> {
-    let (caller, own, tracked) = match how {
+    let (caller, own, in_flight) = match how {
         Driven::Inbound(caller) => (Some(caller), false, None),
-        Driven::Call { tracked, own } => (None, own, Some(tracked)),
+        Driven::Call { own, in_flight } => (None, own, Some(in_flight)),
     };
     let (shared, adoptions) = RunShared::new();
     let driver = Driver {
@@ -295,7 +342,7 @@ async fn drive<S: ConversationStore, O: Operation>(
         committing: None,
         stop: None,
         cut_now: false,
-        _tracked: tracked,
+        in_flight,
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -376,8 +423,9 @@ struct Driver<'kit, S> {
     /// flight and from now on fail `kit_closed`, so that it reports what it
     /// delivered (RFC §12.10.4).
     cut_now: bool,
-    /// The call the run's kit tracks, a call run in its caller's task.
-    _tracked: Option<Tracked>,
+    /// Where a direct call's run notes the commit it has in flight, which a
+    /// run the close aborted warns of; an inbound run's record notes its.
+    in_flight: Option<Arc<InFlight>>,
 }
 
 /// What a wait of the run waits for.
@@ -472,6 +520,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             answers.commits(answer.clone(), written.clone());
         }
         let Some(caller) = self.caller.as_deref() else {
+            if let Some(in_flight) = &self.in_flight {
+                in_flight.commits(self.call, &event.id);
+            }
             self.committing = Some((written.clone(), event.clone(), None));
             return;
         };
@@ -479,6 +530,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             caller.answers(answer, written.clone());
         }
         if decides.is_some() {
+            caller.commits(self.call, &event.id);
             self.committing = Some((written.clone(), event.clone(), decides));
         }
     }
@@ -592,38 +644,31 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// The commit that decides the call, read back by its id once its write
-    /// ended, the kit's close having cut it, within the unwind the close
-    /// gives the call (RFC §12.10.4): its event, `None` when the store
-    /// holds none, or when the read fails, as a warning says.
+    /// ended, the kit's close having cut it (RFC §12.10.4): its event,
+    /// `None` when the store holds none, or when the read fails, as a
+    /// warning says. The close aborts the run once the unwind it gives it
+    /// ran out, and the run's note of the commit in flight warns then.
     async fn read_back(&mut self) -> Option<Box<Committed>> {
         let (mut written, event, decides) = self.committing.take()?;
-        let unwind = Instant::now() + CUT_UNWIND;
-        drop(tokio::time::timeout_at(unwind, calls::outcome_of(&mut written)).await);
-        let read = tokio::time::timeout_at(unwind, self.inner.store.get_event(&event.id)).await;
-        let failure = match read {
-            Ok(Ok(stored)) => {
+        drop(calls::outcome_of(&mut written).await);
+        let failure = match self.inner.store.get_event(&event.id).await {
+            Ok(stored) => {
                 return stored
                     .filter(|stored| stored.room_id == event.room_id)
                     .map(|event| Box::new(Committed { event, decides }));
             }
-            Ok(Err(error)) => error.to_string(),
-            Err(_elapsed) => "it did not end within the close's unwind".to_owned(),
+            Err(error) => error.to_string(),
         };
-        tracing::warn!(
-            target: "roomkit::driver",
-            event_id = %event.id,
-            call = self.call,
-            %failure,
-            "the kit closed as a call committed its event, and reading it back failed: the \
-             call reports nothing stored"
-        );
+        in_flight::read_back_failed(self.call, &event.id, &failure);
         None
     }
 
     /// Cuts a run past its decision once the close's grace ran out: its
     /// calls in flight are dropped, each answered `kit_closed`, as its
     /// waits for a lock or a ticket are, and from now on so is each call it
-    /// starts, but a read of the store (RFC §12.10.4).
+    /// starts, but a read of the store: a write it asks is refused at its
+    /// spawn, the grace run out, so that nothing else of the cut run's
+    /// aftermath is stored, as in the Python implementation (RFC §12.10.4).
     fn cut_past_the_decision<O: Operation>(&mut self, operation: &mut O) -> Result<(), Stop> {
         self.cut_now = true;
         let waiting: Vec<EffectId> = self
@@ -726,7 +771,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             self.indexes.committing(id, event);
         }
         if self.cut_now && !matches!(&request, Request::Hold(_) | Request::Store(_)) {
-            // A run the close cut past its decision calls nothing more.
+            // A run the close cut past its decision calls nothing more; a
+            // write it asks is refused at its spawn, the grace run out.
             return Some((id, Outcome::Failed(cut_by_close())));
         }
         match request {
