@@ -675,7 +675,7 @@ python = "roomkit.ToolCallEvent.__init__"
 params = [
     "channel_type", "tool_call_id", "name", "arguments", "timestamp",
     "is_error", "cancelled", "structured_content", "refused",
-    "refused_but_ran",
+    "refused_but_ran", "intent",
 ]
 reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
 
