@@ -28,8 +28,8 @@ use crate::model::{
     ErrorRecord, Metadata, Observation, ProviderResult, RoomContext, RoomEvent, Task, Visibility,
 };
 use crate::ops::protocol::{
-    CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, EntryId, HoldRequest,
-    KIT_CLOSED, Outcome, TURN_CUT,
+    CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, EntryId, HoldOutcome,
+    HoldRequest, KIT_CLOSED, Outcome, TURN_CUT,
 };
 use crate::ops::{Cx, Progress};
 use crate::rules::chain_depth::ReentryBudget;
@@ -381,8 +381,16 @@ impl DeliverySet {
     }
 
     /// The set's turn came; a turn that could not be awaited is logged, and
-    /// the event delivered all the same (RFC §13.6).
+    /// the event delivered all the same (RFC §13.6). A lane that takes no
+    /// more turn, the kit closing, drops the set before it delivers: it
+    /// delivers nothing, its cascade cancelled [`KIT_CLOSED`], and leaves
+    /// its place (RFC §12.10.4).
     fn on_turn(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
+        if outcome == Outcome::Hold(HoldOutcome::LaneClosed) {
+            self.outcome.cancelled = Some(KIT_CLOSED);
+            self.place = Place::Turn;
+            return self.progress(cx);
+        }
         if let Err(error) = outcome.into_lane_turn() {
             tracing::warn!(
                 target: "roomkit::core::delivery",

@@ -99,7 +99,8 @@ pub enum HoldRequest {
     /// Wait until every place of the room taken before the event's is
     /// left: its delivery set's turn, so that one event's set completes
     /// before the next one's begins (RFC §10.2). Answer
-    /// [`HoldOutcome::LaneTurn`].
+    /// [`HoldOutcome::LaneTurn`], or [`HoldOutcome::LaneClosed`] once the
+    /// kit's close drops the queued sets (RFC §12.10.4).
     AwaitLane {
         /// The room.
         room_id: RoomId,
@@ -445,9 +446,10 @@ pub enum HoldOutcome {
     Released,
     /// The event's place in the room's delivery lane is taken.
     Entered,
-    /// The room's delivery lane takes no more place, the kit closing (RFC
-    /// §10.1 step 18): the event is not delivered, its cascade cancelled
-    /// [`KIT_CLOSED`](super::KIT_CLOSED).
+    /// The room's delivery lane takes no more place, nor gives a place its
+    /// turn, the kit closing (RFC §10.1 step 18, §12.10.4): the event is
+    /// not delivered, its cascade cancelled
+    /// [`KIT_CLOSED`](super::KIT_CLOSED); a set that held a place leaves it.
     LaneClosed,
     /// Every earlier place of the room's delivery lane is left: the event's
     /// turn.
