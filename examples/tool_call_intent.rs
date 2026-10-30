@@ -9,7 +9,7 @@
 //!   schema, which the call is checked against, stays closed;
 //! - the tool receives its own arguments only;
 //! - `BEFORE_TOOL_USE` and the rows read the intent beside the arguments;
-//! - the next request reads the call as the model wrote it.
+//! - the next request reads the call with its intent among its arguments.
 //!
 //! It runs against a local fake of the OpenAI wire, which scripts the
 //! model's call, so it needs no network and no key.
@@ -126,7 +126,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             }),
     );
     checks.expect(
-        "the next request reads the call as the model wrote it",
+        "the next request reads the call with its intent among its arguments",
         replayed == json!({ "command": "find . -name '*.txt'", "_roomkit_intent": INTENT }),
     );
     Ok(checks.finish())

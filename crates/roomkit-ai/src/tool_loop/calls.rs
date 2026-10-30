@@ -115,7 +115,11 @@ impl<P: AiProvider> Loop<P> {
             return self.event(call, ToolCallOutcome::Refused, text);
         };
         let context = self.context.clone();
-        let answer = toolset.call(call.clone(), context);
+        // The tool gets its own call: its intent is the person's, as a
+        // handler of the reference implementation never reads it (RFC §6.4).
+        let mut handed = call.clone();
+        handed.intent = None;
+        let answer = toolset.call(handed, context);
         let answered = match self.bounds.tool_timeout {
             Some(bound) => tokio::time::timeout(bound, answer)
                 .await

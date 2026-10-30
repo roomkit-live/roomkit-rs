@@ -16,12 +16,14 @@ use super::support::Room;
 
 const INTENT: &str = "Je recherche les fichiers texte du projet.";
 
-/// `shell`, its schema closed, recording the arguments it receives.
+/// `shell`, its schema closed, recording the arguments it receives; a call
+/// handed to it never carries an intent, as a Python handler never reads one.
 fn shell(received: &Arc<Mutex<Vec<Value>>>, parameters: Value) -> Tools {
     let received = Arc::clone(received);
     Tools::new().tool(
         ToolDefinition::new("shell", "Run a command", parameters),
         move |call, _context| {
+            assert_eq!(call.intent, None, "the tool never receives the intent");
             received
                 .lock()
                 .unwrap()
@@ -101,7 +103,7 @@ async fn off_nothing_is_taken_from_a_call() {
 
 /// On, the tool receives its own arguments, a closed schema included; the
 /// intent rides the hooks' event and both rows, and the next request reads
-/// the call as the model wrote it.
+/// the call with its intent among its arguments.
 #[tokio::test]
 async fn a_call_s_intent_rides_apart_from_its_arguments() {
     let call = json!({ "command": "ls", "_roomkit_intent": format!("  {INTENT}\n") });

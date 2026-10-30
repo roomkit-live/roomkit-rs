@@ -35,7 +35,7 @@ impl<P> Loop<P> {
     }
 
     /// `messages` as the request shows them: each call the model made with
-    /// its intent back among its arguments, as it wrote it.
+    /// its intent, as normalized, back among its arguments.
     pub(super) fn shown_messages(&self, messages: &[Message]) -> Vec<Message> {
         if !self.intents {
             return messages.to_vec();

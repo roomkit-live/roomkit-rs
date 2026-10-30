@@ -4,11 +4,10 @@
 //! An agent with `tool_call_intents` on shows its model each tool's schema
 //! with one optional property more, [`INTENT_PROPERTY`]. The tool loop takes
 //! it out of a call's arguments before anything reads them and carries its
-//! value, normalized, as the call's `intent`: the tool's arguments never
-//! hold it (a handler reads the call's `intent` beside them). A
+//! value, normalized, as the call's `intent`: the tool never receives it. A
 //! tool whose own schema declares the property keeps it as its argument. The
-//! model reads its calls back with their intent among their arguments, as it
-//! wrote them.
+//! model reads its calls back with their intent, as normalized, among their
+//! arguments.
 
 use serde_json::{Map, Value, json};
 
