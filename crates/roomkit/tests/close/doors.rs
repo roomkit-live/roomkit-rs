@@ -516,8 +516,18 @@ const OBSERVER_RUNS: usize = 20;
 async fn observer_door_runs(runs: usize) -> std::collections::BTreeMap<String, usize> {
     let mut outcomes = std::collections::BTreeMap::new();
     for _ in 0..runs {
-        let witness = Witness::new();
+        // The witness's delivery is held until the observer's close
+        // started: the call is under way as the close starts, whatever the
+        // threads (review A, light pass: on threads the instant delivery
+        // ended the run first in about one door in 30).
+        let gate = Gate::default();
+        let witness = Witness::slow("Bye.", Duration::ZERO).gated(gate.clone());
         let (kit, closer, call) = open(Door::Observer, &witness, false).await;
+        tokio::time::timeout(BOUND, gate.began()).await.unwrap();
+        tokio::time::timeout(BOUND, closer.closing.notified())
+            .await
+            .unwrap();
+        gate.go();
         let returned = closer.returned_once_closed().await;
         let call = ended(call).await;
         roomkit::testing::idle(&kit).await;

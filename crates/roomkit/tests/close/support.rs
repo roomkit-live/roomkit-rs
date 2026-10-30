@@ -4,6 +4,7 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 
 use roomkit::model::hook::AllowOptions;
@@ -189,6 +190,8 @@ pub(crate) struct Closer {
     gated: bool,
     pub(crate) entered: Arc<Notify>,
     pub(crate) go: Arc<Notify>,
+    /// Told once its `close()` started: polled once, the shutdown begun.
+    pub(crate) closing: Arc<Notify>,
     once: Arc<AtomicBool>,
     returned: Arc<Mutex<Option<Returned>>>,
     returned_now: Arc<Notify>,
@@ -202,6 +205,7 @@ impl Closer {
             gated,
             entered: Arc::default(),
             go: Arc::default(),
+            closing: Arc::default(),
             once: Arc::default(),
             returned: Arc::default(),
             returned_now: Arc::default(),
@@ -216,7 +220,14 @@ impl Closer {
         if self.gated {
             self.go.notified().await;
         }
-        let closed = self.kit.close().await;
+        let mut close = std::pin::pin!(self.kit.close());
+        // The close starts at its first poll.
+        let first = std::future::poll_fn(|cx| Poll::Ready(close.as_mut().poll(cx))).await;
+        self.closing.notify_one();
+        let closed = match first {
+            Poll::Ready(closed) => closed,
+            Poll::Pending => close.await,
+        };
         *self.returned.lock().unwrap() = Some((closed, self.witness.load(Ordering::SeqCst)));
         self.returned_now.notify_one();
     }
