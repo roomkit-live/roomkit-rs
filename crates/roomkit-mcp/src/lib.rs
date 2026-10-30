@@ -5,7 +5,9 @@
 //! - [`McpCommand`]: what starts a server, a program and its arguments as a
 //!   list, never through a shell, with an environment of its own.
 //! - [`McpServer`]: a connected server, a [`Toolset`](roomkit_ai::Toolset)
-//!   an agent serves beside its other tools, under the tools' bare names: a
+//!   an agent serves beside its other tools, under bare names or host-labelled
+//!   aliases (`McpServer::with_label`), optionally selecting a subset
+//!   (`McpServer::with_tool_names`): a
 //!   name another of the agent's toolsets serves, a host tool's or a
 //!   skill's, is refused when the agent takes it (RFC §21.1 "One tool per
 //!   name"). The agent's tool policy governs its tools as any other (RFC

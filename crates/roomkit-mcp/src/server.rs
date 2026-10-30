@@ -71,6 +71,8 @@ const CALL_FAILED: &str = "McpError";
 #[derive(Clone)]
 pub struct McpServer {
     inner: Arc<Inner>,
+    label: Option<String>,
+    selected: Option<std::collections::BTreeSet<String>>,
 }
 
 struct Inner {
@@ -93,7 +95,10 @@ struct Connection {
 impl McpServer {
     /// Starts `command`'s server, runs the MCP handshake and lists its
     /// tools, within the command's connect bound ([`McpCommand::connect`]).
-    pub(crate) async fn connect(command: McpCommand) -> Result<Self, McpError> {
+    pub(crate) async fn connect(
+        command: McpCommand,
+        cancelled: impl Future<Output = ()> + Send,
+    ) -> Result<Self, McpError> {
         let program = command.program();
         let Started {
             process,
@@ -102,13 +107,17 @@ impl McpServer {
             stderr,
         } = ServerProcess::start(&command)?;
         let connecting = handshake(stdout, stdin, &program);
-        let connected = match tokio::time::timeout(command.connect_timeout, connecting).await {
-            Ok(connected) => connected,
-            Err(_elapsed) => Err(McpError::Timeout {
-                program: program.clone(),
-                after: command.connect_timeout,
-                stderr: Vec::new(),
-            }),
+        let connected = tokio::select! {
+            biased;
+            () = cancelled => Err(McpError::Cancelled),
+            result = tokio::time::timeout(command.connect_timeout, connecting) => match result {
+                Ok(connected) => connected,
+                Err(_elapsed) => Err(McpError::Timeout {
+                    program: program.clone(),
+                    after: command.connect_timeout,
+                    stderr: Vec::new(),
+                }),
+            },
         };
         let (service, tools) = match connected {
             Ok(connected) => connected,
@@ -124,6 +133,8 @@ impl McpServer {
             "connected to an MCP server"
         );
         Ok(Self {
+            label: None,
+            selected: None,
             inner: Arc::new(Inner {
                 program,
                 peer: service.peer().clone(),
@@ -147,10 +158,62 @@ impl McpServer {
     /// The id the server's process was started with; `None` once the
     /// server is closed.
     pub fn process_id(&self) -> Option<u32> {
-        if self.inner.closed.initialized() {
+        if !self.is_connected() {
             return None;
         }
         self.inner.pid
+    }
+
+    /// Whether the transport is still open. An exited server is reported as
+    /// disconnected without waiting for an explicit close (RFC §21.2).
+    pub fn is_connected(&self) -> bool {
+        !self.inner.closed.initialized() && !self.inner.peer.is_transport_closed()
+    }
+
+    /// Serves this handle's tools as `mcp__<label>__<tool>` (RFC §21.2).
+    /// Other clones keep their own labels and selections, sharing one process.
+    /// Vendor name limits still apply to the complete alias.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an empty label, more than 64 ASCII identifier characters, `__`,
+    /// or a trailing underscore. Letters, digits, `_`, `-` and `.` are accepted.
+    pub fn with_label(mut self, label: impl Into<String>) -> Result<Self, McpError> {
+        let label = label.into();
+        if label.is_empty()
+            || label.len() > 64
+            || label.contains("__")
+            || label.ends_with('_')
+            || !label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+        {
+            return Err(McpError::Configuration {
+                reason: "invalid server label",
+            });
+        }
+        self.label = Some(label);
+        Ok(self)
+    }
+
+    /// Limits this handle to the listed bare tool names. An empty selection
+    /// exposes no tools. Both discovery and dispatch enforce the selection;
+    /// another clone's selection is unchanged (RFC §21.1).
+    ///
+    /// # Errors
+    ///
+    /// Refuses names absent from the connection's discovered catalogue.
+    pub fn with_tool_names(mut self, names: &[String]) -> Result<Self, McpError> {
+        if names
+            .iter()
+            .any(|name| !self.inner.tools.iter().any(|tool| &tool.name == name))
+        {
+            return Err(McpError::Configuration {
+                reason: "selected tool was not discovered",
+            });
+        }
+        self.selected = Some(names.iter().cloned().collect());
+        Ok(self)
     }
 
     /// Closes the connection and stops the server (RFC §21.2): its input
@@ -201,7 +264,10 @@ async fn failed(error: McpError, process: ServerProcess, stderr: Stderr) -> McpE
             after,
             stderr: stderr.last_lines().await,
         },
-        error @ (McpError::Command { .. } | McpError::Spawn { .. }) => error,
+        error @ (McpError::Command { .. }
+        | McpError::Spawn { .. }
+        | McpError::Cancelled
+        | McpError::Configuration { .. }) => error,
     }
 }
 
@@ -242,10 +308,46 @@ where
 
 impl Toolset for McpServer {
     fn tools(&self) -> Vec<ToolDefinition> {
-        self.inner.tools.clone()
+        self.inner
+            .tools
+            .iter()
+            .filter(|tool| {
+                self.selected
+                    .as_ref()
+                    .is_none_or(|names| names.contains(&tool.name))
+            })
+            .cloned()
+            .map(|mut tool| {
+                if let Some(label) = &self.label {
+                    tool.name = format!("mcp__{label}__{}", tool.name);
+                }
+                tool
+            })
+            .collect()
     }
 
-    async fn call(&self, call: ToolCall, _context: ToolContext) -> Result<ToolOutput, ToolError> {
+    async fn call(
+        &self,
+        mut call: ToolCall,
+        _context: ToolContext,
+    ) -> Result<ToolOutput, ToolError> {
+        if let Some(label) = &self.label {
+            let prefix = format!("mcp__{label}__");
+            let Some(name) = call.name.strip_prefix(&prefix) else {
+                return Err(ToolError::raised_as(
+                    CALL_FAILED,
+                    "tool does not belong to this server",
+                ));
+            };
+            call.name = name.to_owned();
+        }
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|names| !names.contains(&call.name))
+        {
+            return Err(ToolError::raised_as(CALL_FAILED, "tool is not selected"));
+        }
         let params = CallToolRequestParams::new(call.name.clone()).with_arguments(call.arguments);
         match self.inner.peer.call_tool(params).await {
             Ok(result) => results::read(&call.name, result),

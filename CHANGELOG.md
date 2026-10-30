@@ -6,6 +6,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- MCP connections support host labels, per-handle tool selection, transport status
+  and joined cancellation during startup.
+
 - Preserve bounded author images separately from transcript text. Vision-enabled
   agents resolve opaque references through a room-scoped host resolver, and the
   OpenAI adapter sends native image parts in Chat Completions and Responses.

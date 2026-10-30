@@ -9,6 +9,15 @@ use std::time::Duration;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum McpError {
+    /// A host label or explicit tool selection is invalid (RFC §21.2).
+    #[error("invalid MCP tool configuration: {reason}")]
+    Configuration {
+        /// The violated rule; never server content or credentials.
+        reason: &'static str,
+    },
+    /// The host cancelled connecting. The process has been stopped and reaped.
+    #[error("MCP connection cancelled")]
+    Cancelled,
     /// The command cannot start a process: an empty program, or an
     /// environment variable whose name is empty or holds `=` or a NUL, or
     /// whose value holds a NUL.

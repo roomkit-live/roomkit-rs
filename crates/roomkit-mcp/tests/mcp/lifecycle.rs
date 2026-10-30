@@ -453,3 +453,22 @@ async fn an_argument_reaches_the_server_as_written() {
     server.close().await;
     assert_eq!(instructions.as_deref(), Some(written));
 }
+
+/// Cancellation waits for cleanup even while initialize has not returned.
+#[tokio::test]
+async fn cancelling_connect_reaps_the_started_process() {
+    let pid_file = PidFile::new();
+    let cancelled = async {
+        while !pid_file.path().exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        pid_file.on(fake("stderr-hang")).connect_until(cancelled),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result, Err(McpError::Cancelled)));
+    assert!(!exists(pid_file.pid()));
+}

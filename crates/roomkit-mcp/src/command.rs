@@ -164,7 +164,21 @@ impl McpCommand {
     /// wrote on its standard error, when it wrote any: a handshake's or a
     /// listing's message ends with them, and they are a timeout's `stderr`.
     pub async fn connect(self) -> Result<McpServer, McpError> {
-        McpServer::connect(self).await
+        self.connect_until(std::future::pending()).await
+    }
+
+    /// Connects until the host's cancellation future completes. Cancellation
+    /// stops and reaps the server before returning (RFC §21.2).
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`connect`](Self::connect), or
+    /// [`McpError::Cancelled`] when the host interrupts connecting.
+    pub async fn connect_until(
+        self,
+        cancelled: impl Future<Output = ()> + Send,
+    ) -> Result<McpServer, McpError> {
+        McpServer::connect(self, cancelled).await
     }
 
     /// The program, as errors and logs name the server: never its
