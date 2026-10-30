@@ -230,28 +230,43 @@ kit, its construction and its calls; lot 2: the model and the errors).
 - A room's creation drops a metadata key only the framework writes (under
   `roomkit:`, or of the room's private state) with a warning and writes the
   rest (RFC §5.1); it was refused.
-- `RoomKit::close` replaces `shutdown` and drains as Python's `close`
-  does: calls are taken while the work
-  drains, a delivery that would start then dropped (`cancellation_reason`
-  `kit_closed`), and refused once the kit is sealed; the inbound runs,
-  their deliveries, turns and the observers their deliveries fire, get up
-  to 5 seconds to end, one ending then reporting its result; the turns
-  still running are cut and the rest of the work aborted, its callers
-  receiving their result (`lane_cancelled` or `kit_closed`, the first
-  reason standing) rather than `ShutDown`; the other observers finish
-  within their hook's timeout; the channels close once. The store's writes
-  are never aborted: the close waits for them three times, as Python's
-  `CLOSE_WAIT_S`, twice until 5 s from its start and once until 5 s from
-  the channels' close, an inbound call's commit until its event took its
-  place in the room's lane, then leaves a write still running to end on
-  its own, with a warning; an inbound call is drained as work until it is
-  committed, its commit's write included, so one whose commit runs past
-  10 s holds the close up to 15 s; a caller whose own
-  commit outlived its run reads
-  what the write came to, its event `kit_closed`, its record blocked with
-  the hook's reason, or the store's error; a call cut before its own commit
-  receives `ShutDown`, whatever its run committed first; a write that fails
-  once its caller is gone is logged as an error.
+- `RoomKit::close` replaces `shutdown`, as Python's `close` since RMK-1030
+  (RFC §12.10.4). Once it starts, every call that runs an operation and
+  every registration of a channel or a hook returns
+  `RoomKitError::KitClosed`, whoever makes it, a hook, a tool or a
+  channel's close included, while the reads (`get_room`, `get_timeline`,
+  `get_binding`, `list_bindings`, `list_members`, `get_channel`, `store`)
+  answer during the close and after it; `unregister_channel` returns a
+  `Result` for that refusal. What has not started is cut at once: a
+  delivery queued in a room's lane is dropped, never sent,
+  `cancellation_reason` `kit_closed` with no delivery result, as is a set
+  that would take its place from then on; a call waiting for its room's
+  lock or admission ticket before its commit is cut there, nothing of it
+  stored, a message reading `blocked`, its `reason` and
+  `cancellation_reason` `kit_closed`, `send_event`, `commit_event` and a
+  room change `KitClosed`; every model turn is cut (below). The running
+  work, a hook, an observer, a store write, a room change, a transport
+  send, gets one grace of 5 s from the close's start, then is cut: a call
+  before its commit as one waiting for its lock; one whose commit had
+  started reads its event back by its id within the unwind, 1 s, and
+  reports it stored, `kit_closed`, or, the read failing, nothing stored,
+  with a warning; a call past its decision has its calls in flight and
+  from then on fail `kit_closed`, each target delivered keeping `sent`, a
+  send cut reading `failed`, code `kit_closed`, retryable, the answers its
+  cascade stored as its `response_events`. A call under way as the close
+  started reads `kit_closed` even when its sends end within the grace, and
+  never a failure the close caused as its error; a call that commits
+  within the grace is stored and delivered to no one. Then the turn
+  backend takes no more turns, the channels close once, one after the
+  other, what their closes started is cut, work still running after its
+  cut is named in one warning, and the kit is sealed. The close takes the
+  grace, plus the channels' closes, plus at most 1 s three times: with a
+  send, a write, an observer and a hook holding its room's lock that never
+  end, it took 15 s, and takes 5 s. A write is no longer waited for three
+  times and left running past the close: a commit of 7 s whose caller left
+  is cut at 5 s, never stored. A failure the close causes is logged at
+  debug; a write that fails on its own once its caller is gone is still
+  logged as an error.
 - The kit has one shutdown, as Python's since RMK-1015 (RFC §12.10.4,
   RMK-1017): the first `close` starts it in a task of its own, and every
   `close`, concurrent or later, waits for it and returns once it ended; a
@@ -259,15 +274,16 @@ kit, its construction and its calls; lot 2: the model and the errors).
   whose future is dropped stops only its own wait: the shutdown runs to its
   end, where it stopped half-way. A `close` from a channel's close returns
   at once.
-- `RoomKit::close` returns `Result<(), KitError>`, its end
-  answering every caller, the first included, as Python's `close` raises:
-  `KitError::ChannelsFailedToClose` names each channel whose `close`
+- `RoomKit::close` returns `Result<(), RoomKitError>`, its end answering
+  every caller, the first included, as Python's `close` raises:
+  `RoomKitError::ExceptionGroup` names each channel whose `close`
   panicked, with what its panic said, the channels after it closed all the
   same, where the panic killed the shutdown and left them open; and
-  `KitError::ShutdownCancelled` answers a `close` after a shutdown that
-  never ended, its runtime dropped under it. A `close` that panics before
-  it returns its future is caught as one whose future panics. The variants' names are
-  provisional: a caller writes `kit.close().await?`, or handles the error.
+  `RoomKitError::ShutdownCancelled`, Python's `ShutdownCancelledError`,
+  answers a `close` after a shutdown that never ended, its runtime dropped
+  under it. A `close` that panics before it returns its future is caught
+  as one whose future panics. `RoomKitError::KitClosed` is Python's
+  `KitClosedError`.
 - A `close` from the kit's own work, a hook's body, a hook a delivery
   fired, a channel's delivery, an agent's tool call or a task spawned with
   `keep_context`, neither waits for that work nor cuts it, whether it
@@ -276,53 +292,30 @@ kit, its construction and its calls; lot 2: the model and the errors).
   cut with its work, leaving the channels open and the kit unsealed. A
   `close` from an observer the kit fires and forgets, an ASYNC hook or a
   tool call's observer, which starts with fresh marks, spares that
-  observer alone, and so cuts the turn that fired it. What waits behind
-  spared work is dropped at once rather than at the grace: the deliveries
-  queued behind its place in the room's lane, `kit_closed`, and the
-  messages waiting, or starting to wait as the close drains, for the
-  room's lock or admission ticket it holds, refused `KitError::ShutDown`,
-  nothing of them stored. Once the kit is sealed, the spared work stores
-  and delivers nothing: its writes and its channel calls are refused, a
-  message whose commit is so refused failing `KitError::ShutDown`, nothing
-  stored, one refused past its commit reading `kit_closed`, and one whose
-  turn is refused carrying the turn link's `backend_closed` in its
-  result's `error` (RFC §10.6.8).
+  observer alone. The deliveries queued behind the spared work's place in
+  its room's lane are dropped at once, as every queued delivery, and the
+  messages waiting for the room's lock or admission ticket it holds are
+  cut at once, nothing of them stored. Once the kit is sealed, the spared
+  work stores and delivers nothing: its writes and its channel calls are
+  refused, a message whose own commit is so refused reading as one the
+  close cut before its commit, nothing stored. The model turn such a
+  `close` runs in is cut all the same: the tool's call awaiting the close
+  runs on, its end row stored before the close returns, and what the turn
+  does after the close is refused quietly, its executor watching its owner
+  no more; a tool awaiting a close it started on a task of its own is cut
+  with its turn.
 - A turn's work, its model's rounds and its tools' calls, is cut at once
-  when the kit closes, with no grace, as Python's (RFC §10.6.8): a turn
-  whose stream is read as the close's first wait for the store's writes
-  ends is cut then, before the drain, what its reader read delivered as
-  the lanes drain, and so is, in turn, a stream whose read begins while
-  the close waits for those readers. A turn whose output is still
-  awaited, the channel's `on_event()`, and one asked as the lanes drain,
-  run with their delivery set, as Python's turn backend takes turns until
-  its lanes are done; the turns still running once the lanes are idle are
-  cut then, not at the grace, as Python's `turns.close` follows its
-  `lanes.aclose`: what a turn sent is stored, its delivery dropped, the
-  call reading `kit_closed`, and a turn that said nothing, still open,
-  fails the turn link's `backend_closed`. Once cut, a turn's streaming
-  target that does not read on is cut with it, as Python cancels its
-  readers, and the text it received is stored, marked `cancelled`: a
-  stalled target held the close 15 s or more, storing nothing. A target
-  waiting on its next item is dropped where it waits, never handed the
-  stream's end, as Python's reader is cancelled inside its read. An agent
-  writing then running a tool of 30 s, closed from outside, closes at 0.1
-  s, where it closed at 5.1 s; one asked once a delivery of 1 s ended, at
-  1 s. A call aborted once its own delivery was over reads no reason, as
-  Python's, where it read `lane_cancelled`, but `kit_closed` when a commit
-  of its cascade stored an event to deliver whose set never took its
-  place in the room's lane, its write still running or its outcome
-  taken: stored and never delivered. A call whose run the close aborts
-  with a turn's stream open, kept unread, being read, or read as the
-  close drained, reads the turn's end, as Python's, whose grace cuts the
-  turn's reader: nothing more once a row of it was stored, `kit_closed`
-  for one stored and never delivered, its set never in the lane as
-  above; the turn link's `backend_closed` in its `error`, with no
-  reason, when nothing of the turn was stored, Python's `TurnLinkError`
-  (`executor_lost` there); so does one whose own set still delivers at
-  the grace's end, its turn's stream kept, where it read
-  `lane_cancelled`. A run that ends on its own past the cut reads
-  `lane_cancelled` only while its own set still delivers.
-  The close's warning counts the writes whose store call still runs.
+  as the kit's close starts, with no grace, as Python's (RFC §10.6.8,
+  §12.10.4), while the other running work has its grace: what its reader
+  read is stored, the text marked `cancelled`, an open tool call given its
+  end row, `failed`, error `kit_closed`, all delivered to no one, the call
+  reading `kit_closed`, no error. A turn's streaming target is cut with
+  it, as Python cancels its readers, and the text it received is stored,
+  marked `cancelled`: a stalled target held the close 15 s or more,
+  storing nothing. A target waiting on its next item is dropped where it
+  waits, never handed the stream's end, as Python's reader is cancelled
+  inside its read. An agent writing then running a tool of 30 s, closed
+  from outside, closes at 0.1 s, where it closed at 5.1 s.
 - A task the kit's work spawns, that calls the kit and waits on its own
   room, is spawned with `keep_context`, the Rust form of Python's
   `create_task` copying its context; spawned plainly, it blocks.
