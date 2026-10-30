@@ -45,8 +45,8 @@ const HISTORY: usize = 20;
 /// How long the server waits on a client and on its own work.
 #[derive(Clone, Copy, Debug)]
 pub struct Patience {
-    /// How long one frame's send may take before its client is taken for
-    /// gone: one that stopped reading (the Python implementation's
+    /// How long one send to a client may wait before the client is taken
+    /// for gone: one that stopped reading (the Python implementation's
     /// `send_timeout`, 5 seconds by default).
     pub send: Duration,
     /// How long a stop waits for the connections to end, before it closes

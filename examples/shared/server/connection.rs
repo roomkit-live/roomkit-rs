@@ -2,7 +2,6 @@
 //! and its writing, until it closes.
 
 use std::collections::HashMap;
-use std::pin::pin;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
@@ -49,6 +48,13 @@ const NAMING: &str = "a conversation and a user of 1 to 64 letters, digits, _ or
 
 /// The largest message, and frame, a connection may send, in bytes.
 pub const MESSAGE_LIMIT: usize = 64 * 1024;
+
+/// How much a connection reads from its socket at once, in bytes: 4 KiB,
+/// where the WebSocket library's default is 128 KiB. Each connection holds
+/// a buffer this size, which the library fills with zeros before each
+/// read; a person's message is a few hundred bytes, and one up to the limit
+/// takes a few reads.
+const READ_BUFFER: usize = 4 * 1024;
 
 /// A connection asking to join a conversation: the conversation's id names
 /// its room, the `user` parameter its participant, `name` their name.
@@ -102,6 +108,7 @@ pub(super) async fn connect(
     upgrade
         .max_frame_size(MESSAGE_LIMIT)
         .max_message_size(MESSAGE_LIMIT)
+        .read_buffer_size(READ_BUFFER)
         .on_upgrade(move |socket| app.converse(socket, counted, connection, room_id, user))
 }
 
@@ -155,14 +162,16 @@ impl App {
     ) {
         let (outgoing, incoming) = socket.split();
         let patience = self.patience.send;
-        let mut writer = pin!(write(outgoing, frames, patience));
+        // A task of its own: in this one, each frame queued would wake the
+        // reader too, and a read with nothing to read still costs.
+        let mut writer = tokio::spawn(write(outgoing, frames, patience));
         let ending = tokio::select! {
             _ = &mut writer => return,
             ending = self.read(incoming, &registration, &room_id, &user) => ending,
         };
         drop(registration);
         // What was queued goes out, then the close that answers the ending.
-        let Some(mut outgoing) = writer.await else {
+        let Ok(Some(mut outgoing)) = writer.await else {
             return;
         };
         // A socket gone meanwhile has nothing more to close.
@@ -353,22 +362,40 @@ fn tell(registration: &Registration, user: &ParticipantId, outcome: Told) {
     let _told = registration.send(json!({ "error": told }).to_string());
 }
 
-/// Sends each frame of `frames` on `outgoing` until the queue ends, then
-/// hands the socket back for its close. Each send gets `patience`: one that
-/// takes longer, a client that stopped reading, or that fails ends it at
-/// once, with no socket to close.
+/// Sends the frames of `frames` on `outgoing` until the queue ends, then
+/// hands the socket back for its close. The frames queued are taken
+/// together, the first as soon as it comes, and flushed once: a frame
+/// alone goes out at once, never held for another. Each wait on the socket
+/// gets `patience`: one that takes longer, a client that stopped reading,
+/// or that fails ends it at once, with no socket to close.
 async fn write(
     mut outgoing: SplitSink<WebSocket, Message>,
     mut frames: mpsc::Receiver<String>,
     patience: Duration,
 ) -> Option<SplitSink<WebSocket, Message>> {
-    while let Some(frame) = frames.recv().await {
-        let sent = tokio::time::timeout(patience, outgoing.send(Message::Text(frame.into()))).await;
-        if !matches!(sent, Ok(Ok(()))) {
+    let mut ready = Vec::new();
+    let most = frames.max_capacity();
+    while frames.recv_many(&mut ready, most).await > 0 {
+        for frame in ready.drain(..) {
+            // Buffered: written once the library's buffer is full, or at
+            // the flush.
+            if !in_time(patience, outgoing.feed(Message::Text(frame.into()))).await {
+                return None;
+            }
+        }
+        if !in_time(patience, outgoing.flush()).await {
             return None;
         }
     }
     Some(outgoing)
+}
+
+/// Whether `sending` succeeded within `patience`.
+async fn in_time(
+    patience: Duration,
+    sending: impl Future<Output = Result<(), axum::Error>>,
+) -> bool {
+    matches!(tokio::time::timeout(patience, sending).await, Ok(Ok(())))
 }
 
 /// How a connection's reading ended, which decides how it is closed.

@@ -34,10 +34,12 @@
 //!   `tool` and the turn's `ended` included, in index order, each with its
 //!   `id` and `index`. A room delivers an event to every channel but its
 //!   source (RFC §10.2 step 2), so the people on `websocket` see the
-//!   agent's answers, not each other's messages. A client that stops
-//!   reading is dropped, reader included, once one send waits 5 seconds; a
-//!   stop gives the connections 10 seconds, then closes the kit, which
-//!   drains what still runs for up to 5 seconds (`RoomKit::close`).
+//!   agent's answers, not each other's messages. The frames queued for a
+//!   connection go out together, flushed once, and a frame alone at once.
+//!   A client that stops reading is dropped, reader included, once one
+//!   send waits 5 seconds; a stop gives the connections 10 seconds, then
+//!   closes the kit, which drains what still runs for up to 5 seconds
+//!   (`RoomKit::close`).
 //! - The agent's answer streams (RFC §6.1, §12.2 steps 13s and 14s): a
 //!   connection opened with `&stream=1` receives its text as the model
 //!   writes it, `{"type": "delta", "stream_id": "...", "text": "..."}`
@@ -100,6 +102,7 @@
 
 use std::env;
 use std::error::Error;
+use std::iter;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::process::ExitCode;
@@ -186,6 +189,22 @@ const STUDIO: &str = "studio";
 const ERIN_ASKS: &str = "When does the rye come out?";
 const RYE: &str = "Fresh rye comes out of the oven at noon.";
 
+/// The counter's conversation, where the host posts a menu that fills
+/// Mia's socket, a burst of messages queued behind it, then one alone. The
+/// menu is larger than a socket's buffers hold, a send buffer's 4 MiB at
+/// most by Linux's default (`net.ipv4.tcp_wmem`).
+const COUNTER: &str = "counter";
+const FULL_MENU: usize = 8 * 1024 * 1024;
+const BURST: usize = 16;
+const LAST_CALL: &str = "Last call for croissants.";
+
+/// The patience of the counter's server: long enough for the burst to be
+/// posted while Mia's socket is full.
+const BURST_PATIENCE: Patience = Patience {
+    send: Duration::from_secs(10),
+    grace: CHECKING.grace,
+};
+
 /// The conversation Gina leaves mid-answer, what she asks, the answer the
 /// model writes slowly, and how many of its pieces she reads.
 const TERRACE: &str = "terrace";
@@ -251,6 +270,7 @@ async fn check() -> Result<ExitCode, Box<dyn Error>> {
     the_conversation_survives_a_restart(&mut checks).await?;
     a_client_reads_the_answer_as_it_is_written(&mut checks).await?;
     a_client_leaves_mid_answer(&mut checks).await?;
+    a_burst_reaches_a_client_in_order(&mut checks).await?;
     a_client_stops_reading(&mut checks).await?;
     what_a_client_is_told(&mut checks).await?;
     what_a_connection_must_name(&mut checks).await?;
@@ -583,6 +603,71 @@ async fn a_client_leaves_mid_answer(checks: &mut Checks) -> Result<(), Box<dyn E
                 && answer.metadata.get("cancelled") == Some(&json!(true))
                 && answer.metadata.get("loop_end_reason") == Some(&json!("cancelled"))
         }),
+    );
+    Ok(())
+}
+
+/// Mia reads nothing while the host posts a menu too large for her socket,
+/// then a burst of messages, which queue behind it and go out together once
+/// she reads: the menu reaches her, then the burst, whole and in the order
+/// posted. A message posted alone afterwards reaches her with no other
+/// after it to push it out.
+async fn a_burst_reaches_a_client_in_order(checks: &mut Checks) -> Result<(), Box<dyn Error>> {
+    println!("Mia's socket fills with a large menu; the host posts a burst behind it.");
+    let endpoint = OpenAiEndpoint::Fake(FakeOpenAi::start(ANSWERS).await?);
+    let database = TempDatabase::new("server_agent_counter");
+    let server = AgentServer::start(
+        database.path(),
+        &endpoint,
+        ANY_PORT.parse()?,
+        BURST_PATIENCE,
+    )
+    .await?;
+    let mut mia = Client::connect_reading_little(server.address(), COUNTER, "mia", "Mia").await?;
+    let room = RoomId::new(COUNTER)?;
+    let menu = format!("Today's menu{}", ".".repeat(FULL_MENU));
+    let burst: Vec<String> = (1..=BURST)
+        .map(|batch| format!("Batch {batch} is out of the oven."))
+        .collect();
+    for text in iter::once(&menu).chain(&burst) {
+        server
+            .kit()
+            .post(
+                &room,
+                TextContent::new(text.as_str()),
+                PostOptions::default(),
+            )
+            .await?;
+    }
+    let menu_read = mia.next_frame(ANSWER_PATIENCE).await;
+    let mut read = Vec::new();
+    while read.len() < BURST {
+        let Some(frame) = mia.next_frame(TOLD_PATIENCE).await else {
+            break;
+        };
+        read.push(frame);
+    }
+    println!(
+        "  Mia receives the menu, then {} of the {BURST} messages",
+        read.len()
+    );
+    server
+        .kit()
+        .post(&room, TextContent::new(LAST_CALL), PostOptions::default())
+        .await?;
+    let alone = mia.next_frame(TOLD_PATIENCE).await;
+    println!("  Mia receives {alone:?}");
+    mia.close().await;
+    server.stop().await?;
+    checks.expect(
+        "the frames queued behind a full socket reach the client whole, in the order posted",
+        menu_read.as_ref().and_then(|frame| frame["text"].as_str()) == Some(menu.as_str())
+            && texts_of(&messages_in(&read)) == burst
+            && indexes_rise(&read),
+    );
+    checks.expect(
+        "a message alone reaches a client, with no other after it to push it out",
+        alone.as_ref().and_then(|frame| frame["text"].as_str()) == Some(LAST_CALL),
     );
     Ok(())
 }
