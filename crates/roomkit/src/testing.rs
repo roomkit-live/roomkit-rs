@@ -38,11 +38,11 @@ pub fn kit_with_environment<S: ConversationStore>(
 /// Waits until `kit` runs nothing in the background: no observer hook
 /// running after the fact (RFC §9.3), and no inbound call running, whether
 /// its caller waits for it, was answered at its decision (RFC §10.1 step
-/// 18) or stopped waiting. What one of them starts, an observer its
-/// delivery fires, a call its channel makes, is waited for too. A call that
-/// runs in its caller's own task, a lifecycle change, a direct change of a
-/// stored event or `commit_event`, is its caller's to wait for. A test
-/// seam: the Python implementation's kit has no such call.
+/// 18) or stopped waiting, and no direct call, a lifecycle change, a direct
+/// change of a stored event or `commit_event`, each running on a task of
+/// its own. What one of them starts, an observer its delivery fires, a call
+/// its channel makes, is waited for too. A test seam: the Python
+/// implementation's kit has no such call.
 ///
 /// Work that keeps coming keeps the kit busy: `idle` returns at a moment
 /// nothing runs. Awaited from the kit's own work, a hook or a channel, it

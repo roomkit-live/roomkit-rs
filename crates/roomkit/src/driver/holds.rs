@@ -132,7 +132,7 @@ impl<'kit> Held<'kit> {
     /// Whether the set of `event_id` runs from its placement: its place was
     /// taken first in `room_id`'s lane, the lane idle; a set placed behind
     /// another is queued. The Python implementation aligns on this rule
-    /// (decided 2026-10-30, RMK-1030).
+    /// (decided 2026-10-30; RMK-1039, RMK-1030).
     pub(super) fn runs(&self, room_id: &RoomId, event_id: &EventId) -> bool {
         self.running.contains(&(room_id.clone(), event_id.clone()))
     }

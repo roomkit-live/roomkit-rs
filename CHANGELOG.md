@@ -331,7 +331,7 @@ kit, its construction and its calls; lot 2: the model and the errors).
 - The ASYNC hooks of `BEFORE_BROADCAST` observe an event once its pass is
   over, its delivery set placed in the room's lane, and a set placed
   first, the lane idle, runs from its placement, which the close does not
-  drop, the rule the Python implementation aligns on (RMK-1030): an
+  drop, the rule the Python implementation aligns on (RMK-1039): an
   observer that closes the kit finds its set delivering, given the
   close's grace, its call reading `kit_closed` with the target `sent`,
   where the close dropped the set, or, placed behind another, queued,
@@ -348,8 +348,9 @@ kit, its construction and its calls; lot 2: the model and the errors).
   into the closing kit was refused, reads code `kit_closed`, retryable,
   as Python's delivery reads `KitClosedError.code`, and one that fails
   with any other `RoomKitError` reads its Python class's name
-  (`RoomNotFoundError`, `ShutdownCancelledError`), as Python's reads the
-  error's type, where both read `ChannelError`.
+  (`RoomNotFoundError`, `ShutdownCancelledError`, `AssertionError` for a
+  defect), as Python's reads the error's type, where both read
+  `ChannelError`; a store's failure keeps `ChannelError`.
 - A task the kit's work spawns, that calls the kit and waits on its own
   room, is spawned with `keep_context`, the Rust form of Python's
   `create_task` copying its context; spawned plainly, it blocks.
