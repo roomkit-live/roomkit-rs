@@ -316,6 +316,33 @@ kit, its construction and its calls; lot 2: the model and the errors).
   waits, never handed the stream's end, as Python's reader is cancelled
   inside its read. An agent writing then running a tool of 30 s, closed
   from outside, closes at 0.1 s, where it closed at 5.1 s.
+- A direct call, a lifecycle change, a direct change of a stored event or
+  `commit_event`, runs on a task of its own within its caller's execution
+  context, as an inbound call does, and Python's task is driven: a caller
+  that keeps the call's future but stops polling it holds no work of the
+  close, which waited 8 s and named the call in its warning, and takes
+  1 s when the call's write takes 1 s. Dropping the future still cancels
+  the call. The close's bound for work that ignores its cut is its grace
+  plus two unwinds, as Python's: the turn backend's unwind waits for its
+  turns alone, where it waited for every tracked task (8 s became 7 s).
+  A run the close aborts before it read its commit back warns as a
+  read-back that failed, where a message's or a `send_event`'s abort
+  logged nothing.
+- The ASYNC hooks of `BEFORE_BROADCAST` observe an event once its delivery
+  set took its place in the room's lane, as Python's observers first run:
+  an observer that closes the kit leaves that set to deliver within the
+  close's grace, its call reading `kit_closed` with the target `sent`,
+  where the close dropped the set. Outside a close the order is the same.
+- A turn a tool closes the kit from fails a sibling tool's verb waiting
+  for its owner, `owner_lost`, as Python's `TurnLinkError` reads, where
+  the verb waited for an answer nobody read, the executor outliving the
+  close.
+- A turn cut with no streaming target records `loop_end_reason`
+  `cancelled` on its text, beside `cancelled`, as Python's does.
+- A delivery that fails with `RoomKitError::KitClosed`, a send whose call
+  into the closing kit was refused, reads code `kit_closed`, retryable,
+  as Python's delivery reads `KitClosedError.code`, where it read
+  `ChannelError`.
 - A task the kit's work spawns, that calls the kit and waits on its own
   room, is spawned with `keep_context`, the Rust form of Python's
   `create_task` copying its context; spawned plainly, it blocks.
@@ -365,6 +392,10 @@ kit, its construction and its calls; lot 2: the model and the errors).
 
 ### Added
 
+- `RoomKitError::code()` and `RoomKitError::retryable()`, Python's
+  `KitClosedError.code` and `.retryable` (`kit_closed`, retryable) and
+  `ProviderDeliveryError.code` and `.retryable`; `None` for an error whose
+  Python class carries neither (RMK-1030).
 - `roomkit-openai`: opt into stateless Responses with `OpenAiApi::Responses`,
   including streamed text, function calls, ordered encrypted reasoning replay
   within a tool loop, usage counters and terminal failure reporting. Chat
