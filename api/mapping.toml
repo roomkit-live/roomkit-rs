@@ -110,6 +110,8 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit.EventNotFoundError" = ["0"]
 "roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
 "roomkit.ProviderDeliveryError" = []
+"roomkit.KitClosedError" = []
+"roomkit.ShutdownCancelledError" = []
 
 [rules.error_families."roomkit_ai::SkillError"]
 "roomkit.skills.SkillDiscoveryError" = []
@@ -242,20 +244,6 @@ rust = "roomkit::RoomKitError"
 members = ["Internal"]
 approved = "2026-10-27"
 reason = "a defect of the crate, where Python asserts: the driver broke the core's effect protocol, or a run ended with neither its event nor a refusal (the architecture table, Errors)"
-
-[[exception]]
-rust = "roomkit::RoomKitError"
-members = ["KitClosed"]
-approved = "2026-10-29"
-until = "roomkit.KitClosedError"
-reason = "a call after close(): Python raises the bare RoomKitError and adds KitClosedError, which Rust's variant names (decided by the maintainer on 2026-10-29, RMK-1021)"
-
-[[exception]]
-rust = "roomkit::RoomKitError"
-members = ["ShutdownCancelled"]
-approved = "2026-10-29"
-until = "roomkit.ShutdownCancelledError"
-reason = "a close whose shutdown was cut: Python raises the bare RoomKitError and adds ShutdownCancelledError, which Rust's variant names (decided by the maintainer on 2026-10-29, RMK-1021)"
 
 [[exception]]
 rust = "roomkit::model::ErrorRecord"
