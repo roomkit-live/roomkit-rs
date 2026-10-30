@@ -39,7 +39,7 @@ use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::Poll;
 
-use roomkit_core::model::{ErrorRecord, EventId, EventStatus, RoomId, Timestamp};
+use roomkit_core::model::{ErrorRecord, EventId, EventStatus, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
     Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest, InboundResult,
     Next, Notice, Operation, Outcome, Request, Settled, StoreRequest,
@@ -294,6 +294,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         id: EffectId,
         decides: Option<Box<InboundResult>>,
         commit: Option<(bool, EventId)>,
+        answer: Option<RoomEvent>,
         written: calls::Written,
     ) {
         let Some(caller) = self.caller.as_deref() else {
@@ -301,6 +302,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         };
         if commit.is_some() {
             self.shared.wrote(&written);
+        }
+        if let Some(answer) = answer {
+            caller.answers(answer, written.clone());
         }
         match (decides, commit) {
             (Some(result), _) => caller.commits(*result, written),
@@ -465,6 +469,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             request,
             deadline,
             decides,
+            answers,
             ..
         } = effect;
         let deadline = deadline.and_then(|deadline| self.clocks.instant_of(deadline));
@@ -472,15 +477,17 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         // A commit, of an event to deliver or not: one stored BLOCKED never
         // is.
         let mut commit = None;
+        let mut answer = None;
         if let Request::Store(StoreRequest::Commit { event, .. }) = &request {
             commit = Some((event.status != EventStatus::Blocked, event.id.clone()));
+            answer = answers.then(|| (**event).clone());
             self.indexes.committing(id, event);
         }
         match request {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) if writes(&request) => {
                 let (writing, written, went_on) = calls::write(&inner, request);
-                self.note_the_commit(id, decides, commit, written);
+                self.note_the_commit(id, decides, commit, answer, written);
                 // Only an inbound run's commit takes a place in a room's
                 // lane, and its run, a task of its own, is always polled; a
                 // run in its caller's own task may sit unpolled, and its

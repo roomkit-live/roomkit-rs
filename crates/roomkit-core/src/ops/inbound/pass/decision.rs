@@ -15,6 +15,7 @@
 use super::super::cascade::entry_result;
 use super::super::commit::{self, Committing};
 use super::super::delivery::Placement;
+use super::super::queues::Lineage;
 use super::super::stamp;
 use super::{CommitPass, PassOrigin, PassResult, State, Verdict};
 use crate::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, Visibility};
@@ -460,6 +461,14 @@ impl CommitPass {
         };
         if self.origin == PassOrigin::Trigger {
             cx.io.decides(effect, entry_result(&committing.result));
+        }
+        // An answer of the call's own cascade, delivered, is one of its
+        // `response_events` (`Effect::answers`).
+        if matches!(self.origin, PassOrigin::Response { .. })
+            && self.lineage == Lineage::Call
+            && matches!(committing.result, PassResult::Delivered { .. })
+        {
+            cx.io.answers(effect);
         }
         State::Committing {
             effect,

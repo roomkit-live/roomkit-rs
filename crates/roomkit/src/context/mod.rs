@@ -783,6 +783,7 @@ mod tests {
             admitted: None,
             budget: None,
             decides: None,
+            answers: false,
         }
     }
 

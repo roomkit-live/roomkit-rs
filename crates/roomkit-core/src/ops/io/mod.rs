@@ -246,6 +246,7 @@ impl Io {
             admitted: self.admitted.clone(),
             budget,
             decides: None,
+            answers: false,
         };
         if let Some(effect) = self.locks.admit(effect) {
             self.issued.push(effect);
@@ -299,6 +300,14 @@ impl Io {
         );
         if let Some(issued) = issued {
             issued.decides = Some(Box::new(result));
+        }
+    }
+
+    /// Marks `effect`, a commit issued for the next step, as storing an
+    /// answer of the call's own cascade (`Effect::answers`).
+    pub(crate) fn answers(&mut self, effect: EffectId) {
+        if let Some(issued) = self.issued.iter_mut().find(|issued| issued.id == effect) {
+            issued.answers = true;
         }
     }
 

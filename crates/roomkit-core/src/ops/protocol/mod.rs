@@ -99,6 +99,11 @@ pub struct Effect {
     /// another event among them: an entry it adopted, a channel's lifecycle
     /// record.
     pub decides: Option<Box<InboundResult>>,
+    /// Whether this request, a commit, stores an answer of the call's own
+    /// cascade, one of Python's `InboundResult.response_events`: a driver
+    /// whose run the kit's close aborts reports the answers it stored, as
+    /// Python's caller reads its cascade's. `false` for any other request.
+    pub answers: bool,
 }
 
 /// The error type of a [`ChannelRequest::OnEvent`] or [`ChannelRequest::Deliver`]

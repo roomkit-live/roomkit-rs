@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
-use roomkit_core::model::{ErrorRecord, EventId, RoomId};
+use roomkit_core::model::{ErrorRecord, EventId, RoomEvent, RoomId};
 use roomkit_core::ops::{
     Decided, EffectId, Inbound, InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED, Outcome,
     StoreOutcome,
@@ -100,6 +100,10 @@ pub(crate) struct Record {
     /// them, as [`committed`](Self::committed) reads a blocked call with no
     /// reason.
     cascade: Mutex<Vec<(EffectId, EventId, Written)>>,
+    /// The commits of the call's own answers, each with what its write came
+    /// to: what the call reports as its `response_events` once the kit's
+    /// close aborted its run, as Python's caller reads its cascade's.
+    answers: Mutex<Vec<(RoomEvent, Written)>>,
 }
 
 impl Record {
@@ -160,6 +164,31 @@ impl Record {
             .retain(|(_, event, _)| event != event_id);
     }
 
+    /// The commit of `answer`, an answer of the call's own cascade, runs,
+    /// its outcome told by `written`.
+    fn answers(&self, answer: RoomEvent, written: Written) {
+        self.answers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((answer, written));
+    }
+
+    /// The call's answers whose commit stored them, in order.
+    async fn stored_answers(&self) -> Vec<RoomEvent> {
+        let running: Vec<(RoomEvent, Written)> = self
+            .answers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let mut stored = Vec::new();
+        for (answer, mut written) in running {
+            if calls::outcome_of(&mut written).await == Outcome::Store(StoreOutcome::Committed) {
+                stored.push(answer);
+            }
+        }
+        stored
+    }
+
     /// The run is aborted leaving its turns' streams open, kept unread or
     /// read, its reads having written `rows`.
     fn left_open(&self, rows: LeftOpen) {
@@ -198,14 +227,15 @@ impl Record {
 
     /// What a run the kit's close aborted reports, as the Python
     /// implementation's lane reports a delivery it dropped: the call as it
-    /// was decided, its delivery cancelled [`LANE_CANCELLED`] when its set
-    /// delivered, [`KIT_CLOSED`] when it still waited for its turn, and no
-    /// reason of the abort's once its set was over, the abort cutting a
-    /// later set of its cascade, as Python's caller reads, but
-    /// [`KIT_CLOSED`] when a commit of its cascade stored an event whose set
-    /// never took its place in the room's lane, its write still running or
-    /// its outcome taken, an event stored and never delivered, as Python's
-    /// caller reads the delivery its sealed lanes refuse. A run that left a
+    /// was decided, with the answers its cascade stored, its delivery
+    /// cancelled [`LANE_CANCELLED`] when its set delivered, [`KIT_CLOSED`]
+    /// when it still waited for its turn, and no reason of the abort's once
+    /// its set was over, the abort cutting a later set of its cascade, as
+    /// Python's caller reads, but [`KIT_CLOSED`] when a commit of its
+    /// cascade stored an event whose set never took its place in the room's
+    /// lane, its write still running or its outcome taken, an event stored
+    /// and never delivered, as Python's caller reads the delivery its sealed
+    /// lanes refuse. A run that left a
     /// turn's stream open reads the turn's end ([`read_left_open`]). A call
     /// whose own commit still ran reads what the write came to, once it
     /// ends, as Python's caller does: its event, stored and never
@@ -220,6 +250,9 @@ impl Record {
         let Some(mut result) = decided else {
             return self.committed().await;
         };
+        // The answers its cascade stored before the abort, as Python's
+        // caller reads its cascade's `response_events`.
+        result.response_events = self.stored_answers().await;
         let left_open = self
             .left_open
             .lock()
@@ -352,6 +385,12 @@ impl Caller {
     /// outcome told by `written`.
     pub(super) fn cascade_commits(&self, effect: EffectId, event_id: EventId, written: Written) {
         self.record.cascade_commits(effect, event_id, written);
+    }
+
+    /// The commit of `answer`, an answer of the call's own cascade, runs,
+    /// its outcome told by `written`.
+    pub(super) fn answers(&self, answer: RoomEvent, written: Written) {
+        self.record.answers(answer, written);
     }
 
     /// `event_id`'s delivery set took its place in the room's lane.

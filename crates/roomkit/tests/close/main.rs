@@ -18,7 +18,9 @@
 //!   turns left once the lanes are idle are cut then, and a stream whose
 //!   read begins as the close waits for those it cut is cut in turn;
 //! - `grace`: a call whose run the grace's end aborts with a turn's stream
-//!   open reads the turn's end (N8).
+//!   open reads the turn's end (N8);
+//! - `answers`: a call whose run the close aborts reads the answers its
+//!   cascade stored.
 //!
 //! The kit's own work here is what roomkit-rs has of Python's doors: a
 //! SYNC hook's body, an ASYNC hook a delivery fires, a transport's
@@ -30,6 +32,7 @@
 
 #![expect(clippy::unwrap_used, reason = "a test fails on a broken fixture")]
 
+mod answers;
 mod doors;
 mod drain;
 mod grace;
