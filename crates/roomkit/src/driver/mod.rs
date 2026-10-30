@@ -60,7 +60,7 @@ use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::tasks::{Kind, Marks, Phase};
+use crate::tasks::{CUT_UNWIND, Kind, Marks, Phase};
 use crate::turns::Canceller;
 
 /// The kit's clock and the runtime's, read together at a run's start: a
@@ -648,23 +648,42 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// The commit that decides the call, read back by its id once its write
-    /// ended, the kit's close having cut it (RFC §12.10.4): its event,
-    /// `None` when the store holds none, or when the read fails, as a
-    /// warning says. The close aborts the run once the unwind it gives it
-    /// ran out, and the run's note of the commit in flight warns then.
+    /// ended, the kit's close having cut it, within the unwind the cut
+    /// gives it, from the cut's instant, as the Python implementation's
+    /// `timeout_at(cut_at + CUT_UNWIND_S)` (RFC §12.10.4): its event, `None`
+    /// when the store holds none, or when the read fails or does not end
+    /// within the unwind, as a warning says. A run the close aborts first,
+    /// at the same instant, warns through its note of the commit in flight;
+    /// a run a close spared meanwhile is never aborted, and ends so.
     async fn read_back(&mut self) -> Option<Box<Committed>> {
         let (mut written, event, decides) = self.committing.take()?;
-        drop(calls::outcome_of(&mut written).await);
-        let failure = match self.inner.store.get_event(&event.id).await {
-            Ok(stored) => {
+        let cut_at = self.inner.tasks.cut_at().unwrap_or_else(Instant::now);
+        let unwind = cut_at + CUT_UNWIND;
+        drop(tokio::time::timeout_at(unwind, calls::outcome_of(&mut written)).await);
+        let read = tokio::time::timeout_at(unwind, self.inner.store.get_event(&event.id)).await;
+        self.read_back_over();
+        let failure = match read {
+            Ok(Ok(stored)) => {
                 return stored
                     .filter(|stored| stored.room_id == event.room_id)
                     .map(|event| Box::new(Committed { event, decides }));
             }
-            Err(error) => error.to_string(),
+            Ok(Err(error)) => error.to_string(),
+            Err(_elapsed) => "it did not end within the close's unwind".to_owned(),
         };
         in_flight::read_back_failed(self.call, &event.id, &failure);
         None
+    }
+
+    /// The run's read-back is over: an abort landing now warns of nothing
+    /// more, the read-back having said what it came to.
+    fn read_back_over(&self) {
+        if let Some(in_flight) = &self.in_flight {
+            in_flight.settled();
+        }
+        if let Some(caller) = self.caller.as_deref() {
+            caller.read_back_over();
+        }
     }
 
     /// Cuts a run past its decision once the close's grace ran out: its
@@ -787,8 +806,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     self.note_the_commit(&event, decides, answer, &written);
                 }
                 // Only an inbound run's commit takes a place in a room's
-                // lane, and its run, a task of its own, is always polled; a
-                // run in its caller's own task may sit unpolled, and its
+                // lane, before its write's task ends: a direct call's
                 // writes end with their write.
                 if self.caller.is_some() {
                     self.writing.insert(id, went_on);

@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use tokio::sync::{Notify, watch};
 use tokio::task::{self, AbortHandle, JoinHandle};
+use tokio::time::Instant;
 
 pub(crate) use self::marks::{Marks, Unit};
 
@@ -96,6 +97,8 @@ pub(crate) struct Tasks {
     phase: watch::Sender<Phase>,
     /// Woken whenever a task ends and a unit is spared.
     changed: Notify,
+    /// The instant of the close's cut, once it came.
+    cut_at: Mutex<Option<Instant>>,
 }
 
 impl Default for Tasks {
@@ -104,6 +107,7 @@ impl Default for Tasks {
             state: Mutex::default(),
             phase: watch::Sender::new(Phase::Open),
             changed: Notify::new(),
+            cut_at: Mutex::new(None),
         }
     }
 }
@@ -294,8 +298,18 @@ impl Tasks {
     /// are aborted, the store's writes among them. A task spawned from now
     /// on, but one of a unit the close spares, is refused.
     pub(crate) fn cut(&self) {
+        self.cut_at
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(Instant::now);
         self.reach(Phase::Cut);
         self.abort_unspared(|kind| !matches!(kind, Kind::Run | Kind::Call));
+    }
+
+    /// The instant the close's grace ran out and it cut the work, once it
+    /// did: the runs read their commits back within the unwind from then.
+    pub(crate) fn cut_at(&self) -> Option<Instant> {
+        *self.cut_at.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Aborts every task the close does not spare still running, the runs

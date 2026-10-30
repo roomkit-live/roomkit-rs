@@ -375,6 +375,65 @@ async fn a_cut_commit_whose_read_back_fails_reports_nothing_stored_and_says_so()
     assert_eq!(rows, expected.collect::<Vec<_>>());
 }
 
+/// RFC §12.10.4: a run whose read-back hangs ends within the unwind from
+/// the cut all the same when a close joined from a task its hook kept in
+/// its context spares it meanwhile, so that the close's abort no longer
+/// reaches it: the read-back has its own deadline, as Python's
+/// `timeout_at(cut_at + CUT_UNWIND_S)`, the call reads as cut before its
+/// commit, a warning says so, and the kit's work ends (review A's probe 7,
+/// `rmk1030-rs-review-A/light/probes_1_6_7.out`). On d192534 the call
+/// never returned and the kit never went idle.
+#[tokio::test(start_paused = true)]
+async fn a_spared_run_whose_read_back_hangs_ends_within_its_unwind() {
+    let (logs, logging) = Warnings::capture();
+    let store = StuckStore::hanging("slow", true).hanging_read_back();
+    let committing = Arc::clone(&store.committing);
+    let kit = kit_of(store, &[&Holding::new("ws", [])], &["r"]).await;
+    let go = Arc::new(Notify::new());
+    let (weak, waiting) = (kit.downgrade(), Arc::clone(&go));
+    let spec = HookSpec::new(
+        "late_closer",
+        HookTrigger::BeforeBroadcast,
+        HookExecution::Sync,
+    );
+    kit.hook(spec, move |event, _context| {
+        let (weak, waiting) = (weak.clone(), Arc::clone(&waiting));
+        let ours = text_of(&event.content) == "slow";
+        async move {
+            if ours {
+                tokio::spawn(roomkit::keep_context(async move {
+                    waiting.notified().await;
+                    if let Some(kit) = weak.upgrade() {
+                        drop(kit.close().await);
+                    }
+                }));
+            }
+            Ok(HookResult::allow(AllowOptions::default()))
+        }
+    })
+    .unwrap();
+    let call = spawn_said(&kit, "slow", "r");
+    committing.notified().await;
+    let close = spawn_close(&kit);
+    // Past the grace: the run is cut and reads its commit back, which
+    // hangs; the hook's task joins the close then, sparing the run.
+    tokio::time::sleep(Duration::from_millis(5300)).await;
+    go.notify_one();
+
+    closed(close).await;
+
+    let ended = tokio::time::timeout(Duration::from_secs(30), call)
+        .await
+        .map(|joined| format!("{:?}", cut(&joined.unwrap().unwrap())));
+    let idle = tokio::time::timeout(Duration::from_secs(30), roomkit::testing::idle(&kit))
+        .await
+        .is_ok();
+    drop(logging);
+    let said_so = logs.containing("reading it back failed").len();
+    let cut_by_close = format!("{CUT_BY_CLOSE:?}");
+    assert_eq!((ended.ok(), idle, said_so), (Some(cut_by_close), true, 1));
+}
+
 /// RFC §12.10.4: the work outlasting the grace is cut before the channels
 /// close (Python's
 /// `test_the_work_outlasting_the_grace_is_cut_before_the_channels_close`).

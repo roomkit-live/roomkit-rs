@@ -241,6 +241,11 @@ impl Caller {
         self.record.in_flight.commits(call, event_id);
     }
 
+    /// The run's read-back of the commit that decides the call is over.
+    pub(super) fn read_back_over(&self) {
+        self.record.in_flight.settled();
+    }
+
     /// Whether the call is decided: its event committed, or its
     /// instruction decided.
     pub(super) fn is_decided(&self) -> bool {

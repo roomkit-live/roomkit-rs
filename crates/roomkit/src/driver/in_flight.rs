@@ -18,6 +18,12 @@ impl InFlight {
         *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some((call, event_id.clone()));
     }
 
+    /// The run read its commit back, or failed to, and said so: an abort
+    /// from now on warns of nothing more.
+    pub(crate) fn settled(&self) {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take();
+    }
+
     /// The kit's close aborted the run, its unwind run out before the run
     /// read its commit back: a commit in flight is reported as a read-back
     /// that failed (RFC §12.10.4).
