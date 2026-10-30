@@ -1,7 +1,8 @@
-//! A store whose commits take their time, as a slow database's do.
+//! A store whose writes may never end, as a stuck database's, and whose
+//! reads by id may fail.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EventId, EventUpdates, Identity, IdentityId,
@@ -14,38 +15,73 @@ use roomkit::{
 };
 use tokio::sync::Notify;
 
-/// An in-memory store whose commit of "Slow." tells `committing` it
-/// started, then waits for `go`, as a slow database does, whose commit of
-/// the text and room `delayed` names takes its delay, and whose moves of
-/// the delivery cursor of the room `advancing` names take its delay.
+/// An in-memory store whose commit of a text, or whose writes of a room,
+/// may never end, telling `committing` they started, and whose reads of an
+/// event by its id may fail.
 #[derive(Debug, Default)]
-pub(crate) struct SlowCommits {
+pub(crate) struct StuckStore {
     store: InMemoryStore,
     pub(crate) committing: Arc<Notify>,
-    pub(crate) go: Arc<Notify>,
-    delayed: Option<(&'static str, RoomId, Duration)>,
-    advancing: Option<(RoomId, Duration)>,
+    /// The commit of this text never ends, its row written first when
+    /// `true`; it tells `committing` it started.
+    hangs: Option<(&'static str, bool)>,
+    /// Whether a read of an event by its id fails.
+    read_back_fails: bool,
+    /// Once set, a write of a room never ends; it tells `committing` it
+    /// started.
+    pub(crate) rooms_hang: Arc<AtomicBool>,
+    /// The writes dropped before they ended, cut: "commit", "room".
+    pub(crate) cut: Arc<Mutex<Vec<&'static str>>>,
 }
 
-impl SlowCommits {
-    /// A store whose commit of `text` in `room_id` takes `delay`.
-    pub(crate) fn delaying(text: &'static str, room_id: RoomId, delay: Duration) -> Self {
+/// Notes a write dropped before it ended.
+struct CutNote {
+    cut: Arc<Mutex<Vec<&'static str>>>,
+    what: &'static str,
+}
+
+impl Drop for CutNote {
+    fn drop(&mut self) {
+        self.cut.lock().unwrap().push(self.what);
+    }
+}
+
+impl StuckStore {
+    /// A store whose commit of `text` never ends, its row written first
+    /// when `written`.
+    pub(crate) fn hanging(text: &'static str, written: bool) -> Self {
         Self {
-            delayed: Some((text, room_id, delay)),
+            hangs: Some((text, written)),
             ..Self::default()
         }
     }
 
-    /// A store whose moves of `room_id`'s delivery cursor take `delay`.
-    pub(crate) fn advancing(room_id: RoomId, delay: Duration) -> Self {
+    /// The same store, whose reads of an event by its id fail.
+    pub(crate) fn failing_read_back(self) -> Self {
         Self {
-            advancing: Some((room_id, delay)),
-            ..Self::default()
+            read_back_fails: true,
+            ..self
         }
+    }
+
+    /// Whether a write of `what` that never ends was cut.
+    pub(crate) fn was_cut(&self, what: &str) -> bool {
+        self.cut.lock().unwrap().contains(&what)
+    }
+
+    /// Never ends, telling `committing` it started; a drop notes `what`
+    /// cut.
+    async fn hang(&self, what: &'static str) {
+        let _note = CutNote {
+            cut: Arc::clone(&self.cut),
+            what,
+        };
+        self.committing.notify_one();
+        std::future::pending::<()>().await;
     }
 }
 
-impl ConversationStore for SlowCommits {
+impl ConversationStore for StuckStore {
     async fn create_room(&self, room: Room) -> Result<(), StoreError> {
         self.store.create_room(room).await
     }
@@ -55,6 +91,9 @@ impl ConversationStore for SlowCommits {
         room_id: &RoomId,
         updates: RoomUpdates,
     ) -> Result<Room, StoreError> {
+        if self.rooms_hang.load(Ordering::SeqCst) {
+            self.hang("room").await;
+        }
         self.store.update_room(room_id, updates).await
     }
 
@@ -68,11 +107,6 @@ impl ConversationStore for SlowCommits {
         index: u64,
         force: bool,
     ) -> Result<bool, StoreError> {
-        if let Some((slow, delay)) = &self.advancing
-            && slow == room_id
-        {
-            tokio::time::sleep(*delay).await;
-        }
         self.store
             .advance_delivered_index(room_id, index, force)
             .await
@@ -219,20 +253,22 @@ impl ConversationStore for SlowCommits {
         target: Option<TargetUpdate>,
     ) -> Result<(), StoreError> {
         let text = text_of(&event.content);
-        if text == "Slow." {
-            self.committing.notify_one();
-            self.go.notified().await;
-        }
-        if let Some((delayed, room_id, delay)) = &self.delayed
-            && text == *delayed
-            && &event.room_id == room_id
+        if let Some((hangs, written)) = self.hangs
+            && text == hangs
         {
-            tokio::time::sleep(*delay).await;
+            if written {
+                self.store.commit(event, counters, target).await?;
+            }
+            self.hang("commit").await;
+            return Ok(());
         }
         self.store.commit(event, counters, target).await
     }
 
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
+        if self.read_back_fails {
+            return Err(StoreError::Value("the store is gone".to_owned()));
+        }
         self.store.get_event(event_id).await
     }
 

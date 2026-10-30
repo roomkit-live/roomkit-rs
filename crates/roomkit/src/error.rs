@@ -196,16 +196,16 @@ pub enum RoomKitError {
         /// Each channel that failed to close, and what its panic said.
         failures: Vec<(ChannelId, String)>,
     },
-    /// The kit is closed ([`RoomKit::close`](crate::RoomKit::close)): the
-    /// call was made once the close sealed it, or its run was cut past its
-    /// grace, what it wrote by then not known. Python raises the bare
-    /// `RoomKitError`; its `KitClosedError` is to come (RMK-1021).
+    /// The kit is closing or closed ([`RoomKit::close`](crate::RoomKit::close),
+    /// RFC §12.10.4): the call was made once the close started, or the
+    /// close cut it before its commit, nothing of it stored. Python's
+    /// `KitClosedError`, a `RoomKitError` whose code is `kit_closed`,
+    /// retryable.
     #[error("the kit is closed")]
     KitClosed,
     /// The kit's shutdown never ended, its task dropped with its runtime or
     /// panicked: its channels and its store may not all be closed (RFC
-    /// §12.10.4). Python raises the bare `RoomKitError`; its
-    /// `ShutdownCancelledError` is to come (RMK-1021).
+    /// §12.10.4). Python's `ShutdownCancelledError`, a `RoomKitError`.
     #[error(
         "the kit's shutdown was cancelled before it ended: its channels and its store may not \
          all be closed"

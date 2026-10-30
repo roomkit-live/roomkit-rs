@@ -1,4 +1,4 @@
-//! RFC §10.1 step 18, §12.10.4: a call whose run the close aborts reports
+//! RFC §10.1 step 18, §12.10.4: a call whose run the close cuts reports
 //! the answers its cascade stored, as Python's caller reads its cascade's
 //! `response_events` (light review A, A4; probe
 //! `tasks/probes/step5-lot2/close_while_held.py`).
@@ -59,13 +59,10 @@ impl Channel for Stuck {
 /// A locked `BEFORE_BROADCAST` hook makes the deferred call `side` when it
 /// sees `hello`, keeping its handle; an agent echoes every message, and a
 /// second one's turn on the echo of `side` never ends. Once that turn
-/// started, the kit closes, its grace running out: the call `hello`,
-/// aborted, reads the answer its cascade stored, `You said: hello`, and
+/// started, the kit closes, cutting it at once: the call `hello` reads
+/// the answer its cascade stored, `You said: hello`, and
 /// the adopted call's handle `You said: side`, as Python's do
-/// (`close_while_held.out`). Their cancellation reasons are lot 3's:
-/// Python's read `kit_closed` and `lane_cancelled`; Rust's depend on the
-/// runtime, the handle reading `kit_closed` on a current-thread one and
-/// neither reading one on a multi-threaded one.
+/// (`close_while_held.out`).
 #[tokio::test(start_paused = true)]
 async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
     assert_eq!(answers_under_the_close().await, said(["hello", "side"]));
@@ -73,11 +70,10 @@ async fn a_call_the_close_aborts_reads_the_answers_its_cascade_stored() {
 
 /// [`a_call_the_close_aborts_reads_the_answers_its_cascade_stored`] on a
 /// runtime of several threads, where the adopted call's report comes before
-/// the abort. On demand: the close's grace takes 5 s of real time. Run it
-/// with `cargo test -p roomkit --test close -- --ignored
-/// answers::a_call_the_close_aborts_reads_its_answers_on_threads`.
+/// the cut. The close cuts the stuck turn at once, with no grace, so it
+/// runs with the others (on fefbfac it waited the grace, 5 s of real time,
+/// and ran on demand).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "the close's grace takes 5 s of real time, run on demand"]
 async fn a_call_the_close_aborts_reads_its_answers_on_threads() {
     assert_eq!(answers_under_the_close().await, said(["hello", "side"]));
 }

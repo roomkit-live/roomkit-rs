@@ -252,9 +252,7 @@ async fn lifecycle_call(
         "unregister_channel" => {
             let channel = channel_id(spec)?;
             let unregistered = run.kit().unregister_channel(&channel);
-            finish(run, name, Ok::<_, RoomKitError>(unregistered), |_| {
-                Value::Null
-            })
+            finish(run, name, unregistered, |_| Value::Null)
         }
         "register_hook" => finish(run, name, register_hook(run, &spec["hook"])?, |()| {
             Value::Null

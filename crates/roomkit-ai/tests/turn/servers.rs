@@ -173,7 +173,11 @@ async fn an_unregistered_agent_is_closed_by_its_caller() {
     let model = ScriptedProvider::new([ScriptedRound::answering("Hello.")]);
     let toolset = closing.clone();
     let room = Room::equipped(model, served(), |agent| agent.with_tools(toolset).unwrap()).await;
-    let agent = room.kit.unregister_channel(&channel("assistant")).unwrap();
+    let agent = room
+        .kit
+        .unregister_channel(&channel("assistant"))
+        .unwrap()
+        .unwrap();
     let handed_back = (
         agent.channel_id().as_str().to_owned(),
         closing.closes.load(Ordering::SeqCst),

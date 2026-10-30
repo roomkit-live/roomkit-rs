@@ -65,8 +65,6 @@ pub(crate) fn transport(id: &str) -> ChannelDeclaration {
 /// of the text `slow` names takes its time, once its gate let it go.
 #[derive(Clone, Default)]
 pub(crate) struct Witness {
-    /// Its id, `witness` unless named.
-    id: Option<&'static str>,
     pub(crate) closed: Arc<AtomicBool>,
     delivered: Arc<Mutex<Vec<String>>>,
     pub(crate) closes_on_delivery: Arc<Mutex<Option<Closer>>>,
@@ -116,14 +114,6 @@ impl Witness {
         }
     }
 
-    /// The same witness, under the id `id`.
-    pub(crate) fn named(self, id: &'static str) -> Self {
-        Self {
-            id: Some(id),
-            ..self
-        }
-    }
-
     /// The texts delivered, in order, ` (closed)` after one that came once
     /// the channel was closed.
     pub(crate) fn delivered(&self) -> Vec<String> {
@@ -145,7 +135,7 @@ impl Witness {
 
 impl Channel for Witness {
     fn declaration(&self) -> ChannelDeclaration {
-        transport(self.id.unwrap_or("witness"))
+        transport("witness")
     }
 
     fn deliver(
@@ -361,29 +351,44 @@ pub(crate) const DOORS: [Door; 5] = [
 
 impl Door {
     /// What the call of the message whose work closes the kit comes to,
-    /// as the Python implementation's call does (`py_probe.out`): the SYNC
-    /// hook's run is refused at its commit, once the kit is sealed, nothing
-    /// of it stored, as Python raises `RoomKitError`; the turn's run reads
-    /// as one whose delivery the close dropped, its answer refused; the
-    /// others end as they would have.
-    pub(crate) fn call_ends(self) -> Answered {
+    /// `joining` a close begun from outside or not, as the Python
+    /// implementation's call does (`rmk1030-rs/py_doors.out`): a call under
+    /// way as the close starts reads `kit_closed` (RFC §12.10.4), the SYNC
+    /// hook's as one cut before its commit, which the sealed kit refused,
+    /// nothing of it stored. Rust's delivery does not wait for the ASYNC
+    /// `AFTER_BROADCAST` hook it fires, a difference of its own: its call is
+    /// over before that hook closes the kit, and reads no reason. An
+    /// observer joining a close begun from outside runs after its call
+    /// ended, which reads no reason either.
+    pub(crate) fn call_ends(self, joining: bool) -> Answered {
         match self {
-            Self::SyncHook => Err(RoomKitError::KitClosed),
-            Self::ToolCall => ok(Some("kit_closed"), None),
-            Self::DeliveryHook | Self::Delivery | Self::Observer => ok(None, None),
+            Self::DeliveryHook => ok(None, None),
+            Self::Observer if joining => ok(None, None),
+            Self::SyncHook | Self::Delivery | Self::Observer | Self::ToolCall => {
+                ok(Some("kit_closed"), None)
+            }
         }
     }
 
     /// What `room_1` stores once the call ended: nothing of the message
-    /// whose commit was refused, and no answer of the turn whose writes
-    /// were.
+    /// whose commit was refused, and the tool's start and end rows, the
+    /// end row stored as the close cut the turn (RFC §12.10.4).
     pub(crate) fn stores(self) -> Vec<String> {
         let stored: &[&str] = match self {
             Self::SyncHook => &[],
-            Self::ToolCall => &["Bye.", "[Tool call: shut_down]"],
+            Self::ToolCall => &["Bye.", "[Tool call: shut_down]", "[Tool call: shut_down]"],
             Self::DeliveryHook | Self::Delivery | Self::Observer => &["Bye."],
         };
         stored.iter().map(|text| (*text).to_owned()).collect()
+    }
+
+    /// Whether the witness reads "Bye.": not when the commit refused it,
+    /// nor when the kit closed from an observer, which runs as the commit
+    /// is written, before the delivery set takes its place in the room's
+    /// lane, so that the close drops the set (Python's delivery had begun
+    /// when its observer closed the kit, `py_doors.out`).
+    pub(crate) fn delivers(self) -> bool {
+        !matches!(self, Self::SyncHook | Self::Observer)
     }
 }
 

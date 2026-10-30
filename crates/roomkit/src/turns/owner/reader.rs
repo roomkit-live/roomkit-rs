@@ -12,13 +12,11 @@ use super::{Canceller, Main, OwnerState, cancel};
 use crate::channel::ChannelError;
 use crate::context::ExecutionContext;
 use crate::stream::ResponseItem;
-use crate::tasks::Unit;
 use crate::turns::codec::{decode_end, decode_loop_end, decode_output, decode_start};
 use crate::turns::error::{RemoteError, TurnError, to_record};
 use crate::turns::lock;
 use crate::turns::pulls::PullWindow;
 use crate::turns::wire::{Control, Item};
-use crate::turns::{Cut, MemoryTurn, TurnStage};
 
 /// Where the reader stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,8 +43,6 @@ pub(crate) enum RemoteItem {
 #[derive(Debug)]
 pub(crate) struct OwnerTurn {
     state: Arc<OwnerState>,
-    /// The unit of the kit's work the turn's tasks run in.
-    unit: Unit,
     main: mpsc::UnboundedReceiver<Main>,
     stage: Stage,
     window: PullWindow,
@@ -59,14 +55,9 @@ pub(crate) struct OwnerTurn {
 }
 
 impl OwnerTurn {
-    pub(super) fn new(
-        state: Arc<OwnerState>,
-        main: mpsc::UnboundedReceiver<Main>,
-        unit: Unit,
-    ) -> Self {
+    pub(super) fn new(state: Arc<OwnerState>, main: mpsc::UnboundedReceiver<Main>) -> Self {
         Self {
             state,
-            unit,
             main,
             stage: Stage::Output,
             window: PullWindow::default(),
@@ -75,31 +66,19 @@ impl OwnerTurn {
         }
     }
 
-    /// The unit of the kit's work the turn's tasks run in.
-    pub(crate) fn unit(&self) -> Unit {
-        self.unit
-    }
-
-    /// The turn as its two sides share it.
-    pub(crate) fn memory(&self) -> &Arc<MemoryTurn> {
-        &self.state.turn
-    }
-
-    /// The turn's output, and whether its stream follows; at the kit's
-    /// shutdown (`cut`), unless it spares the turn, the turn is cancelled
-    /// and its end awaited.
+    /// The turn's output, and whether its stream follows; as the kit's
+    /// close starts (`cut`), the turn is cancelled and its end awaited.
     pub(crate) async fn output(
         &mut self,
-        mut cut: watch::Receiver<Cut>,
+        mut cut: watch::Receiver<bool>,
     ) -> Result<(ChannelOutput, bool), ErrorRecord> {
         self.wait_here();
         let mut cutting = false;
-        let unit = Some(self.unit);
         loop {
             let next = tokio::select! {
                 biased;
                 next = self.main.recv() => next,
-                Ok(_) = cut.wait_for(|cut| cut.cuts(unit, TurnStage::Output)), if !cutting => {
+                Ok(_) = cut.wait_for(|cut| *cut), if !cutting => {
                     cutting = true;
                     self.cancel("kit_closed");
                     continue;

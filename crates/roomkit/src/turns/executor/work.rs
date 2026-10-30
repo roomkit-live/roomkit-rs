@@ -133,12 +133,7 @@ impl Pump<'_> {
             if !self.flow.is_granted() && !self.flush() {
                 return;
             }
-            // A wait for a pull, an item sent, is a wait on the reader,
-            // which has it: whoever sent it, the pump or the heartbeat
-            // sending the burst first, the sender knows.
-            self.turn.wait_on_reader(self.sender.sent_items());
             self.flow.granted().await;
-            self.turn.wait_on_reader(false);
             if self.flow.closing() {
                 return;
             }
@@ -192,10 +187,7 @@ impl Pump<'_> {
             Poll::Pending => {
                 // The stream waits: the burst kept goes now.
                 flushed = self.sender.flush();
-                self.turn.wait_on_channel(true);
-                let read = next.await;
-                self.turn.wait_on_channel(false);
-                read
+                next.await
             }
         };
         let mut gate = lock(&self.flow.gate);

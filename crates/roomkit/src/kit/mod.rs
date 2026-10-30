@@ -360,15 +360,15 @@ fn default_router<S: ConversationStore>(
 }
 
 impl<S> Inner<S> {
-    /// Refuses a call once the kit is sealed, its close past its drain: a
-    /// call made while the close drains is taken, as the Python
-    /// implementation takes it until its store is sealed.
+    /// Refuses a call once the kit's close started, whoever makes it, as
+    /// the Python implementation's kit refuses every call but a read (RFC
+    /// §12.10.4).
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::KitClosed`] once [`RoomKit::close`] sealed the kit.
+    /// Returns [`RoomKitError::KitClosed`] once [`RoomKit::close`] started.
     pub(crate) fn open(&self) -> Result<(), RoomKitError> {
-        if self.tasks.is_sealed() {
+        if self.tasks.is_closing() {
             return Err(RoomKitError::KitClosed);
         }
         Ok(())

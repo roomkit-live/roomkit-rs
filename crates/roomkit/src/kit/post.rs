@@ -66,7 +66,7 @@ impl<S: ConversationStore> RoomKit<S> {
             post: Box::new(options.post(content)),
         };
         let entered = self.enter(entry, POST, false).await?;
-        entered.result.event.ok_or_else(super::inject::no_event)
+        super::inject::event_of(entered.result)
     }
 
     /// Registers the kit's own host channel, when no channel holds its id:

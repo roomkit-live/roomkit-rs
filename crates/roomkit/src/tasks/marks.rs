@@ -10,7 +10,9 @@
 //! last, as the Python implementation's context names the held runs a task
 //! inherited when it was created. A `close()` called from inside them
 //! spares them: the kit's shutdown neither waits for them nor cuts them,
-//! since they cannot move on before the call returns.
+//! since they cannot move on before the call returns; a turn among them is
+//! cut all the same, its executor letting the task the close is called
+//! from run on (RFC §12.10.4).
 //!
 //! A task-local: the kit's tasks are started within their marks, the calls
 //! a run makes within the run's, and [`keep_context`](crate::keep_context)

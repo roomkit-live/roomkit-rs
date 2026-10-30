@@ -499,6 +499,10 @@ pub(crate) trait TurnKit: Send + Sync {
 
     /// Publishes a framework event to the kit's subscribers.
     fn publish(&self, event: FrameworkEvent);
+
+    /// Whether the current task is one the kit's `close()` is called from:
+    /// a turn run in it runs on whatever cuts it (RFC §12.10.4).
+    fn acting(&self) -> bool;
 }
 
 impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
@@ -528,7 +532,7 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         let inner = self.upgrade()?;
         inner
             .tasks
-            .spawn_joined(Kind::Work, task)
+            .spawn_joined(Kind::Turn, task)
             .map(|task| task.abort_handle())
     }
 
@@ -540,6 +544,10 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
 
     fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>> {
         self.upgrade()?.channel(channel_id)
+    }
+
+    fn acting(&self) -> bool {
+        self.upgrade().is_some_and(|inner| inner.tasks.acting())
     }
 
     fn publish(&self, event: FrameworkEvent) {

@@ -146,12 +146,11 @@ pub trait Channel: Send + Sync + 'static {
     /// handed stored marked `cancelled` (RFC §12.2 step 13s). The text is
     /// shown before `BEFORE_BROADCAST` judges the row it ends in.
     ///
-    /// The kit's close may drop this future, as the Python implementation
-    /// cancels its stream readers: a stream the close cuts as it starts,
-    /// and one it drains once its lanes are idle, whose target does not
-    /// pull. The future is polled once more first, so that it takes what it
-    /// was handed, then dropped where it waits, with no async cleanup: a
-    /// target that must release what it holds does so in a `Drop`.
+    /// The kit's close drops this future, as the Python implementation
+    /// cancels its stream readers: the close cuts every turn as it starts.
+    /// The future is polled once more first, so that it takes what it was
+    /// handed, then dropped where it waits, with no async cleanup: a target
+    /// that must release what it holds does so in a `Drop`.
     ///
     /// The default reads the stream to its end, then delivers each row
     /// through [`deliver`](Channel::deliver); a response that fails is
@@ -180,8 +179,9 @@ pub trait Channel: Send + Sync + 'static {
 
     /// Releases what the channel holds (RFC §6.1 `close`): the kit's
     /// [`close`](crate::RoomKit::close) calls it once for each channel
-    /// registered then, in turn, after the work under way ended. It
-    /// must not wait without bound on anything the channel does not own.
+    /// registered then, in turn, once the work under way ended or was cut.
+    /// A call it makes into the kit is refused, the kit closing. It must
+    /// not wait without bound on anything the channel does not own.
     ///
     /// The default releases nothing.
     fn close(&self) -> impl Future<Output = ()> + Send {

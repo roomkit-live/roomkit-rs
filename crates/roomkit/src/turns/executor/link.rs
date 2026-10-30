@@ -43,9 +43,6 @@ struct Sent {
     fixed: HashMap<u64, Metadata>,
     /// The text deltas kept for the burst, in order.
     burst: Vec<String>,
-    /// Whether an item of the stream went, by the pump or by the beat's
-    /// heartbeat sending the burst first.
-    items: bool,
 }
 
 impl FrameSender {
@@ -64,15 +61,7 @@ impl FrameSender {
             return Ok(0);
         }
         self.send_burst(&mut sent)?;
-        let seq = self.turn.frames.put(frame)?;
-        sent.items |= matches!(frame, Frame::Item { .. });
-        Ok(seq)
-    }
-
-    /// Whether an item of the turn's stream went to its reader, whoever
-    /// sent it: a wait for a pull is then a wait on the reader.
-    pub(crate) fn sent_items(&self) -> bool {
-        lock(&self.state).items
+        self.turn.frames.put(frame)
     }
 
     /// Keeps the delta `text` for the burst, sent once the stream waits
@@ -103,7 +92,6 @@ impl FrameSender {
             deltas,
         };
         self.turn.frames.put(&Frame::Item { item })?;
-        sent.items = true;
         Ok(true)
     }
 
@@ -122,7 +110,6 @@ impl FrameSender {
         }
         self.send_burst(&mut sent)?;
         let seq = self.turn.frames.put(&Frame::Item { item })?;
-        sent.items = true;
         sent.open.push((seq, tool_id));
         Ok(())
     }
@@ -138,7 +125,6 @@ impl FrameSender {
         let start = take_open(&mut sent, &end.tool_id);
         let item = encode_end_item(end, start);
         self.turn.frames.put(&Frame::Item { item })?;
-        sent.items = true;
         Ok(())
     }
 

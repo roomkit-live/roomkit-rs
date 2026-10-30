@@ -39,16 +39,17 @@ use std::future::poll_fn;
 use std::sync::Arc;
 use std::task::Poll;
 
-use roomkit_core::model::{ErrorRecord, EventId, EventStatus, RoomEvent, RoomId, Timestamp};
+use roomkit_core::model::{ErrorRecord, RoomEvent, RoomId, Timestamp};
 use roomkit_core::ops::{
     AnswerOf, Delivered, Effect, EffectId, EntryId, Environment, HoldOutcome, HoldRequest,
-    InboundResult, Next, Notice, Operation, Outcome, Request, Settled, StoreRequest,
+    InboundResult, Next, Notice, Operation, Outcome, ProtocolError, Request, Settled, StoreRequest,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{self, AbortHandle, JoinError, JoinSet};
 use tokio::time::Instant;
 
-use self::calls::WentOn;
+pub(crate) use self::calls::cut_by_close;
+use self::calls::{WentOn, Written};
 use self::holds::{Held, Hold, Leases, Rooms, Waited, Waiting};
 use self::inbound::Caller;
 pub(crate) use self::inbound::{InboundOutput, Ran, Record, StoredAnswers, ended, run_inbound};
@@ -57,7 +58,7 @@ use crate::context::{Adoption, ExecutionContext, Frame, Reply, RunShared, Work};
 use crate::error::RoomKitError;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::tasks::Marks;
+use crate::tasks::{CUT_UNWIND, Marks, Phase, Tracked};
 use crate::turns::Canceller;
 
 /// The kit's clock and the runtime's, read together at a run's start: a
@@ -87,16 +88,59 @@ impl Clocks {
     }
 }
 
+/// What ends a run before its operation is over.
+#[derive(Debug)]
+pub(crate) enum Stop {
+    /// The kit's call failed.
+    Failed(RoomKitError),
+    /// The kit's close cut the run (RFC §12.10.4): the event its commit
+    /// stored, read back by its id, when that commit had started.
+    Cut(Option<Box<Committed>>),
+}
+
+impl From<RoomKitError> for Stop {
+    fn from(error: RoomKitError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<ProtocolError> for Stop {
+    fn from(error: ProtocolError) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
+impl Stop {
+    /// The error of a call that reads a run so stopped as a failure: the
+    /// kit's call's, or [`RoomKitError::KitClosed`] for one the close cut.
+    pub(crate) fn into_error(self) -> RoomKitError {
+        match self {
+            Self::Failed(error) => error,
+            Self::Cut(_) => RoomKitError::KitClosed,
+        }
+    }
+}
+
+/// The commit of a run the kit's close cut, read back: the event as the
+/// store holds it, and the call's result at that commit, for an inbound
+/// call's own event.
+#[derive(Debug)]
+pub(crate) struct Committed {
+    pub(crate) event: RoomEvent,
+    pub(crate) decides: Option<Box<InboundResult>>,
+}
+
 /// Runs `operation`, made by the kit's call `call`, until it is ready; a
 /// lock its execution context holds a live lease on is granted to it (RFC
 /// §13.5).
 ///
 /// # Errors
 ///
-/// Returns [`RoomKitError::KitClosed`] once the kit is shut down, and
-/// [`RoomKitError::ReentrantCall`] when the operation waited for a ticket's turn in
-/// an admission order its own execution context stands in, which was
-/// refused; a protocol error or a stall is a defect of this crate.
+/// Returns [`RoomKitError::KitClosed`] once the kit's close started, and
+/// for a run the close cut; [`RoomKitError::ReentrantCall`] when the
+/// operation waited for a ticket's turn in an admission order its own
+/// execution context stands in, which was refused; a protocol error or a
+/// stall is a defect of this crate.
 pub(crate) async fn run<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     call: &'static str,
@@ -119,24 +163,108 @@ pub(crate) async fn run_on<S: ConversationStore, O: Operation>(
     operation: O,
 ) -> Result<O::Output, RoomKitError> {
     inner.open()?;
-    drive(inner, environment, call, operation, Leases::Granted, None).await
+    Box::pin(run_in_its_task(inner, environment, call, operation, false))
+        .await
+        .map_err(Stop::into_error)
+}
+
+/// Runs `operation` as [`run`] does, a run the kit's close cut reading its
+/// commit back: what `commit_event` runs.
+///
+/// # Errors
+///
+/// As [`run`], the close's cut as [`Stop::Cut`].
+pub(crate) async fn run_reading_back<S: ConversationStore, O: Operation>(
+    inner: &Arc<Inner<S>>,
+    call: &'static str,
+    operation: O,
+) -> Result<O::Output, Stop> {
+    inner.open()?;
+    Box::pin(run_in_its_task(
+        inner,
+        inner.environment(),
+        call,
+        operation,
+        false,
+    ))
+    .await
+}
+
+/// Runs `operation`, a step of the kit's own work, a turn's record written
+/// on its last message: taken once the close started, which cuts it only
+/// once its grace ran out.
+///
+/// # Errors
+///
+/// As [`run`].
+pub(crate) async fn run_own<S: ConversationStore, O: Operation>(
+    inner: &Arc<Inner<S>>,
+    call: &'static str,
+    operation: O,
+) -> Result<O::Output, RoomKitError> {
+    if inner.tasks.is_sealed() {
+        return Err(RoomKitError::KitClosed);
+    }
+    Box::pin(run_in_its_task(
+        inner,
+        inner.environment(),
+        call,
+        operation,
+        true,
+    ))
+    .await
+    .map_err(Stop::into_error)
+}
+
+/// Runs `operation` in its caller's own task, tracked as a call the kit's
+/// close gives its grace, then cuts: at once while it waits for a room's
+/// lock, unless it is the kit's `own` work. Boxed by its callers: the
+/// operation and the run's state would make every caller's future large.
+async fn run_in_its_task<S: ConversationStore, O: Operation>(
+    inner: &Arc<Inner<S>>,
+    environment: Arc<dyn Environment + Send + Sync>,
+    call: &'static str,
+    operation: O,
+    own: bool,
+) -> Result<O::Output, Stop> {
+    let tracked = inner.tasks.track_call();
+    drive(
+        inner,
+        environment,
+        call,
+        operation,
+        Leases::Granted,
+        Driven::Call { tracked, own },
+    )
+    .await
+}
+
+/// What a run is: an inbound call's, offering its decision to its caller,
+/// or a call run in its caller's own task.
+enum Driven<'run> {
+    Inbound(&'run mut Caller),
+    Call { tracked: Tracked, own: bool },
 }
 
 /// Runs `operation`, made by the kit's call `call`, until it is ready,
 /// treating a lock its execution context holds a live lease on as `leases`
-/// says, and offering its decision to its `caller`, when the run is an
+/// says, and offering its decision to its caller, when the run is an
 /// inbound call's. Such a run is never dropped for its caller: a caller
 /// gone before the call's decision expires the operation
 /// (`Operation::expire`), which goes on to its end, delivering what it
-/// committed (gap G-076).
+/// committed (gap G-076). The kit's close cuts it (RFC §12.10.4).
 async fn drive<S: ConversationStore, O: Operation>(
     inner: &Arc<Inner<S>>,
     environment: Arc<dyn Environment + Send + Sync>,
     call: &'static str,
     operation: O,
     leases: Leases,
-    caller: Option<&mut Caller>,
-) -> Result<O::Output, RoomKitError> {
+    how: Driven<'_>,
+) -> Result<O::Output, Stop> {
+    let (caller, own, tracked) = match how {
+        Driven::Inbound(caller) => (Some(caller), false, None),
+        Driven::Call { tracked, own } => (None, own, Some(tracked)),
+    };
     let (shared, adoptions) = RunShared::new();
     let driver = Driver {
         calls: JoinSet::new(),
@@ -161,7 +289,13 @@ async fn drive<S: ConversationStore, O: Operation>(
         cut: Vec::new(),
         writing: HashMap::new(),
         written: Vec::new(),
-        out_of_lanes: false,
+        phases: inner.tasks.phases(),
+        phase: Phase::Open,
+        own,
+        committing: None,
+        stop: None,
+        cut_now: false,
+        _tracked: tracked,
     };
     // Boxed: the waits and calls a run polls would make every caller's
     // future large.
@@ -176,8 +310,8 @@ async fn drive<S: ConversationStore, O: Operation>(
 /// lets go of what it holds: the fields drop in that order.
 struct Driver<'kit, S> {
     calls: JoinSet<Outcome>,
-    /// The waits the run polls, each by its effect.
-    waits: Vec<(EffectId, Waiting<'kit>)>,
+    /// The waits the run polls, each by its effect, with what it waits for.
+    waits: Vec<(EffectId, Wait, Waiting<'kit>)>,
     inner: &'kit Arc<Inner<S>>,
     /// The kit's call the run serves, which an error names.
     call: &'static str,
@@ -224,19 +358,43 @@ struct Driver<'kit, S> {
     /// The holds on the writes whose outcome the operation took, until what
     /// that outcome led to is started.
     written: Vec<WentOn>,
-    /// Whether an inbound run told the kit it is out of its rooms' lanes.
-    out_of_lanes: bool,
+    /// The kit's close's phase, told as it changes (RFC §12.10.4).
+    phases: watch::Receiver<Phase>,
+    /// The phase the run last acted on.
+    phase: Phase,
+    /// Whether the run is a step of the kit's own work, which the close
+    /// cuts only once its grace ran out.
+    own: bool,
+    /// The commit that decides the call, while it runs or once it ran: the
+    /// write's outcome, its event and the call's result at it; the commit
+    /// of a call run in its caller's task.
+    committing: Option<(Written, RoomEvent, Option<Box<InboundResult>>)>,
+    /// Why the run stops at once, the kit's close cutting it as a wait
+    /// starts.
+    stop: Option<Stop>,
+    /// Whether the kit's close cut the run past its decision: its calls in
+    /// flight and from now on fail `kit_closed`, so that it reports what it
+    /// delivered (RFC §12.10.4).
+    cut_now: bool,
+    /// The call the run's kit tracks, a call run in its caller's task.
+    _tracked: Option<Tracked>,
+}
+
+/// What a wait of the run waits for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wait {
+    /// A room's lock or admission ticket: what a call waits for before its
+    /// commit, which the kit's close cuts at once.
+    Admission,
+    /// A place's turn in a room's delivery lane: a delivery queued, which
+    /// the kit's close drops at once.
+    Lane,
+    /// Anything else, a room's delivery cursor.
+    Other,
 }
 
 impl<S> Drop for Driver<'_, S> {
     fn drop(&mut self) {
-        // A run ending with a turn's stream kept unread or read, as the
-        // kit's close aborts it: its caller reads that turn left open.
-        if let Some(caller) = self.caller.as_deref()
-            && let Some(rows) = self.shared.left_open()
-        {
-            caller.left_open(rows);
-        }
         self.adoptions.close();
         while let Ok(adoption) = self.adoptions.try_recv() {
             let declined = Reply::Declined(Box::new(adoption.entry));
@@ -252,10 +410,12 @@ enum Event<'kit> {
     Adoption(Adoption),
     /// The caller of an inbound call stopped waiting.
     CallerGone,
+    /// The kit's close moved on to this phase.
+    Phase(Phase),
 }
 
 impl<'kit, S: ConversationStore> Driver<'kit, S> {
-    async fn drive<O: Operation>(mut self, mut operation: O) -> Result<O::Output, RoomKitError> {
+    async fn drive<O: Operation>(mut self, mut operation: O) -> Result<O::Output, Stop> {
         loop {
             let step = operation.poll(&*self.environment);
             for notice in step.notices {
@@ -282,24 +442,27 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 Next::Waiting => Vec::new(),
                 Next::Effects(effects) => effects,
             };
-            if !self.start_all(&mut operation, effects)? {
-                self.note_the_lanes();
+            let answered = self.start_all(&mut operation, effects)?;
+            if let Some(stop) = self.stop.take() {
+                return Err(stop);
+            }
+            if !answered {
                 self.wait(&mut operation).await?;
             }
         }
     }
 
-    /// Tells an inbound run's caller of a write it starts, `written` telling
-    /// its outcome: the commit that decides the call, `decides`, or another
-    /// commit, `commit` its event and whether it is one to deliver, of its
-    /// cascade, a row of a stream read when one is.
+    /// Notes a commit the run starts, `written` telling its outcome: the
+    /// commit that decides an inbound call, `decides`, or a direct call's
+    /// commit, which the kit's close reads back once it cut the run; an
+    /// answer of the call's cascade or of an entry it adopted, `answer`,
+    /// which a run the close aborted reports.
     fn note_the_commit(
-        &self,
-        id: EffectId,
+        &mut self,
+        event: &RoomEvent,
         decides: Option<Box<InboundResult>>,
-        commit: Option<(bool, EventId)>,
         answer: Option<(AnswerOf, RoomEvent)>,
-        written: calls::Written,
+        written: &Written,
     ) {
         // An answer of an entry the run adopted is its handle's, whatever
         // the run's caller.
@@ -309,41 +472,14 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             answers.commits(answer.clone(), written.clone());
         }
         let Some(caller) = self.caller.as_deref() else {
+            self.committing = Some((written.clone(), event.clone(), None));
             return;
         };
-        if commit.is_some() {
-            self.shared.wrote(&written);
-        }
         if let Some((AnswerOf::Call, answer)) = answer {
             caller.answers(answer, written.clone());
         }
-        match (decides, commit) {
-            (Some(result), _) => caller.commits(*result, written),
-            (None, Some((true, event_id))) => caller.cascade_commits(id, event_id, written),
-            (None, _) => {}
-        }
-    }
-
-    /// Tells the kit's close whether an inbound run is out of its rooms'
-    /// lanes as it waits: it holds no lock, place in a lane or admission
-    /// ticket. The close cuts such a run's turns once the lanes are idle,
-    /// each of the streams it reads waiting (RFC §10.6.8), as the Python
-    /// implementation's `turns.close` follows its `lanes.aclose`; a run
-    /// not decided yet reads none.
-    fn note_the_lanes(&mut self) {
-        if self.caller.is_none() {
-            return;
-        }
-        // A guard: a run reads its turns' streams once its sets left their
-        // places, so a run reading holds none; were it to, a delivery set
-        // of it would still run, and its lanes would not be idle.
-        let out = !self.held.holds_any();
-        if out == self.out_of_lanes {
-            return;
-        }
-        self.out_of_lanes = out;
-        if let Some(unit) = self.marks.innermost() {
-            self.inner.tasks.out_of_lanes(unit, out);
+        if decides.is_some() {
+            self.committing = Some((written.clone(), event.clone(), decides));
         }
     }
 
@@ -372,9 +508,13 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// before the call's decision expires the operation, whose requests
     /// within the call's bound the run then drops: the operation goes on to
     /// its end, detached (decision 1 of step 2b, gap G-076).
-    async fn wait<O: Operation>(&mut self, operation: &mut O) -> Result<(), RoomKitError> {
+    async fn wait<O: Operation>(&mut self, operation: &mut O) -> Result<(), Stop> {
         loop {
             match self.next_event().await {
+                Some(Event::Phase(phase)) => {
+                    self.phase = phase;
+                    return self.closing(operation, phase).await;
+                }
                 Some(Event::CallerGone) => {
                     if self.caller.as_deref_mut().is_some_and(Caller::expires) {
                         let given_up = operation.expire();
@@ -386,11 +526,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     }
                 }
                 Some(Event::Waited(id, waited)) => {
-                    if let (Waited::Place((_, event_id), _, true), Some(caller)) =
-                        (&waited, self.caller.as_deref())
-                    {
-                        caller.turn_came(event_id);
-                    }
                     let outcome = self.held.settle(waited);
                     return Ok(operation.complete(id, outcome)?);
                 }
@@ -405,9 +540,111 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                     return Ok(());
                 }
                 // The operation waits for effects that were never issued.
-                None => return Err(stalled()),
+                None => return Err(stalled().into()),
             }
         }
+    }
+
+    /// Acts on the kit's close reaching `phase` (RFC §12.10.4), but for a
+    /// run the close spares, whose queued deliveries alone are dropped. As
+    /// the close starts, a delivery set queued in a room's lane is dropped,
+    /// and a call waiting for its room's lock or admission ticket before
+    /// its commit is cut. Once its grace ran out, a call before its commit
+    /// is cut, reading its commit back when that commit had started, and a
+    /// call past it has its calls in flight, and from then on, fail
+    /// `kit_closed`, so that it reports what it delivered.
+    async fn closing<O: Operation>(&mut self, operation: &mut O, phase: Phase) -> Result<(), Stop> {
+        self.drop_queued(operation)?;
+        if self.inner.tasks.spares(&self.marks) {
+            return Ok(());
+        }
+        let decided = self.caller.as_deref().is_some_and(Caller::is_decided);
+        if phase == Phase::Closing {
+            let waits = self
+                .waits
+                .iter()
+                .any(|(_, wait, _)| *wait == Wait::Admission);
+            if waits && !decided && !self.own && self.committing.is_none() {
+                return Err(Stop::Cut(None));
+            }
+            return Ok(());
+        }
+        if !decided {
+            return Err(Stop::Cut(self.read_back().await));
+        }
+        self.cut_past_the_decision(operation)
+    }
+
+    /// Answers the run's waits for a place's turn in a room's lane at once:
+    /// the kit's close drops the delivery sets queued (RFC §12.10.4).
+    fn drop_queued<O: Operation>(&mut self, operation: &mut O) -> Result<(), RoomKitError> {
+        let queued: Vec<EffectId> = self
+            .waits
+            .iter()
+            .filter(|(_, wait, _)| *wait == Wait::Lane)
+            .map(|(effect, _, _)| *effect)
+            .collect();
+        self.waits.retain(|(_, wait, _)| *wait != Wait::Lane);
+        for effect in queued {
+            operation.complete(effect, HoldOutcome::LaneClosed.into())?;
+        }
+        Ok(())
+    }
+
+    /// The commit that decides the call, read back by its id once its write
+    /// ended, the kit's close having cut it, within the unwind the close
+    /// gives the call (RFC §12.10.4): its event, `None` when the store
+    /// holds none, or when the read fails, as a warning says.
+    async fn read_back(&mut self) -> Option<Box<Committed>> {
+        let (mut written, event, decides) = self.committing.take()?;
+        let unwind = Instant::now() + CUT_UNWIND;
+        drop(tokio::time::timeout_at(unwind, calls::outcome_of(&mut written)).await);
+        let read = tokio::time::timeout_at(unwind, self.inner.store.get_event(&event.id)).await;
+        let failure = match read {
+            Ok(Ok(stored)) => {
+                return stored
+                    .filter(|stored| stored.room_id == event.room_id)
+                    .map(|event| Box::new(Committed { event, decides }));
+            }
+            Ok(Err(error)) => error.to_string(),
+            Err(_elapsed) => "it did not end within the close's unwind".to_owned(),
+        };
+        tracing::warn!(
+            target: "roomkit::driver",
+            event_id = %event.id,
+            call = self.call,
+            %failure,
+            "the kit closed as a call committed its event, and reading it back failed: the \
+             call reports nothing stored"
+        );
+        None
+    }
+
+    /// Cuts a run past its decision once the close's grace ran out: its
+    /// calls in flight are dropped, each answered `kit_closed`, as its
+    /// waits for a lock or a ticket are, and from now on so is each call it
+    /// starts, but a read of the store (RFC §12.10.4).
+    fn cut_past_the_decision<O: Operation>(&mut self, operation: &mut O) -> Result<(), Stop> {
+        self.cut_now = true;
+        let waiting: Vec<EffectId> = self
+            .waits
+            .iter()
+            .filter(|(_, wait, _)| *wait == Wait::Admission)
+            .map(|(effect, _, _)| *effect)
+            .collect();
+        self.waits.retain(|(_, wait, _)| *wait != Wait::Admission);
+        let running: Vec<(EffectId, AbortHandle)> = self.call_of_effect.drain().collect();
+        for (effect, call) in running {
+            call.abort();
+            self.effect_of_task.remove(&call.id());
+            self.shared.answered(effect);
+            self.writing.remove(&effect);
+            operation.complete(effect, Outcome::Failed(cut_by_close()))?;
+        }
+        for effect in waiting {
+            operation.complete(effect, Outcome::Failed(cut_by_close()))?;
+        }
+        Ok(())
     }
 
     /// Performs `notice`: a read the operation stops is the run's own, any
@@ -454,7 +691,8 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     /// up on: a call is aborted, its frame standing in no admission order
     /// any more, and neither is ever answered.
     fn give_up(&mut self, effects: &[EffectId]) {
-        self.waits.retain(|(effect, _)| !effects.contains(effect));
+        self.waits
+            .retain(|(effect, _, _)| !effects.contains(effect));
         for effect in effects {
             // The turn the call awaits is cut before the call is dropped,
             // so its executor reads its cancel before it goes on.
@@ -465,9 +703,6 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 self.shared.answered(*effect);
             }
             self.writing.remove(effect);
-            if let Some(caller) = self.caller.as_deref() {
-                caller.gave_up(*effect);
-            }
         }
     }
 
@@ -485,20 +720,22 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         } = effect;
         let deadline = deadline.and_then(|deadline| self.clocks.instant_of(deadline));
         let inner = Arc::clone(self.inner);
-        // A commit, of an event to deliver or not: one stored BLOCKED never
-        // is.
         let mut commit = None;
-        let mut answer = None;
         if let Request::Store(StoreRequest::Commit { event, .. }) = &request {
-            commit = Some((event.status != EventStatus::Blocked, event.id.clone()));
-            answer = answers.map(|of| (of, (**event).clone()));
+            commit = Some(((**event).clone(), answers.map(|of| (of, (**event).clone()))));
             self.indexes.committing(id, event);
+        }
+        if self.cut_now && !matches!(&request, Request::Hold(_) | Request::Store(_)) {
+            // A run the close cut past its decision calls nothing more.
+            return Some((id, Outcome::Failed(cut_by_close())));
         }
         match request {
             Request::Hold(hold) => return self.hold(id, hold, deadline),
             Request::Store(request) if writes(&request) => {
                 let (writing, written, went_on) = calls::write(&inner, request);
-                self.note_the_commit(id, decides, commit, answer, written);
+                if let Some((event, answer)) = commit {
+                    self.note_the_commit(&event, decides, answer, &written);
+                }
                 // Only an inbound run's commit takes a place in a room's
                 // lane, and its run, a task of its own, is always polled; a
                 // run in its caller's own task may sit unpolled, and its
@@ -529,7 +766,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// Carries out the hold `request` for `effect`, within `deadline`: at
-    /// once, refused, or as a wait the run polls.
+    /// once, refused, or as a wait the run polls. Once the kit's close
+    /// started, a delivery set takes no place in a room's lane and waits
+    /// for no turn there: its delivery is dropped, as Python's sealed
+    /// lanes drop it; a call before its commit that would wait for its
+    /// room's lock or admission ticket is cut there, and one past it, once
+    /// the close's grace ran out, has the wait fail (RFC §12.10.4).
     fn hold(
         &mut self,
         id: EffectId,
@@ -541,27 +783,37 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             lanes: &self.inner.lanes,
             tickets: &self.inner.tickets,
         };
-        if matches!(request, HoldRequest::EnterLane { .. }) && self.inner.tasks.is_draining() {
-            // The kit's close drops a delivery set that would take its place
-            // now, as the Python implementation's sealed lanes drop it: its
-            // index has no place, its turn over at the lock's release.
+        let closing = self.inner.tasks.is_closing();
+        if closing
+            && matches!(
+                request,
+                HoldRequest::EnterLane { .. } | HoldRequest::AwaitLane { .. }
+            )
+        {
             return Some((id, HoldOutcome::LaneClosed.into()));
         }
-        match (&request, self.caller.as_deref()) {
-            (HoldRequest::EnterLane { event_id, .. }, Some(caller)) => caller.entered(event_id),
-            (HoldRequest::LeaveLane { event_id, .. }, Some(caller)) => caller.left(event_id),
-            _ => {}
-        }
-        let behind = self.waits_behind(&request);
+        let wait = match request {
+            HoldRequest::AcquireLock { .. } | HoldRequest::AwaitTicket { .. } => Wait::Admission,
+            HoldRequest::AwaitLane { .. } => Wait::Lane,
+            HoldRequest::ReleaseLock { .. }
+            | HoldRequest::EnterLane { .. }
+            | HoldRequest::LeaveLane { .. }
+            | HoldRequest::TakeTicket { .. }
+            | HoldRequest::ReleaseTicket { .. } => Wait::Other,
+        };
         let over = self.turns_over(&request);
         match self.held.hold(rooms, &self.context, id, request, deadline) {
-            Hold::Wait(wait) if behind => {
-                // Stuck behind work the kit's close spares, which moves on
-                // only once the close returned: the run is dropped at once,
-                // as those the close's drain found there (RFC §12.10.4).
-                self.waits.push((id, wait));
-                let own = self.marks.innermost().into_iter().collect();
-                self.inner.tasks.drop_work_of(&own);
+            Hold::Wait(_) if wait == Wait::Admission && self.cut_now => {
+                Some((id, Outcome::Failed(cut_by_close())))
+            }
+            Hold::Wait(_)
+                if wait == Wait::Admission && closing && self.cuts_before_its_commit() =>
+            {
+                self.stop = Some(Stop::Cut(None));
+                None
+            }
+            Hold::Wait(waiting) => {
+                self.waits.push((id, wait, waiting));
                 None
             }
             Hold::Now(outcome) => self.after_the_cursor(id, outcome, over),
@@ -576,33 +828,15 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 self.refused.get_or_insert(room_id);
                 Some((id, Outcome::Failed(error)))
             }
-            Hold::Wait(wait) => {
-                self.waits.push((id, wait));
-                None
-            }
         }
     }
 
-    /// Whether `request`, a wait for a room's lock or admission ticket an
-    /// inbound run makes while the kit's close drains, would wait behind
-    /// work the close spares, which holds them until the close returned.
-    fn waits_behind(&self, request: &HoldRequest) -> bool {
-        if self.caller.is_none() || !self.inner.tasks.is_draining() {
-            return false;
-        }
-        let spared = self.inner.tasks.spared();
-        match request {
-            HoldRequest::AcquireLock { room_id } => {
-                self.context.lease(room_id).is_none() && self.inner.locks.held_by(room_id, &spared)
-            }
-            HoldRequest::AwaitTicket { room_id } => self.inner.tickets.led_by(room_id, &spared),
-            HoldRequest::ReleaseLock { .. }
-            | HoldRequest::EnterLane { .. }
-            | HoldRequest::AwaitLane { .. }
-            | HoldRequest::LeaveLane { .. }
-            | HoldRequest::TakeTicket { .. }
-            | HoldRequest::ReleaseTicket { .. } => false,
-        }
+    /// Whether the kit's close, started, cuts the run at a wait for its
+    /// room's lock or admission ticket: a call before its commit, but one
+    /// the close spares or the kit's own work (RFC §12.10.4).
+    fn cuts_before_its_commit(&self) -> bool {
+        let decided = self.caller.as_deref().is_some_and(Caller::is_decided);
+        !decided && !self.own && self.committing.is_none() && !self.inner.tasks.spares(&self.marks)
     }
 
     /// The room and the indexes whose turn `request` ends (gap G-091): a
@@ -647,7 +881,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             inner.cursors.catch_up(&*inner.store, &room_id).await;
             (id, Waited::Answered(outcome))
         };
-        self.waits.push((id, Box::pin(caught_up)));
+        self.waits.push((id, Wait::Other, Box::pin(caught_up)));
         None
     }
 
@@ -687,20 +921,32 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             calls,
             adoptions,
             caller,
+            phases,
+            phase,
             ..
         } = self;
-        poll_fn(|cx| {
+        let seen = *phase;
+        let moved = async {
+            let now = phases.wait_for(|now| *now > seen).await.map(|now| *now);
+            match now {
+                Ok(now) => now,
+                // The kit is gone: the run's calls end with it.
+                Err(_closed) => std::future::pending().await,
+            }
+        };
+        let event = poll_fn(|cx| {
             if let Some(caller) = caller.as_deref_mut()
                 && caller.poll_gone(cx).is_ready()
             {
                 return Poll::Ready(Some(Event::CallerGone));
             }
-            let ready = waits.iter_mut().enumerate().find_map(|(index, (_, wait))| {
-                match wait.as_mut().poll(cx) {
+            let ready = waits
+                .iter_mut()
+                .enumerate()
+                .find_map(|(index, (_, _, wait))| match wait.as_mut().poll(cx) {
                     Poll::Ready(waited) => Some((index, waited)),
                     Poll::Pending => None,
-                }
-            });
+                });
             if let Some((index, (effect, waited))) = ready {
                 drop(waits.swap_remove(index));
                 return Poll::Ready(Some(Event::Waited(effect, waited)));
@@ -712,8 +958,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
                 return Poll::Ready(Some(Event::Adoption(adoption)));
             }
             Poll::Pending
-        })
-        .await
+        });
+        tokio::select! {
+            biased;
+            now = moved => Some(Event::Phase(now)),
+            event = event => event,
+        }
     }
 
     /// The effect a finished call answers, and its outcome: a call that
@@ -798,9 +1048,9 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
 
     /// The operation's output, or the refusal of a wait on what the run's
     /// own context holds.
-    fn finish<T>(mut self, output: T) -> Result<T, RoomKitError> {
+    fn finish<T>(mut self, output: T) -> Result<T, Stop> {
         match self.refused.take() {
-            Some(room_id) => Err(RoomKitError::ReentrantCall { room_id }),
+            Some(room_id) => Err(RoomKitError::ReentrantCall { room_id }.into()),
             None => Ok(output),
         }
     }

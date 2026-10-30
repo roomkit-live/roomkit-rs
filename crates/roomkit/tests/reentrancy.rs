@@ -733,7 +733,7 @@ impl Channel for UnregisteringAi {
         if text_of(&event.content) == "side"
             && let Some(kit) = self.kit.get().and_then(WeakRoomKit::upgrade)
         {
-            kit.unregister_channel(&channel("ai"));
+            kit.unregister_channel(&channel("ai")).unwrap();
         }
         ready(Ok(ChannelOutput::default()))
     }

@@ -30,19 +30,6 @@ struct Holdings {
 /// What a write of the store came to, once it ended; nothing while it runs.
 pub(crate) type Written = watch::Receiver<Option<Outcome>>;
 
-/// The reads of the run's kept streams under way, and every commit the run
-/// writes while one is, the rows those reads end among them, stored to
-/// deliver or `BLOCKED`.
-#[derive(Debug, Default)]
-struct Reads {
-    open: usize,
-    rows: Vec<Written>,
-}
-
-/// What a run leaves of its turns' streams as it ends: the commits it
-/// wrote while its reads were under way, none for a stream kept unread.
-pub(crate) type LeftOpen = Vec<Written>;
-
 /// How a run holds a room's lock.
 #[derive(Clone, Debug)]
 enum Tenure {
@@ -67,8 +54,6 @@ pub(crate) struct RunShared {
     /// The turns the run's calls submitted and await the output of, by
     /// their effect: a call given up cuts its turn at once.
     turns: Mutex<HashMap<EffectId, Canceller>>,
-    /// The reads of its kept streams under way.
-    reads: Mutex<Reads>,
 }
 
 /// A claim on one tenure of a room's lock, which code run under that lock
@@ -91,7 +76,6 @@ impl RunShared {
             streams: Mutex::new(HashMap::new()),
             stops: Mutex::new(HashMap::new()),
             turns: Mutex::new(HashMap::new()),
-            reads: Mutex::new(Reads::default()),
         });
         (shared, received)
     }
@@ -157,7 +141,6 @@ impl RunShared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
-        *self.reads() = Reads::default();
     }
 
     /// The call of `effect` submitted a turn, which `turn` cuts.
@@ -186,47 +169,6 @@ impl RunShared {
             .remove(&effect)?;
         turn.cancel("cancelled");
         Some(turn)
-    }
-
-    fn reads(&self) -> MutexGuard<'_, Reads> {
-        self.reads.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The streams of its turns the run leaves open: kept unread, or read
-    /// as it ends, a read that returned as the kit's close drained
-    /// included, with the commits those reads wrote; `None` when it leaves
-    /// none.
-    pub(crate) fn left_open(&self) -> Option<LeftOpen> {
-        // Lock order: `reads`, then `streams`, as in `take_stream`, which
-        // moves a stream from one to the other under `reads`: a run
-        // aborted on another worker sees it kept or read, never neither.
-        let mut reads = self.reads();
-        let kept = !self
-            .streams
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_empty();
-        (kept || reads.open > 0).then(|| std::mem::take(&mut reads.rows))
-    }
-
-    /// A commit the run writes, told by `written`: kept while a read of a
-    /// stream is under way, whichever of the run's commits it is, a row the
-    /// read ends or not.
-    pub(crate) fn wrote(&self, written: &Written) {
-        let mut reads = self.reads();
-        if reads.open > 0 {
-            reads.rows.push(written.clone());
-        }
-    }
-
-    /// The read of a stream [`take_stream`](Self::take_stream) took
-    /// returned: once none is under way, its rows are forgotten.
-    pub(crate) fn read_returned(&self) {
-        let mut reads = self.reads();
-        reads.open = reads.open.saturating_sub(1);
-        if reads.open == 0 {
-            reads.rows.clear();
-        }
     }
 
     /// Keeps the stream the turn of `effect` answered with, until it is read.
@@ -258,20 +200,12 @@ impl RunShared {
             .send_replace(true);
     }
 
-    /// The stream the turn of `effect` answered with, taken to be read: its
-    /// read is under way until [`read_returned`](Self::read_returned).
+    /// The stream the turn of `effect` answered with, taken to be read.
     pub(crate) fn take_stream(&self, effect: EffectId) -> Option<KeptStream> {
-        // Lock order: `reads`, then `streams`, as in `left_open`: the
-        // stream leaves `streams` and its read opens under one hold of
-        // `reads`, so that no abort reads the run between the two.
-        let mut reads = self.reads();
-        let kept = self
-            .streams
+        self.streams
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remove(&effect)?;
-        reads.open += 1;
-        Some(kept)
+            .remove(&effect)
     }
 
     /// The lease on the lock of `room_id` the run holds, by its own tenure

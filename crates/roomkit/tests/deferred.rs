@@ -335,8 +335,9 @@ async fn a_call_that_waits_has_no_delivery_handle() {
 }
 
 /// A deferred delivery the kit's close cuts past its grace reports it as
-/// Python's handle does: the result, the event committed, its delivery
-/// `lane_cancelled` (tasks/probes/step5-lot1-review-A probe 3).
+/// Python's handle does (RFC §12.10.4): the result, the event committed,
+/// the send cut `failed`, code `kit_closed`, the call `kit_closed`. On
+/// fefbfac it read `lane_cancelled`, with no delivery result.
 #[tokio::test(start_paused = true)]
 async fn a_deferred_delivery_the_close_cuts_reports_it() {
     let (kit, sms, held) = room().await;
@@ -353,13 +354,17 @@ async fn a_deferred_delivery_the_close_cuts_reports_it() {
     assert_eq!(
         waited.map(|result| (
             result.event.map(|event| event.status),
-            result.delivery_results.len(),
+            result
+                .delivery_results
+                .values()
+                .map(|delivered| delivered.error.as_ref().map(|error| error.code.clone()))
+                .collect::<Vec<_>>(),
             result.cancellation_reason
         )),
         Ok((
             Some(EventStatus::Delivered),
-            0,
-            Some("lane_cancelled".to_owned())
+            vec![Some("kit_closed".to_owned())],
+            Some("kit_closed".to_owned())
         ))
     );
 }

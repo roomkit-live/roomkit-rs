@@ -50,12 +50,14 @@ impl Drop for Cut {
     }
 }
 
-/// RFC §10.6.8: the kit's close while a tool runs crosses as `cancel`
-/// with its reason; the executor cuts the handler and reports the call
-/// `cancelled` to the kit's observers; the turn's end follows; the reader
-/// stores the call's end `cancelled`; the caller receives its result, the
-/// turn cut at once and its delivery over, no reason. (Milestone 6 left
-/// the call's start with no end, and reported nothing.)
+/// RFC §10.6.8, §12.10.4: the kit's close while a tool runs crosses as
+/// `cancel` with its reason; the executor cuts the handler and reports the
+/// call `cancelled` to the kit's observers; the turn's end follows; the
+/// reader stores the call's end, its error `kit_closed`, as Python's; the
+/// caller receives its result, `kit_closed`, the call under way as the
+/// close started. (Milestone 6 left the call's start with no end, and
+/// reported nothing; on fefbfac the end's error read `cancelled`, the call
+/// no reason.)
 #[tokio::test(start_paused = true)]
 async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_cancelled() {
     let running = Arc::new(Notify::new());
@@ -128,12 +130,7 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
             end
         ),
         (
-            // The caller receives the call it made, as Python's awaited
-            // caller does: the turn is cut at once, with no grace, and
-            // what its reader read is delivered as the lanes drain, its
-            // own delivery over, no reason (RMK-1017; Python's
-            // `rmk1017-lightreview/lr_probe_py.out` c3: `None`).
-            Ok((true, None)),
+            Ok((true, Some("kit_closed".to_owned()))),
             vec!["control cancel kit_closed", "frame end"],
             vec!["cut"],
             vec![(
@@ -142,7 +139,7 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
             )],
             Some((
                 Some(ToolCallOutcome::Cancelled),
-                Some("cancelled".to_owned())
+                Some("kit_closed".to_owned())
             ))
         )
     );

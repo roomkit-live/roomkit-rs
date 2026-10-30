@@ -20,14 +20,16 @@ use tokio::sync::Barrier;
 use tokio::time::Instant;
 
 use crate::support::{
-    AT_ONCE, BOUND, Closer, DOORS, Door, Witness, attach_agent, channel, ended, kit_with, ok, open,
-    room_id, sealed, spawn_message, stored, transport,
+    AT_ONCE, BOUND, Closer, DOORS, Door, Gate, Witness, attach_agent, channel, ended, kit_with, ok,
+    open, room_id, sealed, spawn_message, stored, transport,
 };
 
 /// RFC §12.10.4: the kit's own work closes the kit: its close neither
 /// waits for nor cuts the work it runs within, and returns once every
 /// channel is closed; the kit is sealed, the work's call ends as Python's
-/// does (`Door::call_ends`), and nothing more is stored or delivered.
+/// does (`Door::call_ends`), and nothing more is stored or delivered. On
+/// fefbfac the calls under way read no reason, the SYNC hook's
+/// `KitClosed`.
 #[tokio::test(start_paused = true)]
 async fn a_close_from_the_kit_s_own_work_returns_and_closes_the_kit() {
     let mut doors = Vec::new();
@@ -51,18 +53,17 @@ async fn a_close_from_the_kit_s_own_work_returns_and_closes_the_kit() {
         (
             door,
             (Some(true), true, true),
-            Some(door.call_ends()),
+            Some(door.call_ends(false)),
             door.stores(),
-            (door != Door::SyncHook, true),
+            (door.delivers(), true),
         )
     });
     assert_eq!(doors, expected);
 }
 
-/// The doors a close can join another from as it drains: a tool's call is
-/// cut by the running close, with no grace, before it could (RFC §10.6.8),
-/// as Python's turn is; `join` has a tool join a close still waiting for
-/// the store's writes.
+/// The doors a close can join another from: a tool's call is cut by the
+/// running close, with no grace, before it could (RFC §10.6.8), as
+/// Python's turn is.
 const JOINING: [Door; 4] = [
     Door::SyncHook,
     Door::DeliveryHook,
@@ -70,7 +71,7 @@ const JOINING: [Door; 4] = [
     Door::Observer,
 ];
 
-/// RFC §12.10.4: another close runs, and waits for the work (the drain),
+/// RFC §12.10.4: another close runs, and waits for the work (its grace),
 /// when that work closes the kit too: from then on it is spared, and both
 /// closes return once the kit is closed.
 #[tokio::test(start_paused = true)]
@@ -87,7 +88,7 @@ async fn a_close_from_the_kit_s_own_work_joining_another_spares_that_work() {
             let kit = kit.clone();
             async move { kit.close().await }
         });
-        // The first close's drain reaches the work, and waits for it.
+        // The first close's grace reaches the work, and waits for it.
         tokio::time::sleep(Duration::from_millis(100)).await;
         closer.go.notify_one();
         let returned = closer.returned_once_closed().await;
@@ -101,7 +102,7 @@ async fn a_close_from_the_kit_s_own_work_joining_another_spares_that_work() {
         (
             door,
             (Some(true), Ok(()), true),
-            Some(door.call_ends()),
+            Some(door.call_ends(true)),
             door.stores(),
         )
     });
@@ -219,7 +220,8 @@ impl Channel for KeepingContext {
 /// RFC §12.10.4: a task the kit's work spawns with `keep_context` is that
 /// work: a close it calls neither waits for the delivery awaiting the task
 /// nor cuts it, as `keep_context` promises, the Rust form of Python's
-/// `test_a_close_from_a_held_run_does_not_wait_for_it`.
+/// `test_a_close_from_a_held_run_does_not_wait_for_it`. The call, under
+/// way as the close started, reads `kit_closed`.
 #[tokio::test(start_paused = true)]
 async fn a_close_from_a_task_kept_in_its_context_does_not_wait_for_its_work() {
     let witness = Witness::new();
@@ -242,28 +244,32 @@ async fn a_close_from_a_task_kept_in_its_context_does_not_wait_for_its_work() {
     let at_once = started.elapsed() < AT_ONCE;
     assert_eq!(
         (returned, at_once, ended(call).await, sealed(&kit).await),
-        (Some(true), true, Some(ok(None, None)), true)
+        (Some(true), true, Some(ok(Some("kit_closed"), None)), true)
     );
 }
 
 /// RFC §12.10.4: an observer the kit fires and forgets is no work its run
 /// waits for: a close it calls spares the observer alone, and the close
-/// waits for the run that fired it as a close from outside the kit's work
-/// does. An ASYNC `BEFORE_BROADCAST` observer closes while its run delivers
-/// for 2 s: the close returns once the delivery ended, the witness reading
-/// its text before its close, as Python's (`py_review_probe.out`, leak
-/// observer); on 1d8796c the close returned at once and the delivery came
-/// to a closed channel.
+/// gives the run that fired it its grace, as a close from outside the
+/// kit's work does. An ASYNC `BEFORE_BROADCAST` observer closes once its
+/// run's delivery of 2 s began: the close returns once the delivery ended,
+/// the witness reading its text before its close, as Python's
+/// (`py_review_probe.out`, leak observer), the call under way reading
+/// `kit_closed`; on 1d8796c the close returned at once and the delivery
+/// came to a closed channel.
 #[tokio::test(start_paused = true)]
 async fn a_close_from_an_observer_waits_for_the_run_that_fired_it() {
-    let witness = Witness::slow("Bye.", Duration::from_secs(2));
+    let gate = Gate::default();
+    let witness = Witness::slow("Bye.", Duration::from_secs(2)).gated(gate.clone());
     let kit = kit_with(&witness).await;
     let closer = Closer::new(&kit, &witness, false);
     let work = closer.clone();
     let spec = HookSpec::new("quit", HookTrigger::BeforeBroadcast, HookExecution::Async);
     kit.hook(spec, move |_event, _context| {
-        let work = work.clone();
+        let (work, gate) = (work.clone(), gate.clone());
         async move {
+            gate.began().await;
+            gate.go();
             work.close().await;
             Ok(HookResult::allow(AllowOptions::default()))
         }
@@ -283,7 +289,7 @@ async fn a_close_from_an_observer_waits_for_the_run_that_fired_it() {
         (
             Some(true),
             true,
-            Some(ok(None, None)),
+            Some(ok(Some("kit_closed"), None)),
             vec!["Bye.".to_owned()]
         )
     );
@@ -296,11 +302,8 @@ async fn a_close_from_an_observer_waits_for_the_run_that_fired_it() {
 /// once, the slow tool never ending and no answer stored; on 1d8796c the
 /// observer's close spared the turn, whose slow tool ran to its end and
 /// whose answer was committed after the seal (`review_probe_1d8796c.out`,
-/// leak tool observer). The call reads no reason, its own delivery over.
-/// Python's observer copies the context that fired it, spares the turn's
-/// stream reader, and reads `kit_closed` (`rmk1017-lightreview/
-/// lr_probe_py.out` c2, `rmk1017-lightreview2/c2_mechanism.out`); it
-/// aligns on this rule (RMK-1021).
+/// leak tool observer). The call, under way as the close started, reads
+/// `kit_closed`.
 #[tokio::test(start_paused = true)]
 async fn a_close_from_a_tool_s_observer_cuts_its_turn() {
     let witness = Witness::new();
@@ -355,25 +358,27 @@ async fn a_close_from_a_tool_s_observer_cuts_its_turn() {
             slow_ended.load(Ordering::SeqCst),
             stored.iter().any(|text| text == "Done.")
         ),
-        ((Some(true), true), Some(ok(None, None)), 0, false)
+        (
+            (Some(true), true),
+            Some(ok(Some("kit_closed"), None)),
+            0,
+            false
+        )
     );
 }
 
-/// RFC §12.10.4, §10.6.8: once the kit is sealed, a set of spared work
-/// that delivers to an agent has the agent's `on_event()` refused with the
-/// turn link's `backend_closed`, its call carrying `TurnLinkError`, as a
-/// spared turn's stream read once sealed is
-/// (`stuck::the_turns_a_spared_delivery_runs_are_spared_with_it`).
-/// "One."'s witness delivery holds `room_1`'s lane; "Two.", whose hook
-/// spawned a task kept in its context, has its set queued behind it. That
-/// task closes the kit, then the witness's delivery closes it too,
-/// joining: both runs are spared, the kit is sealed and closed, the
-/// witness's delivery ends, and only then does "Two."'s set deliver, its
-/// calls refused. With the agent's `on_event()` refused as a transport's
-/// delivery is, "Two."'s call reads `kit_closed`, no error
-/// (`rmk1017-fix4/mutation_refused_onevent.out`).
+/// RFC §12.10.4: the close drops the delivery sets queued in a room's lane
+/// as it starts, those of the work it spares included, as Python's sealed
+/// lanes drop every queued entry. "One."'s witness delivery holds
+/// `room_1`'s lane; "Two.", whose hook spawned a task kept in its context,
+/// has its set queued behind it. That task closes the kit, then the
+/// witness's delivery closes it too, joining: both runs are spared, and
+/// "Two."'s set is dropped, never delivered, its agent never asked, its
+/// call reading `kit_closed`, no error. On fefbfac the set delivered once
+/// the kit was sealed, its agent's turn refused `backend_closed`, the call
+/// carrying `TurnLinkError`.
 #[tokio::test(start_paused = true)]
-async fn a_spared_set_s_turn_asked_once_sealed_is_refused_backend_closed() {
+async fn a_spared_run_s_queued_set_is_dropped() {
     let witness = Witness::new();
     let kit = kit_with(&witness).await;
     let one_closes = Closer::new(&kit, &witness, true);
@@ -410,7 +415,7 @@ async fn a_spared_set_s_turn_asked_once_sealed_is_refused_backend_closed() {
     // "Two." commits and takes its place behind "One."'s set.
     tokio::time::sleep(Duration::from_millis(10)).await;
     two_closes.go.notify_one();
-    // The shutdown drains, "One."'s delivery holding the lane.
+    // The shutdown's grace, "One."'s delivery holding the lane.
     tokio::time::sleep(Duration::from_millis(10)).await;
     one_closes.go.notify_one();
     let returned = (
@@ -426,7 +431,7 @@ async fn a_spared_set_s_turn_asked_once_sealed_is_refused_backend_closed() {
         (returned, ended(two).await, two_delivered),
         (
             (Some(true), Some(true)),
-            Some(ok(None, Some("TurnLinkError"))),
+            Some(ok(Some("kit_closed"), None)),
             false
         )
     );

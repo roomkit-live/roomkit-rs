@@ -195,7 +195,7 @@ impl Channel for Unregistering {
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         if let Some(kit) = self.kit.get().and_then(WeakRoomKit::upgrade) {
-            kit.unregister_channel(&channel("ai"));
+            kit.unregister_channel(&channel("ai")).unwrap();
         }
         ready(Ok(ChannelOutput::default()))
     }

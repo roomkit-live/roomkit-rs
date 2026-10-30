@@ -21,13 +21,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Value`] for capabilities their model refuses,
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4); [`RoomKitError::Value`] for capabilities their model refuses,
     /// a limit of 0, as the Python implementation's model refuses them when
     /// the channel builds them; then [`RoomKitError::ChannelAlreadyRegistered`]
     /// when a channel with its id is registered already, and
     /// [`RoomKitError::Value`] for a channel claiming the type `system` (RFC
     /// §5.3).
     pub fn register_channel(&self, channel: impl Channel) -> Result<(), RoomKitError> {
+        self.inner.open()?;
         let declaration = Channel::declaration(&channel);
         declaration.capabilities.check()?;
         let registered = FrameworkEvent::channel_registered(
@@ -58,7 +60,17 @@ impl<S: ConversationStore> RoomKit<S> {
     /// registering a channel under the same id again serves them (gap
     /// G-048). An operation already running keeps the channel it started
     /// with until it calls it.
-    pub fn unregister_channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn RegisteredChannel>> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started, as
+    /// the Python implementation's `unregister_channel` raises
+    /// `KitClosedError` (RFC §12.10.4).
+    pub fn unregister_channel(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<Option<Arc<dyn RegisteredChannel>>, RoomKitError> {
+        self.inner.open()?;
         let Ok(unregistered) = self.inner.try_change_config(|config| {
             let Ok(declaration) = config.unregister_channel(channel_id) else {
                 return Ok::<_, Infallible>(None);
@@ -70,12 +82,14 @@ impl<S: ConversationStore> RoomKit<S> {
                 channel,
             }))
         });
-        let unregistered = unregistered?;
+        let Some(unregistered) = unregistered else {
+            return Ok(None);
+        };
         self.inner.publish(FrameworkEvent::channel_unregistered(
             unregistered.declaration.channel_id.clone(),
             unregistered.declaration.channel_type.clone(),
         ));
-        Some(Arc::new(unregistered))
+        Ok(Some(Arc::new(unregistered)))
     }
 
     /// Registers a hook whose handler is a closure, given the payload and
@@ -112,8 +126,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Value`] when the registration breaks a rule of
-    /// RFC §9.1, and for a tool trigger.
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4); [`RoomKitError::Value`] when the registration breaks a rule
+    /// of RFC §9.1, and for a tool trigger.
     pub fn hook<F, Fut>(&self, spec: HookSpec, handler: F) -> Result<HookId, RoomKitError>
     where
         F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
@@ -127,13 +142,15 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Value`] when the registration breaks a rule
-    /// of RFC §9.1.
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4), and [`RoomKitError::Value`] when the registration breaks a
+    /// rule of RFC §9.1.
     pub fn hook_handler(
         &self,
         spec: HookSpec,
         handler: impl HookHandler,
     ) -> Result<HookId, RoomKitError> {
+        self.inner.open()?;
         let handler: Arc<dyn HookHandler> = Arc::new(handler);
         let id = self.inner.try_change_config(|config| {
             let id = config.hooks.register(spec)?;
@@ -149,7 +166,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Value`] when the name is taken.
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4), and [`RoomKitError::Value`] when the name is taken.
     pub fn before_broadcast<F, Fut>(&self, name: &str, handler: F) -> Result<HookId, RoomKitError>
     where
         F: Fn(RoomEvent, RoomContext) -> Fut + Send + Sync + 'static,
@@ -167,7 +185,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Value`] when the name is taken.
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4), and [`RoomKitError::Value`] when the name is taken.
     pub fn observe<F, Fut>(
         &self,
         name: &str,
@@ -211,7 +230,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Value`] when the name is taken.
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4), and [`RoomKitError::Value`] when the name is taken.
     pub fn before_tool_use<F, Fut>(
         &self,
         spec: impl Into<ToolHookSpec>,
@@ -236,7 +256,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Value`] when the name is taken.
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4), and [`RoomKitError::Value`] when the name is taken.
     pub fn on_tool_call<F, Fut>(
         &self,
         spec: impl Into<ToolHookSpec>,
@@ -261,7 +282,8 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Value`] when the name is taken.
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started (RFC
+    /// §12.10.4), and [`RoomKitError::Value`] when the name is taken.
     pub fn observe_tool_calls<F, Fut>(
         &self,
         spec: impl Into<ToolHookSpec>,
@@ -279,6 +301,7 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Registers the tool hook `spec` with `handler`.
     fn tool_hook(&self, spec: HookSpec, handler: ToolHandler) -> Result<HookId, RoomKitError> {
+        self.inner.open()?;
         self.inner.try_change_config(|config| {
             let id = config.hooks.register_tool_hook(spec)?;
             // The handler is in place before a turn can see the hook.

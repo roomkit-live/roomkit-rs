@@ -18,9 +18,10 @@
 //! running never runs, its end stored `failed`. The text the reader was
 //! handed since the last row is stored marked `cancelled`, the turn's
 //! record `cancelled`. A read stopped from outside, by the operation or the
-//! kit's shutdown, cuts the turn first: `cancel` crosses, its executor cuts
+//! kit's close, cuts the turn first: `cancel` crosses, its executor cuts
 //! the call it runs, and the turn's end is awaited within its cancel bound
-//! before the calls left open are ended `cancelled`. A response that fails
+//! before the calls left open are ended `failed`, their error `cancelled`,
+//! or `kit_closed` for the kit's close (RFC §12.10.4). A response that fails
 //! stores the text it produced,
 //! hands its reader that row, then the failure; a streaming channel that
 //! fails leaves the text to every target. The turn's record, when no row
@@ -38,7 +39,6 @@ use roomkit_core::model::{
     EventUpdates, Metadata, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_HIDDEN, ROW_WITHHELD, StreamTarget};
-use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::segments::Segments;
@@ -48,8 +48,7 @@ use crate::channel::ChannelError;
 use crate::context::{self, Adopting};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::tasks::Unit;
-use crate::turns::{self, Cut, OwnerTurn, RemoteItem, TurnStage, record_of};
+use crate::turns::{OwnerTurn, RemoteItem, record_of};
 
 /// The error of a call a stream's reader stopped before it ended.
 const CANCELLED: &str = "cancelled";
@@ -131,8 +130,6 @@ pub(crate) async fn read<S: ConversationStore>(
         segments: Segments::new(source, answers),
         stream: Some(kept.turn),
         cut: None,
-        draining: None,
-        took: false,
         unanswered: None,
         reads: channel
             .as_ref()
@@ -175,49 +172,24 @@ async fn drain(mut stream: DeliveryStream) -> Result<ChannelOutput, ChannelError
 }
 
 /// What stops a read from outside: the operation's stop of this read, and
-/// the kit's shutdown, which cuts every turn it does not spare.
+/// the kit's close, which cuts every turn as it starts.
 #[derive(Debug)]
 pub(crate) struct Stops {
     /// `true` once the operation stops the read.
     pub(crate) read: watch::Receiver<bool>,
-    /// The kit's cut of its turns, once it shuts down.
-    pub(crate) kit: watch::Receiver<Cut>,
-    /// The unit of the turn read, which the cut may spare (RFC
-    /// §12.10.4).
-    pub(crate) turn: Option<Unit>,
-}
-
-/// How a stop from outside ends a read.
-#[derive(Clone, Copy, Debug)]
-enum Stop {
-    /// At once, its turn cut with the reason: the operation's stop, or the
-    /// kit's close cutting the streams read as it starts.
-    Now(&'static str),
-    /// Its turn cut at once with the reason, what the turn sent before its
-    /// end read: the kit's close cutting the turns left once its lanes are
-    /// idle, as the Python implementation's `turns.close` abandons them.
-    Drained(&'static str),
+    /// `true` once the kit's close started.
+    pub(crate) kit: watch::Receiver<bool>,
 }
 
 impl Stops {
-    /// Returns once the read is stopped: how, and the reason its turn is
-    /// cut with.
-    async fn stopped(&mut self) -> Stop {
+    /// Returns once the read is stopped, with the reason its turn is cut
+    /// with.
+    async fn stopped(&mut self) -> &'static str {
         let read = async { self.read.wait_for(|stopped| *stopped).await.is_ok() };
-        let turn = self.turn;
-        let kit = async {
-            self.kit
-                .wait_for(|cut| cut.cuts(turn, TurnStage::Stream))
-                .await
-                .map(|cut| cut.reads_what_came(turn))
-        };
+        let kit = async { self.kit.wait_for(|cut| *cut).await.is_ok() };
         tokio::select! {
-            true = read => Stop::Now(CALLER_CANCELLED),
-            Ok(reads_what_came) = kit => if reads_what_came {
-                Stop::Drained(KIT_CLOSED)
-            } else {
-                Stop::Now(KIT_CLOSED)
-            },
+            true = read => CALLER_CANCELLED,
+            true = kit => KIT_CLOSED,
             else => std::future::pending().await,
         }
     }
@@ -231,11 +203,6 @@ struct Producer {
     stream: Option<OwnerTurn>,
     /// Why the read was stopped from outside, once it was: the turn is cut.
     cut: Option<&'static str>,
-    /// Why the turn was cut, its read going on to the turn's end, once a
-    /// stop said so ([`Stop::Drained`]).
-    draining: Option<&'static str>,
-    /// Whether the turn's response gave the read anything.
-    took: bool,
     /// The reader's pull the read stopped on, unanswered: kept open until
     /// the reader is dropped, so that it never reads an end there.
     unanswered: Option<oneshot::Sender<Pulled>>,
@@ -311,36 +278,13 @@ impl Producer {
         mut stops: Stops,
     ) {
         loop {
-            if self.draining.is_some() {
-                // A read the close drains goes on only as its reader pulls,
-                // the reader polled once first: one that does not, a
-                // streaming target that stalls, holds the close no longer.
-                tokio::task::yield_now().await;
-                if !matches!(reader_done.try_recv(), Err(TryRecvError::Empty)) {
-                    return;
-                }
-                let Ok(pull) = pulls.try_recv() else {
-                    self.cut = self.draining;
-                    return;
-                };
-                if !self.answer(pull, &mut stops).await {
-                    return;
-                }
-                continue;
-            }
             let pull = tokio::select! {
                 biased;
                 _ = &mut reader_done => return,
-                stop = stops.stopped(), if self.draining.is_none() => match stop {
-                    Stop::Now(reason) => {
-                        self.cut = Some(reason);
-                        return;
-                    }
-                    Stop::Drained(reason) => {
-                        self.drain(reason);
-                        continue;
-                    }
-                },
+                reason = stops.stopped() => {
+                    self.cut = Some(reason);
+                    return;
+                }
                 pull = pulls.recv() => match pull {
                     Some(pull) => pull,
                     None => return,
@@ -366,17 +310,11 @@ impl Producer {
             }
             let read = tokio::select! {
                 biased;
-                stop = stops.stopped(), if self.draining.is_none() => match stop {
-                    Stop::Now(reason) => {
-                        self.cut = Some(reason);
-                        self.unanswered = Some(pull);
-                        return false;
-                    }
-                    Stop::Drained(reason) => {
-                        self.drain(reason);
-                        continue;
-                    }
-                },
+                reason = stops.stopped() => {
+                    self.cut = Some(reason);
+                    self.unanswered = Some(pull);
+                    return false;
+                }
                 read = self.pull_turn() => read,
             };
             if pull.is_closed() {
@@ -384,23 +322,7 @@ impl Producer {
                 self.in_flight = Some(read);
                 return false;
             }
-            if self.draining.is_some() && matches!(read, None | Some(Err(_))) {
-                // The cut turn ended, what it sent read: the read stops as a
-                // cut one.
-                self.cut = self.draining;
-                self.unanswered = Some(pull);
-                return false;
-            }
             self.take(read).await;
-        }
-    }
-
-    /// Cuts the turn at once for `reason`, the read going on to its end:
-    /// what the turn sent before is read (`Stop::Drained`).
-    fn drain(&mut self, reason: &'static str) {
-        self.draining = Some(reason);
-        if let Some(turn) = self.stream.as_ref() {
-            turn.canceller().cancel(reason);
         }
     }
 
@@ -434,7 +356,6 @@ impl Producer {
     /// Takes what a read gave: text for the reader, the rows a call's start
     /// or end writes, the turn's record, the response's end or failure.
     async fn take(&mut self, read: Read) {
-        self.took = true;
         match read {
             None => {
                 if let Some(row) = self.segments.last_text(false) {
@@ -508,21 +429,10 @@ impl Producer {
                     output.error = target_error;
                 } else {
                     self.stopped(over.is_some()).await;
-                    output.error = self.abandoned_unsaid();
                 }
             }
         }
         output
-    }
-
-    /// The error of a turn the kit's close cut once its lanes were idle,
-    /// before the turn said anything: still open as the kit closes, it
-    /// fails the turn link's `backend_closed`, never `executor_lost` (RFC
-    /// §10.6.8; decided 2026-10-28, the Python implementation aligns). One
-    /// that said something stores it, its delivery dropped, the call
-    /// reading `kit_closed`, as Python's.
-    fn abandoned_unsaid(&self) -> Option<ErrorRecord> {
-        (self.draining.is_some() && self.cut == self.draining && !self.took).then(turns::closed)
     }
 
     /// The reader stopped before the end (RFC §12.2 step 13s): the round
@@ -532,7 +442,11 @@ impl Producer {
     /// recording `cancelled`. `ended` says the response had reached its end.
     async fn stopped(&mut self, ended: bool) {
         self.cut_turn().await;
-        let error = self.settle_in_flight().await;
+        let error = match self.settle_in_flight().await {
+            // A call the kit's close cut ends `kit_closed` (RFC §12.10.4).
+            CANCELLED if self.cut == Some(KIT_CLOSED) => KIT_CLOSED,
+            error => error,
+        };
         self.close_open(error).await;
         self.stream = None;
         if !ended {
@@ -550,10 +464,7 @@ impl Producer {
         let (Some(reason), Some(turn)) = (self.cut, self.stream.as_mut()) else {
             return;
         };
-        // A drained read cancelled its turn already.
-        if self.draining.is_none() {
-            turn.cancel(reason);
-        }
+        turn.cancel(reason);
         turn.ended().await;
     }
 
@@ -711,7 +622,17 @@ async fn write_record<S: ConversationStore>(
         metadata: Some(metadata),
         ..EventUpdates::default()
     };
-    if let Err(error) = kit.update_stored(room_id, event_id, updates, None).await {
+    if let Err(error) = kit.update_own(room_id, event_id, updates).await {
+        if inner.tasks.is_closing() {
+            tracing::debug!(
+                target: "roomkit::driver",
+                room_id = %room_id,
+                event_id = %event_id,
+                %error,
+                "the turn's record was not written on its last message: the kit closed"
+            );
+            return;
+        }
         tracing::warn!(
             target: "roomkit::driver",
             room_id = %room_id,

@@ -1,35 +1,34 @@
-//! RFC §12.10.4: what waits behind spared work is dropped at once, rather
-//! than drained for the close's grace, and a turn the close cuts holds it
-//! only until its reader's read is committed.
+//! RFC §12.10.4: what waits behind the work a close is called from, a
+//! queued delivery, a call waiting for the room's lock or admission ticket
+//! that work holds, is cut at once, as everything not started is; every
+//! turn is cut at once, a spared delivery's included.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use roomkit::model::HookResult;
 use roomkit::model::hook::AllowOptions;
-use roomkit::model::{HookResult, RoomId};
-use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, RoomKit,
-    RoomKitError, text_of,
-};
+use roomkit::{HookExecution, HookSpec, HookTrigger, RoomKit, text_of};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use serde_json::json;
 use tokio::time::Instant;
 
 use crate::support::{
-    AT_ONCE, Answered, BOUND, Closer, Door, Witness, attach_agent, channel, ended, kit_with, ok,
-    open, room_id, spawn_message, stored,
+    AT_ONCE, BOUND, Closer, Door, Witness, attach_agent, ended, kit_with, ok, open, room_id,
+    spawn_message, stored,
 };
 
 /// RFC §12.10.4: a delivery closes the kit while the room's next message
-/// waits behind it in the room's lane: the delivery is spared, not
-/// drained, so that message is never delivered, and its caller is answered
-/// at once, `kit_closed`, rather than at the close's grace (5 s on
-/// 1d8796c's parent, a959002). Python's test closes from an ASYNC
-/// `AFTER_BROADCAST` hook, which its lane runs before the next delivery;
-/// Rust's lane does not wait for such a hook, a difference of its own, so
-/// the door here is the delivery itself.
+/// waits behind it in the room's lane: the delivery is spared, the queued
+/// set dropped at once, so that message is never delivered, and its
+/// caller is answered at once, `kit_closed`, rather than at the close's
+/// grace (5 s on 1d8796c's parent, a959002); the spared delivery's call,
+/// under way as the close started, reads `kit_closed`. Python's test
+/// closes from an ASYNC `AFTER_BROADCAST` hook, which its lane runs before
+/// the next delivery; Rust's lane does not wait for such a hook, a
+/// difference of its own, so the door here is the delivery itself.
 #[tokio::test(start_paused = true)]
 async fn the_deliveries_queued_behind_a_delivery_a_close_runs_in_are_dropped() {
     let witness = Witness::new();
@@ -57,22 +56,22 @@ async fn the_deliveries_queued_behind_a_delivery_a_close_runs_in_are_dropped() {
             Some(true),
             true,
             Some(ok(Some("kit_closed"), None)),
-            Some(ok(None, None)),
+            Some(ok(Some("kit_closed"), None)),
             vec!["Bye.".to_owned()]
         )
     );
 }
 
 /// RFC §12.10.4: a SYNC hook closes the kit while the room's next message
-/// waits for the room's lock its run holds: that message is dropped at
-/// once, refused as every call is once the kit is sealed, and the hook's
-/// own message is refused at its commit, nothing stored, as Python's
-/// callers both raise `RoomKitError` at once
-/// (`rmk1017-review-A/py_review_probe.out` row ii). On 1d8796c the close
+/// waits for the room's lock its run holds: that message is cut at once,
+/// and the hook's own message is refused at its commit once the kit is
+/// sealed, nothing stored, each reading as a message cut before its
+/// commit, `kit_closed`, as Python's (`rmk1030-rs/py_doors.out`,
+/// `sync-hook`). On fefbfac both failed `KitClosed`; on 1d8796c the close
 /// drained the waiting message for 5 s (`rmk1017-review-B/
 /// probe_sync_hook_queued.out`).
 #[tokio::test(start_paused = true)]
-async fn a_message_waiting_on_the_lock_a_close_runs_under_is_refused_at_once() {
+async fn a_message_waiting_on_the_lock_a_close_runs_under_is_cut_at_once() {
     let witness = Witness::new();
     let (kit, closer, call) = open(Door::SyncHook, &witness, true).await;
     tokio::time::timeout(BOUND, closer.entered.notified())
@@ -97,25 +96,23 @@ async fn a_message_waiting_on_the_lock_a_close_runs_under_is_refused_at_once() {
         (
             Some(true),
             true,
-            Some(Err(RoomKitError::KitClosed)),
-            Some(Err(RoomKitError::KitClosed)),
+            Some(ok(Some("kit_closed"), None)),
+            Some(ok(Some("kit_closed"), None)),
             Vec::<String>::new()
         )
     );
 }
 
 /// RFC §12.10.4: a transport's delivery closes the kit in a room where an
-/// agent answers, the turn of the same delivery set: the turn is the
-/// spared run's work, spared with it, so the close returns at once, and,
-/// the kit sealed, the turn never starts its tool nor stores anything; its
-/// stream, read once the kit is sealed, is refused with the turn link's
-/// `backend_closed` (RFC §10.6.8: a turn still open as its owner closes),
-/// which the call's result carries, as Python's `TurnLinkError`
-/// (`rmk1017-lightreview/lr_probe_py.out` P3). On 1d8796c the close
-/// drained the turn for 5 s; on 9dfe09b the call read `kit_closed`, no
-/// error.
+/// agent answers, the turn of the same delivery set: the turn is cut at
+/// once, as every turn, the delivery a close is called from spared, so the
+/// close returns at once, the turn never starts its tool nor stores
+/// anything, and the call reads `kit_closed`, no error, as Python's
+/// (`rmk1030-rs/py_doors.out`, `spared-delivery-turns`). On fefbfac the
+/// turn was spared with the delivery, its stream refused once the kit was
+/// sealed, the call carrying `TurnLinkError`.
 #[tokio::test(start_paused = true)]
-async fn the_turns_a_spared_delivery_runs_are_spared_with_it() {
+async fn the_turns_a_spared_delivery_runs_are_cut() {
     let mut cases = Vec::new();
     for calls_a_tool in [false, true] {
         let witness = Witness::new();
@@ -158,7 +155,7 @@ async fn the_turns_a_spared_delivery_runs_are_spared_with_it() {
         (
             calls_a_tool,
             (Some(true), true),
-            Some(ok(None, Some("TurnLinkError"))),
+            Some(ok(Some("kit_closed"), None)),
             0,
             vec!["Go.".to_owned()],
         )
@@ -169,14 +166,13 @@ async fn the_turns_a_spared_delivery_runs_are_spared_with_it() {
 /// RFC §10.6.8, §12.10.4: a turn's work, its model's rounds and its
 /// tools' calls, is cut at once when the kit closes, with no grace, as
 /// Python's: an agent writes "Thinking", then calls a tool of 30 s, and the
-/// kit is closed from outside at 0.1 s. The turn is cut at once and what
-/// its reader read is delivered as the lanes drain, so the close returns
-/// at 0.1 s; when the witness takes 30 s to deliver "Thinking", the drain
-/// gives that delivery its 5 s grace, so the close returns at 5.1 s. Either
-/// way the call reads no reason, its own delivery over, as Python's
-/// (`rmk1017-lightreview/lr_probe_py.out` c1, `lr_probe_py_p6.out`). On
-/// 9dfe09b the turn had the drain's grace: the close returned at 5.1 s in
-/// both rows, the call reading `kit_closed`.
+/// kit is closed from outside at 0.1 s. The turn is cut at once, so the
+/// close returns at 0.1 s; when the witness takes 30 s to deliver
+/// "Thinking", that send, running as the close starts, has the grace, so
+/// the close returns at 5.1 s. Either way the call, under way as the close
+/// started, reads `kit_closed`. On fefbfac it read no reason; on 9dfe09b
+/// the turn had the drain's grace, the close returning at 5.1 s in both
+/// rows.
 #[tokio::test(start_paused = true)]
 async fn a_turn_is_cut_at_once_when_the_kit_closes() {
     let mut rows = Vec::new();
@@ -212,8 +208,8 @@ async fn a_turn_is_cut_at_once_when_the_kit_closes() {
     assert_eq!(
         rows,
         [
-            (false, 0, Some(ok(None, None))),
-            (true, 50, Some(ok(None, None)))
+            (false, 0, Some(ok(Some("kit_closed"), None))),
+            (true, 50, Some(ok(Some("kit_closed"), None)))
         ]
     );
 }
@@ -238,99 +234,14 @@ fn closing_hook(kit: &RoomKit, closer: &Closer, needs_lock: bool) {
     .unwrap();
 }
 
-/// RFC §12.10.4, §9.5.1: a SYNC hook closes the kit under `room_1`'s
-/// lock, or holding its admission ticket off the lock, while `room_2`
-/// drains a delivery of 2 s; "Two." comes to `room_1` 0.5 s into the
-/// close: it waits behind the spared run's lock or ticket, so it is refused
-/// at once, and the close returns once `room_2`'s delivery ended, at 2 s,
-/// as Python's (`rmk1017-lightreview/lr_probe_py.out` P1,
-/// `rmk1017-fix4/py_p1_tickets.out`), whose "Two." is refused only then, at
-/// 2 s (decided 2026-10-28: Rust drops it at once). On 9dfe09b the close
-/// found waiters only as it began and as callers joined: "Two." held it
-/// until the grace, 5 s (`lr_probe_head.out`); without the tickets' half of
-/// `Driver::waits_behind`, the ticket's "Two." waits for the close's return
-/// (`rmk1017-fix4/mutation_waits_ticket.out`).
-#[tokio::test(start_paused = true)]
-async fn a_message_coming_behind_a_spared_lock_or_ticket_as_the_close_drains_is_refused() {
-    let mut rows = Vec::new();
-    for needs_lock in [true, false] {
-        rows.push((needs_lock, behind_a_spared_hold(needs_lock).await));
-    }
-    let row = |needs_lock| {
-        (
-            needs_lock,
-            (
-                (Some(Err(RoomKitError::KitClosed)), 5),
-                (Some(true), 20),
-                Some(Err(RoomKitError::KitClosed)),
-                Some(ok(None, None)),
-            ),
-        )
-    };
-    assert_eq!(rows, [row(true), row(false)]);
-}
-
-/// What "Two." and the close come to in [`a_message_coming_behind_a_spared_lock_or_ticket_as_the_close_drains_is_refused`],
-/// the closing hook taking `room_1`'s lock when `needs_lock`, else its
-/// admission ticket: Two's call and when it ended, the close's return and
-/// when, One's and Slow's calls, the times in tenths of a second.
-async fn behind_a_spared_hold(
-    needs_lock: bool,
-) -> (
-    (Option<Answered>, u128),
-    (Option<bool>, u128),
-    Option<Answered>,
-    Option<Answered>,
-) {
-    let witness = Witness::new();
-    let kit = kit_with(&witness).await;
-    let slow = Witness::slow("Slow.", Duration::from_secs(2)).named("slow");
-    kit.register_channel(slow).unwrap();
-    let room_2 = RoomId::new("room_2").unwrap();
-    kit.create_room(CreateRoomOptions {
-        room_id: Some(room_2.clone()),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    for id in ["sms", "slow"] {
-        kit.attach_channel(&room_2, &channel(id), AttachChannelOptions::default())
-            .await
-            .unwrap();
-    }
-    let closer = Closer::new(&kit, &witness, true);
-    closing_hook(&kit, &closer, needs_lock);
-    let started = Instant::now();
-    let tenths = || (started.elapsed().as_millis() + 50) / 100;
-    let slow_call = spawn_message(&kit, "Slow.", room_2);
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    let one = spawn_message(&kit, "One.", room_id());
-    tokio::time::timeout(BOUND, closer.entered.notified())
-        .await
-        .unwrap();
-    closer.go.notify_one();
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let two = spawn_message(&kit, "Two.", room_id());
-    let two = ended(two).await;
-    let two_at = tenths();
-    let returned = closer.returned_once_closed().await;
-    let closed_at = tenths();
-    (
-        (two, two_at),
-        (returned, closed_at),
-        ended(one).await,
-        ended(slow_call).await,
-    )
-}
-
 /// RFC §12.10.4, §9.5.1: an off-lock SYNC hook closes the kit while its
 /// run holds `room_1`'s admission ticket, "Two." holding the next one: it
-/// waits behind the spared run's ticket, so it is refused at once, nothing
-/// stored, as Python's callers raise `RoomKitError` at 0.1 s
-/// (`rmk1017-fix/py_p2.out`). Without the tickets' half of the drop, the
-/// close held until its grace, 5.1 s (light review, `M1b_tickets` on P2).
+/// waits for its ticket's turn, so it is cut at once, and the hook's own
+/// message is refused at its commit once the kit is sealed, nothing
+/// stored, each reading as a message cut before its commit, `kit_closed`.
+/// On fefbfac both failed `KitClosed`.
 #[tokio::test(start_paused = true)]
-async fn a_message_behind_a_spared_admission_ticket_is_refused_at_once() {
+async fn a_message_behind_a_spared_admission_ticket_is_cut_at_once() {
     let witness = Witness::new();
     let kit = kit_with(&witness).await;
     let closer = Closer::new(&kit, &witness, true);
@@ -356,8 +267,8 @@ async fn a_message_behind_a_spared_admission_ticket_is_refused_at_once() {
         (
             Some(true),
             true,
-            Some(Err(RoomKitError::KitClosed)),
-            Some(Err(RoomKitError::KitClosed)),
+            Some(ok(Some("kit_closed"), None)),
+            Some(ok(Some("kit_closed"), None)),
             Vec::<String>::new()
         )
     );

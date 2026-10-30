@@ -28,26 +28,24 @@
 //! its commit was in flight. A room its step 2 created is completed first,
 //! its creation never within the call's bound.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
-use roomkit_core::model::{ErrorRecord, EventId, RoomEvent, RoomId};
+use roomkit_core::model::{ErrorRecord, EventStatus, RoomEvent, RoomId};
 use roomkit_core::ops::{
-    Decided, EffectId, Inbound, InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED, Outcome,
-    StoreOutcome,
+    Decided, Inbound, InboundError, InboundResult, KIT_CLOSED, Outcome, StoreOutcome,
 };
 use tokio::sync::oneshot;
 use tokio::task::{JoinError, JoinHandle};
 
-use super::Leases;
 use super::calls::{self, Written};
-use crate::context::{ExecutionContext, LeftOpen};
+use super::{Committed, Driven, Leases, Stop};
+use crate::context::ExecutionContext;
 use crate::error::{RoomKitError, with_causes};
 use crate::kit::Inner;
 use crate::store::ConversationStore;
-use crate::tasks::{Kind, Marks, Tasks};
-use crate::turns;
+use crate::tasks::{Kind, Tasks};
+use crate::turns::TURN_LINK_ERROR;
 
 /// What an inbound call's run comes to: the operation's output, or why the
 /// kit's call failed.
@@ -76,30 +74,12 @@ impl Ran {
 }
 
 /// What an inbound call's run leaves its caller beside its output: the
-/// call's decision, and whether the delivery set of the call's own event
-/// had its turn in the room's lane, so that a run the kit's close aborts
-/// still reports the call it decided (RFC §10.1 step 18).
+/// call's decision, and the answers its cascade committed, so that a run
+/// the kit's close aborted, its unwind run out, still reports the call it
+/// decided (RFC §10.1 step 18, §12.10.4).
 #[derive(Debug, Default)]
 pub(crate) struct Record {
     decided: Mutex<Option<InboundResult>>,
-    delivering: AtomicBool,
-    /// Whether the delivery set of the call's own event left its place in
-    /// the room's lane, its delivery over.
-    delivered: AtomicBool,
-    /// The call's result once its own event's commit, the one that decides
-    /// it, is stored, and what that write came to.
-    committing: Mutex<Option<(InboundResult, Written)>>,
-    /// The streams of its turns the run was aborted leaving open, kept
-    /// unread or read, with the commits their reads wrote.
-    left_open: Mutex<Option<LeftOpen>>,
-    /// The commits of the call's cascade past the one that decides it, of
-    /// events to deliver, by their effect and their event, each with what
-    /// its write came to, until the event's delivery set takes its place in
-    /// the room's lane: one whose set never took it was never delivered,
-    /// as Python's sealed lanes refuse it. One stored BLOCKED is not among
-    /// them, as [`committed`](Self::committed) reads a blocked call with no
-    /// reason.
-    cascade: Mutex<Vec<(EffectId, EventId, Written)>>,
     /// The commits of the call's own answers: what the call reports as its
     /// `response_events` once the kit's close aborted its run.
     answers: StoredAnswers,
@@ -121,20 +101,18 @@ impl StoredAnswers {
             .push((answer, written));
     }
 
-    /// The answers whose commit stored them, in order.
-    pub(crate) async fn stored(&self) -> Vec<RoomEvent> {
-        let running: Vec<(RoomEvent, Written)> = self
-            .0
+    /// The answers whose commit stored them, in order; a commit still
+    /// running counts as none.
+    pub(crate) fn stored(&self) -> Vec<RoomEvent> {
+        self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let mut stored = Vec::new();
-        for (answer, mut written) in running {
-            if calls::outcome_of(&mut written).await == Outcome::Store(StoreOutcome::Committed) {
-                stored.push(answer);
-            }
-        }
-        stored
+            .iter()
+            .filter(|(_, written)| {
+                *written.borrow() == Some(Outcome::Store(StoreOutcome::Committed))
+            })
+            .map(|(answer, _)| answer.clone())
+            .collect()
     }
 }
 
@@ -143,191 +121,59 @@ impl Record {
         *self.decided.lock().unwrap_or_else(PoisonError::into_inner) = Some(result.clone());
     }
 
-    /// The lane's turn of `event_id`'s set came: the call's own event's
-    /// set delivers from now on.
-    fn turn_came(&self, event_id: &EventId) {
-        if self.is_own(event_id) {
-            self.delivering.store(true, Ordering::Release);
-        }
-    }
-
-    /// `event_id`'s set left its place in the room's lane: the call's own
-    /// event's delivery is over when it is that event's.
-    fn left(&self, event_id: &EventId) {
-        if self.is_own(event_id) {
-            self.delivered.store(true, Ordering::Release);
-        }
-    }
-
-    /// Whether `event_id` is the call's own event.
-    fn is_own(&self, event_id: &EventId) -> bool {
-        let decided = self.decided.lock().unwrap_or_else(PoisonError::into_inner);
-        decided
-            .as_ref()
-            .and_then(|result| result.event.as_ref())
-            .is_some_and(|event| &event.id == event_id)
-    }
-
-    /// The commit that decides the call as `result` runs, its outcome told
-    /// by `written`.
-    fn commits(&self, result: InboundResult, written: Written) {
-        *self
-            .committing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((result, written));
-    }
-
-    /// A commit of the call's cascade runs for `effect`, of `event_id`, its
-    /// outcome told by `written`, until the event's set takes its place in
-    /// the room's lane ([`entered`](Self::entered)) or the run gives the
-    /// commit up ([`gave_up`](Self::gave_up)).
-    fn cascade_commits(&self, effect: EffectId, event_id: EventId, written: Written) {
-        self.cascade
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push((effect, event_id, written));
-    }
-
-    /// `event_id`'s delivery set took its place in the room's lane.
-    fn entered(&self, event_id: &EventId) {
-        self.cascade
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|(_, event, _)| event != event_id);
-    }
-
     /// The commit of `answer`, an answer of the call's own cascade, runs,
     /// its outcome told by `written`.
     fn answers(&self, answer: RoomEvent, written: Written) {
         self.answers.commits(answer, written);
     }
 
-    /// The run is aborted leaving its turns' streams open, kept unread or
-    /// read, its reads having written `rows`.
-    fn left_open(&self, rows: LeftOpen) {
-        *self
-            .left_open
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(rows);
-    }
-
-    /// The run gave the write of `effect` up.
-    fn gave_up(&self, effect: EffectId) {
-        self.cascade
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|(running, _, _)| *running != effect);
-    }
-
-    /// Whether a commit of the call's cascade whose set never took its
-    /// place in the room's lane stored its event, once its write ended:
-    /// stored and never delivered.
-    async fn cascade_stored(&self) -> bool {
-        let running: Vec<Written> = self
-            .cascade
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .map(|(_, _, written)| written.clone())
-            .collect();
-        for mut written in running {
-            if calls::outcome_of(&mut written).await == Outcome::Store(StoreOutcome::Committed) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// What a run the kit's close aborted reports, as the Python
-    /// implementation's lane reports a delivery it dropped: the call as it
-    /// was decided, with the answers its cascade stored, its delivery
-    /// cancelled [`LANE_CANCELLED`] when its set delivered, [`KIT_CLOSED`]
-    /// when it still waited for its turn, and no reason of the abort's once
-    /// its set was over, the abort cutting a later set of its cascade, as
-    /// Python's caller reads, but [`KIT_CLOSED`] when a commit of its
-    /// cascade stored an event whose set never took its place in the room's
-    /// lane, its write still running or its outcome taken, an event stored
-    /// and never delivered, as Python's caller reads the delivery its sealed
-    /// lanes refuse. A run that left a
-    /// turn's stream open reads the turn's end ([`read_left_open`]). A call
-    /// whose own commit still ran reads what the write came to, once it
-    /// ends, as Python's caller does: its event, stored and never
-    /// delivered, `kit_closed`. [`RoomKitError::KitClosed`] for a call nothing of
-    /// which was stored.
-    pub(crate) async fn aborted(&self) -> InboundOutput {
+    /// What a run the kit's close aborted reports, its unwind run out (RFC
+    /// §12.10.4): the call as it was decided, with the answers its cascade
+    /// stored, `kit_closed`; a call not decided yet, as one the close cut
+    /// before its commit, nothing of it stored.
+    pub(crate) fn aborted(&self) -> InboundResult {
         let decided = self
             .decided
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         let Some(mut result) = decided else {
-            return self.committed().await;
+            return cut_before_its_commit();
         };
-        // The answers its cascade stored before the abort, as Python's
-        // caller reads its cascade's `response_events`.
-        result.response_events = self.answers.stored().await;
-        let left_open = self
-            .left_open
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        // A call whose own delivery was over when the run was aborted reads
-        // no reason of the abort's, as Python's caller, whose lane cut a
-        // later entry of its cascade.
-        if self.delivered.load(Ordering::Acquire) {
-            if self.cascade_stored().await {
-                result
-                    .cancellation_reason
-                    .get_or_insert_with(|| KIT_CLOSED.to_owned());
-            } else if let Some(rows) = left_open {
-                read_left_open(&mut result, rows).await;
-            }
-            return Ok(Ok(result));
-        }
-        // What the abort cuts is a turn's stream, its `on_event()` over,
-        // not a delivery running: the call reads the turn's end, as
-        // Python's, whose grace cuts the turn's reader.
-        if let Some(rows) = left_open {
-            read_left_open(&mut result, rows).await;
-            return Ok(Ok(result));
-        }
-        let reason = if self.delivering.load(Ordering::Acquire) {
-            LANE_CANCELLED
-        } else {
-            KIT_CLOSED
-        };
+        result.response_events = self.answers.stored();
+        result.cancellation_reason = Some(KIT_CLOSED.to_owned());
         result
-            .cancellation_reason
-            .get_or_insert_with(|| reason.to_owned());
-        Ok(Ok(result))
     }
+}
 
-    /// The result of a call aborted while the commit that decides it ran:
-    /// once the write ended, the call as that commit decides it, its event
-    /// never delivered, or the store's error for a write that failed, as
-    /// the run would have read them; `KitClosed` for a call that never
-    /// reached that commit.
-    async fn committed(&self) -> InboundOutput {
-        let committing = self
-            .committing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let Some((mut result, mut written)) = committing else {
-            return Err(RoomKitError::KitClosed);
-        };
-        let outcome = calls::outcome_of(&mut written).await;
-        if let Outcome::Failed(error) = outcome {
-            return Ok(Err(InboundError::Store(error)));
-        }
-        if outcome != Outcome::Store(StoreOutcome::Committed) {
-            return Err(RoomKitError::KitClosed);
-        }
-        if !result.blocked {
-            result.cancellation_reason = Some(KIT_CLOSED.to_owned());
-        }
-        Ok(Ok(result))
+/// What a message the kit's close cut before its commit reads (RFC
+/// §12.10.4): blocked, its `reason` and `cancellation_reason` `kit_closed`,
+/// nothing of it stored; Python's `cut_by_close()`.
+pub(crate) fn cut_before_its_commit() -> InboundResult {
+    InboundResult {
+        blocked: true,
+        reason: Some(KIT_CLOSED.to_owned()),
+        cancellation_reason: Some(KIT_CLOSED.to_owned()),
+        ..InboundResult::default()
     }
+}
+
+/// What a call the kit's close cut as its commit had landed reads, its
+/// event read back, `committed` (RFC §12.10.4): the call as that commit
+/// decided it, `kit_closed`, a block's record keeping its hooks' reason;
+/// delivered to no one.
+fn read_back(committed: Committed) -> InboundResult {
+    let Committed { event, decides } = committed;
+    let mut result = decides.map(|decided| *decided).unwrap_or_default();
+    result.blocked = event.status == EventStatus::Blocked;
+    if result.blocked {
+        result.reason = result.reason.or_else(|| event.blocked_by.clone());
+    } else {
+        result.reason = None;
+    }
+    result.event = Some(event);
+    result.cancellation_reason = Some(KIT_CLOSED.to_owned());
+    result
 }
 
 /// The caller of an inbound call's run, as the run sees it: where the
@@ -378,48 +224,16 @@ impl Caller {
         }
     }
 
-    /// The lane's turn of `event_id`'s set came.
-    pub(super) fn turn_came(&self, event_id: &EventId) {
-        self.record.turn_came(event_id);
-    }
-
-    /// `event_id`'s set left its place in the room's lane.
-    pub(super) fn left(&self, event_id: &EventId) {
-        self.record.left(event_id);
-    }
-
-    /// The commit that decides the call as `result` runs, its outcome told
-    /// by `written`.
-    pub(super) fn commits(&self, result: InboundResult, written: Written) {
-        self.record.commits(result, written);
-    }
-
-    /// A commit of the call's cascade runs for `effect`, of `event_id`, its
-    /// outcome told by `written`.
-    pub(super) fn cascade_commits(&self, effect: EffectId, event_id: EventId, written: Written) {
-        self.record.cascade_commits(effect, event_id, written);
-    }
-
     /// The commit of `answer`, an answer of the call's own cascade, runs,
     /// its outcome told by `written`.
     pub(super) fn answers(&self, answer: RoomEvent, written: Written) {
         self.record.answers(answer, written);
     }
 
-    /// `event_id`'s delivery set took its place in the room's lane.
-    pub(super) fn entered(&self, event_id: &EventId) {
-        self.record.entered(event_id);
-    }
-
-    /// The run gave the write of `effect` up.
-    pub(super) fn gave_up(&self, effect: EffectId) {
-        self.record.gave_up(effect);
-    }
-
-    /// The run ends leaving its turns' streams open, kept unread or read,
-    /// its reads having written `rows`.
-    pub(super) fn left_open(&self, rows: LeftOpen) {
-        self.record.left_open(rows);
+    /// Whether the call is decided: its event committed, or its
+    /// instruction decided.
+    pub(super) fn is_decided(&self) -> bool {
+        self.decided
     }
 
     /// Takes the call's decision, `decided`: the caller is answered with
@@ -503,12 +317,18 @@ impl Caller {
         self.gone || self.answer.as_ref().is_none_or(oneshot::Sender::is_closed)
     }
 
-    /// Logs the end of a run nobody reads, as `output` says it ended.
-    fn log_unread_end(&self, call: &'static str, output: &InboundOutput) {
+    /// Logs the end of a run nobody reads, as `output` says it ended; one
+    /// the kit's close ended, `closing`, at debug (RFC §12.10.4).
+    fn log_unread_end(&self, call: &'static str, output: &InboundOutput, closing: bool) {
         if !self.unread() {
             return;
         }
         match output {
+            Err(RoomKitError::KitClosed) if closing => tracing::debug!(
+                target: "roomkit::driver",
+                call,
+                "a call nobody waits for any more ended as the kit closed"
+            ),
             Ok(Ok(result)) => tracing::debug!(
                 target: "roomkit::driver",
                 call,
@@ -580,25 +400,22 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
             call,
             inbound,
             Leases::Refused,
-            Some(&mut caller),
+            Driven::Inbound(&mut caller),
         )
         .await;
-        let output = refused_once_sealed(output, kit.tasks.is_sealed());
-        caller.log_unread_end(call, &output);
-        // The run's own unit: a close called from inside it spares it.
-        let cut = kit.tasks.cuts(Marks::current().innermost());
-        cut_at_its_end(output, cut, &caller.record)
+        let closing = kit.tasks.is_closing();
+        let output = closed_at_its_end(output, closing);
+        caller.log_unread_end(call, &output, closing);
+        output
     };
     // The kit tracks the run. Dropped, the handle detaches it: the run
     // itself stops when its caller is gone before the call's decision.
-    let Some(mut task) = inner.tasks.spawn(Kind::Work, context.scope(run)) else {
+    let Some(mut task) = inner.tasks.spawn(Kind::Run, context.scope(run)) else {
         return Ran::ended(Err(RoomKitError::KitClosed));
     };
     tokio::select! {
         biased;
-        // Boxed: what an aborted run's caller waits for, its commit's end,
-        // would make every caller's future large.
-        joined = &mut task => Ran::ended(Box::pin(ended(joined, &record, &inner.tasks)).await),
+        joined = &mut task => Ran::ended(ended(joined, &record, &inner.tasks)),
         Ok(answer) = decided => Ran {
             output: answer,
             delivery: defer.then_some((task, record)),
@@ -606,71 +423,47 @@ pub(crate) async fn run_inbound<S: ConversationStore>(
     }
 }
 
-/// What a call whose aborted run left a turn's stream open reads, once
-/// the writes of its reads ended (RFC §10.6.8). A row stored, to deliver
-/// or `BLOCKED`: nothing more, the turn having said it, a row stored and
-/// never delivered reading `kit_closed` already, through the cascade's
-/// commits whose set never entered the lane (`cascade_stored`). Nothing of
-/// the turn stored: the turn link's `backend_closed`, as Python's call
-/// reads the `TurnLinkError` of a turn whose reader its grace cut,
-/// `executor_lost` there, `backend_closed` here (decided 2026-10-28).
-async fn read_left_open(result: &mut InboundResult, rows: LeftOpen) {
-    for mut written in rows {
-        if calls::outcome_of(&mut written).await == Outcome::Store(StoreOutcome::Committed) {
-            return;
+/// `output`, a run's at its end, as the kit's close leaves it, once it
+/// started, `closing` (RFC §12.10.4): a run the close cut before its
+/// commit reads `cut_before_its_commit()`, and one cut as its commit had
+/// landed reads its event, read back; a call whose own commit the sealed
+/// kit refused, a run a close spared resuming once it returned, reads as
+/// one the close cut before its commit. A call under way as the close
+/// started reads `kit_closed`, but one blocked before its delivery, and
+/// never a failure the close caused as its error: a send it cut, a turn it
+/// cut or refused.
+fn closed_at_its_end(
+    output: Result<Result<InboundResult, InboundError>, Stop>,
+    closing: bool,
+) -> InboundOutput {
+    let mut result = match output {
+        Err(Stop::Cut(None)) => return Ok(Ok(cut_before_its_commit())),
+        Err(Stop::Cut(Some(committed))) => return Ok(Ok(read_back(*committed))),
+        Err(Stop::Failed(error)) => return Err(error),
+        Ok(Err(InboundError::Store(error))) if closing && by_close(&error) => {
+            return Ok(Ok(cut_before_its_commit()));
         }
-    }
-    result.error.get_or_insert_with(turns::closed);
-}
-
-/// `output`, a run's at its end: once the kit's close cut the work under
-/// way, its turns cut by it (RFC §10.6.8), the delivery of a call whose own
-/// set had its turn and still delivered reads as cancelled
-/// [`LANE_CANCELLED`], as the Python implementation's lane reports the
-/// cascade it cut, unless an earlier reason stands: the first one stays,
-/// as Python's first cancel does. A call whose set's delivery was over
-/// reads what the run read, a turn's stream the cut ended included, its
-/// turn link's error with no reason, as Python's. The cut is read here,
-/// at the run's end, so that a run that ended before it reports its
-/// result whenever its end is read; a run a close was called from inside
-/// is spared, never cut (RFC §12.10.4).
-fn cut_at_its_end(output: InboundOutput, cut: bool, record: &Record) -> InboundOutput {
-    let delivering =
-        record.delivering.load(Ordering::Acquire) && !record.delivered.load(Ordering::Acquire);
-    if !cut || !delivering {
-        return output;
-    }
-    output.map(|result| {
-        result.map(|mut result| {
-            result
-                .cancellation_reason
-                .get_or_insert_with(|| LANE_CANCELLED.to_owned());
-            result
-        })
-    })
-}
-
-/// `output`, a run's at its end, once the kit, sealed, refused what the
-/// run asked (RFC §12.10.4: the work a close spared stores and delivers
-/// nothing once the kit is sealed). A call whose own commit was refused
-/// fails as every call made once the kit is sealed does, nothing of it
-/// stored (Python's caller raises `RoomKitError`, its store sealed last, as
-/// its close ends; Rust's kit is sealed before its channels close); a call
-/// whose cascade was refused past its commit reads as one whose delivery
-/// the close dropped, `kit_closed`, as Python's sealed lane drops it.
-fn refused_once_sealed(output: InboundOutput, sealed: bool) -> InboundOutput {
-    let refused = |error: &ErrorRecord| sealed && error.error_type == calls::SHUT_DOWN;
-    match output {
-        Ok(Err(InboundError::Store(error))) if refused(&error) => Err(RoomKitError::KitClosed),
-        Ok(Ok(mut result)) if result.error.as_ref().is_some_and(refused) => {
+        Ok(Err(error)) => return Ok(Err(error)),
+        Ok(Ok(result)) => result,
+    };
+    if closing {
+        if result.error.as_ref().is_some_and(by_close) {
             result.error = None;
+        }
+        if !result.blocked {
             result
                 .cancellation_reason
                 .get_or_insert_with(|| KIT_CLOSED.to_owned());
-            Ok(Ok(result))
         }
-        output => output,
     }
+    Ok(Ok(result))
+}
+
+/// Whether `error` is the kit's close ending the work that met it: a call
+/// it cut or refused, `kit_closed`, or a turn it cut or refused, the turn
+/// link's.
+fn by_close(error: &ErrorRecord) -> bool {
+    error.error_type == KIT_CLOSED || error.error_type == TURN_LINK_ERROR
 }
 
 /// `inbound`, a call into `room_id` or routed, charged to the reentry
@@ -688,11 +481,11 @@ fn charged(inbound: Inbound, room_id: Option<&RoomId>, context: &ExecutionContex
     }
 }
 
-/// The output of a run's task that ended: its own, the close's cut read at
-/// its end; for one the kit's close aborted, as `tasks` tell, what its
-/// `record` reports ([`Record::aborted`]); for one the runtime cancelled,
+/// The output of a run's task that ended: its own; for one the kit's close
+/// aborted, its unwind run out, as `tasks` tell, what its `record` reports
+/// ([`Record::aborted`]); for one the runtime cancelled,
 /// [`RoomKitError::Cancelled`].
-pub(crate) async fn ended(
+pub(crate) fn ended(
     joined: Result<InboundOutput, JoinError>,
     record: &Record,
     tasks: &Tasks,
@@ -702,7 +495,7 @@ pub(crate) async fn ended(
         // A panic of the driver's own loop is a defect of this crate: the
         // caller receives it as it would from a run it drove itself.
         Err(failure) if failure.is_panic() => std::panic::resume_unwind(failure.into_panic()),
-        Err(aborted) if tasks.ended_by_close(aborted.id()) => record.aborted().await,
+        Err(aborted) if tasks.ended_by_close(aborted.id()) => Ok(Ok(record.aborted())),
         Err(_cancelled) => Err(RoomKitError::Cancelled),
     }
 }

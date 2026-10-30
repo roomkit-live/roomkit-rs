@@ -6,13 +6,15 @@
 use std::sync::Arc;
 
 use roomkit_core::model::{ChannelId, DirectEvent, EventContent, RoomEvent, RoomId};
-use roomkit_core::ops::{CommitRecord, Entry, Inbound, InboundError, InboundResult, InboundTarget};
+use roomkit_core::ops::{
+    CommitRecord, Entry, Inbound, InboundError, InboundResult, InboundTarget, KIT_CLOSED,
+};
 use tokio::task::JoinHandle;
 
 use super::RoomKit;
 use super::options::{CommitEventOptions, SendEventOptions};
 use crate::context::{self, Adopting, Completion, ExecutionContext};
-use crate::driver::{self, InboundOutput, Ran, Record};
+use crate::driver::{self, InboundOutput, Ran, Record, Stop};
 use crate::error::RoomKitError;
 use crate::inbound::DeliveryHandle;
 use crate::store::ConversationStore;
@@ -103,7 +105,7 @@ impl<S: ConversationStore> RoomKit<S> {
             event: Box::new(event),
         };
         let entered = self.enter(entry, SEND_EVENT, false).await?;
-        entered.result.event.ok_or_else(no_event)
+        event_of(entered.result)
     }
 
     /// Commits `event` to the room `room_id` outside the pipeline (RFC
@@ -124,7 +126,9 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`RoomKitError::Value`] when the record names another room,
+    /// Returns [`RoomKitError::KitClosed`] once the kit's close started, or
+    /// when it cut the call before its commit landed (RFC §12.10.4);
+    /// [`RoomKitError::Value`] when the record names another room,
     /// before anything is read; [`RoomKitError::RoomNotFound`] when the room
     /// does not exist; [`RoomKitError::RoomClosed`] when its status refuses
     /// events (RFC §5.1); [`RoomKitError::IdempotencyKeyTaken`] for a key
@@ -148,7 +152,14 @@ impl<S: ConversationStore> RoomKit<S> {
             event,
             options.organization_id,
         );
-        let committed = driver::run(&self.inner, "commit_event", operation).await?;
+        let committed = match driver::run_reading_back(&self.inner, "commit_event", operation).await
+        {
+            Ok(committed) => committed,
+            // The kit's close cut it as its commit had landed: stored
+            // (RFC §12.10.4).
+            Err(Stop::Cut(Some(committed))) => return Ok(committed.event),
+            Err(stop) => return Err(stop.into_error()),
+        };
         committed.map_err(|error| match (RoomKitError::from(error), taken) {
             (refused, (channel_id, Some(key)))
                 if refused.recorded_refusal() == Some("IdempotencyKeyTaken") =>
@@ -339,9 +350,22 @@ fn refusal_of(entry: &Entry) -> impl FnOnce(InboundError) -> RoomKitError + use<
     }
 }
 
+/// The event an injection committed: once the kit's close cut it before
+/// its commit, nothing of it stored, [`RoomKitError::KitClosed`] (RFC
+/// §12.10.4).
+pub(super) fn event_of(result: InboundResult) -> Result<RoomEvent, RoomKitError> {
+    match result.event {
+        Some(event) => Ok(event),
+        None if result.cancellation_reason.as_deref() == Some(KIT_CLOSED) => {
+            Err(RoomKitError::KitClosed)
+        }
+        None => Err(no_event()),
+    }
+}
+
 /// What a direct injection that ended with neither its event nor a refusal
 /// fails with (RFC §10.5): a defect of this crate.
-pub(super) fn no_event() -> RoomKitError {
+fn no_event() -> RoomKitError {
     RoomKitError::Internal(
         "a direct injection ended with neither its event nor a refusal".to_owned(),
     )

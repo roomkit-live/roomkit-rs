@@ -629,7 +629,7 @@ mod unregistering {
         let mut events = kit.subscribe();
         assert_eq!(
             (
-                kit.unregister_channel(&channel("sms")).is_none(),
+                kit.unregister_channel(&channel("sms")).unwrap().is_none(),
                 events.try_recv().ok()
             ),
             (true, None)

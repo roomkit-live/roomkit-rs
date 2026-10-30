@@ -115,6 +115,32 @@ impl<S: ConversationStore> RoomKit<S> {
         updates: EventUpdates,
         organization_id: Option<String>,
     ) -> Result<Option<RoomEvent>, RoomKitError> {
+        let operation = self.update_of(room_id, event_id, updates, organization_id);
+        Ok(driver::run(&self.inner, "update_event", operation).await??)
+    }
+
+    /// Writes `updates` on the stored event as the kit's own work, a cut
+    /// turn's record on its last message, which the kit's close takes
+    /// within its grace (RFC §12.10.4).
+    pub(crate) async fn update_own(
+        &self,
+        room_id: &RoomId,
+        event_id: &EventId,
+        updates: EventUpdates,
+    ) -> Result<Option<RoomEvent>, RoomKitError> {
+        let operation = self.update_of(room_id, event_id, updates, None);
+        Ok(driver::run_own(&self.inner, "update_event", operation).await??)
+    }
+
+    /// The operation that writes `updates` on the stored event, made in the
+    /// room's work the current code runs in, if any.
+    fn update_of(
+        &self,
+        room_id: &RoomId,
+        event_id: &EventId,
+        updates: EventUpdates,
+        organization_id: Option<String>,
+    ) -> UpdateEvent {
         let operation = UpdateEvent::new(
             self.config(),
             room_id.clone(),
@@ -122,11 +148,10 @@ impl<S: ConversationStore> RoomKit<S> {
             updates,
             organization_id,
         );
-        let operation = match room_work(room_id) {
+        match room_work(room_id) {
             Some((draw, floor)) => operation.made_in(draw, floor),
             None => operation,
-        };
-        Ok(driver::run(&self.inner, "update_event", operation).await??)
+        }
     }
 }
 

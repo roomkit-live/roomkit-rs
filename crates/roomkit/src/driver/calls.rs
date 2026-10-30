@@ -11,7 +11,7 @@ use roomkit_core::model::{
 };
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, Environment,
-    HookAnswer, HookRequest, Notice, Outcome, StoreOutcome, StoreRequest,
+    HookAnswer, HookRequest, KIT_CLOSED, Notice, Outcome, StoreOutcome, StoreRequest,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookTrigger};
@@ -123,8 +123,8 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
 /// the run's. A turn that answers with a stream leaves it with its run,
 /// `shared`, by its effect, `effect`, until it is read. Work a close spared
 /// calls no channel once the kit is sealed, its channels closed, the call
-/// refused with an error naming the shutdown (RFC §12.10.4): a turn with
-/// its link's `backend_closed` (RFC §10.6.8), any other call as a write is.
+/// refused (RFC §12.10.4): a turn with its link's `backend_closed` (RFC
+/// §10.6.8), any other call `kit_closed`, as a write is.
 pub(super) async fn channel<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     environment: &(dyn Environment + Send + Sync),
@@ -207,27 +207,17 @@ pub(super) async fn channel<S: ConversationStore>(
             target,
         } => {
             let kept = shared.take_stream(turn);
-            let taken = kept.is_some();
-            let unit = kept.as_ref().map(|kept| kept.turn.unit());
-            let _reading = kept.as_ref().map(|kept| inner.turns.reading(&kept.turn));
+            // The kit's close waits, within its grace, for the read of a turn
+            // it cut to store what the turn said.
+            let _reading = kept.as_ref().map(|_| inner.turns.reading());
             let stops = Stops {
                 read: shared.stop_signal(effect),
                 kit: inner.turns.cutting(),
-                turn: unit,
             };
-            let read = Box::pin(stream::read(
+            Box::pin(stream::read(
                 inner, kept, stops, responder, *answers, target,
             ))
-            .await;
-            // A read the run's abort drops never returns: its stream stays
-            // open, as the abort reads it. One that returns as the kit's
-            // close drains stays open too, until the run ends: an abort
-            // before that end reads the turn's end, which the run had not
-            // reported yet.
-            if taken && !inner.tasks.is_draining() {
-                shared.read_returned();
-            }
-            read
+            .await
         }
     }
 }
@@ -283,14 +273,11 @@ pub(super) async fn route<S: ConversationStore>(
     }
 }
 
-/// The kind of the failure of a write the kit refused, sealed: the work a
-/// close spared asked it once the close sealed the kit (RFC §12.10.4).
-pub(super) const SHUT_DOWN: &str = "ShutDown";
-
 /// The refusal of `request`, a channel's call work a close spared made
 /// once the kit was sealed: a turn's, its submission or the read of its
 /// stream, its link's `backend_closed`, the turn still open as its owner
-/// closed (RFC §10.6.8); any other, the seal's.
+/// closed (RFC §10.6.8); any other, the close's, `kit_closed` (RFC
+/// §12.10.4).
 fn refused_once_sealed(request: &ChannelRequest) -> ErrorRecord {
     match request {
         ChannelRequest::OnEvent { binding, .. }
@@ -301,8 +288,14 @@ fn refused_once_sealed(request: &ChannelRequest) -> ErrorRecord {
         ChannelRequest::ReadStream { .. } => turns::closed(),
         ChannelRequest::HandleInbound { .. }
         | ChannelRequest::OnEvent { .. }
-        | ChannelRequest::Deliver { .. } => ErrorRecord::new(SHUT_DOWN, "the kit is shut down"),
+        | ChannelRequest::Deliver { .. } => cut_by_close(),
     }
+}
+
+/// The failure of a call the kit's close cut or refused (RFC §12.10.4): a
+/// send so read `failed`, code `kit_closed`, retryable.
+pub(crate) fn cut_by_close() -> ErrorRecord {
+    ErrorRecord::new(KIT_CLOSED, "the kit closed before this call ended")
 }
 
 /// What a write of the store came to, once it ended; nothing while it runs.
@@ -315,13 +308,12 @@ pub(super) type WentOn = oneshot::Sender<Infallible>;
 /// Carries out `request`, a write of the store, as a task of its own the
 /// kit tracks, which the run's abort does not end: a write decided runs to
 /// its end, whatever becomes of its run, as the Python implementation runs
-/// its decided writes (RFC §13.6). The task ends once the run went on from
-/// the write's outcome too, when the run keeps its hold: the kit's close,
-/// which waits for the writes, sees an inbound run's commit take its place
-/// in the room's lane before it seals the lanes, as Python's decided write
-/// covers the commit and the lane's enqueue (`_write_decision`). Returns
-/// the run's call, which answers the write's outcome, where anyone else
-/// reads it, and the run's hold.
+/// its decided writes (RFC §13.6), but the kit's close, which gives it its
+/// grace, then cuts it (RFC §12.10.4). The task ends once the run went on
+/// from the write's outcome too, when the run keeps its hold, so that an
+/// inbound run's commit takes its place in the room's lane before its task
+/// ends. Returns the run's call, which answers the write's outcome, where
+/// anyone else reads it, and the run's hold.
 pub(super) fn write<S: ConversationStore>(
     inner: &Arc<Inner<S>>,
     request: StoreRequest,
@@ -334,7 +326,6 @@ pub(super) fn write<S: ConversationStore>(
     let (went_on, run_going_on) = oneshot::channel();
     let writer = Arc::clone(inner);
     let writing = async move {
-        let storing = writer.tasks.storing();
         let outcome = unwinding(store(&*writer.store, request))
             .await
             .unwrap_or_else(|_panic| Outcome::Failed(panicked()));
@@ -345,16 +336,15 @@ pub(super) fn write<S: ConversationStore>(
             log_left_failed(error);
         }
         ended.send_replace(Some(outcome));
-        drop(storing);
         let Err(_went_on) = run_going_on.await;
     };
-    // A write is spawned whatever the kit's state, but once sealed for
-    // work the close spared.
+    // Refused once the close's grace ran out, but for work the close
+    // spared, and once the kit is sealed.
     let spawned = inner.tasks.spawn(Kind::Write, writing).is_some();
     let mut read = written.clone();
     let call = async move {
         if !spawned {
-            return Outcome::Failed(ErrorRecord::new(SHUT_DOWN, "the kit is shut down"));
+            return Outcome::Failed(cut_by_close());
         }
         outcome_of(&mut read).await
     };
@@ -362,8 +352,19 @@ pub(super) fn write<S: ConversationStore>(
 }
 
 /// Logs `error`, a write's that failed once its caller was gone, as
-/// Python's `run_to_its_end` logs it: nobody else learns of it.
+/// Python's `run_to_its_end` logs it: nobody else learns of it. One the
+/// kit's close caused, a write it refused, is expected, and noted at debug
+/// (RFC §12.10.4).
 pub(super) fn log_left_failed(error: &ErrorRecord) {
+    if error.error_type == KIT_CLOSED {
+        tracing::debug!(
+            target: "roomkit::driver",
+            error_type = %error.error_type,
+            message = %error.message,
+            "the writes a gone caller left ended as the kit closed"
+        );
+        return;
+    }
     tracing::error!(
         target: "roomkit::driver",
         error_type = %error.error_type,
@@ -418,16 +419,9 @@ pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notic
                 };
                 let observing =
                     in_its_work(trigger, &event.room_id, after_delivery.as_ref(), observing);
-                // The observers a delivery fires are its cascade's work,
-                // drained and cut with it, as the Python implementation's
-                // lane runs them; the others run after the fact. Nothing
-                // waits for either: a close one calls spares it alone.
-                let kind = if trigger == HookTrigger::AfterBroadcast {
-                    Kind::Work
-                } else {
-                    Kind::Observer
-                };
-                if inner.tasks.spawn_alone(kind, observing).is_none() {
+                // Nothing waits for an observer: a close one calls spares it
+                // alone; the kit's close gives it its grace, then cuts it.
+                if inner.tasks.spawn_alone(Kind::Observer, observing).is_none() {
                     tracing::debug!(
                         target: "roomkit::hooks",
                         ?trigger,
@@ -484,6 +478,10 @@ async fn run_observers<S: ConversationStore>(
     }
     while let Some(joined) = observers.join_next().await {
         if let Err(failure) = joined {
+            if inner.tasks.is_closing() && failure.is_cancelled() {
+                tracing::debug!(target: "roomkit::hooks", ?trigger, "an awaited observer hook was cut as the kit closed");
+                continue;
+            }
             tracing::warn!(
                 target: "roomkit::hooks",
                 ?trigger,

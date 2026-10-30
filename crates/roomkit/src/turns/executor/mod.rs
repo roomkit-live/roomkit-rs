@@ -86,6 +86,10 @@ enum Cut {
     Closed,
     /// The owner is lost, or its link broke: nothing more is sent.
     Lost(TurnError),
+    /// The owner cancelled the turn a `close()` of the kit is called from
+    /// inside: the owner was told the turn ended, and the work ran on to
+    /// its end, nothing more sent (RFC §12.10.4).
+    LetGo,
 }
 
 impl Executor {
@@ -197,12 +201,16 @@ impl Executor {
                 control = controls.get() => {
                     beat.heard();
                     match control {
-                        Ok((_, control)) => {
-                            if let Some(cutting) = apply(control, flow, link) {
+                        Ok((_, control)) => match apply(control, flow, link) {
+                            Some(Cut::Cancelled(_)) if self.kit.acting() => {
+                                return Some(self.let_go(work.take(), flow, link).await);
+                            }
+                            Some(cutting) => {
                                 work = None;
                                 cut = Some(cutting);
                             }
-                        }
+                            None => {}
+                        },
                         Err(failure) => return Some(Cut::Lost(lost(&failure))),
                     }
                 }
@@ -223,12 +231,42 @@ impl Executor {
         }
     }
 
+    /// Lets the owner go, the turn a `close()` of the kit is called from
+    /// inside cut (RFC §12.10.4): the owner is told at once the turn ended,
+    /// and hears nothing more of it, nor is its silence counted; the work
+    /// runs on, the call awaiting the close with it, its stream closed
+    /// after the read under way, which nobody pulls any more. Its verbs
+    /// cross outside the turn from now on, which the closing kit refuses.
+    async fn let_go(
+        &self,
+        work: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+        flow: &Flow,
+        link: &HostLink,
+    ) -> Cut {
+        drop(self.send(&Frame::End));
+        self.sender.silence();
+        link.close();
+        lock(&flow.gate).close();
+        flow.wake.notify_one();
+        if let Some(work) = work {
+            work.await;
+        }
+        Cut::LetGo
+    }
+
     /// Ends the turn as `cut` leaves it: the calls it cut reported, the
     /// verbs it asked and that wait still failed, then its end, unless its
     /// owner is lost. No verb waits for an answer once the turn is over.
     fn end(&self, cut: Option<Cut>, host: &TurnHost, link: &HostLink) {
         link.close();
         match cut {
+            Some(Cut::LetGo) => {
+                link.fail_all(&TurnError::new(
+                    "backend_closed",
+                    "the turn's owner let it go as the kit closed",
+                ));
+                return;
+            }
             None | Some(Cut::Closed) => {
                 link.fail_all(&TurnError::new(
                     "cancelled",

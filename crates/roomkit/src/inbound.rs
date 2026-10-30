@@ -52,10 +52,10 @@ pub struct InboundResult {
     /// decided stands (RFC §13.6).
     pub error: Option<ErrorRecord>,
     /// Why the call's delivery was cancelled, the event it committed
-    /// standing: `kit_closed` for a delivery the kit's close dropped before
-    /// it ran, `lane_cancelled` for one it cut running, as the Python
-    /// implementation's `cancellation_reason` reads; `None` for a delivery
-    /// that ran.
+    /// standing: `kit_closed` for a call the kit's close cut, its delivery
+    /// dropped or cut running, or under way as the close started (RFC
+    /// §12.10.4), as the Python implementation's `cancellation_reason`
+    /// reads; `None` for a delivery that ran.
     pub cancellation_reason: Option<String>,
     /// The merged response metadata of the turns the message asked for.
     pub response_metadata: Metadata,
@@ -291,7 +291,7 @@ impl Shared {
                 };
                 let joined = running.await;
                 *run = None;
-                match driver::ended(joined, record, &self.tasks).await {
+                match driver::ended(joined, record, &self.tasks) {
                     Ok(Ok(result)) => Ended::Over(Box::new(result)),
                     Ok(Err(error)) => Ended::Failed(std::sync::Mutex::new(Some(error.into()))),
                     Err(error) => Ended::Failed(std::sync::Mutex::new(Some(error))),
@@ -310,7 +310,7 @@ impl Shared {
                 // abort: the answers its cascade stored, as Python's caller
                 // reads its cascade's.
                 if !told {
-                    result.response_events = completion.answers.stored().await;
+                    result.response_events = completion.answers.stored();
                 }
                 Ended::Over(Box::new(result))
             }
