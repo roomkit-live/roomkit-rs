@@ -395,3 +395,49 @@ mod linked_directories {
         );
     }
 }
+
+/// RFC §24.3: narrowing a registry keeps the loaded content and paths.
+#[test]
+fn a_copy_limits_availability_without_rereading_or_mutating_the_source() {
+    let root = TempDir::new();
+    root.skill("skills", "alpha", "First");
+    root.skill("skills", "beta", "Second");
+    let mut source = SkillRegistry::new();
+    source.discover(&[root.path().join("skills")]).unwrap();
+    let copy = source.copy(Some(&["beta".into(), "missing".into()]));
+    assert_eq!(copy.len(), 1);
+    assert_eq!(copy.get("beta"), source.get("beta"));
+    assert_eq!(source.len(), 2);
+    assert_eq!(source.copy(None), source);
+    assert_eq!(copy.tool_definitions().len(), 2);
+    assert_eq!(
+        source.copy(Some(&[])).tool_definitions(),
+        Vec::<roomkit_ai::ToolDefinition>::new()
+    );
+}
+
+#[test]
+fn foreign_permission_and_invocation_policies_are_not_silently_ignored() {
+    for field in [
+        "allowed-tools",
+        "disable-model-invocation",
+        "user-invocable",
+        "context",
+        "agent",
+    ] {
+        let root = TempDir::new();
+        root.skill_with(
+            "skills",
+            "restricted",
+            &skill_md(
+                "restricted",
+                "A restricted skill",
+                &format!("{field}: true\n"),
+            ),
+        );
+        let error = SkillRegistry::new()
+            .discover(&[root.path().join("skills")])
+            .unwrap_err();
+        assert!(error.to_string().contains(field));
+    }
+}

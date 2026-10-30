@@ -83,7 +83,7 @@ fn the_last_of_a_key_given_twice_holds() {
 fn another_key_s_value_is_left_unread() {
     let frontmatter = "description: x\nmetadata:\n  author: acme\n  version: \"1.0\"\n\
                        tags: [a, b]\nnotes: |\n  anything: at all\n  - here\n\
-                       allowed-tools: Bash(git:*)\nbroken: [\nitems:\n- one";
+                       custom-field: Bash(git:*)\nbroken: [\nitems:\n- one";
     assert_eq!(description(frontmatter), Ok(Some("x".to_owned())));
 }
 

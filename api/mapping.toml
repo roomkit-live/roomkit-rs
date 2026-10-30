@@ -483,7 +483,7 @@ reason = "not in 0.x: skill gating, references and scripts, skills served by MCP
 [[missing]]
 python = "roomkit.SkillRegistry"
 members = [
-    "add", "add_mcp_server", "closed_tool_names", "copy",
+    "add", "add_mcp_server", "closed_tool_names",
     "execution_tool_patterns", "gated_tool_names", "get_unavailable_reason",
     "has_served", "is_served", "listed_names", "load_skill",
     "mark_unavailable", "mark_unlisted", "origin", "read_file",
@@ -529,7 +529,7 @@ python = "roomkit.providers.ai.AIProvider"
 members = [
     "available_models", "catalog_entry", "context_window", "list_models",
     "supports_deferred_tools", "supports_response_schema",
-    "supports_response_schema_with_tools", "supports_vision",
+    "supports_response_schema_with_tools",
 ]
 reason = "not in 0.x: the model catalogue, vision and response schemas"
 
@@ -1979,3 +1979,42 @@ reason = "lot 5 decides: mirror SQLiteStore.search_events, or list it [[missing]
 rust = "roomkit::DeliveryHandle::request_cancel"
 approved = "2026-10-30"
 reason = "Explicit nonblocking request followed by wait for joined cleanup; RFC 10.1 permits scoped detached cancellation (architecture: Explicit cancellation of a detached call)"
+
+[[exception]]
+rust = "roomkit_ai::SkillRegistry"
+members = ["tool_definitions"]
+approved = "2026-10-30"
+reason = "Expose the exact built-in schemas for host inventories (architecture: Host skill selection)"
+
+[[exception]]
+rust = "roomkit_ai::SkillRegistry::copy"
+params = ["names"]
+approved = "2026-10-30"
+reason = "An explicit None selects all skills; Rust has no optional call arguments"
+
+[[missing]]
+python = "roomkit.SkillRegistry.copy"
+params = ["marks"]
+reason = "Skill availability marks are not implemented in the Rust registry yet"
+
+[[exception]]
+rust = "roomkit::transcript::Image"
+approved = "2026-10-30"
+reason = "Typed native author image input (architecture: Author images)"
+
+[[exception]]
+rust = "roomkit_ai::ImageResolver"
+approved = "2026-10-30"
+reason = "Async host-owned room-scoped image resolution (architecture: Author images)"
+
+[[exception]]
+rust = "roomkit_ai::AiProvider"
+members = ["model"]
+approved = "2026-10-30"
+reason = "Optional current model identity supplied with native author image support"
+
+[[exception]]
+rust = "roomkit_openai::OpenAiConfig"
+members = ["with_vision"]
+approved = "2026-10-30"
+reason = "Explicit native author image capability (architecture: Author images)"

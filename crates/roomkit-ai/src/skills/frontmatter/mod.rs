@@ -38,7 +38,7 @@ const FLOW_DEPTH_MAX: usize = 64;
 
 /// The keys that gate or require tools (RFC §24.2), which no skill of this
 /// implementation may declare.
-const GATING_KEYS: [&str; 2] = ["allowed_tools", "requires"];
+const GATING_KEYS: [&str; 3] = ["allowed_tools", "allowed-tools", "requires"];
 
 /// The fields the registry reads, in the order of [`Fields`].
 const FIELDS: [&str; 4] = ["name", "description", "license", "compatibility"];
@@ -297,6 +297,14 @@ impl Reader {
             ));
         }
         let value = value.trim();
+        if matches!(
+            key,
+            "disable-model-invocation" | "user-invocable" | "context" | "agent"
+        ) {
+            return Err(format!(
+                "the frontmatter declares unsupported invocation policy: {key}"
+            ));
+        }
         if value.starts_with(['&', '!']) {
             return Err(format!(
                 "the frontmatter's {key} holds an anchor or a tag, which a line-by-line \
