@@ -84,6 +84,9 @@ kit, its construction and its calls; lot 2: the model and the errors).
   and `is_block` go. A block without a reason is refused when read, and
   one built by literal reads as a hook that raised Python's `ValueError`,
   as a modify without its event does.
+- `InvalidCountryCode`'s tuple field is private, as Python's `ValueError`
+  holds none: code that read the refused value through `.0` reads it in
+  the error's message instead.
 - `RoomKitError::ReentrantCall` and `AddressLinked` carry the values
   Python's messages name, and read as Python's: `ReentrantCall { room_id }`
   ("A message routed into room ... cannot be adopted: name the room to
