@@ -10,10 +10,14 @@ pub(super) enum Folding {
 }
 
 impl Folding {
-    pub(super) fn new(api: OpenAiApi) -> Self {
+    pub(super) fn new(api: OpenAiApi, namespace: Option<&str>) -> Self {
         match api {
             OpenAiApi::ChatCompletions => Self::Chat(wire::Folding::default()),
-            OpenAiApi::Responses => Self::Responses(responses::Folding::default()),
+            OpenAiApi::Responses => {
+                let mut folding = responses::Folding::default();
+                folding.namespace = namespace.map(str::to_owned);
+                Self::Responses(folding)
+            }
         }
     }
 

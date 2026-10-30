@@ -8,6 +8,7 @@
     reason = "a test fails on a broken fixture"
 )]
 
+mod credentials;
 mod fake;
 mod responses;
 

@@ -38,6 +38,7 @@ pub(crate) fn answer<'a>(
         request,
         phase: Phase::Asking,
         ready: VecDeque::new(),
+        secret: String::new(),
     };
     Box::pin(Answer {
         step: Some(Box::pin(reading.next())),
@@ -82,6 +83,8 @@ struct Reading<'a> {
     phase: Phase,
     /// The events read and not handed yet, in order.
     ready: VecDeque<ProviderEvent>,
+    /// Credential used for this response, independent of concurrent refreshes.
+    secret: String,
 }
 
 /// A streamed answer being read: its body, its events, its completion as
@@ -125,19 +128,22 @@ impl<'a> Reading<'a> {
     /// Sends the request: a streamed answer is read as it arrives, a whole
     /// completion read whole.
     async fn ask(&mut self) -> Result<(), OpenAiError> {
-        let response = self.provider.ask(self.request).await?;
+        let (response, secret) = self.provider.ask(self.request).await?;
+        self.secret = secret;
         if !is_json(&response) {
             self.phase = Phase::Streaming(Box::new(Streamed {
                 response,
                 events: Events::new(ANSWER_LIMIT),
-                folding: Folding::new(self.provider.api()),
+                folding: Folding::new(self.provider.api(), self.provider.namespace()),
             }));
             return Ok(());
         }
         let body = read_body(response).await?;
         let whole = match self.provider.api() {
-            OpenAiApi::ChatCompletions => wire::response(&body, self.provider.secret())?,
-            OpenAiApi::Responses => crate::responses::body(&body, self.provider.secret())?,
+            OpenAiApi::ChatCompletions => wire::response(&body, &self.secret)?,
+            OpenAiApi::Responses => {
+                crate::responses::body(&body, &self.secret, self.provider.namespace())?
+            }
         };
         if !whole.text.is_empty() {
             self.ready.push_back(ProviderEvent::Text(whole.text));
@@ -156,7 +162,7 @@ impl<'a> Reading<'a> {
             mut events,
             mut folding,
         } = streamed;
-        let secret = self.provider.secret();
+        let secret = &self.secret;
         loop {
             let Some(chunk) = response.chunk().await.map_err(OpenAiError::request)? else {
                 if let Some(data) = events.finish()?

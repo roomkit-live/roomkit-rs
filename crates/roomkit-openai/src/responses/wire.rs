@@ -31,6 +31,30 @@ pub(crate) fn request(config: &OpenAiConfig, request: &AiRequest) -> Result<Valu
             })
         })
         .collect();
+    let tools = if let Some((namespace, description)) = &config.tool_namespace {
+        if namespace.is_empty()
+            || namespace.len() > 64
+            || !namespace
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(malformed("invalid Responses tool namespace"));
+        }
+        for item in &mut input {
+            if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                item["namespace"] = namespace.clone().into();
+            }
+        }
+        if tools.is_empty() {
+            Vec::new()
+        } else {
+            vec![
+                json!({"type":"namespace", "name":namespace, "description":description, "tools":tools}),
+            ]
+        }
+    } else {
+        tools
+    };
     let mut body = json!({ "model": config.model, "input": input, "stream": true, "store": false,
         "include": ["reasoning.encrypted_content"], "tools": tools });
     if let Some(fields) = body.as_object_mut() {
@@ -73,8 +97,13 @@ pub(super) fn failed(value: &Value, secret: &str) -> OpenAiError {
     }
 }
 
-pub(crate) fn body(body: &[u8], secret: &str) -> Result<ProviderResponse, OpenAiError> {
+pub(crate) fn body(
+    body: &[u8],
+    secret: &str,
+    namespace: Option<&str>,
+) -> Result<ProviderResponse, OpenAiError> {
     let value = serde_json::from_slice(body).map_err(|_| malformed("invalid Responses JSON"))?;
+    validate_namespace(&value, namespace)?;
     response(&value, secret)
 }
 
@@ -200,4 +229,23 @@ fn usage(value: Option<&Value>) -> Metadata {
         counted.insert("reasoning_tokens".into(), reasoning.into());
     }
     counted
+}
+
+/// Namespace mismatches fail before a terminal snapshot releases any calls.
+pub(super) fn validate_namespace(value: &Value, expected: Option<&str>) -> Result<(), OpenAiError> {
+    if let Some(items) = value.get("output").and_then(Value::as_array) {
+        for item in items {
+            if item.get("type").and_then(Value::as_str) == Some("function_call")
+                && (item
+                    .get("namespace")
+                    .is_some_and(|v| !v.is_null() && !v.is_string())
+                    || item.get("namespace").and_then(Value::as_str) != expected)
+            {
+                return Err(malformed(
+                    "Responses function call has an unexpected namespace",
+                ));
+            }
+        }
+    }
+    Ok(())
 }

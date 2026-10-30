@@ -229,14 +229,23 @@ impl OpenAiProvider {
         self.config.api
     }
 
-    /// The API key, which no error repeats.
-    pub(crate) fn secret(&self) -> &str {
-        &self.config.api_key
+    pub(crate) fn namespace(&self) -> Option<&str> {
+        self.config
+            .tool_namespace
+            .as_ref()
+            .map(|(name, _)| name.as_str())
     }
 
     /// The answer to `request`, once its head says it succeeded: an error
     /// answer's body is read, bounded, into its error.
-    pub(crate) async fn ask(&self, request: &AiRequest) -> Result<reqwest::Response, OpenAiError> {
+    pub(crate) async fn ask(
+        &self,
+        request: &AiRequest,
+    ) -> Result<(reqwest::Response, String), OpenAiError> {
+        let secret = match &self.config.token_source {
+            Some(source) => source.token().await?,
+            None => self.config.api_key.clone(),
+        };
         let body = match self.config.api {
             OpenAiApi::ChatCompletions => {
                 let mut value =
@@ -254,16 +263,16 @@ impl OpenAiProvider {
             OpenAiApi::Responses => crate::responses::request(&self.config, request)?,
         };
         let mut call = self.client.post(self.endpoint.clone()).json(&body);
-        if !self.config.api_key.is_empty() {
-            call = call.bearer_auth(&self.config.api_key);
+        if !secret.is_empty() {
+            call = call.bearer_auth(&secret);
         }
         let response = call.send().await.map_err(OpenAiError::request)?;
         let status = response.status();
         if !status.is_success() {
             let body = read_body(response).await?;
-            return Err(wire::status_error(status, &body, &self.config.api_key));
+            return Err(wire::status_error(status, &body, &secret));
         }
-        Ok(response)
+        Ok((response, secret))
     }
 }
 

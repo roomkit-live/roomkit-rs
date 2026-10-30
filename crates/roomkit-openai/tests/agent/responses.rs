@@ -367,3 +367,85 @@ async fn an_eof_after_a_terminal_event_without_its_separator_still_completes() {
     );
     assert_eq!(room.sms.texts(), ["Yes."]);
 }
+
+#[tokio::test]
+async fn namespaced_tools_round_trip_with_fresh_credentials_and_history() {
+    use roomkit_openai::{TokenFuture, TokenSource};
+    struct Credentials(AtomicUsize);
+    impl TokenSource for Credentials {
+        fn token(&self) -> TokenFuture<'_> {
+            let round = self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Ok(format!("round-{round}")) })
+        }
+    }
+    let mut item = call("one", r#"{"order":"bread"}"#);
+    item["namespace"] = "functions".into();
+    let count = Arc::new(AtomicUsize::new(0));
+    let tools = lookup(&count);
+    let room = Room::built(
+        vec![
+            Reply::events(&[terminal(complete(vec![item]))]),
+            answer("Ready"),
+            answer("Again"),
+        ],
+        "unused-static",
+        |config| {
+            config
+                .with_api(OpenAiApi::Responses)
+                .with_tool_namespace("functions", "Available tools")
+                .with_token_source(Arc::new(Credentials(AtomicUsize::new(0))))
+        },
+        |agent| agent.with_tools(tools).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        room.says(&room.sms, "alice", "Alice", "First").await.error,
+        None
+    );
+    assert_eq!(
+        room.says(&room.sms, "alice", "Alice", "Second").await.error,
+        None
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    let requests = room.fake.requests();
+    for (round, request) in requests.iter().enumerate() {
+        assert_eq!(
+            request.authorization.as_deref(),
+            Some(format!("Bearer round-{round}").as_str())
+        );
+        assert_eq!(request.body["tools"][0]["type"], "namespace");
+        assert_eq!(request.body["tools"][0]["name"], "functions");
+        assert_eq!(request.body["tools"][0]["tools"][0]["name"], "lookup");
+        for item in request.body["input"].as_array().unwrap() {
+            if item["type"] == "function_call" {
+                assert_eq!(item["namespace"], "functions");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_call_in_an_unknown_namespace_never_executes() {
+    let mut item = call("one", r#"{"order":"bread"}"#);
+    item["namespace"] = "unadvertised".into();
+    let count = Arc::new(AtomicUsize::new(0));
+    let tools = lookup(&count);
+    let room = Room::built(
+        vec![Reply::events(&[terminal(complete(vec![item]))])],
+        "",
+        |config| {
+            config
+                .with_api(OpenAiApi::Responses)
+                .with_tool_namespace("functions", "Available tools")
+        },
+        |agent| agent.with_tools(tools).unwrap(),
+    )
+    .await;
+    assert!(
+        room.says(&room.sms, "alice", "Alice", "First")
+            .await
+            .error
+            .is_some()
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+}

@@ -55,6 +55,7 @@
 
 mod agent;
 mod config;
+mod credentials;
 mod error;
 mod names;
 mod responses;
@@ -64,4 +65,5 @@ mod wire;
 
 pub use self::agent::OpenAiAgent;
 pub use self::config::{OpenAiApi, OpenAiConfig};
+pub use self::credentials::{TokenError, TokenFuture, TokenSource};
 pub use self::error::OpenAiError;

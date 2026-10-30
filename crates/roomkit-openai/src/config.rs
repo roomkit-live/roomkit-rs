@@ -41,8 +41,10 @@ impl OpenAiApi {
 pub struct OpenAiConfig {
     pub(crate) base_url: String,
     pub(crate) api_key: String,
+    pub(crate) token_source: Option<std::sync::Arc<dyn crate::TokenSource>>,
     pub(crate) model: String,
     pub(crate) api: OpenAiApi,
+    pub(crate) tool_namespace: Option<(String, String)>,
     pub(crate) reasoning_effort: Option<String>,
     pub(crate) system_prompt: Option<String>,
     pub(crate) history: usize,
@@ -66,13 +68,25 @@ impl OpenAiConfig {
         Self {
             base_url: base_url.into(),
             api_key: api_key.into(),
+            token_source: None,
             model: model.into(),
             api: OpenAiApi::default(),
             reasoning_effort: None,
+            tool_namespace: None,
             system_prompt: None,
             history: DEFAULT_HISTORY,
             timeout: DEFAULT_TIMEOUT,
         }
+    }
+
+    /// Resolve credentials through a host-owned source before every generation.
+    /// This replaces the static API key, which is cleared. The source owns
+    /// refresh, account selection and storage; its Debug is never called here.
+    #[must_use]
+    pub fn with_token_source(mut self, source: std::sync::Arc<dyn crate::TokenSource>) -> Self {
+        self.api_key.clear();
+        self.token_source = Some(source);
+        self
     }
 
     /// Select Chat Completions or Responses, keeping the same API root and
@@ -80,6 +94,19 @@ impl OpenAiConfig {
     #[must_use]
     pub fn with_api(mut self, api: OpenAiApi) -> Self {
         self.api = api;
+        self
+    }
+
+    /// Group Responses function tools under one namespace. Required by some
+    /// account-based routes; Chat Completions ignores this setting. Names use
+    /// ASCII letters, digits, underscores or hyphens (1–64 characters).
+    #[must_use]
+    pub fn with_tool_namespace(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        self.tool_namespace = Some((name.into(), description.into()));
         self
     }
 
@@ -133,7 +160,9 @@ impl OpenAiConfig {
 
 impl fmt::Debug for OpenAiConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let api_key = if self.api_key.is_empty() {
+        let api_key = if self.token_source.is_some() {
+            "dynamic"
+        } else if self.api_key.is_empty() {
             "none"
         } else {
             "hidden"
@@ -143,6 +172,7 @@ impl fmt::Debug for OpenAiConfig {
             .field("api_key", &api_key)
             .field("model", &self.model)
             .field("api", &self.api)
+            .field("tool_namespace", &self.tool_namespace)
             .field("reasoning_effort", &self.reasoning_effort)
             .field("system_prompt", &self.system_prompt)
             .field("history", &self.history)

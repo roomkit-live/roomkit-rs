@@ -12,6 +12,9 @@ use std::error::Error;
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum OpenAiError {
+    /// The host could not provide an authorized bearer credential.
+    #[error("{0}")]
+    Credential(#[from] crate::TokenError),
     /// The base URL is refused: it is no `http` or `https` URL once
     /// the selected API path follows it, or it holds a query or a fragment,
     /// which the path would follow instead of the URL's path (Azure's

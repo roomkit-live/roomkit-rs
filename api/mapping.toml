@@ -129,13 +129,29 @@ reason = "Python's **kwargs, which go to the binding's fields (the architecture 
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
 [[exception]]
+rust = "roomkit_openai::TokenSource"
+approved = "2026-10-30"
+reason = "Rust host credential source for reusable authentication; Python integration is a separate follow-up (architecture: Renewable provider credentials)"
+
+[[exception]]
+rust = "roomkit_openai::TokenFuture"
+approved = "2026-10-30"
+reason = "Rust host credential source for reusable authentication; Python integration is a separate follow-up (architecture: Renewable provider credentials)"
+
+[[exception]]
+rust = "roomkit_openai::TokenError"
+approved = "2026-10-30"
+reason = "Rust host credential source for reusable authentication; Python integration is a separate follow-up (architecture: Renewable provider credentials)"
+
+
+[[exception]]
 rust = "roomkit_openai::OpenAiApi"
 approved = "2026-10-30"
 reason = "Responses requested in Rust first; its Python counterpart is a separate follow-up (architecture: Responses support)"
 
 [[exception]]
 rust = "roomkit_openai::OpenAiConfig"
-members = ["with_api"]
+members = ["with_api", "with_token_source", "with_tool_namespace"]
 approved = "2026-10-30"
 reason = "Responses requested in Rust first; its Python configuration is a separate follow-up (architecture: Responses support)"
 

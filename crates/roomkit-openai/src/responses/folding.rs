@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 #[derive(Default)]
 pub(crate) struct Folding {
     text: String,
+    pub(crate) namespace: Option<String>,
 }
 
 impl Folding {
@@ -47,6 +48,7 @@ impl Folding {
                         "Responses terminal event and status disagree",
                     ));
                 }
+                wire::validate_namespace(response, self.namespace.as_deref())?;
                 let whole = wire::response(response, secret)?;
                 let suffix = whole.text.strip_prefix(self.text.as_str()).ok_or_else(|| {
                     wire::malformed("Responses terminal text differs from its streamed text")

@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Resolve renewable OpenAI bearer credentials before each generation through a
+  host-owned token source, with safe account errors. Responses can group tools
+  under a namespace and rejects calls outside the configured namespace.
+
 The public API in the Python implementation's terms (step 5, lot 1: the
 kit, its construction and its calls; lot 2: the model and the errors).
 
