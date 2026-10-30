@@ -21,7 +21,6 @@
 
 use std::collections::BTreeMap;
 
-use super::pass::Observed;
 use super::queues::Lineage;
 use super::stamp;
 use crate::model::{
@@ -180,9 +179,6 @@ pub(super) struct DeliverySet {
     /// Whether its turns are cut: it asks no agent, and the turns it asked
     /// are given up on (RFC §10.1 "Explicit delivery cancellation").
     turns_cut: bool,
-    /// The ASYNC hooks of `BEFORE_BROADCAST` its event's pass handed it,
-    /// fired once the lane answers its place.
-    observed: Option<Box<Observed>>,
 }
 
 impl DeliverySet {
@@ -219,15 +215,7 @@ impl DeliverySet {
             outcome,
             lineage,
             turns_cut: false,
-            observed: None,
         }
-    }
-
-    /// The same set, firing `observed` once the lane answers its place.
-    #[must_use]
-    pub(super) fn observed_by(mut self, observed: Option<Box<Observed>>) -> Self {
-        self.observed = observed;
-        self
     }
 
     /// Whose cascade the set belongs to.
@@ -398,12 +386,6 @@ impl DeliverySet {
     /// delivers nothing, its cascade cancelled [`KIT_CLOSED`], and leaves
     /// its place (RFC §12.10.4).
     fn on_turn(&mut self, cx: &mut Cx<'_>, outcome: Outcome) -> Progress<SetOutcome> {
-        // The lane answered the set's place: its event's observers run now,
-        // whatever it answered, so that one closing the kit finds the set
-        // delivering (RFC §9.3, §12.10.4).
-        if let Some(observed) = self.observed.take() {
-            observed.fire(cx);
-        }
         if outcome == Outcome::Hold(HoldOutcome::LaneClosed) {
             self.outcome.cancelled = Some(KIT_CLOSED);
             self.place = Place::Turn;

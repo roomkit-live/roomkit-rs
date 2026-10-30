@@ -172,20 +172,17 @@ pub(super) struct PassReport {
     pub(super) placement: Placement,
     /// Whose cascade the pass belongs to.
     pub(super) lineage: Lineage,
-    /// The ASYNC hooks of `BEFORE_BROADCAST` to fire once the lane answers
-    /// the delivered event's place: its delivery set's.
-    pub(super) observed: Option<Box<Observed>>,
 }
 
 /// The ASYNC hooks of `BEFORE_BROADCAST` observing the event its chain
-/// allowed, as the SYNC hooks left it (RFC §9.2, §9.3), fired once its
-/// delivery set's place in the room's lane is answered, its turn or the
-/// lane closed (RFC §12.10.4), or once the pass is over when the event
-/// takes no such place: an observer that closes the kit finds the set
-/// placed, delivering within the close's grace, as the Python
+/// allowed, as the SYNC hooks left it (RFC §9.2, §9.3), fired once the pass
+/// is over, its event's place in the room's lane taken: running when the
+/// lane was idle, queued behind the sets ahead otherwise, as the Python
 /// implementation's observers, fired at the chain's end, first run once
-/// the set is in the lane, whatever the runtime's threads.
-#[derive(Clone, Debug, PartialEq)]
+/// the set is in the lane. An observer that closes the kit finds the set
+/// delivering, given the close's grace, or queued, dropped (RFC
+/// §12.10.4), whatever the runtime's threads.
+#[derive(Debug)]
 pub(super) struct Observed {
     payload: RoomEvent,
     context: RoomContext,
@@ -250,8 +247,7 @@ pub(super) struct CommitPass {
     /// lock is released (RFC §5.1 When).
     timer_hooks: TimerHooks,
     /// The ASYNC hooks of `BEFORE_BROADCAST` observing the event the chain
-    /// allowed, until the pass hands them to its event's delivery set, or
-    /// fires them.
+    /// allowed, until the pass is over.
     observed: Option<Box<Observed>>,
 }
 
@@ -509,7 +505,6 @@ impl CommitPass {
             release_error: self.release_error.take(),
             placement: self.placement,
             lineage: self.lineage,
-            observed: self.observed.take(),
         }))
     }
 
@@ -573,14 +568,11 @@ impl CommitPass {
     }
 
     /// Releases the room's lock before reporting `result` (RFC §10.1 step 13).
-    /// The ASYNC hooks of `BEFORE_BROADCAST` are handed to the delivery set
-    /// of an event that took its place in the room's lane, which fires them
-    /// once the lane answers that place ([`Observed`]); for any other end
-    /// of the pass, they fire now.
+    /// The ASYNC hooks of `BEFORE_BROADCAST` observe the event its chain
+    /// allowed then, once its place in the room's lane is taken
+    /// ([`Observed`]).
     fn release(&mut self, cx: &mut Cx<'_>, result: Result<PassResult, Abort>) -> State {
-        let placed = self.placement == Placement::Taken
-            && matches!(result, Ok(PassResult::Delivered { .. }));
-        if !placed && let Some(observed) = self.observed.take() {
+        if let Some(observed) = self.observed.take() {
             observed.fire(cx);
         }
         let effect = cx.io.issue(HoldRequest::ReleaseLock {

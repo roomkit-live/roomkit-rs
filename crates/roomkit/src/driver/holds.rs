@@ -34,7 +34,7 @@
 //! makes read live, and forgotten when the run is dropped, whatever ends
 //! it: its places and tickets are dropped with it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -110,6 +110,10 @@ pub(super) struct Held<'kit> {
     leases: Leases,
     locks: HashMap<RoomId, LockHold<'kit>>,
     places: HashMap<(RoomId, EventId), Place<'kit>>,
+    /// The places taken first in their room's lane, the lane idle: their
+    /// sets run from their placement, which the kit's close does not drop
+    /// (RFC §12.10.4), until they leave.
+    running: HashSet<(RoomId, EventId)>,
     tickets: HashMap<RoomId, Ticket<'kit>>,
 }
 
@@ -120,8 +124,17 @@ impl<'kit> Held<'kit> {
             leases,
             locks: HashMap::new(),
             places: HashMap::new(),
+            running: HashSet::new(),
             tickets: HashMap::new(),
         }
+    }
+
+    /// Whether the set of `event_id` runs from its placement: its place was
+    /// taken first in `room_id`'s lane, the lane idle, as the Python
+    /// implementation's lane runs an entry it takes idle; a set placed
+    /// behind another is queued.
+    pub(super) fn runs(&self, room_id: &RoomId, event_id: &EventId) -> bool {
+        self.running.contains(&(room_id.clone(), event_id.clone()))
     }
 
     /// Carries out `request` for `effect`: a release, a place or a ticket at
@@ -145,14 +158,20 @@ impl<'kit> Held<'kit> {
             }
             HoldRequest::EnterLane { room_id, event_id } => {
                 let place = rooms.lanes.take(&room_id, event_id.clone());
-                self.places.insert((room_id, event_id), place);
+                let key = (room_id, event_id);
+                if rooms.lanes.is_first(&place) {
+                    self.running.insert(key.clone());
+                }
+                self.places.insert(key, place);
                 Hold::Now(HoldOutcome::Entered.into())
             }
             HoldRequest::AwaitLane { room_id, event_id } => {
                 self.await_place(rooms, effect, room_id, event_id, deadline)
             }
             HoldRequest::LeaveLane { room_id, event_id } => {
-                self.places.remove(&(room_id, event_id));
+                let key = (room_id, event_id);
+                self.running.remove(&key);
+                self.places.remove(&key);
                 Hold::Now(HoldOutcome::Left.into())
             }
             HoldRequest::TakeTicket { room_id } => {

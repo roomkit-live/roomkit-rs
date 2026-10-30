@@ -437,6 +437,10 @@ enum Wait {
     /// A place's turn in a room's delivery lane: a delivery queued, which
     /// the kit's close drops at once.
     Lane,
+    /// The turn of a place taken first in its room's lane, the lane idle:
+    /// a delivery that runs from its placement, which the close does not
+    /// drop (RFC §12.10.4).
+    Running,
     /// Anything else, a room's delivery cursor.
     Other,
 }
@@ -813,9 +817,11 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
 
     /// Carries out the hold `request` for `effect`, within `deadline`: at
     /// once, refused, or as a wait the run polls. Once the kit's close
-    /// started, a delivery set takes no place in a room's lane and waits
-    /// for no turn there: its delivery is dropped, as Python's sealed
-    /// lanes drop it; a call before its commit that would wait for its
+    /// started, a delivery set takes no place in a room's lane, and one
+    /// placed behind another waits for no turn there: its delivery is
+    /// dropped, as Python's sealed lanes drop what they queue; a set placed
+    /// first, the lane idle, runs from its placement and takes its turn
+    /// (`Held::runs`); a call before its commit that would wait for its
     /// room's lock or admission ticket is cut there, and one past it, once
     /// the close's grace ran out, has the wait fail (RFC §12.10.4).
     fn hold(
@@ -830,7 +836,12 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
             tickets: &self.inner.tickets,
         };
         let closing = self.inner.tasks.is_closing();
+        let runs = matches!(
+            &request,
+            HoldRequest::AwaitLane { room_id, event_id } if self.held.runs(room_id, event_id)
+        );
         if closing
+            && !runs
             && matches!(
                 request,
                 HoldRequest::EnterLane { .. } | HoldRequest::AwaitLane { .. }
@@ -840,6 +851,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         }
         let wait = match request {
             HoldRequest::AcquireLock { .. } | HoldRequest::AwaitTicket { .. } => Wait::Admission,
+            HoldRequest::AwaitLane { .. } if runs => Wait::Running,
             HoldRequest::AwaitLane { .. } => Wait::Lane,
             HoldRequest::ReleaseLock { .. }
             | HoldRequest::EnterLane { .. }

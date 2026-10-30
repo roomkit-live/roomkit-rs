@@ -547,10 +547,10 @@ fn delivered_every_time(runs: usize) -> std::collections::BTreeMap<String, usize
 }
 
 /// RFC §9.3, §12.10.4: an ASYNC `BEFORE_BROADCAST` observer that closes the
-/// kit finds its event's set delivering: its hooks fire once the lane
-/// answered the set's place, so the close gives the set its grace, as
-/// Python's (maintainer's decision R1, 2026-10-30), on a runtime of one
-/// thread.
+/// kit finds its event's set delivering: its hooks fire once the set took
+/// its place in the idle lane, running from it, so the close gives the set
+/// its grace, as Python's (maintainer's decision R1, 2026-10-30), on a
+/// runtime of one thread.
 #[tokio::test(start_paused = true)]
 async fn an_observer_closing_the_kit_finds_its_set_delivering() {
     let outcomes = observer_door_runs(OBSERVER_RUNS).await;
@@ -558,12 +558,148 @@ async fn an_observer_closing_the_kit_finds_its_set_delivering() {
 }
 
 /// The same on a runtime of threads, where the observer may run beside the
-/// set's run: it fires only once the lane answered the set's place, so the
-/// outcome never depends on the runtime. On e5973d6 the observer fired as
-/// the pass released its lock, before the set's turn, and its close
-/// dropped the set in some runs (`rmk1030-rs/pass1/observer_threads_before.out`).
+/// set's run: the set, placed first in the idle lane, runs from its
+/// placement, so the outcome never depends on the runtime. On e5973d6 the
+/// close dropped the set in some runs, its turn not yet taken
+/// (`rmk1030-rs/pass1/observer_threads_before.out`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_observer_closing_the_kit_finds_its_set_delivering_on_threads() {
     let outcomes = observer_door_runs(OBSERVER_RUNS).await;
     assert_eq!(outcomes, delivered_every_time(OBSERVER_RUNS));
+}
+
+/// What a call came to: its `cancellation_reason` and its delivery results'
+/// statuses.
+fn delivered_by(result: &roomkit::InboundResult) -> String {
+    let statuses: Vec<String> = result
+        .delivery_results
+        .iter()
+        .map(|(id, delivered)| format!("{}={:?}", id.as_str(), delivered.status))
+        .collect();
+    format!("{:?} {statuses:?}", result.cancellation_reason)
+}
+
+/// Two messages into `room_1`, "first"'s delivery held by its gate, an
+/// ASYNC `BEFORE_BROADCAST` observer noting each event it observes, and,
+/// when `closes`, closing the kit on "second": `runs` times, counted by
+/// outcome, whether "second"'s observer ran while "first" still delivered,
+/// what each call came to, what the witness received and what the room
+/// stores.
+async fn queued_observer_runs(
+    closes: bool,
+    runs: usize,
+) -> std::collections::BTreeMap<String, usize> {
+    let mut outcomes = std::collections::BTreeMap::new();
+    for _ in 0..runs {
+        let gate = Gate::default();
+        let witness = Witness::slow("first", Duration::from_millis(10)).gated(gate.clone());
+        let kit = kit_with(&witness).await;
+        let seen = Arc::new(tokio::sync::Notify::new());
+        let (weak, telling) = (kit.downgrade(), Arc::clone(&seen));
+        kit.observe(
+            "obs",
+            HookTrigger::BeforeBroadcast,
+            move |event, _context| {
+                let (weak, telling) = (weak.clone(), Arc::clone(&telling));
+                let second = roomkit::text_of(&event.content) == "second";
+                async move {
+                    if !second {
+                        return;
+                    }
+                    telling.notify_one();
+                    if closes && let Some(kit) = weak.upgrade() {
+                        drop(kit.close().await);
+                    }
+                }
+            },
+        )
+        .unwrap();
+        let first = spawn_message(&kit, "first", room_id());
+        tokio::time::timeout(BOUND, gate.began()).await.unwrap();
+        let second = spawn_message(&kit, "second", room_id());
+        let while_first = tokio::time::timeout(Duration::from_secs(2), seen.notified())
+            .await
+            .is_ok();
+        gate.go();
+        let first = tokio::time::timeout(BOUND, first)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let second = tokio::time::timeout(BOUND, second)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if closes {
+            tokio::time::timeout(BOUND, kit.close())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        roomkit::testing::idle(&kit).await;
+        let outcome = format!(
+            "{while_first} {} {} {:?} {:?}",
+            delivered_by(&first),
+            delivered_by(&second),
+            witness.delivered(),
+            stored(&kit).await
+        );
+        *outcomes.entry(outcome).or_insert(0) += 1;
+        if !closes {
+            kit.close().await.unwrap();
+        }
+    }
+    outcomes
+}
+
+/// The one outcome of the queued observer, as Python's
+/// (`rmk1030-rs/pass1/py_queued_observer.out`): "second"'s observer runs
+/// while "first" still delivers, its set queued behind; with no close both
+/// are delivered; when that observer closes the kit, "first" delivers
+/// within the grace, `kit_closed`, `sent`, and "second", queued, is
+/// dropped, `kit_closed` with no delivery result, both stored.
+fn as_python(closes: bool, runs: usize) -> std::collections::BTreeMap<String, usize> {
+    let (reason, second, delivered) = if closes {
+        (Some("kit_closed"), "[]", vec!["first"])
+    } else {
+        (None, "[\"witness=Sent\"]", vec!["first", "second"])
+    };
+    let outcome = format!(
+        "true {reason:?} [\"witness=Sent\"] {reason:?} {second} {delivered:?} {:?}",
+        ["first", "second"]
+    );
+    std::collections::BTreeMap::from([(outcome, runs)])
+}
+
+/// RFC §9.3, §12.10.4: a queued set's ASYNC `BEFORE_BROADCAST` observers
+/// run once its place is taken, while the set ahead still delivers, as
+/// Python's (maintainer's decision R1, 2026-10-30), on a runtime of one
+/// thread. On 31c3c26 they waited for the set's turn
+/// (`rmk1030-rs/pass1/queued_observer_before.out`).
+#[tokio::test(start_paused = true)]
+async fn a_queued_set_s_observer_runs_while_the_set_ahead_delivers() {
+    let outcomes = (
+        queued_observer_runs(false, OBSERVER_RUNS).await,
+        queued_observer_runs(true, OBSERVER_RUNS).await,
+    );
+    let expected = (
+        as_python(false, OBSERVER_RUNS),
+        as_python(true, OBSERVER_RUNS),
+    );
+    assert_eq!(outcomes, expected);
+}
+
+/// The same on a runtime of threads.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queued_set_s_observer_runs_while_the_set_ahead_delivers_on_threads() {
+    let outcomes = (
+        queued_observer_runs(false, OBSERVER_RUNS).await,
+        queued_observer_runs(true, OBSERVER_RUNS).await,
+    );
+    let expected = (
+        as_python(false, OBSERVER_RUNS),
+        as_python(true, OBSERVER_RUNS),
+    );
+    assert_eq!(outcomes, expected);
 }

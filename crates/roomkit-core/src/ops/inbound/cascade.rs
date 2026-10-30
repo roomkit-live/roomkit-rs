@@ -224,8 +224,7 @@ impl Machine {
             report.placement,
             budget,
             lineage,
-        )
-        .observed_by(report.observed);
+        );
         if self.cascade.turns_cut && lineage == Lineage::Call {
             set.cut();
         }

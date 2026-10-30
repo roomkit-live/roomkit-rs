@@ -109,7 +109,7 @@ impl<K: Clone + PartialEq> RoomQueues<K> {
     }
 
     /// Whether nothing of the room taken before `slot` is held.
-    fn is_first(&self, slot: &Slot<'_, K>) -> bool {
+    pub(crate) fn is_first(&self, slot: &Slot<'_, K>) -> bool {
         self.rooms()
             .get(&slot.room_id)
             .and_then(|queue| queue.held.front())

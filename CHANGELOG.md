@@ -328,13 +328,16 @@ kit, its construction and its calls; lot 2: the model and the errors).
   A run the close aborts before it read its commit back warns as a
   read-back that failed, where a message's or a `send_event`'s abort
   logged nothing.
-- The ASYNC hooks of `BEFORE_BROADCAST` observe an event once the room's
-  lane answered its delivery set's place, as Python's observers first run
-  once the set is in the lane: an observer that closes the kit finds the
-  set delivering, which the close gives its grace, its call reading
-  `kit_closed` with the target `sent`, on a runtime of one thread or of
-  several, where the close dropped the set. Outside a close the order is
-  the same.
+- The ASYNC hooks of `BEFORE_BROADCAST` observe an event once its pass is
+  over, its delivery set placed in the room's lane, as Python's observers
+  first run once the set is in the lane, and a set placed first, the lane
+  idle, runs from its placement, which the close no longer drops: an
+  observer that closes the kit finds its set delivering, given the
+  close's grace, its call reading `kit_closed` with the target `sent`,
+  where the close dropped the set, or, placed behind another, queued,
+  dropped, on a runtime of one thread or of several. A queued set's
+  observers run while the set ahead delivers, as Python's. Outside a
+  close the order is the same.
 - A turn a tool closes the kit from fails a sibling tool's verb waiting
   for its owner, `owner_lost`, as Python's `TurnLinkError` reads, where
   the verb waited for an answer nobody read, the executor outliving the
