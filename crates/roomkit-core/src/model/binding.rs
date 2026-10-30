@@ -292,13 +292,17 @@ mod tests {
             read,
             [
                 Err(
-                    "base_delay_seconds: Input should be greater than 0 [input_value=0]".to_owned()
+                    "base_delay_seconds: Input should be greater than 0 [input_value=0.0]"
+                        .to_owned()
                 ),
                 Err(
                     "exponential_base: Input should be greater than 0 [input_value=-1.5]"
                         .to_owned()
                 ),
-                Err("max_delay_seconds: Input should be greater than 0 [input_value=0]".to_owned()),
+                Err(
+                    "max_delay_seconds: Input should be greater than 0 [input_value=0.0]"
+                        .to_owned()
+                ),
             ]
         );
     }

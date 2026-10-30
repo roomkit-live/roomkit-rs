@@ -87,8 +87,10 @@ pub enum ModelError {
     NotPositive {
         /// The field.
         name: &'static str,
-        /// The refused value.
-        value: f64,
+        /// The refused value, as Python's `repr` writes it, which pydantic's
+        /// message shows: `0` for a count, `0.0`, `nan` or `inf` for a
+        /// number.
+        value: String,
     },
 
     /// A media URL is refused when its content is built (RFC §6.4): `reason`

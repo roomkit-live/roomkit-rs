@@ -779,8 +779,8 @@ async fn a_binding_value_its_model_refuses_is_refused_before_any_read() {
         ),
         (
             [
-                positive("max_per_minute", "-1"),
-                positive("base_delay_seconds", "0"),
+                positive("max_per_minute", "-1.0"),
+                positive("base_delay_seconds", "0.0"),
                 positive("max_length", "0"),
             ],
             1,

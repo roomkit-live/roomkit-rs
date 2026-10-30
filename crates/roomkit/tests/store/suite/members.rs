@@ -81,8 +81,8 @@ async fn a_binding_its_model_refuses_is_never_written() {
         (written, store.list_bindings(&room_id()).await),
         (
             vec![
-                refused("max_per_second", "0"),
-                refused("exponential_base", "NaN"),
+                refused("max_per_second", "0.0"),
+                refused("exponential_base", "nan"),
                 refused("max_buttons", "0"),
             ],
             Ok(Vec::new())

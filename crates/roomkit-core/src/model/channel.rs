@@ -477,9 +477,13 @@ mod tests {
             (
                 [
                     Err(
-                        "max_per_second: Input should be greater than 0 [input_value=0]".to_owned()
+                        "max_per_second: Input should be greater than 0 [input_value=0.0]"
+                            .to_owned()
                     ),
-                    Err("max_per_hour: Input should be greater than 0 [input_value=-1]".to_owned()),
+                    Err(
+                        "max_per_hour: Input should be greater than 0 [input_value=-1.0]"
+                            .to_owned()
+                    ),
                 ],
                 RateLimit {
                     max_per_hour: Some(60.0),
@@ -499,7 +503,7 @@ mod tests {
         };
         assert_eq!(
             limit.check().map_err(|error| error.to_string()),
-            Err("max_per_minute: Input should be greater than 0 [input_value=NaN]".to_owned())
+            Err("max_per_minute: Input should be greater than 0 [input_value=nan]".to_owned())
         );
     }
 
