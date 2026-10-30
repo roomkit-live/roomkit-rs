@@ -16,10 +16,10 @@ use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, CompositeContent, DeliveryError, DeliveryResultStatus, EditContent,
-    EventContent, EventDirection, EventId, EventSource, EventStatus, HookResult, InboundMessage,
-    InjectedEvent, MediaContent, RateLimit, RetryPolicy, RoomContext, RoomEvent, RoomId,
-    TextContent, Timestamp,
+    ChannelMediaType, ChannelOutput, ChannelType, CompositeContent, DeliveryError,
+    DeliveryResultStatus, EditContent, EventContent, EventDirection, EventId, EventSource,
+    EventStatus, HookResult, InboundMessage, InjectedEvent, MediaContent, RateLimit, RetryPolicy,
+    RoomContext, RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
     EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
@@ -820,9 +820,19 @@ fn media_url(content: &EventContent) -> Option<String> {
 /// A link's scheme a struct literal holds in capitals enters the room in
 /// lower case at each of the kit's calls, as Python's model writes it when
 /// built: what a `BEFORE_BROADCAST` hook reads of `process_inbound`'s
-/// message, and what `send_event`, `post` and `commit_event` return.
+/// message, and what `send_event`, `post` and `commit_event` return. So it
+/// does at every other door, what a transport is delivered telling: a
+/// channel's parse, a hook's replacement and the event it injects, an
+/// agent's answer (light review A, `door_rewrite_probe.rs`).
 #[tokio::test]
 async fn a_link_s_scheme_a_struct_literal_holds_enters_in_lower_case() {
+    let doors = ["shout", "modify", "inject", "answer"];
+    let mut delivered = Vec::new();
+    for door in doors {
+        delivered.push((door, delivered_through(door).await));
+    }
+    let lower = || Some("https://Example.com/a.png".to_owned());
+    assert_eq!(delivered, doors.map(|door| (door, vec![lower()])));
     let (kit, sms) = sms_and_agent().await;
     let (read, mut hook_read) = mpsc::unbounded_channel();
     kit.hook(
@@ -874,6 +884,145 @@ async fn a_link_s_scheme_a_struct_literal_holds_enters_in_lower_case() {
         ],
         [lower(), lower(), lower(), lower()]
     );
+}
+
+/// A transport whose parse writes the message `shout` as a media whose
+/// link's scheme is in capitals.
+struct ShoutingGate;
+
+impl Channel for ShoutingGate {
+    fn declaration(&self) -> ChannelDeclaration {
+        let mut declaration = ChannelDeclaration::new(
+            channel("gate"),
+            ChannelType::WEBSOCKET,
+            ChannelCategory::Transport,
+            ChannelDirection::Bidirectional,
+        );
+        declaration.recipient_key = None;
+        declaration
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        _context: RoomContext,
+        draft: EventDraft,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        let mut event = default_inbound_event(
+            &message,
+            &self.declaration(),
+            draft.room_id,
+            draft.id,
+            draft.now,
+        );
+        if text_of(&event.content) == "shout" {
+            event.content = shouting_media();
+        }
+        ready(Ok(event))
+    }
+}
+
+/// An agent answering the message `answer` with a media whose link's
+/// scheme is in capitals.
+struct ShoutingAgent;
+
+impl Channel for ShoutingAgent {
+    fn declaration(&self) -> ChannelDeclaration {
+        ChannelDeclaration::new(
+            channel("shouter"),
+            ChannelType::AI,
+            ChannelCategory::Intelligence,
+            ChannelDirection::Bidirectional,
+        )
+    }
+
+    fn on_event(
+        &self,
+        event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        let source = EventSource {
+            direction: EventDirection::Outbound,
+            ..EventSource::new(channel("shouter"), ChannelType::AI)
+        };
+        let answers = if text_of(&event.content) == "answer" {
+            vec![RoomEvent::new(event.room_id, source, shouting_media())]
+        } else {
+            Vec::new()
+        };
+        ready(Ok(ChannelOutput {
+            responded: !answers.is_empty(),
+            response_events: answers,
+            ..ChannelOutput::empty()
+        }))
+    }
+}
+
+/// The media URLs a transport carrying media is delivered once the
+/// message `text` came in on `gate`: a hook replaces `modify` with a media
+/// whose link's scheme is in capitals, and injects one beside `inject`.
+async fn delivered_through(text: &str) -> Vec<Option<String>> {
+    let kit = RoomKit::new(RoomKitOptions::default());
+    let audit = RecordingTransport::new(channel("audit"), ChannelType::WEBSOCKET)
+        .with_capabilities(ChannelCapabilities {
+            media_types: [ChannelMediaType::Text, ChannelMediaType::Media]
+                .into_iter()
+                .collect(),
+            supports_media: true,
+            ..ChannelCapabilities::default()
+        });
+    kit.register_channel(ShoutingGate).unwrap();
+    kit.register_channel(ShoutingAgent).unwrap();
+    kit.register_channel(audit.clone()).unwrap();
+    kit.create_room(CreateRoomOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    for id in ["gate", "shouter", "audit"] {
+        kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
+            .await
+            .unwrap();
+    }
+    let spec = HookSpec::new("shouter", HookTrigger::BeforeBroadcast, HookExecution::Sync);
+    kit.hook(spec, |mut event: RoomEvent, _context| {
+        let answer = match text_of(&event.content).as_str() {
+            "modify" => {
+                event.content = shouting_media();
+                HookResult::modify(event, ModifyOptions::default())
+            }
+            "inject" => {
+                let source = EventSource::new(channel("gate"), ChannelType::WEBSOCKET);
+                let injected = InjectedEvent {
+                    target_channel_ids: Some(vec![channel("audit")]),
+                    ..InjectedEvent::new(RoomEvent::new(event.room_id, source, shouting_media()))
+                };
+                HookResult::allow(AllowOptions {
+                    injected: Some(vec![injected]),
+                })
+            }
+            _ => HookResult::allow(AllowOptions::default()),
+        };
+        ready(Ok(answer))
+    })
+    .unwrap();
+    let message = InboundMessage::new(channel("gate"), "u1", TextContent::new(text));
+    let routed = ProcessInboundOptions {
+        room_id: Some(room_id()),
+        ..Default::default()
+    };
+    kit.process_inbound(message, routed).await.unwrap();
+    roomkit::testing::idle(&kit).await;
+    let delivered = audit
+        .deliveries()
+        .iter()
+        .filter_map(|delivery| media_url(&delivery.event.content))
+        .map(Some)
+        .collect();
+    kit.close().await.unwrap();
+    delivered
 }
 
 /// A SYNC hook that answers with a content its model refuses, the
