@@ -199,6 +199,10 @@ pub(super) struct CommitPass {
     /// The hooks of the timer transitions its gate applied, fired once the
     /// lock is released (RFC §5.1 When).
     timer_hooks: TimerHooks,
+    /// The event the chain allowed and the room its hooks were handed, which
+    /// the ASYNC hooks of `BEFORE_BROADCAST` observe once the pass is over,
+    /// its event's place in the room's lane taken (RFC §9.2, §9.3).
+    observed: Option<Box<(RoomEvent, RoomContext)>>,
 }
 
 /// What the hooks decided, which the pass applies once it has read the room
@@ -334,6 +338,7 @@ impl CommitPass {
             release_error: None,
             placement: Placement::Missing,
             timer_hooks: TimerHooks::default(),
+            observed: None,
         }
     }
 
@@ -517,7 +522,15 @@ impl CommitPass {
     }
 
     /// Releases the room's lock before reporting `result` (RFC §10.1 step 13).
+    /// The ASYNC hooks of `BEFORE_BROADCAST` observe the event its chain
+    /// allowed then, once its delivery set took its place in the room's
+    /// lane, as the Python implementation's observers, fired at the chain's
+    /// end, first run once the set is in the lane.
     fn release(&mut self, cx: &mut Cx<'_>, result: Result<PassResult, Abort>) -> State {
+        if let Some(observed) = self.observed.take() {
+            let (payload, context) = *observed;
+            Self::observe(cx, &payload, &context);
+        }
         let effect = cx.io.issue(HoldRequest::ReleaseLock {
             room_id: self.event.room_id.clone(),
         });

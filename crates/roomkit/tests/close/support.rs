@@ -382,13 +382,14 @@ impl Door {
         stored.iter().map(|text| (*text).to_owned()).collect()
     }
 
-    /// Whether the witness reads "Bye.": not when the commit refused it,
-    /// nor when the kit closed from an observer, which runs as the commit
-    /// is written, before the delivery set takes its place in the room's
-    /// lane, so that the close drops the set (Python's delivery had begun
-    /// when its observer closed the kit, `py_doors.out`).
+    /// Whether the witness reads "Bye.": not when the commit refused it.
+    /// An observer closing the kit runs once the delivery set took its
+    /// place in the room's lane, as Python's (`py_doors.out`,
+    /// `rmk1030-rs-review-B/py_probe.out` observer door), so its set
+    /// delivers within the close's grace; on 01c8420 it ran as the commit
+    /// was written and the close dropped the set.
     pub(crate) fn delivers(self) -> bool {
-        !matches!(self, Self::SyncHook | Self::Observer)
+        !matches!(self, Self::SyncHook)
     }
 }
 

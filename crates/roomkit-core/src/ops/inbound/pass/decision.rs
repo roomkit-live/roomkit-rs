@@ -89,8 +89,8 @@ impl CommitPass {
     }
 
     /// The chain is over: its side effects are kept, the hooks registered
-    /// ASYNC on the trigger observe the event it allowed, as the SYNC hooks
-    /// left it (RFC §9.2, §9.3), and the room is read again before its
+    /// ASYNC on the trigger will observe the event it allowed, as the SYNC
+    /// hooks left it, once the pass is over (RFC §9.2, §9.3), and the room is read again before its
     /// decision applies when a hook ran under the lock, `asked` (gap G-070);
     /// `context`, the room the hooks were handed, is as the gate read it
     /// otherwise.
@@ -111,7 +111,7 @@ impl CommitPass {
             ChainDecision::Allowed => None,
         };
         if blocked.is_none() {
-            Self::observe(cx, &payload, &context);
+            self.observed = Some(Box::new((payload.clone(), (*context).clone())));
         }
         let unchanged = (!asked).then_some(context);
         let verdict = Verdict { payload, blocked };
@@ -130,7 +130,7 @@ impl CommitPass {
     /// call a body makes into the room draws one of the cascade's hook
     /// calls, refused past them, as an `AFTER_BROADCAST` body's does, so an
     /// observer that posts on every event it observes stops at the cap.
-    fn observe(cx: &mut Cx<'_>, payload: &RoomEvent, context: &RoomContext) {
+    pub(super) fn observe(cx: &mut Cx<'_>, payload: &RoomEvent, context: &RoomContext) {
         let trigger = HookTrigger::BeforeBroadcast;
         // A pass always works for a cascade; none lent, the bodies are work
         // of their own.
