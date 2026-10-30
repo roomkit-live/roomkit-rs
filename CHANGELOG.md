@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- AI turn records expose last-generation usage, model identity and accounting
+  completeness separately from cumulative usage. Missing OpenAI token counts
+  remain unknown instead of becoming zero. (RMK-1029)
+
 The public API in the Python implementation's terms (step 5, lot 1: the
 kit, its construction and its calls).
 

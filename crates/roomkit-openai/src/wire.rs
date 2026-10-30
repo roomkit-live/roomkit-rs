@@ -205,10 +205,10 @@ struct AnswerFunction {
 /// What a completion used.
 #[derive(Debug, Deserialize)]
 struct Usage {
-    #[serde(default, deserialize_with = "nullable")]
-    prompt_tokens: i64,
-    #[serde(default, deserialize_with = "nullable")]
-    completion_tokens: i64,
+    #[serde(default)]
+    prompt_tokens: Option<u64>,
+    #[serde(default)]
+    completion_tokens: Option<u64>,
     #[serde(default)]
     prompt_tokens_details: Option<PromptDetails>,
 }
@@ -216,7 +216,7 @@ struct Usage {
 #[derive(Debug, Deserialize)]
 struct PromptDetails {
     #[serde(default, deserialize_with = "nullable")]
-    cached_tokens: i64,
+    cached_tokens: u64,
 }
 
 /// A member that reads `null` as absent: its type's default, a count of 0,
@@ -431,16 +431,15 @@ fn usage_of(usage: Usage) -> Metadata {
         .map(|details| details.cached_tokens)
         .unwrap_or_default();
     let mut counted = Metadata::new();
-    counted.insert(
-        "input_tokens".to_owned(),
-        Value::from(usage.prompt_tokens.saturating_sub(cached).max(0)),
-    );
-    counted.insert(
-        "output_tokens".to_owned(),
-        Value::from(usage.completion_tokens),
-    );
-    if cached > 0 {
-        counted.insert("cache_read_input_tokens".to_owned(), Value::from(cached));
+    if let Some(prompt) = usage.prompt_tokens {
+        let cached = cached.min(prompt);
+        counted.insert("input_tokens".to_owned(), Value::from(prompt - cached));
+        if cached > 0 {
+            counted.insert("cache_read_input_tokens".to_owned(), Value::from(cached));
+        }
+    }
+    if let Some(output) = usage.completion_tokens {
+        counted.insert("output_tokens".to_owned(), Value::from(output));
     }
     counted
 }
@@ -565,7 +564,7 @@ mod tests {
     }
 
     /// An OpenAI-compatible server may write `null` for any member it
-    /// leaves out: each reads as absent, a count as 0, a call's id made by
+    /// leaves out: each reads as absent, a call's id made by
     /// the loop.
     #[test]
     fn a_completion_s_nulls_read_as_absent() {
@@ -580,7 +579,7 @@ mod tests {
             (read.calls, Value::Object(read.done.usage)),
             (
                 vec![ProviderToolCall::new("", "lookup", "")],
-                serde_json::json!({ "input_tokens": 0, "output_tokens": 7 })
+                serde_json::json!({ "output_tokens": 7 })
             )
         );
     }

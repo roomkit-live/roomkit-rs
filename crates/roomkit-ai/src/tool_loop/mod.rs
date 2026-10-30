@@ -63,6 +63,10 @@ pub(crate) struct ToolEnd {
 pub(crate) struct LoopEnd {
     pub(crate) reason: LoopEndReason,
     pub(crate) usage: Metadata,
+    pub(crate) last_usage: Option<Metadata>,
+    pub(crate) usage_complete: bool,
+    pub(crate) model: Option<String>,
+    pub(crate) provider: Option<String>,
 }
 
 /// Why a loop ended (RFC §6.4, Appendix A.9).
@@ -134,6 +138,7 @@ impl<P: AiProvider> Loop<P> {
     ) {
         let declared = self.toolbox.declared(&self.policy);
         let mut usage = Metadata::new();
+        let mut usage_complete = true;
         let mut had_tool_round = false;
         for round in 0..=self.bounds.max_rounds {
             let request = AiRequest::new(
@@ -143,17 +148,43 @@ impl<P: AiProvider> Loop<P> {
             );
             let generation = match Generation::read(&*self.provider, &request, round, &out).await {
                 Ok(generation) => generation,
-                Err(error) => return failed(round, usage, error, &out).await,
+                Err(error) => {
+                    let end = LoopEnd {
+                        reason: LoopEndReason::Error,
+                        usage,
+                        last_usage: None,
+                        usage_complete: false,
+                        model: self.provider.model().map(str::to_owned),
+                        provider: self.provider.name().map(str::to_owned),
+                    };
+                    return failed(round, end, error, &out).await;
+                }
             };
             add_usage(&mut usage, &generation.done.usage);
+            usage_complete &= ["input_tokens", "output_tokens"].iter().all(|key| {
+                generation
+                    .done
+                    .usage
+                    .get(*key)
+                    .and_then(Value::as_u64)
+                    .is_some()
+            });
+            let end = |reason, usage| LoopEnd {
+                reason,
+                usage,
+                last_usage: Some(generation.done.usage.clone()),
+                usage_complete,
+                model: self.provider.model().map(str::to_owned),
+                provider: self.provider.name().map(str::to_owned),
+            };
             if generation.calls.is_empty() {
                 let reason = final_reason(&generation, had_tool_round);
-                return out.give(Ok(TurnItem::End(LoopEnd { reason, usage }))).await;
+                return out.give(Ok(TurnItem::End(end(reason, usage)))).await;
             }
             if round == self.bounds.max_rounds {
                 tracing::warn!(target: "roomkit::ai", max_rounds = round, "the tool loop reached its round bound");
                 let reason = LoopEndReason::MaxRounds;
-                return out.give(Ok(TurnItem::End(LoopEnd { reason, usage }))).await;
+                return out.give(Ok(TurnItem::End(end(reason, usage)))).await;
             }
             had_tool_round = true;
             messages.extend(self.round_of_calls(generation, &out).await);
@@ -205,13 +236,12 @@ impl<P: AiProvider> Loop<P> {
 /// its rounds kept (RFC §6.4 "A turn cut short"); then the error.
 async fn failed(
     round: u32,
-    usage: Metadata,
+    end: LoopEnd,
     error: ProviderError,
     out: &Yielder<Result<TurnItem, ProviderError>>,
 ) {
     if round > 0 {
-        let reason = LoopEndReason::Error;
-        out.give(Ok(TurnItem::End(LoopEnd { reason, usage }))).await;
+        out.give(Ok(TurnItem::End(end))).await;
     }
     out.give(Err(error)).await;
 }

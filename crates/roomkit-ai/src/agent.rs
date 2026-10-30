@@ -64,7 +64,10 @@ const STANDALONE: &str = "standalone";
 /// read past its start. The kit stores each row as it ends: each round's
 /// text as a MESSAGE, a `TOOL_CALL_START` per call, then the round's
 /// `TOOL_CALL_END` rows in call order. The last MESSAGE carries the turn's
-/// record, `loop_end_reason` and `ai_usage` in its metadata. A provider's
+/// record, `loop_end_reason` and `ai_usage` in its metadata. `ai_last_usage`
+/// holds only the final generation's reported counters (null after failure);
+/// `ai_usage_complete` is false when any generation lacked counters. Optional
+/// `ai_model` and `ai_provider` attribute them without guessing capacity. A provider's
 /// error keeps the text it produced and fails the turn (RFC §12.2 step
 /// 13s); after a round, the rows stand and the record says `error` (RFC
 /// §6.4 "A turn cut short"). A later turn's history replays each round at

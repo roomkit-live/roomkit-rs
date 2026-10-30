@@ -659,3 +659,63 @@ async fn an_observer_s_loop_through_its_agent_ends_at_the_depth_limit() {
         assert_eq!(depths, [1, 2], "after the turn: {after_the_turn}");
     }
 }
+
+/// Last-request occupancy must not be inferred from the cumulative bill.
+#[tokio::test]
+async fn last_generation_usage_is_distinct_from_turn_totals() {
+    for last in [
+        json!({"input_tokens": 40, "cache_read_input_tokens": 80, "output_tokens": 7}),
+        json!({}),
+    ] {
+        let rounds = [
+            ScriptedRound::calling("Checking.", [("c1", "lookup_order", "{}")]).with_usage(
+                json!({"input_tokens": 100, "output_tokens": 10})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+            ScriptedRound::answering("Done.").with_usage(last.as_object().unwrap().clone()),
+        ];
+        let room = Room::new(ScriptedProvider::new(rounds), served()).await;
+        room.says("Check.").await;
+        let rows = room.timeline().await;
+        let record = &rows
+            .iter()
+            .find(|row| row.metadata.contains_key("ai_last_usage"))
+            .unwrap()
+            .metadata;
+        assert_eq!(record.get("ai_last_usage"), Some(&last));
+        let measured = last.get("input_tokens").is_some();
+        assert_eq!(record.get("ai_usage_complete"), Some(&json!(measured)));
+        assert_eq!(
+            record["ai_usage"]["input_tokens"],
+            if measured { 140 } else { 100 }
+        );
+        room.kit.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn failed_generation_does_not_reuse_previous_request_usage() {
+    let rounds = [
+        ScriptedRound::calling("Checking.", [("c1", "lookup_order", "{}")]).with_usage(
+            json!({"input_tokens": 100, "output_tokens": 10})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+        ScriptedRound::answering("").failing("provider unavailable"),
+    ];
+    let room = Room::new(ScriptedProvider::new(rounds), served()).await;
+    room.says("Check.").await;
+    let rows = room.timeline().await;
+    let record = &rows
+        .iter()
+        .find(|row| row.metadata.contains_key("ai_last_usage"))
+        .unwrap()
+        .metadata;
+    assert_eq!(record["ai_last_usage"], Value::Null);
+    assert_eq!(record["ai_usage_complete"], false);
+    assert_eq!(record["ai_usage"]["input_tokens"], 100);
+    room.kit.close().await.unwrap();
+}

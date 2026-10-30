@@ -256,6 +256,10 @@ impl AiProvider for OpenAiProvider {
         Some("openai")
     }
 
+    fn model(&self) -> Option<&str> {
+        Some(&self.config.model)
+    }
+
     fn generate<'a>(&'a self, request: &'a AiRequest) -> ProviderStream<'a> {
         stream::answer(self, request)
     }

@@ -193,7 +193,14 @@ async fn the_probe_s_turn_carries_python_s_messages() {
             )
         })
         .collect();
-    assert_eq!((result.error, rust), (None, python_steps()));
+    let mut expected = python_steps();
+    // The extended usage record uses the protocol's existing record frame.
+    let end = expected
+        .iter()
+        .position(|step| step.starts_with("frame item loop_end"))
+        .unwrap();
+    expected.insert(end, "frame record".to_owned());
+    assert_eq!((result.error, rust), (None, expected));
     assert_eq!(
         timeline,
         vec![
