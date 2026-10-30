@@ -6,6 +6,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add optional Streamable HTTP MCP connections with JSON/SSE replies, explicit
+  headers, bounded messages, cancellable discovery and session cleanup. Redirects
+  and automatic tool replay after session expiry are disabled.
+
 - MCP connections support host labels, per-handle tool selection, transport status
   and joined cancellation during startup.
 

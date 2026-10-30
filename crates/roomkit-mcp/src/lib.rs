@@ -1,9 +1,11 @@
-//! The tools of MCP servers for a RoomKit AI agent, each server started as
-//! a process and reached over its stdin and stdout (RFC §21.2; step 4,
-//! decision 12: stdio only).
+//! The tools of MCP servers for a RoomKit AI agent, over stdio or the
+//! optional `http` feature for Streamable HTTP (RFC §21.2).
 //!
 //! - [`McpCommand`]: what starts a server, a program and its arguments as a
 //!   list, never through a shell, with an environment of its own.
+//! - `McpHttp` (feature `http`): a remote endpoint, optional explicit headers,
+//!   JSON/SSE responses, bounded startup and session cleanup. No OAuth or
+//!   legacy HTTP+SSE transport is provided.
 //! - [`McpServer`]: a connected server, a [`Toolset`](roomkit_ai::Toolset)
 //!   an agent serves beside its other tools, under bare names or host-labelled
 //!   aliases (`McpServer::with_label`), optionally selecting a subset
@@ -43,6 +45,11 @@
 //! # Ok(())
 //! # }
 //! ```
+
+#[cfg(feature = "http")]
+mod http;
+#[cfg(feature = "http")]
+pub use self::http::McpHttp;
 
 mod command;
 mod error;

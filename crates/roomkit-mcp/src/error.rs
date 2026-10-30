@@ -11,6 +11,14 @@ use std::time::Duration;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum McpError {
+    /// An HTTP transport failure, with no URL, headers or response body.
+    #[error("MCP HTTP connection failed: {reason} (status {status:?})")]
+    Http {
+        /// HTTP status when a response was received.
+        status: Option<u16>,
+        /// Safe category supplied by the transport, never server text.
+        reason: &'static str,
+    },
     /// A host label or explicit tool selection is invalid (RFC §21.2).
     #[error("invalid MCP tool configuration: {reason}")]
     Configuration {

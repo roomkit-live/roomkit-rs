@@ -1933,6 +1933,11 @@ reason = "lot 5: McpCommand and McpServer become one McpToolProvider, as Python'
 
 [[pending]]
 lot = 5
+rust = "roomkit_mcp::McpHttp"
+reason = "lot 5: HTTP connection configuration joins McpToolProvider alongside McpCommand"
+
+[[pending]]
+lot = 5
 rust = "roomkit_mcp::McpServer"
 reason = "lot 5: McpCommand and McpServer become one McpToolProvider, as Python's MCPToolProvider"
 

@@ -30,7 +30,7 @@ pub(crate) const MESSAGE_LIMIT: usize = 4 * 1024 * 1024;
 /// §9.3: the observers read the message).
 const CALL_FAILED: &str = "McpError";
 
-/// An MCP server started over stdio and connected (RFC §21.2), serving its
+/// A connected MCP server over stdio or Streamable HTTP (RFC §21.2), serving its
 /// tools to an agent as a [`Toolset`], under their bare names by default.
 /// [`with_label`](Self::with_label) supplies host-qualified aliases, and
 /// [`with_tool_names`](Self::with_tool_names) restricts one handle's inventory.
@@ -91,7 +91,9 @@ struct Inner {
 /// What a connection holds until it is closed.
 struct Connection {
     service: RunningService<RoleClient, ()>,
-    process: ServerProcess,
+    process: Option<ServerProcess>,
+    #[cfg(feature = "http")]
+    http_finished: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 impl McpServer {
@@ -144,10 +146,44 @@ impl McpServer {
                 instructions,
                 pid: process.id(),
                 close_grace: command.close_grace,
-                connection: Mutex::new(Some(Connection { service, process })),
+                connection: Mutex::new(Some(Connection {
+                    service,
+                    process: Some(process),
+                    #[cfg(feature = "http")]
+                    http_finished: None,
+                })),
                 closed: OnceCell::new(),
             }),
         })
+    }
+
+    #[cfg(feature = "http")]
+    pub(crate) fn from_http(
+        service: RunningService<RoleClient, ()>,
+        tools: Vec<ToolDefinition>,
+        finished: tokio::sync::oneshot::Receiver<()>,
+    ) -> Self {
+        let instructions = service
+            .peer_info()
+            .and_then(|info| info.instructions.clone());
+        Self {
+            label: None,
+            selected: None,
+            inner: Arc::new(Inner {
+                program: "http".into(),
+                peer: service.peer().clone(),
+                tools,
+                instructions,
+                pid: None,
+                close_grace: std::time::Duration::from_secs(10),
+                connection: Mutex::new(Some(Connection {
+                    service,
+                    process: None,
+                    http_finished: Some(finished),
+                })),
+                closed: OnceCell::new(),
+            }),
+        }
     }
 
     /// What the server published, when it connected, on how to use its
@@ -157,8 +193,8 @@ impl McpServer {
         self.inner.instructions.as_deref()
     }
 
-    /// The id the server's process was started with; `None` once the
-    /// server is closed.
+    /// The id the server's process was started with; `None` for HTTP or once
+    /// the server is closed.
     pub fn process_id(&self) -> Option<u32> {
         if !self.is_connected() {
             return None;
@@ -218,7 +254,9 @@ impl McpServer {
         Ok(self)
     }
 
-    /// Closes the connection and stops the server (RFC §21.2): its input
+    /// Closes the connection (RFC §21.2). HTTP connections drain their worker
+    /// and attempt to delete any negotiated session, without replaying tools.
+    /// For stdio it stops the server: its input
     /// closed, it is given the command's grace to exit, then its process
     /// group is ended (`SIGTERM`, the grace, `SIGKILL`), and this returns
     /// once it is waited for. A call running fails. Called again, or beside
@@ -228,13 +266,19 @@ impl McpServer {
             .closed
             .get_or_init(|| async {
                 let connection = self.inner.connection.lock().await.take();
-                let Some(Connection { service, process }) = connection else {
+                let Some(connection) = connection else {
                     return;
                 };
                 // Ending the service closes the server's input.
                 let grace = self.inner.close_grace;
-                let _ended = tokio::time::timeout(grace, service.cancel()).await;
-                process.stop(grace).await;
+                let _ended = tokio::time::timeout(grace, connection.service.cancel()).await;
+                if let Some(process) = connection.process {
+                    process.stop(grace).await;
+                }
+                #[cfg(feature = "http")]
+                if let Some(finished) = connection.http_finished {
+                    let _finished = finished.await;
+                }
                 tracing::info!(
                     target: "roomkit::mcp",
                     server = self.inner.program,
@@ -266,7 +310,8 @@ async fn failed(error: McpError, process: ServerProcess, stderr: Stderr) -> McpE
             after,
             stderr: stderr.last_lines().await,
         },
-        error @ (McpError::Command { .. }
+        error @ (McpError::Http { .. }
+        | McpError::Command { .. }
         | McpError::Spawn { .. }
         | McpError::Cancelled
         | McpError::Configuration { .. }) => error,
