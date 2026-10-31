@@ -15,8 +15,8 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions, EventFilter,
-    EventQuery, HookExecution, HookOptions, HookTrigger, InboundResult, ProcessInboundOptions,
-    RoomKit, RoomKitError, RoomKitOptions,
+    HookExecution, HookOptions, HookTrigger, InboundResult, ProcessInboundOptions, RoomKit,
+    RoomKitError, RoomKitOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, AiProvider, ToolDefinition, ToolOutput, Tools};
@@ -347,15 +347,15 @@ pub(crate) async fn stored_in<S: ConversationStore>(
     kit: &RoomKit<S>,
     room_id: &RoomId,
 ) -> Vec<String> {
-    let query = EventQuery {
+    let query = roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(EventFilter {
             include_blocked: true,
             ..EventFilter::default()
         }),
-        ..EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     };
-    let events = kit.store().list_events(room_id, &query).await.unwrap();
+    let events = kit.store().list_events(room_id, query).await.unwrap();
     events
         .iter()
         .filter(|event| event.source.channel_type != ChannelType::SYSTEM)

@@ -119,7 +119,7 @@ async fn the_kit_s_close_while_a_tool_runs_crosses_as_cancel_and_ends_the_call_c
         .collect();
     let end = kit
         .store()
-        .list_events(&room(), &received())
+        .list_events(&room(), received())
         .await
         .unwrap()
         .into_iter()
@@ -281,7 +281,7 @@ async fn a_streaming_reader_that_leaves_crosses_as_close() {
     let crossed = crossed(&tap);
     let stored: Vec<(String, Option<Value>)> = kit
         .store()
-        .list_events(&room(), &received())
+        .list_events(&room(), received())
         .await
         .unwrap()
         .into_iter()
@@ -361,7 +361,7 @@ async fn cancelling_a_detached_handle_joins_its_tool_and_keeps_the_kit_usable() 
     );
     let next = asks(&kit, "Continue after cancellation.").await;
     assert!(next.error.is_none());
-    let rows = kit.store().list_events(&room(), &received()).await.unwrap();
+    let rows = kit.store().list_events(&room(), received()).await.unwrap();
     assert!(
         rows.iter().any(
             |row| roomkit_core::rules::transcoding::text_of(&row.content).contains("It is 42.")

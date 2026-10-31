@@ -4,8 +4,9 @@
 //! on the row's columns, applied before the page is cut, and the window
 //! read from the index on `(room_id, idx)`.
 
+use roomkit::EventFilter;
 use roomkit::model::{EventStatus, RoomEvent, RoomId, Visibility};
-use roomkit::{EventFilter, EventQuery};
+use roomkit::store::ListEventsOptions;
 use rusqlite::types::Value;
 use rusqlite::{Connection, params_from_iter};
 
@@ -133,7 +134,7 @@ fn criteria(
 pub(crate) fn page(
     connection: &Connection,
     room_id: &RoomId,
-    query: &EventQuery,
+    query: &ListEventsOptions,
 ) -> Result<Vec<RoomEvent>, Failure> {
     let (sql, values, from_newest) = page_query(room_id, query)?;
     let mut statement = connection.prepare_cached(&sql)?;
@@ -149,8 +150,11 @@ pub(crate) fn page(
 
 /// The statement of [`page`], its values, and whether it reads from the
 /// newest end, descending.
-fn page_query(room_id: &RoomId, query: &EventQuery) -> Result<(String, Vec<Value>, bool), Failure> {
-    let EventQuery {
+fn page_query(
+    room_id: &RoomId,
+    query: &ListEventsOptions,
+) -> Result<(String, Vec<Value>, bool), Failure> {
+    let ListEventsOptions {
         offset,
         limit,
         visibility_filter,
@@ -210,7 +214,7 @@ mod tests {
 
     /// The plan SQLite makes for the page `query` asks for, on the store's
     /// schema: its details, one per step.
-    fn plan(query: &EventQuery) -> Vec<String> {
+    fn plan(query: &ListEventsOptions) -> Vec<String> {
         let mut connection = Connection::open_in_memory().unwrap();
         crate::schema::prepare(&mut connection).unwrap();
         let room_id = RoomId::new("room_1").unwrap();
@@ -234,20 +238,20 @@ mod tests {
             ..EventFilter::default()
         };
         let queries = [
-            EventQuery::default(),
-            EventQuery {
+            ListEventsOptions::default(),
+            ListEventsOptions {
                 newest_first: true,
                 offset: 10,
-                ..EventQuery::default()
+                ..ListEventsOptions::default()
             },
-            EventQuery {
+            ListEventsOptions {
                 after_index: Some(100),
-                ..EventQuery::default()
+                ..ListEventsOptions::default()
             },
-            EventQuery {
+            ListEventsOptions {
                 before_index: Some(100),
                 event_filter: Some(filtered),
-                ..EventQuery::default()
+                ..ListEventsOptions::default()
             },
         ];
         let plans: Vec<Vec<String>> = queries.iter().map(plan).collect();

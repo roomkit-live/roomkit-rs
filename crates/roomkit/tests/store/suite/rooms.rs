@@ -2,11 +2,15 @@
 //! (RFC §5.1, §13.5, §14.1).
 
 use pretty_assertions::assert_eq;
-use roomkit::model::{Room, RoomId, RoomStatus, RoomTimers, RoomUpdates, Timestamp};
+use roomkit::model::{Metadata, Room, RoomId, RoomStatus, RoomTimers, Timestamp};
+use roomkit::store::{
+    AdvanceDeliveredIndexOptions, CommitEventOptions, FindRoomsOptions, ListEventsOptions,
+    PatchRoomMetadataOptions,
+};
 use roomkit::{ConversationStore, RoomFilter, StoreError};
 use serde_json::{Value, json};
 
-use super::{counters, event, room_id, with_room};
+use super::{commit, event, room_id, with_events, with_room};
 
 #[tokio::test]
 async fn a_room_id_cannot_be_created_twice() {
@@ -34,7 +38,7 @@ async fn a_room_is_read_as_it_was_written() {
 #[tokio::test]
 async fn a_commit_sets_the_room_s_counters() {
     let store = with_room().await;
-    store.commit(event(0), counters(0), None).await.unwrap();
+    commit(&store, event(0), None).await.unwrap();
     let room = store.get_room(&room_id()).await.unwrap().unwrap();
     assert_eq!((room.event_count, room.latest_index), (1, Some(0)));
 }
@@ -42,28 +46,27 @@ async fn a_commit_sets_the_room_s_counters() {
 /// RFC §14.1 `advance_delivered_index`, §13.5, as the Python
 /// implementation's stores answer it: a compare-and-set from the index
 /// before, from any lower value when forced, never backwards, nothing
-/// for a room the store does not hold; a commit and a room's update
-/// leave the cursor as stored.
+/// for a room the store does not hold; a commit and a room's update, from
+/// a copy read before the cursor moved, leave the cursor as stored.
 #[tokio::test]
 async fn the_delivery_cursor_advances_by_compare_and_set_only() {
     let store = with_room().await;
     let room = room_id();
     let missing = RoomId::new("room_9").unwrap();
+    let stale = store.get_room(&room).await.unwrap().unwrap();
     let start = store.get_delivered_index(&room).await.unwrap();
     let mut moves = Vec::new();
     for (index, force) in [(0, false), (0, false), (2, false), (2, true), (1, true)] {
+        let options = AdvanceDeliveredIndexOptions { force };
         moves.push(
             store
-                .advance_delivered_index(&room, index, force)
+                .advance_delivered_index(&room, index, options)
                 .await
                 .unwrap(),
         );
     }
-    store.commit(event(0), counters(0), None).await.unwrap();
-    store
-        .update_room(&room, RoomUpdates::default())
-        .await
-        .unwrap();
+    commit(&store, event(0), None).await.unwrap();
+    store.update_room(stale).await.unwrap();
     assert_eq!(
         (
             start,
@@ -77,7 +80,7 @@ async fn the_delivery_cursor_advances_by_compare_and_set_only() {
                 .delivered_index,
             store.get_delivered_index(&missing).await.unwrap(),
             store
-                .advance_delivered_index(&missing, 0, true)
+                .advance_delivered_index(&missing, 0, AdvanceDeliveredIndexOptions { force: true })
                 .await
                 .unwrap()
         ),
@@ -85,46 +88,134 @@ async fn the_delivery_cursor_advances_by_compare_and_set_only() {
     );
 }
 
+/// RFC §14.3, Python's `update_room`: the room is written whole, but for
+/// the counters the store manages, which a copy read before a commit
+/// does not rewind.
 #[tokio::test]
-async fn a_room_update_writes_only_the_fields_it_names() {
+async fn a_room_update_writes_the_room_whole_but_its_counters() {
     let store = with_room().await;
-    store.commit(event(0), counters(0), None).await.unwrap();
-    let updates = RoomUpdates {
-        status: Some(RoomStatus::Paused),
-        ..RoomUpdates::default()
-    };
-    let room = store.update_room(&room_id(), updates).await.unwrap();
-    assert_eq!((room.status, room.event_count), (RoomStatus::Paused, 1));
+    let mut stale = store.get_room(&room_id()).await.unwrap().unwrap();
+    commit(&store, event(0), None).await.unwrap();
+    stale.status = RoomStatus::Paused;
+    let returned = store.update_room(stale).await.unwrap();
+    let room = store.get_room(&room_id()).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            (returned.status, returned.event_count),
+            (room.status, room.event_count, room.latest_index)
+        ),
+        ((RoomStatus::Paused, 1), (RoomStatus::Paused, 1, Some(0)))
+    );
 }
 
 #[tokio::test]
 async fn an_update_of_a_missing_room_is_refused() {
     let store = crate::store().await;
     assert_eq!(
-        store.update_room(&room_id(), RoomUpdates::default()).await,
+        store.update_room(Room::new(room_id())).await,
         Err(StoreError::RoomNotFound(room_id()))
     );
 }
 
+/// RFC §5.1, Python's `committed_state`: a commit that is the room's
+/// activity resumes a paused room and moves its last activity; one that is
+/// not leaves both.
 #[tokio::test]
-async fn a_commit_writes_the_room_updates_it_carries() {
-    let store = with_room().await;
-    let mut resumed = counters(0);
-    resumed.room.status = Some(RoomStatus::Active);
-    let paused = RoomUpdates {
-        status: Some(RoomStatus::Paused),
-        ..RoomUpdates::default()
+async fn an_activity_commit_resumes_a_paused_room() {
+    let paused_at = Timestamp::from_unix_millis(1_000).unwrap();
+    let mut states = Vec::new();
+    for activity in [false, true] {
+        let store = with_room().await;
+        let mut room = store.get_room(&room_id()).await.unwrap().unwrap();
+        room.status = RoomStatus::Paused;
+        room.paused_at = Some(paused_at);
+        store.update_room(room).await.unwrap();
+        let options = CommitEventOptions {
+            activity,
+            ..CommitEventOptions::default()
+        };
+        store
+            .commit_event(&room_id(), event(0), options)
+            .await
+            .unwrap();
+        let room = store.get_room(&room_id()).await.unwrap().unwrap();
+        states.push((
+            room.status,
+            room.paused_at.is_some(),
+            room.timers.last_activity_at.is_some(),
+        ));
+    }
+    assert_eq!(
+        states,
+        [
+            (RoomStatus::Paused, true, false),
+            (RoomStatus::Active, false, true)
+        ]
+    );
+}
+
+/// Python's `patch_room_metadata`: the keys `unset` names go, then the
+/// patch is written, the other keys kept; `None` for a room the store does
+/// not hold.
+#[tokio::test]
+async fn a_metadata_patch_writes_its_keys_and_keeps_the_others() {
+    let store = crate::store().await;
+    let mut room = Room::new(room_id());
+    room.metadata = metadata(json!({ "kept": 1, "gone": 2, "changed": 3 }));
+    store.create_room(room).await.unwrap();
+    let unset = PatchRoomMetadataOptions {
+        unset: vec!["gone".to_owned()],
     };
-    store.update_room(&room_id(), paused).await.unwrap();
-    store.commit(event(0), resumed, None).await.unwrap();
-    let room = store.get_room(&room_id()).await.unwrap().unwrap();
-    assert_eq!(room.status, RoomStatus::Active);
+    let patched = store
+        .patch_room_metadata(&room_id(), metadata(json!({ "changed": 4 })), unset)
+        .await
+        .unwrap()
+        .map(|room| room.metadata);
+    let missing = store
+        .patch_room_metadata(
+            &RoomId::new("room_9").unwrap(),
+            Metadata::new(),
+            PatchRoomMetadataOptions::default(),
+        )
+        .await;
+    assert_eq!(
+        (patched, missing),
+        (Some(metadata(json!({ "kept": 1, "changed": 4 }))), Ok(None))
+    );
+}
+
+/// `value`, a JSON object, as metadata.
+fn metadata(value: Value) -> Metadata {
+    let Value::Object(metadata) = value else {
+        unreachable!()
+    };
+    metadata
+}
+
+/// Python's `delete_room`: the room and what it holds go; whether the
+/// store held it.
+#[tokio::test]
+async fn a_room_s_deletion_takes_what_it_holds() {
+    let store = with_events(vec![event(0)]).await;
+    let deleted = store.delete_room(&room_id()).await;
+    let again = store.delete_room(&room_id()).await;
+    assert_eq!(
+        (
+            deleted,
+            again,
+            store.get_room(&room_id()).await,
+            store
+                .list_events(&room_id(), ListEventsOptions::default())
+                .await
+                .map(|events| events.len())
+        ),
+        (Ok(true), Ok(false), Ok(None), Ok(0))
+    );
 }
 
 /// RFC §14.1: the store keeps a room's private state apart from its
 /// metadata, a write removing the metadata's copy under the key, a `None`
-/// removing the key, and nothing written for a room it does not hold; a
-/// context carries the register of authors (§10.1 step 12).
+/// removing the key, and nothing written for a room it does not hold.
 #[tokio::test]
 async fn a_room_s_private_state_is_kept_apart() {
     let store = with_room().await;
@@ -132,24 +223,16 @@ async fn a_room_s_private_state_is_kept_apart() {
     let Value::Object(value) = json!({ "version": 3, "names": {} }) else {
         unreachable!()
     };
-    let copied = RoomUpdates {
-        metadata: [("author_register".to_owned(), json!("a copy"))]
-            .into_iter()
-            .collect(),
-        ..RoomUpdates::default()
-    };
-    store.update_room(&room, copied).await.unwrap();
+    let copied = metadata(json!({ "author_register": "a copy" }));
+    store
+        .patch_room_metadata(&room, copied, PatchRoomMetadataOptions::default())
+        .await
+        .unwrap();
     store
         .set_private_state(&room, "author_register", Some(value.clone()))
         .await
         .unwrap();
     let kept = store.get_private_state(&room, "author_register").await;
-    let carried = store
-        .load_context(&room, 0)
-        .await
-        .unwrap()
-        .unwrap()
-        .author_register;
     let in_metadata = store
         .get_room(&room)
         .await
@@ -167,37 +250,8 @@ async fn a_room_s_private_state_is_kept_apart() {
         .set_private_state(&missing, "author_register", Some(value.clone()))
         .await;
     assert_eq!(
-        (kept, carried, in_metadata, removed, unknown),
-        (
-            Ok(Some(value.clone())),
-            Some(value),
-            false,
-            Ok(None),
-            Ok(())
-        )
-    );
-}
-
-#[tokio::test]
-async fn listing_rooms_with_timers_armed_skips_the_others() {
-    let store = with_room().await;
-    let mut timed = Room::new(RoomId::new("room_2").unwrap());
-    timed.timers = RoomTimers {
-        inactive_after_seconds: Some(60),
-        ..RoomTimers::default()
-    };
-    store.create_room(timed).await.unwrap();
-    let filter = RoomFilter {
-        timers_armed: true,
-        ..RoomFilter::default()
-    };
-    let listed = store.list_rooms(&filter).await.unwrap();
-    assert_eq!(
-        listed
-            .iter()
-            .map(|room| room.id.as_str())
-            .collect::<Vec<_>>(),
-        ["room_2"]
+        (kept, in_metadata, removed, unknown),
+        (Ok(Some(value)), false, Ok(None), Ok(()))
     );
 }
 
@@ -213,7 +267,10 @@ async fn listing_rooms_without_a_filter_returns_them_oldest_first() {
         };
         store.create_room(room).await.unwrap();
     }
-    let listed = store.list_rooms(&RoomFilter::default()).await.unwrap();
+    let listed = store
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
+        .await
+        .unwrap();
     assert_eq!(
         listed
             .iter()
@@ -223,31 +280,80 @@ async fn listing_rooms_without_a_filter_returns_them_oldest_first() {
     );
 }
 
+/// Python's `find_rooms`: of an organization, in a status, holding every
+/// key and value of the metadata filter, a page of them, by creation then
+/// id.
 #[tokio::test]
-async fn listing_rooms_by_organization_and_status_skips_the_others() {
+async fn finding_rooms_by_organization_status_and_metadata_skips_the_others() {
     let store = crate::store().await;
     for (id, organization, status) in [
         ("bank_active", Some("bank"), RoomStatus::Active),
         ("bank_closed", Some("bank"), RoomStatus::Closed),
         ("clinic_active", Some("clinic"), RoomStatus::Active),
         ("none_active", None, RoomStatus::Active),
+        ("bank_vip", Some("bank"), RoomStatus::Active),
     ] {
         let mut room = Room::new(RoomId::new(id).unwrap());
         room.organization_id = organization.map(str::to_owned);
         room.status = status;
+        if id == "bank_vip" {
+            room.metadata = metadata(json!({ "tier": "vip" }));
+        }
         store.create_room(room).await.unwrap();
     }
-    let filter = RoomFilter {
+    let found = async |options: FindRoomsOptions| {
+        let rooms = store.find_rooms(options).await.unwrap();
+        rooms
+            .into_iter()
+            .map(|room| room.id.to_string())
+            .collect::<Vec<_>>()
+    };
+    let bank = || FindRoomsOptions {
         organization_id: Some("bank".to_owned()),
         status: Some(RoomStatus::Active),
-        ..RoomFilter::default()
+        ..FindRoomsOptions::default()
     };
-    let listed = store.list_rooms(&filter).await.unwrap();
+    let vip = FindRoomsOptions {
+        metadata_filter: Some(metadata(json!({ "tier": "vip" }))),
+        ..bank()
+    };
+    let second = FindRoomsOptions {
+        limit: 1,
+        offset: 1,
+        ..bank()
+    };
     assert_eq!(
-        listed
-            .iter()
-            .map(|room| room.id.as_str())
-            .collect::<Vec<_>>(),
-        ["bank_active"]
+        (found(bank()).await, found(vip).await, found(second).await),
+        (
+            vec!["bank_active".to_owned(), "bank_vip".to_owned()],
+            vec!["bank_vip".to_owned()],
+            vec!["bank_vip".to_owned()]
+        )
+    );
+}
+
+/// Python's `RoomFilter.admits`: one of the statuses, the organization.
+#[test]
+fn a_room_filter_admits_a_room_of_its_statuses_and_organization() {
+    let mut room = Room::new(room_id());
+    room.organization_id = Some("bank".to_owned());
+    let filters = [
+        RoomFilter::default(),
+        RoomFilter {
+            statuses: Some(vec![RoomStatus::Paused, RoomStatus::Active]),
+            organization_id: Some("bank".to_owned()),
+        },
+        RoomFilter {
+            statuses: Some(vec![RoomStatus::Paused]),
+            ..RoomFilter::default()
+        },
+        RoomFilter {
+            organization_id: Some("clinic".to_owned()),
+            ..RoomFilter::default()
+        },
+    ];
+    assert_eq!(
+        filters.map(|filter| filter.admits(&room)),
+        [true, true, false, false]
     );
 }

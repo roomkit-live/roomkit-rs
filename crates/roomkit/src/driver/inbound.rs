@@ -107,17 +107,17 @@ impl StoredAnswers {
             .push((answer, written));
     }
 
-    /// The answers whose commit stored them, in order; a commit still
-    /// running counts as none.
+    /// The answers whose commit stored them, as stored, in order; a commit
+    /// still running counts as none.
     pub(crate) fn stored(&self) -> Vec<RoomEvent> {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .filter(|(_, written)| {
-                *written.borrow() == Some(Outcome::Store(StoreOutcome::Committed))
+            .filter_map(|(_, written)| match &*written.borrow() {
+                Some(Outcome::Store(StoreOutcome::Committed(stored))) => Some((**stored).clone()),
+                _ => None,
             })
-            .map(|(answer, _)| answer.clone())
             .collect()
     }
 }

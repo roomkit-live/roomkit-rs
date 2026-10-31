@@ -28,23 +28,23 @@ use super::StoreError;
 /// full whatever they left out around it.
 ///
 /// ```
-/// use roomkit::EventQuery;
+/// use roomkit::store::ListEventsOptions;
 ///
 /// // A reconnecting reader's snapshot: the 50 newest events, oldest first.
-/// let latest = EventQuery { newest_first: true, ..EventQuery::default() };
+/// let latest = ListEventsOptions { newest_first: true, ..ListEventsOptions::default() };
 /// // The 50 before the oldest it holds, index 120.
-/// let earlier = EventQuery { before_index: Some(120), ..EventQuery::default() };
+/// let earlier = ListEventsOptions { before_index: Some(120), ..ListEventsOptions::default() };
 /// # let _ = (latest, earlier);
 /// ```
 ///
 /// It is not `#[non_exhaustive]`, on purpose, as [`EventFilter`] is not: a
 /// store reads every field, so a new field is a breaking change for stores,
-/// while a caller that fills the rest with `..EventQuery::default()` keeps
+/// while a caller that fills the rest with `..ListEventsOptions::default()` keeps
 /// compiling.
 ///
 /// [`ConversationStore::list_events`]: super::ConversationStore::list_events
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EventQuery {
+pub struct ListEventsOptions {
     /// In offset mode, how many events the window skips, from the oldest
     /// end, or from the newest with `newest_first`.
     pub offset: u64,
@@ -66,7 +66,7 @@ pub struct EventQuery {
     pub newest_first: bool,
 }
 
-impl Default for EventQuery {
+impl Default for ListEventsOptions {
     /// The oldest 50 events the room received.
     fn default() -> Self {
         Self {
@@ -81,14 +81,16 @@ impl Default for EventQuery {
     }
 }
 
-impl EventQuery {
+impl ListEventsOptions {
     /// Refuses a query the read cannot serve, as the Python implementation
     /// raises: both cursors, which exclude each other, or a filter
-    /// [`EventFilter::validate`] refuses.
+    /// [`EventFilter::validate`] refuses. A store calls it first thing in
+    /// `list_events`: outside the public API (decision 16).
     ///
     /// # Errors
     ///
     /// Returns [`StoreError::Value`] saying what is wrong.
+    #[doc(hidden)]
     pub fn validate(&self) -> Result<(), StoreError> {
         if self.after_index.is_some() && self.before_index.is_some() {
             return Err(StoreError::Value(
@@ -171,6 +173,7 @@ impl EventFilter {
     /// # Errors
     ///
     /// Returns [`StoreError::Value`] saying what is wrong.
+    #[doc(hidden)]
     pub fn validate(&self) -> Result<(), StoreError> {
         if let (Some(after), Some(before)) = (self.after_time, self.before_time)
             && after >= before
@@ -187,7 +190,9 @@ impl EventFilter {
         Ok(())
     }
 
-    /// Whether `event` passes the filter.
+    /// Whether `event` passes the filter. A store reads it: outside the
+    /// public API (decision 16).
+    #[doc(hidden)]
     pub fn matches(&self, event: &RoomEvent) -> bool {
         let Self {
             event_types,

@@ -23,8 +23,8 @@ use roomkit::testing::{
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
-    HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomFilter, RoomKit,
-    RoomKitError, RoomKitOptions, SessionStartedEvent,
+    HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitError,
+    RoomKitOptions, SessionStartedEvent,
 };
 use roomkit_core::ops::ChannelConfig;
 use tokio::sync::{Notify, mpsc};
@@ -100,7 +100,7 @@ async fn two_messages_naming_one_missing_room_create_it_once() {
     second.unwrap();
     let indexes: Vec<u64> = kit
         .store()
-        .list_events(&room, &every_row())
+        .list_events(&room, every_row())
         .await
         .unwrap()
         .iter()
@@ -108,7 +108,7 @@ async fn two_messages_naming_one_missing_room_create_it_once() {
         .collect();
     let rooms = kit
         .store()
-        .list_rooms(&RoomFilter::default())
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
         .await
         .unwrap();
     assert_eq!(
@@ -216,7 +216,7 @@ async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
         room_id(),
         channel("sms"),
     );
-    kit.store().create_participant(jean.clone()).await.unwrap();
+    kit.store().add_participant(jean.clone()).await.unwrap();
     let (seen, mut read) = mpsc::unbounded_channel();
     kit.hook(
         HookTrigger::BeforeBroadcast,
@@ -388,7 +388,7 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
     go.notify_one();
     let started = tokio::time::timeout(Duration::from_secs(5), session_started.notified()).await;
     let bindings = kit.store().list_bindings(&room).await.unwrap();
-    let timeline = kit.store().list_events(&room, &every_row()).await.unwrap();
+    let timeline = kit.store().list_events(&room, every_row()).await.unwrap();
     assert_eq!(
         (
             started.is_ok(),
@@ -637,13 +637,13 @@ async fn a_room_created_for_an_sms_sender_answers_at_their_number() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
             include_blocked: true,
             ..roomkit::EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

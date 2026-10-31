@@ -4,7 +4,11 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{IdentityId, Participant, Room, RoomId, RoomStatus, Timestamp};
+use roomkit::store::{
+    FindRoomIdByBindingOptions, FindRoomIdByParticipantOptions, FindRoomIdsByChannelOptions,
+};
 use roomkit::{ConversationStore, RoomFilter};
+use serde_json::json;
 
 use super::{binding, channel, participant_id, room_id, with_room};
 use crate::Store;
@@ -31,7 +35,7 @@ async fn bound(named: &[(&str, Option<&str>)]) -> Store {
         let mut binding = binding("sms");
         binding.room_id = room_id;
         binding.participant_id = correspondent.map(participant_id);
-        store.store_binding(binding).await.unwrap();
+        store.add_binding(binding).await.unwrap();
     }
     store
 }
@@ -43,8 +47,13 @@ async fn by_binding(
     identity: Option<&IdentityId>,
     filter: &RoomFilter,
 ) -> Option<String> {
+    let options = FindRoomIdByBindingOptions {
+        identity_id: identity.cloned(),
+        room_filter: Some(filter.clone()),
+        recipient_key: None,
+    };
     store
-        .find_room_id_by_binding(&channel("sms"), &participant_id(ALICE), identity, filter)
+        .find_room_id_by_binding(&channel("sms"), ALICE, options)
         .await
         .unwrap()
         .map(|room| room.to_string())
@@ -70,9 +79,8 @@ async fn a_binding_of_another_channel_finds_no_room() {
     let found = store
         .find_room_id_by_binding(
             &channel("whatsapp"),
-            &participant_id(ALICE),
-            None,
-            &RoomFilter::default(),
+            ALICE,
+            FindRoomIdByBindingOptions::default(),
         )
         .await;
     assert_eq!(found, Ok(None));
@@ -82,7 +90,7 @@ async fn a_binding_of_another_channel_finds_no_room() {
 async fn a_room_the_filter_refuses_is_not_found_by_its_binding() {
     let store = bound(&[("room_1", Some(ALICE))]).await;
     let filter = RoomFilter {
-        status: Some(RoomStatus::Paused),
+        statuses: Some(vec![RoomStatus::Paused]),
         ..RoomFilter::default()
     };
     assert_eq!(by_binding(&store, None, &filter).await, None);
@@ -137,19 +145,22 @@ async fn a_participant_reached_through_the_channel_finds_its_room() {
     let store = with_room().await;
     let mut participant = jean();
     participant.identity_id = Some(IdentityId::new("id_jean").unwrap());
-    store.create_participant(participant).await.unwrap();
+    store.add_participant(participant).await.unwrap();
     let by_id = store
-        .find_room_id_by_participant(&channel("sms"), &jean().id, None, &RoomFilter::default())
+        .find_room_id_by_participant(
+            &channel("sms"),
+            jean().id.as_str(),
+            FindRoomIdByParticipantOptions::default(),
+        )
         .await
         .unwrap();
     // Another address, the identity the caller resolved for it.
+    let resolved = FindRoomIdByParticipantOptions {
+        identity_id: Some(IdentityId::new("id_jean").unwrap()),
+        room_filter: None,
+    };
     let by_identity = store
-        .find_room_id_by_participant(
-            &channel("sms"),
-            &participant_id("+15559999999"),
-            Some(&IdentityId::new("id_jean").unwrap()),
-            &RoomFilter::default(),
-        )
+        .find_room_id_by_participant(&channel("sms"), "+15559999999", resolved)
         .await
         .unwrap();
     assert_eq!((by_id, by_identity), (Some(room_id()), Some(room_id())));
@@ -158,40 +169,113 @@ async fn a_participant_reached_through_the_channel_finds_its_room() {
 #[tokio::test]
 async fn a_participant_reached_through_another_channel_finds_no_room() {
     let store = with_room().await;
-    store.create_participant(jean()).await.unwrap();
+    store.add_participant(jean()).await.unwrap();
     let found = store
-        .find_room_id_by_participant(&channel("email"), &jean().id, None, &RoomFilter::default())
+        .find_room_id_by_participant(
+            &channel("email"),
+            jean().id.as_str(),
+            FindRoomIdByParticipantOptions::default(),
+        )
         .await;
     assert_eq!(found, Ok(None));
 }
 
+/// Python's `find_room_ids_by_channel`: the rooms binding the channel, the
+/// oldest first, at most `limit` (2 by default), of a group binding or not
+/// when `group` names it; a room holding a participant reached through the
+/// channel, and binding none, is not among them.
 #[tokio::test]
-async fn listing_the_rooms_a_channel_reaches_skips_the_others() {
-    let store = bound(&[("bound", None)]).await;
+async fn the_rooms_binding_a_channel_are_found_oldest_first() {
+    let store = bound(&[("first", None), ("second", None), ("third", None)]).await;
+    let mut group = store
+        .get_binding(&RoomId::new("third").unwrap(), &channel("sms"))
+        .await
+        .unwrap()
+        .unwrap();
+    group.group = true;
+    store.update_binding(group).await.unwrap();
     let joined = RoomId::new("joined").unwrap();
     store.create_room(Room::new(joined.clone())).await.unwrap();
     store
-        .create_participant(Participant::new(
+        .add_participant(Participant::new(
             participant_id(ALICE),
             joined,
             channel("sms"),
         ))
         .await
         .unwrap();
-    store
-        .create_room(Room::new(RoomId::new("elsewhere").unwrap()))
-        .await
-        .unwrap();
-    let filter = RoomFilter {
-        channel_id: Some(channel("sms")),
-        ..RoomFilter::default()
+    let found = async |options: FindRoomIdsByChannelOptions| {
+        let rooms = store
+            .find_room_ids_by_channel(&channel("sms"), options)
+            .await
+            .unwrap();
+        rooms.iter().map(ToString::to_string).collect::<Vec<_>>()
     };
-    let listed = store.list_rooms(&filter).await.unwrap();
+    let every = || FindRoomIdsByChannelOptions {
+        limit: 10,
+        ..FindRoomIdsByChannelOptions::default()
+    };
+    let groups = FindRoomIdsByChannelOptions {
+        group: Some(true),
+        ..every()
+    };
+    let not_groups = FindRoomIdsByChannelOptions {
+        group: Some(false),
+        ..every()
+    };
     assert_eq!(
-        listed
-            .iter()
-            .map(|room| room.id.as_str())
-            .collect::<Vec<_>>(),
-        ["bound", "joined"]
+        (
+            found(FindRoomIdsByChannelOptions::default()).await,
+            found(every()).await,
+            found(groups).await,
+            found(not_groups).await
+        ),
+        (
+            vec!["first".to_owned(), "second".to_owned()],
+            vec!["first".to_owned(), "second".to_owned(), "third".to_owned()],
+            vec!["third".to_owned()],
+            vec!["first".to_owned(), "second".to_owned()]
+        )
+    );
+}
+
+/// RFC §5.7, Python's `names_by_recipient`: with the channel's recipient
+/// key, a binding naming no correspondent, not a group's, names the
+/// address its metadata holds under the key; without the key, it names
+/// none.
+#[tokio::test]
+async fn a_binding_names_its_recipient_under_the_recipient_key() {
+    let store = bound(&[("recipient", None), ("group", None)]).await;
+    for (room, group) in [("recipient", false), ("group", true)] {
+        let mut binding = store
+            .get_binding(&RoomId::new(room).unwrap(), &channel("sms"))
+            .await
+            .unwrap()
+            .unwrap();
+        binding
+            .metadata
+            .insert("phone_number".to_owned(), json!(ALICE));
+        binding.group = group;
+        store.update_binding(binding).await.unwrap();
+    }
+    let keyed = FindRoomIdByBindingOptions {
+        recipient_key: Some("phone_number".to_owned()),
+        ..FindRoomIdByBindingOptions::default()
+    };
+    let found = (
+        store
+            .find_room_id_by_binding(&channel("sms"), ALICE, keyed)
+            .await,
+        store
+            .find_room_id_by_binding(
+                &channel("sms"),
+                ALICE,
+                FindRoomIdByBindingOptions::default(),
+            )
+            .await,
+    );
+    assert_eq!(
+        found,
+        (Ok(Some(RoomId::new("recipient").unwrap())), Ok(None))
     );
 }

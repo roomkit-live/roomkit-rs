@@ -19,9 +19,7 @@ use super::super::queues::Lineage;
 use super::super::stamp;
 use super::{CommitPass, Observed, PassOrigin, PassResult, State, Verdict};
 use crate::model::{ChannelBinding, ChannelId, RoomContext, RoomEvent, Visibility};
-use crate::ops::protocol::{
-    AnswerOf, HoldOutcome, HoldRequest, Outcome, StoreRequest, TargetUpdate,
-};
+use crate::ops::protocol::{AnswerOf, HoldOutcome, HoldRequest, Outcome, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
 use crate::rules::authors;
@@ -38,7 +36,7 @@ pub(super) struct Unrecorded {
     event: RoomEvent,
     plan: DeliveryPlan,
     context: Box<RoomContext>,
-    written: Option<(TargetUpdate, RoomEvent)>,
+    written: Option<RoomEvent>,
 }
 
 impl CommitPass {
@@ -470,11 +468,14 @@ impl CommitPass {
     pub(super) fn on_committed(
         &mut self,
         cx: &mut Cx<'_>,
-        result: PassResult,
+        mut result: PassResult,
         outcome: Outcome,
     ) -> State {
         match outcome.into_committed() {
-            Ok(()) => self.place(cx, result),
+            Ok(stored) => {
+                result.adopt(*stored);
+                self.place(cx, result)
+            }
             Err(error) => self.release(cx, Err(Abort::Store(error))),
         }
     }

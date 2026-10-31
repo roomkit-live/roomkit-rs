@@ -124,7 +124,7 @@ async fn send(kit: &RoomKit, text: &str) -> InboundResult {
 async fn refusal(kit: &RoomKit, result: &InboundResult) -> (bool, Option<String>, usize) {
     let timeline = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap();
     (result.blocked, result.reason.clone(), timeline.len())
@@ -412,14 +412,14 @@ fn a_call_whose_runtime_shuts_down_under_it_is_cancelled() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> crate::store::EventQuery {
-    crate::store::EventQuery {
+fn every_row() -> crate::store::ListEventsOptions {
+    crate::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(crate::store::EventFilter {
             include_blocked: true,
             ..crate::store::EventFilter::default()
         }),
-        ..crate::store::EventQuery::default()
+        ..crate::store::ListEventsOptions::default()
     }
 }
 

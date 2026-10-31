@@ -98,9 +98,9 @@ pub(crate) async fn asks(kit: &RoomKit, text: &str) -> InboundResult {
 }
 
 /// Every event of a room's timeline the room received.
-pub(crate) fn received() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+pub(crate) fn received() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

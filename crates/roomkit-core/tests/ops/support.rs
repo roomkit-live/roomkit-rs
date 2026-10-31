@@ -55,14 +55,14 @@ use roomkit_core::ops::{
     ChannelConfig, ChannelOutcome, ChannelRequest, CommitRecord, Decided, DeleteEvent, Effect,
     EffectId, Entry, Environment, FrameworkEvent, HoldOutcome, HoldRequest, HookAnswer,
     HookRequest, Inbound, InboundError, InboundResult, InboundTarget, KitConfig, MutationError,
-    Notice, Outcome, Request, RoomCounters, SequentialEnvironment, Settled, StoreOutcome,
-    StoreRequest, TargetUpdate, UpdateEvent, default_inbound_event,
+    Notice, Outcome, Request, SequentialEnvironment, Settled, StoreOutcome, StoreRequest,
+    UpdateEvent, default_inbound_event,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
 use roomkit_core::rules::routing::RouteQuery;
 use roomkit_core::rules::transcoding::text_of;
-use roomkit_core::rules::{attachment, edits};
+use roomkit_core::rules::{attachment, edits, lifecycle};
 
 /// What a channel answers to `on_event()`.
 pub(crate) type OnEvent =
@@ -1593,9 +1593,10 @@ impl Sim {
             }
             StoreRequest::Commit {
                 event,
-                counters,
                 target,
-            } => self.commit(*event, counters, target.as_ref()),
+                activity,
+                author_register,
+            } => self.commit(*event, target.as_deref(), activity, author_register),
             StoreRequest::ListEvents { room_id } => self.list_events(&room_id),
             StoreRequest::DeleteEvent {
                 event_id,
@@ -1702,14 +1703,25 @@ impl Sim {
         Outcome::Store(StoreOutcome::Events(received))
     }
 
-    /// Commits `event` with the room's counters, under the room's lock, with
-    /// the update an edit or a delete makes to its target in the same write.
+    /// Commits `event` under the room's lock, as the driver and a store's
+    /// `commit_event` do: the register of authors its record changed
+    /// written first, then its index the room's count, which the core
+    /// planned too, the counters bumped, the target an edit or a delete
+    /// changes written in the same write, and the room's activity at
+    /// `activity` (RFC §5.1).
     fn commit(
         &mut self,
-        event: RoomEvent,
-        counters: RoomCounters,
-        target: Option<&TargetUpdate>,
+        mut event: RoomEvent,
+        target: Option<&RoomEvent>,
+        activity: Option<Timestamp>,
+        author_register: Option<Metadata>,
     ) -> Outcome {
+        if let Some(register) = author_register {
+            self.update_room(RoomUpdates {
+                private_state: [("author_register".to_owned(), Some(register))].into(),
+                ..RoomUpdates::default()
+            });
+        }
         assert!(
             self.state(self.current).locks.contains(&event.room_id),
             "an event was committed outside the room lock"
@@ -1718,27 +1730,29 @@ impl Sim {
             event.index, self.room.event_count,
             "the index is the room's count"
         );
-        if let Some(update) = target {
+        if let Some(target) = target {
             let Some(stored) = self
                 .timeline
                 .iter_mut()
-                .find(|stored| stored.id == update.event_id)
+                .find(|stored| stored.id == target.id)
             else {
                 return Outcome::Failed(ErrorRecord::new("EventNotFound", "the target is gone"));
             };
-            update.updates.apply(stored);
+            let delivery_results = mem::take(&mut stored.delivery_results);
+            stored.clone_from(target);
+            stored.delivery_results = delivery_results;
         }
-        self.room.event_count = counters.event_count;
-        self.room.latest_index = Some(counters.latest_index);
-        self.room.timers.last_activity_at = counters.last_activity_at;
-        self.update_room(counters.room);
-        let updating = target.map_or_else(String::new, |update| {
-            format!(" updating {}", update.event_id)
-        });
+        event.index = self.room.event_count;
+        self.room.event_count = self.room.event_count.saturating_add(1);
+        self.room.latest_index = Some(event.index);
+        if let Some(at) = activity {
+            lifecycle::commit_activity(&mut self.room, at);
+        }
+        let updating = target.map_or_else(String::new, |target| format!(" updating {}", target.id));
         self.trace
             .push(format!("commit {}{updating}", describe(&event)));
-        self.timeline.push(event);
-        Outcome::Store(StoreOutcome::Committed)
+        self.timeline.push(event.clone());
+        Outcome::Store(StoreOutcome::Committed(Box::new(event)))
     }
 
     /// Creates the room, unless its id is taken, by another call meanwhile

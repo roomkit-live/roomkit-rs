@@ -104,7 +104,7 @@ impl Team {
             joined_at: self.clock.now(),
             ..Participant::new(ParticipantId::new(id)?, self.room.clone(), self.ws.clone())
         };
-        self.kit.store().create_participant(member.clone()).await?;
+        self.kit.store().add_participant(member.clone()).await?;
         Ok(member)
     }
 

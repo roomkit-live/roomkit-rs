@@ -540,7 +540,11 @@ mod an_edit {
     async fn from_someone_else_is_refused_and_stores_nothing() {
         let room = room().await;
         let result = send(&room.kit, edit_from(STRANGER, "I need 0$")).await;
-        let stored = room.kit.store().get_event_count(&room_id(), None).await;
+        let stored = room
+            .kit
+            .store()
+            .get_event_count(&room_id(), roomkit::store::GetEventCountOptions::default())
+            .await;
         assert_eq!(
             (
                 result.blocked,
@@ -723,7 +727,10 @@ mod a_direct_call {
             (
                 removed.iter().map(EventId::as_str).collect::<Vec<_>>(),
                 stored.event_count,
-                room.kit.store().get_event_count(&room_id(), None).await
+                room.kit
+                    .store()
+                    .get_event_count(&room_id(), roomkit::store::GetEventCountOptions::default())
+                    .await
             ),
             (vec!["evt_1", "evt_2"], 7, Ok(5))
         );
@@ -777,7 +784,10 @@ mod a_direct_call {
             .unwrap();
         // The attaches' lifecycle records alone are left.
         assert_eq!(
-            room.kit.store().get_event_count(&room_id(), None).await,
+            room.kit
+                .store()
+                .get_event_count(&room_id(), roomkit::store::GetEventCountOptions::default())
+                .await,
             Ok(4)
         );
     }
@@ -824,7 +834,12 @@ mod a_direct_call {
         let received = room
             .kit
             .store()
-            .get_event_count(&room_id(), Some(EventFilter::default()))
+            .get_event_count(
+                &room_id(),
+                roomkit::store::GetEventCountOptions {
+                    event_filter: Some(EventFilter::default()),
+                },
+            )
             .await;
         assert_eq!(
             (next.event.map(|event| event.index), received),
@@ -992,7 +1007,7 @@ mod changes_at_once {
         let left = room
             .kit
             .store()
-            .list_events(&room_id(), &every_row())
+            .list_events(&room_id(), every_row())
             .await
             .unwrap();
         assert_eq!(
@@ -1040,13 +1055,13 @@ mod changes_at_once {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(EventFilter {
             include_blocked: true,
             ..EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

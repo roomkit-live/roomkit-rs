@@ -396,8 +396,9 @@ pub(crate) async fn add_participant(
         .map_err(|error| format!("participant: {error}"))?;
     run.kit()
         .store()
-        .create_participant(record)
+        .add_participant(record)
         .await
+        .map(drop)
         .map_err(|error| format!("participant: {error}"))
 }
 

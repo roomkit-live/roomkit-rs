@@ -18,13 +18,14 @@ use std::path::{Path, PathBuf};
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, DeleteContent, EventContent, EventType, EventUpdates,
-    IdentityId, InboundMessage, Room, RoomId, RoomUpdates, TextContent, Timestamp,
+    ChannelBinding, ChannelId, ChannelType, DeleteContent, EventContent, EventType, IdentityId,
+    InboundMessage, Room, RoomEvent, RoomId, TextContent, Timestamp,
 };
+use roomkit::store::{DeleteEventOptions, LinkAddressOptions, ResolveIdentityOptions};
 use roomkit::testing::{
     RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
 };
-use roomkit::{ConversationStore, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions};
+use roomkit::{ConversationStore, ProcessInboundOptions, RoomKit, RoomKitOptions};
 use roomkit_sqlite::{OpenError, SqliteStore};
 use rusqlite::Connection;
 use serde_json::Value;
@@ -231,41 +232,58 @@ fn differences(
     }
 }
 
+/// A link in the organization `org-1`.
+fn in_org_1() -> LinkAddressOptions {
+    LinkAddressOptions {
+        organization_id: Some("org-1".to_owned()),
+    }
+}
+
+/// A resolution in the organization `org-1`.
+fn resolved_in_org_1() -> ResolveIdentityOptions {
+    ResolveIdentityOptions {
+        organization_id: Some("org-1".to_owned()),
+    }
+}
+
 /// Rewrites every record of the file through the store, each as it reads
 /// it.
 async fn rewrite_everything(store: &SqliteStore) {
     let full = room("room-full");
-    for room in store.list_rooms(&RoomFilter::default()).await.unwrap() {
-        store
-            .update_room(&room.id, RoomUpdates::default())
-            .await
-            .unwrap();
+    for room in store
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
+        .await
+        .unwrap()
+    {
+        store.update_room(room).await.unwrap();
     }
     for binding in store.list_bindings(&full).await.unwrap() {
-        store.store_binding(binding).await.unwrap();
+        store.add_binding(binding).await.unwrap();
     }
     for participant in store.list_participants(&full).await.unwrap() {
         store.update_participant(participant).await.unwrap();
     }
-    for event in store.list_events(&full, &every_row()).await.unwrap() {
-        store
-            .update_event(&event.id, EventUpdates::default())
-            .await
-            .unwrap();
+    for event in store.list_events(&full, every_row()).await.unwrap() {
+        store.update_event(event).await.unwrap();
     }
     let identity = IdentityId::new("id-jean").unwrap();
     store
-        .link_address(&identity, ChannelType::SMS, "+15551234567", Some("org-1"))
+        .link_address(&identity, &ChannelType::SMS, "+15551234567", in_org_1())
         .await
         .unwrap();
     let (tasks, observations) = (
-        store.list_tasks(&full).await.unwrap(),
+        store
+            .list_tasks(&full, roomkit::store::ListTasksOptions::default())
+            .await
+            .unwrap(),
         store.list_observations(&full).await.unwrap(),
     );
-    store
-        .persist_side_effects(&full, tasks, observations)
-        .await
-        .unwrap();
+    for task in tasks {
+        store.add_task(task).await.unwrap();
+    }
+    for observation in observations {
+        store.add_observation(observation).await.unwrap();
+    }
     let register = store
         .get_private_state(&full, "author_register")
         .await
@@ -332,7 +350,7 @@ async fn every_record_python_wrote_reads() {
     let store = SqliteStore::open(file.path()).await.unwrap();
     let full = room("room-full");
     let rooms: Vec<String> = store
-        .list_rooms(&RoomFilter::default())
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
         .await
         .unwrap()
         .into_iter()
@@ -345,20 +363,18 @@ async fn every_record_python_wrote_reads() {
         .into_iter()
         .map(|binding| binding.channel_type.to_string())
         .collect();
-    let timeline = store.list_events(&full, &every_row()).await.unwrap();
+    let timeline = store.list_events(&full, every_row()).await.unwrap();
     let indexes: Vec<u64> = timeline.iter().map(|event| event.index).collect();
     let slack = ChannelType::new("slack").unwrap();
     let resolved = store
-        .resolve_identity(slack, "U024BE7LH", Some("org-1"))
+        .resolve_identity(&slack, "U024BE7LH", resolved_in_org_1())
         .await
         .unwrap()
         .map(|identity| identity.id.to_string());
     let register = store
-        .load_context(&full, 5)
+        .get_private_state(&full, "author_register")
         .await
         .unwrap()
-        .unwrap()
-        .author_register
         .is_some();
     assert_eq!(
         (
@@ -367,7 +383,11 @@ async fn every_record_python_wrote_reads() {
             indexes,
             store.list_participants(&full).await.unwrap().len(),
             resolved,
-            store.list_tasks(&full).await.unwrap().len(),
+            store
+                .list_tasks(&full, roomkit::store::ListTasksOptions::default())
+                .await
+                .unwrap()
+                .len(),
             store.list_observations(&full).await.unwrap().len(),
             register
         ),
@@ -488,14 +508,14 @@ async fn what_python_reads_beside_the_timeline_is_kept_right() {
     let committed = derived(file.path());
     let mut deleted = event.metadata.clone();
     deleted.insert("deleted".to_owned(), true.into());
-    let marking = EventUpdates {
-        metadata: Some(deleted),
-        ..EventUpdates::default()
+    let marking = RoomEvent {
+        metadata: deleted,
+        ..event.clone()
     };
-    kit.store().update_event(&event.id, marking).await.unwrap();
+    kit.store().update_event(marking).await.unwrap();
     let marked = derived(file.path());
     kit.store()
-        .delete_event(&full, &event.id, true)
+        .delete_event(&full, &event.id, DeleteEventOptions::default())
         .await
         .unwrap();
     let removed = derived(file.path());
@@ -628,7 +648,7 @@ async fn a_delete_marks_its_target_s_edits_as_python_reads_them() {
     ))
     .unwrap();
     let full = room("room-full");
-    let timeline = kit.store().list_events(&full, &every_row()).await.unwrap();
+    let timeline = kit.store().list_events(&full, every_row()).await.unwrap();
     let edited = timeline
         .iter()
         .find(|event| event.index == 3)
@@ -696,7 +716,7 @@ async fn an_identity_with_a_key_rust_does_not_read_resolves_and_keeps_it() {
     let store = SqliteStore::open(file.path()).await.unwrap();
     let lena = IdentityId::new("id-lena").unwrap();
     let resolved = store
-        .resolve_identity(ChannelType::SMS, "+15559876543", Some("org-1"))
+        .resolve_identity(&ChannelType::SMS, "+15559876543", resolved_in_org_1())
         .await
         .map(|identity| identity.map(|identity| identity.id.to_string()));
     let read = store
@@ -704,7 +724,7 @@ async fn an_identity_with_a_key_rust_does_not_read_resolves_and_keeps_it() {
         .await
         .map(|identity| identity.map(|identity| identity.channel_addresses.len()));
     store
-        .link_address(&lena, ChannelType::EMAIL, "lena@example.com", Some("org-1"))
+        .link_address(&lena, &ChannelType::EMAIL, "lena@example.com", in_org_1())
         .await
         .unwrap();
     let kept: Value = {
@@ -753,7 +773,7 @@ async fn a_binding_row_its_model_refuses_fails_its_read_as_python_s_does() {
             room_id.clone(),
             ChannelType::HOST,
         );
-        store.store_binding(binding).await.unwrap();
+        store.add_binding(binding).await.unwrap();
     }
     let connection = Connection::open(file.path()).unwrap();
     let data: String = connection
@@ -792,13 +812,13 @@ async fn a_binding_row_its_model_refuses_fails_its_read_as_python_s_does() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
             include_blocked: true,
             ..roomkit::EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

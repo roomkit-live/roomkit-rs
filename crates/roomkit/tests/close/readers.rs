@@ -15,8 +15,8 @@ use futures_core::Stream;
 use pretty_assertions::assert_eq;
 use roomkit::model::{ChannelBinding, ChannelOutput, ChannelType, RoomContext};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, ConversationStore, DeliveryStream, EventQuery,
-    RoomKit, StreamItem,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, DeliveryStream, RoomKit,
+    StreamItem,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -276,11 +276,11 @@ impl Channel for Receiving {
 /// The texts `room_1` stores past its first event, each with whether it
 /// is marked `cancelled`.
 async fn answers(kit: &RoomKit) -> Vec<(String, bool)> {
-    let query = EventQuery {
+    let query = roomkit::store::ListEventsOptions {
         limit: u64::MAX,
-        ..EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     };
-    let events = kit.store().list_events(&room_id(), &query).await.unwrap();
+    let events = kit.store().list_events(&room_id(), query).await.unwrap();
     events
         .iter()
         .filter(|event| event.source.channel_type != ChannelType::SYSTEM)

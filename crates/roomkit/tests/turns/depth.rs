@@ -124,7 +124,7 @@ async fn sends_through_the_turn(sends: usize) -> (usize, Vec<u32>, usize) {
     let notes: Vec<roomkit::model::RoomEvent> = roomkit::ConversationStore::list_events(
         kit.store(),
         &crate::support::room(),
-        &crate::support::received(),
+        crate::support::received(),
     )
     .await
     .unwrap()

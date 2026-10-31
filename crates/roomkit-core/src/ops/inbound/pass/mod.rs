@@ -137,6 +137,24 @@ pub(super) enum PassResult {
 }
 
 impl PassResult {
+    /// Takes `stored`, the event as the store committed it, in place of the
+    /// planned one, in the result and in the context the commit left: the
+    /// index the store gave it is the event's (RFC §8.1), as the Python
+    /// implementation's pipeline goes on with the event `commit_event`
+    /// returns.
+    pub(super) fn adopt(&mut self, stored: RoomEvent) {
+        match self {
+            Self::Delivered { event, changed, .. } => {
+                if let Some(changed) = changed {
+                    super::commit::adopt(&mut changed.context, &stored);
+                }
+                **event = stored;
+            }
+            Self::Blocked { event, .. } => **event = stored,
+            Self::Refused { .. } | Self::Duplicate { .. } | Self::EditRefused { .. } => {}
+        }
+    }
+
     /// The room's context at the commit, for a pass that committed.
     pub(super) fn context(&self) -> Option<&RoomContext> {
         match self {

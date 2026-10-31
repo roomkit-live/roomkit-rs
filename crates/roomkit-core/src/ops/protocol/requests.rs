@@ -3,11 +3,11 @@
 
 use std::time::Duration;
 
-use super::{EffectId, RoomCounters, TargetUpdate};
+use super::EffectId;
 use crate::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, ErrorRecord, EventId, EventUpdates,
-    Identity, InboundMessage, Observation, ProviderResult, Room, RoomContext, RoomEvent, RoomId,
-    RoomUpdates, Task,
+    Identity, InboundMessage, Metadata, Observation, ProviderResult, Room, RoomContext, RoomEvent,
+    RoomId, RoomUpdates, Task, Timestamp,
 };
 use crate::rules::hook_chain::HookOutcome;
 use crate::rules::hook_registry::{HookId, HookTrigger};
@@ -181,20 +181,31 @@ pub enum StoreRequest {
         /// The room.
         room_id: RoomId,
     },
-    /// Store `event` and set the room's counters, as one atomic commit (RFC
-    /// §14.3), with the update an edit or a delete makes to its target in
-    /// the same transaction (RFC §10.1 step 12), and what the counters
-    /// carry for the room, its register of authors among it (gap G-089). The store must refuse an
-    /// index the room has given out already, a hard-deleted one included
-    /// (RFC §8.1), and fail the whole commit when the target is gone.
-    /// Answer [`StoreOutcome::Committed`].
+    /// Commit `event` as one atomic write (RFC §10.1 step 12, §14.3,
+    /// Python's `commit_event`): the store gives it its index, the room's
+    /// count of indices given out, bumps the room's counters, writes the
+    /// change's `target` in the same transaction, failing the whole commit
+    /// when the target is gone, and, for the room's `activity`, moves its
+    /// last activity and resumes it when paused (RFC §5.1). The register
+    /// of authors the event's record changed is written first, as the
+    /// Python implementation writes it: a commit that fails after it leaves
+    /// a rank unused, never one held twice (gap G-089). Answer
+    /// [`StoreOutcome::Committed`] with the event as stored.
     Commit {
-        /// The event, with its index and status.
+        /// The event, with its status and the index its room's count gave
+        /// it under the lock; the index the store gives it is the one it
+        /// takes.
         event: Box<RoomEvent>,
-        /// The room's counters once the event is stored.
-        counters: RoomCounters,
-        /// What an accepted edit or delete writes on its target.
-        target: Option<TargetUpdate>,
+        /// An accepted edit's or delete's target, as the change leaves it.
+        target: Option<Box<RoomEvent>>,
+        /// The instant of the room's activity the commit is: an event the
+        /// pipeline stores delivered. `None` for any other commit, which
+        /// moves the counters only (gap G-071).
+        activity: Option<Timestamp>,
+        /// The room's register of authors as the event's record left it,
+        /// when the record changed it (RFC §14.1 `set_private_state` under
+        /// `author_register`).
+        author_register: Option<Metadata>,
     },
     /// Store side effects (RFC §10.1 step 15). Answer
     /// [`StoreOutcome::Persisted`].
@@ -477,8 +488,9 @@ pub enum StoreOutcome {
     Deleted(Vec<RoomEvent>),
     /// The room's timeline, in index order.
     Events(Vec<RoomEvent>),
-    /// The commit is durable.
-    Committed,
+    /// The commit is durable: the event as the store holds it, its index
+    /// the store's.
+    Committed(Box<RoomEvent>),
     /// The side effects are stored.
     Persisted,
     /// The record is stored.

@@ -1,6 +1,6 @@
 //! The commit of a pass (RFC §10.1 steps 10 to 12, §14.3): the event and
-//! the room's counters in one write, with what an accepted edit or delete
-//! writes on its target (RFC §10.3).
+//! the room's counters in one write, the store giving the index, with the
+//! target an accepted edit or delete changes (RFC §10.3).
 //!
 //! An instruction is never committed (RFC §10.1.1 rules 4 and 5): its pass
 //! decides it, blocked or delivered, with no commit, so it consumes no index
@@ -9,11 +9,11 @@
 
 use super::pass::{Changed, PassResult};
 use crate::model::{
-    EventStatus, EventType, Metadata, RoomContext, RoomEvent, RoomUpdates, Timestamp, Visibility,
+    EventStatus, EventType, Metadata, RoomContext, RoomEvent, Timestamp, Visibility,
 };
-use crate::ops::protocol::{EffectId, RoomCounters, StoreRequest, TargetUpdate};
+use crate::ops::protocol::{EffectId, StoreRequest};
 use crate::ops::{Cx, FrameworkEvent, Notice};
-use crate::rules::authors::{AUTHOR, AUTHOR_REGISTER};
+use crate::rules::authors::AUTHOR;
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::permissions::{self, DeliveryPlan};
 
@@ -24,23 +24,22 @@ pub(super) struct Committing {
     pub(super) result: PassResult,
 }
 
-/// Commits `event` delivered with the room's counters, its activity moved
-/// (RFC §10.1 step 12). A paused room is resumed in the same commit (gap
-/// G-045), and the delivery set reads it active.
+/// Commits `event` delivered, the room's activity (RFC §10.1 step 12): the
+/// store moves its last activity and resumes it when paused, in the same
+/// commit (gap G-045), and the delivery set reads it active.
 ///
 /// An accepted edit or delete updates its target in the same commit, never
-/// before (RFC §10.1 step 12, §10.3): `written` is the write on the target
-/// and the target as it leaves it. The delivery set reads the target so,
-/// and the result carries it, with the room as the commit leaves it, for
-/// the mutation trigger. `register` is the room's register of authors as
-/// the event's author record left it, written in the same commit when it
-/// changed (RFC §10.1 step 12, gap G-089).
+/// before (RFC §10.1 step 12, §10.3): `written` is the target as it leaves
+/// it. The delivery set reads the target so, and the result carries it,
+/// with the room as the commit leaves it, for the mutation trigger.
+/// `register` is the room's register of authors as the event's author
+/// record left it, when it changed (RFC §10.1 step 12, gap G-089).
 pub(super) fn delivered(
     cx: &mut Cx<'_>,
     mut event: RoomEvent,
     plan: DeliveryPlan,
     mut context: Box<RoomContext>,
-    written: Option<(TargetUpdate, RoomEvent)>,
+    written: Option<RoomEvent>,
     register: Option<Metadata>,
 ) -> Committing {
     event.status = EventStatus::Delivered;
@@ -58,34 +57,29 @@ pub(super) fn delivered(
         };
     }
     let now = cx.env.now();
-    let mut counters = RoomCounters::after_commit(&context.room, event.index)
-        .moving_activity(now, resume(&mut context, now));
-    if let Some(register) = register {
-        counters
-            .room
-            .private_state
-            .insert(AUTHOR_REGISTER.to_owned(), Some(register));
-    }
+    resume(&mut context, now);
     let (target, changed) = match written {
-        Some((update, changed)) => {
+        Some(changed) => {
             for recent in &mut context.recent_events {
                 if recent.id == changed.id {
                     recent.clone_from(&changed);
                 }
             }
+            let target = Box::new(changed.clone());
             let changed = Changed {
                 target: changed,
-                context: committed(&context, &event, &counters, cx.config.context_window),
+                context: committed(&context, &event, now, cx.config.context_window),
             };
-            (Some(update), Some(Box::new(changed)))
+            (Some(target), Some(Box::new(changed)))
         }
         None => (None, None),
     };
     let room_id = event.room_id.clone();
     let request = StoreRequest::Commit {
         event: Box::new(event.clone()),
-        counters,
         target,
+        activity: Some(now),
+        author_register: register,
     };
     let effect = cx.io.issue_locked(request, room_id);
     Committing {
@@ -99,21 +93,22 @@ pub(super) fn delivered(
     }
 }
 
-/// The room of `context` as the commit of `event` with `counters` leaves it
-/// (RFC §10.3 "Mutation triggers", gap G-062): its counters written, and
-/// `event` the newest event of its history, at its committed index, the
-/// oldest dropped past `window`, as a read of the room would hold it.
+/// The room of `context` as the commit of `event`, the room's activity at
+/// `now`, leaves it (RFC §10.3 "Mutation triggers", gap G-062): one more
+/// index given out, `event`'s the latest, its activity moved, and `event`
+/// the newest event of its history, at its index, the oldest dropped past
+/// `window`, as a read of the room would hold it.
 fn committed(
     context: &RoomContext,
     event: &RoomEvent,
-    counters: &RoomCounters,
+    now: Timestamp,
     window: usize,
 ) -> RoomContext {
     let mut committed = context.clone();
     let room = &mut committed.room;
-    room.event_count = counters.event_count;
-    room.latest_index = Some(counters.latest_index);
-    room.timers.last_activity_at = counters.last_activity_at;
+    room.event_count = room.event_count.saturating_add(1);
+    room.latest_index = Some(event.index);
+    room.timers.last_activity_at = Some(now);
     let history = &mut committed.recent_events;
     history.retain(|recent| recent.id != event.id);
     history.push(event.clone());
@@ -157,12 +152,12 @@ pub(super) fn blocked(
             result,
         };
     }
-    let counters = RoomCounters::after_commit(&context.room, event.index);
     let room_id = event.room_id.clone();
     let request = StoreRequest::Commit {
         event: Box::new(event),
-        counters,
         target: None,
+        activity: None,
+        author_register: None,
     };
     let effect = cx.io.issue_locked(request, room_id);
     Committing {
@@ -183,12 +178,26 @@ pub(super) fn stored_visibility(event: &RoomEvent, context: &RoomContext) -> Vis
     )
 }
 
-/// The write that resumes the room of `context` at `now` when it is paused,
-/// applied to `context` too; empty for a room that is not (gap G-045).
-fn resume(context: &mut RoomContext, now: Timestamp) -> RoomUpdates {
-    if !lifecycle::apply(&mut context.room, Transition::Resume, now) {
-        return RoomUpdates::default();
+/// Resumes the room of `context` at `now` when it is paused, as the commit
+/// resumes the stored room (gap G-045).
+fn resume(context: &mut RoomContext, now: Timestamp) {
+    if lifecycle::apply(&mut context.room, Transition::Resume, now) {
+        context.room.updated_at = now;
     }
-    context.room.updated_at = now;
-    RoomUpdates::lifecycle(&context.room)
+}
+
+/// Writes `stored`, the event as the store committed it, in place of its
+/// planned copy in `context`, a context the commit left: the index the
+/// store gave it is the latest (RFC §8.1, Python's `commit_event`).
+pub(super) fn adopt(context: &mut RoomContext, stored: &RoomEvent) {
+    let Some(copy) = context
+        .recent_events
+        .iter_mut()
+        .find(|recent| recent.id == stored.id)
+    else {
+        return;
+    };
+    copy.clone_from(stored);
+    context.room.latest_index = Some(stored.index);
+    context.room.event_count = context.room.event_count.max(stored.index.saturating_add(1));
 }

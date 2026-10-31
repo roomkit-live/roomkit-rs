@@ -333,7 +333,7 @@ async fn deltas_yielded_together_cross_as_one_item() {
             })
         })
         .collect();
-    let events = kit.store().list_events(&room(), &received()).await.unwrap();
+    let events = kit.store().list_events(&room(), received()).await.unwrap();
     let answer = events.last().map(|event| text_of(&event.content).len());
     assert_eq!(
         (target.sizes.lock().unwrap().clone(), bursts, answer),
@@ -659,7 +659,7 @@ async fn text_written_inside_a_call_crosses_in_order() {
     .unwrap();
     roomkit::testing::idle(&kit).await;
     let frames = frame_lines(&tap);
-    let events = kit.store().list_events(&room(), &received()).await.unwrap();
+    let events = kit.store().list_events(&room(), received()).await.unwrap();
     let stored: Vec<String> = events
         .iter()
         .filter(|event| event.source.channel_id == channel("ai"))

@@ -32,9 +32,7 @@ pub use results::{InboundError, InboundResult, KIT_CLOSED, LANE_CANCELLED};
 use thiserror::Error;
 
 use super::{Environment, FrameworkEvent};
-use crate::model::{
-    EventId, EventUpdates, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Timestamp,
-};
+use crate::model::{RoomContext, RoomEvent, RoomId, Timestamp};
 use crate::rules::chain_depth::ReentryBudget;
 use crate::rules::hook_registry::{HookId, HookTrigger};
 
@@ -144,59 +142,6 @@ pub const ROW_HIDDEN: &str = "row_hidden";
 /// operation itself ([`Operation::cancel_turns`]): no failure, nothing of it
 /// reported.
 pub(crate) const TURN_CUT: &str = "turn_cut";
-
-/// The room's counters after a commit (RFC §10.1 step 12).
-#[derive(Clone, Debug, PartialEq)]
-pub struct RoomCounters {
-    /// How many indices the room has given out: the events its timeline
-    /// holds, and those a hard delete removed (gap G-064).
-    pub event_count: u64,
-    /// The highest index of the timeline.
-    pub latest_index: u64,
-    /// The room's last activity, moved by a delivered event only.
-    pub last_activity_at: Option<Timestamp>,
-    /// What else the commit writes on the room, in the same transaction: a
-    /// delivered event resumes a PAUSED room (gap G-045). Empty otherwise.
-    pub room: RoomUpdates,
-}
-
-impl RoomCounters {
-    /// The counters of `room` once an event of index `index` is committed to
-    /// it (RFC §10.1 step 12, §14.3): one more index given out, `index` the
-    /// latest, the room's activity as it is and nothing else written. So
-    /// commit a record stored `BLOCKED` and a record committed outside the
-    /// pipeline (gap G-071); a delivered event moves the activity too
-    /// ([`moving_activity`](Self::moving_activity)).
-    pub(crate) fn after_commit(room: &Room, index: u64) -> Self {
-        Self {
-            event_count: room.event_count.saturating_add(1),
-            latest_index: index,
-            last_activity_at: room.timers.last_activity_at,
-            room: RoomUpdates::default(),
-        }
-    }
-
-    /// The same counters, the room's activity moved to `now`, with `room`
-    /// written on it in the same commit: a delivered event's, which resumes
-    /// a PAUSED room (gap G-045).
-    pub(crate) fn moving_activity(self, now: Timestamp, room: RoomUpdates) -> Self {
-        Self {
-            last_activity_at: Some(now),
-            room,
-            ..self
-        }
-    }
-}
-
-/// What a commit writes on the event an accepted edit or delete targets
-/// (RFC §10.1 step 12, §10.3), in the commit's transaction.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TargetUpdate {
-    /// The target.
-    pub event_id: EventId,
-    /// What to write on it.
-    pub updates: EventUpdates,
-}
 
 /// Something the driver performs or reports without answering.
 #[derive(Clone, Debug, PartialEq)]

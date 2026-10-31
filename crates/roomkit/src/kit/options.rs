@@ -15,7 +15,7 @@ use roomkit_core::model::{
 };
 
 use crate::router::InboundRoomRouter;
-use crate::store::{EventFilter, EventQuery, InMemoryStore};
+use crate::store::{EventFilter, InMemoryStore, ListEventsOptions};
 
 /// Python's `max_chain_depth=5` (RFC §8.3).
 const MAX_CHAIN_DEPTH: u32 = 5;
@@ -479,8 +479,8 @@ impl Default for GetTimelineOptions {
 
 impl GetTimelineOptions {
     /// The store read it stands for.
-    pub(crate) fn query(&self) -> EventQuery {
-        EventQuery {
+    pub(crate) fn query(&self) -> ListEventsOptions {
+        ListEventsOptions {
             offset: self.offset,
             limit: self.limit,
             visibility_filter: self.visibility_filter.clone(),

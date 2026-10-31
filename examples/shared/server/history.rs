@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 
-use roomkit::model::{ParticipantId, RoomId};
+use roomkit::model::{ParticipantId, RoomContext, RoomId};
 use roomkit::{ConversationStore, GetTimelineOptions, visible_events};
 use serde_json::{Value, json};
 
@@ -31,14 +31,18 @@ impl App {
             ..GetTimelineOptions::default()
         };
         let page = self.kit.get_timeline(room_id, query).await?;
-        let Some(mut context) = self.kit.store().load_context(room_id, 0).await? else {
+        let (Some(room), bindings, participants) =
+            self.kit.store().load_room_context(room_id).await?
+        else {
             return Err(format!("room {room_id} is gone").into());
         };
-        let reads = context
-            .bindings
+        let reads = bindings
             .iter()
             .find(|binding| binding.channel_id == *self.websocket.id())
             .is_some_and(|binding| binding.access.reads());
+        let mut context = RoomContext::new(room);
+        context.bindings = bindings;
+        context.participants = participants;
         context.recent_events = if reads { page } else { Vec::new() };
         let names: HashMap<&ParticipantId, &str> = context
             .participants

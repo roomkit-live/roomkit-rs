@@ -9,8 +9,8 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::{EventContent, EventType, RoomEvent, TextContent, ToolCallStatus};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, EventQuery, HookOptions, InMemoryStore,
-    ProcessInboundOptions, RoomKit, SendEventOptions, TurnTimeouts, keep_context,
+    AttachChannelOptions, ConversationStore, HookOptions, InMemoryStore, ProcessInboundOptions,
+    RoomKit, SendEventOptions, TurnTimeouts, keep_context,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
@@ -23,11 +23,11 @@ use crate::warnings::Warnings;
 
 /// Whether the agent's last message in `r` is marked `cancelled`.
 async fn cancelled<S: ConversationStore>(kit: &RoomKit<S>) -> bool {
-    let query = EventQuery {
+    let query = roomkit::store::ListEventsOptions {
         limit: u64::MAX,
-        ..EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     };
-    let events = kit.store().list_events(&room("r"), &query).await.unwrap();
+    let events = kit.store().list_events(&room("r"), query).await.unwrap();
     events
         .iter()
         .rev()
@@ -92,11 +92,11 @@ async fn a_room_turn_returns_cancelled_to_its_caller() {
 
 /// The tool-call end rows `r` stores, each with its status and error.
 async fn ends<S: ConversationStore>(kit: &RoomKit<S>) -> Vec<(ToolCallStatus, Option<String>)> {
-    let query = EventQuery {
+    let query = roomkit::store::ListEventsOptions {
         limit: u64::MAX,
-        ..EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     };
-    let events = kit.store().list_events(&room("r"), &query).await.unwrap();
+    let events = kit.store().list_events(&room("r"), query).await.unwrap();
     events
         .into_iter()
         .filter(|event| event.r#type == EventType::ToolCallEnd)

@@ -5,24 +5,26 @@ mod events;
 mod identities;
 
 use std::collections::{BTreeMap, HashMap};
+use std::mem;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ChannelType, EventId, EventUpdates, Identity, IdentityId, Metadata,
-    Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
-    Task,
+    ChannelBinding, ChannelId, ChannelType, EventId, Identity, IdentityId, Metadata, Observation,
+    Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
 };
-use roomkit_core::ops::{RoomCounters, TargetUpdate};
-use roomkit_core::rules::{idempotency, routing};
+use roomkit_core::rules::{idempotency, lifecycle, routing};
 
 use self::identities::Identities;
-use super::{ConversationStore, EventFilter, EventQuery, RoomFilter, StoreError};
+use super::{
+    AdvanceDeliveredIndexOptions, CommitEventOptions, ConversationStore, DeleteEventOptions,
+    FindRoomIdByBindingOptions, FindRoomIdByParticipantOptions, FindRoomIdsByChannelOptions,
+    FindRoomsOptions, GetEventCountOptions, LinkAddressOptions, ListEventsOptions,
+    ListRoomsOptions, ListTasksOptions, PatchRoomMetadataOptions, ResolveIdentityOptions,
+    RoomFilter, StoreError, UnlinkAddressOptions, names_by_recipient, names_sender,
+};
 
-/// The key of a room's private state holding its register of authors (RFC
-/// §10.1 step 12, §14.1), which a context carries.
-const AUTHOR_REGISTER: &str = "author_register";
-
-/// A store that keeps everything in memory, for one process.
+/// A store that keeps everything in memory, for one process: Python's
+/// `InMemoryStore`.
 ///
 /// Every read returns copies and every write copies in, so no caller can
 /// change stored state outside the store's methods (RFC §14.4). A room's
@@ -46,106 +48,72 @@ struct Record {
 }
 
 impl Record {
-    /// Writes `updates` on the room, its private state apart: a value
-    /// written or removed under a key removes the metadata's copy under it
-    /// (RFC §14.1 `set_private_state`).
-    fn update(&mut self, mut updates: RoomUpdates) {
-        for (key, value) in std::mem::take(&mut updates.private_state) {
-            self.room.metadata.remove(&key);
-            match value {
-                Some(value) => {
-                    self.private.insert(key, value);
-                }
-                None => {
-                    self.private.remove(&key);
-                }
-            }
+    /// The record of a new room.
+    fn new(room: Room) -> Self {
+        Self {
+            room,
+            bindings: Vec::new(),
+            participants: Vec::new(),
+            events: Vec::new(),
+            tasks: Vec::new(),
+            observations: Vec::new(),
+            private: BTreeMap::new(),
         }
-        updates.apply(&mut self.room);
     }
 
-    /// Whether the room has a participant with the id.
-    fn has_participant(&self, participant_id: &ParticipantId) -> bool {
-        self.participants
+    /// The room's binding of `channel_id`.
+    fn binding(&self, channel_id: &ChannelId) -> Option<&ChannelBinding> {
+        self.bindings
             .iter()
-            .any(|participant| &participant.id == participant_id)
-    }
-
-    /// Whether `filter` admits the room.
-    fn admitted_by(&self, filter: &RoomFilter) -> bool {
-        filter.matches(&self.room, &self.bindings, &self.participants)
-    }
-
-    /// Whether the room's binding of `channel_id` names `participant_id` or
-    /// `identity_id`.
-    fn binds_to(
-        &self,
-        channel_id: &ChannelId,
-        participant_id: &ParticipantId,
-        identity_id: Option<&IdentityId>,
-    ) -> bool {
-        self.bindings.iter().any(|binding| {
-            &binding.channel_id == channel_id
-                && binding
-                    .participant_id
-                    .as_ref()
-                    .is_some_and(|named| names(named, participant_id, identity_id))
-        })
+            .find(|binding| &binding.channel_id == channel_id)
     }
 
     /// Whether the room holds a participant reached through `channel_id`
-    /// whose id is `participant_id` or `identity_id`, or whose identity is
-    /// `identity_id`.
+    /// who is the sender, by `participant_id` or `identity_id`, as Python's
+    /// `reached_as` reads them.
     fn reached(
         &self,
         channel_id: &ChannelId,
-        participant_id: &ParticipantId,
+        participant_id: &str,
         identity_id: Option<&IdentityId>,
     ) -> bool {
         self.participants.iter().any(|participant| {
             participant.connected_via.contains(channel_id)
-                && (names(&participant.id, participant_id, identity_id)
-                    || identity_id
-                        .is_some_and(|identity| participant.identity_id.as_ref() == Some(identity)))
+                && (names_sender(participant.id.as_str(), participant_id, identity_id)
+                    || participant.identity_id.as_ref().is_some_and(|identity| {
+                        names_sender(identity.as_str(), participant_id, identity_id)
+                    }))
         })
     }
 }
 
-/// Whether `named`, a stored id, names the sender: their address
-/// `participant_id`, or the identity `identity_id` the caller resolved for
-/// them. Ids compare as stored.
-fn names(
-    named: &ParticipantId,
-    participant_id: &ParticipantId,
-    identity_id: Option<&IdentityId>,
-) -> bool {
-    named == participant_id
-        || identity_id.is_some_and(|identity| named.as_str() == identity.as_str())
-}
-
-/// The page of `timeline` `query` asks for, as the Python implementation's
+/// The page of `timeline` `options` asks for, as the Python implementation's
 /// in-memory store cuts it: the events between the cursor and the end in
-/// index order, those the query admits, then the window, taken from the
+/// index order, those the options admit, then the window, taken from the
 /// newest end for a `before_index` cursor and for `newest_first` in offset
 /// mode, the page ascending either way.
-fn page(timeline: &[RoomEvent], query: &EventQuery) -> Vec<RoomEvent> {
+fn page(timeline: &[RoomEvent], options: &ListEventsOptions) -> Vec<RoomEvent> {
     let mut events: Vec<&RoomEvent> = timeline
         .iter()
-        .filter(|event| query.after_index.is_none_or(|after| event.index > after))
-        .filter(|event| query.before_index.is_none_or(|before| event.index < before))
-        .filter(|event| query.admits(event))
+        .filter(|event| options.after_index.is_none_or(|after| event.index > after))
+        .filter(|event| {
+            options
+                .before_index
+                .is_none_or(|before| event.index < before)
+        })
+        .filter(|event| options.admits(event))
         .collect();
     // Rendered by index whatever the commit order (RFC §14.1); the sort is
     // stable.
     events.sort_by_key(|event| event.index);
-    let limit = usize::try_from(query.limit).unwrap_or(usize::MAX);
-    let cursor = query.after_index.is_some() || query.before_index.is_some();
+    let limit = usize::try_from(options.limit).unwrap_or(usize::MAX);
+    let cursor = options.after_index.is_some() || options.before_index.is_some();
     let offset = if cursor {
         0
     } else {
-        usize::try_from(query.offset).unwrap_or(usize::MAX)
+        usize::try_from(options.offset).unwrap_or(usize::MAX)
     };
-    let from_newest = query.before_index.is_some() || (!cursor && query.newest_first);
+    let from_newest = options.before_index.is_some() || (!cursor && options.newest_first);
     let (start, end) = if from_newest {
         let end = events.len().saturating_sub(offset);
         (end.saturating_sub(limit), end)
@@ -161,15 +129,25 @@ fn page(timeline: &[RoomEvent], query: &EventQuery) -> Vec<RoomEvent> {
         .collect()
 }
 
+/// `rooms` from `offset`, at most `limit` of them, as a Python slice cuts
+/// them.
+fn window(rooms: Vec<Room>, offset: u64, limit: u64) -> Vec<Room> {
+    let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    rooms.into_iter().skip(offset).take(limit).collect()
+}
+
 /// The refusal of `event`'s commit when `events`, its room's timeline,
-/// holds an event of the same source channel with the same idempotency key
-/// (RFC §14.3); `None` for an event that carries no key, a blank one read
-/// as none already (RFC §13.4).
+/// holds another event of the same source channel with the same
+/// idempotency key (RFC §14.3); `None` for an event that carries no key, a
+/// blank one read as none already (RFC §13.4).
 fn taken_key(events: &[RoomEvent], event: &RoomEvent) -> Option<StoreError> {
     let key = event.idempotency_key.as_deref()?;
     let channel_id = &event.source.channel_id;
     let taken = events.iter().any(|stored| {
-        stored.idempotency_key.as_deref() == Some(key) && &stored.source.channel_id == channel_id
+        stored.id != event.id
+            && stored.idempotency_key.as_deref() == Some(key)
+            && &stored.source.channel_id == channel_id
     });
     taken.then(|| StoreError::IdempotencyKeyTaken {
         room_id: event.room_id.clone(),
@@ -189,6 +167,31 @@ fn advance(cursor: &mut i64, index: u64, force: bool) -> bool {
         *cursor = index;
     }
     moves
+}
+
+/// Writes `target` whole on its stored copy among `events`, keeping the
+/// stored `delivery_results` (RFC §14.3), and marks its edits deleted when
+/// `event` deletes it (RFC §10.3).
+///
+/// # Errors
+///
+/// [`StoreError::EventNotFound`] for a target `events` no longer holds.
+fn write_target(
+    events: &mut [RoomEvent],
+    event: &RoomEvent,
+    mut target: RoomEvent,
+) -> Result<(), StoreError> {
+    let stored = events
+        .iter_mut()
+        .find(|stored| stored.id == target.id)
+        .ok_or_else(|| StoreError::EventNotFound(target.id.clone()))?;
+    target.delivery_results = mem::take(&mut stored.delivery_results);
+    *stored = target;
+    let target_id = stored.id.clone();
+    if events::deletes(event, &target_id) {
+        events::mark_edits_deleted(events, &target_id);
+    }
+    Ok(())
 }
 
 impl InMemoryStore {
@@ -211,23 +214,34 @@ impl InMemoryStore {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Every room `admits` accepts, in the order every store pages them: by
+    /// creation, then by id.
+    fn rooms_in_order(&self, admits: impl Fn(&Room) -> bool) -> Vec<Room> {
+        let mut rooms: Vec<Room> = self
+            .rooms()
+            .values()
+            .map(|record| &record.room)
+            .filter(|room| admits(room))
+            .cloned()
+            .collect();
+        rooms.sort_by(routing::recency);
+        rooms
+    }
+
     /// The newest room `filter` admits whose record `found` accepts, as the
     /// default router orders rooms (RFC §10.4).
     fn newest(&self, filter: &RoomFilter, found: impl Fn(&Record) -> bool) -> Option<RoomId> {
         self.rooms()
             .values()
-            .filter(|record| record.admitted_by(filter) && found(record))
+            .filter(|record| filter.admits(&record.room) && found(record))
             .map(|record| &record.room)
             .max_by(|left, right| routing::recency(left, right))
             .map(|room| room.id.clone())
     }
 
-    /// Runs `read` on the room's record.
-    fn read<T>(&self, room_id: &RoomId, read: impl FnOnce(&Record) -> T) -> Result<T, StoreError> {
-        self.rooms()
-            .get(room_id)
-            .map(read)
-            .ok_or_else(|| StoreError::RoomNotFound(room_id.clone()))
+    /// Runs `read` on the room's record; `None` for a room the store lacks.
+    fn read<T>(&self, room_id: &RoomId, read: impl FnOnce(&Record) -> T) -> Option<T> {
+        self.rooms().get(room_id).map(read)
     }
 
     /// Runs `write` on the room's record.
@@ -242,132 +256,9 @@ impl InMemoryStore {
             .ok_or_else(|| StoreError::RoomNotFound(room_id.clone()))?;
         write(record)
     }
-}
 
-#[expect(
-    clippy::unused_async_trait_impl,
-    reason = "the store answers at once; written as async fn, it reads as a store that awaits"
-)]
-impl ConversationStore for InMemoryStore {
-    async fn create_room(&self, room: Room) -> Result<(), StoreError> {
-        let mut rooms = self.rooms();
-        if rooms.contains_key(&room.id) {
-            return Err(StoreError::RoomAlreadyExists(room.id));
-        }
-        rooms.insert(
-            room.id.clone(),
-            Record {
-                room,
-                bindings: Vec::new(),
-                participants: Vec::new(),
-                events: Vec::new(),
-                tasks: Vec::new(),
-                observations: Vec::new(),
-                private: BTreeMap::new(),
-            },
-        );
-        Ok(())
-    }
-
-    async fn update_room(
-        &self,
-        room_id: &RoomId,
-        updates: RoomUpdates,
-    ) -> Result<Room, StoreError> {
-        self.write(room_id, |record| {
-            record.update(updates);
-            Ok(record.room.clone())
-        })
-    }
-
-    async fn get_private_state(
-        &self,
-        room_id: &RoomId,
-        key: &str,
-    ) -> Result<Option<Metadata>, StoreError> {
-        Ok(self
-            .rooms()
-            .get(room_id)
-            .and_then(|record| record.private.get(key).cloned()))
-    }
-
-    async fn set_private_state(
-        &self,
-        room_id: &RoomId,
-        key: &str,
-        value: Option<Metadata>,
-    ) -> Result<(), StoreError> {
-        let updates = RoomUpdates {
-            private_state: [(key.to_owned(), value)].into(),
-            ..RoomUpdates::default()
-        };
-        if let Some(record) = self.rooms().get_mut(room_id) {
-            record.update(updates);
-        }
-        Ok(())
-    }
-
-    async fn get_delivered_index(&self, room_id: &RoomId) -> Result<i64, StoreError> {
-        Ok(self
-            .rooms()
-            .get(room_id)
-            .map_or(-1, |record| record.room.delivered_index))
-    }
-
-    async fn advance_delivered_index(
-        &self,
-        room_id: &RoomId,
-        index: u64,
-        force: bool,
-    ) -> Result<bool, StoreError> {
-        let mut rooms = self.rooms();
-        let Some(record) = rooms.get_mut(room_id) else {
-            return Ok(false);
-        };
-        Ok(advance(&mut record.room.delivered_index, index, force))
-    }
-
-    async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
-        Ok(self.rooms().get(room_id).map(|record| record.room.clone()))
-    }
-
-    async fn list_rooms(&self, filter: &RoomFilter) -> Result<Vec<Room>, StoreError> {
-        let mut rooms: Vec<Room> = self
-            .rooms()
-            .values()
-            .filter(|record| record.admitted_by(filter))
-            .map(|record| record.room.clone())
-            .collect();
-        rooms
-            .sort_by(|left, right| (left.created_at, &left.id).cmp(&(right.created_at, &right.id)));
-        Ok(rooms)
-    }
-
-    async fn find_room_id_by_binding(
-        &self,
-        channel_id: &ChannelId,
-        participant_id: &ParticipantId,
-        identity_id: Option<&IdentityId>,
-        filter: &RoomFilter,
-    ) -> Result<Option<RoomId>, StoreError> {
-        Ok(self.newest(filter, |record| {
-            record.binds_to(channel_id, participant_id, identity_id)
-        }))
-    }
-
-    async fn find_room_id_by_participant(
-        &self,
-        channel_id: &ChannelId,
-        participant_id: &ParticipantId,
-        identity_id: Option<&IdentityId>,
-        filter: &RoomFilter,
-    ) -> Result<Option<RoomId>, StoreError> {
-        Ok(self.newest(filter, |record| {
-            record.reached(channel_id, participant_id, identity_id)
-        }))
-    }
-
-    async fn store_binding(&self, binding: ChannelBinding) -> Result<(), StoreError> {
+    /// Stores `binding` in place of the room's binding of its channel.
+    fn put_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
         super::written::binding(&binding)?;
         let room_id = binding.room_id.clone();
         self.write(&room_id, |record| {
@@ -378,58 +269,260 @@ impl ConversationStore for InMemoryStore {
                 .iter_mut()
                 .find(|bound| bound.channel_id == binding.channel_id)
             {
-                Some(bound) => *bound = binding,
-                None => record.bindings.push(binding),
+                Some(bound) => bound.clone_from(&binding),
+                None => record.bindings.push(binding.clone()),
             }
-            Ok(())
+            Ok(binding)
+        })
+    }
+}
+
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "the store answers at once; written as async fn, it reads as a store that awaits"
+)]
+impl ConversationStore for InMemoryStore {
+    async fn create_room(&self, room: Room) -> Result<Room, StoreError> {
+        let mut rooms = self.rooms();
+        if rooms.contains_key(&room.id) {
+            return Err(StoreError::RoomAlreadyExists(room.id));
+        }
+        rooms.insert(room.id.clone(), Record::new(room.clone()));
+        Ok(room)
+    }
+
+    async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
+        Ok(self.read(room_id, |record| record.room.clone()))
+    }
+
+    async fn update_room(&self, mut room: Room) -> Result<Room, StoreError> {
+        let room_id = room.id.clone();
+        self.write(&room_id, |record| {
+            // The counters are the store's: a caller's stale copy never
+            // rewinds them (RFC §14.3).
+            room.event_count = record.room.event_count;
+            room.latest_index = record.room.latest_index;
+            room.delivered_index = record.room.delivered_index;
+            record.room.clone_from(&room);
+            Ok(room)
         })
     }
 
-    async fn delete_binding(
+    /// One write under the store's lock: no commit falls between the read
+    /// and the write.
+    async fn patch_room_metadata(
         &self,
         room_id: &RoomId,
+        patch: Metadata,
+        options: PatchRoomMetadataOptions,
+    ) -> Result<Option<Room>, StoreError> {
+        let mut rooms = self.rooms();
+        let Some(record) = rooms.get_mut(room_id) else {
+            return Ok(None);
+        };
+        for key in &options.unset {
+            record.room.metadata.remove(key);
+        }
+        record.room.metadata.extend(patch);
+        record.room.updated_at = super::written::now();
+        Ok(Some(record.room.clone()))
+    }
+
+    async fn delete_room(&self, room_id: &RoomId) -> Result<bool, StoreError> {
+        Ok(self.rooms().remove(room_id).is_some())
+    }
+
+    async fn list_rooms(&self, options: ListRoomsOptions) -> Result<Vec<Room>, StoreError> {
+        let rooms = self.rooms_in_order(|_| true);
+        Ok(window(rooms, options.offset, options.limit))
+    }
+
+    async fn find_rooms(&self, options: FindRoomsOptions) -> Result<Vec<Room>, StoreError> {
+        let FindRoomsOptions {
+            organization_id,
+            status,
+            metadata_filter,
+            limit,
+            offset,
+        } = options;
+        let rooms = self.rooms_in_order(|room| {
+            organization_id
+                .as_ref()
+                .is_none_or(|organization| room.organization_id.as_ref() == Some(organization))
+                && status.is_none_or(|status| room.status == status)
+                && metadata_filter.as_ref().is_none_or(|filter| {
+                    filter
+                        .iter()
+                        .all(|(key, value)| room.metadata.get(key) == Some(value))
+                })
+        });
+        Ok(window(rooms, offset, limit))
+    }
+
+    async fn find_room_ids_by_channel(
+        &self,
         channel_id: &ChannelId,
-    ) -> Result<(), StoreError> {
-        self.write(room_id, |record| {
-            record
-                .bindings
-                .retain(|bound| &bound.channel_id != channel_id);
-            Ok(())
-        })
+        options: FindRoomIdsByChannelOptions,
+    ) -> Result<Vec<RoomId>, StoreError> {
+        let filter = options.room_filter.unwrap_or_default();
+        let mut matched: Vec<Room> =
+            self.rooms()
+                .values()
+                .filter(|record| {
+                    record.binding(channel_id).is_some_and(|binding| {
+                        options.group.is_none_or(|group| binding.group == group)
+                    }) && filter.admits(&record.room)
+                })
+                .map(|record| record.room.clone())
+                .collect();
+        matched.sort_by(routing::recency);
+        Ok(matched
+            .into_iter()
+            .take(options.limit)
+            .map(|room| room.id)
+            .collect())
     }
 
-    async fn list_bindings(&self, room_id: &RoomId) -> Result<Vec<ChannelBinding>, StoreError> {
-        self.read(room_id, |record| record.bindings.clone())
-    }
-
-    async fn load_context(
+    async fn find_room_id_by_binding(
         &self,
-        room_id: &RoomId,
-        recent_events: usize,
-    ) -> Result<Option<RoomContext>, StoreError> {
-        Ok(self.rooms().get(room_id).map(|record| {
-            let skip = record.events.len().saturating_sub(recent_events);
-            RoomContext {
-                room: record.room.clone(),
-                bindings: record.bindings.clone(),
-                participants: record.participants.clone(),
-                recent_events: record.events.iter().skip(skip).cloned().collect(),
-                author_register: record.private.get(AUTHOR_REGISTER).cloned(),
-            }
+        channel_id: &ChannelId,
+        participant_id: &str,
+        options: FindRoomIdByBindingOptions,
+    ) -> Result<Option<RoomId>, StoreError> {
+        let filter = options.room_filter.unwrap_or_default();
+        let identity_id = options.identity_id.as_ref();
+        let recipient_key = options.recipient_key.as_deref();
+        Ok(self.newest(&filter, |record| {
+            record.binding(channel_id).is_some_and(|binding| {
+                binding
+                    .participant_id
+                    .as_ref()
+                    .is_some_and(|named| names_sender(named.as_str(), participant_id, identity_id))
+                    || names_by_recipient(binding, participant_id, recipient_key)
+            })
         }))
     }
 
-    async fn create_participant(&self, participant: Participant) -> Result<(), StoreError> {
+    async fn find_room_id_by_participant(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &str,
+        options: FindRoomIdByParticipantOptions,
+    ) -> Result<Option<RoomId>, StoreError> {
+        let filter = options.room_filter.unwrap_or_default();
+        Ok(self.newest(&filter, |record| {
+            record.reached(channel_id, participant_id, options.identity_id.as_ref())
+        }))
+    }
+
+    async fn get_delivered_index(&self, room_id: &RoomId) -> Result<i64, StoreError> {
+        Ok(self
+            .read(room_id, |record| record.room.delivered_index)
+            .unwrap_or(-1))
+    }
+
+    async fn advance_delivered_index(
+        &self,
+        room_id: &RoomId,
+        index: u64,
+        options: AdvanceDeliveredIndexOptions,
+    ) -> Result<bool, StoreError> {
+        let mut rooms = self.rooms();
+        let Some(record) = rooms.get_mut(room_id) else {
+            return Ok(false);
+        };
+        Ok(advance(
+            &mut record.room.delivered_index,
+            index,
+            options.force,
+        ))
+    }
+
+    async fn get_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+    ) -> Result<Option<Metadata>, StoreError> {
+        Ok(self
+            .read(room_id, |record| record.private.get(key).cloned())
+            .flatten())
+    }
+
+    /// Kept apart from the metadata, whose copy under `key` goes in the
+    /// same write (RFC §14.1).
+    async fn set_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+        value: Option<Metadata>,
+    ) -> Result<(), StoreError> {
+        let mut rooms = self.rooms();
+        let Some(record) = rooms.get_mut(room_id) else {
+            return Ok(());
+        };
+        record.room.metadata.remove(key);
+        match value {
+            Some(value) => record.private.insert(key.to_owned(), value),
+            None => record.private.remove(key),
+        };
+        Ok(())
+    }
+
+    async fn add_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
+        self.put_binding(binding)
+    }
+
+    async fn get_binding(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<Option<ChannelBinding>, StoreError> {
+        Ok(self
+            .read(room_id, |record| record.binding(channel_id).cloned())
+            .flatten())
+    }
+
+    async fn update_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
+        self.put_binding(binding)
+    }
+
+    async fn remove_binding(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<bool, StoreError> {
+        let mut rooms = self.rooms();
+        let Some(record) = rooms.get_mut(room_id) else {
+            return Ok(false);
+        };
+        let held = record.bindings.len();
+        record
+            .bindings
+            .retain(|bound| &bound.channel_id != channel_id);
+        Ok(record.bindings.len() < held)
+    }
+
+    async fn list_bindings(&self, room_id: &RoomId) -> Result<Vec<ChannelBinding>, StoreError> {
+        Ok(self
+            .read(room_id, |record| record.bindings.clone())
+            .unwrap_or_default())
+    }
+
+    async fn add_participant(&self, participant: Participant) -> Result<Participant, StoreError> {
         let room_id = participant.room_id.clone();
         self.write(&room_id, |record| {
-            if record.has_participant(&participant.id) {
+            if record
+                .participants
+                .iter()
+                .any(|stored| stored.id == participant.id)
+            {
                 return Err(StoreError::ParticipantExists {
                     room_id: room_id.clone(),
                     participant_id: participant.id,
                 });
             }
-            record.participants.push(participant);
-            Ok(())
+            record.participants.push(participant.clone());
+            Ok(participant)
         })
     }
 
@@ -438,31 +531,36 @@ impl ConversationStore for InMemoryStore {
         room_id: &RoomId,
         participant_id: &ParticipantId,
     ) -> Result<Option<Participant>, StoreError> {
-        self.read(room_id, |record| {
-            record
-                .participants
-                .iter()
-                .find(|participant| &participant.id == participant_id)
-                .cloned()
-        })
+        Ok(self
+            .read(room_id, |record| {
+                record
+                    .participants
+                    .iter()
+                    .find(|participant| &participant.id == participant_id)
+                    .cloned()
+            })
+            .flatten())
     }
 
-    async fn update_participant(&self, participant: Participant) -> Result<(), StoreError> {
-        let room_id = participant.room_id.clone();
-        self.write(&room_id, |record| {
-            let Some(stored) = record
+    async fn update_participant(
+        &self,
+        participant: Participant,
+    ) -> Result<Participant, StoreError> {
+        let mut rooms = self.rooms();
+        let stored = rooms.get_mut(&participant.room_id).and_then(|record| {
+            record
                 .participants
                 .iter_mut()
                 .find(|stored| stored.id == participant.id)
-            else {
-                return Err(StoreError::ParticipantNotFound {
-                    room_id: room_id.clone(),
-                    participant_id: participant.id,
-                });
-            };
-            *stored = participant;
-            Ok(())
-        })
+        });
+        let Some(stored) = stored else {
+            return Err(StoreError::ParticipantNotFound {
+                room_id: participant.room_id,
+                participant_id: participant.id,
+            });
+        };
+        stored.clone_from(&participant);
+        Ok(participant)
     }
 
     async fn delete_participant(
@@ -470,20 +568,23 @@ impl ConversationStore for InMemoryStore {
         room_id: &RoomId,
         participant_id: &ParticipantId,
     ) -> Result<(), StoreError> {
-        self.write(room_id, |record| {
+        if let Some(record) = self.rooms().get_mut(room_id) {
             record
                 .participants
                 .retain(|participant| &participant.id != participant_id);
-            Ok(())
-        })
+        }
+        Ok(())
     }
 
     async fn list_participants(&self, room_id: &RoomId) -> Result<Vec<Participant>, StoreError> {
-        self.read(room_id, |record| record.participants.clone())
+        Ok(self
+            .read(room_id, |record| record.participants.clone())
+            .unwrap_or_default())
     }
 
-    async fn create_identity(&self, identity: Identity) -> Result<(), StoreError> {
-        self.identities().create(identity)
+    async fn create_identity(&self, identity: Identity) -> Result<Identity, StoreError> {
+        self.identities().create(identity.clone())?;
+        Ok(identity)
     }
 
     async fn get_identity(&self, identity_id: &IdentityId) -> Result<Option<Identity>, StoreError> {
@@ -492,122 +593,121 @@ impl ConversationStore for InMemoryStore {
 
     async fn resolve_identity(
         &self,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: ResolveIdentityOptions,
     ) -> Result<Option<Identity>, StoreError> {
         Ok(self
             .identities()
-            .resolve(&channel_type, address, organization_id))
+            .resolve(channel_type, address, options.organization_id.as_deref()))
     }
 
     async fn link_address(
         &self,
         identity_id: &IdentityId,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: LinkAddressOptions,
     ) -> Result<(), StoreError> {
-        self.identities()
-            .link(identity_id, channel_type, address, organization_id)
+        self.identities().link(
+            identity_id,
+            channel_type.clone(),
+            address,
+            options.organization_id.as_deref(),
+        )
     }
 
     async fn unlink_address(
         &self,
         identity_id: &IdentityId,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: UnlinkAddressOptions,
     ) -> Result<(), StoreError> {
-        self.identities()
-            .unlink(identity_id, &channel_type, address, organization_id)
+        self.identities().unlink(
+            identity_id,
+            channel_type,
+            address,
+            options.organization_id.as_deref(),
+        )
     }
 
+    async fn check_idempotency(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+        channel_id: Option<&ChannelId>,
+    ) -> Result<bool, StoreError> {
+        let found = self
+            .get_event_by_idempotency_key(room_id, key, channel_id)
+            .await?;
+        Ok(found.is_some())
+    }
+
+    /// With no channel, the event of lowest index any channel of the room
+    /// committed the key with, as Python's store reads it (§22.1).
     async fn get_event_by_idempotency_key(
         &self,
         room_id: &RoomId,
-        channel_id: Option<&ChannelId>,
         key: &str,
+        channel_id: Option<&ChannelId>,
     ) -> Result<Option<RoomEvent>, StoreError> {
         // A blank key is no key: it names no event (RFC §13.4).
         if !idempotency::is_key(key) {
-            return self.read(room_id, |_| None);
+            return Ok(None);
         }
-        self.read(room_id, |record| {
-            record
-                .events
-                .iter()
-                .find(|event| {
-                    event.idempotency_key.as_deref() == Some(key)
-                        && channel_id
-                            .is_none_or(|channel_id| &event.source.channel_id == channel_id)
-                })
-                .cloned()
-        })
+        Ok(self
+            .read(room_id, |record| {
+                record
+                    .events
+                    .iter()
+                    .filter(|event| {
+                        event.idempotency_key.as_deref() == Some(key)
+                            && channel_id
+                                .is_none_or(|channel_id| &event.source.channel_id == channel_id)
+                    })
+                    .min_by_key(|event| event.index)
+                    .cloned()
+            })
+            .flatten())
     }
 
-    async fn commit(
+    async fn commit_event(
         &self,
+        room_id: &RoomId,
         mut event: RoomEvent,
-        counters: RoomCounters,
-        mut target: Option<TargetUpdate>,
-    ) -> Result<(), StoreError> {
-        super::written::event(&mut event, target.as_mut())?;
+        options: CommitEventOptions,
+    ) -> Result<RoomEvent, StoreError> {
+        let CommitEventOptions {
+            mut target,
+            activity,
+        } = options;
+        super::written::event(&mut event)?;
+        if let Some(target) = &mut target {
+            super::written::event(target)?;
+        }
         // A blank key is no key: the event is stored with none (RFC §13.4).
         event.idempotency_key = idempotency::key(event.idempotency_key);
-        let room_id = event.room_id.clone();
-        self.write(&room_id, |record| {
-            // The room's count is the next index: a hard-deleted index is
-            // never given again (gap G-064).
-            if event.index != record.room.event_count {
-                return Err(StoreError::IndexTaken {
-                    room_id: room_id.clone(),
-                    index: event.index,
-                });
-            }
+        let now = activity.then(super::written::now);
+        self.write(room_id, |record| {
             if let Some(taken) = taken_key(&record.events, &event) {
                 return Err(taken);
             }
-            if let Some(TargetUpdate { event_id, updates }) = &target {
-                let stored = record
-                    .events
-                    .iter_mut()
-                    .find(|stored| &stored.id == event_id)
-                    .ok_or_else(|| StoreError::EventNotFound(event_id.clone()))?;
-                updates.apply(stored);
-                if events::deletes(&event, event_id) {
-                    events::mark_edits_deleted(&mut record.events, event_id);
-                }
+            if let Some(target) = target {
+                write_target(&mut record.events, &event, target)?;
             }
-            record.room.event_count = counters.event_count;
-            record.room.latest_index = Some(counters.latest_index);
-            record.room.timers.last_activity_at = counters.last_activity_at;
-            record.update(counters.room);
-            record.events.push(event);
-            Ok(())
+            // The room's count is the next index: a hard-deleted index is
+            // never given again (gap G-064).
+            event.index = record.room.event_count;
+            let room = &mut record.room;
+            room.event_count = room.event_count.saturating_add(1);
+            room.latest_index = Some(event.index);
+            if let Some(now) = now {
+                lifecycle::commit_activity(room, now);
+            }
+            record.events.push(event.clone());
+            Ok(event)
         })
-    }
-
-    async fn persist_side_effects(
-        &self,
-        room_id: &RoomId,
-        tasks: Vec<Task>,
-        observations: Vec<Observation>,
-    ) -> Result<(), StoreError> {
-        self.write(room_id, |record| {
-            record.tasks.extend(tasks);
-            record.observations.extend(observations);
-            Ok(())
-        })
-    }
-
-    async fn list_events(
-        &self,
-        room_id: &RoomId,
-        query: &EventQuery,
-    ) -> Result<Vec<RoomEvent>, StoreError> {
-        query.validate()?;
-        self.read(room_id, |record| page(&record.events, query))
     }
 
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
@@ -620,59 +720,108 @@ impl ConversationStore for InMemoryStore {
         }))
     }
 
-    async fn update_event(
-        &self,
-        event_id: &EventId,
-        mut updates: EventUpdates,
-    ) -> Result<RoomEvent, StoreError> {
-        super::written::updates(&mut updates)?;
+    async fn update_event(&self, mut event: RoomEvent) -> Result<RoomEvent, StoreError> {
+        super::written::event(&mut event)?;
         let mut rooms = self.rooms();
         let stored = rooms
-            .values_mut()
-            .find_map(|record| record.events.iter_mut().find(|event| &event.id == event_id))
-            .ok_or_else(|| StoreError::EventNotFound(event_id.clone()))?;
-        updates.apply(stored);
-        Ok(stored.clone())
+            .get_mut(&event.room_id)
+            .and_then(|record| {
+                record
+                    .events
+                    .iter_mut()
+                    .find(|stored| stored.id == event.id)
+            })
+            .ok_or_else(|| StoreError::EventNotFound(event.id.clone()))?;
+        event.delivery_results = mem::take(&mut stored.delivery_results);
+        stored.clone_from(&event);
+        Ok(event)
     }
 
     async fn delete_event(
         &self,
         room_id: &RoomId,
         event_id: &EventId,
-        cascade_replies: bool,
+        options: DeleteEventOptions,
     ) -> Result<Vec<RoomEvent>, StoreError> {
-        self.write(room_id, |record| {
-            Ok(events::remove(
-                &mut record.events,
-                event_id,
-                cascade_replies,
-            ))
-        })
+        let mut rooms = self.rooms();
+        let Some(record) = rooms.get_mut(room_id) else {
+            return Ok(Vec::new());
+        };
+        Ok(events::remove(
+            &mut record.events,
+            event_id,
+            options.cascade_replies,
+        ))
     }
 
     async fn get_event_count(
         &self,
         room_id: &RoomId,
-        filter: Option<EventFilter>,
+        options: GetEventCountOptions,
     ) -> Result<u64, StoreError> {
+        let filter = options.event_filter;
         if let Some(filter) = &filter {
             filter.validate()?;
         }
-        self.read(room_id, |record| {
-            let counted = record
-                .events
-                .iter()
-                .filter(|event| filter.as_ref().is_none_or(|filter| filter.matches(event)))
-                .count();
-            u64::try_from(counted).unwrap_or(u64::MAX)
+        let counted = self
+            .read(room_id, |record| {
+                record
+                    .events
+                    .iter()
+                    .filter(|event| filter.as_ref().is_none_or(|filter| filter.matches(event)))
+                    .count()
+            })
+            .unwrap_or_default();
+        Ok(u64::try_from(counted).unwrap_or(u64::MAX))
+    }
+
+    async fn list_events(
+        &self,
+        room_id: &RoomId,
+        options: ListEventsOptions,
+    ) -> Result<Vec<RoomEvent>, StoreError> {
+        options.validate()?;
+        Ok(self
+            .read(room_id, |record| page(&record.events, &options))
+            .unwrap_or_default())
+    }
+
+    async fn add_task(&self, task: Task) -> Result<Task, StoreError> {
+        let room_id = task.room_id.clone();
+        self.write(&room_id, |record| {
+            record.tasks.push(task.clone());
+            Ok(task)
         })
     }
 
-    async fn list_tasks(&self, room_id: &RoomId) -> Result<Vec<Task>, StoreError> {
-        self.read(room_id, |record| record.tasks.clone())
+    async fn add_observation(&self, observation: Observation) -> Result<Observation, StoreError> {
+        let room_id = observation.room_id.clone();
+        self.write(&room_id, |record| {
+            record.observations.push(observation.clone());
+            Ok(observation)
+        })
+    }
+
+    async fn list_tasks(
+        &self,
+        room_id: &RoomId,
+        options: ListTasksOptions,
+    ) -> Result<Vec<Task>, StoreError> {
+        Ok(self
+            .read(room_id, |record| {
+                record
+                    .tasks
+                    .iter()
+                    .filter(|task| options.status.is_none_or(|status| task.status == status))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     async fn list_observations(&self, room_id: &RoomId) -> Result<Vec<Observation>, StoreError> {
-        self.read(room_id, |record| record.observations.clone())
+        Ok(self
+            .read(room_id, |record| record.observations.clone())
+            .unwrap_or_default())
     }
 }

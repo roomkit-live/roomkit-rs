@@ -10,9 +10,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use roomkit::model::RoomId;
-use roomkit::{
-    ArchiveRoomOptions, CloseRoomOptions, ConversationStore, RoomFilter, RoomKitOptions,
-};
+use roomkit::{ArchiveRoomOptions, CloseRoomOptions, ConversationStore, RoomKitOptions};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -156,7 +154,7 @@ async fn run_step(run: &Arc<Run>, step: &Value, path: &str) -> Vec<Value> {
 async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
     let store = run.kit().store();
     let rooms = store
-        .list_rooms(&RoomFilter::default())
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
         .await
         .unwrap_or_default();
     let mut timelines = Vec::new();
@@ -196,7 +194,10 @@ async fn observe(run: &Arc<Run>, step_outcomes: Vec<Value>) -> Observed {
                 .map(|o| serde_json::to_value(o).unwrap_or_default())
                 .collect(),
         );
-        let tasks = store.list_tasks(&room.id).await.unwrap_or_default();
+        let tasks = store
+            .list_tasks(&room.id, roomkit::store::ListTasksOptions::default())
+            .await
+            .unwrap_or_default();
         observed.tasks.insert(
             room_key,
             tasks

@@ -31,9 +31,9 @@ use roomkit::testing::{
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CloseRoomOptions, CommitEventOptions,
     ConversationStore, CreateRoomOptions, DetachChannelOptions, HookExecution, HookOptions,
-    HookTrigger, InboundRoomRouter, MuteOptions, ProcessInboundOptions, RoomFilter, RoomKit,
-    RoomKitError, RoomKitOptions, RouteOptions, RouterFuture, SendEventOptions, UpdateEventOptions,
-    WeakRoomKit, default_inbound_event, keep_context,
+    HookTrigger, InboundRoomRouter, MuteOptions, ProcessInboundOptions, RoomKit, RoomKitError,
+    RoomKitOptions, RouteOptions, RouterFuture, SendEventOptions, UpdateEventOptions, WeakRoomKit,
+    default_inbound_event, keep_context,
 };
 use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
@@ -296,7 +296,7 @@ async fn delivered(audit: &RecordingTransport, count: usize) -> Vec<String> {
 /// text` lines.
 async fn timeline(kit: &RoomKit) -> Vec<String> {
     kit.store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
         .iter()
@@ -1451,7 +1451,7 @@ async fn a_delivery_s_keyed_injection_past_the_reentry_cap_is_a_replay() {
         .map(|(call, id, status)| (*call, id.clone(), *status));
     let keyed = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
         .into_iter()
@@ -1629,7 +1629,7 @@ async fn an_awaited_creation_hook_injects_into_the_room_being_created() {
         .unwrap();
     let texts: Vec<(u64, String)> = kit
         .store()
-        .list_events(&new_room, &every_row())
+        .list_events(&new_room, every_row())
         .await
         .unwrap()
         .iter()
@@ -1700,7 +1700,7 @@ async fn an_integrator_creation_hook_sends_into_the_room_being_created() {
     .unwrap();
     let texts: Vec<String> = kit
         .store()
-        .list_events(&new_room, &every_row())
+        .list_events(&new_room, every_row())
         .await
         .unwrap()
         .iter()
@@ -1825,7 +1825,7 @@ async fn a_task_a_turn_awaits_as_its_own_keeps_the_turn_s_context() {
 /// on: its lifecycle records left out.
 async fn messages(kit: &RoomKit) -> Vec<String> {
     kit.store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
         .iter()
@@ -2512,7 +2512,7 @@ async fn opening_a_room_on_every_delivery_stops_at_the_reentry_cap(opens: Opens)
     }
     let rooms = kit
         .store()
-        .list_rooms(&RoomFilter::default())
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
         .await
         .unwrap();
     assert_eq!(
@@ -3544,7 +3544,7 @@ async fn commit_event_under_a_key_its_channel_holds_is_refused() {
         .await;
     let held = kit
         .store()
-        .get_event_by_idempotency_key(&room_id(), Some(&channel("ws")), "WS1")
+        .get_event_by_idempotency_key(&room_id(), "WS1", Some(&channel("ws")))
         .await
         .unwrap()
         .map(|event| event.id);
@@ -3594,7 +3594,7 @@ async fn a_blank_key_is_no_key() {
         }
         let mut stored = kit
             .store()
-            .list_events(&room_id(), &every_row())
+            .list_events(&room_id(), every_row())
             .await
             .unwrap();
         // The attaches' lifecycle records carry no key either (gap G-046).
@@ -3632,13 +3632,13 @@ async fn commit_event_keeps_the_delivery_results_it_brings() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
             include_blocked: true,
             ..roomkit::EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

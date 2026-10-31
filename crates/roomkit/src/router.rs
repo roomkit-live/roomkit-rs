@@ -17,11 +17,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use roomkit_core::model::{ChannelId, ChannelType, Identity, Metadata, RoomId, RoomStatus};
+use roomkit_core::model::{
+    ChannelId, ChannelType, Identity, Metadata, RoomContext, RoomId, RoomStatus,
+};
 use roomkit_core::rules::addresses::{AddressForm, Addressing};
 use roomkit_core::rules::routing::{self, Candidate, Refusal, RouteQuery, Sender};
 
 use crate::registered::RegisteredChannel;
+use crate::store::rooms::rooms_read_by;
 use crate::store::{self, ConversationStore, RoomFilter, StoreError};
 
 /// What a router failed with. The message fails with it, before anything is
@@ -299,17 +302,31 @@ async fn candidates<S: ConversationStore>(
     let mut read = HashSet::new();
     for status in [RoomStatus::Paused, RoomStatus::Active] {
         let filter = RoomFilter {
+            statuses: Some(vec![status]),
             organization_id: query.organization_id.clone(),
-            status: Some(status),
-            channel_id: Some(query.channel_id.clone()),
-            ..RoomFilter::default()
         };
-        for room in store.list_rooms(&filter).await? {
+        for room in rooms_read_by(store, &filter).await? {
             if !read.insert(room.id.clone()) {
                 continue;
             }
-            if let Some(context) = store.load_context(&room.id, 0).await? {
-                candidates.push(Candidate::new(context));
+            let (room, bindings, participants) = store.load_room_context(&room.id).await?;
+            let Some(room) = room else {
+                continue;
+            };
+            let reached = bindings
+                .iter()
+                .any(|binding| binding.channel_id == query.channel_id)
+                || participants
+                    .iter()
+                    .any(|participant| participant.connected_via.contains(&query.channel_id));
+            if reached {
+                candidates.push(Candidate::new(RoomContext {
+                    room,
+                    bindings,
+                    participants,
+                    recent_events: Vec::new(),
+                    author_register: None,
+                }));
             }
         }
     }

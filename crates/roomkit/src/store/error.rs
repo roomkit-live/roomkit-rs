@@ -93,25 +93,24 @@ pub enum StoreError {
     /// No room has the id.
     #[error("room {0} does not exist")]
     RoomNotFound(RoomId),
-    /// The room has a participant with the id already (RFC §5.5).
-    #[error("room {room_id} has a participant {participant_id} already")]
+    /// The room has a participant with the id already (RFC §5.5, §14.3),
+    /// Python's `ParticipantExistsError`: nothing is written.
+    #[error("Participant {participant_id} is already in room {room_id}")]
     ParticipantExists {
         /// The room.
         room_id: RoomId,
         /// The participant.
         participant_id: ParticipantId,
     },
-    /// The room has no participant with the id.
-    #[error("room {room_id} has no participant {participant_id}")]
+    /// The room has no participant with the id, Python's
+    /// `ParticipantNotFoundError`: nothing is written.
+    #[error("Participant {participant_id} is not in room {room_id}")]
     ParticipantNotFound {
         /// The room.
         room_id: RoomId,
         /// The participant.
         participant_id: ParticipantId,
     },
-    /// An identity with the id exists already.
-    #[error("identity {0} exists already")]
-    IdentityExists(IdentityId),
     /// No identity of the organization has the id.
     #[error("no identity {0} in the organization")]
     IdentityNotFound(IdentityId),
@@ -128,16 +127,6 @@ pub enum StoreError {
     /// an edit or a delete is gone by its commit.
     #[error("event {0} does not exist")]
     EventNotFound(EventId),
-    /// The commit's index is not the room's next one (RFC §8.1): another
-    /// writer committed first, or the index was given out already, a
-    /// hard-deleted one included, which is never given again.
-    #[error("index {index} is not room {room_id}'s next index")]
-    IndexTaken {
-        /// The room.
-        room_id: RoomId,
-        /// The index.
-        index: u64,
-    },
     /// The room holds an event of the same source channel with the same
     /// idempotency key (RFC §13.4, §14.3): the commit is refused, nothing
     /// written, and the event the key names is kept. The pipeline looks a
@@ -158,9 +147,9 @@ pub enum StoreError {
     /// A read's arguments cannot be served together, the Python
     /// implementation's `ValueError`: a timeline read's two cursors,
     /// which exclude each other (RFC §14.1), or a filter that admits
-    /// nothing by construction ([`EventQuery::validate`]).
+    /// nothing by construction ([`ListEventsOptions::validate`]).
     ///
-    /// [`EventQuery::validate`]: super::EventQuery::validate
+    /// [`ListEventsOptions::validate`]: super::ListEventsOptions::validate
     #[error("{0}")]
     Value(String),
     /// The store could not be reached or failed: the error it met is the
@@ -193,11 +182,9 @@ impl StoreError {
             Self::RoomNotFound(_) => "RoomNotFound",
             Self::ParticipantExists { .. } => "ParticipantExists",
             Self::ParticipantNotFound { .. } => "ParticipantNotFound",
-            Self::IdentityExists(_) => "IdentityExists",
             Self::IdentityNotFound(_) => "IdentityNotFound",
             Self::AddressLinked { .. } => "AddressLinked",
             Self::EventNotFound(_) => "EventNotFound",
-            Self::IndexTaken { .. } => "IndexTaken",
             Self::IdempotencyKeyTaken { .. } => "IdempotencyKeyTaken",
             Self::Value(_) => "Value",
             Self::Unavailable(_) => "StoreUnavailable",

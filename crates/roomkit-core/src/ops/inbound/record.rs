@@ -20,7 +20,7 @@
 use super::direct::DirectCall;
 use super::{cascade, commit, report};
 use crate::model::{ChannelId, ErrorRecord, EventStatus, Room, RoomContext, RoomEvent, RoomId};
-use crate::ops::protocol::{EffectId, Outcome, RoomCounters, StoreRequest};
+use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::section::{Failure, Section, SectionWork};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
@@ -78,16 +78,12 @@ struct RecordWork {
 enum Waiting {
     Nothing,
     /// A direct injection's key, looked up before anything of it is
-    /// committed (RFC §14.3, §13.4), then the commit with `counters`.
-    Key {
-        effect: EffectId,
-        counters: RoomCounters,
-    },
+    /// committed (RFC §14.3, §13.4), then the commit.
+    Key(EffectId),
     /// A read of the record's thread parent's rooting (RFC §10.1 step 8),
-    /// then the commit with `counters`.
+    /// then the commit.
     Root {
         effect: EffectId,
-        counters: RoomCounters,
         rooting: Box<Rooting>,
     },
     Commit(EffectId),
@@ -184,29 +180,29 @@ impl RecordPass {
 impl RecordWork {
     /// Roots the record's thread parent, when it has one, as every
     /// committed event's is (RFC §10.1 step 8), then commits it.
-    fn root_and_commit(&mut self, cx: &mut Cx<'_>, counters: RoomCounters) {
+    fn root_and_commit(&mut self, cx: &mut Cx<'_>) {
         match Rooting::of(&self.record) {
             Some((rooting, request)) => {
                 let effect = cx.io.issue_locked(request, self.record.room_id.clone());
                 self.waiting = Waiting::Root {
                     effect,
-                    counters,
                     rooting: Box::new(rooting),
                 };
             }
-            None => self.commit(cx, counters),
+            None => self.commit(cx),
         }
     }
 
-    /// Commits the record, the room's counters then `counters`. A record
+    /// Commits the record, no activity of the room (RFC §8.3). A record
     /// stored `BLOCKED` takes no author record, one it came with dropped
     /// (RFC §10.1 step 12).
-    fn commit(&mut self, cx: &mut Cx<'_>, counters: RoomCounters) {
+    fn commit(&mut self, cx: &mut Cx<'_>) {
         self.record.metadata.remove(authors::AUTHOR);
         let request = StoreRequest::Commit {
             event: Box::new(self.record.clone()),
-            counters,
             target: None,
+            activity: None,
+            author_register: None,
         };
         let effect = cx.io.issue_locked(request, self.record.room_id.clone());
         if self.decides {
@@ -269,7 +265,6 @@ impl SectionWork for RecordWork {
                 permissions::targets_visibility(targets.as_deref(), &context.bindings)
             }
         };
-        let counters = RoomCounters::after_commit(&context.room, self.record.index);
         match self.record.idempotency_key.clone() {
             Some(key) if self.direct.is_some() => {
                 let request = StoreRequest::GetEventByIdempotencyKey {
@@ -278,9 +273,9 @@ impl SectionWork for RecordWork {
                     key,
                 };
                 let effect = cx.io.issue_locked(request, self.record.room_id.clone());
-                self.waiting = Waiting::Key { effect, counters };
+                self.waiting = Waiting::Key(effect);
             }
-            Some(_) | None => self.root_and_commit(cx, counters),
+            Some(_) | None => self.root_and_commit(cx),
         }
         Progress::Waiting
     }
@@ -292,40 +287,29 @@ impl SectionWork for RecordWork {
         outcome: Outcome,
     ) -> Progress<Result<RecordResult, Abort>> {
         match std::mem::replace(&mut self.waiting, Waiting::Nothing) {
-            Waiting::Key { counters, .. } => match outcome.into_idempotent() {
+            Waiting::Key(_) => match outcome.into_idempotent() {
                 Ok(Some(original)) => Progress::Done(Ok(RecordResult::Replayed(original))),
                 Ok(None) => {
-                    self.root_and_commit(cx, counters);
+                    self.root_and_commit(cx);
                     Progress::Waiting
                 }
                 Err(error) => Progress::Done(Err(Abort::Store(error))),
             },
-            Waiting::Root {
-                counters,
-                mut rooting,
-                ..
-            } => match rooting.on_read(outcome) {
+            Waiting::Root { mut rooting, .. } => match rooting.on_read(outcome) {
                 Ok(Rooted::Read(request)) => {
                     let effect = cx.io.issue_locked(*request, self.record.room_id.clone());
-                    self.waiting = Waiting::Root {
-                        effect,
-                        counters,
-                        rooting,
-                    };
+                    self.waiting = Waiting::Root { effect, rooting };
                     Progress::Waiting
                 }
                 Ok(Rooted::Parent(parent)) => {
                     self.record.parent_event_id = parent;
-                    self.commit(cx, counters);
+                    self.commit(cx);
                     Progress::Waiting
                 }
                 Err(error) => Progress::Done(Err(Abort::Store(error))),
             },
             Waiting::Commit(_) | Waiting::Nothing => match outcome.into_committed() {
-                Ok(()) => {
-                    let committed = RecordResult::Committed(Box::new(self.record.clone()));
-                    Progress::Done(Ok(committed))
-                }
+                Ok(stored) => Progress::Done(Ok(RecordResult::Committed(stored))),
                 Err(error) => Progress::Done(Err(Abort::Store(error))),
             },
         }
@@ -333,7 +317,7 @@ impl SectionWork for RecordWork {
 
     fn awaits(&self, effect: EffectId) -> bool {
         match &self.waiting {
-            Waiting::Key { effect: waited, .. }
+            Waiting::Key(waited)
             | Waiting::Root { effect: waited, .. }
             | Waiting::Commit(waited) => *waited == effect,
             Waiting::Nothing => false,

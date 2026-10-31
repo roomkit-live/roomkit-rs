@@ -80,11 +80,9 @@ async fn open_order(
             ChannelId::new(channel)?,
         ))
     };
+    kit.store().add_participant(member("desk", "host")?).await?;
     kit.store()
-        .create_participant(member("desk", "host")?)
-        .await?;
-    kit.store()
-        .create_participant(member(CUSTOMER, "sms")?)
+        .add_participant(member(CUSTOMER, "sms")?)
         .await?;
     Ok(())
 }

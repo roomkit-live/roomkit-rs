@@ -31,6 +31,7 @@ use roomkit::model::{
     ChannelId, ChannelType, Identity, IdentityId, InboundMessage, Participant, ParticipantId,
     RoomId, TextContent,
 };
+use roomkit::store::{LinkAddressOptions, ResolveIdentityOptions, UnlinkAddressOptions};
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
@@ -44,7 +45,6 @@ const BANK: &str = "bank";
 const JEAN: &str = "+15551234567";
 const JEAN_WORK: &str = "+15559998888";
 const MARIE: &str = "+15557654321";
-
 /// The bank's kit, its SMS number and the agent that answers on it.
 struct Bank {
     kit: RoomKit,
@@ -90,7 +90,14 @@ impl Bank {
         store.create_identity(identity).await?;
         for number in numbers {
             store
-                .link_address(&identity_id, ChannelType::SMS, number, Some(BANK))
+                .link_address(
+                    &identity_id,
+                    &ChannelType::SMS,
+                    number,
+                    LinkAddressOptions {
+                        organization_id: Some(BANK.to_owned()),
+                    },
+                )
                 .await?;
         }
         Ok(identity_id)
@@ -146,7 +153,7 @@ impl Bank {
                 self.sms.id().clone(),
             )
         };
-        self.kit.store().create_participant(member).await?;
+        self.kit.store().add_participant(member).await?;
         Ok(room_id)
     }
 
@@ -164,6 +171,30 @@ impl Bank {
             ..Default::default()
         };
         self.open(room, naming).await
+    }
+
+    /// Moves `number` from the identity `from` to `to` (RFC §5.6): an
+    /// unlink, then a link; the rooms that named it stay as they are.
+    async fn move_number(
+        &self,
+        from: &IdentityId,
+        to: &IdentityId,
+        number: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        let store = self.kit.store();
+        let unlinked = UnlinkAddressOptions {
+            organization_id: Some(BANK.to_owned()),
+        };
+        store
+            .unlink_address(from, &ChannelType::SMS, number, unlinked)
+            .await?;
+        let linked = LinkAddressOptions {
+            organization_id: Some(BANK.to_owned()),
+        };
+        store
+            .link_address(to, &ChannelType::SMS, number, linked)
+            .await?;
+        Ok(())
     }
 
     /// A text from `number` to the SMS number of `organization`'s rooms;
@@ -194,10 +225,22 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let jeans_room = bank.room_naming(&jean, "jean_room").await?;
     let maries_room = bank.room_of(&marie, "marie_room").await?;
     let found = store
-        .resolve_identity(ChannelType::SMS, JEAN, Some(BANK))
+        .resolve_identity(
+            &ChannelType::SMS,
+            JEAN,
+            ResolveIdentityOptions {
+                organization_id: Some(BANK.to_owned()),
+            },
+        )
         .await?;
     let elsewhere = store
-        .resolve_identity(ChannelType::SMS, JEAN, Some("clinic"))
+        .resolve_identity(
+            &ChannelType::SMS,
+            JEAN,
+            ResolveIdentityOptions {
+                organization_id: Some("clinic".to_owned()),
+            },
+        )
         .await?;
     checks.expect(
         "an address resolves to its identity within the organization, and to none outside it",
@@ -218,7 +261,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
 
     let taken = store
-        .link_address(&jean, ChannelType::SMS, MARIE, Some(BANK))
+        .link_address(
+            &jean,
+            &ChannelType::SMS,
+            MARIE,
+            LinkAddressOptions {
+                organization_id: Some(BANK.to_owned()),
+            },
+        )
         .await;
     checks.expect(
         "an address belongs to one identity of the organization: Marie's number cannot be Jean's, \
@@ -233,12 +283,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
 
     println!("Jean gives his work phone to Marie: the bank unlinks it from him, links it to her.");
-    store
-        .unlink_address(&jean, ChannelType::SMS, JEAN_WORK, Some(BANK))
-        .await?;
-    store
-        .link_address(&marie, ChannelType::SMS, JEAN_WORK, Some(BANK))
-        .await?;
+    bank.move_number(&jean, &marie, JEAN_WORK).await?;
     let landed = bank.text_from(BANK, JEAN_WORK).await?;
     checks.expect(
         "a text from the number moved reaches Marie's room, and is answered there",

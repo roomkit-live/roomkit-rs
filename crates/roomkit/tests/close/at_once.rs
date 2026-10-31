@@ -13,9 +13,8 @@ use roomkit::model::{
     ToolCallStatus,
 };
 use roomkit::{
-    AttachChannelOptions, CloseRoomOptions, CommitEventOptions, ConversationStore, EventQuery,
-    GetRoomOptions, HookOptions, HookTrigger, InMemoryStore, ListBindingsOptions, RoomKit,
-    SendEventOptions,
+    AttachChannelOptions, CloseRoomOptions, CommitEventOptions, ConversationStore, GetRoomOptions,
+    HookOptions, HookTrigger, InMemoryStore, ListBindingsOptions, RoomKit, SendEventOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
@@ -232,11 +231,11 @@ async fn a_call_reaching_its_room_lock_once_the_close_started_is_cut() {
 
 /// The events `r` stores of `channel_id`.
 async fn of<S: ConversationStore>(kit: &RoomKit<S>, channel_id: &str) -> Vec<RoomEvent> {
-    let query = EventQuery {
+    let query = roomkit::store::ListEventsOptions {
         limit: u64::MAX,
-        ..EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     };
-    let events = kit.store().list_events(&room("r"), &query).await.unwrap();
+    let events = kit.store().list_events(&room("r"), query).await.unwrap();
     let channel_id = ChannelId::new(channel_id).unwrap();
     events
         .into_iter()

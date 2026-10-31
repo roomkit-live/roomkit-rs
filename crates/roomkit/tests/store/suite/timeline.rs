@@ -5,17 +5,18 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{
-    ChannelSet, ChannelType, EventStatus, EventType, RoomEvent, RoomId, Timestamp, Visibility,
+    ChannelSet, ChannelType, EventStatus, EventType, RoomEvent, Timestamp, Visibility,
 };
-use roomkit::{ConversationStore, EventFilter, EventQuery, StoreError};
+use roomkit::store::{GetEventCountOptions, ListEventsOptions};
+use roomkit::{ConversationStore, EventFilter, StoreError};
 
 use super::{channel, event, event_id, event_stored, participant_id, room_id, with_events};
 use crate::Store;
 
 /// The indexes of `room_1`'s page `query` reads.
-async fn page(store: &Store, query: EventQuery) -> Vec<u64> {
+async fn page(store: &Store, query: ListEventsOptions) -> Vec<u64> {
     store
-        .list_events(&room_id(), &query)
+        .list_events(&room_id(), query)
         .await
         .unwrap()
         .iter()
@@ -29,7 +30,7 @@ async fn page(store: &Store, query: EventQuery) -> Vec<u64> {
 #[tokio::test]
 async fn each_window_is_read_in_ascending_index_order() {
     let store = with_events((0..6).map(event).collect()).await;
-    let query = EventQuery::default();
+    let query = ListEventsOptions::default();
     let cases = [
         (
             "the default, the oldest 50",
@@ -38,7 +39,7 @@ async fn each_window_is_read_in_ascending_index_order() {
         ),
         (
             "an offset and a limit",
-            EventQuery {
+            ListEventsOptions {
                 offset: 1,
                 limit: 2,
                 ..query.clone()
@@ -47,7 +48,7 @@ async fn each_window_is_read_in_ascending_index_order() {
         ),
         (
             "the newest",
-            EventQuery {
+            ListEventsOptions {
                 newest_first: true,
                 limit: 2,
                 ..query.clone()
@@ -56,7 +57,7 @@ async fn each_window_is_read_in_ascending_index_order() {
         ),
         (
             "the newest, an offset counted back",
-            EventQuery {
+            ListEventsOptions {
                 newest_first: true,
                 offset: 1,
                 limit: 2,
@@ -66,7 +67,7 @@ async fn each_window_is_read_in_ascending_index_order() {
         ),
         (
             "an offset past the newest end",
-            EventQuery {
+            ListEventsOptions {
                 newest_first: true,
                 offset: 9,
                 limit: 2,
@@ -76,7 +77,7 @@ async fn each_window_is_read_in_ascending_index_order() {
         ),
         (
             "after a cursor, the nearest",
-            EventQuery {
+            ListEventsOptions {
                 after_index: Some(1),
                 limit: 2,
                 ..query.clone()
@@ -85,7 +86,7 @@ async fn each_window_is_read_in_ascending_index_order() {
         ),
         (
             "before a cursor, the nearest",
-            EventQuery {
+            ListEventsOptions {
                 before_index: Some(4),
                 limit: 2,
                 ..query.clone()
@@ -94,7 +95,7 @@ async fn each_window_is_read_in_ascending_index_order() {
         ),
         (
             "after a cursor, offset and newest_first ignored",
-            EventQuery {
+            ListEventsOptions {
                 after_index: Some(1),
                 offset: 3,
                 newest_first: true,
@@ -105,7 +106,7 @@ async fn each_window_is_read_in_ascending_index_order() {
         ),
         (
             "before a cursor, offset ignored",
-            EventQuery {
+            ListEventsOptions {
                 before_index: Some(4),
                 offset: 3,
                 limit: 2,
@@ -113,7 +114,11 @@ async fn each_window_is_read_in_ascending_index_order() {
             },
             vec![2, 3],
         ),
-        ("a limit of none", EventQuery { limit: 0, ..query }, vec![]),
+        (
+            "a limit of none",
+            ListEventsOptions { limit: 0, ..query },
+            vec![],
+        ),
     ];
     for (case, query, expected) in cases {
         assert_eq!(page(&store, query).await, expected, "{case}");
@@ -125,14 +130,14 @@ async fn each_window_is_read_in_ascending_index_order() {
 #[tokio::test]
 async fn a_cursor_past_every_index_bounds_the_page() {
     let store = with_events((0..6).map(event).collect()).await;
-    let after = EventQuery {
+    let after = ListEventsOptions {
         after_index: Some(u64::MAX),
-        ..EventQuery::default()
+        ..ListEventsOptions::default()
     };
-    let before = EventQuery {
+    let before = ListEventsOptions {
         before_index: Some(u64::MAX),
         limit: 2,
-        ..EventQuery::default()
+        ..ListEventsOptions::default()
     };
     assert_eq!(
         (page(&store, after).await, page(&store, before).await),
@@ -144,13 +149,13 @@ async fn a_cursor_past_every_index_bounds_the_page() {
 #[tokio::test]
 async fn both_cursors_are_refused() {
     let store = with_events((0..3).map(event).collect()).await;
-    let both = EventQuery {
+    let both = ListEventsOptions {
         after_index: Some(0),
         before_index: Some(2),
-        ..EventQuery::default()
+        ..ListEventsOptions::default()
     };
     assert_eq!(
-        store.list_events(&room_id(), &both).await,
+        store.list_events(&room_id(), both).await,
         Err(StoreError::Value(
             "after_index and before_index are mutually exclusive".to_owned()
         ))
@@ -175,37 +180,37 @@ async fn refused_events_are_left_out_before_the_page_is_cut() {
     let pages = [
         page(
             &store,
-            EventQuery {
+            ListEventsOptions {
                 limit: 2,
-                ..EventQuery::default()
+                ..ListEventsOptions::default()
             },
         )
         .await,
         page(
             &store,
-            EventQuery {
+            ListEventsOptions {
                 newest_first: true,
                 limit: 2,
-                ..EventQuery::default()
+                ..ListEventsOptions::default()
             },
         )
         .await,
         page(
             &store,
-            EventQuery {
+            ListEventsOptions {
                 before_index: Some(5),
                 limit: 2,
-                ..EventQuery::default()
+                ..ListEventsOptions::default()
             },
         )
         .await,
         page(
             &store,
-            EventQuery {
+            ListEventsOptions {
                 newest_first: true,
                 limit: 2,
                 event_filter: every_row,
-                ..EventQuery::default()
+                ..ListEventsOptions::default()
             },
         )
         .await,
@@ -325,11 +330,18 @@ fn criteria() -> Vec<(&'static str, EventFilter, Vec<u64>)> {
 async fn a_filter_s_criteria_select_the_page_and_its_count() {
     let store = with_events(varied()).await;
     for (case, filter, expected) in criteria() {
-        let query = EventQuery {
+        let query = ListEventsOptions {
             event_filter: Some(filter.clone()),
-            ..EventQuery::default()
+            ..ListEventsOptions::default()
         };
-        let counted = store.get_event_count(&room_id(), Some(filter)).await;
+        let counted = store
+            .get_event_count(
+                &room_id(),
+                GetEventCountOptions {
+                    event_filter: Some(filter),
+                },
+            )
+            .await;
         let expected_count = u64::try_from(expected.len()).unwrap();
         assert_eq!(
             (page(&store, query).await, counted),
@@ -344,24 +356,24 @@ async fn a_filter_s_criteria_select_the_page_and_its_count() {
 #[tokio::test]
 async fn a_visibility_filter_is_an_exact_value_the_filter_s_own_overrides() {
     let store = with_events(varied()).await;
-    let transport = EventQuery {
+    let transport = ListEventsOptions {
         visibility_filter: Some(Visibility::Transport),
-        ..EventQuery::default()
+        ..ListEventsOptions::default()
     };
-    let overridden = EventQuery {
+    let overridden = ListEventsOptions {
         event_filter: Some(EventFilter {
             visibility: Some(Visibility::All),
             ..EventFilter::default()
         }),
         ..transport.clone()
     };
-    let listed = EventQuery {
+    let listed = ListEventsOptions {
         visibility_filter: Some(
             ChannelSet::new([channel("sms")])
                 .map(Visibility::Channels)
                 .unwrap(),
         ),
-        ..EventQuery::default()
+        ..ListEventsOptions::default()
     };
     assert_eq!(
         (
@@ -398,14 +410,21 @@ async fn a_filter_that_admits_nothing_by_construction_is_refused() {
         ),
     ];
     for (filter, reason) in refused {
-        let query = EventQuery {
+        let query = ListEventsOptions {
             event_filter: Some(filter.clone()),
-            ..EventQuery::default()
+            ..ListEventsOptions::default()
         };
         assert_eq!(
             (
-                store.list_events(&room_id(), &query).await.map(|_| ()),
-                store.get_event_count(&room_id(), Some(filter)).await
+                store.list_events(&room_id(), query).await.map(|_| ()),
+                store
+                    .get_event_count(
+                        &room_id(),
+                        GetEventCountOptions {
+                            event_filter: Some(filter)
+                        }
+                    )
+                    .await
             ),
             (
                 Err(StoreError::Value(reason.to_owned())),
@@ -413,15 +432,4 @@ async fn a_filter_that_admits_nothing_by_construction_is_refused() {
             )
         );
     }
-}
-
-/// A read of a room the store does not hold is refused as not found.
-#[tokio::test]
-async fn a_missing_room_s_timeline_is_not_found() {
-    let store = with_events(Vec::new()).await;
-    let missing = RoomId::new("room_9").unwrap();
-    assert_eq!(
-        store.list_events(&missing, &EventQuery::default()).await,
-        Err(StoreError::RoomNotFound(missing))
-    );
 }

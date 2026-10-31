@@ -14,7 +14,7 @@ use crate::model::{
     Visibility,
 };
 use crate::ops::Cx;
-use crate::ops::protocol::{EffectId, RoomCounters, StoreRequest};
+use crate::ops::protocol::{EffectId, StoreRequest};
 use crate::rules::records::Record;
 
 /// The commit of `record` as the next event of the room `context` holds,
@@ -42,17 +42,17 @@ pub(crate) fn commit(
     event.status = EventStatus::Delivered;
     event.visibility = Visibility::Internal;
     event.index = room.event_count;
-    let counters = RoomCounters::after_commit(room, event.index);
-    room.event_count = counters.event_count;
-    room.latest_index = Some(counters.latest_index);
+    room.event_count = room.event_count.saturating_add(1);
+    room.latest_index = Some(event.index);
     let history = &mut context.recent_events;
     history.push(event.clone());
     let excess = history.len().saturating_sub(cx.config.context_window);
     history.drain(..excess);
     Some(StoreRequest::Commit {
         event: Box::new(event),
-        counters,
         target: None,
+        activity: None,
+        author_register: None,
     })
 }
 

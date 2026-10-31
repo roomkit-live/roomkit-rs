@@ -16,7 +16,7 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions, EventQuery,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
     InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 use roomkit_ai::{AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderStream};
@@ -323,13 +323,13 @@ pub(crate) fn record(text: &str) -> RoomEvent {
 
 /// The texts `room_id` stores, its lifecycle records aside.
 pub(crate) async fn stored<S: ConversationStore>(kit: &RoomKit<S>, room_id: &str) -> Vec<String> {
-    let query = EventQuery {
+    let query = roomkit::store::ListEventsOptions {
         limit: u64::MAX,
-        ..EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     };
     let events = kit
         .store()
-        .list_events(&room(room_id), &query)
+        .list_events(&room(room_id), query)
         .await
         .unwrap();
     events

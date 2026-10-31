@@ -63,7 +63,7 @@ mod locks;
 mod queues;
 mod registered;
 mod router;
-mod store;
+pub mod store;
 mod stream;
 mod tasks;
 pub mod testing;
@@ -82,14 +82,14 @@ pub mod model {
         ChannelCategory, ChannelDirection, ChannelId, ChannelMediaType, ChannelOutput, ChannelSet,
         ChannelType, CompositeContent, Confidence, DeleteContent, DeleteType, DeliveryError,
         DeliveryResult, DeliveryResultStatus, EditContent, EditSource, ErrorRecord, EventContent,
-        EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates, HookAction,
-        HookResult, IdentificationStatus, Identity, IdentityId, InboundMessage, InjectedEvent,
-        Latitude, LocationContent, Longitude, MediaContent, Metadata, ModelError, Observation,
-        ObservationId, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
-        ProviderResult, RateLimit, RetryPolicy, RichContent, RichFormat, Room, RoomContext,
-        RoomEvent, RoomId, RoomStatus, RoomTimers, RoomUpdates, SystemContent, Task, TaskId,
-        TaskStatus, TemplateContent, TextContent, Timestamp, ToolCallContent, ToolCallOutcome,
-        ToolCallStatus, VerificationStatus, VideoContent, Visibility,
+        EventDirection, EventId, EventSource, EventStatus, EventType, HookAction, HookResult,
+        IdentificationStatus, Identity, IdentityId, InboundMessage, InjectedEvent, Latitude,
+        LocationContent, Longitude, MediaContent, Metadata, ModelError, Observation, ObservationId,
+        Participant, ParticipantId, ParticipantRole, ParticipantStatus, ProviderResult, RateLimit,
+        RetryPolicy, RichContent, RichFormat, Room, RoomContext, RoomEvent, RoomId, RoomStatus,
+        RoomTimers, SystemContent, Task, TaskId, TaskStatus, TemplateContent, TextContent,
+        Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus, VerificationStatus,
+        VideoContent, Visibility,
     };
     /// What a hook returns: [`HookResult`]'s constructors and their options,
     /// Python's keywords of `HookResult.allow`, `block` and `modify`.
@@ -142,12 +142,12 @@ pub use self::router::{
     ChannelOf, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, InboundRoomRouter,
     RouteOptions, RouterError, RouterFuture,
 };
+pub use self::store::error::{StoreError, StoreFailure};
+pub use self::store::query::EventFilter;
+pub use self::store::rooms::RoomFilter;
 #[doc(hidden)]
 pub use self::store::written;
-pub use self::store::{
-    ConversationStore, EventFilter, EventQuery, InMemoryStore, RoomCounters, RoomFilter,
-    StoreError, StoreFailure, TargetUpdate,
-};
+pub use self::store::{ConversationStore, InMemoryStore};
 pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem};
 pub use self::tool_calls::ToolCallEvent;
 #[doc(hidden)]

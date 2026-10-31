@@ -7,11 +7,11 @@
 use std::fmt::Debug;
 
 use super::MutationError;
-use crate::model::{EventId, EventUpdates, RoomContext, RoomEvent, RoomId};
-use crate::ops::protocol::{EffectId, Outcome, RoomCounters, StoreRequest};
+use crate::model::{EventId, EventUpdates, Metadata, RoomContext, RoomEvent, RoomId};
+use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Cx, KitConfig, Progress};
-use crate::rules::authors::{self, AUTHOR_REGISTER, NeedsTimeline};
+use crate::rules::authors::{self, NeedsTimeline};
 use crate::rules::chain_depth::{Draw, ReentryBudget};
 use crate::rules::hook_registry::HookTrigger;
 
@@ -447,13 +447,13 @@ enum Waiting {
     /// then the record's author, its rooting and its commit.
     Timeline {
         effect: EffectId,
-        counters: RoomCounters,
         context: Box<RoomContext>,
     },
-    /// A read of the parent's rooting, then the commit with `counters`.
+    /// A read of the parent's rooting, then the commit with `register`, the
+    /// room's register of authors when the record changed it.
     Root {
         effect: EffectId,
-        counters: RoomCounters,
+        register: Option<Metadata>,
         rooting: Box<Rooting>,
     },
     Commit(EffectId),
@@ -468,8 +468,8 @@ impl Commit {
         }
     }
 
-    /// Records the record's author on the room of `context`, its register
-    /// written with `counters` when it changed.
+    /// Records the record's author on the room of `context`: the room's
+    /// register of authors when the record changed it.
     ///
     /// # Errors
     ///
@@ -479,38 +479,34 @@ impl Commit {
         &mut self,
         context: &RoomContext,
         timeline: Option<&[RoomEvent]>,
-        counters: &mut RoomCounters,
-    ) -> Result<(), NeedsTimeline> {
-        if let Some(register) = authors::with_author(&mut self.record, context, timeline)? {
-            counters
-                .room
-                .private_state
-                .insert(AUTHOR_REGISTER.to_owned(), Some(register));
-        }
-        Ok(())
+    ) -> Result<Option<Metadata>, NeedsTimeline> {
+        authors::with_author(&mut self.record, context, timeline)
     }
 
-    /// Roots the record's thread parent, then commits it with `counters`.
-    fn root(&mut self, cx: &mut Cx<'_>, room_id: &RoomId, counters: RoomCounters) {
+    /// Roots the record's thread parent, then commits it with `register`.
+    fn root(&mut self, cx: &mut Cx<'_>, room_id: &RoomId, register: Option<Metadata>) {
         match Rooting::of(&self.record) {
             Some((rooting, request)) => {
                 let effect = cx.io.issue_locked(request, room_id.clone());
                 self.waiting = Waiting::Root {
                     effect,
-                    counters,
+                    register,
                     rooting: Box::new(rooting),
                 };
             }
-            None => self.commit(cx, counters),
+            None => self.commit(cx, register),
         }
     }
 
-    /// Commits the record, the room's counters then `counters`.
-    fn commit(&mut self, cx: &mut Cx<'_>, counters: RoomCounters) {
+    /// Commits the record, no activity of the room (gap G-071), the room's
+    /// register of authors `register` written first when the record changed
+    /// it.
+    fn commit(&mut self, cx: &mut Cx<'_>, register: Option<Metadata>) {
         let request = StoreRequest::Commit {
             event: self.record.clone(),
-            counters,
             target: None,
+            activity: None,
+            author_register: register,
         };
         let room_id = self.record.room_id.clone();
         self.waiting = Waiting::Commit(cx.io.issue_locked(request, room_id));
@@ -543,9 +539,8 @@ impl EventChange for Commit {
             }));
         }
         self.record.index = context.room.event_count;
-        let mut counters = RoomCounters::after_commit(&context.room, self.record.index);
-        if self.with_author(&context, None, &mut counters).is_ok() {
-            self.root(cx, room_id, counters);
+        if let Ok(register) = self.with_author(&context, None) {
+            self.root(cx, room_id, register);
             return Progress::Waiting;
         }
         // The room holds no register, and its window not its timeline whole.
@@ -553,11 +548,7 @@ impl EventChange for Commit {
             room_id: room_id.clone(),
         };
         let effect = cx.io.issue_locked(request, room_id.clone());
-        self.waiting = Waiting::Timeline {
-            effect,
-            counters,
-            context,
-        };
+        self.waiting = Waiting::Timeline { effect, context };
         Progress::Waiting
     }
 
@@ -567,21 +558,18 @@ impl EventChange for Commit {
         outcome: Outcome,
     ) -> Progress<Result<RoomEvent, MutationError>> {
         match std::mem::replace(&mut self.waiting, Waiting::Nothing) {
-            Waiting::Timeline {
-                counters, context, ..
-            } => match outcome.into_events() {
+            Waiting::Timeline { context, .. } => match outcome.into_events() {
                 Ok(timeline) => {
                     let room_id = self.record.room_id.clone();
-                    let mut counters = counters;
                     // With the timeline given, the author is always recorded.
-                    let _recorded = self.with_author(&context, Some(&timeline), &mut counters);
-                    self.root(cx, &room_id, counters);
+                    let register = self.with_author(&context, Some(&timeline)).ok().flatten();
+                    self.root(cx, &room_id, register);
                     Progress::Waiting
                 }
                 Err(error) => Progress::Done(Err(MutationError::Store(error))),
             },
             Waiting::Root {
-                counters,
+                register,
                 mut rooting,
                 ..
             } => match rooting.on_read(outcome) {
@@ -589,20 +577,20 @@ impl EventChange for Commit {
                     let effect = cx.io.issue_locked(*request, self.record.room_id.clone());
                     self.waiting = Waiting::Root {
                         effect,
-                        counters,
+                        register,
                         rooting,
                     };
                     Progress::Waiting
                 }
                 Ok(Rooted::Parent(parent)) => {
                     self.record.parent_event_id = parent;
-                    self.commit(cx, counters);
+                    self.commit(cx, register);
                     Progress::Waiting
                 }
                 Err(error) => Progress::Done(Err(MutationError::Store(error))),
             },
             Waiting::Commit(_) | Waiting::Nothing => match outcome.into_committed() {
-                Ok(()) => Progress::Done(Ok((*self.record).clone())),
+                Ok(stored) => Progress::Done(Ok(*stored)),
                 Err(error) => Progress::Done(Err(MutationError::Store(error))),
             },
         }

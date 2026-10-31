@@ -51,17 +51,28 @@ pub(crate) fn store_binding(
     Ok(())
 }
 
-/// Removes the room's binding of `channel_id`, if it has one.
-pub(crate) fn delete_binding(
+/// Removes the room's binding of `channel_id`; whether it had one.
+pub(crate) fn remove_binding(
     connection: &Connection,
     room_id: &RoomId,
     channel_id: &ChannelId,
-) -> Result<(), Failure> {
-    connection.execute(
+) -> Result<bool, Failure> {
+    let removed = connection.execute(
         "DELETE FROM bindings WHERE room_id = ? AND channel_id = ?",
         [room_id.as_str(), channel_id.as_str()],
     )?;
-    Ok(())
+    Ok(removed > 0)
+}
+
+/// The room's binding of `channel_id`, if it has one.
+pub(crate) fn binding(
+    connection: &Connection,
+    room_id: &RoomId,
+    channel_id: &ChannelId,
+) -> Result<Option<ChannelBinding>, Failure> {
+    stored_binding(connection, room_id, channel_id)?
+        .map(|data| records::read(&data))
+        .transpose()
 }
 
 /// The room's bindings.
@@ -114,8 +125,9 @@ fn stored_participant(
         .optional()?)
 }
 
-/// Stores a new participant of its room; an id the room has is refused
-/// [`StoreError::ParticipantExists`] (RFC §5.5).
+/// Stores a new participant of its room; a room the store does not hold is
+/// refused [`StoreError::RoomNotFound`], an id the room has
+/// [`StoreError::ParticipantExists`] (RFC §5.5, §14.3).
 pub(crate) fn create_participant(
     connection: &Connection,
     participant: &Participant,
@@ -139,13 +151,12 @@ pub(crate) fn create_participant(
     Ok(())
 }
 
-/// The room's participant `participant_id`.
+/// The room's participant `participant_id`, if it has one.
 pub(crate) fn participant(
     connection: &Connection,
     room_id: &RoomId,
     participant_id: &ParticipantId,
 ) -> Result<Option<Participant>, Failure> {
-    rooms::check(connection, room_id)?;
     stored_participant(connection, room_id, participant_id)?
         .map(|data| records::read(&data))
         .transpose()
@@ -157,7 +168,6 @@ pub(crate) fn update_participant(
     connection: &Connection,
     participant: &Participant,
 ) -> Result<(), Failure> {
-    rooms::check(connection, &participant.room_id)?;
     let Some(stored) = stored_participant(connection, &participant.room_id, &participant.id)?
     else {
         return Err(StoreError::ParticipantNotFound {
@@ -183,7 +193,6 @@ pub(crate) fn delete_participant(
     room_id: &RoomId,
     participant_id: &ParticipantId,
 ) -> Result<(), Failure> {
-    rooms::check(connection, room_id)?;
     connection.execute(
         "DELETE FROM participants WHERE room_id = ? AND id = ?",
         [room_id.as_str(), participant_id.as_str()],

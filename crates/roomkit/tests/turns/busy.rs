@@ -33,7 +33,7 @@ async fn a_tool_blocking_its_thread_past_the_heartbeat_timeout_ends_normally() {
     let result = asks(&kit, "What is it?").await;
     let rows: Vec<EventType> = kit
         .store()
-        .list_events(&room(), &received())
+        .list_events(&room(), received())
         .await
         .unwrap()
         .into_iter()

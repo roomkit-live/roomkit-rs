@@ -23,8 +23,8 @@ use roomkit::{
     Addressing, AttachChannelOptions, Channel, ChannelError, ChannelOf, CloseRoomOptions,
     ConversationStore, CreateRoomOptions, DefaultInboundRoomRouter,
     DefaultInboundRoomRouterOptions, HookExecution, HookOptions, HookTrigger, InMemoryStore,
-    InboundRoomRouter, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitError, RoomKitOptions,
-    RouteOptions, RouterError, RouterFuture, WeakRoomKit,
+    InboundRoomRouter, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, RouteOptions,
+    RouterError, RouterFuture, WeakRoomKit,
 };
 use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
@@ -250,7 +250,7 @@ async fn correspondent(kit: &RoomKit, room_id: &RoomId) -> Option<String> {
 /// G-046).
 async fn texts(kit: &RoomKit, room_id: &RoomId) -> Vec<String> {
     kit.store()
-        .list_events(room_id, &every_row())
+        .list_events(room_id, every_row())
         .await
         .unwrap()
         .iter()
@@ -339,7 +339,7 @@ async fn a_member_is_found_by_an_address_linked_to_their_identity() {
         channel("sms"),
     );
     jean.identity_id = Some(IdentityId::new("id_jean").unwrap());
-    kit.store().create_participant(jean).await.unwrap();
+    kit.store().add_participant(jean).await.unwrap();
     kit.store()
         .create_identity(Identity::new(IdentityId::new("id_jean").unwrap()))
         .await
@@ -347,9 +347,9 @@ async fn a_member_is_found_by_an_address_linked_to_their_identity() {
     kit.store()
         .link_address(
             &IdentityId::new("id_jean").unwrap(),
-            ChannelType::SMS,
+            &ChannelType::SMS,
             ALICE,
-            None,
+            roomkit::store::LinkAddressOptions::default(),
         )
         .await
         .unwrap();
@@ -375,7 +375,7 @@ async fn an_address_moved_to_another_identity_routes_to_its_new_person() {
             channel("sms"),
         );
         member.identity_id = Some(identity_id.clone());
-        kit.store().create_participant(member).await.unwrap();
+        kit.store().add_participant(member).await.unwrap();
         kit.store()
             .create_identity(Identity::new(identity_id))
             .await
@@ -387,15 +387,30 @@ async fn an_address_moved_to_another_identity_routes_to_its_new_person() {
     );
     let store = kit.store();
     store
-        .link_address(&jean, ChannelType::SMS, ALICE, None)
+        .link_address(
+            &jean,
+            &ChannelType::SMS,
+            ALICE,
+            roomkit::store::LinkAddressOptions::default(),
+        )
         .await
         .unwrap();
     store
-        .unlink_address(&jean, ChannelType::SMS, ALICE, None)
+        .unlink_address(
+            &jean,
+            &ChannelType::SMS,
+            ALICE,
+            roomkit::store::UnlinkAddressOptions::default(),
+        )
         .await
         .unwrap();
     store
-        .link_address(&marie, ChannelType::SMS, ALICE, None)
+        .link_address(
+            &marie,
+            &ChannelType::SMS,
+            ALICE,
+            roomkit::store::LinkAddressOptions::default(),
+        )
         .await
         .unwrap();
     assert_eq!(routed(&kit, message(ALICE, "Bonjour")).await, maries);
@@ -612,7 +627,7 @@ async fn a_failing_router_fails_the_message_with_nothing_written() {
         .await;
     let rooms = kit
         .store()
-        .list_rooms(&RoomFilter::default())
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
         .await
         .unwrap();
     assert_eq!(
@@ -945,13 +960,13 @@ async fn a_room_that_heard_another_sender_before_the_record_routes_the_message_o
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
             include_blocked: true,
             ..roomkit::EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

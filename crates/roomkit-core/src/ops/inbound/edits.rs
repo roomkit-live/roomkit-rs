@@ -10,7 +10,6 @@
 
 use super::pass::PassOrigin;
 use crate::model::{ChannelBinding, EventId, Participant, RoomEvent};
-use crate::ops::protocol::TargetUpdate;
 use crate::rules::edits::{self, EditRefusal, Origin};
 
 /// An edit or a delete step 8a accepted, with its target as read under the
@@ -74,25 +73,20 @@ impl Accepted {
         });
     }
 
-    /// What the commit of `event` writes on the target, and the target as it
-    /// leaves it (RFC §10.3 state updates). The edit's new content is the
-    /// one the hooks left. `None` for an event that no longer changes its
-    /// target, which the hooks' kept content rules out (gap G-062): the pass
-    /// then refuses it rather than commit a change without its target's
-    /// update.
-    pub(super) fn write(self, event: &RoomEvent) -> Option<(TargetUpdate, RoomEvent)> {
+    /// The target as the commit of `event` leaves it (RFC §10.3 state
+    /// updates), which the commit writes whole. The edit's new content is
+    /// the one the hooks left. `None` for an event that no longer changes
+    /// its target, which the hooks' kept content rules out (gap G-062): the
+    /// pass then refuses it rather than commit a change without its
+    /// target's update.
+    pub(super) fn write(self, event: &RoomEvent) -> Option<RoomEvent> {
         let mutation = edits::mutation(event).ok().flatten()?;
         if mutation.target_event_id() != &self.target.id {
             return None;
         }
-        let updates = edits::target_updates(&mutation, &self.target);
         let mut changed = *self.target;
-        updates.apply(&mut changed);
-        let update = TargetUpdate {
-            event_id: changed.id.clone(),
-            updates,
-        };
-        Some((update, changed))
+        edits::target_updates(&mutation, &changed).apply(&mut changed);
+        Some(changed)
     }
 }
 

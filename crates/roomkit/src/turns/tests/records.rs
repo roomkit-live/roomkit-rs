@@ -18,7 +18,7 @@ async fn ending_on(end: Metadata) -> (Option<String>, Option<Value>) {
     crate::testing::idle(&kit).await;
     let last = kit
         .store()
-        .list_events(&room_id(), &received())
+        .list_events(&room_id(), received())
         .await
         .unwrap()
         .into_iter()
@@ -53,9 +53,9 @@ async fn an_end_with_a_key_of_its_own_writes_the_record_whole() {
 }
 
 /// Every event of a room's timeline the room received.
-fn received() -> crate::store::EventQuery {
-    crate::store::EventQuery {
+fn received() -> crate::store::ListEventsOptions {
+    crate::store::ListEventsOptions {
         limit: u64::MAX,
-        ..crate::store::EventQuery::default()
+        ..crate::store::ListEventsOptions::default()
     }
 }

@@ -695,12 +695,10 @@ impl From<StoreError> for RoomKitError {
             },
             StoreError::Value(message) => Self::Value(message),
             StoreError::Unavailable(failure) => Self::Store(failure),
-            // Refusals Python's store makes no class of (lot 4 removes
-            // them): the store's error, as a dependency's.
+            // TODO(lot 4 parity): Python's `ParticipantExistsError` and
+            // `ParticipantNotFoundError` of the store's.
             other @ (StoreError::ParticipantExists { .. }
-            | StoreError::ParticipantNotFound { .. }
-            | StoreError::IdentityExists(_)
-            | StoreError::IndexTaken { .. }) => Self::Store(StoreFailure::new(other)),
+            | StoreError::ParticipantNotFound { .. }) => Self::Store(StoreFailure::new(other)),
         }
     }
 }

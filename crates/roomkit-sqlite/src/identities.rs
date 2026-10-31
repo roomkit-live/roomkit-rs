@@ -106,13 +106,11 @@ fn index(
     Ok(())
 }
 
-/// Stores a new identity; an id taken is refused
-/// [`StoreError::IdentityExists`], an address another identity of its
-/// organization uses [`StoreError::AddressLinked`].
+/// Stores `identity`, replacing the one stored under its id, as Python's
+/// store does (`INSERT OR REPLACE`); an address another identity of its
+/// organization uses is refused [`StoreError::AddressLinked`].
 pub(crate) fn create(connection: &Connection, identity: &Identity) -> Result<(), Failure> {
-    if stored(connection, &identity.id)?.is_some() {
-        return Err(StoreError::IdentityExists(identity.id.clone()).into());
-    }
+    let held = stored(connection, &identity.id)?.map(|(_, data)| data);
     let organization = identity.organization_id.as_deref();
     for (channel_type, addresses) in &identity.channel_addresses {
         for address in addresses {
@@ -126,10 +124,10 @@ pub(crate) fn create(connection: &Connection, identity: &Identity) -> Result<(),
         }
     }
     connection.execute(
-        "INSERT INTO identities(id, data) VALUES(?, ?)",
+        "INSERT OR REPLACE INTO identities(id, data) VALUES(?, ?)",
         params![
             identity.id.as_str(),
-            records::written(identity, Kind::Identity, None)?,
+            records::written(identity, Kind::Identity, held.as_deref())?,
         ],
     )?;
     for (channel_type, addresses) in &identity.channel_addresses {

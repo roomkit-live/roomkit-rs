@@ -94,7 +94,7 @@ async fn sms_and_agent() -> (RoomKit, RecordingTransport) {
 
 async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
     kit.store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
 }
@@ -369,7 +369,7 @@ async fn the_timeline_reads_without_the_refused_events_by_default() {
     .unwrap();
     let received = kit
         .store()
-        .list_events(&room_id(), &received())
+        .list_events(&room_id(), received())
         .await
         .unwrap();
     // The two attaches' lifecycle records are received (gap G-046); the
@@ -1104,7 +1104,7 @@ async fn a_binding_value_its_model_refuses_is_refused_before_any_read() {
 /// How many rooms the kit's store holds.
 async fn rooms(kit: &RoomKit) -> usize {
     kit.store()
-        .list_rooms(&roomkit::RoomFilter::default())
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
         .await
         .unwrap()
         .len()
@@ -1823,21 +1823,21 @@ fn a_kit_can_be_shared_across_tasks_and_threads() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
             include_blocked: true,
             ..roomkit::EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }
 
 /// Every event of a room's timeline the room received.
-fn received() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn received() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

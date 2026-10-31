@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use roomkit_core::model::{Room, RoomId};
+use roomkit_core::model::{Room, RoomId, RoomStatus};
 use roomkit_core::ops::{CheckTimers, Environment};
 use roomkit_core::rules::timers;
 
@@ -18,6 +18,7 @@ use super::RoomKit;
 use super::options::{CheckAllTimersOptions, CheckRoomTimersOptions};
 use crate::driver;
 use crate::error::{RoomKitError, with_causes};
+use crate::store::rooms::rooms_read_by;
 use crate::store::{ConversationStore, RoomFilter};
 
 impl<S: ConversationStore> RoomKit<S> {
@@ -59,12 +60,13 @@ impl<S: ConversationStore> RoomKit<S> {
         options: CheckAllTimersOptions,
     ) -> Result<Vec<Room>, RoomKitError> {
         self.inner.open()?;
+        // Every ACTIVE and PAUSED room, read a page at a time before any is
+        // checked, as Python's sweep reads them (RMK-1009).
         let filter = RoomFilter {
-            timers_armed: true,
+            statuses: Some(vec![RoomStatus::Active, RoomStatus::Paused]),
             organization_id: options.organization_id.clone(),
-            ..RoomFilter::default()
         };
-        let rooms = self.inner.store.list_rooms(&filter).await?;
+        let rooms = rooms_read_by(&*self.inner.store, &filter).await?;
         // The sweep reads the environment once: each room's check runs on
         // the clock its due transitions were read with.
         let environment = self.inner.environment();

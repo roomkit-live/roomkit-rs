@@ -501,7 +501,7 @@ async fn a_room_whose_recipient_is_not_one_is_no_stranger_s() {
     let after_routed = sms.sent().len();
     let stored = kit
         .store()
-        .list_events(&host_room, &every_row())
+        .list_events(&host_room, every_row())
         .await
         .unwrap();
     let bob_in_host_room = stored.iter().any(|event| {
@@ -527,7 +527,7 @@ async fn a_room_whose_recipient_is_not_one_is_no_stranger_s() {
     let binding = sms_binding(&kit, &host_room).await;
     let answered_in_host_room = kit
         .store()
-        .list_events(&host_room, &every_row())
+        .list_events(&host_room, every_row())
         .await
         .unwrap()
         .iter()
@@ -571,13 +571,13 @@ async fn a_room_whose_recipient_is_not_one_is_no_stranger_s() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
             include_blocked: true,
             ..roomkit::EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

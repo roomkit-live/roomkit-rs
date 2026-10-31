@@ -169,7 +169,7 @@ async fn process_timeouts(kit: &RoomKit, tap: &EventTap) -> Vec<(bool, bool)> {
 async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
     let mut timeline = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap();
     timeline.retain(|event| event.source.channel_type != ChannelType::SYSTEM);
@@ -542,13 +542,13 @@ async fn process_timeout_defaults_to_30_seconds() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
             include_blocked: true,
             ..roomkit::EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

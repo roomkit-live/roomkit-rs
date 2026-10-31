@@ -1004,7 +1004,7 @@ async fn timeline_in(
 ) -> Result<Vec<RoomEvent>, Box<dyn Error>> {
     let store = SqliteStore::open(database).await?;
     Ok(store
-        .list_events(&RoomId::new(conversation)?, &every_row())
+        .list_events(&RoomId::new(conversation)?, every_row())
         .await?)
 }
 

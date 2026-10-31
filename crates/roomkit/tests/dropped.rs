@@ -13,15 +13,16 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelType, EventId, EventSource, EventStatus, EventUpdates,
-    HookResult, Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId,
-    Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, TextContent, Timestamp,
+    ChannelBinding, ChannelId, ChannelType, EventId, EventSource, EventStatus, HookResult,
+    Identity, IdentityId, InboundMessage, Metadata, Observation, Participant, ParticipantId, Room,
+    RoomEvent, RoomId, Task, TextContent, Timestamp,
 };
+use roomkit::store;
 use roomkit::testing::{EventTap, RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, EventFilter,
-    EventQuery, HookOptions, HookTrigger, InMemoryStore, ProcessInboundOptions, RoomCounters,
-    RoomFilter, RoomKit, RoomKitError, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
+    HookOptions, HookTrigger, InMemoryStore, ProcessInboundOptions, RoomKit, RoomKitError,
+    RoomKitOptions, SendEventOptions, StoreError,
 };
 use tokio::sync::Notify;
 
@@ -58,87 +59,135 @@ struct GatedStore {
 }
 
 impl ConversationStore for GatedStore {
-    async fn create_room(&self, room: Room) -> Result<(), StoreError> {
+    async fn create_room(&self, room: Room) -> Result<Room, StoreError> {
         self.store.create_room(room).await
-    }
-
-    async fn update_room(
-        &self,
-        room_id: &RoomId,
-        updates: RoomUpdates,
-    ) -> Result<Room, StoreError> {
-        self.store.update_room(room_id, updates).await
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
         self.store.get_room(room_id).await
     }
 
-    async fn advance_delivered_index(
+    async fn update_room(&self, room: Room) -> Result<Room, StoreError> {
+        self.store.update_room(room).await
+    }
+
+    async fn patch_room_metadata(
         &self,
         room_id: &RoomId,
-        index: u64,
-        force: bool,
-    ) -> Result<bool, StoreError> {
+        patch: Metadata,
+        options: store::PatchRoomMetadataOptions,
+    ) -> Result<Option<Room>, StoreError> {
         self.store
-            .advance_delivered_index(room_id, index, force)
+            .patch_room_metadata(room_id, patch, options)
             .await
     }
 
-    async fn list_rooms(&self, filter: &RoomFilter) -> Result<Vec<Room>, StoreError> {
-        self.store.list_rooms(filter).await
+    async fn delete_room(&self, room_id: &RoomId) -> Result<bool, StoreError> {
+        self.store.delete_room(room_id).await
+    }
+
+    async fn list_rooms(&self, options: store::ListRoomsOptions) -> Result<Vec<Room>, StoreError> {
+        self.store.list_rooms(options).await
+    }
+
+    async fn find_rooms(&self, options: store::FindRoomsOptions) -> Result<Vec<Room>, StoreError> {
+        self.store.find_rooms(options).await
+    }
+
+    async fn find_room_ids_by_channel(
+        &self,
+        channel_id: &ChannelId,
+        options: store::FindRoomIdsByChannelOptions,
+    ) -> Result<Vec<RoomId>, StoreError> {
+        self.store
+            .find_room_ids_by_channel(channel_id, options)
+            .await
     }
 
     async fn find_room_id_by_binding(
         &self,
         channel_id: &ChannelId,
-        participant_id: &ParticipantId,
-        identity_id: Option<&IdentityId>,
-        filter: &RoomFilter,
+        participant_id: &str,
+        options: store::FindRoomIdByBindingOptions,
     ) -> Result<Option<RoomId>, StoreError> {
         self.store
-            .find_room_id_by_binding(channel_id, participant_id, identity_id, filter)
+            .find_room_id_by_binding(channel_id, participant_id, options)
             .await
     }
 
     async fn find_room_id_by_participant(
         &self,
         channel_id: &ChannelId,
-        participant_id: &ParticipantId,
-        identity_id: Option<&IdentityId>,
-        filter: &RoomFilter,
+        participant_id: &str,
+        options: store::FindRoomIdByParticipantOptions,
     ) -> Result<Option<RoomId>, StoreError> {
         self.store
-            .find_room_id_by_participant(channel_id, participant_id, identity_id, filter)
+            .find_room_id_by_participant(channel_id, participant_id, options)
             .await
     }
 
-    async fn store_binding(&self, binding: ChannelBinding) -> Result<(), StoreError> {
-        self.store.store_binding(binding).await
+    async fn get_delivered_index(&self, room_id: &RoomId) -> Result<i64, StoreError> {
+        self.store.get_delivered_index(room_id).await
     }
 
-    async fn delete_binding(
+    async fn advance_delivered_index(
+        &self,
+        room_id: &RoomId,
+        index: u64,
+        options: store::AdvanceDeliveredIndexOptions,
+    ) -> Result<bool, StoreError> {
+        self.store
+            .advance_delivered_index(room_id, index, options)
+            .await
+    }
+
+    async fn get_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+    ) -> Result<Option<Metadata>, StoreError> {
+        self.store.get_private_state(room_id, key).await
+    }
+
+    async fn set_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+        value: Option<Metadata>,
+    ) -> Result<(), StoreError> {
+        self.store.set_private_state(room_id, key, value).await
+    }
+
+    async fn add_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
+        self.store.add_binding(binding).await
+    }
+
+    async fn get_binding(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
-    ) -> Result<(), StoreError> {
-        self.store.delete_binding(room_id, channel_id).await
+    ) -> Result<Option<ChannelBinding>, StoreError> {
+        self.store.get_binding(room_id, channel_id).await
+    }
+
+    async fn update_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
+        self.store.update_binding(binding).await
+    }
+
+    async fn remove_binding(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<bool, StoreError> {
+        self.store.remove_binding(room_id, channel_id).await
     }
 
     async fn list_bindings(&self, room_id: &RoomId) -> Result<Vec<ChannelBinding>, StoreError> {
         self.store.list_bindings(room_id).await
     }
 
-    async fn load_context(
-        &self,
-        room_id: &RoomId,
-        recent_events: usize,
-    ) -> Result<Option<RoomContext>, StoreError> {
-        self.store.load_context(room_id, recent_events).await
-    }
-
-    async fn create_participant(&self, participant: Participant) -> Result<(), StoreError> {
-        self.store.create_participant(participant).await
+    async fn add_participant(&self, participant: Participant) -> Result<Participant, StoreError> {
+        self.store.add_participant(participant).await
     }
 
     async fn get_participant(
@@ -149,7 +198,10 @@ impl ConversationStore for GatedStore {
         self.store.get_participant(room_id, participant_id).await
     }
 
-    async fn update_participant(&self, participant: Participant) -> Result<(), StoreError> {
+    async fn update_participant(
+        &self,
+        participant: Participant,
+    ) -> Result<Participant, StoreError> {
         self.store.update_participant(participant).await
     }
 
@@ -165,7 +217,7 @@ impl ConversationStore for GatedStore {
         self.store.list_participants(room_id).await
     }
 
-    async fn create_identity(&self, identity: Identity) -> Result<(), StoreError> {
+    async fn create_identity(&self, identity: Identity) -> Result<Identity, StoreError> {
         self.store.create_identity(identity).await
     }
 
@@ -175,56 +227,65 @@ impl ConversationStore for GatedStore {
 
     async fn resolve_identity(
         &self,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: store::ResolveIdentityOptions,
     ) -> Result<Option<Identity>, StoreError> {
         self.store
-            .resolve_identity(channel_type, address, organization_id)
+            .resolve_identity(channel_type, address, options)
             .await
     }
 
     async fn link_address(
         &self,
         identity_id: &IdentityId,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: store::LinkAddressOptions,
     ) -> Result<(), StoreError> {
         self.store
-            .link_address(identity_id, channel_type, address, organization_id)
+            .link_address(identity_id, channel_type, address, options)
             .await
     }
 
     async fn unlink_address(
         &self,
         identity_id: &IdentityId,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: store::UnlinkAddressOptions,
     ) -> Result<(), StoreError> {
         self.store
-            .unlink_address(identity_id, channel_type, address, organization_id)
+            .unlink_address(identity_id, channel_type, address, options)
             .await
+    }
+
+    async fn check_idempotency(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+        channel_id: Option<&ChannelId>,
+    ) -> Result<bool, StoreError> {
+        self.store.check_idempotency(room_id, key, channel_id).await
     }
 
     async fn get_event_by_idempotency_key(
         &self,
         room_id: &RoomId,
-        channel_id: Option<&ChannelId>,
         key: &str,
+        channel_id: Option<&ChannelId>,
     ) -> Result<Option<RoomEvent>, StoreError> {
         self.store
-            .get_event_by_idempotency_key(room_id, channel_id, key)
+            .get_event_by_idempotency_key(room_id, key, channel_id)
             .await
     }
 
-    async fn commit(
+    async fn commit_event(
         &self,
+        room_id: &RoomId,
         event: RoomEvent,
-        counters: RoomCounters,
-        target: Option<TargetUpdate>,
-    ) -> Result<(), StoreError> {
+        options: store::CommitEventOptions,
+    ) -> Result<RoomEvent, StoreError> {
         let ungated = event.source.channel_type == ChannelType::SYSTEM
             || roomkit_core::rules::transcoding::text_of(&event.content) == "First";
         if !ungated && !self.started.swap(true, Ordering::SeqCst) {
@@ -238,61 +299,56 @@ impl ConversationStore for GatedStore {
                 "the store's driver broke"
             );
         }
-        self.store.commit(event, counters, target).await
+        self.store.commit_event(room_id, event, options).await
     }
 
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
         self.store.get_event(event_id).await
     }
 
-    async fn update_event(
-        &self,
-        event_id: &EventId,
-        updates: EventUpdates,
-    ) -> Result<RoomEvent, StoreError> {
-        self.store.update_event(event_id, updates).await
+    async fn update_event(&self, event: RoomEvent) -> Result<RoomEvent, StoreError> {
+        self.store.update_event(event).await
     }
 
     async fn delete_event(
         &self,
         room_id: &RoomId,
         event_id: &EventId,
-        cascade_replies: bool,
+        options: store::DeleteEventOptions,
     ) -> Result<Vec<RoomEvent>, StoreError> {
-        self.store
-            .delete_event(room_id, event_id, cascade_replies)
-            .await
+        self.store.delete_event(room_id, event_id, options).await
     }
 
     async fn get_event_count(
         &self,
         room_id: &RoomId,
-        filter: Option<EventFilter>,
+        options: store::GetEventCountOptions,
     ) -> Result<u64, StoreError> {
-        self.store.get_event_count(room_id, filter).await
-    }
-
-    async fn persist_side_effects(
-        &self,
-        room_id: &RoomId,
-        tasks: Vec<Task>,
-        observations: Vec<Observation>,
-    ) -> Result<(), StoreError> {
-        self.store
-            .persist_side_effects(room_id, tasks, observations)
-            .await
+        self.store.get_event_count(room_id, options).await
     }
 
     async fn list_events(
         &self,
         room_id: &RoomId,
-        query: &EventQuery,
+        options: store::ListEventsOptions,
     ) -> Result<Vec<RoomEvent>, StoreError> {
-        self.store.list_events(room_id, query).await
+        self.store.list_events(room_id, options).await
     }
 
-    async fn list_tasks(&self, room_id: &RoomId) -> Result<Vec<Task>, StoreError> {
-        self.store.list_tasks(room_id).await
+    async fn add_task(&self, task: Task) -> Result<Task, StoreError> {
+        self.store.add_task(task).await
+    }
+
+    async fn add_observation(&self, observation: Observation) -> Result<Observation, StoreError> {
+        self.store.add_observation(observation).await
+    }
+
+    async fn list_tasks(
+        &self,
+        room_id: &RoomId,
+        options: store::ListTasksOptions,
+    ) -> Result<Vec<Task>, StoreError> {
+        self.store.list_tasks(room_id, options).await
     }
 
     async fn list_observations(&self, room_id: &RoomId) -> Result<Vec<Observation>, StoreError> {
@@ -354,7 +410,7 @@ async fn delivered_and_processed(
     roomkit::testing::idle(kit).await;
     let mut timeline = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap();
     timeline.retain(|event| event.source.channel_type != ChannelType::SYSTEM);
@@ -423,14 +479,14 @@ async fn an_injected_event_dropped_during_its_commit_is_delivered() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> EventQuery {
-    EventQuery {
+fn every_row() -> store::ListEventsOptions {
+    store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(EventFilter {
             include_blocked: true,
             ..EventFilter::default()
         }),
-        ..EventQuery::default()
+        ..store::ListEventsOptions::default()
     }
 }
 
@@ -466,7 +522,7 @@ async fn slow_commit(
 /// Whether the room holds `text`.
 async fn stored(kit: &RoomKit<GatedStore>, text: &str) -> bool {
     kit.store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
         .iter()

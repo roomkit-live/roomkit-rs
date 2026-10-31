@@ -36,13 +36,13 @@ impl Indexes {
     }
 
     /// `effect` was answered `outcome`: a commit that succeeded waits for
-    /// its place, or for the release.
+    /// its place, or for the release, with the index the store gave it.
     pub(super) fn answered(&mut self, effect: EffectId, outcome: &Outcome) {
-        let Some(committed) = self.committing.remove(&effect) else {
+        let Some((room_id, event_id, _planned)) = self.committing.remove(&effect) else {
             return;
         };
-        if matches!(outcome, Outcome::Store(StoreOutcome::Committed)) {
-            self.unplaced.push(committed);
+        if let Outcome::Store(StoreOutcome::Committed(stored)) = outcome {
+            self.unplaced.push((room_id, event_id, stored.index));
         }
     }
 

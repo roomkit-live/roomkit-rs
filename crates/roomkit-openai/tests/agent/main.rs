@@ -160,7 +160,7 @@ impl Room {
     async fn timeline(&self) -> Vec<RoomEvent> {
         self.kit
             .store()
-            .list_events(&room_id(), &every_row())
+            .list_events(&room_id(), every_row())
             .await
             .unwrap()
     }
@@ -717,13 +717,13 @@ fn a_tool_name_openai_refuses_is_refused_when_the_agent_takes_it() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
             include_blocked: true,
             ..roomkit::EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

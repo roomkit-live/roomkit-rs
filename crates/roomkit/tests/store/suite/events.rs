@@ -4,27 +4,29 @@
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelId, CompositeContent, DeleteContent, EditContent, EventContent, EventStatus, EventType,
-    EventUpdates, MediaContent, Room, RoomEvent, RoomId, TextContent, Timestamp,
+    MediaContent, Room, RoomEvent, RoomId, TextContent, Timestamp,
 };
-use roomkit::{ConversationStore, EventFilter, EventQuery, StoreError, TargetUpdate};
+use roomkit::store::{DeleteEventOptions, GetConversationOptions, ListEventsOptions};
+use roomkit::{ConversationStore, EventFilter, StoreError};
 use serde_json::json;
 
 use super::{
-    channel, counters, edit_of, event, event_id, event_stored, ids, reply, room_id, with_events,
+    channel, commit, edit_of, event, event_id, event_stored, ids, reply, room_id, with_events,
     with_room,
 };
 use crate::Store;
 
-/// The update an edit of `evt_0` writes, its text `text`.
-fn edited(text: &str) -> TargetUpdate {
-    let updates = EventUpdates {
-        content: Some(TextContent::new(text).into()),
-        ..EventUpdates::default()
-    };
-    TargetUpdate {
-        event_id: event_id("evt_0"),
-        updates,
+/// `evt_0` as an edit to its text `text` leaves it.
+fn edited(text: &str) -> RoomEvent {
+    RoomEvent {
+        content: TextContent::new(text).into(),
+        ..event(0)
     }
+}
+
+/// A delete that takes the replies, or not.
+fn cascading(cascade_replies: bool) -> DeleteEventOptions {
+    DeleteEventOptions { cascade_replies }
 }
 
 /// `room_1` holding `evt_0` and its reply `evt_1`.
@@ -53,16 +55,25 @@ async fn an_event_is_read_as_it_was_committed() {
     );
 }
 
+/// RFC §8.1, §14.3: the store gives the index, the room's count of the
+/// indices it gave out, as Python's `commit_event` does: an event planned
+/// at an index the room holds, a stale one, lands at the next.
 #[tokio::test]
-async fn an_index_the_room_holds_is_refused() {
+async fn commit_event_assigns_the_index() {
     let store = with_events(vec![event(0)]).await;
-    let again = store.commit(event(0), counters(0), None).await;
+    let mut stale = event(0);
+    stale.id = event_id("evt_stale");
+    let committed = commit(&store, stale, None).await.map(|event| event.index);
+    let room = store.get_room(&room_id()).await.unwrap().unwrap();
+    let stored = store.get_event(&event_id("evt_stale")).await.unwrap();
     assert_eq!(
-        again,
-        Err(StoreError::IndexTaken {
-            room_id: room_id(),
-            index: 0
-        })
+        (
+            committed,
+            stored.map(|event| event.index),
+            room.event_count,
+            room.latest_index
+        ),
+        (Ok(1), Some(1), 2, Some(1))
     );
 }
 
@@ -115,28 +126,19 @@ async fn a_link_s_scheme_is_written_in_lower_case() {
     let store = with_events(vec![event(0)]).await;
     let mut media = event(1);
     media.content = shouting_media("HTTPS://Example.com/a.png");
-    store.commit(media, counters(1), None).await.unwrap();
-    let target = TargetUpdate {
-        event_id: event_id("evt_0"),
-        updates: EventUpdates {
-            content: Some(shouting_media("Http://Example.com/b.png")),
-            ..EventUpdates::default()
-        },
+    commit(&store, media, None).await.unwrap();
+    let target = RoomEvent {
+        content: shouting_media("Http://Example.com/b.png"),
+        ..event(0)
     };
-    store
-        .commit(edit_of(2, 0), counters(2), Some(target))
-        .await
-        .unwrap();
-    let updates = EventUpdates {
-        content: Some(shouting_media("DATA:image/png;base64,AAAA")),
-        ..EventUpdates::default()
+    commit(&store, edit_of(2, 0), Some(target)).await.unwrap();
+    let updated = RoomEvent {
+        content: shouting_media("DATA:image/png;base64,AAAA"),
+        ..event(1)
     };
-    store
-        .update_event(&event_id("evt_1"), updates)
-        .await
-        .unwrap();
+    store.update_event(updated).await.unwrap();
     let events = store
-        .list_events(&room_id(), &EventQuery::default())
+        .list_events(&room_id(), ListEventsOptions::default())
         .await
         .unwrap();
     assert_eq!(
@@ -169,31 +171,24 @@ async fn a_content_its_model_refuses_is_never_written() {
     );
     let edit_to_it = with_content(EditContent::new(event_id("evt_0"), javascript_media()).into());
     let edit = edit_of(1, 0);
-    let target = TargetUpdate {
-        event_id: event_id("evt_0"),
-        updates: EventUpdates {
-            content: Some(javascript_media()),
-            ..EventUpdates::default()
-        },
+    let target = RoomEvent {
+        content: javascript_media(),
+        ..event(0)
     };
-    let updates = EventUpdates {
-        content: Some(javascript_media()),
-        ..EventUpdates::default()
-    };
+    let updated = target.clone();
     let refused = [
-        store.commit(media, counters(1), None).await,
-        store.commit(composite, counters(1), None).await,
-        store.commit(edit_to_it, counters(1), None).await,
-        store.commit(edit, counters(1), Some(target)).await,
-        store
-            .update_event(&event_id("evt_0"), updates)
-            .await
-            .map(drop),
+        commit(&store, media, None).await.map(drop),
+        commit(&store, composite, None).await.map(drop),
+        commit(&store, edit_to_it, None).await.map(drop),
+        commit(&store, edit, Some(target)).await.map(drop),
+        store.update_event(updated).await.map(drop),
     ];
     assert_eq!(
         (
             refused,
-            store.list_events(&room_id(), &EventQuery::default()).await
+            store
+                .list_events(&room_id(), ListEventsOptions::default())
+                .await
         ),
         (
             [
@@ -212,18 +207,29 @@ async fn a_content_its_model_refuses_is_never_written() {
 async fn a_commit_to_a_missing_room_is_refused() {
     let store = crate::store().await;
     assert_eq!(
-        store.commit(event(0), counters(0), None).await,
+        commit(&store, event(0), None).await,
         Err(StoreError::RoomNotFound(room_id()))
     );
 }
 
+/// Python's `get_conversation`: the room's latest messages, a refused one
+/// included, a change left out, in index order.
 #[tokio::test]
-async fn a_context_holds_the_latest_events_only() {
-    let store = with_events((0..3).map(event).collect()).await;
-    let context = store.load_context(&room_id(), 2).await.unwrap().unwrap();
+async fn a_conversation_holds_the_latest_messages_only() {
+    let store = with_events(vec![
+        event(0),
+        event(1),
+        event_stored(2, EventStatus::Blocked),
+        edit_of(3, 0),
+    ])
+    .await;
+    let latest = GetConversationOptions {
+        limit: 2,
+        after_index: None,
+    };
+    let conversation = store.get_conversation(&room_id(), latest).await.unwrap();
     assert_eq!(
-        context
-            .recent_events
+        conversation
             .iter()
             .map(|event| event.index)
             .collect::<Vec<_>>(),
@@ -242,7 +248,7 @@ async fn a_key_is_found_from_its_channel_or_within_the_room() {
     let mut found = Vec::new();
     for channel in [Some(&sms), Some(&ws), None] {
         let event = store
-            .get_event_by_idempotency_key(&room_id(), channel, "key_1")
+            .get_event_by_idempotency_key(&room_id(), "key_1", channel)
             .await
             .unwrap();
         found.push(event.map(|event| event.id.to_string()));
@@ -268,21 +274,16 @@ fn keyed(index: u64, channel: &str, key: &str) -> RoomEvent {
 #[tokio::test]
 async fn a_key_its_channel_holds_refuses_another_event() {
     let store = with_thread().await;
-    store
-        .commit(keyed(2, "sms", "SM1"), counters(2), None)
-        .await
-        .unwrap();
-    let again = store
-        .commit(keyed(3, "sms", "SM1"), counters(3), Some(edited("hello")))
-        .await;
+    commit(&store, keyed(2, "sms", "SM1"), None).await.unwrap();
+    let again = commit(&store, keyed(3, "sms", "SM1"), Some(edited("hello"))).await;
     let (room, target) = (
         store.get_room(&room_id()).await.unwrap().unwrap(),
         store.get_event(&event_id("evt_0")).await,
     );
     let others = [
-        store.commit(keyed(3, "ws", "SM1"), counters(3), None).await,
-        store.commit(keyed(4, "sms", " "), counters(4), None).await,
-        store.commit(keyed(5, "sms", " "), counters(5), None).await,
+        commit(&store, keyed(3, "ws", "SM1"), None).await.map(drop),
+        commit(&store, keyed(4, "sms", " "), None).await.map(drop),
+        commit(&store, keyed(5, "sms", " "), None).await.map(drop),
     ];
     assert_eq!(
         (
@@ -309,13 +310,10 @@ async fn a_key_its_channel_holds_refuses_another_event() {
 #[tokio::test]
 async fn a_blank_key_is_stored_as_no_key_and_finds_nothing() {
     let store = with_thread().await;
-    store
-        .commit(keyed(2, "sms", "   "), counters(2), None)
-        .await
-        .unwrap();
+    commit(&store, keyed(2, "sms", "   "), None).await.unwrap();
     let stored = store.get_event(&event_id("evt_k2")).await.unwrap().unwrap();
     let found = store
-        .get_event_by_idempotency_key(&room_id(), None, "   ")
+        .get_event_by_idempotency_key(&room_id(), "   ", None)
         .await
         .unwrap();
     assert_eq!((stored.idempotency_key, found), (None, None));
@@ -331,12 +329,8 @@ async fn an_update_and_a_change_s_commit_keep_the_delivery_results() {
         .delivery_results
         .insert("sms".to_owned(), "failed".into());
     let store = with_events(vec![delivered]).await;
-    store
-        .update_event(&event_id("evt_0"), edited("hi again").updates)
-        .await
-        .unwrap();
-    store
-        .commit(event(1), counters(1), Some(edited("hello")))
+    store.update_event(edited("hi again")).await.unwrap();
+    commit(&store, event(1), Some(edited("hello")))
         .await
         .unwrap();
     let stored = store.get_event(&event_id("evt_0")).await.unwrap().unwrap();
@@ -350,8 +344,7 @@ async fn an_update_and_a_change_s_commit_keep_the_delivery_results() {
 #[tokio::test]
 async fn a_commit_updates_its_target_in_the_same_write() {
     let store = with_thread().await;
-    store
-        .commit(event(2), counters(2), Some(edited("hello")))
+    commit(&store, event(2), Some(edited("hello")))
         .await
         .unwrap();
     let target = store.get_event(&event_id("evt_0")).await.unwrap().unwrap();
@@ -362,18 +355,18 @@ async fn a_commit_updates_its_target_in_the_same_write() {
 async fn a_commit_whose_target_is_gone_writes_nothing() {
     let store = with_thread().await;
     store
-        .delete_event(&room_id(), &event_id("evt_0"), false)
+        .delete_event(&room_id(), &event_id("evt_0"), cascading(false))
         .await
         .unwrap();
-    let committed = store
-        .commit(event(2), counters(2), Some(edited("hello")))
-        .await;
+    let committed = commit(&store, event(2), Some(edited("hello"))).await;
     let room = store.get_room(&room_id()).await.unwrap().unwrap();
     assert_eq!(
         (
             committed,
             room.event_count,
-            store.get_event_count(&room_id(), None).await
+            store
+                .get_event_count(&room_id(), roomkit::store::GetEventCountOptions::default())
+                .await
         ),
         (Err(StoreError::EventNotFound(event_id("evt_0"))), 2, Ok(1))
     );
@@ -388,28 +381,20 @@ async fn a_commit_whose_target_is_another_room_s_is_refused() {
     let mut elsewhere = event(0);
     elsewhere.id = event_id("evt_elsewhere");
     elsewhere.room_id = other;
-    let committed = store
-        .commit(elsewhere, counters(0), Some(edited("hello")))
-        .await;
+    let committed = commit(&store, elsewhere, Some(edited("hello"))).await;
     assert_eq!(committed, Err(StoreError::EventNotFound(event_id("evt_0"))));
 }
 
 /// Gap G-064: a hard-deleted index is never given again.
 #[tokio::test]
-async fn a_hard_deleted_index_is_refused() {
+async fn a_hard_deleted_index_is_never_given_again() {
     let store = with_thread().await;
     store
-        .delete_event(&room_id(), &event_id("evt_1"), true)
+        .delete_event(&room_id(), &event_id("evt_1"), cascading(true))
         .await
         .unwrap();
-    let again = store.commit(event(1), counters(1), None).await;
-    assert_eq!(
-        again,
-        Err(StoreError::IndexTaken {
-            room_id: room_id(),
-            index: 1
-        })
-    );
+    let again = commit(&store, event(1), None).await;
+    assert_eq!(again.map(|event| event.index), Ok(2));
 }
 
 /// Gap G-064: the counters stay, the timeline shrinks.
@@ -417,7 +402,7 @@ async fn a_hard_deleted_index_is_refused() {
 async fn a_hard_delete_leaves_the_counters_and_lowers_the_count() {
     let store = with_thread().await;
     store
-        .delete_event(&room_id(), &event_id("evt_0"), true)
+        .delete_event(&room_id(), &event_id("evt_0"), cascading(true))
         .await
         .unwrap();
     let room = store.get_room(&room_id()).await.unwrap().unwrap();
@@ -425,7 +410,9 @@ async fn a_hard_delete_leaves_the_counters_and_lowers_the_count() {
         (
             room.event_count,
             room.latest_index,
-            store.get_event_count(&room_id(), None).await
+            store
+                .get_event_count(&room_id(), roomkit::store::GetEventCountOptions::default())
+                .await
         ),
         (2, Some(1), Ok(0))
     );
@@ -435,8 +422,7 @@ async fn a_hard_delete_leaves_the_counters_and_lowers_the_count() {
 #[tokio::test]
 async fn a_filtered_count_leaves_refused_events_out_as_a_timeline_read_does() {
     let store = with_thread().await;
-    store
-        .commit(event_stored(2, EventStatus::Blocked), counters(2), None)
+    commit(&store, event_stored(2, EventStatus::Blocked), None)
         .await
         .unwrap();
     let with_blocked = EventFilter {
@@ -444,13 +430,27 @@ async fn a_filtered_count_leaves_refused_events_out_as_a_timeline_read_does() {
         ..EventFilter::default()
     };
     let counts = (
-        store.get_event_count(&room_id(), None).await,
         store
-            .get_event_count(&room_id(), Some(EventFilter::default()))
+            .get_event_count(&room_id(), roomkit::store::GetEventCountOptions::default())
             .await,
-        store.get_event_count(&room_id(), Some(with_blocked)).await,
         store
-            .list_events(&room_id(), &received())
+            .get_event_count(
+                &room_id(),
+                roomkit::store::GetEventCountOptions {
+                    event_filter: Some(EventFilter::default()),
+                },
+            )
+            .await,
+        store
+            .get_event_count(
+                &room_id(),
+                roomkit::store::GetEventCountOptions {
+                    event_filter: Some(with_blocked),
+                },
+            )
+            .await,
+        store
+            .list_events(&room_id(), received())
             .await
             .map(|events| events.len()),
     );
@@ -460,10 +460,7 @@ async fn a_filtered_count_leaves_refused_events_out_as_a_timeline_read_does() {
 #[tokio::test]
 async fn an_update_writes_what_it_names_and_returns_the_event() {
     let store = with_thread().await;
-    let updated = store
-        .update_event(&event_id("evt_0"), edited("hello").updates)
-        .await
-        .unwrap();
+    let updated = store.update_event(edited("hello")).await.unwrap();
     assert_eq!(
         (updated.content, updated.index),
         (TextContent::new("hello").into(), 0)
@@ -474,7 +471,10 @@ async fn an_update_writes_what_it_names_and_returns_the_event() {
 async fn an_update_of_a_missing_event_is_refused() {
     let store = with_thread().await;
     let updated = store
-        .update_event(&event_id("evt_9"), EventUpdates::default())
+        .update_event(RoomEvent {
+            id: event_id("evt_9"),
+            ..event(0)
+        })
         .await;
     assert_eq!(updated, Err(StoreError::EventNotFound(event_id("evt_9"))));
 }
@@ -485,11 +485,16 @@ async fn a_delete_in_another_room_removes_nothing() {
     let other = RoomId::new("room_2").unwrap();
     store.create_room(Room::new(other.clone())).await.unwrap();
     let removed = store
-        .delete_event(&other, &event_id("evt_0"), true)
+        .delete_event(&other, &event_id("evt_0"), cascading(true))
         .await
         .unwrap();
     assert_eq!(
-        (removed.len(), store.get_event_count(&room_id(), None).await),
+        (
+            removed.len(),
+            store
+                .get_event_count(&room_id(), roomkit::store::GetEventCountOptions::default())
+                .await
+        ),
         (0, Ok(2))
     );
 }
@@ -508,10 +513,10 @@ async fn deleting(
 ) -> (Vec<String>, Vec<String>) {
     let store = with_events(events).await;
     let removed = store
-        .delete_event(&room_id(), &event_id(target), cascade_replies)
+        .delete_event(&room_id(), &event_id(target), cascading(cascade_replies))
         .await
         .unwrap();
-    let left = store.list_events(&room_id(), &every_row()).await.unwrap();
+    let left = store.list_events(&room_id(), every_row()).await.unwrap();
     (ids(&removed), ids(&left))
 }
 
@@ -627,10 +632,7 @@ async fn an_event_is_found_whichever_room_holds_it() {
     store.create_room(Room::new(other.clone())).await.unwrap();
     let mut elsewhere = event(0);
     elsewhere.room_id = other.clone();
-    store
-        .commit(elsewhere.clone(), counters(0), None)
-        .await
-        .unwrap();
+    commit(&store, elsewhere.clone(), None).await.unwrap();
     assert_eq!(
         store.get_event(&event_id("evt_0")).await,
         Ok(Some(elsewhere))
@@ -647,20 +649,13 @@ async fn a_delete_s_commit_marks_its_target_s_edits_deleted() {
     let mut delete = event(4);
     delete.r#type = EventType::Delete;
     delete.content = EventContent::Delete(DeleteContent::new(event_id("evt_0")));
-    let updates = EventUpdates {
-        metadata: Some([("deleted".to_owned(), json!(true))].into_iter().collect()),
-        ..EventUpdates::default()
+    let deleted = RoomEvent {
+        metadata: [("deleted".to_owned(), json!(true))].into_iter().collect(),
+        ..event(0)
     };
-    let deleted = TargetUpdate {
-        event_id: event_id("evt_0"),
-        updates,
-    };
-    store
-        .commit(delete, counters(4), Some(deleted))
-        .await
-        .unwrap();
+    commit(&store, delete, Some(deleted)).await.unwrap();
     let marks: Vec<Option<serde_json::Value>> = store
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
         .into_iter()
@@ -671,21 +666,21 @@ async fn a_delete_s_commit_marks_its_target_s_edits_deleted() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> EventQuery {
-    EventQuery {
+fn every_row() -> ListEventsOptions {
+    ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(EventFilter {
             include_blocked: true,
             ..EventFilter::default()
         }),
-        ..EventQuery::default()
+        ..ListEventsOptions::default()
     }
 }
 
 /// Every event of a room's timeline the room received.
-fn received() -> EventQuery {
-    EventQuery {
+fn received() -> ListEventsOptions {
+    ListEventsOptions {
         limit: u64::MAX,
-        ..EventQuery::default()
+        ..ListEventsOptions::default()
     }
 }

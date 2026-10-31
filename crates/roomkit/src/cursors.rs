@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use roomkit_core::model::RoomId;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::store::ConversationStore;
+use crate::store::{AdvanceDeliveredIndexOptions, ConversationStore};
 
 /// Each room's indexes whose turn is over, waiting for its cursor.
 #[derive(Debug, Default)]
@@ -90,7 +90,11 @@ impl RoomCursors {
     ) -> Result<(), crate::store::StoreError> {
         let mut at = store.get_delivered_index(room_id).await?;
         while let Some(next) = cursor.next_after(at) {
-            if !store.advance_delivered_index(room_id, next, false).await? {
+            let options = AdvanceDeliveredIndexOptions::default();
+            if !store
+                .advance_delivered_index(room_id, next, options)
+                .await?
+            {
                 let moved = store.get_delivered_index(room_id).await?;
                 // Another writer moved it, or the room is gone: nothing
                 // this one can do moves it from here.

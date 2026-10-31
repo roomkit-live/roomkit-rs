@@ -15,17 +15,16 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     Access, AgentResponsePolicy, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId,
     ChannelMediaType, ChannelOutput, ChannelType, EventContent, EventDirection, EventId,
-    EventSource, EventUpdates, HookResult, Identity, IdentityId, InboundMessage, Metadata,
-    Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
-    Task, TextContent, Timestamp,
+    EventSource, HookResult, Identity, IdentityId, InboundMessage, Metadata, Observation,
+    Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, Task, TextContent, Timestamp,
 };
+use roomkit::store;
 use roomkit::testing::EventTap;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, CloseRoomOptions, CommitEventOptions,
-    ConversationStore, CreateRoomOptions, DetachChannelOptions, EventFilter, EventQuery,
-    HookOptions, HookTrigger, HostChannel, InMemoryStore, PostOptions, ProcessInboundOptions,
-    RoomCounters, RoomFilter, RoomKit, RoomKitError, RoomKitOptions, SendEventOptions, StoreError,
-    TargetUpdate,
+    ConversationStore, CreateRoomOptions, DetachChannelOptions, EventFilter, HookOptions,
+    HookTrigger, HostChannel, InMemoryStore, PostOptions, ProcessInboundOptions, RoomKit,
+    RoomKitError, RoomKitOptions, SendEventOptions, StoreError,
 };
 use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
@@ -399,7 +398,7 @@ async fn sms_room<S: ConversationStore>(
 async fn written<S: ConversationStore>(kit: &RoomKit<S>) -> String {
     let events = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap();
     let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
@@ -506,7 +505,7 @@ async fn a_post_addressed_to_an_agent_is_answered_and_names_its_speaker() {
     let host = CountingHost::new("desk-host");
     kit.register_channel(host.clone()).unwrap();
     kit.store()
-        .create_participant(participant("desk", "desk-host"))
+        .add_participant(participant("desk", "desk-host"))
         .await
         .unwrap();
     let post = PostOptions {
@@ -791,7 +790,7 @@ async fn set_up(kit: &RoomKit, setup: Setup) {
         }
         Setup::CustomerOnSms => {
             kit.store()
-                .create_participant(participant(CUSTOMER, "sms"))
+                .add_participant(participant(CUSTOMER, "sms"))
                 .await
                 .unwrap();
         }
@@ -989,7 +988,7 @@ async fn a_post_speaks_as_a_participant_its_host_channel_reaches() {
         let mut customer = participant(CUSTOMER, "sms");
         customer.connected_via.push(channel("host"));
         for member in [desk, customer] {
-            kit.store().create_participant(member).await.unwrap();
+            kit.store().add_participant(member).await.unwrap();
         }
         let post = PostOptions {
             participant_id: (!speaker.is_empty()).then(|| ParticipantId::new(speaker).unwrap()),
@@ -1044,7 +1043,7 @@ async fn a_message_on_the_host_channel_is_refused_before_anything_is_written() {
         .await;
     let rooms = kit
         .store()
-        .list_rooms(&RoomFilter::default())
+        .list_rooms(store::ListRoomsOptions::default())
         .await
         .unwrap();
     let refused = || {
@@ -1292,7 +1291,7 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
         let posted = posted.lock().unwrap().clone();
         let host: Vec<(String, Option<String>)> = kit
             .store()
-            .list_events(&room_id(), &every_row())
+            .list_events(&room_id(), every_row())
             .await
             .unwrap()
             .into_iter()
@@ -1359,91 +1358,149 @@ struct GatedStore {
 }
 
 impl ConversationStore for GatedStore {
-    async fn create_room(&self, room: Room) -> Result<(), StoreError> {
+    async fn create_room(&self, room: Room) -> Result<Room, StoreError> {
         self.store.create_room(room).await
-    }
-
-    async fn update_room(
-        &self,
-        room_id: &RoomId,
-        updates: RoomUpdates,
-    ) -> Result<Room, StoreError> {
-        self.store.update_room(room_id, updates).await
     }
 
     async fn get_room(&self, room_id: &RoomId) -> Result<Option<Room>, StoreError> {
         self.store.get_room(room_id).await
     }
 
-    async fn advance_delivered_index(
+    async fn update_room(&self, room: Room) -> Result<Room, StoreError> {
+        self.store.update_room(room).await
+    }
+
+    async fn patch_room_metadata(
         &self,
         room_id: &RoomId,
-        index: u64,
-        force: bool,
-    ) -> Result<bool, StoreError> {
+        patch: Metadata,
+        options: store::PatchRoomMetadataOptions,
+    ) -> Result<Option<Room>, StoreError> {
         self.store
-            .advance_delivered_index(room_id, index, force)
+            .patch_room_metadata(room_id, patch, options)
             .await
     }
 
-    async fn list_rooms(&self, filter: &RoomFilter) -> Result<Vec<Room>, StoreError> {
-        self.store.list_rooms(filter).await
+    async fn delete_room(&self, room_id: &RoomId) -> Result<bool, StoreError> {
+        self.store.delete_room(room_id).await
+    }
+
+    async fn list_rooms(&self, options: store::ListRoomsOptions) -> Result<Vec<Room>, StoreError> {
+        self.store.list_rooms(options).await
+    }
+
+    async fn find_rooms(&self, options: store::FindRoomsOptions) -> Result<Vec<Room>, StoreError> {
+        self.store.find_rooms(options).await
+    }
+
+    async fn find_room_ids_by_channel(
+        &self,
+        channel_id: &ChannelId,
+        options: store::FindRoomIdsByChannelOptions,
+    ) -> Result<Vec<RoomId>, StoreError> {
+        self.store
+            .find_room_ids_by_channel(channel_id, options)
+            .await
     }
 
     async fn find_room_id_by_binding(
         &self,
         channel_id: &ChannelId,
-        participant_id: &ParticipantId,
-        identity_id: Option<&IdentityId>,
-        filter: &RoomFilter,
+        participant_id: &str,
+        options: store::FindRoomIdByBindingOptions,
     ) -> Result<Option<RoomId>, StoreError> {
         self.store
-            .find_room_id_by_binding(channel_id, participant_id, identity_id, filter)
+            .find_room_id_by_binding(channel_id, participant_id, options)
             .await
     }
 
     async fn find_room_id_by_participant(
         &self,
         channel_id: &ChannelId,
-        participant_id: &ParticipantId,
-        identity_id: Option<&IdentityId>,
-        filter: &RoomFilter,
+        participant_id: &str,
+        options: store::FindRoomIdByParticipantOptions,
     ) -> Result<Option<RoomId>, StoreError> {
         self.store
-            .find_room_id_by_participant(channel_id, participant_id, identity_id, filter)
+            .find_room_id_by_participant(channel_id, participant_id, options)
             .await
     }
 
-    async fn store_binding(&self, binding: ChannelBinding) -> Result<(), StoreError> {
+    async fn get_delivered_index(&self, room_id: &RoomId) -> Result<i64, StoreError> {
+        self.store.get_delivered_index(room_id).await
+    }
+
+    async fn advance_delivered_index(
+        &self,
+        room_id: &RoomId,
+        index: u64,
+        options: store::AdvanceDeliveredIndexOptions,
+    ) -> Result<bool, StoreError> {
+        self.store
+            .advance_delivered_index(room_id, index, options)
+            .await
+    }
+
+    async fn get_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+    ) -> Result<Option<Metadata>, StoreError> {
+        self.store.get_private_state(room_id, key).await
+    }
+
+    async fn set_private_state(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+        value: Option<Metadata>,
+    ) -> Result<(), StoreError> {
+        self.store.set_private_state(room_id, key, value).await
+    }
+
+    async fn add_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
         if binding.channel_id.as_str() == "host" {
             self.binding.pass().await;
         }
-        self.store.store_binding(binding).await
+        self.store.add_binding(binding).await
     }
 
-    async fn delete_binding(
+    async fn get_binding(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
-    ) -> Result<(), StoreError> {
-        self.store.delete_binding(room_id, channel_id).await
+    ) -> Result<Option<ChannelBinding>, StoreError> {
+        self.store.get_binding(room_id, channel_id).await
+    }
+
+    async fn update_binding(&self, binding: ChannelBinding) -> Result<ChannelBinding, StoreError> {
+        if binding.channel_id.as_str() == "host" {
+            self.binding.pass().await;
+        }
+        self.store.update_binding(binding).await
+    }
+
+    async fn remove_binding(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> Result<bool, StoreError> {
+        self.store.remove_binding(room_id, channel_id).await
     }
 
     async fn list_bindings(&self, room_id: &RoomId) -> Result<Vec<ChannelBinding>, StoreError> {
         self.store.list_bindings(room_id).await
     }
 
-    async fn load_context(
+    async fn load_room_context(
         &self,
         room_id: &RoomId,
-        recent_events: usize,
-    ) -> Result<Option<RoomContext>, StoreError> {
+    ) -> Result<(Option<Room>, Vec<ChannelBinding>, Vec<Participant>), StoreError> {
         self.read.pass().await;
-        self.store.load_context(room_id, recent_events).await
+        self.store.load_room_context(room_id).await
     }
 
-    async fn create_participant(&self, participant: Participant) -> Result<(), StoreError> {
-        self.store.create_participant(participant).await
+    async fn add_participant(&self, participant: Participant) -> Result<Participant, StoreError> {
+        self.store.add_participant(participant).await
     }
 
     async fn get_participant(
@@ -1454,7 +1511,10 @@ impl ConversationStore for GatedStore {
         self.store.get_participant(room_id, participant_id).await
     }
 
-    async fn update_participant(&self, participant: Participant) -> Result<(), StoreError> {
+    async fn update_participant(
+        &self,
+        participant: Participant,
+    ) -> Result<Participant, StoreError> {
         self.store.update_participant(participant).await
     }
 
@@ -1470,7 +1530,7 @@ impl ConversationStore for GatedStore {
         self.store.list_participants(room_id).await
     }
 
-    async fn create_identity(&self, identity: Identity) -> Result<(), StoreError> {
+    async fn create_identity(&self, identity: Identity) -> Result<Identity, StoreError> {
         self.store.create_identity(identity).await
     }
 
@@ -1480,111 +1540,115 @@ impl ConversationStore for GatedStore {
 
     async fn resolve_identity(
         &self,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: store::ResolveIdentityOptions,
     ) -> Result<Option<Identity>, StoreError> {
         self.store
-            .resolve_identity(channel_type, address, organization_id)
+            .resolve_identity(channel_type, address, options)
             .await
     }
 
     async fn link_address(
         &self,
         identity_id: &IdentityId,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: store::LinkAddressOptions,
     ) -> Result<(), StoreError> {
         self.store
-            .link_address(identity_id, channel_type, address, organization_id)
+            .link_address(identity_id, channel_type, address, options)
             .await
     }
 
     async fn unlink_address(
         &self,
         identity_id: &IdentityId,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: store::UnlinkAddressOptions,
     ) -> Result<(), StoreError> {
         self.store
-            .unlink_address(identity_id, channel_type, address, organization_id)
+            .unlink_address(identity_id, channel_type, address, options)
             .await
+    }
+
+    async fn check_idempotency(
+        &self,
+        room_id: &RoomId,
+        key: &str,
+        channel_id: Option<&ChannelId>,
+    ) -> Result<bool, StoreError> {
+        self.store.check_idempotency(room_id, key, channel_id).await
     }
 
     async fn get_event_by_idempotency_key(
         &self,
         room_id: &RoomId,
-        channel_id: Option<&ChannelId>,
         key: &str,
+        channel_id: Option<&ChannelId>,
     ) -> Result<Option<RoomEvent>, StoreError> {
         self.store
-            .get_event_by_idempotency_key(room_id, channel_id, key)
+            .get_event_by_idempotency_key(room_id, key, channel_id)
             .await
     }
 
-    async fn commit(
+    async fn commit_event(
         &self,
+        room_id: &RoomId,
         event: RoomEvent,
-        counters: RoomCounters,
-        target: Option<TargetUpdate>,
-    ) -> Result<(), StoreError> {
-        self.store.commit(event, counters, target).await
+        options: store::CommitEventOptions,
+    ) -> Result<RoomEvent, StoreError> {
+        self.store.commit_event(room_id, event, options).await
     }
 
     async fn get_event(&self, event_id: &EventId) -> Result<Option<RoomEvent>, StoreError> {
         self.store.get_event(event_id).await
     }
 
-    async fn update_event(
-        &self,
-        event_id: &EventId,
-        updates: EventUpdates,
-    ) -> Result<RoomEvent, StoreError> {
-        self.store.update_event(event_id, updates).await
+    async fn update_event(&self, event: RoomEvent) -> Result<RoomEvent, StoreError> {
+        self.store.update_event(event).await
     }
 
     async fn delete_event(
         &self,
         room_id: &RoomId,
         event_id: &EventId,
-        cascade_replies: bool,
+        options: store::DeleteEventOptions,
     ) -> Result<Vec<RoomEvent>, StoreError> {
-        self.store
-            .delete_event(room_id, event_id, cascade_replies)
-            .await
+        self.store.delete_event(room_id, event_id, options).await
     }
 
     async fn get_event_count(
         &self,
         room_id: &RoomId,
-        filter: Option<EventFilter>,
+        options: store::GetEventCountOptions,
     ) -> Result<u64, StoreError> {
-        self.store.get_event_count(room_id, filter).await
-    }
-
-    async fn persist_side_effects(
-        &self,
-        room_id: &RoomId,
-        tasks: Vec<Task>,
-        observations: Vec<Observation>,
-    ) -> Result<(), StoreError> {
-        self.store
-            .persist_side_effects(room_id, tasks, observations)
-            .await
+        self.store.get_event_count(room_id, options).await
     }
 
     async fn list_events(
         &self,
         room_id: &RoomId,
-        query: &EventQuery,
+        options: store::ListEventsOptions,
     ) -> Result<Vec<RoomEvent>, StoreError> {
-        self.store.list_events(room_id, query).await
+        self.store.list_events(room_id, options).await
     }
 
-    async fn list_tasks(&self, room_id: &RoomId) -> Result<Vec<Task>, StoreError> {
-        self.store.list_tasks(room_id).await
+    async fn add_task(&self, task: Task) -> Result<Task, StoreError> {
+        self.store.add_task(task).await
+    }
+
+    async fn add_observation(&self, observation: Observation) -> Result<Observation, StoreError> {
+        self.store.add_observation(observation).await
+    }
+
+    async fn list_tasks(
+        &self,
+        room_id: &RoomId,
+        options: store::ListTasksOptions,
+    ) -> Result<Vec<Task>, StoreError> {
+        self.store.list_tasks(room_id, options).await
     }
 
     async fn list_observations(&self, room_id: &RoomId) -> Result<Vec<Observation>, StoreError> {
@@ -1622,7 +1686,7 @@ async fn host_attaches<S: ConversationStore>(kit: &RoomKit<S>, tap: &EventTap) -
 /// The room's messages from the host channel.
 async fn host_messages<S: ConversationStore>(kit: &RoomKit<S>) -> usize {
     kit.store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
         .iter()
@@ -1724,13 +1788,13 @@ async fn a_first_post_s_read_of_its_room_waits_within_process_timeout() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> EventQuery {
-    EventQuery {
+fn every_row() -> store::ListEventsOptions {
+    store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(EventFilter {
             include_blocked: true,
             ..EventFilter::default()
         }),
-        ..EventQuery::default()
+        ..store::ListEventsOptions::default()
     }
 }

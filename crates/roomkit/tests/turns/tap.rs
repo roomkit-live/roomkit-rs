@@ -185,7 +185,7 @@ async fn the_probe_s_turn_carries_python_s_messages() {
         .collect();
     let timeline: Vec<(EventType, String, u32)> = kit
         .store()
-        .list_events(&room(), &received())
+        .list_events(&room(), received())
         .await
         .unwrap()
         .into_iter()

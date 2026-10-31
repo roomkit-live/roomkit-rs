@@ -2,7 +2,7 @@
 //! the `rooms` and `private_state` tables.
 
 use roomkit::StoreError;
-use roomkit::model::{Metadata, Room, RoomId, RoomUpdates};
+use roomkit::model::{Metadata, Room, RoomId, Timestamp};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
@@ -105,33 +105,64 @@ pub(crate) fn write(connection: &Connection, room: &Room, stored: &str) -> Resul
     Ok(())
 }
 
-/// Writes `updates` on the stored room and returns it: the private state it
-/// names apart, each key removing the metadata's copy (RFC §14.1).
-pub(crate) fn update(
-    connection: &Connection,
-    room_id: &RoomId,
-    updates: RoomUpdates,
-) -> Result<Room, Failure> {
-    let Stored { mut room, data } = held(connection, room_id)?;
-    apply(connection, &mut room, &data, updates)?;
+/// Writes `room` whole over its row and returns it as stored: the
+/// counters the store manages keep their stored values, as Python's store
+/// keeps them, so that a stale copy never rewinds them (RFC §14.3).
+pub(crate) fn update(connection: &Connection, mut room: Room) -> Result<Room, Failure> {
+    let Stored { room: held, data } = held(connection, &room.id)?;
+    room.event_count = held.event_count;
+    room.latest_index = held.latest_index;
+    room.delivered_index = held.delivered_index;
+    write(connection, &room, &data)?;
     Ok(room)
 }
 
-/// Writes `updates` on `room`, as `stored` holds it, and the room over its
-/// row: the private state it names apart, each key removing the metadata's
-/// copy (RFC §14.1).
-pub(crate) fn apply(
+/// Removes the keys `unset` names from the room's metadata, then writes
+/// `patch` on it, its `updated_at` at `now`, in one transaction (RFC §10.1
+/// step 15), as Python's store patches it; `None` for a room the store
+/// does not hold.
+pub(crate) fn patch_metadata(
     connection: &Connection,
-    room: &mut Room,
-    stored: &str,
-    mut updates: RoomUpdates,
-) -> Result<(), Failure> {
-    for (key, value) in std::mem::take(&mut updates.private_state) {
-        write_private(connection, &room.id, &key, value.as_ref())?;
-        room.metadata.remove(&key);
+    room_id: &RoomId,
+    patch: Metadata,
+    unset: &[String],
+    now: Timestamp,
+) -> Result<Option<Room>, Failure> {
+    let Some(Stored { mut room, data }) = get(connection, room_id)? else {
+        return Ok(None);
+    };
+    for key in unset {
+        room.metadata.remove(key);
     }
-    updates.apply(room);
-    write(connection, room, stored)
+    room.metadata.extend(patch);
+    room.updated_at = now;
+    write(connection, &room, &data)?;
+    Ok(Some(room))
+}
+
+/// Deletes the room and every row it holds, whether the store held it, as
+/// Python's store deletes them.
+pub(crate) fn delete(connection: &Connection, room_id: &RoomId) -> Result<bool, Failure> {
+    let existed = connection.execute("DELETE FROM rooms WHERE id = ?", [room_id.as_str()])? > 0;
+    for table in [
+        "events",
+        "bindings",
+        "participants",
+        "tasks",
+        "observations",
+        "read_markers",
+        "idempotency",
+        "voice_deliveries",
+        "event_sequences",
+        "events_fts",
+        "private_state",
+    ] {
+        connection.execute(
+            &format!("DELETE FROM {table} WHERE room_id = ?"),
+            [room_id.as_str()],
+        )?;
+    }
+    Ok(existed)
 }
 
 /// The value the room keeps for itself under `key`; one that is not a map
@@ -180,22 +211,23 @@ fn write_private(
     Ok(())
 }
 
-/// Writes the room's private state under `key`, nothing for a room the
-/// store does not hold (RFC §14.1 `set_private_state`).
+/// Writes the room's private state under `key`, `None` removing it, and
+/// removes the copy the room's metadata holds under the key; nothing for a
+/// room the store does not hold (RFC §14.1 `set_private_state`).
 pub(crate) fn set_private_state(
     connection: &Connection,
     room_id: &RoomId,
     key: &str,
-    value: Option<Metadata>,
+    value: Option<&Metadata>,
 ) -> Result<(), Failure> {
-    let updates = RoomUpdates {
-        private_state: [(key.to_owned(), value)].into(),
-        ..RoomUpdates::default()
+    let Some(Stored { mut room, data }) = get(connection, room_id)? else {
+        return Ok(());
     };
-    match update(connection, room_id, updates) {
-        Ok(_) | Err(Failure::Refused(StoreError::RoomNotFound(_))) => Ok(()),
-        Err(failure) => Err(failure),
+    write_private(connection, room_id, key, value)?;
+    if room.metadata.remove(key).is_some() {
+        write(connection, &room, &data)?;
     }
+    Ok(())
 }
 
 /// The room's delivery cursor, `-1` for a room the store does not hold.

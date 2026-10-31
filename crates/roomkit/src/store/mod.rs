@@ -1,4 +1,6 @@
-//! Where rooms and their timelines live (RFC §14).
+//! Where rooms and their timelines live (RFC §14): Python's `roomkit.store`,
+//! its `ConversationStore` and `InMemoryStore`, with the keyword arguments
+//! of the store's methods as the options structs of this module.
 //!
 //! The store is authoritative: the core keeps no room state between
 //! operations and reads what it decides on through the store, so a store
@@ -7,73 +9,35 @@
 //! distributed lock (RFC §13.5), which 0.1 does not have
 //! (docs/architecture.md).
 
-mod error;
+pub(crate) mod error;
 mod memory;
-mod query;
+mod options;
+pub(crate) mod query;
+pub(crate) mod rooms;
 
 use std::future::Future;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelId, ChannelType, EventId, EventUpdates, Identity, IdentityId, Metadata,
-    Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomStatus,
-    RoomUpdates, Task,
+    ChannelBinding, ChannelId, ChannelType, EventId, EventType, Identity, IdentityId, Metadata,
+    Observation, Participant, ParticipantId, Room, RoomEvent, RoomId, Task,
 };
-use roomkit_core::rules::timers;
+use roomkit_core::rules::addresses::written_recipient;
+use roomkit_core::rules::routing;
 
-pub use roomkit_core::ops::{RoomCounters, TargetUpdate};
-
-pub use self::error::{StoreError, StoreFailure};
 pub use self::memory::InMemoryStore;
-pub use self::query::{EventFilter, EventQuery};
+pub use self::options::{
+    AdvanceDeliveredIndexOptions, CommitEventOptions, DeleteEventOptions,
+    FindRoomIdByBindingOptions, FindRoomIdByParticipantOptions, FindRoomIdsByChannelOptions,
+    FindRoomsOptions, GetConversationOptions, GetEventCountOptions, LinkAddressOptions,
+    ListRoomsOptions, ListTasksOptions, PatchRoomMetadataOptions, ResolveIdentityOptions,
+    UnlinkAddressOptions,
+};
+pub use self::query::ListEventsOptions;
 
-/// Which rooms [`ConversationStore::list_rooms`] returns; an empty filter
-/// returns every room.
-///
-/// It is not `#[non_exhaustive]`, on purpose: a store reads every field,
-/// so a new field is a breaking change on purpose. A store that
-/// destructures it fails to compile until it reads the new field, rather
-/// than silently reading too wide (a field narrowing a read to an
-/// organization, say).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RoomFilter {
-    /// Only the rooms of this organization.
-    pub organization_id: Option<String>,
-    /// Only the rooms in this status.
-    pub status: Option<RoomStatus>,
-    /// Only the rooms with a timer that can still fall due: an ACTIVE room
-    /// with an inactivity timer, a PAUSED room with a close timer (RFC §5.1).
-    pub timers_armed: bool,
-    /// Only the rooms this channel reaches: those binding it, and those
-    /// holding a participant reached through it (RFC §5.5 `connected_via`),
-    /// the rooms the default router reads (RFC §10.4).
-    pub channel_id: Option<ChannelId>,
-}
-
-impl RoomFilter {
-    /// Whether the room `room`, with its `bindings` and `participants`,
-    /// passes the filter.
-    pub fn matches(
-        &self,
-        room: &Room,
-        bindings: &[ChannelBinding],
-        participants: &[Participant],
-    ) -> bool {
-        let reached = self.channel_id.as_ref().is_none_or(|channel_id| {
-            bindings
-                .iter()
-                .any(|binding| &binding.channel_id == channel_id)
-                || participants
-                    .iter()
-                    .any(|participant| participant.connected_via.contains(channel_id))
-        });
-        self.organization_id
-            .as_ref()
-            .is_none_or(|organization| room.organization_id.as_ref() == Some(organization))
-            && self.status.is_none_or(|status| room.status == status)
-            && (!self.timers_armed || timers::armed(room))
-            && reached
-    }
-}
+pub(crate) use self::error::{StoreError, StoreFailure};
+pub(crate) use self::query::EventFilter;
+pub(crate) use self::rooms::RoomFilter;
+use self::rooms::rooms_read_by;
 
 /// The checks a store runs on what it writes: a value its model refuses,
 /// which a struct literal can hold since it runs no check, is refused with
@@ -85,36 +49,27 @@ impl RoomFilter {
 /// runs none unless it calls them.
 #[doc(hidden)]
 pub mod written {
-    use roomkit_core::model::{ChannelBinding, EventContent, EventUpdates, RoomEvent};
-    use roomkit_core::ops::TargetUpdate;
+    use std::future::Future;
+
+    use roomkit_core::model::{ChannelBinding, RoomEvent, Timestamp};
+    use roomkit_core::ops::Environment;
 
     use super::StoreError;
+    use crate::environment::SystemEnvironment;
 
-    /// An event a commit writes, and what it writes on its target, each
-    /// content as its constructor writes it (a link's scheme in lower case).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`StoreError::Value`] for a content its model refuses.
-    pub fn event(
-        event: &mut RoomEvent,
-        target: Option<&mut TargetUpdate>,
-    ) -> Result<(), StoreError> {
-        event.check()?;
-        target.map_or(Ok(()), |target| updates(&mut target.updates))
+    tokio::task_local! {
+        /// The instant of the write the kit runs, from the kit's clock.
+        static WRITTEN_AT: Timestamp;
     }
 
-    /// What an update writes on an event, its content as its constructor
-    /// writes it.
+    /// An event a store writes, a commit's and its target, each content as
+    /// its constructor writes it (a link's scheme in lower case).
     ///
     /// # Errors
     ///
     /// Returns [`StoreError::Value`] for a content its model refuses.
-    pub fn updates(updates: &mut EventUpdates) -> Result<(), StoreError> {
-        Ok(updates
-            .content
-            .as_mut()
-            .map_or(Ok(()), EventContent::check)?)
+    pub fn event(event: &mut RoomEvent) -> Result<(), StoreError> {
+        Ok(event.check()?)
     }
 
     /// A binding a store writes.
@@ -124,6 +79,22 @@ pub mod written {
     /// Returns [`StoreError::Value`] for a rate limit its model refuses.
     pub fn binding(binding: &ChannelBinding) -> Result<(), StoreError> {
         Ok(binding.check()?)
+    }
+
+    /// The store's clock: the instant an `activity` commit writes as the
+    /// room's last activity (RFC §5.1), and a metadata patch as its
+    /// `updated_at`, as the Python implementation's store reads its own. It
+    /// is the kit's clock while the kit writes, so that a kit on a test's
+    /// clock reads its rooms' timers on the same one.
+    pub fn now() -> Timestamp {
+        WRITTEN_AT
+            .try_with(|at| *at)
+            .unwrap_or_else(|_| SystemEnvironment.now())
+    }
+
+    /// Runs `write`, a store's write the kit runs, its [`now`] `at`.
+    pub(crate) async fn at<F: Future>(at: Timestamp, write: F) -> F::Output {
+        WRITTEN_AT.scope(at, write).await
     }
 }
 
@@ -139,12 +110,12 @@ pub(crate) async fn whole_timeline<S: ConversationStore>(
 ) -> Result<Vec<RoomEvent>, StoreError> {
     let mut events: Vec<RoomEvent> = Vec::new();
     loop {
-        let query = EventQuery {
+        let options = ListEventsOptions {
             limit: TIMELINE_PAGE,
             after_index: events.last().map(|event| event.index),
-            ..EventQuery::default()
+            ..ListEventsOptions::default()
         };
-        let page = store.list_events(room_id, &query).await?;
+        let page = store.list_events(room_id, options).await?;
         let full = u64::try_from(page.len()).is_ok_and(|read| read >= TIMELINE_PAGE);
         events.extend(page);
         if !full {
@@ -153,8 +124,35 @@ pub(crate) async fn whole_timeline<S: ConversationStore>(
     }
 }
 
-/// A conversation store (RFC §14.1): the operations the pipeline and the kit
-/// use. Implement the methods with `async fn`.
+/// Whether `named`, a stored id, names the sender known by
+/// `participant_id` and the identity `identity_id` the caller resolved, as
+/// Python's `sender_names` reads them (RFC §10.4 step 1).
+fn names_sender(named: &str, participant_id: &str, identity_id: Option<&IdentityId>) -> bool {
+    named == participant_id || identity_id.is_some_and(|identity| named == identity.as_str())
+}
+
+/// Whether `binding` names `address` through its recipient, as Python's
+/// `names_by_recipient` reads it (RFC §5.7, §10.4 step 1): a binding with a
+/// recipient and no correspondent, and not `group`, is its recipient's
+/// conversation.
+fn names_by_recipient(
+    binding: &ChannelBinding,
+    address: &str,
+    recipient_key: Option<&str>,
+) -> bool {
+    let Some(key) = recipient_key else {
+        return false;
+    };
+    if binding.participant_id.is_some() || binding.group {
+        return false;
+    }
+    written_recipient(&binding.metadata, key).is_some_and(|recipient| recipient == address)
+}
+
+/// A conversation store (RFC §14.1): Python's `ConversationStore`, the
+/// operations the pipeline and the kit use, by Python's names. Implement
+/// the methods with `async fn`; a store implements what Python's ABC makes
+/// abstract, and may override what it provides.
 ///
 /// The store is authoritative: the core keeps no room state between
 /// operations and reads what it decides on through the store, so a store
@@ -164,38 +162,224 @@ pub(crate) async fn whole_timeline<S: ConversationStore>(
 /// (docs/architecture.md).
 ///
 /// The room metadata keys under `roomkit:` belong to the implementation
-/// (RFC §10.6.5): the framework writes them through [`update_room`], and
-/// host code that writes the store directly must leave them alone.
-///
-/// [`update_room`]: ConversationStore::update_room
+/// (RFC §10.6.5): the framework writes them, and host code that writes the
+/// store directly must leave them alone.
 pub trait ConversationStore: Send + Sync + 'static {
-    /// Stores a new room.
-    fn create_room(&self, room: Room) -> impl Future<Output = Result<(), StoreError>> + Send;
+    /// Stores a new room, and returns it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::RoomAlreadyExists`] for an id the store holds (RFC
+    /// §14.3).
+    fn create_room(&self, room: Room) -> impl Future<Output = Result<Room, StoreError>> + Send;
 
-    /// Writes the fields `updates` names on the stored room, keeping every
-    /// other one as stored, and returns the room as it now stands (RFC §14.1
-    /// `update_room(room_id, updates)`). The write is atomic: a commit can
-    /// neither fall in the middle of it nor be lost by it, whether or not
-    /// its caller holds the room's lock. The private state it names
-    /// (`RoomUpdates::private_state`) is written as
-    /// [`set_private_state`](Self::set_private_state) writes it.
-    fn update_room(
+    /// The room `room_id`, if the store holds it.
+    fn get_room(
         &self,
         room_id: &RoomId,
-        updates: RoomUpdates,
-    ) -> impl Future<Output = Result<Room, StoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<Room>, StoreError>> + Send;
 
-    /// The value the room keeps for itself under `key`, apart from its
-    /// metadata, which clients may read; `None` when the room does not exist
-    /// or holds none (RFC §14.1 `get_private_state`). The caller's own copy
-    /// (RFC §14.4). The register of authors is one, under `author_register`
-    /// (RFC §10.1 step 12).
+    /// Writes `room` whole, keyed by its id, and returns it as stored. The
+    /// counters the store manages, `event_count`, `latest_index` and
+    /// `delivered_index`, keep their stored values, as Python's stores keep
+    /// them: a caller's stale copy never rewinds them (RFC §14.3). A caller
+    /// writes the rest from a fresh read under the room's lock: a whole
+    /// write from a stale copy would undo the activity a commit just wrote.
     ///
-    /// The keys are the implementation's, and each reserves the same key in
-    /// the room's metadata. This default reads the value from the metadata:
-    /// a store that keeps its rooms' private state apart overrides it, and
-    /// [`set_private_state`](Self::set_private_state), as
-    /// [`InMemoryStore`] does.
+    /// # Errors
+    ///
+    /// [`StoreError::RoomNotFound`] for a room the store lacks.
+    fn update_room(&self, room: Room) -> impl Future<Output = Result<Room, StoreError>> + Send;
+
+    /// Removes the keys `unset` names from the room's metadata, then writes
+    /// `patch` on it, its `updated_at` the store's clock: the partial write
+    /// of RFC §10.1 step 15, which a commit cannot lose; the room as it
+    /// leaves it, `None` for a room the store lacks. Provided as Python
+    /// provides it, a read then [`update_room`](Self::update_room), which
+    /// is not atomic: a store shared across processes overrides it with
+    /// one partial write.
+    fn patch_room_metadata(
+        &self,
+        room_id: &RoomId,
+        patch: Metadata,
+        options: PatchRoomMetadataOptions,
+    ) -> impl Future<Output = Result<Option<Room>, StoreError>> + Send {
+        async move {
+            let Some(mut room) = self.get_room(room_id).await? else {
+                return Ok(None);
+            };
+            for key in &options.unset {
+                room.metadata.remove(key);
+            }
+            room.metadata.extend(patch);
+            room.updated_at = written::now();
+            Ok(Some(self.update_room(room).await?))
+        }
+    }
+
+    /// Deletes the room `room_id` and everything it holds; whether the store
+    /// held it.
+    fn delete_room(
+        &self,
+        room_id: &RoomId,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// A page of every room, as Python's `list_rooms(offset=0, limit=50)`.
+    fn list_rooms(
+        &self,
+        options: ListRoomsOptions,
+    ) -> impl Future<Output = Result<Vec<Room>, StoreError>> + Send;
+
+    /// A page of the rooms `options` names: of an organization, in a
+    /// status, whose metadata holds every key and value `metadata_filter`
+    /// names.
+    fn find_rooms(
+        &self,
+        options: FindRoomsOptions,
+    ) -> impl Future<Output = Result<Vec<Room>, StoreError>> + Send;
+
+    /// The rooms binding `channel_id` among those `room_filter` admits, the
+    /// oldest first, at most `limit`, of a `group` binding or not when
+    /// `group` names it. Provided as Python provides it, over
+    /// [`find_rooms`](Self::find_rooms) and
+    /// [`get_binding`](Self::get_binding).
+    fn find_room_ids_by_channel(
+        &self,
+        channel_id: &ChannelId,
+        options: FindRoomIdsByChannelOptions,
+    ) -> impl Future<Output = Result<Vec<RoomId>, StoreError>> + Send {
+        async move {
+            let filter = options.room_filter.unwrap_or_default();
+            let mut matched: Vec<Room> = Vec::new();
+            for room in rooms_read_by(self, &filter).await? {
+                let binding = self.get_binding(&room.id, channel_id).await?;
+                if binding
+                    .is_some_and(|binding| options.group.is_none_or(|group| binding.group == group))
+                {
+                    matched.push(room);
+                }
+            }
+            matched.sort_by(routing::recency);
+            Ok(matched
+                .into_iter()
+                .take(options.limit)
+                .map(|room| room.id)
+                .collect())
+        }
+    }
+
+    /// The newest room whose binding of `channel_id` names the sender, by
+    /// `participant_id` or the identity the caller resolved, or names the
+    /// sender's address through its recipient, among the rooms the filter
+    /// admits (RFC §10.4 step 1). Provided as Python provides it.
+    fn find_room_id_by_binding(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &str,
+        options: FindRoomIdByBindingOptions,
+    ) -> impl Future<Output = Result<Option<RoomId>, StoreError>> + Send {
+        async move {
+            let ids = FindRoomIdsByChannelOptions {
+                room_filter: options.room_filter,
+                limit: usize::MAX,
+                group: None,
+            };
+            let room_ids = self.find_room_ids_by_channel(channel_id, ids).await?;
+            for room_id in room_ids.into_iter().rev() {
+                let Some(binding) = self.get_binding(&room_id, channel_id).await? else {
+                    continue;
+                };
+                let named = binding.participant_id.as_ref().is_some_and(|named| {
+                    names_sender(named.as_str(), participant_id, options.identity_id.as_ref())
+                });
+                if named
+                    || names_by_recipient(
+                        &binding,
+                        participant_id,
+                        options.recipient_key.as_deref(),
+                    )
+                {
+                    return Ok(Some(room_id));
+                }
+            }
+            Ok(None)
+        }
+    }
+
+    /// The newest room holding a participant reached through `channel_id`
+    /// who is the sender, by `participant_id` or the identity the caller
+    /// resolved, among the rooms the filter admits (RFC §10.4 step 1).
+    /// Provided as Python provides it.
+    fn find_room_id_by_participant(
+        &self,
+        channel_id: &ChannelId,
+        participant_id: &str,
+        options: FindRoomIdByParticipantOptions,
+    ) -> impl Future<Output = Result<Option<RoomId>, StoreError>> + Send {
+        async move {
+            let filter = options.room_filter.unwrap_or_default();
+            let mut best: Option<Room> = None;
+            for room in rooms_read_by(self, &filter).await? {
+                if best
+                    .as_ref()
+                    .is_some_and(|best| routing::recency(&room, best).is_le())
+                {
+                    continue;
+                }
+                let reached = self
+                    .list_participants(&room.id)
+                    .await?
+                    .iter()
+                    .any(|participant| {
+                        participant.connected_via.contains(channel_id)
+                            && (names_sender(
+                                participant.id.as_str(),
+                                participant_id,
+                                options.identity_id.as_ref(),
+                            ) || participant.identity_id.as_ref().is_some_and(|identity| {
+                                names_sender(
+                                    identity.as_str(),
+                                    participant_id,
+                                    options.identity_id.as_ref(),
+                                )
+                            }))
+                    });
+                if reached {
+                    best = Some(room);
+                }
+            }
+            Ok(best.map(|room| room.id))
+        }
+    }
+
+    /// The room's delivery cursor (RFC §13.5): the index of the last event
+    /// its delivery reached, `-1` before any, and for a room the store
+    /// lacks.
+    fn get_delivered_index(
+        &self,
+        room_id: &RoomId,
+    ) -> impl Future<Output = Result<i64, StoreError>> + Send {
+        async move {
+            let room = self.get_room(room_id).await?;
+            Ok(room.map_or(-1, |room| room.delivered_index))
+        }
+    }
+
+    /// Moves the room's delivery cursor to `index` from `index - 1`, or from
+    /// any lower value with `force`, as one compare-and-set (RFC §14.1);
+    /// whether it moved. Required: a read-then-write default could move it
+    /// twice (RFC §14.1).
+    fn advance_delivered_index(
+        &self,
+        room_id: &RoomId,
+        index: u64,
+        options: AdvanceDeliveredIndexOptions,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// The room's private state under `key` (RFC §14.1), which its metadata
+    /// never shows: `None` when nothing is stored there, or the room is
+    /// unknown. Provided, as Python provides it, over the metadata; a store
+    /// keeping private state apart overrides both.
     fn get_private_state(
         &self,
         room_id: &RoomId,
@@ -207,13 +391,9 @@ pub trait ConversationStore: Send + Sync + 'static {
         }
     }
 
-    /// Keeps `value` under `key` for the room, apart from its metadata, or
-    /// removes the key for `None`; the copy the room's metadata may hold
-    /// under the key is removed in the same write (RFC §14.1
-    /// `set_private_state`). Writes nothing for a room the store does not
-    /// hold. Its caller holds the room's lock, and the room's deletion
-    /// takes its private state. This default keeps the value in the room's
-    /// metadata, through [`update_room`](Self::update_room).
+    /// Writes the room's private state under `key`, `None` removing it;
+    /// nothing for an unknown room (RFC §14.1). Provided, as Python provides
+    /// it, through [`patch_room_metadata`](Self::patch_room_metadata).
     fn set_private_state(
         &self,
         room_id: &RoomId,
@@ -221,337 +401,342 @@ pub trait ConversationStore: Send + Sync + 'static {
         value: Option<Metadata>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send {
         async move {
-            let updates = RoomUpdates {
-                private_state: [(key.to_owned(), value)].into(),
-                ..RoomUpdates::default()
+            let (patch, unset) = match value {
+                Some(value) => (
+                    Metadata::from_iter([(key.to_owned(), value.into())]),
+                    Vec::new(),
+                ),
+                None => (Metadata::new(), vec![key.to_owned()]),
             };
-            match self.update_room(room_id, updates).await {
-                Ok(_) | Err(StoreError::RoomNotFound(_)) => Ok(()),
-                Err(error) => Err(error),
-            }
+            let options = PatchRoomMetadataOptions { unset };
+            self.patch_room_metadata(room_id, patch, options).await?;
+            Ok(())
         }
     }
 
-    /// The room's delivery cursor, `-1` for a room the store does not hold
-    /// or whose delivery sets never ran (RFC §14.1 `get_delivered_index`,
-    /// §13.5). This default reads the whole room: a store that can read the
-    /// cursor alone should override it.
-    fn get_delivered_index(
-        &self,
-        room_id: &RoomId,
-    ) -> impl Future<Output = Result<i64, StoreError>> + Send {
-        async move {
-            let room = self.get_room(room_id).await?;
-            Ok(room.map_or(-1, |room| room.delivered_index))
-        }
-    }
-
-    /// Advances the room's delivery cursor to `index`, a compare-and-set
-    /// (RFC §14.1 `advance_delivered_index`, §13.5): it moves only from
-    /// `index - 1`, the room's strict delivery order, or, when `force`,
-    /// from any lower value, as a lane skipping a gap does. Whether the
-    /// cursor moved: never for a room the store does not hold, nor past a
-    /// cursor at `index` or beyond. The write is atomic, and nothing else
-    /// moves the cursor: [`update_room`](Self::update_room) cannot, and a
-    /// commit leaves it.
-    fn advance_delivered_index(
-        &self,
-        room_id: &RoomId,
-        index: u64,
-        force: bool,
-    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
-
-    /// The room `room_id`, if it exists.
-    fn get_room(
-        &self,
-        room_id: &RoomId,
-    ) -> impl Future<Output = Result<Option<Room>, StoreError>> + Send;
-
-    /// The rooms `filter` admits, oldest first (RFC §14.1 `list_rooms`).
-    fn list_rooms(
-        &self,
-        filter: &RoomFilter,
-    ) -> impl Future<Output = Result<Vec<Room>, StoreError>> + Send;
-
-    /// The newest room `filter` admits whose binding of `channel_id` names
-    /// the sender as its correspondent: `participant_id`, their address, or
-    /// `identity_id`, the identity the caller resolved for them, `None` when
-    /// none (RFC §14.1 `find_room_id_by_binding`, §10.4 step 1, gap G-058).
-    /// The filter carries the statuses and the caller's organization. Ids
-    /// compare as stored. Rooms are ordered as the default router orders
-    /// them ([`rules::routing::recency`](roomkit_core::rules::routing::recency)):
-    /// by creation, then by id, whichever name found them. Step 1 reads
-    /// ACTIVE and PAUSED rooms (gap G-045): a router built on this query asks
-    /// it for each status, and keeps the newer of the rooms it answers.
-    fn find_room_id_by_binding(
-        &self,
-        channel_id: &ChannelId,
-        participant_id: &ParticipantId,
-        identity_id: Option<&IdentityId>,
-        filter: &RoomFilter,
-    ) -> impl Future<Output = Result<Option<RoomId>, StoreError>> + Send;
-
-    /// The newest room `filter` admits holding a participant reached through
-    /// `channel_id` named by the sender's `participant_id` or `identity_id`:
-    /// its id is either, or its identity is `identity_id` (RFC §14.1
-    /// `find_room_id_by_participant`, gap G-058). Ids compare as stored;
-    /// rooms are ordered, and step 1 asks for each status, as in
-    /// [`find_room_id_by_binding`](Self::find_room_id_by_binding).
-    fn find_room_id_by_participant(
-        &self,
-        channel_id: &ChannelId,
-        participant_id: &ParticipantId,
-        identity_id: Option<&IdentityId>,
-        filter: &RoomFilter,
-    ) -> impl Future<Output = Result<Option<RoomId>, StoreError>> + Send;
-
-    /// Stores a binding, replacing the room's binding of the same channel.
-    fn store_binding(
+    /// Stores `binding`, replacing the room's binding of its channel, and
+    /// returns it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::RoomNotFound`] for a room the store lacks;
+    /// [`StoreError::Value`] for a binding its model refuses.
+    fn add_binding(
         &self,
         binding: ChannelBinding,
-    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+    ) -> impl Future<Output = Result<ChannelBinding, StoreError>> + Send;
 
-    /// Removes the room's binding of `channel_id`; removing a binding the
-    /// room does not have changes nothing (RFC §14.1 `delete_binding`).
-    fn delete_binding(
+    /// The room's binding of `channel_id`, if any.
+    fn get_binding(
         &self,
         room_id: &RoomId,
         channel_id: &ChannelId,
-    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<ChannelBinding>, StoreError>> + Send;
 
-    /// The room's bindings.
+    /// Writes `binding`, keyed by its room and channel, and returns it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::RoomNotFound`] for a room the store lacks;
+    /// [`StoreError::Value`] for a binding its model refuses.
+    fn update_binding(
+        &self,
+        binding: ChannelBinding,
+    ) -> impl Future<Output = Result<ChannelBinding, StoreError>> + Send;
+
+    /// Removes the room's binding of `channel_id`; whether it held one.
+    fn remove_binding(
+        &self,
+        room_id: &RoomId,
+        channel_id: &ChannelId,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// The room's bindings; none for a room the store lacks.
     fn list_bindings(
         &self,
         room_id: &RoomId,
     ) -> impl Future<Output = Result<Vec<ChannelBinding>, StoreError>> + Send;
 
-    /// The room with its bindings, its participants, its latest
-    /// `recent_events` events, refused ones included (RFC §10.1 step 3),
-    /// and its register of authors, its private state under
-    /// `author_register` (`RoomContext::author_register`, RFC §10.1 step 12);
-    /// `None` when the room does not exist.
-    fn load_context(
+    /// The room, its bindings and its participants, as one read (RFC
+    /// §10.1 step 3): `(None, [], [])` for a room the store lacks. Provided
+    /// as Python provides it.
+    #[expect(
+        clippy::type_complexity,
+        reason = "Python's (room, bindings, participants), a named alias would be a name Python lacks"
+    )]
+    fn load_room_context(
         &self,
         room_id: &RoomId,
-        recent_events: usize,
-    ) -> impl Future<Output = Result<Option<RoomContext>, StoreError>> + Send;
+    ) -> impl Future<
+        Output = Result<(Option<Room>, Vec<ChannelBinding>, Vec<Participant>), StoreError>,
+    > + Send {
+        async move {
+            let Some(room) = self.get_room(room_id).await? else {
+                return Ok((None, Vec::new(), Vec::new()));
+            };
+            let bindings = self.list_bindings(room_id).await?;
+            let participants = self.list_participants(room_id).await?;
+            Ok((Some(room), bindings, participants))
+        }
+    }
 
-    /// Stores a new participant of its room (RFC §14.1
-    /// `create_participant`). A participant is one record per room and id
-    /// (RFC §5.5): an id the room has is refused with
-    /// [`StoreError::ParticipantExists`].
-    fn create_participant(
+    /// The room's conversation: its message events, a blocked one
+    /// included, the newest `limit` in index order, or with `after_index`
+    /// the first `limit` after it. Provided as Python provides it, over
+    /// [`list_events`](Self::list_events).
+    fn get_conversation(
+        &self,
+        room_id: &RoomId,
+        options: GetConversationOptions,
+    ) -> impl Future<Output = Result<Vec<RoomEvent>, StoreError>> + Send {
+        async move {
+            let messages = EventFilter {
+                event_types: Some(vec![EventType::Message]),
+                include_blocked: true,
+                ..EventFilter::default()
+            };
+            let read = ListEventsOptions {
+                limit: options.limit,
+                after_index: options.after_index,
+                event_filter: Some(messages),
+                newest_first: options.after_index.is_none(),
+                ..ListEventsOptions::default()
+            };
+            self.list_events(room_id, read).await
+        }
+    }
+
+    /// Stores `participant` and returns it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::RoomNotFound`] for a room the store lacks;
+    /// [`StoreError::ParticipantExists`] for an id the room holds.
+    fn add_participant(
         &self,
         participant: Participant,
-    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+    ) -> impl Future<Output = Result<Participant, StoreError>> + Send;
 
-    /// The room's participant `participant_id`, if it has one (RFC §14.1
-    /// `get_participant`, named within its room by gap G-054).
+    /// The room's participant `participant_id`, if any.
     fn get_participant(
         &self,
         room_id: &RoomId,
         participant_id: &ParticipantId,
     ) -> impl Future<Output = Result<Option<Participant>, StoreError>> + Send;
 
-    /// Writes `participant` whole, in place of its room's record of its id
-    /// (RFC §14.1 `update_participant`, gap G-054). A participant the room
-    /// does not have is refused with [`StoreError::ParticipantNotFound`].
+    /// Writes `participant` whole, keyed by its room and id (RFC §14.1),
+    /// and returns it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::ParticipantNotFound`] for a participant the room lacks.
     fn update_participant(
         &self,
         participant: Participant,
-    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+    ) -> impl Future<Output = Result<Participant, StoreError>> + Send;
 
-    /// Removes the room's participant `participant_id`; removing one the
-    /// room does not have changes nothing (RFC §14.1 `delete_participant`).
+    /// Removes the room's participant `participant_id`.
     fn delete_participant(
         &self,
         room_id: &RoomId,
         participant_id: &ParticipantId,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
-    /// The room's participants, in the order they were created (RFC §14.1
-    /// `list_participants`).
+    /// The room's participants; none for a room the store lacks.
     fn list_participants(
         &self,
         room_id: &RoomId,
     ) -> impl Future<Output = Result<Vec<Participant>, StoreError>> + Send;
 
-    /// Stores a new identity (RFC §14.1 `create_identity`). An id taken is
-    /// refused with [`StoreError::IdentityExists`], and an address another
-    /// identity of its organization uses with [`StoreError::AddressLinked`]
-    /// (gap G-060).
+    /// Stores `identity`, replacing one under its id, and returns it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::AddressLinked`] for an address another identity of its
+    /// organization holds (RFC §5.6).
     fn create_identity(
         &self,
         identity: Identity,
-    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+    ) -> impl Future<Output = Result<Identity, StoreError>> + Send;
 
-    /// The identity `identity_id`, if any (RFC §14.1 `get_identity`).
+    /// The identity `identity_id`, if any.
     fn get_identity(
         &self,
         identity_id: &IdentityId,
     ) -> impl Future<Output = Result<Option<Identity>, StoreError>> + Send;
 
-    /// The identity of `organization_id` that uses `address` on channels of
-    /// `channel_type`, if any (RFC §14.1 `resolve_identity`, §17.2). An
-    /// organization of `None` resolves the identities of no organization
-    /// (gap G-060). Addresses compare as stored: link them in their
-    /// channel's form, a phone number in E.164 (RFC §5.7).
+    /// The identity of the organization `options` names that `address` on
+    /// `channel_type` belongs to, if any (RFC §5.6, §17.2).
     fn resolve_identity(
         &self,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: ResolveIdentityOptions,
     ) -> impl Future<Output = Result<Option<Identity>, StoreError>> + Send;
 
-    /// Links `address` on channels of `channel_type` to the identity
-    /// `identity_id` of `organization_id` (RFC §14.1 `link_address`). An
-    /// identity of another organization is refused with
-    /// [`StoreError::IdentityNotFound`], and an address another identity of
-    /// the organization uses with [`StoreError::AddressLinked`]; linking an
-    /// address the identity uses changes nothing.
+    /// Links `address` on `channel_type` to the identity `identity_id`, of
+    /// the organization `options` names (RFC §5.6).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::IdentityNotFound`] for an identity the organization
+    /// lacks; [`StoreError::AddressLinked`] for an address another of its
+    /// identities holds.
     fn link_address(
         &self,
         identity_id: &IdentityId,
-        channel_type: ChannelType,
+        channel_type: &ChannelType,
         address: &str,
-        organization_id: Option<&str>,
+        options: LinkAddressOptions,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
-    /// Removes `address` on channels of `channel_type` from the identity
-    /// `identity_id` of `organization_id` (RFC §14.1 `unlink_address`,
-    /// §5.6). An identity of another organization is refused with
-    /// [`StoreError::IdentityNotFound`], as by [`link_address`]; an address
-    /// the identity does not use changes nothing. Moving an address is an
-    /// unlink, then a link: the rooms, bindings and participants that named
-    /// it are left as they are.
+    /// Unlinks `address` on `channel_type` from the identity `identity_id`
+    /// (RFC §5.6, §14.1). Provided as Python provides it: refused by name,
+    /// for a store that does not unlink addresses (Python's
+    /// `NotImplementedError`).
     ///
-    /// [`link_address`]: ConversationStore::link_address
+    /// # Errors
+    ///
+    /// [`StoreError::Value`] by default.
     fn unlink_address(
         &self,
-        identity_id: &IdentityId,
-        channel_type: ChannelType,
-        address: &str,
-        organization_id: Option<&str>,
-    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+        _identity_id: &IdentityId,
+        _channel_type: &ChannelType,
+        _address: &str,
+        _options: UnlinkAddressOptions,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send {
+        async {
+            let store = std::any::type_name::<Self>();
+            let name = store.rsplit("::").next().unwrap_or(store);
+            Err(StoreError::Value(format!(
+                "{name} does not unlink identity addresses (RFC §14.1)"
+            )))
+        }
+    }
 
-    /// The event the room committed with idempotency `key`, a `BLOCKED` one
-    /// included (RFC §14.1 `get_event_by_idempotency_key`, §13.4): the one
-    /// `channel_id` committed, or, for `None`, the one any channel of the
-    /// room committed, as a proactive delivery's key is looked up (§22.1).
-    /// A blank key, empty or whitespace only, is no key and names none.
-    fn get_event_by_idempotency_key(
+    /// Whether the room holds an event committed with `key`, from
+    /// `channel_id` when it names one (RFC §13.4, §14.3). Required: a
+    /// redelivery seen with no event is answered as a blocked duplicate,
+    /// never processed again.
+    fn check_idempotency(
         &self,
         room_id: &RoomId,
-        channel_id: Option<&ChannelId>,
         key: &str,
-    ) -> impl Future<Output = Result<Option<RoomEvent>, StoreError>> + Send;
+        channel_id: Option<&ChannelId>,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
-    /// Stores `event`, sets the room's counters, writes the room updates
-    /// they carry (a paused room's resume, the register of authors the
-    /// event's record changed, its private state written as
-    /// [`set_private_state`](Self::set_private_state) writes it) and the
-    /// update an edit or a delete makes to its target, as one atomic commit
-    /// (RFC §10.1 step 12, §14.3). Refuses with [`StoreError::IndexTaken`] an index the room has
-    /// given out already: one its timeline holds, or one a hard delete
-    /// removed, since the counters count both (RFC §8.1, gap G-064). Refuses
-    /// with [`StoreError::IdempotencyKeyTaken`] an event whose source
-    /// channel and idempotency key an event of the room carries, a blank key
-    /// being no key (RFC §13.4, §14.3). Refuses with
-    /// [`StoreError::EventNotFound`] a target the room no longer holds.
-    /// A refused commit writes nothing. An event carrying a blank key is
-    /// stored with none.
-    ///
-    /// The target's update keeps the `delivery_results` the store holds:
-    /// once stored, an event's `delivery_results` is written by the record
-    /// of its deliveries alone (RFC §14.3), which the kit does not make; the
-    /// event committed is stored with the ones it carries.
-    fn commit(
+    /// The event the room committed with `key`, from `channel_id` when it
+    /// names one (RFC §13.4). Provided as Python provides it: `None`.
+    fn get_event_by_idempotency_key(
         &self,
-        event: RoomEvent,
-        counters: RoomCounters,
-        target: Option<TargetUpdate>,
-    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+        _room_id: &RoomId,
+        _key: &str,
+        _channel_id: Option<&ChannelId>,
+    ) -> impl Future<Output = Result<Option<RoomEvent>, StoreError>> + Send {
+        async { Ok(None) }
+    }
 
-    /// The event `event_id`, whichever room holds it, refused ones included
-    /// (RFC §14.1 `get_event`).
+    /// Commits `event` to `room_id` as one atomic write (RFC §10.1 step 12,
+    /// §14.3): its index the room's event count, the room's counters
+    /// bumped, the change's `target` written whole as it leaves it, keeping
+    /// its stored `delivery_results`, a delete's target's edits marked
+    /// deleted, and, for an `activity` commit, the room's last activity
+    /// moved to the commit's instant, the store's clock (the kit's while
+    /// the kit commits), and a `PAUSED` room resumed
+    /// ([`commit_activity`](roomkit_core::rules::lifecycle::commit_activity),
+    /// RFC §5.1); the event as stored. A blank idempotency key is stored as
+    /// none (RFC §13.4). Required: a read-then-write default would let the
+    /// counters and the timeline diverge (RFC §14.3).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::IdempotencyKeyTaken`] for a key its channel holds in
+    /// the room, nothing written; [`StoreError::EventNotFound`] for a
+    /// target the room no longer holds; [`StoreError::Value`] for a content
+    /// its model refuses.
+    fn commit_event(
+        &self,
+        room_id: &RoomId,
+        event: RoomEvent,
+        options: CommitEventOptions,
+    ) -> impl Future<Output = Result<RoomEvent, StoreError>> + Send;
+
+    /// The event `event_id`, if any.
     fn get_event(
         &self,
         event_id: &EventId,
     ) -> impl Future<Output = Result<Option<RoomEvent>, StoreError>> + Send;
 
-    /// Writes the fields `updates` names on the stored event, keeping every
-    /// other one, its `delivery_results` among them (RFC §14.3), and returns
-    /// the event as it now stands (RFC §14.1 `update_event(event_id,
-    /// updates)`). An event no room holds is refused with
-    /// [`StoreError::EventNotFound`].
+    /// Writes `event` whole, keyed by its id, keeping the stored
+    /// `delivery_results` (RFC §14.3), and returns it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::EventNotFound`] for an event the store lacks;
+    /// [`StoreError::Value`] for a content its model refuses.
     fn update_event(
         &self,
-        event_id: &EventId,
-        updates: EventUpdates,
+        event: RoomEvent,
     ) -> impl Future<Output = Result<RoomEvent, StoreError>> + Send;
 
-    /// Removes the room's event `event_id` for good, with, when
-    /// `cascade_replies` is set, its replies one level deep (the events
-    /// whose `parent_event_id` names it), and always the edits and deletes
-    /// of the target and its replies (RFC §10.3, gap G-063). Returns the
-    /// events removed in §10.3's order: the target, its replies by index,
-    /// then the changes by index, an event both a reply and a change among
-    /// the replies (RFC §14.1 `delete_event(room_id, event_id,
-    /// cascade_replies)`, which names their ids; the records let the kit fire
-    /// `ON_EVENT_DELETED` for each, in that order, gap G-064). An event the
-    /// room does not hold removes nothing. The room's counters are left as
-    /// they are.
+    /// Hard-deletes the room's event `event_id` (RFC §10.3), its replies
+    /// one level deep with `cascade_replies`, and always the edits and
+    /// deletes of what it removes; the events removed in §10.3's order, the
+    /// target, its replies by index, then the changes by index, none when
+    /// the room lacks it. The room's counters stay as they are.
     fn delete_event(
         &self,
         room_id: &RoomId,
         event_id: &EventId,
-        cascade_replies: bool,
+        options: DeleteEventOptions,
     ) -> impl Future<Output = Result<Vec<RoomEvent>, StoreError>> + Send;
 
-    /// How many of the room's events `filter` admits, or how many rows the
-    /// timeline holds, the refused ones included, with no filter (RFC §14.1
-    /// `get_event_count`). Once events are hard-deleted, the count is lower
+    /// How many of the room's events `event_filter` admits, every row of
+    /// its timeline, a refused one included, without one; `0` for a room
+    /// the store lacks. Once events are hard-deleted, the count is lower
     /// than the room's `event_count`, which counts every index given out
     /// (gap G-064).
-    fn get_event_count(
-        &self,
-        room_id: &RoomId,
-        filter: Option<EventFilter>,
-    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
-
-    /// Stores side effects (RFC §10.1 step 15).
-    fn persist_side_effects(
-        &self,
-        room_id: &RoomId,
-        tasks: Vec<Task>,
-        observations: Vec<Observation>,
-    ) -> impl Future<Output = Result<(), StoreError>> + Send;
-
-    /// The page of the room's timeline `query` asks for, in ascending index
-    /// order, the criteria applied before the page is cut (RFC §14.1,
-    /// "Reading a timeline"; the Python implementation's `list_events`):
-    /// see [`EventQuery`].
-    ///
-    /// A store that holds a room's events in a database reads the window
-    /// from its index on `(room_id, index)`, never the whole timeline.
     ///
     /// # Errors
     ///
-    /// Refuses a missing room with [`StoreError::RoomNotFound`], and a query
-    /// [`EventQuery::validate`] refuses with [`StoreError::Value`].
+    /// [`StoreError::Value`] for a filter its model refuses.
+    fn get_event_count(
+        &self,
+        room_id: &RoomId,
+        options: GetEventCountOptions,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
+
+    /// A page of the room's timeline ([`ListEventsOptions`]); none for a
+    /// room the store lacks.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Value`] for both cursors, or a filter its model
+    /// refuses.
     fn list_events(
         &self,
         room_id: &RoomId,
-        query: &EventQuery,
+        options: ListEventsOptions,
     ) -> impl Future<Output = Result<Vec<RoomEvent>, StoreError>> + Send;
 
-    /// The room's tasks.
+    /// Stores `task` and returns it (RFC §10.1 step 15).
+    fn add_task(&self, task: Task) -> impl Future<Output = Result<Task, StoreError>> + Send;
+
+    /// Stores `observation` and returns it (RFC §10.1 step 15).
+    fn add_observation(
+        &self,
+        observation: Observation,
+    ) -> impl Future<Output = Result<Observation, StoreError>> + Send;
+
+    /// The room's tasks, of the status `options` names; none for a room the
+    /// store lacks.
     fn list_tasks(
         &self,
         room_id: &RoomId,
+        options: ListTasksOptions,
     ) -> impl Future<Output = Result<Vec<Task>, StoreError>> + Send;
 
-    /// The room's observations.
+    /// The room's observations; none for a room the store lacks.
     fn list_observations(
         &self,
         room_id: &RoomId,

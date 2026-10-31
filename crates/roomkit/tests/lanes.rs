@@ -29,7 +29,7 @@ use roomkit::testing::{
 use roomkit::{
     AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
     HookExecution, HookOptions, HookTrigger, MuteOptions, PauseRoomOptions, ProcessInboundOptions,
-    RoomFilter, RoomKit, RoomKitOptions,
+    RoomKit, RoomKitOptions,
 };
 use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
@@ -160,12 +160,12 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
     }
     let rooms = kit
         .store()
-        .list_rooms(&RoomFilter::default())
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
         .await
         .unwrap();
     let timeline = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap();
     let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
@@ -425,7 +425,7 @@ impl Channel for Gated {
 async fn first_event_processed(kit: &RoomKit, tap: &EventTap) -> bool {
     let timeline = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap();
     let first = timeline
@@ -706,7 +706,7 @@ async fn a_call_dropped_during_its_agent_s_turn_cuts_the_turn_and_delivers_its_e
         .unwrap();
     let timeline: Vec<(String, EventStatus)> = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
         .into_iter()
@@ -876,13 +876,13 @@ async fn a_call_dropped_under_the_room_lock_leaves_the_lane_and_the_lock_free() 
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
             include_blocked: true,
             ..roomkit::EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

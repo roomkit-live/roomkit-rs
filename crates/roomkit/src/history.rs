@@ -17,7 +17,7 @@
 use roomkit_core::model::{ChannelBinding, EventType, RoomContext, RoomEvent};
 use roomkit_core::rules::visible_events;
 
-use crate::store::{ConversationStore, EventFilter, EventQuery, StoreError};
+use crate::store::{ConversationStore, EventFilter, ListEventsOptions, StoreError};
 
 /// How many of the room's latest messages a turn reads: the Python
 /// implementation's window for an AI channel (`AI_CHANNEL_CONTEXT_EVENTS`).
@@ -86,18 +86,18 @@ async fn read<S: ConversationStore>(
         ..EventFilter::default()
     };
     let mut history = store
-        .list_events(&event.room_id, &messages_up_to(event, messages))
+        .list_events(&event.room_id, messages_up_to(event, messages))
         .await?;
     if !matches!(event.r#type, EventType::Message | EventType::Instruction) {
         history.push(stored(store, event).await);
     }
-    let latest_rows = EventQuery {
+    let latest_rows = ListEventsOptions {
         limit: TOOL_ROWS,
         event_filter: Some(rows),
         newest_first: true,
-        ..EventQuery::default()
+        ..ListEventsOptions::default()
     };
-    history.extend(store.list_events(&event.room_id, &latest_rows).await?);
+    history.extend(store.list_events(&event.room_id, latest_rows).await?);
     history.sort_by_key(|event| event.index);
     Ok(history)
 }
@@ -127,18 +127,18 @@ async fn stored<S: ConversationStore>(store: &S, event: &RoomEvent) -> RoomEvent
 /// those up to `event`, which came before its turn. An instruction, never
 /// stored, holds the index the room's next event takes; an event the store
 /// never numbered bounds nothing.
-fn messages_up_to(event: &RoomEvent, filter: EventFilter) -> EventQuery {
+fn messages_up_to(event: &RoomEvent, filter: EventFilter) -> ListEventsOptions {
     let bound = if event.r#type == EventType::Instruction {
         event.index
     } else {
         event.index.saturating_add(1)
     };
-    EventQuery {
+    ListEventsOptions {
         limit: MESSAGES,
         event_filter: Some(filter),
         before_index: (event.index > 0).then_some(bound),
         newest_first: true,
-        ..EventQuery::default()
+        ..ListEventsOptions::default()
     }
 }
 
@@ -147,12 +147,11 @@ mod tests {
     use pretty_assertions::assert_eq;
     use roomkit_core::model::{
         ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource, EventStatus,
-        Room, RoomId, RoomUpdates, TextContent, Timestamp, ToolCallContent,
+        Room, RoomId, TextContent, Timestamp, ToolCallContent,
     };
-    use roomkit_core::ops::RoomCounters;
 
     use super::*;
-    use crate::store::InMemoryStore;
+    use crate::store::{CommitEventOptions, InMemoryStore};
 
     fn room_id() -> RoomId {
         RoomId::new("room_1").unwrap()
@@ -195,13 +194,14 @@ mod tests {
         let store = InMemoryStore::new();
         store.create_room(Room::new(room_id())).await.unwrap();
         for event in events {
-            let counters = RoomCounters {
-                event_count: event.index + 1,
-                latest_index: event.index,
-                last_activity_at: None,
-                room: RoomUpdates::default(),
+            let options = CommitEventOptions {
+                activity: false,
+                ..CommitEventOptions::default()
             };
-            store.commit(event, counters, None).await.unwrap();
+            store
+                .commit_event(&room_id(), event, options)
+                .await
+                .unwrap();
         }
         store
     }

@@ -9,13 +9,13 @@ mod support;
 use pretty_assertions::assert_eq;
 use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventId, EventSource, EventStatus,
-    EventType, InboundMessage, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, TextContent,
-    Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
+    EventType, InboundMessage, Room, RoomContext, RoomEvent, RoomId, TextContent, Timestamp,
+    ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, EventQuery, ProcessInboundOptions,
-    RoomCounters, RoomKit, RoomKitOptions,
+    AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitOptions, store::CommitEventOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, AiRequest, ToolDefinition, ToolOutput, Tools};
@@ -97,21 +97,23 @@ async fn overlapping_turns_read_back_from_the_file_pair_by_their_correlation_id(
         event(5, "sms", TextContent::new("And then?").into(), None),
     ];
     for committed in events {
-        let counters = RoomCounters {
-            event_count: committed.index + 1,
-            latest_index: committed.index,
-            last_activity_at: None,
-            room: RoomUpdates::default(),
+        let room_id = committed.room_id.clone();
+        let options = CommitEventOptions {
+            activity: false,
+            ..CommitEventOptions::default()
         };
-        store.commit(committed, counters, None).await.unwrap();
+        store
+            .commit_event(&room_id, committed, options)
+            .await
+            .unwrap();
     }
     drop(store);
     let store = SqliteStore::open(file.path()).await.unwrap();
-    let query = EventQuery {
+    let query = roomkit::store::ListEventsOptions {
         limit: u64::MAX,
-        ..EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     };
-    let timeline = store.list_events(&room_id(), &query).await.unwrap();
+    let timeline = store.list_events(&room_id(), query).await.unwrap();
     let turns: Vec<Option<&str>> = timeline
         .iter()
         .map(|event| event.correlation_id.as_deref())
@@ -237,11 +239,11 @@ async fn a_restarted_kit_replays_the_rounds_its_file_holds() {
     let after = ScriptedProvider::new([ScriptedRound::answering("Three.")]);
     let kit = kit_on(&file, after.clone(), false).await;
     says(&kit, "third").await;
-    let query = EventQuery {
+    let query = roomkit::store::ListEventsOptions {
         limit: u64::MAX,
-        ..EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     };
-    let timeline = kit.store().list_events(&room_id(), &query).await.unwrap();
+    let timeline = kit.store().list_events(&room_id(), query).await.unwrap();
     kit.close().await.unwrap();
     let turn_of = |index: usize| timeline[index].correlation_id.clone().unwrap();
     assert_eq!(

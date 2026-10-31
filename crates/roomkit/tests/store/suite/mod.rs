@@ -15,10 +15,10 @@ mod timeline;
 
 use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, EditContent, EventContent, EventId, EventSource,
-    EventStatus, EventType, ParticipantId, Room, RoomEvent, RoomId, RoomUpdates, TextContent,
-    Timestamp,
+    EventStatus, EventType, ParticipantId, Room, RoomEvent, RoomId, TextContent, Timestamp,
 };
-use roomkit::{ConversationStore, RoomCounters};
+use roomkit::store::CommitEventOptions;
+use roomkit::{ConversationStore, StoreError};
 
 use crate::Store;
 
@@ -74,15 +74,28 @@ pub(crate) fn edit_of(index: u64, target: u64) -> RoomEvent {
     edit
 }
 
-/// The counters of a room once `index` is committed after every index
-/// before it.
-pub(crate) fn counters(index: u64) -> RoomCounters {
-    RoomCounters {
-        event_count: index + 1,
-        latest_index: index,
-        last_activity_at: None,
-        room: RoomUpdates::default(),
+/// A commit that is no activity of the room: its counters move, its
+/// activity and status stay (RFC §5.1).
+pub(crate) fn no_activity() -> CommitEventOptions {
+    CommitEventOptions {
+        activity: false,
+        ..CommitEventOptions::default()
     }
+}
+
+/// Commits `event` to its room, no activity of the room, the change's
+/// `target` as it leaves it.
+pub(crate) async fn commit(
+    store: &Store,
+    event: RoomEvent,
+    target: Option<RoomEvent>,
+) -> Result<RoomEvent, StoreError> {
+    let room_id = event.room_id.clone();
+    let options = CommitEventOptions {
+        target,
+        ..no_activity()
+    };
+    store.commit_event(&room_id, event, options).await
 }
 
 /// An empty store holding `room_1`.
@@ -96,9 +109,9 @@ pub(crate) async fn with_room() -> Store {
 pub(crate) async fn with_events(events: Vec<RoomEvent>) -> Store {
     let store = with_room().await;
     for committed in events {
-        let index = committed.index;
+        let room_id = committed.room_id.clone();
         store
-            .commit(committed, counters(index), None)
+            .commit_event(&room_id, committed, no_activity())
             .await
             .unwrap();
     }

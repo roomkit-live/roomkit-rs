@@ -3,11 +3,13 @@
 //! execution context; and the notices it performs without answering.
 
 use std::convert::Infallible;
+use std::mem;
 use std::sync::Arc;
 
 use roomkit_core::model::{
-    ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, ModelError, RoomContext, RoomEvent,
-    RoomId,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ErrorRecord, EventId, EventUpdates,
+    Metadata, ModelError, Observation, RoomContext, RoomEvent, RoomId, RoomUpdates, Task,
+    Timestamp,
 };
 use roomkit_core::ops::{
     AfterDelivery, CHANNEL_NOT_REGISTERED, ChannelOutcome, ChannelRequest, EffectId, Environment,
@@ -27,21 +29,29 @@ use crate::events::Handled;
 use crate::hooks;
 use crate::kit::Inner;
 use crate::router;
-use crate::store::ConversationStore;
+use crate::store::{
+    CommitEventOptions, ConversationStore, DeleteEventOptions, GetConversationOptions,
+    PatchRoomMetadataOptions, ResolveIdentityOptions, StoreError, written,
+};
 use crate::stream::{self, KeptStream, Stops};
 use crate::tasks::{Kind, Marks};
 use crate::turn::TurnKit;
 use crate::turns::{self, Answer};
 use crate::unwind::unwinding;
 
-/// Carries out a request on the store (RFC §14).
+/// The key of a room's private state holding its register of authors (RFC
+/// §10.1 step 12, §14.1), Python's `AUTHOR_REGISTER`.
+const AUTHOR_REGISTER: &str = "author_register";
+
+/// Carries out a request on the store (RFC §14), through Python's store
+/// calls.
 pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest) -> Outcome {
     let answer = match request {
         StoreRequest::LoadContext {
             room_id,
             recent_events,
         } => {
-            return match store.load_context(&room_id, recent_events).await {
+            return match load_context(store, &room_id, recent_events).await {
                 Ok(Some(context)) => StoreOutcome::Context(Box::new(context)).into(),
                 Ok(None) => StoreOutcome::RoomNotFound.into(),
                 Err(error) => Outcome::Failed(error.to_record()),
@@ -52,7 +62,7 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
             channel_id,
             key,
         } => store
-            .get_event_by_idempotency_key(&room_id, channel_id.as_ref(), &key)
+            .get_event_by_idempotency_key(&room_id, &key, channel_id.as_ref())
             .await
             .map(|event| StoreOutcome::Idempotent(event.map(Box::new))),
         StoreRequest::GetEvent { event_id } => store
@@ -64,60 +74,210 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
             .map(StoreOutcome::Events),
         StoreRequest::Commit {
             event,
-            counters,
             target,
-        } => store
-            .commit(*event, counters, target)
+            activity,
+            author_register,
+        } => commit(
+            store,
+            *event,
+            target.map(|target| *target),
+            activity,
+            author_register,
+        )
+        .await
+        .map(|stored| StoreOutcome::Committed(Box::new(stored))),
+        StoreRequest::UpdateEvent { event_id, updates } => update_event(store, &event_id, updates)
             .await
-            .map(|()| StoreOutcome::Committed),
-        StoreRequest::UpdateEvent { event_id, updates } => store
-            .update_event(&event_id, updates)
-            .await
-            .map(|_| StoreOutcome::Stored),
+            .map(|()| StoreOutcome::Stored),
         StoreRequest::DeleteEvent {
             room_id,
             event_id,
             cascade_replies,
         } => store
-            .delete_event(&room_id, &event_id, cascade_replies)
+            .delete_event(&room_id, &event_id, DeleteEventOptions { cascade_replies })
             .await
             .map(StoreOutcome::Deleted),
         StoreRequest::PersistSideEffects {
-            room_id,
             tasks,
             observations,
-        } => store
-            .persist_side_effects(&room_id, tasks, observations)
+            ..
+        } => persist_side_effects(store, tasks, observations)
             .await
             .map(|()| StoreOutcome::Persisted),
         StoreRequest::CreateRoom { room } => {
-            store.create_room(room).await.map(|()| StoreOutcome::Stored)
+            store.create_room(room).await.map(|_| StoreOutcome::Stored)
         }
-        StoreRequest::UpdateRoom { room_id, updates } => store
-            .update_room(&room_id, updates)
+        StoreRequest::UpdateRoom { room_id, updates } => update_room(store, &room_id, updates)
             .await
-            .map(|_| StoreOutcome::Stored),
-        StoreRequest::StoreBinding { binding } => store
-            .store_binding(binding)
+            .map(|()| StoreOutcome::Stored),
+        StoreRequest::StoreBinding { binding } => store_binding(store, binding)
             .await
             .map(|()| StoreOutcome::Stored),
         StoreRequest::DeleteBinding {
             room_id,
             channel_id,
         } => store
-            .delete_binding(&room_id, &channel_id)
+            .remove_binding(&room_id, &channel_id)
             .await
-            .map(|()| StoreOutcome::Stored),
+            .map(|_| StoreOutcome::Stored),
         StoreRequest::ResolveIdentity {
             channel_type,
             address,
             organization_id,
         } => store
-            .resolve_identity(channel_type, &address, organization_id.as_deref())
+            .resolve_identity(
+                &channel_type,
+                &address,
+                ResolveIdentityOptions { organization_id },
+            )
             .await
             .map(StoreOutcome::Resolved),
     };
     answer.map_or_else(|error| Outcome::Failed(error.to_record()), Outcome::from)
+}
+
+/// The room's context (RFC §10.1 step 3), as the Python implementation's
+/// kit builds it: the room, its bindings and participants, its latest
+/// `recent_events` messages, a blocked one included (`get_conversation`),
+/// and its register of authors, its private state (gap G-089); `None` for
+/// a room the store lacks.
+async fn load_context<S: ConversationStore>(
+    store: &S,
+    room_id: &RoomId,
+    recent_events: usize,
+) -> Result<Option<RoomContext>, StoreError> {
+    let (room, bindings, participants) = store.load_room_context(room_id).await?;
+    let Some(room) = room else {
+        return Ok(None);
+    };
+    let options = GetConversationOptions {
+        limit: u64::try_from(recent_events).unwrap_or(u64::MAX),
+        after_index: None,
+    };
+    let recent_events = store.get_conversation(room_id, options).await?;
+    let author_register = store.get_private_state(room_id, AUTHOR_REGISTER).await?;
+    Ok(Some(RoomContext {
+        room,
+        bindings,
+        participants,
+        recent_events,
+        author_register,
+    }))
+}
+
+/// Commits `event` (RFC §10.1 step 12): the room's register of authors its
+/// record changed written first, as the Python implementation writes it,
+/// then the commit, the room's activity at `activity` when it is one.
+async fn commit<S: ConversationStore>(
+    store: &S,
+    event: RoomEvent,
+    target: Option<RoomEvent>,
+    activity: Option<Timestamp>,
+    author_register: Option<Metadata>,
+) -> Result<RoomEvent, StoreError> {
+    let room_id = event.room_id.clone();
+    if let Some(register) = author_register {
+        store
+            .set_private_state(&room_id, AUTHOR_REGISTER, Some(register))
+            .await?;
+    }
+    let options = CommitEventOptions {
+        target,
+        activity: activity.is_some(),
+    };
+    let committed = store.commit_event(&room_id, event, options);
+    match activity {
+        Some(at) => written::at(at, committed).await,
+        None => committed.await,
+    }
+}
+
+/// Writes `updates` on the room (RFC §14.1): its private state through
+/// `set_private_state`; a write of its metadata alone through
+/// `patch_room_metadata`, the partial write a commit cannot lose, as the
+/// Python implementation writes step 15's; any other through a fresh read
+/// and `update_room`, which its caller runs under the room's lock.
+async fn update_room<S: ConversationStore>(
+    store: &S,
+    room_id: &RoomId,
+    mut updates: RoomUpdates,
+) -> Result<(), StoreError> {
+    for (key, value) in mem::take(&mut updates.private_state) {
+        store.set_private_state(room_id, &key, value).await?;
+    }
+    if updates.is_empty() {
+        return Ok(());
+    }
+    let missing = || StoreError::RoomNotFound(room_id.clone());
+    let lifecycle = updates.status.is_some()
+        || updates.closed_at.is_some()
+        || updates.paused_at.is_some()
+        || updates.last_activity_at.is_some();
+    if !lifecycle {
+        let options = PatchRoomMetadataOptions {
+            unset: mem::take(&mut updates.removed_metadata),
+        };
+        let patch = store.patch_room_metadata(room_id, mem::take(&mut updates.metadata), options);
+        let patched = match updates.updated_at {
+            Some(at) => written::at(at, patch).await?,
+            None => patch.await?,
+        };
+        return patched.map(drop).ok_or_else(missing);
+    }
+    let mut room = store.get_room(room_id).await?.ok_or_else(missing)?;
+    updates.apply(&mut room);
+    store.update_room(room).await?;
+    Ok(())
+}
+
+/// Stores `binding` (RFC §14.1): `add_binding` for a channel the room does
+/// not bind yet, `update_binding` for one it binds, as the Python
+/// implementation's kit calls them.
+async fn store_binding<S: ConversationStore>(
+    store: &S,
+    binding: ChannelBinding,
+) -> Result<(), StoreError> {
+    let bound = store
+        .get_binding(&binding.room_id, &binding.channel_id)
+        .await?;
+    match bound {
+        Some(_) => store.update_binding(binding).await?,
+        None => store.add_binding(binding).await?,
+    };
+    Ok(())
+}
+
+/// Writes `updates` on the stored event `event_id` (RFC §14.1): a read,
+/// then `update_event` of the event whole, its delivery results kept by
+/// the store (RFC §14.3).
+async fn update_event<S: ConversationStore>(
+    store: &S,
+    event_id: &EventId,
+    updates: EventUpdates,
+) -> Result<(), StoreError> {
+    let mut event = store
+        .get_event(event_id)
+        .await?
+        .ok_or_else(|| StoreError::EventNotFound(event_id.clone()))?;
+    updates.apply(&mut event);
+    store.update_event(event).await?;
+    Ok(())
+}
+
+/// Stores a pass's side effects one by one (RFC §10.1 step 15), as
+/// Python's `_persist_side_effects` does.
+async fn persist_side_effects<S: ConversationStore>(
+    store: &S,
+    tasks: Vec<Task>,
+    observations: Vec<Observation>,
+) -> Result<(), StoreError> {
+    for task in tasks {
+        store.add_task(task).await?;
+    }
+    for observation in observations {
+        store.add_observation(observation).await?;
+    }
+    Ok(())
 }
 
 /// Calls a channel (RFC §6.1): a parse, a turn, a delivery or the read of

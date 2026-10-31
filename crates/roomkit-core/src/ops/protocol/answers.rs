@@ -151,7 +151,7 @@ impl RequestKind {
             Self::GetEvent => matches!(outcome, Outcome::Store(StoreOutcome::Event(_))),
             Self::ListEvents => matches!(outcome, Outcome::Store(StoreOutcome::Events(_))),
             Self::DeleteEvent => matches!(outcome, Outcome::Store(StoreOutcome::Deleted(_))),
-            Self::Commit => matches!(outcome, Outcome::Store(StoreOutcome::Committed)),
+            Self::Commit => matches!(outcome, Outcome::Store(StoreOutcome::Committed(_))),
             Self::PersistSideEffects => matches!(outcome, Outcome::Store(StoreOutcome::Persisted)),
             Self::Write => matches!(outcome, Outcome::Store(StoreOutcome::Stored)),
             Self::ResolveIdentity => matches!(outcome, Outcome::Store(StoreOutcome::Resolved(_))),
@@ -298,9 +298,10 @@ impl Outcome {
         }
     }
 
-    pub(crate) fn into_committed(self) -> Result<(), ErrorRecord> {
+    /// The event as the store committed it, its index the store's.
+    pub(crate) fn into_committed(self) -> Result<Box<RoomEvent>, ErrorRecord> {
         match self {
-            Self::Store(StoreOutcome::Committed) => Ok(()),
+            Self::Store(StoreOutcome::Committed(event)) => Ok(event),
             other => Err(other.into_failure()),
         }
     }
@@ -322,7 +323,7 @@ impl Outcome {
     /// A write's answer, a commit's included: `Stored` or `Committed`.
     pub(crate) fn into_written(self) -> Result<(), ErrorRecord> {
         match self {
-            Self::Store(StoreOutcome::Stored | StoreOutcome::Committed) => Ok(()),
+            Self::Store(StoreOutcome::Stored | StoreOutcome::Committed(_)) => Ok(()),
             other => Err(other.into_failure()),
         }
     }
@@ -419,7 +420,7 @@ impl Outcome {
                 StoreOutcome::Event(_) => "Event",
                 StoreOutcome::Deleted(_) => "Deleted",
                 StoreOutcome::Events(_) => "Events",
-                StoreOutcome::Committed => "Committed",
+                StoreOutcome::Committed(_) => "Committed",
                 StoreOutcome::Persisted => "Persisted",
                 StoreOutcome::Stored => "Stored",
                 StoreOutcome::Resolved(_) => "Resolved",

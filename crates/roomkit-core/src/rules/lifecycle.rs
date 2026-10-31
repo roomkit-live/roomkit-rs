@@ -88,6 +88,19 @@ impl Transition {
     }
 }
 
+/// Writes on `room` what a commit that is its activity writes beside its
+/// counters, in the commit's transaction (RFC §5.1, gap G-045), as the
+/// Python implementation's `committed_state`: `timers.last_activity_at`
+/// moves to `at`, and a PAUSED room is resumed, its `updated_at` the
+/// instant too. A store calls it in its `commit_event` for an `activity`
+/// commit; any other commit writes nothing beside the counters.
+pub fn commit_activity(room: &mut Room, at: Timestamp) {
+    room.timers.last_activity_at = Some(at);
+    if apply(room, Transition::Resume, at) {
+        room.updated_at = at;
+    }
+}
+
 /// Applies `transition` to `room` as of `at`, and says whether it applied.
 ///
 /// A pause records `paused_at`, which the close timer counts from; a close

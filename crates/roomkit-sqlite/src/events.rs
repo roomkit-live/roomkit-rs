@@ -4,10 +4,10 @@
 
 use std::collections::BTreeSet;
 
-use roomkit::model::{ChannelId, EventId, EventUpdates, RoomEvent, RoomId};
-use roomkit::{RoomCounters, StoreError, TargetUpdate};
+use roomkit::StoreError;
+use roomkit::model::{ChannelId, EventId, RoomEvent, RoomId, Timestamp};
 use roomkit_core::rules::edits::{self, Mutation};
-use roomkit_core::rules::idempotency;
+use roomkit_core::rules::{idempotency, lifecycle};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Failure;
@@ -51,34 +51,63 @@ pub(crate) fn get(
     Ok(stored(connection, event_id, None)?.map(|stored| stored.event))
 }
 
-/// Commits `event` with the room's counters and its target's update, all
-/// or nothing (RFC §10.1 step 12, §14.3).
+/// Commits `event` to `room_id` as one transaction, all or nothing (RFC
+/// §10.1 step 12, §14.3), as Python's store commits it: the target an edit
+/// or a delete changes written whole, its delivery results kept, a
+/// delete's target's edits marked deleted, then the event at the room's
+/// next index, which the store reserves, and the room's counters bumped,
+/// its activity moved and a PAUSED room resumed for a commit that is its
+/// activity, `at` (RFC §5.1); the event as stored.
 pub(crate) fn commit(
     connection: &Connection,
+    room_id: &RoomId,
     mut event: RoomEvent,
-    counters: RoomCounters,
-    target: Option<TargetUpdate>,
-) -> Result<(), Failure> {
+    target: Option<RoomEvent>,
+    activity: Option<Timestamp>,
+) -> Result<RoomEvent, Failure> {
     // A blank key is no key: the event is stored with none (RFC §13.4).
     event.idempotency_key = idempotency::key(event.idempotency_key);
-    let rooms::Stored { mut room, data } = rooms::held(connection, &event.room_id)?;
-    check_index(connection, &event, room.event_count)?;
+    let rooms::Stored { mut room, data } = rooms::held(connection, room_id)?;
     check_key(connection, &event)?;
-    if let Some(TargetUpdate { event_id, updates }) = target {
-        let Some(mut target) = stored(connection, &event_id, Some(&event.room_id))? else {
-            return Err(StoreError::EventNotFound(event_id).into());
+    if let Some(mut target) = target {
+        let Some(held) = stored(connection, &target.id, Some(room_id))? else {
+            return Err(StoreError::EventNotFound(target.id).into());
         };
-        updates.apply(&mut target.event);
-        write_row(connection, &target.event, Some(&target.data))?;
-        if deletes(&event, &event_id) {
-            mark_edits_deleted(connection, &event.room_id, &event_id)?;
+        target.delivery_results = held.event.delivery_results;
+        write_row(connection, &target, Some(&held.data))?;
+        if deletes(&event, &target.id) {
+            mark_edits_deleted(connection, room_id, &target.id)?;
         }
     }
-    room.event_count = counters.event_count;
-    room.latest_index = Some(counters.latest_index);
-    room.timers.last_activity_at = counters.last_activity_at;
-    rooms::apply(connection, &mut room, &data, counters.room)?;
-    write_row(connection, &event, None)
+    event.index = reserve_index(connection, room_id)?;
+    room.event_count = room.event_count.saturating_add(1);
+    room.latest_index = Some(event.index);
+    if let Some(at) = activity {
+        lifecycle::commit_activity(&mut room, at);
+    }
+    rooms::write(connection, &room, &data)?;
+    write_row(connection, &event, None)?;
+    Ok(event)
+}
+
+/// Reserves the room's next index, in the caller's transaction, as
+/// Python's `_reserve_event_index`: a hard-deleted index is never given
+/// again (gap G-064), nor one another writer of the file reserved.
+fn reserve_index(connection: &Connection, room_id: &RoomId) -> Result<u64, Failure> {
+    connection.execute(
+        "INSERT OR IGNORE INTO event_sequences(room_id, next_index) VALUES(?, 0)",
+        [room_id.as_str()],
+    )?;
+    let next: i64 = connection.query_row(
+        "SELECT next_index FROM event_sequences WHERE room_id = ?",
+        [room_id.as_str()],
+        |row| row.get(0),
+    )?;
+    connection.execute(
+        "UPDATE event_sequences SET next_index = ? WHERE room_id = ?",
+        params![next.saturating_add(1), room_id.as_str()],
+    )?;
+    u64::try_from(next).map_err(|_| Failure::OutOfRange("an index"))
 }
 
 /// Whether `event` is a delete of `target`, whose commit marks the target's
@@ -88,32 +117,6 @@ fn deletes(event: &RoomEvent, target: &EventId) -> bool {
         edits::mutation(event),
         Ok(Some(Mutation::Delete(delete))) if &delete.target_event_id == target
     )
-}
-
-/// Refuses an index the room has given out: one below its count, a
-/// hard-deleted one's included (gap G-064), or one another writer of the
-/// file reserved.
-fn check_index(
-    connection: &Connection,
-    event: &RoomEvent,
-    event_count: u64,
-) -> Result<(), Failure> {
-    let next: Option<i64> = connection
-        .query_row(
-            "SELECT next_index FROM event_sequences WHERE room_id = ?",
-            [event.room_id.as_str()],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let index = records::integer(event.index)?;
-    if event.index != event_count || next.is_some_and(|next| index < next) {
-        return Err(StoreError::IndexTaken {
-            room_id: event.room_id.clone(),
-            index: event.index,
-        }
-        .into());
-    }
-    Ok(())
 }
 
 /// Refuses an event whose source channel holds its idempotency key in the
@@ -140,18 +143,14 @@ fn check_key(connection: &Connection, event: &RoomEvent) -> Result<(), Failure> 
     }
 }
 
-/// Writes `updates` on the stored event and returns it (RFC §14.1
-/// `update_event`); its `delivery_results` stay as stored.
-pub(crate) fn update(
-    connection: &Connection,
-    event_id: &EventId,
-    updates: &EventUpdates,
-) -> Result<RoomEvent, Failure> {
-    let Some(Stored { mut event, data }) = stored(connection, event_id, None)? else {
-        return Err(StoreError::EventNotFound(event_id.clone()).into());
+/// Writes `event` whole over its stored row and returns it (RFC §14.1
+/// `update_event`); its `delivery_results` stay as stored (RFC §14.3).
+pub(crate) fn update(connection: &Connection, mut event: RoomEvent) -> Result<RoomEvent, Failure> {
+    let Some(held) = stored(connection, &event.id, Some(&event.room_id))? else {
+        return Err(StoreError::EventNotFound(event.id).into());
     };
-    updates.apply(&mut event);
-    write_row(connection, &event, Some(&data))?;
+    event.delivery_results = held.event.delivery_results;
+    write_row(connection, &event, Some(&held.data))?;
     Ok(event)
 }
 
@@ -219,21 +218,6 @@ fn changes_one_of(event: &RoomEvent, gone: &BTreeSet<&EventId>) -> bool {
         .ok()
         .flatten()
         .is_some_and(|mutation| gone.contains(mutation.target_event_id()))
-}
-
-/// The room's latest `count` events, refused ones included, in index order.
-pub(crate) fn recent(
-    connection: &Connection,
-    room_id: &RoomId,
-    count: usize,
-) -> Result<Vec<RoomEvent>, Failure> {
-    let limit = i64::try_from(count).unwrap_or(i64::MAX);
-    select(
-        connection,
-        "SELECT data FROM (SELECT data, idx FROM events WHERE room_id = ? ORDER BY idx DESC LIMIT ?)
-         ORDER BY idx",
-        params![room_id.as_str(), limit],
-    )
 }
 
 /// The event the room committed with `key`, from `channel_id`, or from any

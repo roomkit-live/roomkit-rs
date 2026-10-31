@@ -352,7 +352,7 @@ impl App {
                 display_name: name,
                 ..Participant::new(user.clone(), room_id.clone(), self.websocket.id().clone())
             };
-            store.create_participant(person).await?;
+            store.add_participant(person).await?;
         }
         Ok(())
     }

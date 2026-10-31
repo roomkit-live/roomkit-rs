@@ -461,7 +461,7 @@ async fn a_hook_opening_a_room_after_every_event_stops_at_the_cap() {
     roomkit::testing::idle(&kit).await;
     let rooms = kit
         .store()
-        .list_rooms(&roomkit::RoomFilter::default())
+        .list_rooms(roomkit::store::ListRoomsOptions::default())
         .await
         .unwrap();
     let refused = taken(&answers)
@@ -814,7 +814,7 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
     roomkit::testing::idle(&kit).await;
     let messages: Vec<(String, u32, Option<String>)> = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
         .into_iter()
@@ -898,7 +898,7 @@ async fn a_notice_per_answer_costs_the_agents_no_answer() {
     roomkit::testing::idle(&kit).await;
     let answers: Vec<Option<String>> = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
         .into_iter()
@@ -1402,7 +1402,7 @@ async fn a_locked_hook_s_update_whose_body_posts_back_stops_at_the_cap() {
     roomkit::testing::idle(&kit).await;
     let answers: Vec<Option<String>> = kit
         .store()
-        .list_events(&room_id(), &every_row())
+        .list_events(&room_id(), every_row())
         .await
         .unwrap()
         .into_iter()
@@ -1521,13 +1521,13 @@ async fn a_hook_of_a_call_a_body_makes_draws_nothing() {
 }
 
 /// Every row of a room's timeline, the refused ones included.
-fn every_row() -> roomkit::EventQuery {
-    roomkit::EventQuery {
+fn every_row() -> roomkit::store::ListEventsOptions {
+    roomkit::store::ListEventsOptions {
         limit: u64::MAX,
         event_filter: Some(roomkit::EventFilter {
             include_blocked: true,
             ..roomkit::EventFilter::default()
         }),
-        ..roomkit::EventQuery::default()
+        ..roomkit::store::ListEventsOptions::default()
     }
 }

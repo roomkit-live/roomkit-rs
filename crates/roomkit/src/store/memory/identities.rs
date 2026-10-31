@@ -17,12 +17,10 @@ pub(super) struct Identities {
 }
 
 impl Identities {
-    /// Stores `identity`, unless its id is taken or another identity of its
-    /// organization uses one of its addresses.
+    /// Stores `identity`, replacing the one stored under its id, as
+    /// Python's store does, unless another identity of its organization
+    /// uses one of its addresses.
     pub(super) fn create(&mut self, identity: Identity) -> Result<(), StoreError> {
-        if self.by_id.contains_key(&identity.id) {
-            return Err(StoreError::IdentityExists(identity.id));
-        }
         let organization = identity.organization_id.as_deref();
         for (channel_type, addresses) in &identity.channel_addresses {
             for address in addresses {

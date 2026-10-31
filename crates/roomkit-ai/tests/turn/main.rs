@@ -696,7 +696,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
         roomkit::testing::idle(&kit).await;
         let greeting = kit
             .store()
-            .list_events(&room_id(), &every_row())
+            .list_events(&room_id(), every_row())
             .await
             .unwrap()
             .into_iter()
