@@ -19,8 +19,7 @@ use std::process::ExitCode;
 use roomkit::model::{ChannelId, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, FrameworkEvent, HookTrigger, ProcessInboundOptions,
-    RoomKit, text_of,
+    AttachChannelOptions, ConversationStore, HookTrigger, ProcessInboundOptions, RoomKit, text_of,
 };
 
 use shared::{Checks, SmsNumber};
@@ -97,7 +96,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             }
         },
     )?;
-    let mut events = kit.subscribe();
+    let events = shared::framework_events(&kit, &["room_created"]);
 
     let jeans = customer_says(&kit, &sms, JEAN, "Bonjour").await?;
     let maries = customer_says(&kit, &sms, MARIE, "Hello").await?;
@@ -107,10 +106,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         println!("{who}'s room {room}:");
         shared::print_timeline(&shared::timeline(&kit, room).await?);
     }
-    let created = shared::framework_events(&mut events)
-        .iter()
-        .filter(|event| matches!(event, FrameworkEvent::RoomCreated { .. }))
-        .count();
+    let created = events.entries().len();
     let jeans_timeline = shared::timeline(&kit, &jeans).await?;
 
     let mut checks = Checks::default();

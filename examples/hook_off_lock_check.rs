@@ -21,8 +21,8 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger,
-    InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, text_of,
+    AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult,
+    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, text_of,
 };
 
 use shared::{Checks, Log};
@@ -146,9 +146,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
 
     println!("A message the scanner never answers, with a {PROCESS_TIMEOUT:?} process_timeout.");
-    let mut events = kit.subscribe();
+    let events = shared::framework_events(&kit, &["process_timeout"]);
     let hung = chat.clone().says("hang").await?;
-    let reported = shared::framework_events(&mut events);
+    let reported = events.entries();
     let written = shared::timeline(&kit, &room).await?.len();
     let next = chat.says("after").await?;
     println!("  hang: blocked {}, reason {:?}", hung.blocked, hung.reason);
@@ -161,9 +161,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "a process_timeout framework event reports it",
-        reported
-            .iter()
-            .any(|event| matches!(event, FrameworkEvent::ProcessTimeout { .. })),
+        !reported.is_empty(),
     );
     checks.expect(
         "the room is free: the next message is delivered",

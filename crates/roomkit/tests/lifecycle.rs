@@ -16,7 +16,7 @@ use roomkit::model::{
     RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit::testing::{
-    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    EchoAgent, EchoAgentOptions, EventTap, RecordingTransport, RecordingTransportOptions,
     SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
@@ -24,10 +24,11 @@ use roomkit::{
     CheckAllTimersOptions, CheckRoomTimersOptions, CloseRoomOptions, ConversationStore,
     CreateRoomOptions, DetachChannelOptions, FrameworkEvent, GetBindingOptions, HookTrigger,
     ListMembersOptions, MuteOptions, ProcessInboundOptions, ReopenRoomOptions, RoomKit,
-    RoomKitError, RoomKitOptions, SetAccessOptions, SetVisibilityOptions, TransitionReason,
-    UnmuteOptions, UpdateBindingMetadataOptions,
+    RoomKitError, RoomKitOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
+    UpdateBindingMetadataOptions,
 };
-use tokio::sync::{broadcast, mpsc};
+use serde_json::{Value, json};
+use tokio::sync::mpsc;
 
 #[path = "support/warnings.rs"]
 mod warnings;
@@ -103,21 +104,26 @@ async fn timed_room(clock: &Clock) -> (RoomKit, RecordingTransport) {
     (kit, sms)
 }
 
-/// The next framework event matching `wanted`, or a failure after a second.
-async fn next_matching(
-    events: &mut broadcast::Receiver<FrameworkEvent>,
-    wanted: impl Fn(&FrameworkEvent) -> bool,
-) -> FrameworkEvent {
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            let event = events.recv().await.unwrap();
-            if wanted(&event) {
-                return event;
-            }
-        }
-    })
-    .await
-    .unwrap()
+/// What a framework event reads: its type, its room, its channel and its
+/// data.
+fn read(event: &FrameworkEvent) -> (&str, Option<&str>, Option<&str>, Value) {
+    (
+        event.r#type.as_str(),
+        event.room_id.as_ref().map(RoomId::as_str),
+        event.channel_id.as_ref().map(ChannelId::as_str),
+        Value::Object(event.data.clone()),
+    )
+}
+
+/// The first framework event of `r#type` `tap` saw, once the kit's
+/// background work is over.
+async fn first_of(kit: &RoomKit, tap: &EventTap, r#type: &str) -> FrameworkEvent {
+    roomkit::testing::idle(kit).await;
+    let events = tap.events();
+    events
+        .into_iter()
+        .find(|event| event.r#type == r#type)
+        .unwrap()
 }
 
 /// The statuses of `rooms`.
@@ -193,17 +199,27 @@ mod timers {
     async fn check_timers_reports_each_transition_with_the_reason_timer() {
         let clock = Clock::new();
         let (kit, _sms) = timed_room(&clock).await;
-        let mut events = kit.subscribe();
+        let tap = EventTap::on(&kit, &["room_paused", "room_closed"]);
         clock.advance(3600);
         kit.check_all_timers(CheckAllTimersOptions::default())
             .await
             .unwrap();
-        let reported = [events.recv().await.unwrap(), events.recv().await.unwrap()];
+        let reported = tap.events();
         assert_eq!(
-            reported,
+            reported.iter().map(read).collect::<Vec<_>>(),
             [
-                FrameworkEvent::room_paused(room_id(), TransitionReason::Timer),
-                FrameworkEvent::room_closed(room_id(), Some(TransitionReason::Timer)),
+                (
+                    "room_paused",
+                    Some("room_1"),
+                    None,
+                    json!({ "reason": "timer" })
+                ),
+                (
+                    "room_closed",
+                    Some("room_1"),
+                    None,
+                    json!({ "reason": "timer" })
+                ),
             ]
         );
     }
@@ -295,16 +311,13 @@ mod a_paused_conversation {
         kit: &RoomKit,
         clock: &Clock,
     ) -> (Vec<RoomStatus>, FrameworkEvent) {
-        let mut events = kit.subscribe();
+        let tap = EventTap::on(kit, &["room_paused"]);
         clock.advance(90);
         let paused = kit
             .check_all_timers(CheckAllTimersOptions::default())
             .await
             .unwrap();
-        let reported = next_matching(&mut events, |event| {
-            matches!(event, FrameworkEvent::RoomPaused { .. })
-        })
-        .await;
+        let reported = first_of(kit, &tap, "room_paused").await;
         (statuses(&paused), reported)
     }
 
@@ -327,14 +340,19 @@ mod a_paused_conversation {
         assert_eq!(
             (
                 paused,
-                reported,
+                read(&reported),
                 result.event.map(|event| event.room_id),
                 (room.status, room.paused_at),
                 ws.texts()
             ),
             (
                 vec![RoomStatus::Paused],
-                FrameworkEvent::room_paused(room_id(), TransitionReason::Timer),
+                (
+                    "room_paused",
+                    Some("room_1"),
+                    None,
+                    json!({ "reason": "timer" })
+                ),
                 Some(room_id()),
                 (RoomStatus::Active, None),
                 ["Bonjour", "Still there?"].map(str::to_owned).to_vec()
@@ -450,11 +468,17 @@ mod unregistering {
     #[tokio::test]
     async fn emits_channel_unregistered() {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
-        let mut events = kit.subscribe();
+        let tap = EventTap::on(&kit, &["channel_unregistered"]);
         kit.unregister_channel(sms.channel_id()).unwrap();
+        let unregistered = first_of(&kit, &tap, "channel_unregistered").await;
         assert_eq!(
-            events.recv().await.unwrap(),
-            FrameworkEvent::channel_unregistered(channel("sms"), ChannelType::SMS)
+            read(&unregistered),
+            (
+                "channel_unregistered",
+                None,
+                Some("sms"),
+                json!({ "channel_id": "sms", "channel_type": "sms" })
+            )
         );
     }
 
@@ -483,7 +507,7 @@ mod unregistering {
     async fn skips_a_transport_binding_it_leaves() {
         let (kit, sms, ws) = room_with_sms_and_ws().await;
         kit.unregister_channel(ws.channel_id()).unwrap();
-        let mut events = kit.subscribe();
+        let tap = EventTap::on(&kit, &["delivery_failed"]);
         kit.process_inbound(
             message(&sms, "Bonjour"),
             ProcessInboundOptions {
@@ -493,12 +517,8 @@ mod unregistering {
         )
         .await
         .unwrap();
-        let mut failed = 0;
-        while let Ok(event) = events.try_recv() {
-            if matches!(event, FrameworkEvent::DeliveryFailed { .. }) {
-                failed += 1;
-            }
-        }
+        roomkit::testing::idle(&kit).await;
+        let failed = tap.events().len();
         let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
         assert_eq!((failed, bindings.len()), (0, 2));
     }
@@ -518,7 +538,7 @@ mod unregistering {
             .await
             .unwrap();
         kit.unregister_channel(&channel("ai")).unwrap();
-        let mut events = kit.subscribe();
+        let tap = EventTap::on(&kit, &["delivery_failed"]);
         kit.process_inbound(
             message(&sms, "Bonjour"),
             ProcessInboundOptions {
@@ -528,19 +548,10 @@ mod unregistering {
         )
         .await
         .unwrap();
-        let failed = next_matching(&mut events, |event| {
-            matches!(event, FrameworkEvent::DeliveryFailed { .. })
-        })
-        .await;
-        let FrameworkEvent::DeliveryFailed {
-            channel_id, error, ..
-        } = failed
-        else {
-            panic!("a delivery failure was expected");
-        };
+        let failed = first_of(&kit, &tap, "delivery_failed").await;
         assert_eq!(
-            (channel_id, error.as_str()),
-            (channel("ai"), CHANNEL_NOT_REGISTERED)
+            (failed.channel_id, &failed.data["error"]),
+            (Some(channel("ai")), &json!(CHANNEL_NOT_REGISTERED))
         );
     }
 
@@ -562,7 +573,7 @@ mod unregistering {
                 .unwrap();
         }
         kit.unregister_channel(&channel("ai")).unwrap();
-        let mut events = kit.subscribe();
+        let tap = EventTap::on(&kit, &["delivery_failed"]);
         let mut addressed = message(&sms, "Bonjour");
         addressed.addressed_to = Some(vec![channel("bot")]);
         kit.process_inbound(
@@ -575,12 +586,11 @@ mod unregistering {
         .await
         .unwrap();
         roomkit::testing::idle(&kit).await;
-        let mut failed = Vec::new();
-        while let Ok(event) = events.try_recv() {
-            if let FrameworkEvent::DeliveryFailed { channel_id, .. } = event {
-                failed.push(channel_id);
-            }
-        }
+        let failed: Vec<Option<ChannelId>> = tap
+            .events()
+            .into_iter()
+            .map(|event| event.channel_id)
+            .collect();
         assert_eq!((failed, sms.texts()), (vec![], vec!["Hello".to_owned()]));
     }
 
@@ -605,7 +615,7 @@ mod unregistering {
     async fn skips_a_transport_unregistered_during_the_call() {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         unregistering_during_the_call(&kit, "ws");
-        let mut events = kit.subscribe();
+        let tap = EventTap::on(&kit, &["delivery_failed"]);
         kit.process_inbound(
             message(&sms, "Bonjour"),
             ProcessInboundOptions {
@@ -615,12 +625,8 @@ mod unregistering {
         )
         .await
         .unwrap();
-        let mut failed = 0;
-        while let Ok(event) = events.try_recv() {
-            if matches!(event, FrameworkEvent::DeliveryFailed { .. }) {
-                failed += 1;
-            }
-        }
+        roomkit::testing::idle(&kit).await;
+        let failed = tap.events().len();
         assert_eq!(failed, 0);
     }
 
@@ -639,7 +645,7 @@ mod unregistering {
             .await
             .unwrap();
         unregistering_during_the_call(&kit, "ai");
-        let mut events = kit.subscribe();
+        let tap = EventTap::on(&kit, &["delivery_failed"]);
         kit.process_inbound(
             message(&sms, "Bonjour"),
             ProcessInboundOptions {
@@ -649,19 +655,10 @@ mod unregistering {
         )
         .await
         .unwrap();
-        let failed = next_matching(&mut events, |event| {
-            matches!(event, FrameworkEvent::DeliveryFailed { .. })
-        })
-        .await;
-        let FrameworkEvent::DeliveryFailed {
-            channel_id, error, ..
-        } = failed
-        else {
-            panic!("a delivery failure was expected");
-        };
+        let failed = first_of(&kit, &tap, "delivery_failed").await;
         assert_eq!(
-            (channel_id, error.as_str()),
-            (channel("ai"), CHANNEL_NOT_REGISTERED)
+            (failed.channel_id, &failed.data["error"]),
+            (Some(channel("ai")), &json!(CHANNEL_NOT_REGISTERED))
         );
     }
 
@@ -670,14 +667,10 @@ mod unregistering {
     #[tokio::test]
     async fn unregister_of_an_unknown_channel_returns_none() {
         let kit = RoomKit::new(RoomKitOptions::default());
-        let mut events = kit.subscribe();
-        assert_eq!(
-            (
-                kit.unregister_channel(&channel("sms")).unwrap().is_none(),
-                events.try_recv().ok()
-            ),
-            (true, None)
-        );
+        let tap = EventTap::on(&kit, &["channel_unregistered"]);
+        let unknown = kit.unregister_channel(&channel("sms")).unwrap().is_none();
+        roomkit::testing::idle(&kit).await;
+        assert_eq!((unknown, tap.events()), (true, vec![]));
     }
 
     #[tokio::test]

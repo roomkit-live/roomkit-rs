@@ -22,16 +22,17 @@ use roomkit::model::{
     RoomContext, RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
-    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    EchoAgent, EchoAgentOptions, EventTap, RecordingTransport, RecordingTransportOptions,
     SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
-    CommitEventOptions, ConversationStore, CreateRoomOptions, EventDraft, FrameworkEvent,
-    HookExecution, HookHandler, HookReturn, HookSpec, HookTrigger, PostOptions,
-    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, SendEventOptions,
-    UpdateEventOptions, WeakRoomKit, default_inbound_event, text_of,
+    CommitEventOptions, ConversationStore, CreateRoomOptions, EventDraft, HookExecution,
+    HookHandler, HookReturn, HookSpec, HookTrigger, PostOptions, ProcessInboundOptions, RoomKit,
+    RoomKitError, RoomKitOptions, SendEventOptions, UpdateEventOptions, WeakRoomKit,
+    default_inbound_event, text_of,
 };
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 fn channel(id: &str) -> ChannelId {
@@ -394,7 +395,7 @@ async fn an_async_hook_on_before_broadcast_observes_the_payload_the_chain_left()
 #[tokio::test]
 async fn a_hook_past_its_timeout_lets_the_message_through_and_is_reported() {
     let (kit, sms) = sms_and_agent().await;
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["hook_timeout"]);
     let mut spec = HookSpec::new(
         "slow_scan",
         HookTrigger::BeforeBroadcast,
@@ -416,10 +417,8 @@ async fn a_hook_past_its_timeout_lets_the_message_through_and_is_reported() {
         )
         .await
         .unwrap();
-    let mut timed_out = false;
-    while let Ok(event) = events.try_recv() {
-        timed_out |= matches!(event, FrameworkEvent::HookTimeout { .. });
-    }
+    roomkit::testing::idle(&kit).await;
+    let timed_out = !tap.events().is_empty();
     assert_eq!((result.blocked, timed_out), (false, true));
 }
 
@@ -1114,7 +1113,7 @@ async fn raised_by_answering(injecting: bool) -> (String, (bool, Vec<String>)) {
         ready(Ok(answer))
     })
     .unwrap();
-    let mut errors = kit.subscribe();
+    let errors = EventTap::on(&kit, &["hook_error"]);
     kit.process_inbound(
         message(&sms, "Bonjour"),
         ProcessInboundOptions {
@@ -1124,15 +1123,14 @@ async fn raised_by_answering(injecting: bool) -> (String, (bool, Vec<String>)) {
     )
     .await
     .unwrap();
-    let raised = tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            if let FrameworkEvent::HookError { hook, error, .. } = errors.recv().await.unwrap() {
-                break (hook, error);
-            }
-        }
-    })
-    .await
-    .unwrap();
+    let raised = tokio::time::timeout(Duration::from_secs(1), errors.wait_for(|_| true))
+        .await
+        .unwrap();
+    let member = |name: &str| {
+        let value = raised.data.get(name).and_then(Value::as_str);
+        value.unwrap().to_owned()
+    };
+    let raised = (member("hook"), member("error"));
     let stored = timeline(&kit)
         .await
         .into_iter()
@@ -1309,16 +1307,22 @@ async fn a_muted_agent_is_asked_and_its_answer_stored_blocked() {
 #[tokio::test]
 async fn registering_a_channel_is_announced_to_subscribers() {
     let kit = RoomKit::new(RoomKitOptions::default());
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["channel_registered"]);
     kit.register_channel(RecordingTransport::new(
         channel("sms"),
         ChannelType::SMS,
         RecordingTransportOptions::default(),
     ))
     .unwrap();
+    let registered = tokio::time::timeout(Duration::from_secs(1), tap.wait_for(|_| true))
+        .await
+        .unwrap();
     assert_eq!(
-        events.recv().await.unwrap(),
-        FrameworkEvent::channel_registered(channel("sms"), ChannelType::SMS)
+        (registered.channel_id, Value::Object(registered.data)),
+        (
+            Some(channel("sms")),
+            json!({ "channel_id": "sms", "channel_type": "sms" })
+        )
     );
 }
 

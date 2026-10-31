@@ -26,15 +26,15 @@ use roomkit::model::{
     HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, RoomStatus, TextContent, Timestamp,
 };
 use roomkit::testing::{
-    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    EchoAgent, EchoAgentOptions, EventTap, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
     CommitEventOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, EventDraft,
-    FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundRoomRouter, MuteOptions,
-    ProcessInboundOptions, RoomFilter, RoomKit, RoomKitError, RoomKitOptions, RouteOptions,
-    RouterFuture, SendEventOptions, UpdateEventOptions, WeakRoomKit, default_inbound_event,
-    keep_context, text_of,
+    HookExecution, HookSpec, HookTrigger, InboundRoomRouter, MuteOptions, ProcessInboundOptions,
+    RoomFilter, RoomKit, RoomKitError, RoomKitOptions, RouteOptions, RouterFuture,
+    SendEventOptions, UpdateEventOptions, WeakRoomKit, default_inbound_event, keep_context,
+    text_of,
 };
 use tokio::sync::Notify;
 
@@ -328,7 +328,7 @@ mod a_locked_hook {
     #[tokio::test]
     async fn that_closes_the_room_refuses_the_event() {
         let (kit, _) = room().await;
-        let mut events = kit.subscribe();
+        let tap = EventTap::on(&kit, &["room_closed", "room_refused_event"]);
         let hook_kit = kit.clone();
         kit.hook(before_broadcast("farewell", true), move |_, _| {
             let kit = hook_kit.clone();
@@ -340,21 +340,15 @@ mod a_locked_hook {
         })
         .unwrap();
         let result = send(&kit, "hello").await.unwrap();
-        let mut names = Vec::new();
-        while let Ok(event) = events.try_recv() {
-            if matches!(event, FrameworkEvent::RoomClosed { .. }) {
-                names.push("room_closed");
-            } else if matches!(event, FrameworkEvent::RoomRefusedEvent { .. }) {
-                names.push("room_refused_event");
-            }
-        }
+        roomkit::testing::idle(&kit).await;
+        let names = tap.types();
         assert_eq!(
             (result.reason, timeline(&kit).await.len(), names),
             // The attaches' records; the close writes none (gap G-046).
             (
                 Some("room_closed".to_owned()),
                 3,
-                vec!["room_closed", "room_refused_event"]
+                vec!["room_closed".to_owned(), "room_refused_event".to_owned()]
             )
         );
     }

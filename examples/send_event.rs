@@ -21,7 +21,8 @@ use std::process::ExitCode;
 
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
+    EventDirection, EventId, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId,
+    TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
@@ -133,6 +134,15 @@ impl Channel for Agent {
     }
 }
 
+/// Whether `events` holds the `event_processed` of `event_id` (RFC §8.2).
+fn reported_processed(events: &Log<FrameworkEvent>, event_id: &EventId) -> bool {
+    let reported = Some(event_id);
+    events
+        .entries()
+        .iter()
+        .any(|event| event.event_id.as_ref() == reported)
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
@@ -200,7 +210,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
 
     println!("The customer asks; the agent's turn posts a note, then answers.");
-    let mut events = kit.subscribe();
+    let events = shared::framework_events(&kit, &["event_processed"]);
     let question = InboundMessage::new(
         customer.channel_id().clone(),
         "+15551234567",
@@ -222,9 +232,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     // Nothing awaits the note's delivery: it runs in the background, which
     // the kit's close lets finish, and the framework reports its end.
     kit.close().await?;
-    let processed = shared::framework_events(&mut events).into_iter().find(|event| {
-        matches!(event, FrameworkEvent::EventProcessed { event_id, .. } if *event_id == note.event.id)
-    });
+    let processed = reported_processed(&events, &note.event.id);
     shared::print_timeline(&shared::timeline(&kit, &room).await?);
     println!("Delivered on SMS: {:?}", customer.texts());
     checks.expect(
@@ -233,7 +241,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "the note is delivered once the turn is over, ahead of the answer committed after it",
-        processed.is_some()
+        processed
             && customer.texts()
                 == [
                     "Your order #42 has shipped.",

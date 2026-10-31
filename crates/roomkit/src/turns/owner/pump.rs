@@ -7,8 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use roomkit_core::model::Metadata;
-use roomkit_core::ops::FrameworkEvent;
+use roomkit_core::model::{ChannelId, EventId, Metadata, RoomId};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
@@ -213,7 +212,8 @@ impl Pump {
     }
 
     /// Emits a framework event the turn emitted on its executor (RFC
-    /// §10.6.3), when it reads as one of RFC §8.2's.
+    /// §10.6.3), as the frame places it: Python's owner emits it as it
+    /// came.
     fn publish(
         &self,
         event_type: String,
@@ -222,25 +222,12 @@ impl Pump {
         event_id: Option<String>,
         data: Metadata,
     ) {
-        let mut fields = data;
-        fields.insert("event".to_owned(), Value::String(event_type));
-        for (name, value) in [
-            ("room_id", room_id),
-            ("channel_id", channel_id),
-            ("event_id", event_id),
-        ] {
-            if let Some(value) = value {
-                fields
-                    .entry(name.to_owned())
-                    .or_insert(Value::String(value));
-            }
-        }
-        match serde_json::from_value::<FrameworkEvent>(Value::Object(fields)) {
-            Ok(event) => self.kit.publish(event),
-            Err(error) => {
-                tracing::debug!(target: "roomkit::turns", %error, "a framework event of the turn reads as none of RFC §8.2's");
-            }
-        }
+        let ids = (
+            room_id.and_then(|id| RoomId::new(id).ok()),
+            channel_id.and_then(|id| ChannelId::new(id).ok()),
+            event_id.and_then(|id| EventId::new(id).ok()),
+        );
+        self.kit.emit(event_type, ids, data);
     }
 
     /// The executor fell silent, or never said it took the turn within the

@@ -19,12 +19,13 @@ use roomkit::model::{
     Observation, Participant, ParticipantId, Room, RoomContext, RoomEvent, RoomId, RoomUpdates,
     Task, TextContent, Timestamp,
 };
+use roomkit::testing::EventTap;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
     CommitEventOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, EventFilter,
-    EventQuery, FrameworkEvent, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore,
-    PostOptions, ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit, RoomKitError,
-    RoomKitOptions, SendEventOptions, StoreError, TargetUpdate, text_of,
+    EventQuery, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore, PostOptions,
+    ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit, RoomKitError, RoomKitOptions,
+    SendEventOptions, StoreError, TargetUpdate, text_of,
 };
 use tokio::sync::Notify;
 
@@ -381,7 +382,7 @@ async fn a_post_addressed_to_an_agent_is_answered_and_names_its_speaker() {
 async fn concurrent_first_posts_attach_the_host_channel_once() {
     let kit = RoomKit::new(RoomKitOptions::default());
     sms_room(&kit, None, CreateRoomOptions::default()).await;
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["room_channel_attached"]);
     let posts = (0..5).map(|n| {
         let kit = kit.clone();
         tokio::spawn(async move {
@@ -396,13 +397,18 @@ async fn concurrent_first_posts_attach_the_host_channel_once() {
     for post in posts.collect::<Vec<_>>() {
         post.await.unwrap().unwrap();
     }
-    let mut attached = 0;
-    while let Ok(event) = events.try_recv() {
-        if matches!(&event, FrameworkEvent::RoomChannelAttached { channel_id, .. } if channel_id.as_str() == "host")
-        {
-            attached += 1;
-        }
-    }
+    roomkit::testing::idle(&kit).await;
+    let attached = tap
+        .events()
+        .iter()
+        .filter(|event| {
+            event.r#type == "room_channel_attached"
+                && event
+                    .channel_id
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == "host")
+        })
+        .count();
     assert_eq!(
         (attached, binding_of(&kit, "host").await.is_some()),
         (1, true)
@@ -474,16 +480,15 @@ async fn a_first_post_waits_for_the_room_lock_within_process_timeout() {
     };
     kit.store().read.reached.notified().await;
     let before = written(&kit).await;
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["process_timeout"]);
     let refused = kit
         .post(&room_id(), text("Notice."), PostOptions::default())
         .await;
     let after = written(&kit).await;
     kit.store().read.open.notify_one();
     holder.await.unwrap().unwrap();
-    let timed_out = std::iter::from_fn(|| events.try_recv().ok())
-        .filter(|event| matches!(event, FrameworkEvent::ProcessTimeout { .. }))
-        .count();
+    roomkit::testing::idle(&kit).await;
+    let timed_out = tap.events().len();
     assert_eq!(
         (refused, after == before, timed_out, sms.sent().len()),
         (
@@ -998,7 +1003,7 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
         sms_room(&kit, None, CreateRoomOptions::default()).await;
         let posted = Arc::new(Mutex::new(Vec::new()));
         let (hook_kit, hook_posted) = (kit.clone(), Arc::clone(&posted));
-        let mut framework = kit.subscribe();
+        let framework = EventTap::on(&kit, &["room_channel_attached"]);
         let mut ack = HookSpec::new("ack", HookTrigger::BeforeBroadcast, HookExecution::Sync);
         ack.needs_lock = needs_lock;
         kit.hook(ack, move |event, _| {
@@ -1051,8 +1056,17 @@ async fn a_post_replayed_from_the_room_s_work_draws_no_pass() {
             .filter(|event| event.source.channel_id == channel("host"))
             .map(|event| (text_of(&event.content), event.blocked_by))
             .collect();
-        let attaches = std::iter::from_fn(|| framework.try_recv().ok())
-            .filter(|event| matches!(event, FrameworkEvent::RoomChannelAttached { channel_id, .. } if channel_id.as_str() == "host"))
+        roomkit::testing::idle(&kit).await;
+        let attaches = framework
+            .events()
+            .iter()
+            .filter(|event| {
+                event.r#type == "room_channel_attached"
+                    && event
+                        .channel_id
+                        .as_ref()
+                        .is_some_and(|id| id.as_str() == "host")
+            })
             .count();
         let replayed_the_first = posted[..12].iter().all(|id| *id == posted[0]);
         assert_eq!(
@@ -1346,11 +1360,18 @@ async fn gated_room(process_timeout: Duration) -> (RoomKit<GatedStore>, Sms) {
     (kit, sms)
 }
 
-/// How many times the host channel was attached, as the kit reported it.
-fn host_attaches(events: &mut tokio::sync::broadcast::Receiver<FrameworkEvent>) -> usize {
-    std::iter::from_fn(|| events.try_recv().ok())
+/// How many times the host channel was attached, as the kit reported it,
+/// once its background work is over.
+async fn host_attaches<S: ConversationStore>(kit: &RoomKit<S>, tap: &EventTap) -> usize {
+    roomkit::testing::idle(kit).await;
+    tap.events()
+        .iter()
         .filter(|event| {
-            matches!(event, FrameworkEvent::RoomChannelAttached { channel_id, .. } if channel_id.as_str() == "host")
+            event.r#type == "room_channel_attached"
+                && event
+                    .channel_id
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == "host")
         })
         .count()
 }
@@ -1373,7 +1394,7 @@ async fn host_messages<S: ConversationStore>(kit: &RoomKit<S>) -> usize {
 #[tokio::test]
 async fn a_first_post_s_attach_spends_the_deadline_its_message_shares() {
     let (kit, sms) = gated_room(Duration::from_millis(50)).await;
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["room_channel_attached"]);
     kit.store().binding.arm();
     let posting = {
         let kit = kit.clone();
@@ -1391,7 +1412,7 @@ async fn a_first_post_s_attach_spends_the_deadline_its_message_shares() {
         (
             refused,
             binding_of(&kit, "host").await.is_some(),
-            host_attaches(&mut events),
+            host_attaches(&kit, &tap).await,
             host_messages(&kit).await,
             sms.sent().len()
         ),
@@ -1411,7 +1432,7 @@ async fn a_first_post_s_attach_spends_the_deadline_its_message_shares() {
 #[tokio::test]
 async fn a_cancelled_first_post_attaches_the_host_channel_to_its_end() {
     let (kit, sms) = gated_room(UNBOUNDED).await;
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["room_channel_attached"]);
     kit.store().binding.arm();
     let posting = {
         let kit = kit.clone();
@@ -1428,7 +1449,7 @@ async fn a_cancelled_first_post_attaches_the_host_channel_to_its_end() {
     assert_eq!(
         (
             binding_of(&kit, "host").await.is_some(),
-            host_attaches(&mut events),
+            host_attaches(&kit, &tap).await,
             host_messages(&kit).await,
             sms.sent().len()
         ),

@@ -24,14 +24,14 @@ use roomkit::model::{
     RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{
-    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    EchoAgent, EchoAgentOptions, EventTap, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, FrameworkEvent, HookTrigger, MuteOptions, PauseRoomOptions,
-    ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions, text_of,
+    CreateRoomOptions, HookTrigger, MuteOptions, PauseRoomOptions, ProcessInboundOptions,
+    RoomFilter, RoomKit, RoomKitOptions, text_of,
 };
-use tokio::sync::{Barrier, Notify, broadcast};
+use tokio::sync::{Barrier, Notify};
 
 /// How long a call that should not wait may take before the test fails it.
 const BOUND: Duration = Duration::from_secs(5);
@@ -95,23 +95,14 @@ async fn next_call_goes_through(kit: &RoomKit) -> roomkit::InboundResult {
         .unwrap()
 }
 
-/// The names of step 2's framework events among those `events` holds, in
-/// order.
-fn event_names(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<String> {
-    let mut names = Vec::new();
-    while let Ok(event) = events.try_recv() {
-        let name = if matches!(event, FrameworkEvent::RoomCreated { .. }) {
-            "room_created"
-        } else if matches!(event, FrameworkEvent::RoomChannelAttached { .. }) {
-            "room_channel_attached"
-        } else if matches!(event, FrameworkEvent::SessionStarted { .. }) {
-            "session_started"
-        } else {
-            continue;
-        };
-        names.push(name.to_owned());
-    }
-    names
+/// The framework events step 2 emits, which `tap` reads in order.
+const STEP_2_EVENTS: [&str; 3] = ["room_created", "room_channel_attached", "session_started"];
+
+/// The names of step 2's framework events `tap` saw, in order, once the
+/// kit's background work is over.
+async fn event_names(kit: &RoomKit, tap: &EventTap) -> Vec<String> {
+    roomkit::testing::idle(kit).await;
+    tap.types()
 }
 
 /// Two tasks on a multi-threaded runtime send at the same instant into one
@@ -140,7 +131,7 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
         tokio::time::sleep(Duration::from_millis(50))
     })
     .unwrap();
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &STEP_2_EVENTS);
     let start = Arc::new(Barrier::new(2));
     let tasks = ["+15550000001", "+15550000002"].map(|sender| {
         let (kit, start) = (kit.clone(), Arc::clone(&start));
@@ -170,7 +161,7 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
         .await
         .unwrap();
     let bindings = kit.store().list_bindings(&room_id()).await.unwrap();
-    let names = event_names(&mut events);
+    let names = event_names(&kit, &tap).await;
     let count = |name: &str| names.iter().filter(|seen| *seen == name).count();
     let position = |name: &str| names.iter().position(|seen| seen == name);
     assert_eq!(
@@ -329,10 +320,7 @@ impl Channel for Gated {
 /// Whether `events` reports `event_processed` for the room's first message
 /// within the bound: the events before it are its attaches' lifecycle
 /// records (gap G-046).
-async fn first_event_processed(
-    kit: &RoomKit,
-    events: &mut broadcast::Receiver<FrameworkEvent>,
-) -> bool {
+async fn first_event_processed(kit: &RoomKit, tap: &EventTap) -> bool {
     let timeline = kit
         .store()
         .list_events(&room_id(), &every_row())
@@ -344,15 +332,7 @@ async fn first_event_processed(
         .unwrap()
         .id
         .clone();
-    let processed = async {
-        loop {
-            if let Ok(FrameworkEvent::EventProcessed { event_id, .. }) = events.recv().await
-                && event_id == first
-            {
-                return;
-            }
-        }
-    };
+    let processed = tap.wait_for(|event| event.event_id.as_ref() == Some(&first));
     tokio::time::timeout(BOUND, processed).await.is_ok()
 }
 
@@ -381,7 +361,7 @@ async fn a_call_dropped_during_its_delivery_still_delivers_its_event() {
         ready(())
     })
     .unwrap();
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["event_processed"]);
     let room = room_id();
     let call = kit.process_inbound(
         message("sms", "+15551234567", "Bonjour"),
@@ -395,7 +375,7 @@ async fn a_call_dropped_during_its_delivery_still_delivers_its_event() {
         () = slow.delivering.notified() => {}
     }
     slow.go.notify_one();
-    let processed = first_event_processed(&kit, &mut events).await;
+    let processed = first_event_processed(&kit, &tap).await;
     let observed = tokio::time::timeout(BOUND, broadcast_over.notified()).await;
     assert_eq!(
         (

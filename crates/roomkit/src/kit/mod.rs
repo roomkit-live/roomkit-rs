@@ -34,13 +34,15 @@ mod timers;
 mod weak;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, PoisonError, RwLock, Weak};
 
 use roomkit_core::model::{ChannelId, EventSource, InboundMessage, RoomEvent, RoomId};
-use roomkit_core::ops::{Entry, Environment, FrameworkEvent, Inbound, InboundTarget, KitConfig};
+use roomkit_core::ops::{
+    Entry, Environment, FrameworkEvent as CoreEvent, Inbound, InboundTarget, KitConfig,
+};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookId, HookSpec, HookTrigger};
-use tokio::sync::broadcast;
 
 use self::inject::Entered;
 pub use self::options::{
@@ -59,6 +61,7 @@ use crate::cursors::RoomCursors;
 use crate::driver;
 use crate::environment::SystemEnvironment;
 use crate::error::RoomKitError;
+use crate::events::{FrameworkEvent, Handled, Handler, Handlers};
 use crate::hooks::HookHandler;
 use crate::inbound::InboundResult;
 use crate::locks::RoomMutexes;
@@ -72,10 +75,6 @@ use crate::tasks::Tasks;
 use crate::tools::ToolHandler;
 use crate::turns::Turns;
 use crate::unwind;
-
-/// How many framework events a slow subscriber may fall behind before it
-/// misses some.
-const FRAMEWORK_EVENT_BACKLOG: usize = 1024;
 
 /// The kit's call that runs a message, as an error names it.
 const PROCESS_INBOUND: &str = "process_inbound";
@@ -138,7 +137,8 @@ pub(crate) struct Inner<S> {
     /// The clock and the ids every run reads: the system's, or a test's
     /// (`testing::kit_with_environment`).
     environment: Arc<dyn Environment + Send + Sync>,
-    events: broadcast::Sender<FrameworkEvent>,
+    /// The handlers `on` registered for framework events (RFC §8.2).
+    pub(crate) events: Handlers,
     /// The turn backend every intelligence turn runs through (RFC §10.6).
     pub(crate) turns: Arc<Turns>,
     /// Set once the channels were closed at the kit's close, with those
@@ -177,7 +177,6 @@ impl<S: ConversationStore> RoomKit<S> {
         config.max_chain_depth = max_chain_depth;
         config.agent_response_policy = agent_response_policy;
         config.process_timeout = Some(process_timeout);
-        let (events, _) = broadcast::channel(FRAMEWORK_EVENT_BACKLOG);
         let inner = Arc::new_cyclic(|kit: &Weak<Inner<S>>| Inner {
             config: RwLock::new(Arc::new(config)),
             channels: RwLock::new(HashMap::new()),
@@ -191,7 +190,7 @@ impl<S: ConversationStore> RoomKit<S> {
             cursors: RoomCursors::default(),
             tasks: Arc::default(),
             environment,
-            events,
+            events: Handlers::default(),
             turns: Arc::default(),
             channels_closed: tokio::sync::OnceCell::new(),
             shutdown: shutdown::Shutdown::default(),
@@ -211,9 +210,30 @@ impl<S: ConversationStore> RoomKit<S> {
         &self.inner.store
     }
 
-    /// Framework events from now on (RFC §8.2).
-    pub fn subscribe(&self) -> broadcast::Receiver<FrameworkEvent> {
-        self.inner.events.subscribe()
+    /// Runs `handler` on every framework event of `event_type` from now on
+    /// (RFC §8.2), after the handlers registered before it: Python's
+    /// `RoomKit.on(event_type)`. The call that emitted an event waits for
+    /// its handlers before it goes on, as Python's awaits them, sometimes
+    /// holding the event's room: a handler that calls into that room waits
+    /// for the call, which waits for the handler. Keep a handler short, and
+    /// spawn what it starts. One that panics is logged, the call
+    /// unaffected. No type stands for all.
+    ///
+    /// ```
+    /// use roomkit::RoomKit;
+    ///
+    /// let kit = RoomKit::new(Default::default());
+    /// kit.on("room_created", |event| async move {
+    ///     println!("room {:?} created", event.room_id);
+    /// });
+    /// ```
+    pub fn on<F, Fut>(&self, event_type: impl Into<String>, handler: F)
+    where
+        F: Fn(FrameworkEvent) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let handler: Handler = Arc::new(move |event| Box::pin(handler(event)));
+        self.inner.events.add(event_type.into(), handler);
     }
 
     /// Runs `message` through the inbound pipeline (RFC §10.1), and the
@@ -460,12 +480,11 @@ impl<S> Inner<S> {
         Some((self.hook(hook)?, spec))
     }
 
-    /// Publishes a framework event to the subscribers there are.
-    pub(crate) fn publish(&self, event: FrameworkEvent) {
-        tracing::debug!(target: "roomkit::events", ?event, "framework event");
-        if self.events.send(event).is_err() {
-            tracing::trace!(target: "roomkit::events", "no subscriber for the framework event");
-        }
+    /// Emits the framework event `notice` reports, now: the end of its
+    /// handlers, which the call that emitted it waits for.
+    pub(crate) fn emit(&self, notice: CoreEvent) -> Option<Handled> {
+        let event = FrameworkEvent::of(notice, self.environment.now());
+        self.events.emit(&self.tasks, event)
     }
 
     /// Logs what an observer of `room_id` raised, and reports its timeout
@@ -493,12 +512,12 @@ impl<S> Inner<S> {
             ),
             HookOutcome::TimedOut => {
                 tracing::warn!(target: "roomkit::hooks", hook = %spec.name, "an observer hook timed out");
-                self.publish(FrameworkEvent::hook_timeout(
+                drop(self.emit(CoreEvent::hook_timeout(
                     room_id,
                     spec.name.clone(),
                     trigger,
                     spec.timeout.as_secs_f64(),
-                ));
+                )));
             }
         }
     }

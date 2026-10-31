@@ -14,14 +14,14 @@ use roomkit::model::{ChannelId, ChannelType, EventStatus, InboundMessage, RoomId
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
 };
-use roomkit::{AttachChannelOptions, CreateRoomOptions, FrameworkEvent, ProcessInboundOptions};
+use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
 
 use shared::Checks;
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let mut events = kit.subscribe();
+    let events = shared::framework_events(&kit, &["chain_depth_exceeded"]);
 
     let human = RecordingTransport::new(
         ChannelId::new("ws")?,
@@ -75,10 +75,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     let timeline = shared::timeline(&kit, &room).await?;
     shared::print_timeline(&timeline);
-    let exceeded = shared::framework_events(&mut events)
-        .iter()
-        .filter(|event| matches!(event, FrameworkEvent::ChainDepthExceeded { .. }))
-        .count();
+    let exceeded = events.entries().len();
 
     let mut checks = Checks::default();
     checks.expect(

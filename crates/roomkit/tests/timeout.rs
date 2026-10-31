@@ -36,14 +36,15 @@ use roomkit::model::{
     EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{
-    RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
+    EventTap, RecordingTransport, RecordingTransportOptions, SequentialEnvironment,
+    kit_with_environment,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundResult,
-    PauseRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult, PauseRoomOptions,
+    ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
-use tokio::sync::{Notify, broadcast};
+use tokio::sync::Notify;
 
 /// The kit's `process_timeout`.
 const TIMEOUT: Duration = Duration::from_millis(100);
@@ -146,21 +147,15 @@ fn timed_out() -> (bool, Option<&'static str>, bool) {
     (true, Some("process_timeout"), true)
 }
 
-/// The `process_timeout` events `events` holds: whether each named the
-/// channel, and whether it named an event.
-fn process_timeouts(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<(bool, bool)> {
-    let mut found = Vec::new();
-    while let Ok(event) = events.try_recv() {
-        if let FrameworkEvent::ProcessTimeout {
-            channel_id,
-            event_id,
-            ..
-        } = event
-        {
-            found.push((channel_id.is_some(), event_id.is_some()));
-        }
-    }
-    found
+/// The `process_timeout` events `tap` saw once the kit's background work is
+/// over: whether each named the channel, and whether it named an event.
+async fn process_timeouts(kit: &RoomKit, tap: &EventTap) -> Vec<(bool, bool)> {
+    roomkit::testing::idle(kit).await;
+    tap.events()
+        .into_iter()
+        .filter(|event| event.r#type == "process_timeout")
+        .map(|event| (event.channel_id.is_some(), event.event_id.is_some()))
+        .collect()
 }
 
 /// The room's timeline but its lifecycle records (gap G-046).
@@ -178,7 +173,7 @@ async fn timeline(kit: &RoomKit) -> Vec<RoomEvent> {
 async fn a_timeout_during_an_off_lock_hook_writes_nothing_and_the_next_message_goes_through() {
     let kit = room().await;
     slow_the_first_time(&kit, false);
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["process_timeout"]);
     let result = send(&kit, "Bonjour").await;
     let written = timeline(&kit).await.len();
     let next = send(&kit, "Still there?").await;
@@ -186,7 +181,7 @@ async fn a_timeout_during_an_off_lock_hook_writes_nothing_and_the_next_message_g
         (
             refusal(&result),
             written,
-            process_timeouts(&mut events),
+            process_timeouts(&kit, &tap).await,
             next.event.map(|event| (event.index, event.status))
         ),
         // The attach's lifecycle record took index 0 (gap G-046).
@@ -204,7 +199,7 @@ async fn a_timeout_during_an_off_lock_hook_writes_nothing_and_the_next_message_g
 async fn a_timeout_during_a_locked_hook_releases_the_lock_and_names_the_event() {
     let kit = room().await;
     slow_the_first_time(&kit, true);
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["process_timeout"]);
     let result = send(&kit, "Bonjour").await;
     let written = timeline(&kit).await.len();
     let paused = tokio::time::timeout(
@@ -217,7 +212,7 @@ async fn a_timeout_during_a_locked_hook_releases_the_lock_and_names_the_event() 
         (
             refusal(&result),
             written,
-            process_timeouts(&mut events),
+            process_timeouts(&kit, &tap).await,
             paused.is_ok(),
             next.event.map(|event| (event.index, event.status))
         ),
@@ -245,22 +240,14 @@ async fn a_hook_s_own_timeout_stays_a_hook_error() {
         Ok(HookResult::allow(AllowOptions::default()))
     })
     .unwrap();
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["hook_timeout", "hook_error", "process_timeout"]);
     let result = send(&kit, "Bonjour").await;
-    let mut names = Vec::new();
-    while let Ok(event) = events.try_recv() {
-        if matches!(event, FrameworkEvent::HookTimeout { .. }) {
-            names.push("hook_timeout");
-        } else if matches!(event, FrameworkEvent::HookError { .. }) {
-            names.push("hook_error");
-        } else if matches!(event, FrameworkEvent::ProcessTimeout { .. }) {
-            names.push("process_timeout");
-        }
-    }
+    roomkit::testing::idle(&kit).await;
+    let names = tap.types();
     assert_eq!(
         (names, result.event.map(|event| event.status)),
         (
-            vec!["hook_timeout", "hook_error"],
+            vec!["hook_timeout".to_owned(), "hook_error".to_owned()],
             Some(EventStatus::Delivered)
         )
     );
@@ -336,13 +323,13 @@ async fn a_slow_delivery_never_times_out_the_committed_event() {
     )
     .await
     .unwrap();
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["process_timeout"]);
     let result = send(&kit, "Bonjour").await;
     assert_eq!(
         (
             result.blocked,
             result.event.map(|event| event.status),
-            process_timeouts(&mut events)
+            process_timeouts(&kit, &tap).await
         ),
         (false, Some(EventStatus::Delivered), Vec::new())
     );
@@ -382,7 +369,7 @@ async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
     tokio::time::timeout(BOUND, delivering.notified())
         .await
         .unwrap();
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["process_timeout"]);
     let second = {
         let kit = kit.clone();
         tokio::spawn(async move { send(&kit, "Still there?").await })
@@ -406,7 +393,7 @@ async fn a_call_behind_a_slow_delivery_commits_within_its_bound() {
             delivered_yet,
             first.map(|first| first.event.map(|event| event.index)),
             second.event.map(|event| (event.index, event.status)),
-            process_timeouts(&mut events)
+            process_timeouts(&kit, &tap).await
         ),
         // After the two attaches' lifecycle records (gap G-046).
         (

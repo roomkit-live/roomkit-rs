@@ -5,7 +5,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use roomkit_core::model::{ChannelId, RoomContext, RoomEvent};
-use roomkit_core::ops::FrameworkEvent;
+use roomkit_core::ops::FrameworkEvent as CoreEvent;
 use roomkit_core::rules::hook_registry::{HookExecution, HookId, HookSpec, HookTrigger};
 
 use super::{RoomKit, write};
@@ -32,7 +32,7 @@ impl<S: ConversationStore> RoomKit<S> {
         self.inner.open()?;
         let declaration = Channel::declaration(&channel);
         declaration.capabilities.check()?;
-        let registered = FrameworkEvent::channel_registered(
+        let registered = CoreEvent::channel_registered(
             declaration.channel_id.clone(),
             declaration.channel_type.clone(),
         );
@@ -45,7 +45,7 @@ impl<S: ConversationStore> RoomKit<S> {
             write(&self.inner.channels).insert(channel_id, channel);
             Ok::<(), RoomKitError>(())
         })?;
-        self.inner.publish(registered);
+        drop(self.inner.emit(registered));
         Ok(())
     }
 
@@ -85,10 +85,10 @@ impl<S: ConversationStore> RoomKit<S> {
         let Some(unregistered) = unregistered else {
             return Ok(None);
         };
-        self.inner.publish(FrameworkEvent::channel_unregistered(
+        drop(self.inner.emit(CoreEvent::channel_unregistered(
             unregistered.declaration.channel_id.clone(),
             unregistered.declaration.channel_type.clone(),
-        ));
+        )));
         Ok(Some(Arc::new(unregistered)))
     }
 

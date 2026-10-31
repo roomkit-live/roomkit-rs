@@ -25,9 +25,8 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CloseRoomOptions,
-    ConversationStore, CreateRoomOptions, FrameworkEvent, HookTrigger, InboundResult,
-    PauseRoomOptions, ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit,
-    RoomKitError, TransitionReason, text_of,
+    ConversationStore, CreateRoomOptions, HookTrigger, InboundResult, PauseRoomOptions,
+    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError, text_of,
 };
 
 use shared::{Checks, Clock, Log};
@@ -222,7 +221,7 @@ async fn by_timers(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn E
     };
     desk.open(&room, Some(timers)).await?;
     desk.alice_says(&room, "Hello").await?;
-    let mut events = kit.subscribe();
+    let events = shared::framework_events(kit, &["room_paused", "room_closed"]);
 
     desk.clock.advance(Duration::from_secs(90));
     let paused = kit
@@ -240,7 +239,15 @@ async fn by_timers(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn E
         "  240 s later, check_all_timers changes {:?}",
         statuses(&closed)
     );
-    let reported = shared::framework_events(&mut events);
+    let reported: Vec<(String, Option<RoomId>, Option<&str>)> = events
+        .entries()
+        .into_iter()
+        .map(|event| {
+            let reason =
+                event.data.get("reason").and_then(|reason| reason.as_str()) == Some("timer");
+            (event.r#type, event.room_id, reason.then_some("timer"))
+        })
+        .collect();
 
     checks.expect(
         "the first check pauses the room, the second closes it",
@@ -257,13 +264,11 @@ async fn by_timers(desk: &Helpdesk, checks: &mut Checks) -> Result<(), Box<dyn E
     );
     checks.expect(
         "each transition is reported with the reason timer",
-        reported.contains(&FrameworkEvent::room_paused(
-            room.clone(),
-            TransitionReason::Timer,
-        )) && reported.contains(&FrameworkEvent::room_closed(
-            room.clone(),
-            Some(TransitionReason::Timer),
-        )),
+        reported
+            == [
+                ("room_paused".to_owned(), Some(room.clone()), Some("timer")),
+                ("room_closed".to_owned(), Some(room.clone()), Some("timer")),
+            ],
     );
     Ok(())
 }

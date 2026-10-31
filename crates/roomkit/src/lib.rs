@@ -55,6 +55,7 @@ mod cursors;
 mod driver;
 mod environment;
 mod error;
+mod events;
 mod history;
 mod hooks;
 mod host;
@@ -103,8 +104,8 @@ pub mod model {
     pub use roomkit_core::model::{HOST_CHANNEL_ID, MAX_COMPOSITE_DEPTH, ToolCall};
 }
 pub use roomkit_core::ops::{
-    CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, FrameworkEvent, LifecycleChange,
-    LifecyclePayload, RefusedOperation, TransitionReason, default_inbound_event,
+    CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, LifecycleChange, LifecyclePayload,
+    RefusedOperation, TransitionReason, default_inbound_event,
 };
 pub use roomkit_core::rules::addresses::{
     AddressForm, Addressing, CountryCode, InvalidCountryCode,
@@ -126,6 +127,7 @@ pub use roomkit_core::rules::tool_intent;
 pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::context::keep_context;
 pub use self::error::RoomKitError;
+pub use self::events::FrameworkEvent;
 pub use self::hooks::{HookError, HookFuture, HookHandler, HookReturn};
 pub use self::host::HostChannel;
 pub use self::inbound::{DeliveryHandle, InboundResult};

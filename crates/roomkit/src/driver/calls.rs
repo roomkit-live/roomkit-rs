@@ -22,6 +22,7 @@ use tokio::task::JoinSet;
 use crate::channel::{ChannelError, EventDraft};
 use crate::context::{ExecutionContext, HookBody, RunShared};
 use crate::error::RoomKitError;
+use crate::events::Handled;
 use crate::hooks;
 use crate::kit::Inner;
 use crate::router;
@@ -401,9 +402,12 @@ pub(crate) async fn outcome_of(written: &mut Written) -> Outcome {
 /// calls into the room draw on the work's hook calls, at least one deeper
 /// than its event (RFC §8.3, §9.5.1, §10.1 step 16, gap G-087). Once the
 /// kit is shut down, none runs.
-pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notice) {
+pub(super) fn perform<S: ConversationStore>(
+    inner: &Arc<Inner<S>>,
+    notice: Notice,
+) -> Option<Handled> {
     match notice {
-        Notice::FrameworkEvent(event) => inner.publish(event),
+        Notice::FrameworkEvent(event) => return inner.emit(event),
         // The run's own: the driver stops its read (`Driver::notice`).
         Notice::StopReading { .. } => {}
         Notice::AsyncHooks {
@@ -431,6 +435,7 @@ pub(super) fn perform<S: ConversationStore>(inner: &Arc<Inner<S>>, notice: Notic
             }
         }
     }
+    None
 }
 
 /// `observing`, a hook's body on `trigger`, run as the work

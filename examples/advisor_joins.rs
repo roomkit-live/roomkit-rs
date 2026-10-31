@@ -20,14 +20,13 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    Access, ChannelId, ChannelSet, ChannelType, InboundMessage, RoomId, TextContent, Visibility,
+    ChannelId, ChannelSet, ChannelType, InboundMessage, RoomId, TextContent, Visibility,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, FrameworkEvent, HookTrigger, MuteOptions,
     ProcessInboundOptions, RoomKit, SetVisibilityOptions, UnmuteOptions, text_of,
 };
-use tokio::sync::broadcast;
 
 use shared::{Checks, Log, Script, ScriptedAgent};
 
@@ -58,7 +57,8 @@ struct Conversation {
     agent: ChannelId,
     /// The payloads of the mute and unmute hooks, as they fire.
     mute_hooks: Log<String>,
-    events: broadcast::Receiver<FrameworkEvent>,
+    /// The `room_channel_attached` events, as the kit's handler notes them.
+    events: Log<FrameworkEvent>,
 }
 
 impl Conversation {
@@ -82,7 +82,13 @@ impl Conversation {
         kit.register_channel(ScriptedAgent::new(agent.clone(), SCRIPT))?;
         let mute_hooks = Log::new();
         observe_mutes(&kit, &mute_hooks)?;
-        let events = kit.subscribe();
+        // Framework events reach a handler registered by type (RFC §8.2).
+        let events = Log::new();
+        let noted = events.clone();
+        kit.on("room_channel_attached", move |event| {
+            noted.push(event);
+            std::future::ready(())
+        });
         let room = RoomId::new("room_1")?;
         kit.create_room(CreateRoomOptions {
             room_id: Some(room.clone()),
@@ -196,16 +202,12 @@ impl Conversation {
     }
 
     /// The advisor's `room_channel_attached` event, if it was emitted.
-    fn advisor_attached(&mut self) -> Option<FrameworkEvent> {
-        let advisor = self.advisor.channel_id().clone();
-        shared::framework_events(&mut self.events)
+    fn advisor_attached(&self) -> Option<FrameworkEvent> {
+        let advisor = self.advisor.channel_id();
+        self.events
+            .entries()
             .into_iter()
-            .find(|event| {
-                matches!(
-                    event,
-                    FrameworkEvent::RoomChannelAttached { channel_id, .. } if *channel_id == advisor
-                )
-            })
+            .find(|event| event.channel_id.as_ref() == Some(advisor))
     }
 }
 
@@ -234,7 +236,7 @@ fn has_suggestion(texts: &[String]) -> bool {
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
-    let mut conversation = Conversation::open().await?;
+    let conversation = Conversation::open().await?;
     conversation.run().await?;
 
     let timeline = shared::timeline(&conversation.kit, &conversation.room).await?;
@@ -251,14 +253,10 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let mut checks = Checks::default();
     checks.expect(
         "the advisor joins mid-conversation, read-write and visible to all",
-        matches!(
-            attached,
-            Some(FrameworkEvent::RoomChannelAttached {
-                access: Access::ReadWrite,
-                visibility: Visibility::All,
-                ..
-            })
-        ),
+        attached.is_some_and(|event| {
+            event.data.get("access").and_then(|access| access.as_str()) == Some("read_write")
+                && event.data.get("visibility").and_then(|seen| seen.as_str()) == Some("all")
+        }),
     );
     checks.expect(
         "muting and unmuting the agent fire ON_CHANNEL_MUTED and ON_CHANNEL_UNMUTED once each, its visibility changes neither",

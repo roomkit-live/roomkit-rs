@@ -3,11 +3,11 @@
 //! the background, an observer hook or a call that went on detached, is
 //! waited for with `RoomKit::idle` before it is read.
 
-use roomkit::FrameworkEvent;
+use roomkit::{ConversationStore, FrameworkEvent, RoomKit};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 
 /// How long an example waits for a hook of a call still running to note
 /// something: far longer than it takes.
@@ -72,10 +72,22 @@ impl<T: Clone> Default for Log<T> {
     }
 }
 
-/// The framework events `events` received since it subscribed or was last
-/// read. The kit publishes each one as the work it reports runs: those of a
-/// call the example makes are all there once the call returned, and those of
-/// the work it runs in the background once `RoomKit::idle` returned.
-pub fn framework_events(events: &mut broadcast::Receiver<FrameworkEvent>) -> Vec<FrameworkEvent> {
-    std::iter::from_fn(|| events.try_recv().ok()).collect()
+/// The framework events of `types` the kit emits from now on (RFC §8.2),
+/// noted in order by a handler [`RoomKit::on`] registers for each type. The
+/// call that emits an event waits for its handlers: those of a call the
+/// example makes are there once the call returned, and those of the work it
+/// runs in the background once that work is over.
+pub fn framework_events<S: ConversationStore>(
+    kit: &RoomKit<S>,
+    types: &[&str],
+) -> Log<FrameworkEvent> {
+    let log = Log::new();
+    for event_type in types {
+        let noted = log.clone();
+        kit.on(*event_type, move |event| {
+            noted.push(event);
+            std::future::ready(())
+        });
+    }
+    log
 }

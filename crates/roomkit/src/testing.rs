@@ -23,7 +23,7 @@ pub use roomkit_core::ops::{Environment, SequentialEnvironment};
 use crate::channel::{Channel, ChannelError};
 use crate::store::ConversationStore;
 use crate::turns::{Carried, TurnTimeouts};
-use crate::{RoomKit, RoomKitOptions};
+use crate::{FrameworkEvent, RoomKit, RoomKitOptions};
 
 /// A kit built with `options` whose runs read `environment` instead of the
 /// system clock and random ids: a deterministic clock and sequential ids,
@@ -247,6 +247,65 @@ impl Channel for EchoAgent {
             response_events: vec![self.reply_to(&event)],
             ..ChannelOutput::empty()
         }))
+    }
+}
+
+/// The framework events of the given types a kit emits from the moment it
+/// is set, in the order they are emitted (RFC §8.2), through
+/// [`RoomKit::on`]: for a test, which reads them once the call returned,
+/// or once [`idle`] did for the kit's background work. Cloning it shares
+/// the record.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default)]
+pub struct EventTap {
+    events: Arc<tokio::sync::watch::Sender<Vec<FrameworkEvent>>>,
+}
+
+impl EventTap {
+    /// Taps `kit`'s framework events of `types`.
+    pub fn on<S: ConversationStore>(kit: &RoomKit<S>, types: &[&str]) -> Self {
+        let tap = Self::default();
+        for event_type in types {
+            let record = Arc::clone(&tap.events);
+            kit.on(*event_type, move |event| {
+                record.send_modify(|events| events.push(event));
+                ready(())
+            });
+        }
+        tap
+    }
+
+    /// The events tapped so far.
+    pub fn events(&self) -> Vec<FrameworkEvent> {
+        self.events.borrow().clone()
+    }
+
+    /// The types of the events tapped so far.
+    pub fn types(&self) -> Vec<String> {
+        self.events()
+            .into_iter()
+            .map(|event| event.r#type)
+            .collect()
+    }
+
+    /// The first event tapped that `wanted` admits, once there is one: a
+    /// test bounds the wait with its own timeout.
+    pub async fn wait_for(&self, wanted: impl Fn(&FrameworkEvent) -> bool) -> FrameworkEvent {
+        let mut changes = self.events.subscribe();
+        loop {
+            let found = changes
+                .borrow_and_update()
+                .iter()
+                .find(|event| wanted(event))
+                .cloned();
+            if let Some(event) = found {
+                return event;
+            }
+            // The tap holds the sender, so a change always may come.
+            if changes.changed().await.is_err() {
+                return std::future::pending().await;
+            }
+        }
     }
 }
 

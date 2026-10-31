@@ -8,10 +8,9 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use roomkit_core::model::{
-    ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, EventDirection, EventSource,
-    Metadata, RoomContext, RoomEvent, RoomId, ToolCall, ToolCallOutcome,
+    ChannelId, ChannelOutput, ChannelType, DirectEvent, EventContent, EventDirection, EventId,
+    EventSource, Metadata, RoomContext, RoomEvent, RoomId, ToolCall, ToolCallOutcome,
 };
-use roomkit_core::ops::FrameworkEvent;
 use roomkit_core::rules::hook_registry::{HookSpec, HookTrigger};
 use serde_json::Value;
 use tokio::task::AbortHandle;
@@ -19,6 +18,7 @@ use tokio::task::AbortHandle;
 use crate::channel::{BoxFuture, DynChannel};
 use crate::context::ExecutionContext;
 use crate::error::RoomKitError;
+use crate::events::FrameworkEvent;
 use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::stream::ResponseStream;
@@ -507,8 +507,14 @@ pub(crate) trait TurnKit: Send + Sync {
     /// The channel the kit registered under `channel_id`, live.
     fn channel(&self, channel_id: &ChannelId) -> Option<Arc<dyn DynChannel>>;
 
-    /// Publishes a framework event to the kit's subscribers.
-    fn publish(&self, event: FrameworkEvent);
+    /// Emits a framework event of `event_type` to the kit's handlers, now:
+    /// one a turn emitted on its executor, placed as its frame places it.
+    fn emit(
+        &self,
+        event_type: String,
+        ids: (Option<RoomId>, Option<ChannelId>, Option<EventId>),
+        data: Metadata,
+    );
 
     /// Whether the current task is one the kit's `close()` is called from:
     /// a turn run in it runs on whatever cuts it (RFC §12.10.4).
@@ -560,10 +566,24 @@ impl<S: ConversationStore> TurnKit for Weak<Inner<S>> {
         self.upgrade().is_some_and(|inner| inner.tasks.acting())
     }
 
-    fn publish(&self, event: FrameworkEvent) {
-        if let Some(inner) = self.upgrade() {
-            inner.publish(event);
-        }
+    fn emit(
+        &self,
+        event_type: String,
+        (room_id, channel_id, event_id): (Option<RoomId>, Option<ChannelId>, Option<EventId>),
+        data: Metadata,
+    ) {
+        let Some(inner) = self.upgrade() else {
+            return;
+        };
+        let event = FrameworkEvent {
+            r#type: event_type,
+            room_id,
+            channel_id,
+            event_id,
+            timestamp: inner.environment().now(),
+            data,
+        };
+        drop(inner.events.emit(&inner.tasks, event));
     }
 }
 

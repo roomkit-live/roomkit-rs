@@ -18,8 +18,7 @@ use roomkit_core::model::{
     EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit_core::ops::{
-    ChannelDeclaration, EffectId, Environment, FrameworkEvent, Next, Operation, Outcome,
-    ProtocolError, Step,
+    ChannelDeclaration, EffectId, Environment, Next, Operation, Outcome, ProtocolError, Step,
 };
 use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
 use tokio::sync::Notify;
@@ -160,25 +159,25 @@ async fn a_call_past_its_deadline_waiting_for_its_ticket_writes_nothing_and_rele
 #[tokio::test]
 async fn a_call_past_its_deadline_waiting_for_the_room_lock_writes_nothing() {
     let kit = checked_room().await;
-    let mut events = kit.subscribe();
+    let tap = crate::testing::EventTap::on(&kit, &["process_timeout"]);
     let lock = kit.inner.locks.lock(&room_id()).await;
     let result = send(&kit, "Bonjour").await;
     let refused = refusal(&kit, &result).await;
     drop(lock);
     unbounded(&kit);
     let next = send(&kit, "Still there?").await;
-    let mut named = Vec::new();
-    while let Ok(event) = events.try_recv() {
-        if let FrameworkEvent::ProcessTimeout {
-            room_id,
-            channel_id,
-            event_id,
-            ..
-        } = event
-        {
-            named.push((room_id, channel_id.map(String::from), event_id));
-        }
-    }
+    crate::testing::idle(&kit).await;
+    let named: Vec<_> = tap
+        .events()
+        .into_iter()
+        .map(|event| {
+            (
+                event.room_id,
+                event.channel_id.map(String::from),
+                event.event_id,
+            )
+        })
+        .collect();
     assert_eq!(
         (
             refused,

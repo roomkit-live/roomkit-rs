@@ -17,13 +17,13 @@ use roomkit::model::{
     HookResult, Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId,
     Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, TextContent, Timestamp,
 };
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::testing::{EventTap, RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, EventFilter,
-    EventQuery, FrameworkEvent, InMemoryStore, ProcessInboundOptions, RoomCounters, RoomFilter,
-    RoomKit, RoomKitError, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
+    EventQuery, InMemoryStore, ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit,
+    RoomKitError, RoomKitOptions, SendEventOptions, StoreError, TargetUpdate,
 };
-use tokio::sync::{Notify, broadcast};
+use tokio::sync::Notify;
 
 #[path = "support/warnings.rs"]
 mod warnings;
@@ -349,20 +349,20 @@ async fn drop_during_the_commit<T>(kit: &RoomKit<GatedStore>, call: impl Future<
 /// text`, and whether `events` reports each one's end.
 async fn delivered_and_processed(
     kit: &RoomKit<GatedStore>,
-    events: &mut broadcast::Receiver<FrameworkEvent>,
+    tap: &EventTap,
 ) -> (Vec<(EventStatus, String)>, bool) {
+    roomkit::testing::idle(kit).await;
     let mut timeline = kit
         .store()
         .list_events(&room_id(), &every_row())
         .await
         .unwrap();
     timeline.retain(|event| event.source.channel_type != ChannelType::SYSTEM);
-    let mut processed = Vec::new();
-    while let Ok(event) = events.try_recv() {
-        if let FrameworkEvent::EventProcessed { event_id, .. } = event {
-            processed.push(event_id);
-        }
-    }
+    let processed: Vec<_> = tap
+        .events()
+        .into_iter()
+        .filter_map(|event| event.event_id)
+        .collect();
     let all_processed = timeline.iter().all(|event| processed.contains(&event.id));
     let lines = timeline
         .iter()
@@ -374,7 +374,7 @@ async fn delivered_and_processed(
 #[tokio::test]
 async fn a_message_dropped_during_its_commit_is_delivered() {
     let (kit, ws) = gated_room().await;
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["event_processed"]);
     let room = room_id();
     let message = InboundMessage::new(channel("sms"), "+15551234567", TextContent::new("Bonjour"));
     drop_during_the_commit(
@@ -389,7 +389,7 @@ async fn a_message_dropped_during_its_commit_is_delivered() {
     )
     .await;
     assert_eq!(
-        (delivered_and_processed(&kit, &mut events).await, ws.texts()),
+        (delivered_and_processed(&kit, &tap).await, ws.texts()),
         (
             (vec![(EventStatus::Delivered, "Bonjour".to_owned())], true),
             vec!["Bonjour".to_owned()]
@@ -400,7 +400,7 @@ async fn a_message_dropped_during_its_commit_is_delivered() {
 #[tokio::test]
 async fn an_injected_event_dropped_during_its_commit_is_delivered() {
     let (kit, ws) = gated_room().await;
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["event_processed"]);
     let room = room_id();
     let event = SendEventOptions::default();
     drop_during_the_commit(
@@ -409,7 +409,7 @@ async fn an_injected_event_dropped_during_its_commit_is_delivered() {
     )
     .await;
     assert_eq!(
-        (delivered_and_processed(&kit, &mut events).await, ws.texts()),
+        (delivered_and_processed(&kit, &tap).await, ws.texts()),
         (
             (vec![(EventStatus::Delivered, "Bonjour".to_owned())], true),
             vec!["Bonjour".to_owned()]

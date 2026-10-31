@@ -471,7 +471,7 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
         loop {
             let step = operation.poll(&*self.environment);
             for notice in step.notices {
-                self.notice(notice);
+                self.notice(notice).await;
             }
             for settled in step.settled {
                 self.answer(settled);
@@ -716,12 +716,15 @@ impl<'kit, S: ConversationStore> Driver<'kit, S> {
     }
 
     /// Performs `notice`: a read the operation stops is the run's own, any
-    /// other the kit's.
-    fn notice(&self, notice: Notice) {
+    /// other the kit's. A framework event's handlers are waited for before
+    /// the run goes on, as Python's `_emit_framework_event` awaits them.
+    async fn notice(&mut self, notice: Notice) {
         match notice {
             Notice::StopReading { effect } => self.shared.stop_reading(effect),
             notice @ (Notice::FrameworkEvent(_) | Notice::AsyncHooks { .. }) => {
-                calls::perform(self.inner, notice);
+                if let Some(handled) = calls::perform(self.inner, notice) {
+                    handled.wait().await;
+                }
             }
         }
     }

@@ -9,11 +9,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use roomkit::model::{ChannelId, RoomEvent, RoomId};
+use roomkit::model::{ChannelId, EventId, RoomEvent, RoomId};
+use roomkit::testing::EventTap;
 use roomkit::{ConversationStore, FrameworkEvent};
 use roomkit_ai::testing::ScriptedProvider;
 use serde_json::{Map, Value, json};
-use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::calls;
@@ -97,7 +97,10 @@ pub(crate) struct Run {
     labels: Mutex<HashMap<String, Option<String>>>,
     pub(crate) checks: Mutex<Vec<Check>>,
     pub(crate) problems: Mutex<Vec<String>>,
-    events: Mutex<broadcast::Receiver<FrameworkEvent>>,
+    /// The framework events of `LEVEL_0_EVENTS` the kit emitted, and how
+    /// many of them were read.
+    events: EventTap,
+    events_read: Mutex<usize>,
     pub(crate) background: Mutex<HashMap<String, JoinHandle<Value>>>,
     /// The scripted agents' models, by channel.
     pub(crate) models: Mutex<BTreeMap<String, ScriptedProvider>>,
@@ -106,7 +109,7 @@ pub(crate) struct Run {
 impl Run {
     /// A run of `scenario` on `kit`, recording nothing yet.
     pub(crate) fn new(kit: crate::Kit, scenario: &Value) -> Self {
-        let events = kit.subscribe();
+        let events = EventTap::on(&kit, &LEVEL_0_EVENTS);
         let asserted_actions = scenario["expect"]["actions"]
             .as_object()
             .map(|actions| actions.keys().cloned().collect())
@@ -123,7 +126,8 @@ impl Run {
             labels: Mutex::default(),
             checks: Mutex::default(),
             problems: Mutex::default(),
-            events: Mutex::new(events),
+            events,
+            events_read: Mutex::new(0),
             background: Mutex::default(),
             models: Mutex::default(),
         }
@@ -222,34 +226,47 @@ impl Run {
         observed.hook_order.push(name.to_owned());
     }
 
-    /// Reads the framework events emitted so far.
+    /// Reads the framework events emitted since the last read.
     fn drain_events(&self) {
-        let mut receiver = lock(&self.events);
-        loop {
-            match receiver.try_recv() {
-                Ok(event) => self.on_framework_event(&event),
-                Err(broadcast::error::TryRecvError::Lagged(missed)) => {
-                    self.problem(format!("{missed} framework events were missed"));
-                }
-                Err(_) => break,
-            }
+        let mut read = lock(&self.events_read);
+        let events = self.events.events();
+        for event in events.iter().skip(*read) {
+            self.on_framework_event(event);
         }
+        *read = events.len();
     }
 
+    /// Records `event` as Python's harness does: the members of its data
+    /// flat, its data whole too, and its ids (`_harness.py`
+    /// `_on_framework_event`).
     fn on_framework_event(&self, event: &FrameworkEvent) {
-        let flat = serde_json::to_value(event).unwrap_or_default();
         let mut observed = lock(&self.observed);
-        if flat["event"] == "room_created"
-            && let Some(room) = flat["room_id"].as_str()
+        if event.r#type == "room_created"
+            && let Some(room) = &event.room_id
         {
-            observed.created_rooms.push(room.to_owned());
+            observed.created_rooms.push(room.as_str().to_owned());
         }
-        let level_0 = flat["event"]
-            .as_str()
-            .is_some_and(|name| LEVEL_0_EVENTS.contains(&name));
-        if self.recording.load(Ordering::SeqCst) && level_0 {
-            observed.framework_events.push(flat);
+        if !self.recording.load(Ordering::SeqCst) {
+            return;
         }
+        let mut flat = Map::new();
+        flat.insert("event".to_owned(), Value::String(event.r#type.clone()));
+        flat.extend(event.data.clone());
+        flat.insert("data".to_owned(), Value::Object(event.data.clone()));
+        let ids = [
+            ("room_id", event.room_id.as_ref().map(RoomId::as_str)),
+            (
+                "channel_id",
+                event.channel_id.as_ref().map(ChannelId::as_str),
+            ),
+            ("event_id", event.event_id.as_ref().map(EventId::as_str)),
+        ];
+        for (name, id) in ids {
+            if let Some(id) = id {
+                flat.insert(name.to_owned(), Value::String(id.to_owned()));
+            }
+        }
+        observed.framework_events.push(Value::Object(flat));
     }
 
     /// A call a hook or a channel makes while it runs; its outcome is kept.

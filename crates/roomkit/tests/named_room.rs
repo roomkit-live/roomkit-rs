@@ -18,15 +18,15 @@ use roomkit::model::{
     RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
-    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    EchoAgent, EchoAgentOptions, EventTap, RecordingTransport, RecordingTransportOptions,
     SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger, ProcessInboundOptions,
-    RoomFilter, RoomKit, RoomKitError, RoomKitOptions,
+    CreateRoomOptions, HookExecution, HookSpec, HookTrigger, ProcessInboundOptions, RoomFilter,
+    RoomKit, RoomKitError, RoomKitOptions,
 };
-use tokio::sync::{Notify, broadcast, mpsc};
+use tokio::sync::{Notify, mpsc};
 
 fn channel(id: &str) -> ChannelId {
     ChannelId::new(id).unwrap()
@@ -65,13 +65,11 @@ fn kit_without_rooms() -> (RoomKit, RecordingTransport) {
     (kit, sms)
 }
 
-/// How many `room_created` events `events` holds.
-fn rooms_created(events: &mut broadcast::Receiver<FrameworkEvent>) -> usize {
-    let mut created = 0;
-    while let Ok(event) = events.try_recv() {
-        created += usize::from(matches!(event, FrameworkEvent::RoomCreated { .. }));
-    }
-    created
+/// How many `room_created` events `tap` saw once the kit's background
+/// work is over.
+async fn rooms_created(kit: &RoomKit, tap: &EventTap) -> usize {
+    roomkit::testing::idle(kit).await;
+    tap.events().len()
 }
 
 /// The room's lane runs one message at a time: the second finds the room
@@ -79,7 +77,7 @@ fn rooms_created(events: &mut broadcast::Receiver<FrameworkEvent>) -> usize {
 #[tokio::test]
 async fn two_messages_naming_one_missing_room_create_it_once() {
     let (kit, sms) = kit_without_rooms();
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["room_created"]);
     let room = room_id();
     let (first, second) = tokio::join!(
         kit.process_inbound(
@@ -113,7 +111,7 @@ async fn two_messages_naming_one_missing_room_create_it_once() {
         .await
         .unwrap();
     assert_eq!(
-        (rooms.len(), rooms_created(&mut events), indexes),
+        (rooms.len(), rooms_created(&kit, &tap).await, indexes),
         // The attach's lifecycle record, then the two messages (gap G-046).
         (1, 1, vec![0, 1, 2])
     );
@@ -237,7 +235,7 @@ async fn a_participant_the_host_stores_is_in_the_context_a_hook_reads() {
 #[tokio::test]
 async fn an_on_room_created_hook_that_hangs_is_bounded_by_its_timeout() {
     let (kit, sms) = kit_without_rooms();
-    let mut events = kit.subscribe();
+    let tap = EventTap::on(&kit, &["hook_timeout"]);
     let mut spec = HookSpec::new("stuck", HookTrigger::OnRoomCreated, HookExecution::Async);
     spec.timeout = Duration::from_millis(50);
     kit.hook(spec, |_, _| async {
@@ -257,10 +255,8 @@ async fn an_on_room_created_hook_that_hangs_is_bounded_by_its_timeout() {
         ),
     )
     .await;
-    let mut timed_out = false;
-    while let Ok(event) = events.try_recv() {
-        timed_out |= matches!(event, FrameworkEvent::HookTimeout { .. });
-    }
+    roomkit::testing::idle(&kit).await;
+    let timed_out = !tap.events().is_empty();
     assert_eq!(
         (
             sent.map(|result| result.map(|result| result.blocked)),
@@ -289,7 +285,12 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
         }
     })
     .unwrap();
-    let mut events = kit.subscribe();
+    let session_started = Arc::new(Notify::new());
+    let started_notice = Arc::clone(&session_started);
+    kit.on("session_started", move |_| {
+        started_notice.notify_one();
+        ready(())
+    });
     let room = room_id();
     let call = kit.process_inbound(
         message(&sms, "Bonjour"),
@@ -303,14 +304,7 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
         () = observing.notified() => {}
     }
     go.notify_one();
-    let session = async {
-        loop {
-            if let Ok(FrameworkEvent::SessionStarted { .. }) = events.recv().await {
-                return;
-            }
-        }
-    };
-    let started = tokio::time::timeout(Duration::from_secs(5), session).await;
+    let started = tokio::time::timeout(Duration::from_secs(5), session_started.notified()).await;
     let bindings = kit.store().list_bindings(&room).await.unwrap();
     let timeline = kit.store().list_events(&room, &every_row()).await.unwrap();
     assert_eq!(

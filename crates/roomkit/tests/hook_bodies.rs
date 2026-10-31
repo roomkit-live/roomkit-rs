@@ -641,7 +641,7 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
     kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
         .await
         .unwrap();
-    let mut events = kit.subscribe();
+    let tap = roomkit::testing::EventTap::on(&kit, &["chain_depth_exceeded"]);
     let failures: Kept<RoomKitError> = kept();
     let (hook_kit, hook_failures) = (kit.clone(), Arc::clone(&failures));
     kit.observe("judge", HookTrigger::AfterBroadcast, move |event, _| {
@@ -676,14 +676,7 @@ async fn a_task_the_hook_starts_continues_the_chain_it_names() {
     )
     .await
     .unwrap();
-    let limited = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match events.recv().await {
-                Ok(roomkit::FrameworkEvent::ChainDepthExceeded { .. }) | Err(_) => return,
-                Ok(_) => {}
-            }
-        }
-    });
+    let limited = tokio::time::timeout(Duration::from_secs(5), tap.wait_for(|_| true));
     limited.await.unwrap();
     roomkit::testing::idle(&kit).await;
     let messages: Vec<(String, u32, Option<String>)> = kit
