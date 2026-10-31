@@ -663,6 +663,7 @@
     "create_room": ["async def", "room"],
     "create_verification_request": ["async def", "request"],
     "delete_event": ["async def", "room_id", "event_id", "*", "cascade_replies=True"],
+    "delete_participant": ["async def", "room_id", "participant_id"],
     "delete_room": ["async def", "room_id"],
     "find_latest_room": ["async def", "participant_id", "channel_type=None", "status=None"],
     "find_room_id_by_binding": ["async def", "channel_id", "participant_id", "identity_id=None", "room_filter=None", "*", "recipient_key=None"],
@@ -682,7 +683,7 @@
     "get_room": ["async def", "room_id"],
     "get_task": ["async def", "task_id"],
     "get_thread_summaries": ["async def", "room_id", "root_event_ids"],
-    "get_timeline": ["async def", "room_id", "*", "event_filter=None", "limit=100", "after_index=None", "newest_first=False"],
+    "get_timeline": ["async def", "room_id", "*", "event_filter=None", "limit=50", "after_index=None", "newest_first=False"],
     "get_unread_count": ["async def", "room_id", "channel_id"],
     "get_verification": ["async def", "identity_id", "organization_id=None"],
     "get_verification_request": ["async def", "request_id"],
@@ -1239,6 +1240,7 @@
     "create_room": ["async def", "room"],
     "create_verification_request": ["async def", "request"],
     "delete_event": ["async def", "room_id", "event_id", "*", "cascade_replies=True"],
+    "delete_participant": ["async def", "room_id", "participant_id"],
     "delete_room": ["async def", "room_id"],
     "find_latest_room": ["async def", "participant_id", "channel_type=None", "status=None"],
     "find_room_id_by_binding": ["async def", "channel_id", "participant_id", "identity_id=None", "room_filter=None", "*", "recipient_key=None"],
@@ -1258,7 +1260,7 @@
     "get_room": ["async def", "room_id"],
     "get_task": ["async def", "task_id"],
     "get_thread_summaries": ["async def", "room_id", "root_event_ids"],
-    "get_timeline": ["async def", "room_id", "*", "event_filter=None", "limit=100", "after_index=None", "newest_first=False"],
+    "get_timeline": ["async def", "room_id", "*", "event_filter=None", "limit=50", "after_index=None", "newest_first=False"],
     "get_unread_count": ["async def", "room_id", "channel_id"],
     "get_verification": ["async def", "identity_id", "organization_id=None"],
     "get_verification_request": ["async def", "request_id"],
@@ -1566,6 +1568,7 @@
   "roomkit.Participant": {
     "__init__": ["def", "*", "id", "room_id", "channel_id", "display_name=None", "role=<ParticipantRole.MEMBER: 'member'>", "status=<ParticipantStatus.ACTIVE: 'active'>", "identification=<IdentificationStatus.PENDING: 'pending'>", "identity_id=None", "candidates=None", "connected_via=<factory>", "external_id=None", "resolved_at=None", "resolved_by=None", "joined_at=<factory>", "metadata=<factory>"]
   },
+  "roomkit.ParticipantExistsError": {},
   "roomkit.ParticipantNotAdmittedError": {},
   "roomkit.ParticipantNotFoundError": {},
   "roomkit.PendingInput": {
@@ -1865,6 +1868,7 @@
     "mute_output": ["async def", "room_id", "channel_id", "*", "organization_id=None"],
     "on": ["def", "event_type"],
     "on_delivery_status": ["def", "fn"],
+    "pause_room": ["async def", "room_id", "*", "organization_id=None"],
     "post": ["async def", "room_id", "content", "*", "participant_id=None", "addressed_to=()", "metadata=None", "channel_id=None", "organization_id=None", "idempotency_key=None", "chain_depth=0"],
     "process_delivery_status": ["async def", "status", "*", "organization_id=None"],
     "process_inbound": ["async def", "message", "*", "room_id=None", "defer_delivery=False", "organization_id=None"],
@@ -1883,8 +1887,10 @@
     "remove_member": ["async def", "room_id", "participant_id", "*", "status=<ParticipantStatus.LEFT: 'left'>", "organization_id=None"],
     "remove_room_hook": ["async def", "room_id", "name", "*", "organization_id=None"],
     "rename_member": ["async def", "room_id", "participant_id", "display_name", "*", "organization_id=None"],
+    "reopen_room": ["async def", "room_id", "*", "organization_id=None"],
     "request_verification": ["async def", "identity_id", "*", "room_id", "channel_id", "method='link'", "window_start=None", "organization_id=None"],
     "resolve_participant": ["async def", "room_id", "participant_id", "identity_id", "resolved_by='manual'", "*", "organization_id=None"],
+    "resume_room": ["async def", "room_id", "*", "organization_id=None"],
     "revoke_verification": ["async def", "identity_id", "*", "reason='revoked'", "organization_id=None"],
     "room_recordings": ["async def", "room_id", "*", "organization_id=None"],
     "room_strategy": ["def", "room_id", "*", "organization_id=None"],
@@ -1992,6 +1998,7 @@
     "create_room": ["async def", "room"],
     "create_verification_request": ["async def", "request"],
     "delete_event": ["async def", "room_id", "event_id", "*", "cascade_replies=True"],
+    "delete_participant": ["async def", "room_id", "participant_id"],
     "delete_room": ["async def", "room_id"],
     "find_latest_room": ["async def", "participant_id", "channel_type=None", "status=None"],
     "find_room_id_by_binding": ["async def", "channel_id", "participant_id", "identity_id=None", "room_filter=None", "*", "recipient_key=None"],
@@ -2011,7 +2018,7 @@
     "get_room": ["async def", "room_id"],
     "get_task": ["async def", "task_id"],
     "get_thread_summaries": ["async def", "room_id", "root_event_ids"],
-    "get_timeline": ["async def", "room_id", "*", "event_filter=None", "limit=100", "after_index=None", "newest_first=False"],
+    "get_timeline": ["async def", "room_id", "*", "event_filter=None", "limit=50", "after_index=None", "newest_first=False"],
     "get_unread_count": ["async def", "room_id", "channel_id"],
     "get_verification": ["async def", "identity_id", "organization_id=None"],
     "get_verification_request": ["async def", "request_id"],
@@ -2870,7 +2877,10 @@
     "create_room": ["async def", "room_id=None", "metadata=None", "recorders=None", "orchestration=<object object>", "organization_id=None", "timers=None", "agent_response_policy=None"],
     "ensure_participant": ["async def", "room_id", "channel_id", "participant_id", "display_name=None", "*", "organization_id=None"],
     "get_room": ["async def", "room_id", "*", "organization_id=None"],
+    "pause_room": ["async def", "room_id", "*", "organization_id=None"],
+    "reopen_room": ["async def", "room_id", "*", "organization_id=None"],
     "resolve_participant": ["async def", "room_id", "participant_id", "identity_id", "resolved_by='manual'", "*", "organization_id=None"],
+    "resume_room": ["async def", "room_id", "*", "organization_id=None"],
     "set_agent_response_policy": ["async def", "room_id", "policy", "*", "organization_id=None"],
     "set_room_timers": ["async def", "room_id", "timers", "*", "organization_id=None"],
     "submit_feedback": ["async def", "room_id", "rating", "*", "event_id=None", "channel_id=None", "comment=''", "dimension='overall'", "metadata=None", "organization_id=None"],
@@ -3112,7 +3122,7 @@
     "__init__": ["def", "*", "type='cancel'", "reason='cancelled'"]
   },
   "roomkit.models.ChannelData": {
-    "__init__": ["def", "*", "provider=None", "external_id=None", "thread_id=None", "extra=<factory>"]
+    "__init__": ["def", "*", "provider=None", "external_id=None", "thread_id=None", "extra=<factory>", "**extra_data"]
   },
   "roomkit.models.ChannelDirection": {
     "BIDIRECTIONAL": ["member", "'bidirectional'"],
@@ -3141,6 +3151,10 @@
   },
   "roomkit.models.EditContent": {
     "__init__": ["def", "*", "type='edit'", "target_event_id", "new_content", "edit_source=None"]
+  },
+  "roomkit.models.EditSource": {
+    "SENDER": ["member", "'sender'"],
+    "SYSTEM": ["member", "'system'"]
   },
   "roomkit.models.IdentificationStatus": {
     "AMBIGUOUS": ["member", "'ambiguous'"],
@@ -3218,6 +3232,9 @@
   },
   "roomkit.models.TemplateContent": {
     "__init__": ["def", "*", "type='template'", "template_id", "language='en'", "parameters=<factory>", "body=None"]
+  },
+  "roomkit.models.ThinkingDeltaMarker": {
+    "__init__": ["def", "thinking"]
   },
   "roomkit.models.UpdateSystemPrompt": {
     "__init__": ["def", "*", "type='update_system_prompt'", "append"]
@@ -5010,6 +5027,9 @@
   },
   "roomkit.skills.SkillDiscoveryError": {},
   "roomkit.skills.SkillError": {},
+  "roomkit.skills.SkillManifestTooLargeError": {
+    "__init__": ["def", "characters", "limit"]
+  },
   "roomkit.skills.SkillParseError": {},
   "roomkit.skills.SkillPathError": {},
   "roomkit.skills.SkillValidationError": {},
@@ -5167,6 +5187,7 @@
     "create_verification_request": ["async def", "request"],
     "dedupe_event_indices": ["async def", "*", "dry_run=True"],
     "delete_event": ["async def", "room_id", "event_id", "*", "cascade_replies=True"],
+    "delete_participant": ["async def", "room_id", "participant_id"],
     "delete_room": ["async def", "room_id"],
     "drop_legacy_parent_index": ["async def", "*", "dry_run=True"],
     "event_from_row": ["staticmethod", "row"],
@@ -5188,7 +5209,7 @@
     "get_room": ["async def", "room_id"],
     "get_task": ["async def", "task_id"],
     "get_thread_summaries": ["async def", "room_id", "root_event_ids"],
-    "get_timeline": ["async def", "room_id", "*", "event_filter=None", "limit=100", "after_index=None", "newest_first=False"],
+    "get_timeline": ["async def", "room_id", "*", "event_filter=None", "limit=50", "after_index=None", "newest_first=False"],
     "get_unread_count": ["async def", "room_id", "channel_id"],
     "get_verification": ["async def", "identity_id", "organization_id=None"],
     "get_verification_request": ["async def", "request_id"],
@@ -5401,6 +5422,85 @@
   "roomkit.telemetry.get_current_span": {
     "__call__": ["def"]
   },
+  "roomkit.testing.Delivery": {
+    "__init__": ["def", "event", "text"]
+  },
+  "roomkit.testing.EchoAgent": {
+    "__init__": ["def", "channel_id", "reply", "*", "quote=False"],
+    "active_turns": ["property"],
+    "capabilities": ["def"],
+    "channel_call": ["async def", "room_id", "verb", "arguments"],
+    "close": ["async def"],
+    "connect_session": ["async def", "session", "room_id", "binding"],
+    "conversation_address": ["def", "message"],
+    "declaration": ["def"],
+    "deliver": ["async def", "event", "binding", "context"],
+    "deliver_stream": ["async def", "text_stream", "event", "binding", "context"],
+    "disconnect_session": ["async def", "session", "room_id"],
+    "emit_trace": ["def", "trace"],
+    "extract_text": ["staticmethod", "event"],
+    "handle_inbound": ["async def", "message", "context"],
+    "info": ["property"],
+    "normalize_address": ["def", "address"],
+    "on_event": ["async def", "event", "binding", "context"],
+    "on_room_attached": ["async def", "room_id", "binding"],
+    "on_room_detached": ["async def", "room_id"],
+    "on_room_event": ["async def", "room_id", "event"],
+    "on_trace": ["def", "callback", "*", "protocols=None"],
+    "provider_name": ["property"],
+    "recent_events_window": ["property"],
+    "recipient_address": ["def", "binding"],
+    "recipient_key": ["property"],
+    "recipient_metadata": ["def", "address"],
+    "reply_metadata": ["def", "message"],
+    "resolve_trace_room": ["def", "session_id"],
+    "restore_room_state": ["def", "room_id", "state"],
+    "room_state": ["def", "room_id"],
+    "serializes_room_turns": ["property"],
+    "supports_streaming_delivery": ["property"],
+    "supports_streaming_delivery_for": ["def", "room_id"],
+    "trace_enabled": ["property"],
+    "update_binding": ["def", "room_id", "binding"]
+  },
+  "roomkit.testing.RecordingTransport": {
+    "__init__": ["def", "channel_id", "channel_type", "*", "capabilities=None"],
+    "active_turns": ["property"],
+    "capabilities": ["def"],
+    "channel_call": ["async def", "room_id", "verb", "arguments"],
+    "close": ["async def"],
+    "connect_session": ["async def", "session", "room_id", "binding"],
+    "conversation_address": ["def", "message"],
+    "declaration": ["def"],
+    "deliver": ["async def", "event", "binding", "context"],
+    "deliver_stream": ["async def", "text_stream", "event", "binding", "context"],
+    "deliveries": ["property"],
+    "disconnect_session": ["async def", "session", "room_id"],
+    "emit_trace": ["def", "trace"],
+    "extract_text": ["staticmethod", "event"],
+    "handle_inbound": ["async def", "message", "context"],
+    "info": ["property"],
+    "normalize_address": ["def", "address"],
+    "on_event": ["async def", "event", "binding", "context"],
+    "on_room_attached": ["async def", "room_id", "binding"],
+    "on_room_detached": ["async def", "room_id"],
+    "on_room_event": ["async def", "room_id", "event"],
+    "on_trace": ["def", "callback", "*", "protocols=None"],
+    "provider_name": ["property"],
+    "recent_events_window": ["property"],
+    "recipient_address": ["def", "binding"],
+    "recipient_key": ["property"],
+    "recipient_metadata": ["def", "address"],
+    "reply_metadata": ["def", "message"],
+    "resolve_trace_room": ["def", "session_id"],
+    "restore_room_state": ["def", "room_id", "state"],
+    "room_state": ["def", "room_id"],
+    "serializes_room_turns": ["property"],
+    "supports_streaming_delivery": ["property"],
+    "supports_streaming_delivery_for": ["def", "room_id"],
+    "texts": ["property"],
+    "trace_enabled": ["property"],
+    "update_binding": ["def", "room_id", "binding"]
+  },
   "roomkit.tools.ExternalToolHandler": {
     "channel_id": ["property"],
     "on_tool_cancelled": ["async def", "tool_name", "tool_input", "*", "tool_call_id=''", "job_id=None", "room_id=None"],
@@ -5411,12 +5511,12 @@
     "stop": ["async def"]
   },
   "roomkit.tools.MCPToolProvider": {
-    "__init__": ["def", "url=None", "*", "transport='streamable_http'", "tool_filter=None", "headers=None", "command=None", "args=()", "env=None", "cwd=None", "discover=True", "label=None"],
+    "__init__": ["def", "url=None", "*", "transport='streamable_http'", "tool_filter=None", "headers=None", "command=None", "args=()", "env=None", "cwd=None", "discover=True", "label=None", "connect_timeout=None"],
     "as_tool_handler": ["def", "*", "gate_discovery=True"],
     "call_tool": ["async def", "name", "arguments", "*", "timeout=30.0"],
     "call_tool_result": ["async def", "name", "arguments", "*", "timeout=30.0"],
     "connected": ["property"],
-    "from_command": ["classmethod", "command", "args=()", "*", "env=None", "cwd=None", "tool_filter=None", "discover=True", "label=None"],
+    "from_command": ["classmethod", "command", "args=()", "*", "env=None", "cwd=None", "tool_filter=None", "discover=True", "label=None", "connect_timeout=60.0"],
     "from_url": ["classmethod", "url", "*", "transport='streamable_http'", "tool_filter=None", "headers=None", "discover=True", "label=None"],
     "get_tools": ["def"],
     "get_tools_as_dicts": ["def"],

@@ -18,7 +18,7 @@ use tokio::time::Instant;
 
 use crate::InboundResult;
 use crate::stream::{DeliveryStream, ResponseItem};
-use crate::testing::RecordingTransport;
+use crate::testing::{RecordingTransport, RecordingTransportOptions};
 use crate::turns::observe::{Carried, Fate};
 use crate::{
     AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
@@ -36,8 +36,12 @@ pub(super) fn room_id() -> RoomId {
 /// A kit whose room binds an SMS transport and `agent`.
 pub(super) async fn kit_with(agent: impl Channel) -> RoomKit {
     let kit = RoomKit::new(RoomKitOptions::default());
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room_id()),
         ..Default::default()

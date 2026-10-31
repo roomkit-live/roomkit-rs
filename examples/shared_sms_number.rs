@@ -19,7 +19,9 @@ use std::process::ExitCode;
 use roomkit::model::{
     ChannelId, ChannelType, EventType, InboundMessage, Metadata, ParticipantId, RoomId, TextContent,
 };
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookTrigger, ProcessInboundOptions, RoomKit,
 };
@@ -74,12 +76,20 @@ fn agent_joins_every_room(kit: &RoomKit, agent: &ChannelId) -> Result<(), Box<dy
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
     let sms = SmsNumber::new(ChannelId::new("sms")?);
-    let agent = EchoAgent::new(ChannelId::new("ai")?, "Thanks, we are on it.");
-    let team = RecordingTransport::new(ChannelId::new("team_sms")?, ChannelType::SMS);
+    let agent = EchoAgent::new(
+        ChannelId::new("ai")?,
+        "Thanks, we are on it.",
+        EchoAgentOptions::default(),
+    );
+    let team = RecordingTransport::new(
+        ChannelId::new("team_sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent.clone())?;
     kit.register_channel(team.clone())?;
-    agent_joins_every_room(&kit, agent.id())?;
+    agent_joins_every_room(&kit, agent.channel_id())?;
     let mut checks = Checks::default();
 
     println!("The host opens a room for Alice's appointment, naming her on its binding.");
@@ -132,15 +142,16 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         group: true,
         ..Default::default()
     };
-    kit.attach_channel(&team_room, team.id(), group).await?;
+    kit.attach_channel(&team_room, team.channel_id(), group)
+        .await?;
     let mut landed = Vec::new();
     for sender in [ALICE, BOB, CAROL] {
-        landed.push(text(&kit, team.id(), sender, "Hi team").await?);
+        landed.push(text(&kit, team.channel_id(), sender, "Hi team").await?);
     }
     let senders: Vec<String> = shared::timeline(&kit, &team_room)
         .await?
         .iter()
-        .filter(|event| event.source.channel_id == *team.id())
+        .filter(|event| event.source.channel_id == *team.channel_id())
         .filter_map(|event| {
             event
                 .source

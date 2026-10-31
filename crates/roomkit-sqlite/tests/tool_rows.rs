@@ -12,7 +12,7 @@ use roomkit::model::{
     EventType, InboundMessage, Room, RoomContext, RoomEvent, RoomId, RoomUpdates, TextContent,
     Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::transcript::{Message, Role, conversation};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, EventQuery, ProcessInboundOptions,
@@ -158,8 +158,12 @@ fn lookup() -> Tools {
 async fn kit_on(file: &TempFile, model: ScriptedProvider, fresh: bool) -> RoomKit<SqliteStore> {
     let store = SqliteStore::open(file.path()).await.unwrap();
     let kit = RoomKit::new(RoomKitOptions::with_store(store));
-    kit.register_channel(RecordingTransport::new(id("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        id("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     let agent = AiAgent::new(id("assistant"), model)
         .with_tools(lookup())
         .unwrap();

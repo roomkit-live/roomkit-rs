@@ -13,7 +13,7 @@ mod support;
 use std::path::Path;
 
 use roomkit::model::{ChannelId, ChannelType, RoomId};
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookTrigger, RoomKit,
     RoomKitOptions,
@@ -52,6 +52,7 @@ async fn left_after_drop(held: Held) -> (bool, usize) {
     kit.register_channel(RecordingTransport::new(
         websocket.clone(),
         ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     let (strong, weak) = match held {

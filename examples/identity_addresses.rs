@@ -31,7 +31,7 @@ use roomkit::model::{
     ChannelId, ChannelType, Identity, IdentityId, InboundMessage, Participant, ParticipantId,
     RoomId, TextContent,
 };
-use roomkit::testing::EchoAgent;
+use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
     StoreError,
@@ -58,7 +58,11 @@ impl Bank {
         let clock = Clock::new();
         let kit = clock.kit();
         let sms = SmsNumber::new(ChannelId::new("sms")?);
-        let agent = EchoAgent::new(ChannelId::new("ai")?, "You said: ").quoting();
+        let agent = EchoAgent::new(
+            ChannelId::new("ai")?,
+            "You said: ",
+            EchoAgentOptions { quote: true },
+        );
         kit.register_channel(sms.clone())?;
         kit.register_channel(agent.clone())?;
         Ok(Self {
@@ -119,7 +123,7 @@ impl Bank {
             ..Default::default()
         };
         self.kit
-            .attach_channel(&room_id, self.agent.id(), agent)
+            .attach_channel(&room_id, self.agent.channel_id(), agent)
             .await?;
         Ok(room_id)
     }

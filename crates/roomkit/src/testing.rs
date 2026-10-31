@@ -75,7 +75,19 @@ pub struct Delivery {
     pub text: String,
 }
 
-/// A text transport that records every event delivered to it.
+/// What [`RecordingTransport::new`] takes beside the channel's id and
+/// type, Python's `RecordingTransport` keywords.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecordingTransportOptions {
+    /// Python `capabilities=None`: what the transport declares (RFC §5.8),
+    /// a text channel's when `None`. One that edits and deletes natively
+    /// receives an edit or a delete as it is (RFC §6.6).
+    pub capabilities: Option<ChannelCapabilities>,
+}
+
+/// A text transport that records every event delivered to it: Python's
+/// `roomkit.testing.RecordingTransport(channel_id, channel_type, *,
+/// capabilities=None)`.
 ///
 /// Cloning it shares the record, so a test keeps a clone to read what the
 /// registered one delivered. Its destination is its record, so it needs no
@@ -89,8 +101,13 @@ pub struct RecordingTransport {
 }
 
 impl RecordingTransport {
-    /// A bidirectional text transport of `channel_type` named `channel_id`.
-    pub fn new(channel_id: ChannelId, channel_type: ChannelType) -> Self {
+    /// A bidirectional text transport of `channel_type` named `channel_id`,
+    /// declaring the capabilities `options` names.
+    pub fn new(
+        channel_id: ChannelId,
+        channel_type: ChannelType,
+        options: RecordingTransportOptions,
+    ) -> Self {
         let mut declaration = ChannelDeclaration::new(
             channel_id,
             channel_type,
@@ -99,22 +116,17 @@ impl RecordingTransport {
         );
         declaration.provider_name = Some("RecordingTransport".to_owned());
         declaration.recipient_key = None;
+        if let Some(capabilities) = options.capabilities {
+            declaration.capabilities = capabilities;
+        }
         Self {
             declaration,
             deliveries: Arc::default(),
         }
     }
 
-    /// The same transport, declaring `capabilities`: one that edits and
-    /// deletes natively receives an edit or a delete as it is (RFC §6.6).
-    #[must_use]
-    pub fn with_capabilities(mut self, capabilities: ChannelCapabilities) -> Self {
-        self.declaration.capabilities = capabilities;
-        self
-    }
-
-    /// The channel's id.
-    pub fn id(&self) -> &ChannelId {
+    /// The channel's id, Python's `channel_id`.
+    pub fn channel_id(&self) -> &ChannelId {
         &self.declaration.channel_id
     }
 
@@ -155,8 +167,18 @@ impl Channel for RecordingTransport {
     }
 }
 
+/// What [`EchoAgent::new`] takes beside the channel's id and its reply,
+/// Python's `EchoAgent` keywords.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EchoAgentOptions {
+    /// Python `quote=False`: the reply is followed by the text of the event
+    /// it answers.
+    pub quote: bool,
+}
+
 /// An agent that answers every event it is asked with `reply`, followed by
-/// the event's text when `quote` is set.
+/// the event's text when `quote` is set: Python's
+/// `roomkit.testing.EchoAgent(channel_id, reply, *, quote=False)`.
 #[derive(Clone, Debug)]
 pub struct EchoAgent {
     declaration: ChannelDeclaration,
@@ -165,8 +187,9 @@ pub struct EchoAgent {
 }
 
 impl EchoAgent {
-    /// An agent named `channel_id` answering `reply`.
-    pub fn new(channel_id: ChannelId, reply: impl Into<String>) -> Self {
+    /// An agent named `channel_id` answering `reply`, quoting the event it
+    /// answers after it when `options` says so.
+    pub fn new(channel_id: ChannelId, reply: impl Into<String>, options: EchoAgentOptions) -> Self {
         let mut declaration = ChannelDeclaration::new(
             channel_id,
             ChannelType::AI,
@@ -177,19 +200,12 @@ impl EchoAgent {
         Self {
             declaration,
             reply: reply.into(),
-            quote: false,
+            quote: options.quote,
         }
     }
 
-    /// The same agent, quoting the event it answers after its reply.
-    #[must_use]
-    pub fn quoting(mut self) -> Self {
-        self.quote = true;
-        self
-    }
-
-    /// The channel's id.
-    pub fn id(&self) -> &ChannelId {
+    /// The channel's id, Python's `channel_id`.
+    pub fn channel_id(&self) -> &ChannelId {
         &self.declaration.channel_id
     }
 
@@ -248,12 +264,14 @@ impl Channel for EchoAgent {
 ///
 /// It keeps every message, unbounded: set it for a test, not for a kit's
 /// life.
+#[doc(hidden)]
 #[derive(Clone, Debug, Default)]
 pub struct TurnTap {
     messages: Arc<Mutex<Vec<TappedMessage>>>,
 }
 
 /// One message a [`TurnTap`] saw.
+#[doc(hidden)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TappedMessage {

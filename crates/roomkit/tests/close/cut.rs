@@ -15,7 +15,7 @@ use roomkit::model::{
     DeliveryResultStatus, HookResult, Observation, ObservationId, RoomContext, RoomEvent,
     RoomStatus, TextContent,
 };
-use roomkit::testing::EchoAgent;
+use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
     ConversationStore, GetRoomOptions, HookExecution, HookSpec, HookTrigger, InMemoryStore,
@@ -536,8 +536,12 @@ async fn a_cut_call_carries_the_answers_already_stored() {
         let cursor = Arc::clone(&store.cursor_writes_left);
         let kit = kit_of(store, &[&Holding::new("ws", [])], &["r"]).await;
         let stuck = StuckOnAnswers::default();
-        kit.register_channel(EchoAgent::new(channel("ai"), "hello"))
-            .unwrap();
+        kit.register_channel(EchoAgent::new(
+            channel("ai"),
+            "hello",
+            EchoAgentOptions::default(),
+        ))
+        .unwrap();
         kit.register_channel(stuck.clone()).unwrap();
         for id in ["ai", "stuck"] {
             kit.attach_channel(&room("r"), &channel(id), AttachChannelOptions::default())

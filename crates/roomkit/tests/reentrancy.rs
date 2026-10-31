@@ -25,7 +25,9 @@ use roomkit::model::{
     EditContent, EventContent, EventDirection, EventId, EventSource, EventStatus, EventType,
     HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, RoomStatus, TextContent, Timestamp,
 };
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
     CommitEventOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, EventDraft,
@@ -199,12 +201,21 @@ async fn room() -> (RoomKit, RecordingTransport) {
 /// [`room`] on a kit built with `options`.
 async fn room_with(options: RoomKitOptions) -> (RoomKit, RecordingTransport) {
     let kit = RoomKit::new(options);
-    let audit = RecordingTransport::new(channel("audit"), ChannelType::WEBSOCKET);
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    let audit = RecordingTransport::new(
+        channel("audit"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     kit.register_channel(RecordingTransport::new(
         channel("ws"),
         ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     kit.register_channel(audit.clone()).unwrap();
@@ -665,8 +676,12 @@ async fn adopted_calls_read_their_answers() {
 /// room an agent echoes.
 async fn answers_of_an_adopted_call(needs_lock: bool) -> (Vec<String>, Vec<String>, Vec<String>) {
     let (kit, _audit) = room().await;
-    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
-        .unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    ))
+    .unwrap();
     kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
         .await
         .unwrap();
@@ -752,8 +767,12 @@ async fn an_adopted_call_s_wait_reads_its_agent_unregistered_before_its_turn() {
     };
     gate.kit.set(kit.downgrade()).unwrap();
     kit.register_channel(gate).unwrap();
-    kit.register_channel(EchoAgent::new(channel("ai"), "You said: "))
-        .unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "You said: ",
+        EchoAgentOptions::default(),
+    ))
+    .unwrap();
     for id in ["gate", "ai"] {
         kit.attach_channel(&room_id(), &channel(id), AttachChannelOptions::default())
             .await
@@ -3216,7 +3235,7 @@ mod send_event {
             ..Default::default()
         };
         kit.create_room(options).await.unwrap();
-        for id in [channel("ws"), audit.id().clone()] {
+        for id in [channel("ws"), audit.channel_id().clone()] {
             let options = AttachChannelOptions {
                 organization_id: clinic(),
                 ..Default::default()

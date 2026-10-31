@@ -7,7 +7,7 @@
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, BlockOptions};
 use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId, TextContent};
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, GetTimelineOptions, ProcessInboundOptions, RoomKit,
     RoomKitError, RoomKitOptions, text_of,
@@ -21,7 +21,11 @@ fn room_id() -> RoomId {
 /// "one", refused "spam" with a hook, then received "two" and "three".
 async fn a_room_that_refused_one_message() -> RoomKit {
     let kit = RoomKit::new(RoomKitOptions::default());
-    let sms = RecordingTransport::new(ChannelId::new("sms").unwrap(), ChannelType::SMS);
+    let sms = RecordingTransport::new(
+        ChannelId::new("sms").unwrap(),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(sms.clone()).unwrap();
     let options = CreateRoomOptions {
         room_id: Some(room_id()),
@@ -29,9 +33,13 @@ async fn a_room_that_refused_one_message() -> RoomKit {
         ..Default::default()
     };
     kit.create_room(options).await.unwrap();
-    kit.attach_channel(&room_id(), sms.id(), AttachChannelOptions::default())
-        .await
-        .unwrap();
+    kit.attach_channel(
+        &room_id(),
+        sms.channel_id(),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
     kit.before_broadcast("no_spam", |event, _| async move {
         if text_of(&event.content) == "spam" {
             Ok(HookResult::block("spam", BlockOptions::default()))
@@ -41,7 +49,11 @@ async fn a_room_that_refused_one_message() -> RoomKit {
     })
     .unwrap();
     for text in ["one", "spam", "two", "three"] {
-        let message = InboundMessage::new(sms.id().clone(), "+15551234567", TextContent::new(text));
+        let message = InboundMessage::new(
+            sms.channel_id().clone(),
+            "+15551234567",
+            TextContent::new(text),
+        );
         kit.process_inbound(
             message,
             ProcessInboundOptions {

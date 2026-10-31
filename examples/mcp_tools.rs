@@ -36,7 +36,7 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomEvent, RoomId,
     TextContent, ToolCallContent, ToolCallOutcome,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
 use roomkit_ai::ToolPolicy;
 use roomkit_mcp::{McpCommand, McpError, McpServer};
@@ -140,6 +140,7 @@ async fn shop_room(
     kit.register_channel(RecordingTransport::new(
         ChannelId::new("sms")?,
         ChannelType::SMS,
+        RecordingTransportOptions::default(),
     ))?;
     kit.register_channel(agent)?;
     let room = RoomId::new("room_1")?;

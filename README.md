@@ -85,23 +85,32 @@ The kit's calls on their own, with the crate's test channels:
 
 ```rust
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions};
 use roomkit::{CreateRoomOptions, ProcessInboundOptions, RoomKit};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kit = RoomKit::new(Default::default());
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
-    let agent = EchoAgent::new(ChannelId::new("ai")?, "You said: ").quoting();
+    let sms = RecordingTransport::new(
+        ChannelId::new("sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    let agent = EchoAgent::new(
+        ChannelId::new("ai")?,
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    );
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent.clone())?;
 
     let room = RoomId::new("room_1")?;
     kit.create_room(CreateRoomOptions { room_id: Some(room.clone()), ..Default::default() }).await?;
-    kit.attach_channel(&room, sms.id(), Default::default()).await?;
-    kit.attach_channel(&room, agent.id(), Default::default()).await?;
+    kit.attach_channel(&room, sms.channel_id(), Default::default()).await?;
+    kit.attach_channel(&room, agent.channel_id(), Default::default()).await?;
 
-    let message = InboundMessage::new(sms.id().clone(), "+15551234567", TextContent::new("Bonjour"));
+    let message =
+        InboundMessage::new(sms.channel_id().clone(), "+15551234567", TextContent::new("Bonjour"));
     kit.process_inbound(message, ProcessInboundOptions { room_id: Some(room), ..Default::default() }).await?;
     assert_eq!(sms.texts(), ["You said: Bonjour"]);
     kit.close().await?;

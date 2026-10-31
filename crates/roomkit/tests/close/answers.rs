@@ -12,7 +12,9 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelOutput, ChannelType, HookResult,
     RoomContext, RoomEvent,
 };
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     DeliveryHandle, HookExecution, HookSpec, HookTrigger, ProcessInboundOptions, RoomKit,
@@ -88,10 +90,18 @@ fn said<const N: usize>(texts: [&str; N]) -> [Vec<String>; N] {
 async fn answers_under_the_close() -> [Vec<String>; 2] {
     let started = Arc::new(Notify::new());
     let kit = RoomKit::new(RoomKitOptions::default());
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
-    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    ))
+    .unwrap();
     kit.register_channel(Stuck {
         started: Arc::clone(&started),
     })

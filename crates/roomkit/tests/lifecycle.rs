@@ -16,7 +16,8 @@ use roomkit::model::{
     RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit::testing::{
-    EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
     AttachChannelOptions, CHANNEL_NOT_REGISTERED, Channel, ChannelDeclaration, ChannelError,
@@ -48,7 +49,11 @@ fn after_start(seconds: i64) -> Timestamp {
 }
 
 fn message(from: &RecordingTransport, text: &str) -> InboundMessage {
-    InboundMessage::new(from.id().clone(), "+15551234567", TextContent::new(text))
+    InboundMessage::new(
+        from.channel_id().clone(),
+        "+15551234567",
+        TextContent::new(text),
+    )
 }
 
 /// A sequential environment the test keeps a handle on, to move the kit's
@@ -72,7 +77,11 @@ impl Clock {
 /// after the pause.
 async fn timed_room(clock: &Clock) -> (RoomKit, RecordingTransport) {
     let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&clock.0));
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(sms.clone()).unwrap();
     let options = CreateRoomOptions {
         room_id: Some(room_id()),
@@ -84,9 +93,13 @@ async fn timed_room(clock: &Clock) -> (RoomKit, RecordingTransport) {
         ..Default::default()
     };
     kit.create_room(options).await.unwrap();
-    kit.attach_channel(&room_id(), sms.id(), AttachChannelOptions::default())
-        .await
-        .unwrap();
+    kit.attach_channel(
+        &room_id(),
+        sms.channel_id(),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
     (kit, sms)
 }
 
@@ -263,9 +276,13 @@ mod a_paused_conversation {
     /// The timed room, with a websocket attached beside its SMS transport.
     async fn with_websocket(clock: &Clock) -> (RoomKit, RecordingTransport, RecordingTransport) {
         let (kit, sms) = timed_room(clock).await;
-        let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
+        let ws = RecordingTransport::new(
+            channel("ws"),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
         kit.register_channel(ws.clone()).unwrap();
-        kit.attach_channel(&room_id(), ws.id(), AttachChannelOptions::default())
+        kit.attach_channel(&room_id(), ws.channel_id(), AttachChannelOptions::default())
             .await
             .unwrap();
         (kit, sms, ws)
@@ -359,15 +376,18 @@ mod a_paused_conversation {
             group: true,
             ..Default::default()
         };
-        kit.attach_channel(&room_id(), sms.id(), group)
+        kit.attach_channel(&room_id(), sms.channel_id(), group)
             .await
             .unwrap();
         kit.process_inbound(message(&sms, "Bonjour"), ProcessInboundOptions::default())
             .await
             .unwrap();
         let (paused, _) = paused_by_its_timer(&kit, &clock).await;
-        let other =
-            InboundMessage::new(sms.id().clone(), "+15550000002", TextContent::new("Me too"));
+        let other = InboundMessage::new(
+            sms.channel_id().clone(),
+            "+15550000002",
+            TextContent::new("Me too"),
+        );
         let result = kit
             .process_inbound(other, ProcessInboundOptions::default())
             .await
@@ -396,8 +416,16 @@ mod unregistering {
 
     async fn room_with_sms_and_ws() -> (RoomKit, RecordingTransport, RecordingTransport) {
         let kit = RoomKit::new(RoomKitOptions::default());
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
-        let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
+        let sms = RecordingTransport::new(
+            channel("sms"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
+        let ws = RecordingTransport::new(
+            channel("ws"),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(ws.clone()).unwrap();
         kit.create_room(CreateRoomOptions {
@@ -406,10 +434,14 @@ mod unregistering {
         })
         .await
         .unwrap();
-        kit.attach_channel(&room_id(), sms.id(), AttachChannelOptions::default())
-            .await
-            .unwrap();
-        kit.attach_channel(&room_id(), ws.id(), AttachChannelOptions::default())
+        kit.attach_channel(
+            &room_id(),
+            sms.channel_id(),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+        kit.attach_channel(&room_id(), ws.channel_id(), AttachChannelOptions::default())
             .await
             .unwrap();
         (kit, sms, ws)
@@ -419,7 +451,7 @@ mod unregistering {
     async fn emits_channel_unregistered() {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         let mut events = kit.subscribe();
-        kit.unregister_channel(sms.id()).unwrap();
+        kit.unregister_channel(sms.channel_id()).unwrap();
         assert_eq!(
             events.recv().await.unwrap(),
             FrameworkEvent::channel_unregistered(channel("sms"), ChannelType::SMS)
@@ -429,7 +461,7 @@ mod unregistering {
     #[tokio::test]
     async fn refuses_the_channel_s_next_message() {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
-        kit.unregister_channel(sms.id()).unwrap();
+        kit.unregister_channel(sms.channel_id()).unwrap();
         let refused = kit
             .process_inbound(
                 message(&sms, "Hello?"),
@@ -450,7 +482,7 @@ mod unregistering {
     #[tokio::test]
     async fn skips_a_transport_binding_it_leaves() {
         let (kit, sms, ws) = room_with_sms_and_ws().await;
-        kit.unregister_channel(ws.id()).unwrap();
+        kit.unregister_channel(ws.channel_id()).unwrap();
         let mut events = kit.subscribe();
         kit.process_inbound(
             message(&sms, "Bonjour"),
@@ -476,8 +508,12 @@ mod unregistering {
     #[tokio::test]
     async fn reports_an_agent_binding_it_leaves_as_a_failed_delivery() {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
-        kit.register_channel(EchoAgent::new(channel("ai"), "Hello"))
-            .unwrap();
+        kit.register_channel(EchoAgent::new(
+            channel("ai"),
+            "Hello",
+            EchoAgentOptions::default(),
+        ))
+        .unwrap();
         kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
             .await
             .unwrap();
@@ -515,8 +551,12 @@ mod unregistering {
     async fn skips_an_unregistered_agent_the_event_does_not_solicit() {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
         for agent in ["ai", "bot"] {
-            kit.register_channel(EchoAgent::new(channel(agent), "Hello"))
-                .unwrap();
+            kit.register_channel(EchoAgent::new(
+                channel(agent),
+                "Hello",
+                EchoAgentOptions::default(),
+            ))
+            .unwrap();
             kit.attach_channel(&room_id(), &channel(agent), AttachChannelOptions::default())
                 .await
                 .unwrap();
@@ -589,8 +629,12 @@ mod unregistering {
     #[tokio::test]
     async fn reports_an_agent_unregistered_during_the_call() {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
-        kit.register_channel(EchoAgent::new(channel("ai"), "Hello"))
-            .unwrap();
+        kit.register_channel(EchoAgent::new(
+            channel("ai"),
+            "Hello",
+            EchoAgentOptions::default(),
+        ))
+        .unwrap();
         kit.attach_channel(&room_id(), &channel("ai"), AttachChannelOptions::default())
             .await
             .unwrap();
@@ -639,8 +683,12 @@ mod unregistering {
     #[tokio::test]
     async fn frees_the_id_for_another_channel() {
         let (kit, sms, _ws) = room_with_sms_and_ws().await;
-        kit.unregister_channel(sms.id()).unwrap();
-        let replacement = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+        kit.unregister_channel(sms.channel_id()).unwrap();
+        let replacement = RecordingTransport::new(
+            channel("sms"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
         kit.register_channel(replacement.clone()).unwrap();
         kit.process_inbound(
             message(&replacement, "Back"),
@@ -730,8 +778,12 @@ mod creating {
     #[tokio::test]
     async fn returns_once_its_on_room_created_hooks_are_over() {
         let kit = RoomKit::new(RoomKitOptions::default());
-        kit.register_channel(EchoAgent::new(channel("ai"), "Hello"))
-            .unwrap();
+        kit.register_channel(EchoAgent::new(
+            channel("ai"),
+            "Hello",
+            EchoAgentOptions::default(),
+        ))
+        .unwrap();
         let attaching = kit.clone();
         kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
             let kit = attaching.clone();
@@ -785,7 +837,11 @@ mod metadata_updates {
 
     async fn tagged_room() -> roomkit::model::Room {
         let kit = RoomKit::new(RoomKitOptions::default());
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+        let sms = RecordingTransport::new(
+            channel("sms"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(Tagger::new()).unwrap();
         kit.create_room(CreateRoomOptions {
@@ -794,9 +850,13 @@ mod metadata_updates {
         })
         .await
         .unwrap();
-        kit.attach_channel(&room_id(), sms.id(), AttachChannelOptions::default())
-            .await
-            .unwrap();
+        kit.attach_channel(
+            &room_id(),
+            sms.channel_id(),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
         kit.attach_channel(&room_id(), &channel("crm"), AttachChannelOptions::default())
             .await
             .unwrap();
@@ -885,8 +945,12 @@ mod bindings {
 
     async fn sms_and_agent() -> (RoomKit, RecordingTransport, EchoAgent) {
         let kit = RoomKit::new(RoomKitOptions::default());
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
-        let agent = EchoAgent::new(channel("ai"), "Hello back");
+        let sms = RecordingTransport::new(
+            channel("sms"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
+        let agent = EchoAgent::new(channel("ai"), "Hello back", EchoAgentOptions::default());
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(agent.clone()).unwrap();
         kit.create_room(CreateRoomOptions {
@@ -895,12 +959,20 @@ mod bindings {
         })
         .await
         .unwrap();
-        kit.attach_channel(&room_id(), sms.id(), AttachChannelOptions::default())
-            .await
-            .unwrap();
-        kit.attach_channel(&room_id(), agent.id(), AttachChannelOptions::default())
-            .await
-            .unwrap();
+        kit.attach_channel(
+            &room_id(),
+            sms.channel_id(),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
+        kit.attach_channel(
+            &room_id(),
+            agent.channel_id(),
+            AttachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
         (kit, sms, agent)
     }
 
@@ -923,15 +995,27 @@ mod bindings {
     async fn detach_of_an_unbound_channel_returns_false() {
         let (kit, _sms, agent) = sms_and_agent().await;
         let first = kit
-            .detach_channel(&room_id(), agent.id(), DetachChannelOptions::default())
+            .detach_channel(
+                &room_id(),
+                agent.channel_id(),
+                DetachChannelOptions::default(),
+            )
             .await;
         let after_first = bound(&kit).await;
         let again = kit
-            .detach_channel(&room_id(), agent.id(), DetachChannelOptions::default())
+            .detach_channel(
+                &room_id(),
+                agent.channel_id(),
+                DetachChannelOptions::default(),
+            )
             .await;
         let missing = RoomId::new("room_9").unwrap();
         let elsewhere = kit
-            .detach_channel(&missing, agent.id(), DetachChannelOptions::default())
+            .detach_channel(
+                &missing,
+                agent.channel_id(),
+                DetachChannelOptions::default(),
+            )
             .await;
         assert_eq!(
             (first, again, elsewhere, bound(&kit).await == after_first),
@@ -999,7 +1083,7 @@ mod bindings {
         for metadata in [first, then] {
             kit.update_binding_metadata(
                 &room_id(),
-                sms.id(),
+                sms.channel_id(),
                 metadata,
                 UpdateBindingMetadataOptions::default(),
             )
@@ -1008,7 +1092,7 @@ mod bindings {
         }
         kit.set_access(
             &room_id(),
-            sms.id(),
+            sms.channel_id(),
             Access::ReadOnly,
             SetAccessOptions::default(),
         )
@@ -1017,14 +1101,14 @@ mod bindings {
         let binding = kit
             .set_visibility(
                 &room_id(),
-                sms.id(),
+                sms.channel_id(),
                 Visibility::None,
                 SetVisibilityOptions::default(),
             )
             .await
             .unwrap();
         let read = kit
-            .get_binding(&room_id(), sms.id(), GetBindingOptions::default())
+            .get_binding(&room_id(), sms.channel_id(), GetBindingOptions::default())
             .await
             .unwrap();
         assert_eq!(
@@ -1071,8 +1155,11 @@ mod bindings {
             ("ana", ParticipantStatus::Active),
             ("ben", ParticipantStatus::Left),
         ] {
-            let mut person =
-                Participant::new(ParticipantId::new(id).unwrap(), room_id(), sms.id().clone());
+            let mut person = Participant::new(
+                ParticipantId::new(id).unwrap(),
+                room_id(),
+                sms.channel_id().clone(),
+            );
             person.status = status;
             kit.store().create_participant(person).await.unwrap();
         }
@@ -1103,9 +1190,13 @@ mod bindings {
     #[tokio::test]
     async fn a_detached_agent_is_asked_nothing_more() {
         let (kit, sms, agent) = sms_and_agent().await;
-        kit.detach_channel(&room_id(), agent.id(), DetachChannelOptions::default())
-            .await
-            .unwrap();
+        kit.detach_channel(
+            &room_id(),
+            agent.channel_id(),
+            DetachChannelOptions::default(),
+        )
+        .await
+        .unwrap();
         kit.process_inbound(
             message(&sms, "Bonjour"),
             ProcessInboundOptions {
@@ -1135,11 +1226,11 @@ mod bindings {
             })
             .unwrap();
         }
-        kit.mute(&room_id(), agent.id(), MuteOptions::default())
+        kit.mute(&room_id(), agent.channel_id(), MuteOptions::default())
             .await
             .unwrap();
         let muted = next(&mut fired).await;
-        kit.unmute(&room_id(), agent.id(), UnmuteOptions::default())
+        kit.unmute(&room_id(), agent.channel_id(), UnmuteOptions::default())
             .await
             .unwrap();
         let unmuted = next(&mut fired).await;

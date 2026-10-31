@@ -22,7 +22,7 @@ use std::process::ExitCode;
 use roomkit::model::{
     Access, ChannelId, ChannelSet, ChannelType, InboundMessage, RoomId, TextContent, Visibility,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, FrameworkEvent, HookTrigger, MuteOptions,
     ProcessInboundOptions, RoomKit, SetVisibilityOptions, UnmuteOptions, text_of,
@@ -66,9 +66,16 @@ impl Conversation {
     /// WebSocket is registered, not attached yet.
     async fn open() -> Result<Self, Box<dyn Error>> {
         let kit = shared::kit();
-        let customer = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
-        let advisor =
-            RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::WEBSOCKET);
+        let customer = RecordingTransport::new(
+            ChannelId::new("sms")?,
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
+        let advisor = RecordingTransport::new(
+            ChannelId::new("ws_advisor")?,
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
         let agent = ChannelId::new("ai_support")?;
         kit.register_channel(customer.clone())?;
         kit.register_channel(advisor.clone())?;
@@ -82,8 +89,12 @@ impl Conversation {
             ..Default::default()
         })
         .await?;
-        kit.attach_channel(&room, customer.id(), AttachChannelOptions::default())
-            .await?;
+        kit.attach_channel(
+            &room,
+            customer.channel_id(),
+            AttachChannelOptions::default(),
+        )
+        .await?;
         kit.attach_channel(&room, &agent, AttachChannelOptions::default())
             .await?;
         Ok(Self {
@@ -112,7 +123,7 @@ impl Conversation {
         text: &str,
     ) -> Result<(), Box<dyn Error>> {
         println!("{sender} writes {text:?}.");
-        let message = InboundMessage::new(on.id().clone(), sender, TextContent::new(text));
+        let message = InboundMessage::new(on.channel_id().clone(), sender, TextContent::new(text));
         self.kit
             .process_inbound(
                 message,
@@ -147,7 +158,7 @@ impl Conversation {
         self.kit
             .attach_channel(
                 &self.room,
-                self.advisor.id(),
+                self.advisor.channel_id(),
                 AttachChannelOptions::default(),
             )
             .await?;
@@ -159,7 +170,7 @@ impl Conversation {
             .await?;
         self.agent_visible_to(Visibility::Channels(ChannelSet::new([self
             .advisor
-            .id()
+            .channel_id()
             .clone()])?))
             .await?;
         self.kit
@@ -186,7 +197,7 @@ impl Conversation {
 
     /// The advisor's `room_channel_attached` event, if it was emitted.
     fn advisor_attached(&mut self) -> Option<FrameworkEvent> {
-        let advisor = self.advisor.id().clone();
+        let advisor = self.advisor.channel_id().clone();
         shared::framework_events(&mut self.events)
             .into_iter()
             .find(|event| {

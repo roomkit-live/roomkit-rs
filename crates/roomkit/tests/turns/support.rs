@@ -7,7 +7,9 @@ use std::future::Future;
 use roomkit::model::{
     ChannelId, ChannelType, InboundMessage, Metadata, RoomId, TextContent, Timestamp, ToolCall,
 };
-use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
+use roomkit::testing::{
+    RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, InboundResult, ProcessInboundOptions, RoomKit,
     RoomKitOptions,
@@ -57,8 +59,12 @@ where
 {
     let at: Timestamp = "2026-10-26T12:00:00Z".parse().unwrap();
     let kit = kit_with_environment(RoomKitOptions::default(), SequentialEnvironment::new(at));
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     let agent = AiAgent::new(channel("ai"), model())
         .with_tools(Tools::new().tool(lookup(), handler))
         .unwrap();

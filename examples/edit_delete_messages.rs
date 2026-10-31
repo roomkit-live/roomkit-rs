@@ -21,7 +21,7 @@ use roomkit::model::{
     ChannelCapabilities, ChannelId, ChannelType, DeleteContent, EditContent, EditSource,
     EventContent, EventId, EventType, HookResult, InboundMessage, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookTrigger, ProcessInboundOptions,
     RoomKit, is_deleted, is_edited, text_of,
@@ -77,12 +77,23 @@ struct Conversation {
 impl Conversation {
     async fn open() -> Result<Self, Box<dyn Error>> {
         let kit = shared::kit();
-        let customer =
-            RecordingTransport::new(ChannelId::new("wa_customer")?, ChannelType::WHATSAPP);
-        let advisor =
-            RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::WEBSOCKET)
-                .with_capabilities(edits_natively());
-        let sms = RecordingTransport::new(ChannelId::new("sms_copy")?, ChannelType::SMS);
+        let customer = RecordingTransport::new(
+            ChannelId::new("wa_customer")?,
+            ChannelType::WHATSAPP,
+            RecordingTransportOptions::default(),
+        );
+        let advisor = RecordingTransport::new(
+            ChannelId::new("ws_advisor")?,
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions {
+                capabilities: Some(edits_natively()),
+            },
+        );
+        let sms = RecordingTransport::new(
+            ChannelId::new("sms_copy")?,
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
         let agent =
             ScriptedAgent::new(ChannelId::new("ai")?, &[]).with_capabilities(edits_natively());
         kit.register_channel(customer.clone())?;
@@ -98,7 +109,11 @@ impl Conversation {
             ..Default::default()
         })
         .await?;
-        for channel_id in [customer.id(), advisor.id(), sms.id()] {
+        for channel_id in [
+            customer.channel_id(),
+            advisor.channel_id(),
+            sms.channel_id(),
+        ] {
             kit.attach_channel(&room, channel_id, AttachChannelOptions::default())
                 .await?;
         }
@@ -148,8 +163,11 @@ impl Conversation {
     /// The customer writes [`MESSAGES`].
     async fn chat(&mut self) -> Result<(), Box<dyn Error>> {
         for text in MESSAGES {
-            let message =
-                InboundMessage::new(self.customer.id().clone(), CUSTOMER, TextContent::new(text));
+            let message = InboundMessage::new(
+                self.customer.channel_id().clone(),
+                CUSTOMER,
+                TextContent::new(text),
+            );
             let committed = self
                 .send(message)
                 .await?
@@ -164,7 +182,7 @@ impl Conversation {
     fn edit(&self, index: usize, text: &str) -> Result<InboundMessage, Box<dyn Error>> {
         let target_event_id = self.sent.get(index).ok_or("no such message")?.clone();
         let mut message = InboundMessage::new(
-            self.customer.id().clone(),
+            self.customer.channel_id().clone(),
             CUSTOMER,
             EventContent::Edit(EditContent {
                 edit_source: Some(EditSource::Sender),
@@ -179,7 +197,7 @@ impl Conversation {
     fn delete(&self, index: usize) -> Result<InboundMessage, Box<dyn Error>> {
         let target_event_id = self.sent.get(index).ok_or("no such message")?.clone();
         let mut message = InboundMessage::new(
-            self.customer.id().clone(),
+            self.customer.channel_id().clone(),
             CUSTOMER,
             EventContent::Delete(DeleteContent::new(target_event_id)),
         );

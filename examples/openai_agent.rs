@@ -21,7 +21,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, text_of};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::Value;
@@ -46,8 +46,16 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?;
 
     let kit = shared::kit();
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
-    let web = RecordingTransport::new(ChannelId::new("web")?, ChannelType::WEBSOCKET);
+    let sms = RecordingTransport::new(
+        ChannelId::new("sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    let web = RecordingTransport::new(
+        ChannelId::new("web")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     let agent_id = agent.id().clone();
     kit.register_channel(sms.clone())?;
     kit.register_channel(web.clone())?;
@@ -58,7 +66,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    for channel in [sms.id(), web.id(), &agent_id] {
+    for channel in [sms.channel_id(), web.channel_id(), &agent_id] {
         kit.attach_channel(&room, channel, AttachChannelOptions::default())
             .await?;
     }
@@ -73,8 +81,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ),
         (&web, "visitor-7", "Bob", "Can I pick up two loaves at 5?"),
     ] {
-        println!("{name} writes on {}: {text:?}", channel.id());
-        let mut message = InboundMessage::new(channel.id().clone(), sender, TextContent::new(text));
+        println!("{name} writes on {}: {text:?}", channel.channel_id());
+        let mut message =
+            InboundMessage::new(channel.channel_id().clone(), sender, TextContent::new(text));
         message
             .metadata
             .insert("sender_name".to_owned(), name.into());

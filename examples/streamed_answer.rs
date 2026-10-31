@@ -41,7 +41,7 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventType, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     DeliveryStream, ProcessInboundOptions, RoomKit, StreamItem, text_of,
@@ -194,7 +194,11 @@ async fn bakery(
     let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?.with_tools(tools)?;
     let kit = shared::kit();
     let screen = Screen::new(ChannelId::new("screen")?);
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
+    let sms = RecordingTransport::new(
+        ChannelId::new("sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(screen.clone())?;
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent)?;
@@ -223,7 +227,7 @@ async fn ask(
     number: &str,
     text: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let message = InboundMessage::new(sms.id().clone(), number, TextContent::new(text));
+    let message = InboundMessage::new(sms.channel_id().clone(), number, TextContent::new(text));
     let result = kit
         .process_inbound(
             message,

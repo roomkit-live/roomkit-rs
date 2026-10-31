@@ -18,7 +18,8 @@ use roomkit::model::{
     RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
-    EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
@@ -36,7 +37,11 @@ fn room_id() -> RoomId {
 }
 
 fn message(from: &RecordingTransport, text: &str) -> InboundMessage {
-    InboundMessage::new(from.id().clone(), "+15551234567", TextContent::new(text))
+    InboundMessage::new(
+        from.channel_id().clone(),
+        "+15551234567",
+        TextContent::new(text),
+    )
 }
 
 /// A kit with no room, an SMS transport and an echo agent registered.
@@ -45,10 +50,18 @@ fn kit_without_rooms() -> (RoomKit, RecordingTransport) {
         RoomKitOptions::default(),
         SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
     );
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(sms.clone()).unwrap();
-    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
-        .unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    ))
+    .unwrap();
     (kit, sms)
 }
 
@@ -381,8 +394,12 @@ async fn sms_room(attach_sms: Option<&str>) -> (RoomKit, Sms) {
     let kit = RoomKit::new(RoomKitOptions::default());
     let sms = Sms::new();
     kit.register_channel(sms.clone()).unwrap();
-    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
-        .unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    ))
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room_id()),
         ..Default::default()
@@ -456,8 +473,12 @@ async fn a_room_created_for_an_sms_sender_answers_at_their_number() {
     let kit = RoomKit::new(RoomKitOptions::default());
     let sms = Sms::new();
     kit.register_channel(sms.clone()).unwrap();
-    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
-        .unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    ))
+    .unwrap();
     let attaching = kit.clone();
     kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
         let kit = attaching.clone();

@@ -22,7 +22,7 @@ use roomkit::model::{
     ChannelId, ChannelType, EventType, InboundMessage, Room, RoomId, RoomStatus, RoomTimers,
     TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CloseRoomOptions,
     ConversationStore, CreateRoomOptions, FrameworkEvent, HookTrigger, InboundResult,
@@ -45,9 +45,16 @@ impl Helpdesk {
     fn new() -> Result<Self, Box<dyn Error>> {
         let clock = Clock::new();
         let kit = clock.kit();
-        let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
-        let advisor =
-            RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::WEBSOCKET);
+        let sms = RecordingTransport::new(
+            ChannelId::new("sms")?,
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
+        let advisor = RecordingTransport::new(
+            ChannelId::new("ws_advisor")?,
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
         kit.register_channel(sms.clone())?;
         kit.register_channel(advisor.clone())?;
         Ok(Self {
@@ -67,10 +74,14 @@ impl Helpdesk {
         };
         self.kit.create_room(options).await?;
         self.kit
-            .attach_channel(room, self.sms.id(), AttachChannelOptions::default())
+            .attach_channel(room, self.sms.channel_id(), AttachChannelOptions::default())
             .await?;
         self.kit
-            .attach_channel(room, self.advisor.id(), AttachChannelOptions::default())
+            .attach_channel(
+                room,
+                self.advisor.channel_id(),
+                AttachChannelOptions::default(),
+            )
             .await?;
         Ok(())
     }
@@ -78,7 +89,7 @@ impl Helpdesk {
     async fn alice_says(&self, room: &RoomId, text: &str) -> Result<InboundResult, Box<dyn Error>> {
         println!("  Alice writes {text:?}.");
         let message = InboundMessage::new(
-            self.sms.id().clone(),
+            self.sms.channel_id().clone(),
             "+15551234567",
             TextContent::new(text),
         );

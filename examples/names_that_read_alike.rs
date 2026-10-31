@@ -17,7 +17,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, EventType, InboundMessage, RoomId, TextContent};
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions};
 
 use shared::Checks;
@@ -25,8 +25,16 @@ use shared::Checks;
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
-    let web = RecordingTransport::new(ChannelId::new("web")?, ChannelType::WEBSOCKET);
+    let sms = RecordingTransport::new(
+        ChannelId::new("sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    let web = RecordingTransport::new(
+        ChannelId::new("web")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(sms.clone())?;
     kit.register_channel(web.clone())?;
     let room = RoomId::new("room_1")?;
@@ -35,16 +43,16 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    kit.attach_channel(&room, sms.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, sms.channel_id(), AttachChannelOptions::default())
         .await?;
-    kit.attach_channel(&room, web.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, web.channel_id(), AttachChannelOptions::default())
         .await?;
 
     for (channel, sender, name) in [
-        (sms.id(), "+15551234567", "Alice"),
-        (web.id(), "visitor-7", "ALICE"),
-        (sms.id(), "+15559876543", "\u{410}lice"),
-        (sms.id(), "+15551234567", "Alice"),
+        (sms.channel_id(), "+15551234567", "Alice"),
+        (web.channel_id(), "visitor-7", "ALICE"),
+        (sms.channel_id(), "+15559876543", "\u{410}lice"),
+        (sms.channel_id(), "+15551234567", "Alice"),
     ] {
         println!("{sender} writes, signed {name:?}.");
         let mut message = InboundMessage::new(channel.clone(), sender, TextContent::new("Hello"));

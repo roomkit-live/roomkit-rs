@@ -15,7 +15,9 @@ use roomkit::model::{
     Access, ChannelId, ChannelType, EventSource, InboundMessage, Metadata, RoomEvent, RoomId,
     RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
 };
-use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
+use roomkit::testing::{
+    RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
     CloseRoomOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, DeleteEventOptions,
@@ -52,8 +54,12 @@ async fn room_of(owner: Option<&str>) -> (RoomKit, Arc<SequentialEnvironment>) {
     ));
     let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&clock));
     for (id, channel_type) in [("sms", ChannelType::SMS), ("ws", ChannelType::WEBSOCKET)] {
-        kit.register_channel(RecordingTransport::new(channel(id), channel_type))
-            .unwrap();
+        kit.register_channel(RecordingTransport::new(
+            channel(id),
+            channel_type,
+            RecordingTransportOptions::default(),
+        ))
+        .unwrap();
     }
     let organization_id = owner.map(str::to_owned);
     let room = CreateRoomOptions {

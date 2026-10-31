@@ -20,7 +20,9 @@ use std::time::Duration;
 use roomkit::model::{
     ChannelId, ChannelType, InboundMessage, Room, RoomId, RoomStatus, RoomTimers, TextContent,
 };
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
     AttachChannelOptions, CheckAllTimersOptions, ConversationStore, CreateRoomOptions, HookTrigger,
     ProcessInboundOptions, RoomKit,
@@ -108,12 +110,20 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let clock = Clock::new();
     let kit = clock.kit();
     let sms = SmsNumber::new(ChannelId::new("sms")?);
-    let team = RecordingTransport::new(ChannelId::new("team_sms")?, ChannelType::SMS);
-    let agent = EchoAgent::new(ChannelId::new("ai")?, "You said: ").quoting();
+    let team = RecordingTransport::new(
+        ChannelId::new("team_sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    let agent = EchoAgent::new(
+        ChannelId::new("ai")?,
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    );
     kit.register_channel(sms.clone())?;
     kit.register_channel(team.clone())?;
     kit.register_channel(agent.clone())?;
-    agent_joins_every_room(&kit, agent.id())?;
+    agent_joins_every_room(&kit, agent.channel_id())?;
     let mut checks = Checks::default();
 
     let support = RoomId::new("support")?;
@@ -153,11 +163,12 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         group: true,
         ..Default::default()
     };
-    kit.attach_channel(&team_room, team.id(), group).await?;
-    text(&kit, team.id(), ALICE, "Meeting at 3?").await?;
+    kit.attach_channel(&team_room, team.channel_id(), group)
+        .await?;
+    text(&kit, team.channel_id(), ALICE, "Meeting at 3?").await?;
     two_hours_later(&kit, &clock).await?;
     let paused_group = status(&kit, &team_room).await?;
-    let landed = text(&kit, team.id(), BOB, "On my way.").await?;
+    let landed = text(&kit, team.channel_id(), BOB, "On my way.").await?;
     checks.expect(
         "a paused group room takes another member's text, which resumes it",
         paused_group == Some(RoomStatus::Paused)

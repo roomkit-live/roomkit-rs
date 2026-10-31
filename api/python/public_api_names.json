@@ -193,6 +193,7 @@
     "OwnerTools",
     "PCMAudio",
     "Participant",
+    "ParticipantExistsError",
     "ParticipantNotAdmittedError",
     "ParticipantNotFoundError",
     "PendingInput",
@@ -599,6 +600,7 @@
     "DeliveryResult",
     "DeliveryStatus",
     "EditContent",
+    "EditSource",
     "EventContent",
     "EventDirection",
     "EventFilter",
@@ -647,6 +649,7 @@
     "TaskStatus",
     "TemplateContent",
     "TextContent",
+    "ThinkingDeltaMarker",
     "ThinkingEvent",
     "ToolCallCallback",
     "ToolCallContent",
@@ -1106,6 +1109,7 @@
     "SkillEntry",
     "SkillError",
     "SkillExecutionRequest",
+    "SkillManifestTooLargeError",
     "SkillMetadata",
     "SkillParseError",
     "SkillPathError",
@@ -1215,6 +1219,11 @@
     "TelemetryConfig",
     "TelemetryProvider",
     "get_current_span"
+  ],
+  "roomkit.testing": [
+    "Delivery",
+    "EchoAgent",
+    "RecordingTransport"
   ],
   "roomkit.tools": [
     "ExternalToolHandler",

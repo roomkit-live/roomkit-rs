@@ -10,7 +10,7 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomEvent, RoomId,
     TextContent, ToolCallContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
     RoomKitOptions,
@@ -126,8 +126,12 @@ impl Room {
     /// The room, its agent the one `agent` builds.
     pub(crate) async fn with(agent: AiAgent<ScriptedProvider>) -> Self {
         let kit = RoomKit::new(RoomKitOptions::default());
-        kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-            .unwrap();
+        kit.register_channel(RecordingTransport::new(
+            channel("sms"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        ))
+        .unwrap();
         kit.register_channel(agent).unwrap();
         kit.create_room(CreateRoomOptions {
             room_id: Some(room_id()),

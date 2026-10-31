@@ -11,7 +11,9 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, EventStatus, InboundMessage, RoomId, TextContent};
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, FrameworkEvent, ProcessInboundOptions};
 
 use shared::Checks;
@@ -21,11 +23,20 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
     let mut events = kit.subscribe();
 
-    let human = RecordingTransport::new(ChannelId::new("ws")?, ChannelType::WEBSOCKET);
-    let analyst = EchoAgent::new(ChannelId::new("analyst")?, "Key findings: revenue is up.");
+    let human = RecordingTransport::new(
+        ChannelId::new("ws")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    let analyst = EchoAgent::new(
+        ChannelId::new("analyst")?,
+        "Key findings: revenue is up.",
+        EchoAgentOptions::default(),
+    );
     let writer = EchoAgent::new(
         ChannelId::new("writer")?,
         "Report drafted from the findings.",
+        EchoAgentOptions::default(),
     );
     kit.register_channel(human.clone())?;
     kit.register_channel(analyst.clone())?;
@@ -37,18 +48,22 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    for channel in [human.id(), analyst.id(), writer.id()] {
+    for channel in [
+        human.channel_id(),
+        analyst.channel_id(),
+        writer.channel_id(),
+    ] {
         kit.attach_channel(&room, channel, AttachChannelOptions::default())
             .await?;
     }
 
     println!("The human asks the analyst; each agent then answers the other (AGENT_CHAIN).");
     let mut message = InboundMessage::new(
-        human.id().clone(),
+        human.channel_id().clone(),
         "alice",
         TextContent::new("Analyse the quarter"),
     );
-    message.addressed_to = Some(vec![analyst.id().clone()]);
+    message.addressed_to = Some(vec![analyst.channel_id().clone()]);
     kit.process_inbound(
         message,
         ProcessInboundOptions {

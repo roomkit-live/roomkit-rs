@@ -17,7 +17,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, InboundMessage, RoomId, TextContent};
-use roomkit::testing::EchoAgent;
+use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, FrameworkEvent, HookTrigger, ProcessInboundOptions,
     RoomKit, text_of,
@@ -72,11 +72,15 @@ async fn bound_to(
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
     let sms = SmsNumber::new(ChannelId::new("sms_main")?);
-    let agent = EchoAgent::new(ChannelId::new("ai")?, "Bonjour! You said: ").quoting();
+    let agent = EchoAgent::new(
+        ChannelId::new("ai")?,
+        "Bonjour! You said: ",
+        EchoAgentOptions { quote: true },
+    );
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent.clone())?;
     let attaching = kit.downgrade();
-    let agent_id = agent.id().clone();
+    let agent_id = agent.channel_id().clone();
     kit.observe(
         "attach_agent",
         HookTrigger::OnRoomCreated,

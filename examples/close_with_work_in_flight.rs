@@ -43,7 +43,7 @@ use roomkit::model::{
     DeliveryResultStatus, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
     TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     GetTimelineOptions, InboundResult, ProcessInboundOptions, RoomKit, RoomKitError,
@@ -163,8 +163,16 @@ async fn kit(
     in_hook: &Arc<Notify>,
 ) -> Result<RoomKit, Box<dyn Error>> {
     let kit = shared::kit();
-    kit.register_channel(RecordingTransport::new(id("chat"), ChannelType::WEBSOCKET))?;
-    kit.register_channel(RecordingTransport::new(id("web"), ChannelType::WEBSOCKET))?;
+    kit.register_channel(RecordingTransport::new(
+        id("chat"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    ))?;
+    kit.register_channel(RecordingTransport::new(
+        id("web"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    ))?;
     kit.register_channel(stuck.clone())?;
     let provider = LongAnswer {
         started: Arc::clone(started),

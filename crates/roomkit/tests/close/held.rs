@@ -14,7 +14,7 @@ use roomkit::model::{
     ChannelBinding, ChannelOutput, ChannelType, EventSource, InboundMessage, RoomContext,
     RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, EventQuery, InboundResult, ProcessInboundOptions, RoomKit, RoomKitError,
@@ -148,8 +148,12 @@ pub(crate) async fn kit_of<S: ConversationStore>(
     rooms: &[&str],
 ) -> RoomKit<S> {
     let kit = RoomKit::new(RoomKitOptions::with_store(store));
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     for target in targets {
         kit.register_channel((*target).clone()).unwrap();
     }

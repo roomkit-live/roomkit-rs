@@ -24,7 +24,7 @@ use roomkit::model::{
     DeleteContent, EditContent, EventContent, EventDirection, EventId, EventSource, EventType,
     HookResult, InboundMessage, ParticipantId, RoomContext, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, DeleteEventOptions, HookTrigger, InboundResult, InboundRoomRouter,
@@ -76,8 +76,12 @@ async fn room(max_chain_depth: u32) -> RoomKit {
 /// [`room`] on a kit built with `options`.
 async fn room_with(options: RoomKitOptions) -> RoomKit {
     let kit = RoomKit::new(options);
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room_id()),
         ..Default::default()
@@ -255,6 +259,7 @@ async fn an_observer_of_before_broadcast_s_call_returns_with_its_delivery_result
     kit.register_channel(RecordingTransport::new(
         channel("ws"),
         ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())

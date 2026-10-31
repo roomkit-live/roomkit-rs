@@ -19,7 +19,8 @@ use roomkit::model::{
     TextContent, Timestamp,
 };
 use roomkit::testing::{
-    Environment, RecordingTransport, SequentialEnvironment, kit_with_environment,
+    Environment, RecordingTransport, RecordingTransportOptions, SequentialEnvironment,
+    kit_with_environment,
 };
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
@@ -193,10 +194,23 @@ async fn room() -> Fixture {
 async fn room_with(agent: Reader) -> Fixture {
     let setup = Setup::new();
     let kit = kit_with_environment(RoomKitOptions::default(), Arc::clone(&setup));
-    let wa = RecordingTransport::new(channel("wa"), ChannelType::WHATSAPP);
-    let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET)
-        .with_capabilities(edits_natively());
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+    let wa = RecordingTransport::new(
+        channel("wa"),
+        ChannelType::WHATSAPP,
+        RecordingTransportOptions::default(),
+    );
+    let ws = RecordingTransport::new(
+        channel("ws"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions {
+            capabilities: Some(edits_natively()),
+        },
+    );
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(wa).unwrap();
     kit.register_channel(ws.clone()).unwrap();
     kit.register_channel(sms.clone()).unwrap();

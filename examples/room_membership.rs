@@ -25,7 +25,7 @@ use roomkit::model::{
     HookResult, InboundMessage, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
     RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, InboundResult,
     ProcessInboundOptions, RoomKit, StoreError, is_deleted,
@@ -47,7 +47,11 @@ impl Team {
     async fn open() -> Result<Self, Box<dyn Error>> {
         let clock = Clock::new();
         let kit = clock.kit();
-        let ws = RecordingTransport::new(ChannelId::new("ws")?, ChannelType::WEBSOCKET);
+        let ws = RecordingTransport::new(
+            ChannelId::new("ws")?,
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
         kit.register_channel(ws.clone())?;
         let rosters = Log::new();
         let read = rosters.clone();
@@ -68,13 +72,13 @@ impl Team {
             ..Default::default()
         })
         .await?;
-        kit.attach_channel(&room, ws.id(), AttachChannelOptions::default())
+        kit.attach_channel(&room, ws.channel_id(), AttachChannelOptions::default())
             .await?;
         Ok(Self {
             kit,
             clock,
             room,
-            ws: ws.id().clone(),
+            ws: ws.channel_id().clone(),
             rosters,
         })
     }

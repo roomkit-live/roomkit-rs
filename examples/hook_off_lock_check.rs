@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId, TextContent};
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger,
     InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, text_of,
@@ -89,8 +89,16 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         process_timeout: PROCESS_TIMEOUT,
         ..Default::default()
     });
-    let user = RecordingTransport::new(ChannelId::new("ws_user")?, ChannelType::WEBSOCKET);
-    let agent = RecordingTransport::new(ChannelId::new("ws_agent")?, ChannelType::WEBSOCKET);
+    let user = RecordingTransport::new(
+        ChannelId::new("ws_user")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    let agent = RecordingTransport::new(
+        ChannelId::new("ws_agent")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(user.clone())?;
     kit.register_channel(agent.clone())?;
     let scans = Log::new();
@@ -101,14 +109,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    kit.attach_channel(&room, user.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, user.channel_id(), AttachChannelOptions::default())
         .await?;
-    kit.attach_channel(&room, agent.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, agent.channel_id(), AttachChannelOptions::default())
         .await?;
     let chat = Chat {
         kit: kit.clone(),
         room: room.clone(),
-        user: user.id().clone(),
+        user: user.channel_id().clone(),
     };
     let mut checks = Checks::default();
 

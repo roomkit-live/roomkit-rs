@@ -20,7 +20,9 @@ use roomkit::model::{
     ChannelId, ChannelType, EventDirection, EventSource, EventStatus, HookResult, InboundMessage,
     InjectedEvent, Observation, RoomEvent, RoomId, RoomStatus, TextContent, Timestamp,
 };
-use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
+use roomkit::testing::{
+    RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookReturn,
     HookSpec, HookTrigger, InboundResult, PauseRoomOptions, ProcessInboundOptions, RoomKit,
@@ -54,8 +56,12 @@ fn before_broadcast(name: &str, needs_lock: bool) -> HookSpec {
 /// A kit with an SMS transport attached to `room_1`.
 async fn room() -> RoomKit {
     let kit = RoomKit::new(RoomKitOptions::default());
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room_id()),
         ..Default::default()
@@ -263,6 +269,7 @@ async fn a_message_no_check_fires_for_commits_during_another_s_check() {
     kit.register_channel(RecordingTransport::new(
         channel("ws"),
         ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())
@@ -466,8 +473,16 @@ struct B2 {
 async fn block_and_inject(needs_lock: bool) -> B2 {
     let now = Timestamp::from_unix_millis(1_792_677_780_000).unwrap();
     let kit = kit_with_environment(RoomKitOptions::default(), SequentialEnvironment::new(now));
-    let customer = RecordingTransport::new(channel("sms_customer"), ChannelType::SMS);
-    let advisor = RecordingTransport::new(channel("ws_advisor"), ChannelType::WEBSOCKET);
+    let customer = RecordingTransport::new(
+        channel("sms_customer"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    let advisor = RecordingTransport::new(
+        channel("ws_advisor"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(customer.clone()).unwrap();
     kit.register_channel(advisor.clone()).unwrap();
     let to_customer = notice("Message blocked. Do not send your SIN by SMS.", now);
@@ -517,14 +532,22 @@ async fn block_and_inject(needs_lock: bool) -> B2 {
     })
     .await
     .unwrap();
-    kit.attach_channel(&room_id(), customer.id(), AttachChannelOptions::default())
-        .await
-        .unwrap();
-    kit.attach_channel(&room_id(), advisor.id(), AttachChannelOptions::default())
-        .await
-        .unwrap();
+    kit.attach_channel(
+        &room_id(),
+        customer.channel_id(),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
+    kit.attach_channel(
+        &room_id(),
+        advisor.channel_id(),
+        AttachChannelOptions::default(),
+    )
+    .await
+    .unwrap();
     let sin = InboundMessage::new(
-        customer.id().clone(),
+        customer.channel_id().clone(),
         "+15551234567",
         TextContent::new("Mon NAS est 123-456-789"),
     );

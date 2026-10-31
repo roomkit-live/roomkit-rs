@@ -20,7 +20,7 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType, HookResult,
     InboundMessage, InjectedEvent, ModelError, RoomEvent, RoomId, SystemContent, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookTrigger, LifecyclePayload, ProcessInboundOptions,
     RoomKit,
@@ -109,8 +109,16 @@ fn welcomes(transport: &RecordingTransport) -> Vec<String> {
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let alice = RecordingTransport::new(ChannelId::new("ws_alice")?, ChannelType::WEBSOCKET);
-    let bob = RecordingTransport::new(ChannelId::new("ws_bob")?, ChannelType::WEBSOCKET);
+    let alice = RecordingTransport::new(
+        ChannelId::new("ws_alice")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    let bob = RecordingTransport::new(
+        ChannelId::new("ws_bob")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(alice.clone())?;
     kit.register_channel(bob.clone())?;
     let (attached, welcomed) = (Log::new(), Log::new());
@@ -123,18 +131,21 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     })
     .await?;
     println!("Alice and Bob join the room.");
-    kit.attach_channel(&room, alice.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, alice.channel_id(), AttachChannelOptions::default())
         .await?;
-    kit.attach_channel(&room, bob.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, bob.channel_id(), AttachChannelOptions::default())
         .await?;
     // The observer runs in the background, once each attach returned: the
     // room goes on once it noted both.
     attached.wait_for(2).await;
 
     let says = async |on: &RecordingTransport, text: &str| -> Result<(), Box<dyn Error>> {
-        println!("{} writes {text:?}.", on.id());
-        let message =
-            InboundMessage::new(on.id().clone(), on.id().as_str(), TextContent::new(text));
+        println!("{} writes {text:?}.", on.channel_id());
+        let message = InboundMessage::new(
+            on.channel_id().clone(),
+            on.channel_id().as_str(),
+            TextContent::new(text),
+        );
         kit.process_inbound(
             message,
             ProcessInboundOptions {
@@ -163,7 +174,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "each newcomer is welcomed once",
-        welcomed.entries() == [alice.id().clone(), bob.id().clone()],
+        welcomed.entries() == [alice.channel_id().clone(), bob.channel_id().clone()],
     );
     checks.expect(
         "the messages reach the room as usual",

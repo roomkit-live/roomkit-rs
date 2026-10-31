@@ -35,7 +35,9 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
+use roomkit::testing::{
+    RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, FrameworkEvent, HookExecution, HookSpec, HookTrigger, InboundResult,
@@ -77,8 +79,12 @@ async fn room_bound_by(process_timeout: Duration) -> RoomKit {
 
 /// `kit` with an SMS transport attached to `room_1`.
 async fn room_with(kit: RoomKit) -> RoomKit {
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room_id()),
         ..Default::default()

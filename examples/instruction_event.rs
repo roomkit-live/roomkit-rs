@@ -19,7 +19,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, EventType, InboundMessage, RoomId, TextContent};
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, InboundResult, ProcessInboundOptions, text_of,
 };
@@ -58,8 +58,16 @@ fn instruction(
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let app = RecordingTransport::new(ChannelId::new("app")?, ChannelType::WEBSOCKET);
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
+    let app = RecordingTransport::new(
+        ChannelId::new("app")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    let sms = RecordingTransport::new(
+        ChannelId::new("sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     let advisor = ScriptedAgent::new(ChannelId::new("advisor")?, ADVISOR);
     let notetaker = ScriptedAgent::new(ChannelId::new("notetaker")?, &[]);
     kit.register_channel(app.clone())?;
@@ -72,7 +80,12 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    for channel in [app.id(), sms.id(), advisor.id(), notetaker.id()] {
+    for channel in [
+        app.channel_id(),
+        sms.channel_id(),
+        advisor.id(),
+        notetaker.id(),
+    ] {
         kit.attach_channel(&room, channel, AttachChannelOptions::default())
             .await?;
     }
@@ -86,18 +99,30 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         Ok(kit.process_inbound(message, into_room.clone()).await?)
     };
 
-    let introduced = run(instruction(app.id(), advisor.id(), INTRODUCE, false)).await?;
+    let introduced = run(instruction(
+        app.channel_id(),
+        advisor.id(),
+        INTRODUCE,
+        false,
+    ))
+    .await?;
     let customer = InboundMessage::new(
-        sms.id().clone(),
+        sms.channel_id().clone(),
         "+15551234567",
         TextContent::new("I'd like to check my balance."),
     );
     run(customer).await?;
-    run(instruction(app.id(), advisor.id(), SUMMARIZE, false)).await?;
-    run(instruction(app.id(), advisor.id(), SUMMARIZE, true)).await?;
+    run(instruction(
+        app.channel_id(),
+        advisor.id(),
+        SUMMARIZE,
+        false,
+    ))
+    .await?;
+    run(instruction(app.channel_id(), advisor.id(), SUMMARIZE, true)).await?;
     let unaddressed = run(InboundMessage {
         addressed_to: None,
-        ..instruction(app.id(), advisor.id(), SUMMARIZE, false)
+        ..instruction(app.channel_id(), advisor.id(), SUMMARIZE, false)
     })
     .await?;
 

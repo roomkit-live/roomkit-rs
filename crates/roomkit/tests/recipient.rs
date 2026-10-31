@@ -19,7 +19,7 @@ use roomkit::model::{
     InboundMessage, Metadata, ParticipantId, RoomContext, RoomEvent, RoomId, TextContent,
     Timestamp,
 };
-use roomkit::testing::{EchoAgent, SequentialEnvironment, kit_with_environment};
+use roomkit::testing::{EchoAgent, EchoAgentOptions, SequentialEnvironment, kit_with_environment};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ChannelOf, ConversationStore,
     CreateRoomOptions, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookTrigger,
@@ -147,8 +147,12 @@ fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Sms) {
     );
     let sms = Sms::new();
     kit.register_channel(sms.clone()).unwrap();
-    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
-        .unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    ))
+    .unwrap();
     let attaching = kit.clone();
     kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
         let kit = attaching.clone();

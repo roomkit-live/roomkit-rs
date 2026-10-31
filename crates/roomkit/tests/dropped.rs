@@ -17,7 +17,7 @@ use roomkit::model::{
     HookResult, Identity, IdentityId, InboundMessage, Observation, Participant, ParticipantId,
     Room, RoomContext, RoomEvent, RoomId, RoomUpdates, Task, TextContent, Timestamp,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CommitEventOptions, ConversationStore, CreateRoomOptions, EventFilter,
     EventQuery, FrameworkEvent, InMemoryStore, ProcessInboundOptions, RoomCounters, RoomFilter,
@@ -304,9 +304,17 @@ impl ConversationStore for GatedStore {
 /// attached to `room_1`.
 async fn gated_room() -> (RoomKit<GatedStore>, RecordingTransport) {
     let kit = RoomKit::new(RoomKitOptions::with_store(GatedStore::default()));
-    let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    let ws = RecordingTransport::new(
+        channel("ws"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     kit.register_channel(ws.clone()).unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room_id()),
@@ -669,8 +677,12 @@ async fn a_call_cut_before_its_commit_does_not_read_an_adopted_entry_s() {
 async fn a_call_cut_before_its_commit_does_not_read_its_channel_s_record() {
     let kit = RoomKit::new(RoomKitOptions::with_store(GatedStore::default()));
     kit.store().started.store(true, Ordering::SeqCst);
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room_id()),
         ..Default::default()

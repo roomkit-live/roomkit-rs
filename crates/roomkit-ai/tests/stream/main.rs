@@ -19,7 +19,7 @@ use roomkit::model::{
     DirectEvent, EventContent, EventType, HookResult, InboundMessage, RoomContext, RoomEvent,
     RoomId, TextContent, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, DeliveryStream, HookExecution, HookSpec, HookTrigger, InboundResult,
@@ -338,7 +338,11 @@ impl Room {
         let agent = AiAgent::new(channel("agent"), model.clone())
             .with_tools(tools(&kit))
             .unwrap();
-        let web = RecordingTransport::new(channel("web"), ChannelType::WEBHOOK);
+        let web = RecordingTransport::new(
+            channel("web"),
+            ChannelType::WEBHOOK,
+            RecordingTransportOptions::default(),
+        );
         kit.register_channel(web.clone()).unwrap();
         kit.register_channel(ws.clone()).unwrap();
         kit.register_channel(agent).unwrap();
@@ -944,6 +948,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
     kit.register_channel(RecordingTransport::new(
         channel("web"),
         ChannelType::WEBHOOK,
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     kit.register_channel(ws.clone()).unwrap();
@@ -1025,9 +1030,17 @@ async fn the_default_deliver_stream_delivers_each_row_once_the_stream_is_over() 
     let model = ScriptedProvider::new([ScriptedRound::writing(["Hello ", "there."])]);
     let agent = AiAgent::new(channel("agent"), model);
     let kit = RoomKit::new(RoomKitOptions::default());
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     let buffered = Buffered {
-        inner: RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET),
+        inner: RecordingTransport::new(
+            channel("ws"),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        ),
     };
     kit.register_channel(sms).unwrap();
     kit.register_channel(buffered.clone()).unwrap();

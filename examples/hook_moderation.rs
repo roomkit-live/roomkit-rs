@@ -17,7 +17,7 @@ use roomkit::model::hook::{AllowOptions, BlockOptions, ModifyOptions};
 use roomkit::model::{
     ChannelId, ChannelType, EventStatus, HookResult, InboundMessage, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult,
     ProcessInboundOptions, RoomKit, text_of,
@@ -112,8 +112,16 @@ fn moderate(kit: &RoomKit, ran: &Log<String>) -> Result<(), Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let user = RecordingTransport::new(ChannelId::new("ws_user")?, ChannelType::WEBSOCKET);
-    let agent = RecordingTransport::new(ChannelId::new("ws_agent")?, ChannelType::WEBSOCKET);
+    let user = RecordingTransport::new(
+        ChannelId::new("ws_user")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    let agent = RecordingTransport::new(
+        ChannelId::new("ws_agent")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(user.clone())?;
     kit.register_channel(agent.clone())?;
     let ran = Log::new();
@@ -125,13 +133,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    kit.attach_channel(&room, user.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, user.channel_id(), AttachChannelOptions::default())
         .await?;
-    kit.attach_channel(&room, agent.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, agent.channel_id(), AttachChannelOptions::default())
         .await?;
 
     let says = async |text: &str| -> Result<InboundResult, Box<dyn Error>> {
-        let message = InboundMessage::new(user.id().clone(), "user", TextContent::new(text));
+        let message =
+            InboundMessage::new(user.channel_id().clone(), "user", TextContent::new(text));
         let result = kit
             .process_inbound(
                 message,

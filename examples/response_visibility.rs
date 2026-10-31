@@ -35,7 +35,7 @@ use roomkit::model::{
     ChannelType, EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId,
     TextContent, Visibility,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     ProcessInboundOptions, RoomKit, text_of,
@@ -104,7 +104,7 @@ impl Channel for Assistant {
 fn message(from: &RecordingTransport, text: &str, visibility: Visibility) -> InboundMessage {
     InboundMessage {
         visibility,
-        ..InboundMessage::new(from.id().clone(), "user", TextContent::new(text))
+        ..InboundMessage::new(from.channel_id().clone(), "user", TextContent::new(text))
     }
 }
 
@@ -138,9 +138,21 @@ async fn writes(
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let call = RecordingTransport::new(ChannelId::new("call")?, ChannelType::VOICE);
-    let screen = RecordingTransport::new(ChannelId::new("screen")?, ChannelType::WEBSOCKET);
-    let supervisor = RecordingTransport::new(ChannelId::new("supervisor")?, ChannelType::WEBSOCKET);
+    let call = RecordingTransport::new(
+        ChannelId::new("call")?,
+        ChannelType::VOICE,
+        RecordingTransportOptions::default(),
+    );
+    let screen = RecordingTransport::new(
+        ChannelId::new("screen")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    let supervisor = RecordingTransport::new(
+        ChannelId::new("supervisor")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     let assistant = ChannelId::new("assistant")?;
     kit.register_channel(call.clone())?;
     kit.register_channel(screen.clone())?;
@@ -153,9 +165,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    kit.attach_channel(&room, call.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, call.channel_id(), AttachChannelOptions::default())
         .await?;
-    kit.attach_channel(&room, screen.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, screen.channel_id(), AttachChannelOptions::default())
         .await?;
     kit.attach_channel(&room, &assistant, AttachChannelOptions::default())
         .await?;
@@ -165,7 +177,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         visibility: Visibility::Transport,
         ..Default::default()
     };
-    kit.attach_channel(&room, supervisor.id(), for_people)
+    kit.attach_channel(&room, supervisor.channel_id(), for_people)
         .await?;
 
     let spoken = "What time is it?";
@@ -174,14 +186,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let typed = "What is the meaning of life?";
     let on_screen = InboundMessage {
         response_visibility: Some(Visibility::Channels(ChannelSet::new([screen
-            .id()
+            .channel_id()
             .clone()])?)),
         ..message(&screen, typed, Visibility::Intelligence)
     };
     writes(&kit, &room, on_screen).await?;
     let notice = "Can you keep your answers short?";
     writes(&kit, &room, message(&supervisor, notice, Visibility::All)).await?;
-    let note = Visibility::Channels(ChannelSet::new([screen.id().clone()])?);
+    let note = Visibility::Channels(ChannelSet::new([screen.channel_id().clone()])?);
     let noted = "Note: call recorded.";
     writes(&kit, &room, message(&supervisor, noted, note)).await?;
 

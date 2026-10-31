@@ -36,7 +36,7 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomEvent, RoomId,
     TextContent, ToolCallContent, ToolCallOutcome,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, ToolHookSpec, ToolUse,
 };
@@ -83,7 +83,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     println!("Alice asks about order 42.");
     let message = InboundMessage::new(
-        sms.id().clone(),
+        sms.channel_id().clone(),
         "+15551234567",
         TextContent::new("Where is order 42? Cancel it, or refund me."),
     );
@@ -159,7 +159,11 @@ async fn shop_room(
         .with_tool_policy(ToolPolicy::new().deny("delete_*"))
         .with_tool_timeout(Some(BOUND));
     let kit = shared::kit();
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
+    let sms = RecordingTransport::new(
+        ChannelId::new("sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent)?;
     let room = RoomId::new("room_1")?;

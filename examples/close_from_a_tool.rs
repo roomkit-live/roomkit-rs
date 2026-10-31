@@ -27,7 +27,7 @@ use std::time::Duration;
 use roomkit::model::{
     ChannelCategory, ChannelDirection, ChannelId, ChannelType, InboundMessage, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, CreateRoomOptions, ProcessInboundOptions,
     RoomKit, RoomKitError,
@@ -156,6 +156,7 @@ async fn service_room(
     kit.register_channel(RecordingTransport::new(
         ChannelId::new("sms")?,
         ChannelType::SMS,
+        RecordingTransportOptions::default(),
     ))?;
     kit.register_channel(agent)?;
     kit.register_channel(pager.clone())?;

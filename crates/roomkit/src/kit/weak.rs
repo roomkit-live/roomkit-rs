@@ -27,12 +27,12 @@ use crate::store::InMemoryStore;
 ///
 /// ```
 /// use roomkit::model::ChannelId;
-/// use roomkit::testing::EchoAgent;
+/// use roomkit::testing::{EchoAgent, EchoAgentOptions};
 /// use roomkit::{HookTrigger, RoomKit};
 ///
 /// let kit = RoomKit::new(Default::default());
 /// let agent = ChannelId::new("ai")?;
-/// kit.register_channel(EchoAgent::new(agent.clone(), "You said: "))?;
+/// kit.register_channel(EchoAgent::new(agent.clone(), "You said: ", EchoAgentOptions::default()))?;
 /// let attaching = kit.downgrade();
 /// kit.observe("attach_agent", HookTrigger::OnRoomCreated, move |event, _| {
 ///     let (kit, agent) = (attaching.upgrade(), agent.clone());

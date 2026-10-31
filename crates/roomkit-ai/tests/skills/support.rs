@@ -10,7 +10,7 @@ use roomkit::model::{
     ChannelId, ChannelType, EventContent, EventType, InboundMessage, RoomEvent, RoomId,
     TextContent, ToolCallContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, InboundResult,
     ProcessInboundOptions, RoomKitOptions,
@@ -112,7 +112,11 @@ impl Room {
         adjust: impl FnOnce(AiAgent<ScriptedProvider>) -> AiAgent<ScriptedProvider>,
     ) -> Self {
         let kit = RoomKit::new(RoomKitOptions::default());
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+        let sms = RecordingTransport::new(
+            channel("sms"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
         kit.register_channel(sms).unwrap();
         kit.register_channel(agent(model, skills, adjust)).unwrap();
         kit.create_room(CreateRoomOptions {

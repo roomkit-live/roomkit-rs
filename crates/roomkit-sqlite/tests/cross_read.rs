@@ -21,7 +21,9 @@ use roomkit::model::{
     ChannelBinding, ChannelId, ChannelType, DeleteContent, EventContent, EventType, EventUpdates,
     IdentityId, InboundMessage, Room, RoomId, RoomUpdates, TextContent, Timestamp,
 };
-use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
+use roomkit::testing::{
+    RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{ConversationStore, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions};
 use roomkit_sqlite::{OpenError, SqliteStore};
 use rusqlite::Connection;
@@ -393,8 +395,12 @@ async fn a_channel_python_detached_stays_detached() {
     let file = copy();
     let kit = fixture_kit(&file).await;
     for id in ["ws-gone", "ws-user"] {
-        kit.register_channel(RecordingTransport::new(channel(id), ChannelType::WEBSOCKET))
-            .unwrap();
+        kit.register_channel(RecordingTransport::new(
+            channel(id),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        ))
+        .unwrap();
     }
     let full = room("room-full");
     let mut results = Vec::new();
@@ -442,6 +448,7 @@ async fn what_python_reads_beside_the_timeline_is_kept_right() {
     kit.register_channel(RecordingTransport::new(
         channel("ws-user"),
         ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     let full = room("room-full");
@@ -617,6 +624,7 @@ async fn a_delete_marks_its_target_s_edits_as_python_reads_them() {
     kit.register_channel(RecordingTransport::new(
         channel("ws-user"),
         ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     let full = room("room-full");

@@ -17,7 +17,7 @@ use std::process::ExitCode;
 use roomkit::model::{
     ChannelId, ChannelType, EventStatus, InboundMessage, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookTrigger, MuteOptions, ProcessInboundOptions,
     RoomKit, UnmuteOptions, text_of,
@@ -62,10 +62,10 @@ async fn says(
     from: &RecordingTransport,
     text: &str,
 ) -> Result<(), Box<dyn Error>> {
-    println!("  {} writes {text:?}.", from.id());
+    println!("  {} writes {text:?}.", from.channel_id());
     let message = InboundMessage::new(
-        from.id().clone(),
-        from.id().as_str(),
+        from.channel_id().clone(),
+        from.channel_id().as_str(),
         TextContent::new(text),
     );
     kit.process_inbound(
@@ -95,8 +95,16 @@ fn muted_answers(timeline: &[RoomEvent], assistant: &ChannelId) -> Vec<String> {
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let customer = RecordingTransport::new(ChannelId::new("ws_customer")?, ChannelType::WEBSOCKET);
-    let agent = RecordingTransport::new(ChannelId::new("ws_agent")?, ChannelType::WEBSOCKET);
+    let customer = RecordingTransport::new(
+        ChannelId::new("ws_customer")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    let agent = RecordingTransport::new(
+        ChannelId::new("ws_agent")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     let assistant = ScriptedAgent::new(ChannelId::new("assistant")?, SCRIPT);
     kit.register_channel(customer.clone())?;
     kit.register_channel(agent.clone())?;
@@ -110,7 +118,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    for channel in [customer.id(), agent.id(), assistant.id()] {
+    for channel in [customer.channel_id(), agent.channel_id(), assistant.id()] {
         kit.attach_channel(&room, channel, AttachChannelOptions::default())
             .await?;
     }

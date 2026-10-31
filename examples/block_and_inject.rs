@@ -15,7 +15,7 @@ use roomkit::model::{
     ChannelId, ChannelType, EventDirection, EventSource, EventStatus, HookResult, InboundMessage,
     InjectedEvent, Observation, RoomEvent, RoomId, TextContent, Timestamp,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, text_of,
 };
@@ -73,14 +73,22 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = clock.kit();
     let now = clock.now();
 
-    let customer = RecordingTransport::new(ChannelId::new("sms_customer")?, ChannelType::SMS);
-    let advisor = RecordingTransport::new(ChannelId::new("ws_advisor")?, ChannelType::WEBSOCKET);
+    let customer = RecordingTransport::new(
+        ChannelId::new("sms_customer")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    let advisor = RecordingTransport::new(
+        ChannelId::new("ws_advisor")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(customer.clone())?;
     kit.register_channel(advisor.clone())?;
 
     let to_customer = notice("Message blocked. Do not send your SIN by SMS.", now)?;
     let to_advisor = notice("The client attempted to send a SIN. Blocked.", now)?;
-    let (customer_id, advisor_id) = (customer.id().clone(), advisor.id().clone());
+    let (customer_id, advisor_id) = (customer.channel_id().clone(), advisor.channel_id().clone());
     kit.before_broadcast("sensitivity_scanner", move |event, context| {
         let found = has_sin(&text_of(&event.content));
         let (to_customer, to_advisor) = (to_customer.clone(), to_advisor.clone());
@@ -111,14 +119,18 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    kit.attach_channel(&room, customer.id(), AttachChannelOptions::default())
-        .await?;
-    kit.attach_channel(&room, advisor.id(), AttachChannelOptions::default())
+    kit.attach_channel(
+        &room,
+        customer.channel_id(),
+        AttachChannelOptions::default(),
+    )
+    .await?;
+    kit.attach_channel(&room, advisor.channel_id(), AttachChannelOptions::default())
         .await?;
 
     println!("The customer writes their SIN on SMS.");
     let message = InboundMessage::new(
-        customer.id().clone(),
+        customer.channel_id().clone(),
         "+15551234567",
         TextContent::new("Mon NAS est 123-456-789"),
     );

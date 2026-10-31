@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
     RoomKitOptions,
@@ -170,7 +170,11 @@ impl Shop {
         let kit = RoomKit::new(RoomKitOptions::with_store(
             SqliteStore::open(database).await?,
         ));
-        let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
+        let sms = RecordingTransport::new(
+            ChannelId::new("sms")?,
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
         kit.register_channel(sms.clone())?;
         kit.register_channel(agent)?;
         let room = RoomId::new("returns")?;
@@ -195,7 +199,7 @@ impl Shop {
     async fn alice_says(&self, text: &str) -> Result<(), Box<dyn Error>> {
         println!("Alice: {text}");
         let message = InboundMessage::new(
-            self.sms.id().clone(),
+            self.sms.channel_id().clone(),
             "+15551234567",
             TextContent::new(text),
         );

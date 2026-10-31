@@ -251,24 +251,6 @@ approved = "2026-10-27"
 reason = "a serialized model holds no live error"
 
 [[exception]]
-rust = "roomkit::testing::Delivery"
-approved = "2026-10-27"
-until = "roomkit.testing.RecordingTransport"
-reason = "Python first (decision 17): roomkit.testing is a Python item; 22 and 6 examples use them"
-
-[[exception]]
-rust = "roomkit::testing::EchoAgent"
-approved = "2026-10-27"
-until = "roomkit.testing.EchoAgent"
-reason = "Python first (decision 17): roomkit.testing is a Python item; 22 and 6 examples use them"
-
-[[exception]]
-rust = "roomkit::testing::RecordingTransport"
-approved = "2026-10-27"
-until = "roomkit.testing.RecordingTransport"
-reason = "Python first (decision 17): roomkit.testing is a Python item; 22 and 6 examples use them"
-
-[[exception]]
 rust = "roomkit_ai::ProviderStream"
 approved = "2026-10-27"
 reason = "a trait method returns a nameable stream type (decision 18)"
@@ -285,45 +267,11 @@ approved = "2026-10-30"
 reason = "the class attributes KitClosedError.code and .retryable, and ProviderDeliveryError.code and .retryable, on the one enum whose variants are Python's classes; None for a class that carries neither (RMK-1030, decided by the maintainer on 2026-10-30)"
 
 [[exception]]
-rust = "roomkit::ConversationStore"
-members = ["delete_participant"]
-approved = "2026-10-27"
-until = "roomkit.ConversationStore.delete_participant"
-reason = "RFC §14.1 names it and Rust has it; Python adds it (RMK-1010 item 23)"
-
-[[exception]]
-rust = "roomkit::RoomKit"
-members = ["pause_room"]
-approved = "2026-10-27"
-until = "roomkit.RoomKit.pause_room"
-reason = "RFC §5.1 names it and Rust has it; Python adds it (RMK-1010 item 22)"
-
-[[exception]]
-rust = "roomkit::RoomKit"
-members = ["resume_room"]
-approved = "2026-10-27"
-until = "roomkit.RoomKit.resume_room"
-reason = "RFC §5.1 names it and Rust has it; Python adds it (RMK-1010 item 22)"
-
-[[exception]]
-rust = "roomkit::RoomKit"
-members = ["reopen_room"]
-approved = "2026-10-27"
-until = "roomkit.RoomKit.reopen_room"
-reason = "RFC §5.1 names it and Rust has it; Python adds it (RMK-1010 item 22)"
-
-[[exception]]
 rust = "roomkit::model::ChannelType"
 members = ["new", "as_str"]
 approved = "2026-10-27"
 until = "roomkit.ChannelType.__init__"
 reason = "decision 19: ChannelType stays open, Rust is right and Python aligns (RMK-1010 item 1, RMK-986); until Python's open ChannelType gains its constructor"
-
-[[exception]]
-rust = "roomkit::model::EditSource"
-approved = "2026-10-27"
-until = "roomkit.models.EditSource"
-reason = "decision 19: edit_source stays an enum, Rust is right and Python aligns (Python's field is str | None, no Literal); until Python's enum of the field's values"
 
 [[exception]]
 rust = "roomkit_ai::SkillError"
@@ -367,24 +315,6 @@ reason = "decision 5: Python's tests patch the clock and uuid4; the sans-IO core
 rust = "roomkit::testing::kit_with_environment"
 approved = "2026-10-27"
 reason = "decision 5: Python's tests patch the clock and uuid4; the sans-IO core takes them as an input"
-
-[[exception]]
-rust = "roomkit::PauseRoomOptions"
-approved = "2026-10-27"
-until = "roomkit.RoomKit.pause_room"
-reason = "the options of pause_room, which RFC §5.1 names and Rust has; Python adds it (RMK-1010 item 22)"
-
-[[exception]]
-rust = "roomkit::ResumeRoomOptions"
-approved = "2026-10-27"
-until = "roomkit.RoomKit.resume_room"
-reason = "the options of resume_room, which RFC §5.1 names and Rust has; Python adds it (RMK-1010 item 22)"
-
-[[exception]]
-rust = "roomkit::ReopenRoomOptions"
-approved = "2026-10-27"
-until = "roomkit.RoomKit.reopen_room"
-reason = "the options of reopen_room, which RFC §5.1 names and Rust has; Python adds it (RMK-1010 item 22)"
 
 # Python names of classes in scope that Rust lacks: not in 0.x (rule 5).
 

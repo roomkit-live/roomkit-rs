@@ -20,7 +20,9 @@ use roomkit::model::{
     ChannelId, ChannelType, ErrorRecord, EventType, InboundMessage, RoomEvent, RoomId, TextContent,
     Timestamp,
 };
-use roomkit::testing::{RecordingTransport, SequentialEnvironment, kit_with_environment};
+use roomkit::testing::{
+    RecordingTransport, RecordingTransportOptions, SequentialEnvironment, kit_with_environment,
+};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
     HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions, text_of,
@@ -89,8 +91,16 @@ impl Room {
             RoomKitOptions::default(),
             SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
         );
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
-        let web = RecordingTransport::new(channel("web"), ChannelType::WEBSOCKET);
+        let sms = RecordingTransport::new(
+            channel("sms"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
+        let web = RecordingTransport::new(
+            channel("web"),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
         let config = adjust(
             OpenAiConfig::new(fake.base_url(), api_key, "fake-model")
                 .with_system_prompt(SYSTEM_PROMPT),
@@ -126,8 +136,11 @@ impl Room {
         name: &str,
         text: &str,
     ) -> InboundResult {
-        let mut message =
-            InboundMessage::new(transport.id().clone(), sender, TextContent::new(text));
+        let mut message = InboundMessage::new(
+            transport.channel_id().clone(),
+            sender,
+            TextContent::new(text),
+        );
         message
             .metadata
             .insert("sender_name".to_owned(), name.into());
@@ -295,7 +308,11 @@ async fn the_answer_becomes_the_agent_s_response() {
 async fn two_senders_with_no_name_on_one_number_are_labelled_apart() {
     let room = Room::new(vec![Reply::completion("Noted.")], API_KEY).await;
     for (sender, text) in [("+15550001", "Refund me"), ("+15550002", "Do not")] {
-        let message = InboundMessage::new(room.sms.id().clone(), sender, TextContent::new(text));
+        let message = InboundMessage::new(
+            room.sms.channel_id().clone(),
+            sender,
+            TextContent::new(text),
+        );
         room.kit
             .process_inbound(
                 message,
@@ -320,7 +337,7 @@ async fn an_instruction_is_sent_as_the_application_s_marked_input() {
         event_type: EventType::Instruction,
         addressed_to: Some(vec![channel("assistant")]),
         ..InboundMessage::new(
-            room.web.id().clone(),
+            room.web.channel_id().clone(),
             "app",
             TextContent::new("Greet the customer."),
         )
@@ -401,7 +418,11 @@ async fn an_unreachable_endpoint_fails_the_turn_without_naming_its_url() {
     let address = closed.local_addr().unwrap();
     drop(closed);
     let kit = RoomKit::new(RoomKitOptions::default());
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     let config = OpenAiConfig::new(format!("http://{address}/v1"), API_KEY, "m");
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(OpenAiAgent::new(channel("assistant"), config).unwrap())
@@ -417,7 +438,11 @@ async fn an_unreachable_endpoint_fails_the_turn_without_naming_its_url() {
             .await
             .unwrap();
     }
-    let message = InboundMessage::new(sms.id().clone(), "+15550001", TextContent::new("Hi"));
+    let message = InboundMessage::new(
+        sms.channel_id().clone(),
+        "+15550001",
+        TextContent::new("Hi"),
+    );
     let result = kit
         .process_inbound(
             message,

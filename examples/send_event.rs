@@ -23,7 +23,7 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     FrameworkEvent, ProcessInboundOptions, RoomKit, RoomKitError, SendEventOptions, WeakRoomKit,
@@ -101,7 +101,7 @@ impl Channel for Agent {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let from_customer = event.source.channel_id == *self.customer.id();
+        let from_customer = event.source.channel_id == *self.customer.channel_id();
         let answer = self.answer(&event);
         let (kit, customer, notes, agent) = (
             self.kit.upgrade(),
@@ -136,9 +136,21 @@ impl Channel for Agent {
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let customer = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
-    let console = RecordingTransport::new(ChannelId::new("console")?, ChannelType::WEBSOCKET);
-    let crm = RecordingTransport::new(ChannelId::new("crm")?, ChannelType::WEBSOCKET);
+    let customer = RecordingTransport::new(
+        ChannelId::new("sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    let console = RecordingTransport::new(
+        ChannelId::new("console")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    let crm = RecordingTransport::new(
+        ChannelId::new("crm")?,
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     let notes = Log::new();
     let agent = Agent::new(ChannelId::new("agent")?, &kit, &customer, &notes);
     let agent_id = agent.declaration.channel_id.clone();
@@ -152,7 +164,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    for channel in [customer.id(), console.id(), &agent_id] {
+    for channel in [customer.channel_id(), console.channel_id(), &agent_id] {
         kit.attach_channel(&room, channel, AttachChannelOptions::default())
             .await?;
     }
@@ -165,11 +177,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     };
     let sent = kit
-        .send_event(&room, console.id(), shipped(), keyed())
+        .send_event(&room, console.channel_id(), shipped(), keyed())
         .await?;
     let delivered_on_return = customer.texts();
     let retried = kit
-        .send_event(&room, console.id(), shipped(), keyed())
+        .send_event(&room, console.channel_id(), shipped(), keyed())
         .await?;
     // The three attaches' lifecycle records take indexes 0 to 2 (RFC §5.1,
     // gap G-046).
@@ -186,7 +198,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let refused = kit
         .send_event(
             &room,
-            crm.id(),
+            crm.channel_id(),
             TextContent::new("Account updated."),
             SendEventOptions::default(),
         )
@@ -195,14 +207,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         "a channel the room does not bind is refused as not found in the room, nothing written",
         matches!(
             &refused,
-            Err(RoomKitError::ChannelNotFound { channel_id, .. }) if channel_id == crm.id()
+            Err(RoomKitError::ChannelNotFound { channel_id, .. }) if channel_id == crm.channel_id()
         ) && shared::timeline(&kit, &room).await?.len() == 4,
     );
 
     println!("The customer asks; the agent's turn posts a note, then answers.");
     let mut events = kit.subscribe();
     let question = InboundMessage::new(
-        customer.id().clone(),
+        customer.channel_id().clone(),
         "+15551234567",
         TextContent::new("Where is my refund?"),
     );

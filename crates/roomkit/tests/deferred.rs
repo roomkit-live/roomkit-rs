@@ -15,7 +15,7 @@ use roomkit::model::{
     EventStatus, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
     TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     HookExecution, HookSpec, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
@@ -69,7 +69,11 @@ impl Channel for Held {
 /// A room binding an SMS and the held transport.
 async fn room() -> (RoomKit, RecordingTransport, Held) {
     let kit = RoomKit::new(RoomKitOptions::default());
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     let held = Held {
         delivering: Arc::new(Notify::new()),
         release: Arc::new(Notify::new()),
@@ -81,7 +85,7 @@ async fn room() -> (RoomKit, RecordingTransport, Held) {
         ..CreateRoomOptions::default()
     };
     kit.create_room(options).await.unwrap();
-    for id in [sms.id().clone(), channel("held")] {
+    for id in [sms.channel_id().clone(), channel("held")] {
         kit.attach_channel(&room_id(), &id, AttachChannelOptions::default())
             .await
             .unwrap();
@@ -98,7 +102,11 @@ fn deferred() -> ProcessInboundOptions {
 }
 
 fn hello(sms: &RecordingTransport) -> InboundMessage {
-    InboundMessage::new(sms.id().clone(), "+15551234567", TextContent::new("Hello"))
+    InboundMessage::new(
+        sms.channel_id().clone(),
+        "+15551234567",
+        TextContent::new("Hello"),
+    )
 }
 
 /// The call returns at its commit while the held transport still delivers;
@@ -200,7 +208,11 @@ async fn a_deferred_call_refused_before_the_lock_has_no_handle() {
             Ok(HookResult::allow(AllowOptions::default()))
         })
         .unwrap();
-    let sms_2 = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+    let sms_2 = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     timed.register_channel(sms_2.clone()).unwrap();
     let options = CreateRoomOptions {
         room_id: Some(room_id()),
@@ -208,7 +220,11 @@ async fn a_deferred_call_refused_before_the_lock_has_no_handle() {
     };
     timed.create_room(options).await.unwrap();
     timed
-        .attach_channel(&room_id(), sms_2.id(), AttachChannelOptions::default())
+        .attach_channel(
+            &room_id(),
+            sms_2.channel_id(),
+            AttachChannelOptions::default(),
+        )
         .await
         .unwrap();
     let late = timed

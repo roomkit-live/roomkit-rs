@@ -11,7 +11,9 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
 
 use shared::Checks;
@@ -20,8 +22,16 @@ use shared::Checks;
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
 
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
-    let agent = EchoAgent::new(ChannelId::new("ai")?, "Bonjour Jean! You said: ").quoting();
+    let sms = RecordingTransport::new(
+        ChannelId::new("sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    let agent = EchoAgent::new(
+        ChannelId::new("ai")?,
+        "Bonjour Jean! You said: ",
+        EchoAgentOptions { quote: true },
+    );
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent.clone())?;
 
@@ -31,14 +41,14 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
         ..Default::default()
     })
     .await?;
-    kit.attach_channel(&room, sms.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, sms.channel_id(), AttachChannelOptions::default())
         .await?;
-    kit.attach_channel(&room, agent.id(), AttachChannelOptions::default())
+    kit.attach_channel(&room, agent.channel_id(), AttachChannelOptions::default())
         .await?;
 
     println!("The customer writes \"Bonjour\" on SMS.");
     let message = InboundMessage::new(
-        sms.id().clone(),
+        sms.channel_id().clone(),
         "+15551234567",
         TextContent::new("Bonjour"),
     );
@@ -65,9 +75,9 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     checks.expect(
         "the agent's answer is committed next, one hop deeper",
-        timeline
-            .get(3)
-            .is_some_and(|reply| reply.source.channel_id == *agent.id() && reply.chain_depth == 1),
+        timeline.get(3).is_some_and(|reply| {
+            reply.source.channel_id == *agent.channel_id() && reply.chain_depth == 1
+        }),
     );
     checks.expect(
         "the answer reaches the customer on SMS",

@@ -77,6 +77,7 @@ async fn a_streaming_target_cannot_write_a_key_only_the_framework_writes() {
     kit.register_channel(roomkit::testing::RecordingTransport::new(
         channel("sms"),
         ChannelType::SMS,
+        roomkit::testing::RecordingTransportOptions::default(),
     ))
     .unwrap();
     let mut declaration = ChannelDeclaration::new(
@@ -171,6 +172,7 @@ async fn deltas_yielded_together_cross_as_one_item() {
     kit.register_channel(roomkit::testing::RecordingTransport::new(
         channel("sms"),
         ChannelType::SMS,
+        roomkit::testing::RecordingTransportOptions::default(),
     ))
     .unwrap();
     let target = Counting {
@@ -373,6 +375,7 @@ async fn text_written_inside_a_call_crosses_in_order() {
     kit.register_channel(roomkit::testing::RecordingTransport::new(
         channel("sms"),
         ChannelType::SMS,
+        roomkit::testing::RecordingTransportOptions::default(),
     ))
     .unwrap();
     let target = Logging {

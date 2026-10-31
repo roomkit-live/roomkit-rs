@@ -185,6 +185,7 @@ async fn a_streaming_reader_that_leaves_crosses_as_close() {
     kit.register_channel(roomkit::testing::RecordingTransport::new(
         channel("sms"),
         ChannelType::SMS,
+        roomkit::testing::RecordingTransportOptions::default(),
     ))
     .unwrap();
     let mut declaration = ChannelDeclaration::new(

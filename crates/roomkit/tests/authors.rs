@@ -9,7 +9,7 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{ChannelId, ChannelType, EventType, InboundMessage, RoomId, TextContent};
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
     RoomKitOptions,
@@ -92,11 +92,16 @@ const SENT: [(&str, &str, Option<&str>, Option<Record>); 11] = [
 async fn names_that_read_alike_are_ranked_as_the_python_implementation_ranks_them() {
     let kit = RoomKit::new(RoomKitOptions::default());
     let room = RoomId::new("room_1").unwrap();
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     kit.register_channel(RecordingTransport::new(
         channel("ws"),
         ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     kit.create_room(CreateRoomOptions {

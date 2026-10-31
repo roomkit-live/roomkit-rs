@@ -32,7 +32,7 @@ use crate::channel::{Channel, ChannelError};
 use crate::driver;
 use crate::error::RoomKitError;
 use crate::store::ConversationStore;
-use crate::testing::RecordingTransport;
+use crate::testing::{RecordingTransport, RecordingTransportOptions};
 
 /// The kit's `process_timeout`.
 const TIMEOUT: Duration = Duration::from_millis(100);
@@ -62,6 +62,7 @@ async fn checked_room() -> RoomKit {
     kit.register_channel(RecordingTransport::new(
         ChannelId::new("sms").unwrap(),
         ChannelType::SMS,
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     kit.create_room(CreateRoomOptions {

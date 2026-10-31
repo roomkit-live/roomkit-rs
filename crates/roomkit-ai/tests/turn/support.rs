@@ -7,7 +7,7 @@ use roomkit::model::{
     ChannelBinding, ChannelId, ChannelOutput, ChannelType, HookResult, InboundMessage, Metadata,
     RoomContext, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::transcript::Role;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
@@ -79,7 +79,11 @@ impl Room {
     /// The room, its agent `agent`, on any provider.
     pub(crate) async fn with_agent<P: AiProvider>(agent: AiAgent<P>) -> Self {
         let kit = RoomKit::new(RoomKitOptions::default());
-        let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+        let sms = RecordingTransport::new(
+            channel("sms"),
+            ChannelType::SMS,
+            RecordingTransportOptions::default(),
+        );
         kit.register_channel(sms.clone()).unwrap();
         kit.register_channel(agent).unwrap();
         kit.create_room(CreateRoomOptions {
@@ -181,7 +185,11 @@ pub(crate) async fn observer_loop(after_the_turn: bool) -> Vec<u32> {
         max_chain_depth: 3,
         ..Default::default()
     });
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(Counting { sms, answers }).unwrap();
     kit.register_channel(agent).unwrap();
     kit.create_room(CreateRoomOptions {
@@ -311,8 +319,12 @@ impl AiProvider for Endless {
 pub(crate) async fn two_agents(rounds: usize) -> usize {
     let (alpha, beta) = (Endless::new(rounds), Endless::new(rounds));
     let kit = RoomKit::new(RoomKitOptions::default());
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     for (id, model) in [("alpha", alpha.clone()), ("beta", beta.clone())] {
         let agent = AiAgent::new(channel(id), model)
             .with_tools(served())
@@ -368,8 +380,12 @@ pub(crate) async fn a_hook_calling_per_row(echo: Echo, max_chain_depth: u32) -> 
         max_chain_depth,
         ..Default::default()
     });
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     let agent = AiAgent::new(channel("assistant"), model.clone())
         .with_tools(served())
         .unwrap();

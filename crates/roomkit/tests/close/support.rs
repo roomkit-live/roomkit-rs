@@ -12,7 +12,7 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, EventFilter, EventQuery, HookExecution, HookSpec, HookTrigger,
@@ -251,8 +251,12 @@ pub(crate) async fn kit_with(witness: &Witness) -> RoomKit {
 
 /// `kit`, with an SMS transport and `witness` attached to `room_1`.
 pub(crate) async fn kit_on<S: ConversationStore>(kit: RoomKit<S>, witness: &Witness) -> RoomKit<S> {
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     kit.register_channel(witness.clone()).unwrap();
     kit.create_room(CreateRoomOptions {
         room_id: Some(room_id()),

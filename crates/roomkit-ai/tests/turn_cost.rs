@@ -26,7 +26,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use roomkit::model::{ChannelId, ChannelType, DirectEvent, InboundMessage, RoomId, TextContent};
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::transcript::Role;
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
@@ -98,8 +98,12 @@ fn kit(calls: bool, deltas: usize) -> RoomKit {
 /// The kit, its tool writing to the room through its turn when `writes`.
 fn kit_writing(calls: bool, deltas: usize, writes: bool) -> RoomKit {
     let kit = RoomKit::new(RoomKitOptions::default());
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     let lookup = ToolDefinition::new(
         "lookup",
         "Look it up.",
@@ -211,10 +215,18 @@ async fn measure() {
 
     // A buffered answer, no stream: the turn's fixed cost alone.
     let echo = RoomKit::new(RoomKitOptions::default());
-    echo.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
-    echo.register_channel(roomkit::testing::EchoAgent::new(channel("ai"), "Hello."))
-        .unwrap();
+    echo.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
+    echo.register_channel(roomkit::testing::EchoAgent::new(
+        channel("ai"),
+        "Hello.",
+        roomkit::testing::EchoAgentOptions::default(),
+    ))
+    .unwrap();
     let room_id = room(&echo, "echo", 50).await;
     let started = Instant::now();
     for _ in 0..TURNS {

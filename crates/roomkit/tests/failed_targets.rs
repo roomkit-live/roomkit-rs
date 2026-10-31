@@ -15,7 +15,7 @@ use roomkit::model::{
     DeliveryError, DeliveryResult, DeliveryResultStatus, ErrorRecord, InboundMessage, Metadata,
     ProviderResult, RoomContext, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
@@ -144,6 +144,7 @@ async fn reported() -> (Vec<Option<DeliveryResult>>, Option<Vec<ChannelId>>) {
     kit.register_channel(RecordingTransport::new(
         channel("ws"),
         ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
     ))
     .unwrap();
     for id in TARGETS {

@@ -20,7 +20,9 @@ use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     ChannelId, ChannelType, EventStatus, EventType, HookResult, InboundMessage, RoomId, TextContent,
 };
-use roomkit::testing::{EchoAgent, RecordingTransport};
+use roomkit::testing::{
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
     HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions, text_of,
@@ -53,12 +55,24 @@ fn sent(task: usize, message: usize) -> String {
 /// each task's first message into `room_0` until all four are inside it.
 async fn rooms() -> (RoomKit, RecordingTransport) {
     let kit = RoomKit::new(RoomKitOptions::default());
-    let ws = RecordingTransport::new(channel("ws"), ChannelType::WEBSOCKET);
-    kit.register_channel(RecordingTransport::new(channel("sms"), ChannelType::SMS))
-        .unwrap();
+    let ws = RecordingTransport::new(
+        channel("ws"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    kit.register_channel(RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    ))
+    .unwrap();
     kit.register_channel(ws.clone()).unwrap();
-    kit.register_channel(EchoAgent::new(channel("ai"), "Echo: ").quoting())
-        .unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "Echo: ",
+        EchoAgentOptions { quote: true },
+    ))
+    .unwrap();
     let meeting = Arc::new(Barrier::new(TASKS));
     let mut check = HookSpec::new("meeting", HookTrigger::BeforeBroadcast, HookExecution::Sync);
     check.needs_lock = false;

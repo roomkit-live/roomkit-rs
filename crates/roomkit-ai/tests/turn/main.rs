@@ -17,7 +17,7 @@ use roomkit::model::{
     ChannelType, DirectEvent, EventContent, EventType, InboundMessage, Metadata, RoomEvent,
     TextContent, ToolCallContent, ToolCallOutcome,
 };
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
     HookTrigger, MuteOptions, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
@@ -446,8 +446,12 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
     ] {
         let kit = RoomKit::new(RoomKitOptions::default());
         for (id, channel_type) in [("sms", ChannelType::SMS), ("ws", ChannelType::WEBSOCKET)] {
-            kit.register_channel(RecordingTransport::new(channel(id), channel_type))
-                .unwrap();
+            kit.register_channel(RecordingTransport::new(
+                channel(id),
+                channel_type,
+                RecordingTransportOptions::default(),
+            ))
+            .unwrap();
         }
         let weak = kit.downgrade();
         let changes = Tools::new().tool(
@@ -622,7 +626,11 @@ async fn a_messaging_transport_is_handed_no_tool_row_and_a_websocket_is() {
         ScriptedRound::answering("Order 1 shipped."),
     ]);
     let room = Room::new(model, served()).await;
-    let web = RecordingTransport::new(channel("web"), ChannelType::WEBSOCKET);
+    let web = RecordingTransport::new(
+        channel("web"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
     room.kit.register_channel(web.clone()).unwrap();
     room.kit
         .attach_channel(&room_id(), &channel("web"), AttachChannelOptions::default())

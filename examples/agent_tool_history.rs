@@ -20,7 +20,7 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
-use roomkit::testing::RecordingTransport;
+use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -52,7 +52,11 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let (kit, sms, room) = office(&endpoint).await?;
     for text in [BOOK, ASK] {
         println!("Alice: {text}");
-        let message = InboundMessage::new(sms.id().clone(), "+15551234567", TextContent::new(text));
+        let message = InboundMessage::new(
+            sms.channel_id().clone(),
+            "+15551234567",
+            TextContent::new(text),
+        );
         let options = ProcessInboundOptions {
             room_id: Some(room.clone()),
             ..Default::default()
@@ -144,7 +148,11 @@ async fn office(
     let config = OpenAiConfig::new(endpoint.base_url(), endpoint.api_key(), endpoint.model());
     let agent = OpenAiAgent::new(ChannelId::new("assistant")?, config)?.with_tools(booking())?;
     let kit = shared::kit();
-    let sms = RecordingTransport::new(ChannelId::new("sms")?, ChannelType::SMS);
+    let sms = RecordingTransport::new(
+        ChannelId::new("sms")?,
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
     kit.register_channel(sms.clone())?;
     kit.register_channel(agent)?;
     let room = RoomId::new("office")?;

@@ -18,7 +18,7 @@ use roomkit::model::{
     ErrorRecord, Identity, IdentityId, InboundMessage, Participant, ParticipantId, RoomContext,
     RoomEvent, RoomId, TextContent, Timestamp,
 };
-use roomkit::testing::{EchoAgent, SequentialEnvironment, kit_with_environment};
+use roomkit::testing::{EchoAgent, EchoAgentOptions, SequentialEnvironment, kit_with_environment};
 use roomkit::{
     Addressing, AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ChannelOf,
     CloseRoomOptions, ConversationStore, CreateRoomOptions, DefaultInboundRoomRouter,
@@ -142,8 +142,12 @@ fn kit_with_agent_on(options: RoomKitOptions) -> (RoomKit, Provider) {
     );
     let sms = Provider::new("sms", ChannelType::SMS);
     kit.register_channel(sms.clone()).unwrap();
-    kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
-        .unwrap();
+    kit.register_channel(EchoAgent::new(
+        channel("ai"),
+        "You said: ",
+        EchoAgentOptions { quote: true },
+    ))
+    .unwrap();
     let attaching = kit.clone();
     kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
         let kit = attaching.clone();
@@ -593,8 +597,12 @@ async fn a_chat_is_answered_in_its_chat_and_keeps_its_room() {
         let kit = RoomKit::new(RoomKitOptions::default());
         let channel_id = chat_channel.declaration.channel_id.clone();
         kit.register_channel(chat_channel.clone()).unwrap();
-        kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
-            .unwrap();
+        kit.register_channel(EchoAgent::new(
+            channel("ai"),
+            "You said: ",
+            EchoAgentOptions { quote: true },
+        ))
+        .unwrap();
         let attaching = kit.clone();
         kit.observe("welcome", HookTrigger::OnRoomCreated, move |event, _| {
             let kit = attaching.clone();
@@ -647,8 +655,12 @@ async fn a_room_the_host_opened_for_a_chat_id_is_the_chat_s() {
         let kit = RoomKit::new(RoomKitOptions::default());
         let telegram = Provider::new("tg", ChannelType::TELEGRAM);
         kit.register_channel(telegram.clone()).unwrap();
-        kit.register_channel(EchoAgent::new(channel("ai"), "You said: ").quoting())
-            .unwrap();
+        kit.register_channel(EchoAgent::new(
+            channel("ai"),
+            "You said: ",
+            EchoAgentOptions { quote: true },
+        ))
+        .unwrap();
         kit.create_room(CreateRoomOptions {
             room_id: Some(room("chat-room")),
             ..Default::default()

@@ -9,7 +9,8 @@ use roomkit::model::{
     ChannelId, ChannelType, EventType, InboundMessage, RoomEvent, RoomId, TextContent, Timestamp,
 };
 use roomkit::testing::{
-    EchoAgent, RecordingTransport, SequentialEnvironment, kit_with_environment,
+    EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
+    SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
@@ -31,9 +32,21 @@ async fn room() -> (RoomKit, RecordingTransport, RecordingTransport) {
         RoomKitOptions::default(),
         SequentialEnvironment::new(Timestamp::from_unix_millis(1_792_677_780_000).unwrap()),
     );
-    let app = RecordingTransport::new(channel("app"), ChannelType::WEBSOCKET);
-    let sms = RecordingTransport::new(channel("sms"), ChannelType::SMS);
-    let agent = EchoAgent::new(channel("ai"), "Hello, I am the assistant.");
+    let app = RecordingTransport::new(
+        channel("app"),
+        ChannelType::WEBSOCKET,
+        RecordingTransportOptions::default(),
+    );
+    let sms = RecordingTransport::new(
+        channel("sms"),
+        ChannelType::SMS,
+        RecordingTransportOptions::default(),
+    );
+    let agent = EchoAgent::new(
+        channel("ai"),
+        "Hello, I am the assistant.",
+        EchoAgentOptions::default(),
+    );
     kit.register_channel(app.clone()).unwrap();
     kit.register_channel(sms.clone()).unwrap();
     kit.register_channel(agent.clone()).unwrap();
@@ -43,7 +56,7 @@ async fn room() -> (RoomKit, RecordingTransport, RecordingTransport) {
     })
     .await
     .unwrap();
-    for id in [app.id(), sms.id(), agent.id()] {
+    for id in [app.channel_id(), sms.channel_id(), agent.channel_id()] {
         kit.attach_channel(&room_id(), id, AttachChannelOptions::default())
             .await
             .unwrap();
