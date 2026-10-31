@@ -352,8 +352,6 @@ pub struct StreamTarget {
     pub binding: ChannelBinding,
     /// The room's context, as the channel may see it (RFC §7.5 rule 8).
     pub context: Box<RoomContext>,
-    /// Whether it is handed the tool-call rows (`ChannelDeclaration::receives_tool_calls`).
-    pub tool_rows: bool,
 }
 
 /// The run of hooks (RFC §9.3), answered by a [`HookAnswer`].

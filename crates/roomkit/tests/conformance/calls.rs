@@ -411,7 +411,10 @@ pub(crate) fn register_channel(
         return Ok(Err(named("invalid_argument")));
     };
     let registered = if channel["type"] == "host" {
-        run.kit().register_channel(HostChannel::with_id(id))
+        run.kit()
+            .register_channel(HostChannel::new(roomkit::HostChannelOptions {
+                channel_id: id,
+            }))
     } else if channel.get("model").is_some() {
         let (agent, model) = agents::scripted_agent(channel)?;
         crate::run::lock(&run.models).insert(id.to_string(), model);

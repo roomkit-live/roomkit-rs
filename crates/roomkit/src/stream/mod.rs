@@ -34,7 +34,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::Stream;
-use roomkit_core::model::{ChannelId, EventId, Metadata, RoomEvent, ToolCallContent};
+use roomkit_core::model::{Metadata, RoomEvent, ToolCallContent};
 use tokio::sync::{mpsc, oneshot};
 
 pub(crate) use self::reader::{KeptStream, Stops, read};
@@ -103,35 +103,16 @@ pub struct DeliveryStream {
     pulls: mpsc::UnboundedSender<oneshot::Sender<Pulled>>,
     waiting: Option<oneshot::Receiver<Pulled>>,
     ended: bool,
-    responder: ChannelId,
-    answers: EventId,
 }
 
 impl DeliveryStream {
-    /// The stream whose pulls go to `pulls`, of `responder`'s response to
-    /// `answers`.
-    fn new(
-        pulls: mpsc::UnboundedSender<oneshot::Sender<Pulled>>,
-        responder: ChannelId,
-        answers: EventId,
-    ) -> Self {
+    /// The stream whose pulls go to `pulls`.
+    fn new(pulls: mpsc::UnboundedSender<oneshot::Sender<Pulled>>) -> Self {
         Self {
             pulls,
             waiting: None,
             ended: false,
-            responder,
-            answers,
         }
-    }
-
-    /// The intelligence channel whose response it is.
-    pub fn responder(&self) -> &ChannelId {
-        &self.responder
-    }
-
-    /// The event the response answers.
-    pub fn answers(&self) -> &EventId {
-        &self.answers
     }
 
     /// The next item: text, a row, or the response's failure, its last;
@@ -146,8 +127,6 @@ impl std::fmt::Debug for DeliveryStream {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("DeliveryStream")
-            .field("responder", &self.responder)
-            .field("answers", &self.answers)
             .field("ended", &self.ended)
             .finish_non_exhaustive()
     }

@@ -116,10 +116,17 @@ fn welcome_newcomers(
 
 /// The welcomes `transport` received.
 fn welcomes(transport: &RecordingTransport) -> Vec<String> {
+    // A welcome is a system notice, which a recording transport keeps no
+    // text of: its body is read on the event delivered.
     transport
-        .texts()
+        .deliveries()
         .into_iter()
-        .filter(|text| text.starts_with("Welcome"))
+        .filter_map(|delivery| {
+            let EventContent::System(notice) = delivery.event.content else {
+                return None;
+            };
+            notice.body.starts_with("Welcome").then_some(notice.body)
+        })
         .collect()
 }
 

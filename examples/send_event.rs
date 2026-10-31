@@ -20,14 +20,13 @@ use std::future::Future;
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventDirection, EventId, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId,
-    TextContent,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelType, EventDirection,
+    EventId, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    FrameworkEvent, ProcessInboundOptions, RoomKit, RoomKitError, SendEventOptions, WeakRoomKit,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, FrameworkEvent,
+    ProcessInboundOptions, RoomKit, RoomKitError, SendEventOptions, WeakRoomKit,
 };
 
 use shared::text_of;
@@ -45,7 +44,7 @@ struct Note {
 /// note into the room with `send_event`, then answers. The kit holds the
 /// agent, so the agent holds the kit weakly.
 struct Agent {
-    declaration: ChannelDeclaration,
+    channel_id: ChannelId,
     kit: WeakRoomKit,
     customer: RecordingTransport,
     notes: Log<Note>,
@@ -58,14 +57,8 @@ impl Agent {
         customer: &RecordingTransport,
         notes: &Log<Note>,
     ) -> Self {
-        let declaration = ChannelDeclaration::new(
-            channel_id,
-            ChannelType::AI,
-            ChannelCategory::Intelligence,
-            ChannelDirection::Bidirectional,
-        );
         Self {
-            declaration,
+            channel_id,
             kit: kit.downgrade(),
             customer: customer.clone(),
             notes: notes.clone(),
@@ -76,7 +69,7 @@ impl Agent {
     fn answer(&self, event: &RoomEvent) -> RoomEvent {
         let source = EventSource {
             direction: EventDirection::Outbound,
-            ..EventSource::new(self.declaration.channel_id.clone(), ChannelType::AI)
+            ..EventSource::new(self.channel_id.clone(), ChannelType::AI)
         };
         // The pipeline gives the answer its own id, room and depth.
         RoomEvent {
@@ -92,8 +85,16 @@ impl Agent {
 }
 
 impl Channel for Agent {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
     }
 
     fn on_event(
@@ -108,7 +109,7 @@ impl Channel for Agent {
             self.kit.upgrade(),
             self.customer.clone(),
             self.notes.clone(),
-            self.declaration.channel_id.clone(),
+            self.channel_id.clone(),
         );
         async move {
             if !from_customer {
@@ -132,6 +133,24 @@ impl Channel for Agent {
             })
         }
     }
+
+    /// An agent takes no message: it answers in its room.
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Err("an agent takes no message".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
 }
 
 /// Whether `events` holds the `event_processed` of `event_id` (RFC §8.2).
@@ -151,7 +170,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let crm = recording("crm", ChannelType::WEBSOCKET)?;
     let notes = Log::new();
     let agent = Agent::new(ChannelId::new("agent")?, &kit, &customer, &notes);
-    let agent_id = agent.declaration.channel_id.clone();
+    let agent_id = agent.channel_id.clone();
     kit.register_channel(customer.clone())?;
     kit.register_channel(console.clone())?;
     kit.register_channel(crm.clone())?;

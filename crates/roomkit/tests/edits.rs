@@ -23,11 +23,12 @@ use roomkit::testing::{
     kit_with_environment,
 };
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
-    ConversationStore, CreateRoomOptions, DeleteEventOptions, EventFilter, HookExecution,
-    HookOptions, HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions,
-    SendEventOptions, UpdateEventOptions,
+    AttachChannelOptions, Channel, ChannelError, CommitEventOptions, ConversationStore,
+    CreateRoomOptions, DeleteEventOptions, EventFilter, HookExecution, HookOptions, HookTrigger,
+    InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
+    UpdateEventOptions,
 };
+use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::edits::is_deleted;
 use roomkit_core::rules::edits::is_edited;
 use roomkit_core::rules::transcoding::text_of;
@@ -83,9 +84,10 @@ impl Reader {
     }
 }
 
-impl Channel for Reader {
-    fn declaration(&self) -> ChannelDeclaration {
-        let mut declaration = ChannelDeclaration::new(
+impl Reader {
+    /// The configuration the kit keeps of the channel.
+    fn config(&self) -> ChannelConfig {
+        let mut declaration = ChannelConfig::new(
             channel("ai"),
             ChannelType::AI,
             ChannelCategory::Intelligence,
@@ -97,6 +99,51 @@ impl Channel for Reader {
             edits_natively()
         };
         declaration
+    }
+}
+
+impl Channel for Reader {
+    fn channel_id(&self) -> ChannelId {
+        self.config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.config().direction
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = self.config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -119,6 +166,23 @@ impl Channel for Reader {
             .unwrap_or_else(PoisonError::into_inner)
             .push((event, history));
         ready(Ok(ChannelOutput::default()))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 }
 

@@ -17,9 +17,10 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitError, RoomKitOptions,
 };
+use roomkit_core::ops::ChannelConfig;
 use serde_json::{Value, json};
 
 fn channel(id: &str) -> ChannelId {
@@ -50,15 +51,16 @@ struct Failing {
     id: &'static str,
 }
 
-impl Channel for Failing {
-    fn declaration(&self) -> ChannelDeclaration {
+impl Failing {
+    /// The configuration the kit keeps of the channel.
+    fn config(&self) -> ChannelConfig {
         let (channel_type, category) = match self.id {
             "raising" | "erring" => (ChannelType::AI, ChannelCategory::Intelligence),
             "sms_refused" | "sms_no_recipient" => (ChannelType::SMS, ChannelCategory::Transport),
             _ => (ChannelType::WEBSOCKET, ChannelCategory::Transport),
         };
         let websocket = channel_type == ChannelType::WEBSOCKET;
-        let mut declaration = ChannelDeclaration::new(
+        let mut declaration = ChannelConfig::new(
             channel(self.id),
             channel_type,
             category,
@@ -68,6 +70,51 @@ impl Channel for Failing {
             declaration.recipient_key = None;
         }
         declaration
+    }
+}
+
+impl Channel for Failing {
+    fn channel_id(&self) -> ChannelId {
+        self.config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = self.config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -119,6 +166,14 @@ impl Channel for Failing {
             }),
             _ => Ok(ChannelOutput::empty()),
         })
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

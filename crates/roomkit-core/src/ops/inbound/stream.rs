@@ -333,7 +333,6 @@ fn target(cx: &Cx<'_>, job: &StreamJob, context: &RoomContext) -> Option<StreamT
         let declaration = cx.config.channel(&transport.binding.channel_id)?;
         (transport.delivers && declaration.supports_streaming_delivery).then(|| StreamTarget {
             context: Box::new(permissions::context_for(&transport.binding, context)),
-            tool_rows: declaration.receives_tool_calls,
             binding: transport.binding,
         })
     })

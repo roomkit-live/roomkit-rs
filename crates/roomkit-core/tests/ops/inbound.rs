@@ -9,9 +9,8 @@ use roomkit_core::model::{
     TextContent, Timestamp, Visibility,
 };
 use roomkit_core::ops::{
-    ChannelDeclaration, FrameworkEvent, HoldOutcome, Inbound, InboundError, InboundTarget,
-    KitConfig, Next, Operation, Outcome, ProtocolError, RefusedOperation, SequentialEnvironment,
-    StoreOutcome,
+    ChannelConfig, FrameworkEvent, HoldOutcome, Inbound, InboundError, InboundTarget, KitConfig,
+    Next, Operation, Outcome, ProtocolError, RefusedOperation, SequentialEnvironment, StoreOutcome,
 };
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookSpec, HookTrigger};
@@ -2182,7 +2181,7 @@ mod a_refused_operation {
     #[test]
     fn a_message_on_a_host_channel_is_refused_before_any_effect() {
         let mut sim = room();
-        sim.declare(ChannelDeclaration::host(channel("host")));
+        sim.declare(ChannelConfig::host(channel("host")));
         let named = sim.send(Sim::message("host", "Bonjour"));
         let routed = sim.route(None, Sim::message("host", "Bonjour"));
         let refused = || Err(InboundError::InboundOnHostChannel(channel("host")));

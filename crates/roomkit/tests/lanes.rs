@@ -27,10 +27,11 @@ use roomkit::testing::{
     EchoAgent, EchoAgentOptions, EventTap, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, HookExecution, HookOptions, HookTrigger, MuteOptions, PauseRoomOptions,
-    ProcessInboundOptions, RoomFilter, RoomKit, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    HookExecution, HookOptions, HookTrigger, MuteOptions, PauseRoomOptions, ProcessInboundOptions,
+    RoomFilter, RoomKit, RoomKitOptions,
 };
+use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::{Barrier, Notify};
 
@@ -187,14 +188,14 @@ async fn two_tasks_naming_one_missing_room_at_once_create_it_once() {
 
 /// A transport that panics in the call it is built to panic in.
 struct Panicking {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     in_on_event: bool,
 }
 
 impl Panicking {
     fn new(in_on_event: bool) -> Self {
         Self {
-            declaration: ChannelDeclaration::new(
+            declaration: ChannelConfig::new(
                 channel("broken"),
                 ChannelType::WEBSOCKET,
                 ChannelCategory::Transport,
@@ -206,8 +207,47 @@ impl Panicking {
 }
 
 impl Channel for Panicking {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -228,6 +268,14 @@ impl Channel for Panicking {
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         assert!(self.in_on_event, "the provider SDK panicked in deliver");
         ready(Ok(ChannelOutput::default()))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 
@@ -275,7 +323,7 @@ async fn a_channel_that_panics_in_deliver_leaves_the_lane_and_the_lock_free() {
 /// waits for `go`, as a slow provider; it keeps the texts it delivered.
 #[derive(Clone)]
 struct Gated {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     /// Whether the first delivery started.
     started: Arc<AtomicBool>,
     delivering: Arc<Notify>,
@@ -286,7 +334,7 @@ struct Gated {
 impl Gated {
     fn new() -> Self {
         Self {
-            declaration: ChannelDeclaration::new(
+            declaration: ChannelConfig::new(
                 channel("slow"),
                 ChannelType::WEBSOCKET,
                 ChannelCategory::Transport,
@@ -301,8 +349,47 @@ impl Gated {
 }
 
 impl Channel for Gated {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -321,6 +408,14 @@ impl Channel for Gated {
             gate.delivered.lock().unwrap().push(text_of(&event.content));
             Ok(ChannelOutput::default())
         }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 
@@ -407,7 +502,7 @@ async fn a_call_dropped_during_its_delivery_still_delivers_its_event() {
 /// dropped unfinished.
 #[derive(Clone)]
 struct SlowAgent {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     turning: Arc<Notify>,
     go: Arc<Notify>,
     log: Arc<Mutex<Vec<&'static str>>>,
@@ -416,7 +511,7 @@ struct SlowAgent {
 impl SlowAgent {
     fn new() -> Self {
         Self {
-            declaration: ChannelDeclaration::new(
+            declaration: ChannelConfig::new(
                 channel("ai"),
                 ChannelType::AI,
                 ChannelCategory::Intelligence,
@@ -444,8 +539,47 @@ impl Drop for Unfinished {
 }
 
 impl Channel for SlowAgent {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -483,6 +617,23 @@ impl Channel for SlowAgent {
                 ..ChannelOutput::empty()
             })
         }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 }
 

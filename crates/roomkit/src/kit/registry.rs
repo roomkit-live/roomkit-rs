@@ -9,7 +9,7 @@ use roomkit_core::ops::FrameworkEvent as CoreEvent;
 use roomkit_core::rules::hook_registry::{HookTrigger, RegistrationError};
 
 use super::{RoomKit, write};
-use crate::channel::{Channel, DynChannel};
+use crate::channel::{Channel, DynChannel, config_of};
 use crate::error::RoomKitError;
 use crate::hooks::{Closure, HookHandler, HookOptions, HookPayload, IntoHookReturn};
 use crate::registered::{Registered, RegisteredChannel};
@@ -29,7 +29,7 @@ impl<S: ConversationStore> RoomKit<S> {
     /// §5.3).
     pub fn register_channel(&self, channel: impl Channel) -> Result<(), RoomKitError> {
         self.inner.open()?;
-        let declaration = Channel::declaration(&channel);
+        let declaration = config_of(&channel);
         declaration.capabilities.check()?;
         let registered = CoreEvent::channel_registered(
             declaration.channel_id.clone(),

@@ -228,6 +228,29 @@ impl Segments {
         Some(row)
     }
 
+    /// The empty event a streaming channel renders the response under
+    /// (`deliver_stream`'s `event`), as Python's `_stream_placeholder`
+    /// builds it: from the agent, one deeper than the event the response
+    /// answers and answering it, in its thread, with the response's id and
+    /// the visibility the trigger asks its responses for.
+    pub(super) fn placeholder(&self) -> RoomEvent {
+        let mut event = RoomEvent::new(
+            self.answers.room_id.clone(),
+            self.source.clone(),
+            TextContent::new(""),
+        );
+        event.chain_depth = self.answers.chain_depth.saturating_add(1);
+        event.responds_to = Some(self.answers.id.clone());
+        event
+            .parent_event_id
+            .clone_from(&self.answers.parent_event_id);
+        event.correlation_id = Some(self.correlation_id.clone());
+        if let Some(visibility) = &self.answers.response_visibility {
+            event.visibility = visibility.clone();
+        }
+        event
+    }
+
     /// A row of `event_type` saying `content`, as the response wrote it,
     /// with the response's id: the pipeline gives it its id, its depth and
     /// its instant, and makes it answer the event the response answers.

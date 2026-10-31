@@ -4,10 +4,10 @@
 use std::future::{Future, ready};
 
 use roomkit::model::{
-    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, EventDirection, EventSource, RoomContext, RoomEvent, TextContent,
+    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
+    EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, TextContent,
 };
-use roomkit::{Channel, ChannelDeclaration, ChannelError, turn_context};
+use roomkit::{Channel, ChannelError, turn_context};
 
 use crate::Log;
 use crate::text_of;
@@ -23,7 +23,8 @@ pub type Script = &'static [(&'static str, &'static str)];
 /// kept.
 #[derive(Clone, Debug)]
 pub struct ScriptedAgent {
-    declaration: ChannelDeclaration,
+    channel_id: ChannelId,
+    capabilities: ChannelCapabilities,
     script: Script,
     turns: Log<Turn>,
 }
@@ -40,15 +41,9 @@ pub struct Turn {
 impl ScriptedAgent {
     /// An agent named `channel_id`, answering from `script`.
     pub fn new(channel_id: ChannelId, script: Script) -> Self {
-        let mut declaration = ChannelDeclaration::new(
-            channel_id,
-            ChannelType::AI,
-            ChannelCategory::Intelligence,
-            ChannelDirection::Bidirectional,
-        );
-        declaration.provider_name = Some("ScriptedAgent".to_owned());
         Self {
-            declaration,
+            channel_id,
+            capabilities: ChannelCapabilities::default(),
             script,
             turns: Log::new(),
         }
@@ -58,13 +53,13 @@ impl ScriptedAgent {
     /// natively is handed an edit or a delete as it is (RFC §6.6).
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: ChannelCapabilities) -> Self {
-        self.declaration.capabilities = capabilities;
+        self.capabilities = capabilities;
         self
     }
 
     /// The channel's id.
     pub fn id(&self) -> &ChannelId {
-        &self.declaration.channel_id
+        &self.channel_id
     }
 
     /// What its turns read so far, in order.
@@ -86,7 +81,7 @@ impl ScriptedAgent {
         let (_, reply) = self.script.iter().find(|(line, _)| *line == read)?;
         let source = EventSource {
             direction: EventDirection::Outbound,
-            ..EventSource::new(self.declaration.channel_id.clone(), ChannelType::AI)
+            ..EventSource::new(self.channel_id.clone(), ChannelType::AI)
         };
         // The pipeline gives the response its own id, room and depth, and
         // makes it answer the event that asked.
@@ -99,8 +94,43 @@ impl ScriptedAgent {
 }
 
 impl Channel for ScriptedAgent {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Some("ScriptedAgent".to_owned())
+    }
+
+    /// An agent takes no message: it answers in its room.
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Err("a scripted agent takes no message".into()))
+    }
+
+    /// An intelligence channel is not delivered to.
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 
     fn on_event(
@@ -115,7 +145,7 @@ impl Channel for ScriptedAgent {
                 response_events: vec![answer],
                 ..ChannelOutput::empty()
             },
-            None => ChannelOutput::default(),
+            None => ChannelOutput::empty(),
         };
         let history = turn_context(&event, context)
             .recent_events

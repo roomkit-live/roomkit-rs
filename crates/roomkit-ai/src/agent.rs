@@ -7,10 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
+    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
     EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent,
 };
-use roomkit::{Channel, ChannelDeclaration, ChannelError, EventDraft, current_turn_host};
+use roomkit::{Channel, ChannelError, current_turn_host};
 use roomkit_core::rules::transcript::conversation;
 
 use serde_json::Value;
@@ -92,7 +92,8 @@ const STANDALONE: &str = "standalone";
 /// no inbound message. Cloning it shares its provider, its tools and its
 /// skills.
 pub struct AiAgent<P> {
-    declaration: ChannelDeclaration,
+    channel_id: ChannelId,
+    capabilities: ChannelCapabilities,
     provider: Arc<P>,
     toolbox: Arc<Toolbox>,
     policy: ToolPolicy,
@@ -109,7 +110,8 @@ pub struct AiAgent<P> {
 impl<P> Clone for AiAgent<P> {
     fn clone(&self) -> Self {
         Self {
-            declaration: self.declaration.clone(),
+            channel_id: self.channel_id.clone(),
+            capabilities: self.capabilities.clone(),
             provider: Arc::clone(&self.provider),
             toolbox: Arc::clone(&self.toolbox),
             policy: self.policy.clone(),
@@ -130,22 +132,16 @@ impl<P: AiProvider> AiAgent<P> {
     /// system prompt and no tool, the room's history as the kit's context
     /// holds it, 50 rounds and 30 seconds per call.
     pub fn new(channel_id: ChannelId, provider: P) -> Self {
-        let mut declaration = ChannelDeclaration::new(
-            channel_id,
-            ChannelType::AI,
-            ChannelCategory::Intelligence,
-            ChannelDirection::Bidirectional,
-        );
-        declaration.provider_name = provider.name().map(str::to_owned);
+        let mut capabilities = ChannelCapabilities::default();
         if provider.supports_vision() {
-            declaration
-                .capabilities
+            capabilities
                 .media_types
                 .insert(roomkit::model::ChannelMediaType::Media);
-            declaration.capabilities.supports_media = true;
+            capabilities.supports_media = true;
         }
         Self {
-            declaration,
+            channel_id,
+            capabilities,
             provider: Arc::new(provider),
             toolbox: Arc::default(),
             policy: ToolPolicy::default(),
@@ -173,7 +169,7 @@ impl<P: AiProvider> AiAgent<P> {
 
     /// The channel's id.
     pub fn id(&self) -> &ChannelId {
-        &self.declaration.channel_id
+        &self.channel_id
     }
 
     /// The agent's provider.
@@ -379,8 +375,24 @@ impl<P: AiProvider> AiAgent<P> {
 }
 
 impl<P: AiProvider> Channel for AiAgent<P> {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.provider.name().map(str::to_owned)
     }
 
     /// An AI agent takes no inbound message, as the reference
@@ -392,9 +404,19 @@ impl<P: AiProvider> Channel for AiAgent<P> {
         &self,
         _message: InboundMessage,
         _context: RoomContext,
-        _draft: EventDraft,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
         future::ready(Err("AI channel does not accept inbound messages".into()))
+    }
+
+    /// An intelligence channel is not delivered to: its turn is its
+    /// `on_event()`.
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        future::ready(Ok(ChannelOutput::empty()))
     }
 
     async fn on_event(
@@ -459,7 +481,7 @@ fn stands_alone(event: &RoomEvent) -> bool {
 impl<P> fmt::Debug for AiAgent<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AiAgent")
-            .field("channel_id", &self.declaration.channel_id)
+            .field("channel_id", &self.channel_id)
             .field("toolbox", &self.toolbox)
             .field("policy", &self.policy)
             .field("bounds", &self.bounds)

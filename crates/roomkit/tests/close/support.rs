@@ -14,12 +14,13 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, EventFilter, EventQuery, HookExecution, HookOptions, HookTrigger,
-    InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions, EventFilter,
+    EventQuery, HookExecution, HookOptions, HookTrigger, InboundResult, ProcessInboundOptions,
+    RoomKit, RoomKitError, RoomKitOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, AiProvider, ToolDefinition, ToolOutput, Tools};
+use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 use serde_json::json;
 use tokio::sync::Notify;
@@ -52,8 +53,8 @@ pub(crate) fn into(room_id: RoomId) -> ProcessInboundOptions {
     }
 }
 
-pub(crate) fn transport(id: &str) -> ChannelDeclaration {
-    ChannelDeclaration::new(
+pub(crate) fn transport(id: &str) -> ChannelConfig {
+    ChannelConfig::new(
         channel(id),
         ChannelType::WEBSOCKET,
         ChannelCategory::Transport,
@@ -135,9 +136,55 @@ impl Witness {
     }
 }
 
-impl Channel for Witness {
-    fn declaration(&self) -> ChannelDeclaration {
+impl Witness {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
         transport("witness")
+    }
+}
+
+impl Channel for Witness {
+    fn channel_id(&self) -> ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -175,6 +222,14 @@ impl Channel for Witness {
     fn close(&self) -> impl Future<Output = ()> + Send {
         let closed = Arc::clone(&self.closed);
         async move { closed.store(true, Ordering::SeqCst) }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

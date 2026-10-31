@@ -136,15 +136,17 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
             answer.metadata.get("loop_end_reason") == Some(&json!("completed"))
         }),
     );
+    let read: Vec<String> = sms
+        .texts()
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect();
     checks.expect(
-        "Alice receives the round's text and the answer by SMS, and no tool-call row",
-        sms.deliveries()
-            .iter()
-            .map(|delivery| delivery.event.r#type)
-            .eq([EventType::Message, EventType::Message])
-            && sms.texts().first().map(String::as_str) == Some("Let me look into order 42.")
-            && sms
-                .texts()
+        "Alice's SMS is handed the round's rows too, which carry no text: she reads the round's \
+         text and the answer",
+        sms.deliveries().len() == 12
+            && read.first().map(String::as_str) == Some("Let me look into order 42.")
+            && read
                 .last()
                 .is_some_and(|text| text.starts_with("Order 42 shipped")),
     );

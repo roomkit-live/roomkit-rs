@@ -12,9 +12,10 @@ use roomkit::model::{
     ChannelOutput, ChannelType, HookResult, InboundMessage, RoomContext, RoomEvent,
 };
 use roomkit::{
-    Channel, ChannelDeclaration, ChannelError, DeliveryStream, EventDraft, HookError,
-    SessionStartedEvent, StreamItem, default_inbound_event,
+    Channel, ChannelError, DeliveryStream, HookError, SessionStartedEvent, StreamItem,
+    default_inbound_event,
 };
+use roomkit_core::ops::ChannelConfig;
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
@@ -176,7 +177,7 @@ pub(crate) async fn perform(
 
 /// A channel whose parse, turn and delivery follow the scenario's reactions.
 pub(crate) struct ScriptedChannel {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     run: Weak<Run>,
     parse: Reactions,
     on_event: Reactions,
@@ -207,7 +208,7 @@ impl ScriptedChannel {
                 .map_err(|e| e.to_string())?;
         let id =
             ChannelId::new(spec["id"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
-        let mut declaration = ChannelDeclaration::new(id, channel_type, category, direction);
+        let mut declaration = ChannelConfig::new(id, channel_type, category, direction);
         if let Some(capabilities) = spec.get("capabilities") {
             declaration.capabilities =
                 serde_json::from_value::<ChannelCapabilities>(capabilities.clone())
@@ -293,30 +294,62 @@ impl ScriptedChannel {
 }
 
 impl Channel for ScriptedChannel {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     async fn handle_inbound(
         &self,
         message: InboundMessage,
-        _context: RoomContext,
-        draft: EventDraft,
+        context: RoomContext,
     ) -> Result<RoomEvent, ChannelError> {
-        let room_id = draft.room_id.to_string();
+        let room_id = context.room.id.to_string();
         if let (Some(run), Some(reaction)) = (
             self.run.upgrade(),
             self.parse.pick(&message_subject(&message, &room_id)),
         ) {
             perform(&run, &reaction, &Scope::in_room(&room_id)).await?;
         }
-        Ok(default_inbound_event(
-            &message,
-            &self.declaration,
-            draft.room_id,
-            draft.id,
-            draft.now,
-        ))
+        Ok(default_inbound_event(&message, &context))
     }
 
     async fn on_event(
@@ -350,6 +383,7 @@ impl Channel for ScriptedChannel {
     async fn deliver_stream(
         &self,
         mut stream: DeliveryStream,
+        _event: RoomEvent,
         binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {

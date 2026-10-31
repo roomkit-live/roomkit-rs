@@ -11,13 +11,14 @@ use roomkit::model::{
 };
 use roomkit::testing::TurnTap;
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, DeliveryStream, HookExecution, HookOptions, HookTrigger,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, ToolCallEvent,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    DeliveryStream, HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit,
+    RoomKitOptions, ToolCallEvent,
 };
 use roomkit_ai::AiAgent;
 use roomkit_ai::ToolOutput;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+use roomkit_core::ops::ChannelConfig;
 use serde_json::Value;
 use tokio::sync::Notify;
 
@@ -161,22 +162,79 @@ fn message() -> roomkit::model::InboundMessage {
 
 /// A WebSocket transport that streams, and leaves once it read one item.
 struct Leaving {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
 }
 
 impl Channel for Leaving {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     async fn deliver_stream(
         &self,
         mut stream: DeliveryStream,
+        _event: roomkit::model::RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         stream.next().await;
         Ok(ChannelOutput::default())
+    }
+
+    fn handle_inbound(
+        &self,
+        message: roomkit::model::InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<roomkit::model::RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: roomkit::model::RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
 }
 
@@ -194,7 +252,7 @@ async fn a_streaming_reader_that_leaves_crosses_as_close() {
         roomkit::testing::RecordingTransportOptions::default(),
     ))
     .unwrap();
-    let mut declaration = ChannelDeclaration::new(
+    let mut declaration = ChannelConfig::new(
         channel("ws"),
         ChannelType::WEBSOCKET,
         ChannelCategory::Transport,

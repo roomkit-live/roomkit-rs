@@ -341,23 +341,6 @@ pub(crate) fn plan_delivery(
     plan
 }
 
-/// Keeps `event`, when it is a tool-call row (`TOOL_CALL_START`,
-/// `TOOL_CALL_END`), from the transports of `plan` that do not take one, as
-/// `takes` says of each channel: a messaging transport delivers an event's
-/// text, and a row's names a tool to a person who called none (RFC §6.4;
-/// gap noted in docs/rfc-gaps.md, step 4 milestone 5). Any other event is
-/// left as planned.
-pub(crate) fn keep_tool_rows_to(
-    plan: &mut DeliveryPlan,
-    event: &RoomEvent,
-    takes: impl Fn(&ChannelId) -> bool,
-) {
-    if is_tool_call_row(event) {
-        plan.transports
-            .retain(|target| takes(&target.binding.channel_id));
-    }
-}
-
 /// Whether `event` is a tool call's start or end row.
 fn is_tool_call_row(event: &RoomEvent) -> bool {
     matches!(

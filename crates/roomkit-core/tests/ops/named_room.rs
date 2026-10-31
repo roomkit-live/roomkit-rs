@@ -12,7 +12,7 @@ use roomkit_core::model::{
     ErrorRecord, InboundMessage, Participant, ParticipantId, Room, RoomId, RoomStatus, TextContent,
     Timestamp, Visibility,
 };
-use roomkit_core::ops::{ChannelDeclaration, FrameworkEvent, InboundError};
+use roomkit_core::ops::{ChannelConfig, FrameworkEvent, InboundError};
 use roomkit_core::rules::addresses::CountryCode;
 use roomkit_core::rules::hook_registry::HookTrigger;
 use serde_json::json;
@@ -624,7 +624,7 @@ mod the_sender {
     #[test]
     fn takes_the_country_code_its_channel_declares() {
         let mut sim = Sim::new();
-        let mut declaration = ChannelDeclaration::new(
+        let mut declaration = ChannelConfig::new(
             channel("inbox"),
             ChannelType::SMS,
             ChannelCategory::Transport,

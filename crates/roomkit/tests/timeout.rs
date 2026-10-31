@@ -40,10 +40,10 @@ use roomkit::testing::{
     kit_with_environment,
 };
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, HookOptions, HookTrigger, InboundResult, PauseRoomOptions,
-    ProcessInboundOptions, RoomKit, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions, HookOptions,
+    HookTrigger, InboundResult, PauseRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
+use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
 
 /// The kit's `process_timeout`.
@@ -271,7 +271,7 @@ async fn a_hook_s_own_timeout_stays_a_hook_error() {
 /// `release` is notified with `hangs_first`, each telling `delivering` it
 /// started.
 struct Slow {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     lasts: Duration,
     /// Whether a delivery hung already, or none is to.
     hung: Arc<AtomicBool>,
@@ -282,7 +282,7 @@ struct Slow {
 impl Slow {
     fn new(lasts: Duration, hangs_first: bool) -> Self {
         Self {
-            declaration: ChannelDeclaration::new(
+            declaration: ChannelConfig::new(
                 channel("slow"),
                 ChannelType::WEBSOCKET,
                 ChannelCategory::Transport,
@@ -297,8 +297,47 @@ impl Slow {
 }
 
 impl Channel for Slow {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -319,6 +358,14 @@ impl Channel for Slow {
             }
             Ok(ChannelOutput::default())
         }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

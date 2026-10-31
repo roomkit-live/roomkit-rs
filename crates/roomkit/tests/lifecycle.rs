@@ -21,13 +21,13 @@ use roomkit::testing::{
     SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CheckAllTimersOptions,
-    CheckRoomTimersOptions, CloseRoomOptions, ConversationStore, CreateRoomOptions,
-    DetachChannelOptions, FrameworkEvent, GetBindingOptions, HookExecution, HookOptions,
-    HookTrigger, ListMembersOptions, MuteOptions, ProcessInboundOptions, ReopenRoomOptions,
-    RoomKit, RoomKitError, RoomKitOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
-    UpdateBindingMetadataOptions,
+    AttachChannelOptions, Channel, ChannelError, CheckAllTimersOptions, CheckRoomTimersOptions,
+    CloseRoomOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, FrameworkEvent,
+    GetBindingOptions, HookExecution, HookOptions, HookTrigger, ListMembersOptions, MuteOptions,
+    ProcessInboundOptions, ReopenRoomOptions, RoomKit, RoomKitError, RoomKitOptions,
+    SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions,
 };
+use roomkit_core::ops::ChannelConfig;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -769,13 +769,13 @@ mod unregistering {
 /// A transport that tags the room on every event it is told of.
 #[derive(Clone, Debug)]
 struct Tagger {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
 }
 
 impl Tagger {
     fn new() -> Self {
         Self {
-            declaration: ChannelDeclaration::new(
+            declaration: ChannelConfig::new(
                 channel("crm"),
                 ChannelType::WEBHOOK,
                 ChannelCategory::Transport,
@@ -789,8 +789,47 @@ impl Tagger {
 const FORGED: &str = "forged";
 
 impl Channel for Tagger {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -814,6 +853,23 @@ impl Channel for Tagger {
             .metadata_updates
             .insert("_speak_queue_results".to_owned(), FORGED.into());
         ready(Ok(output))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 }
 
@@ -1089,7 +1145,8 @@ mod bindings {
     #[tokio::test]
     async fn attach_refuses_in_python_s_order() {
         let (kit, _sms, _agent) = sms_and_agent().await;
-        kit.register_channel(roomkit::HostChannel::new()).unwrap();
+        kit.register_channel(roomkit::HostChannel::default())
+            .unwrap();
         let missing = RoomId::new("room_9").unwrap();
         let attach = |room: RoomId, channel_id: &str, options: AttachChannelOptions| {
             let (kit, channel_id) = (kit.clone(), channel(channel_id));

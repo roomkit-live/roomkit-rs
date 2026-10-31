@@ -18,7 +18,7 @@ use roomkit_core::model::{
     EventStatus, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit_core::ops::{
-    ChannelDeclaration, EffectId, Environment, Next, Operation, Outcome, ProtocolError, Step,
+    ChannelConfig, EffectId, Environment, Next, Operation, Outcome, ProtocolError, Step,
 };
 use roomkit_core::rules::hook_registry::HookTrigger;
 use tokio::sync::Notify;
@@ -204,14 +204,58 @@ async fn a_call_past_its_deadline_waiting_for_the_room_lock_writes_nothing() {
 /// A transport whose delivery tells `delivering` it started, then waits for
 /// `go`.
 struct Paused {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     delivering: Arc<Notify>,
     go: Arc<Notify>,
 }
 
 impl Channel for Paused {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit_core::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(
+        &self,
+    ) -> (
+        roomkit_core::rules::addresses::ChannelAddressing,
+        Option<roomkit_core::rules::addresses::CountryCode>,
+    ) {
+        let config = &self.declaration;
+        let addressing = roomkit_core::rules::addresses::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -227,6 +271,14 @@ impl Channel for Paused {
             Ok(ChannelOutput::default())
         }
     }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(crate::default_inbound_event(&message, &context)))
+    }
 }
 
 /// RFC §9.5.1: the ticket is released once the locked section decided and
@@ -238,7 +290,7 @@ async fn a_call_releases_its_ticket_once_its_event_is_committed() {
     unbounded(&kit);
     let (delivering, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     kit.register_channel(Paused {
-        declaration: ChannelDeclaration::new(
+        declaration: ChannelConfig::new(
             ChannelId::new("ws").unwrap(),
             ChannelType::WEBSOCKET,
             ChannelCategory::Transport,

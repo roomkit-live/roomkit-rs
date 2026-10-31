@@ -16,11 +16,11 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, EventQuery, InboundResult, ProcessInboundOptions, RoomKit, RoomKitError,
-    RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions, EventQuery,
+    InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 use roomkit_ai::{AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderStream};
+use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::Sleep;
@@ -100,9 +100,55 @@ impl Drop for SendNote {
     }
 }
 
-impl Channel for Holding {
-    fn declaration(&self) -> ChannelDeclaration {
+impl Holding {
+    /// The configuration the kit keeps of the channel.
+    fn config(&self) -> ChannelConfig {
         transport(self.id)
+    }
+}
+
+impl Channel for Holding {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        self.config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.config().channel_type.clone()
+    }
+
+    fn category(&self) -> roomkit::model::ChannelCategory {
+        self.config().category
+    }
+
+    fn direction(&self) -> roomkit::model::ChannelDirection {
+        self.config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = self.config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -134,6 +180,14 @@ impl Channel for Holding {
     fn close(&self) -> impl Future<Output = ()> + Send {
         let steps = Arc::clone(&self.steps);
         async move { steps.lock().unwrap().push("closed") }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

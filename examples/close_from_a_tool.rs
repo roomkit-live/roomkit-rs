@@ -25,12 +25,13 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelCategory, ChannelDirection, ChannelId, ChannelType, InboundMessage, RoomId, TextContent,
+    ChannelBinding, ChannelDirection, ChannelId, ChannelOutput, ChannelType, InboundMessage,
+    RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, CreateRoomOptions, ProcessInboundOptions,
-    RoomKit, RoomKitError,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
+    RoomKitError,
 };
 use roomkit_ai::{ToolDefinition, ToolError, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -54,33 +55,52 @@ fn script() -> Vec<Reply> {
 /// The operator's pager, a channel that notes its close.
 #[derive(Clone)]
 struct Pager {
-    declaration: ChannelDeclaration,
+    channel_id: ChannelId,
     closes: Log<&'static str>,
 }
 
 impl Pager {
     fn new() -> Result<Self, Box<dyn Error>> {
-        let declaration = ChannelDeclaration::new(
-            ChannelId::new("pager")?,
-            ChannelType::WEBHOOK,
-            ChannelCategory::Transport,
-            ChannelDirection::Outbound,
-        );
         Ok(Self {
-            declaration,
+            channel_id: ChannelId::new("pager")?,
             closes: Log::new(),
         })
     }
 }
 
 impl Channel for Pager {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::WEBHOOK
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        ChannelDirection::Outbound
     }
 
     fn close(&self) -> impl Future<Output = ()> + Send {
         let closes = self.closes.clone();
         async move { closes.push("pager closed") }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
 }
 

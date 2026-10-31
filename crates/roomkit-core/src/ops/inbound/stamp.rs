@@ -11,7 +11,7 @@ use crate::model::{
     EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, InboundMessage,
     InjectedEvent, Metadata, ParticipantId, RoomEvent, RoomId, TextContent, Timestamp, Visibility,
 };
-use crate::ops::ChannelDeclaration;
+use crate::ops::ChannelConfig;
 use crate::rules::{chain_depth, edits, instructions, permissions};
 
 /// The event a channel that keeps no data of its own parses from `message`:
@@ -21,7 +21,7 @@ use crate::rules::{chain_depth, edits, instructions, permissions};
 /// driver's default `handle_inbound()` (RFC §6.1).
 pub fn default_inbound_event(
     message: &InboundMessage,
-    channel: &ChannelDeclaration,
+    channel: &ChannelConfig,
     room_id: RoomId,
     id: EventId,
     now: Timestamp,
@@ -57,7 +57,7 @@ pub fn default_inbound_event(
 pub(crate) fn stamp_trigger(
     mut event: RoomEvent,
     message: &InboundMessage,
-    channel: &ChannelDeclaration,
+    channel: &ChannelConfig,
     id: EventId,
 ) -> RoomEvent {
     event.id = id;
@@ -92,7 +92,7 @@ pub(crate) fn stamp_trigger(
 /// (RFC §10.1.1 rules 3 and 4).
 pub(crate) fn stamp_direct(
     direct: DirectEvent,
-    channel: &ChannelDeclaration,
+    channel: &ChannelConfig,
     room_id: RoomId,
     id: EventId,
     now: Timestamp,
@@ -413,10 +413,10 @@ mod tests {
     use super::*;
     use crate::model::{ChannelCategory, ChannelDirection, ChannelId, ChannelType, EventId};
 
-    fn sms() -> ChannelDeclaration {
-        ChannelDeclaration {
+    fn sms() -> ChannelConfig {
+        ChannelConfig {
             provider_name: Some("TwilioSMS".to_owned()),
-            ..ChannelDeclaration::new(
+            ..ChannelConfig::new(
                 ChannelId::new("sms").unwrap(),
                 ChannelType::SMS,
                 ChannelCategory::Transport,

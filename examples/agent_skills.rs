@@ -215,10 +215,16 @@ impl Shop {
         Ok(())
     }
 
-    /// Closes the shop; returns the answers Alice received.
+    /// Closes the shop; returns the answers Alice received: her SMS is
+    /// handed the turns' tool-call rows too, which carry no text.
     async fn close(self) -> Result<Vec<String>, Box<dyn Error>> {
         self.kit.close().await?;
-        Ok(self.sms.texts())
+        Ok(self
+            .sms
+            .texts()
+            .into_iter()
+            .filter(|text| !text.is_empty())
+            .collect())
     }
 }
 

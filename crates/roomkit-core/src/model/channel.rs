@@ -17,7 +17,7 @@ use super::{Metadata, ModelError};
 /// more (`discord`, `buzz`); any other name is a type too, so a record that
 /// names one is read and written back as it is. What a type means for its
 /// channels, how their senders are addressed and what they do, is the
-/// channel's declaration (`ops::ChannelDeclaration`), which takes the
+/// channel's declaration (`ops::ChannelConfig`), which takes the
 /// well-known names' defaults. The well-known names are the associated
 /// constants. Two are reserved: [`HOST`](Self::HOST), which only a host
 /// channel's declaration may claim, and [`SYSTEM`](Self::SYSTEM), the

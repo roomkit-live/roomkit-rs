@@ -35,7 +35,7 @@ use crate::model::{
 };
 use crate::ops::io::Bound;
 use crate::ops::protocol::{ChannelRequest, EffectId, Outcome, Request, StoreRequest};
-use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
+use crate::ops::{ChannelConfig, Cx, KitConfig, Progress};
 use crate::rules::chain_depth::Draw;
 use crate::rules::routing::{self, RouteQuery, Sender};
 use crate::rules::{addresses, idempotency, permissions};
@@ -62,7 +62,7 @@ pub(super) enum Admitted {
     /// The message arrives, on its channel, its sender in the channel's
     /// form (step 1).
     Message {
-        channel: Box<ChannelDeclaration>,
+        channel: Box<ChannelConfig>,
         message: Box<InboundMessage>,
     },
     /// The message is refused, nothing read or written: the call's result.
@@ -114,7 +114,7 @@ pub(super) fn admit(
 fn resolve(
     config: &KitConfig,
     mut message: InboundMessage,
-) -> Result<(ChannelDeclaration, InboundMessage), InboundError> {
+) -> Result<(ChannelConfig, InboundMessage), InboundError> {
     let channel = config
         .channel(&message.channel_id)
         .cloned()
@@ -147,7 +147,7 @@ pub(super) struct Arrival {
     bound: Bound,
     organization_id: Option<String>,
     message: Box<InboundMessage>,
-    channel: Box<ChannelDeclaration>,
+    channel: Box<ChannelConfig>,
     /// Who the message is from, as routing names them. The identity is read
     /// once, for a routed message only.
     sender: Sender,
@@ -196,7 +196,7 @@ impl Arrival {
     pub(super) fn new(
         target: InboundTarget,
         organization_id: Option<String>,
-        channel: ChannelDeclaration,
+        channel: ChannelConfig,
         message: InboundMessage,
         bound: Bound,
     ) -> Self {
@@ -246,7 +246,7 @@ impl Arrival {
     pub(super) fn adopted(
         room_id: RoomId,
         organization_id: Option<String>,
-        channel: ChannelDeclaration,
+        channel: ChannelConfig,
         message: InboundMessage,
     ) -> Self {
         Self::new(

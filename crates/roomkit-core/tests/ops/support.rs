@@ -52,7 +52,7 @@ use roomkit_core::model::{
     RoomEvent, RoomId, RoomStatus, RoomUpdates, Task, TextContent, Timestamp,
 };
 use roomkit_core::ops::{
-    ChannelDeclaration, ChannelOutcome, ChannelRequest, CommitRecord, Decided, DeleteEvent, Effect,
+    ChannelConfig, ChannelOutcome, ChannelRequest, CommitRecord, Decided, DeleteEvent, Effect,
     EffectId, Entry, Environment, FrameworkEvent, HoldOutcome, HoldRequest, HookAnswer,
     HookRequest, Inbound, InboundError, InboundResult, InboundTarget, KitConfig, MutationError,
     Notice, Outcome, Request, RoomCounters, SequentialEnvironment, Settled, StoreOutcome,
@@ -427,7 +427,7 @@ impl Sim {
 
     /// Registers a transport that no room binds, declared as `declaration`
     /// says, with text capabilities; it answers nothing and delivers.
-    pub(crate) fn declare(&mut self, mut declaration: ChannelDeclaration) {
+    pub(crate) fn declare(&mut self, mut declaration: ChannelConfig) {
         declaration.capabilities = text_only();
         self.register(declaration, Box::new(|_, _| Ok(ChannelOutput::default())));
     }
@@ -435,7 +435,7 @@ impl Sim {
     /// Registers a text transport of `channel_type` that no room binds, with
     /// its type's defaults.
     pub(crate) fn unbound_transport(&mut self, id: &str, channel_type: ChannelType) {
-        self.declare(ChannelDeclaration::new(
+        self.declare(ChannelConfig::new(
             channel(id),
             channel_type,
             ChannelCategory::Transport,
@@ -446,7 +446,7 @@ impl Sim {
     /// Registers an agent that no room binds, answering every event it is
     /// asked with `reply`.
     pub(crate) fn unbound_agent(&mut self, id: &str, reply: &'static str) {
-        let mut declaration = ChannelDeclaration::new(
+        let mut declaration = ChannelConfig::new(
             channel(id),
             ChannelType::AI,
             ChannelCategory::Intelligence,
@@ -487,7 +487,7 @@ impl Sim {
         category: ChannelCategory,
         on_event: OnEvent,
     ) -> &mut ChannelBinding {
-        let mut declaration = ChannelDeclaration::new(
+        let mut declaration = ChannelConfig::new(
             channel(id),
             channel_type,
             category,
@@ -498,7 +498,7 @@ impl Sim {
         self.attach(id)
     }
 
-    fn register(&mut self, declaration: ChannelDeclaration, on_event: OnEvent) {
+    fn register(&mut self, declaration: ChannelConfig, on_event: OnEvent) {
         let id = declaration.channel_id.clone();
         self.config.register_channel(declaration).unwrap();
         self.channels.insert(

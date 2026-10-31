@@ -77,7 +77,7 @@ impl<S: ConversationStore> RoomKit<S> {
         if self.config().channel(&host).is_some() {
             return Ok(());
         }
-        match self.register_channel(HostChannel::new()) {
+        match self.register_channel(HostChannel::default()) {
             Err(RoomKitError::ChannelAlreadyRegistered(_)) | Ok(()) => Ok(()),
             Err(error) => Err(error),
         }

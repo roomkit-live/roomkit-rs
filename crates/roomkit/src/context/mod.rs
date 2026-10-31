@@ -556,7 +556,7 @@ mod tests {
         TextContent, Timestamp,
     };
     use roomkit_core::ops::{
-        ChannelDeclaration, CheckTimers, KitConfig, Next, Operation, SequentialEnvironment,
+        ChannelConfig, CheckTimers, KitConfig, Next, Operation, SequentialEnvironment,
     };
 
     use super::*;
@@ -759,7 +759,7 @@ mod tests {
     /// at `depth`.
     fn on_event(category: ChannelCategory, depth: u32) -> Effect {
         let channel = ChannelId::new("ai").unwrap();
-        let declaration = ChannelDeclaration::new(
+        let declaration = ChannelConfig::new(
             channel.clone(),
             ChannelType::AI,
             category,

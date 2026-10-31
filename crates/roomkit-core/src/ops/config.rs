@@ -20,7 +20,7 @@ const DEFAULT_CONTEXT_WINDOW: usize = 50;
 /// A registered channel, as the core knows it: its declaration, never the
 /// object behind it (RFC §10.6.2).
 #[derive(Clone, Debug, PartialEq)]
-pub struct ChannelDeclaration {
+pub struct ChannelConfig {
     /// The channel's id.
     pub channel_id: ChannelId,
     /// Its type, an open name (RFC §6.2): what it means for the channel is
@@ -55,16 +55,6 @@ pub struct ChannelDeclaration {
     /// carrying private chats and groups (WhatsApp Personal), a message
     /// without the key is addressed by its sender.
     pub chat_key: Option<String>,
-    /// Whether the channel, a transport, is handed an agent's tool-call rows
-    /// (`TOOL_CALL_START`, `TOOL_CALL_END`, RFC §6.4): a channel that shows
-    /// a turn's activity, a WebSocket client or a webhook, which takes the
-    /// event as data. A messaging transport (SMS, email, a chat platform)
-    /// is not handed them, so that its delivery, sending the event's text,
-    /// never sends a person `[Tool call: x]`: the reference
-    /// implementation's message providers send nothing for a row with no
-    /// text (gap noted in docs/rfc-gaps.md, step 4 milestone 5). Its type's
-    /// default: `true` for `websocket` and `webhook`.
-    pub receives_tool_calls: bool,
     /// Whether the channel, a transport, takes a streamed response as it is
     /// written (RFC §6.1 `supports_streaming_delivery`): the first transport
     /// a response's rows reach that does reads its stream through its
@@ -74,10 +64,10 @@ pub struct ChannelDeclaration {
     pub supports_streaming_delivery: bool,
 }
 
-impl ChannelDeclaration {
+impl ChannelConfig {
     /// A channel of `channel_type` with the RFC's defaults: the default
     /// capabilities, no provider name, no country code, and the addressing,
-    /// recipient key, chat key and tool-call rows of its type ([`Addressing::of`],
+    /// recipient key and chat key of its type ([`Addressing::of`],
     /// `addresses::recipient_key`, `addresses::chat_key`, gaps G-051 and
     /// G-057), which a name the RFC does not list has none of: its senders
     /// are addressed as written, with no recipient and no chat key, unless
@@ -93,8 +83,6 @@ impl ChannelDeclaration {
             addressing: Addressing::of(&channel_type),
             recipient_key: addresses::recipient_key(&channel_type).map(str::to_owned),
             chat_key: addresses::chat_key(&channel_type).map(str::to_owned),
-            receives_tool_calls: channel_type == ChannelType::WEBSOCKET
-                || channel_type == ChannelType::WEBHOOK,
             supports_streaming_delivery: false,
             channel_type,
             category,
@@ -177,7 +165,7 @@ pub enum ConfigError {
 /// A kit's configuration: what the operations read and never change.
 #[derive(Clone, Debug)]
 pub struct KitConfig {
-    channels: BTreeMap<ChannelId, ChannelDeclaration>,
+    channels: BTreeMap<ChannelId, ChannelConfig>,
     /// The kit's hooks (RFC §9.1).
     pub hooks: HookRegistry,
     /// The chain-depth limit (RFC §8.3), 5 by default.
@@ -214,7 +202,7 @@ impl KitConfig {
     /// Returns [`ConfigError::DuplicateChannel`] when the id is taken, and
     /// [`ConfigError::ReservedChannelType`] for a channel claiming `system`
     /// (RFC §5.3).
-    pub fn register_channel(&mut self, declaration: ChannelDeclaration) -> Result<(), ConfigError> {
+    pub fn register_channel(&mut self, declaration: ChannelConfig) -> Result<(), ConfigError> {
         if self.channels.contains_key(&declaration.channel_id) {
             return Err(ConfigError::DuplicateChannel(declaration.channel_id));
         }
@@ -235,17 +223,14 @@ impl KitConfig {
     /// # Errors
     ///
     /// Returns [`ConfigError::UnknownChannel`] when no channel has the id.
-    pub fn unregister_channel(
-        &mut self,
-        id: &ChannelId,
-    ) -> Result<ChannelDeclaration, ConfigError> {
+    pub fn unregister_channel(&mut self, id: &ChannelId) -> Result<ChannelConfig, ConfigError> {
         self.channels
             .remove(id)
             .ok_or_else(|| ConfigError::UnknownChannel(id.clone()))
     }
 
     /// The registered channel `id`.
-    pub fn channel(&self, id: &ChannelId) -> Option<&ChannelDeclaration> {
+    pub fn channel(&self, id: &ChannelId) -> Option<&ChannelConfig> {
         self.channels.get(id)
     }
 }

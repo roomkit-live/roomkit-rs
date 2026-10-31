@@ -21,12 +21,13 @@ use roomkit::model::{
 };
 use roomkit::testing::EventTap;
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
-    CommitEventOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, EventFilter,
-    EventQuery, HookOptions, HookTrigger, HostChannel, InMemoryStore, PostOptions,
-    ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit, RoomKitError, RoomKitOptions,
-    SendEventOptions, StoreError, TargetUpdate,
+    AttachChannelOptions, Channel, ChannelError, CloseRoomOptions, CommitEventOptions,
+    ConversationStore, CreateRoomOptions, DetachChannelOptions, EventFilter, EventQuery,
+    HookOptions, HookTrigger, HostChannel, InMemoryStore, PostOptions, ProcessInboundOptions,
+    RoomCounters, RoomFilter, RoomKit, RoomKitError, RoomKitOptions, SendEventOptions, StoreError,
+    TargetUpdate,
 };
+use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
 
@@ -63,14 +64,60 @@ impl Sms {
     }
 }
 
-impl Channel for Sms {
-    fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration::new(
+impl Sms {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
+        ChannelConfig::new(
             channel("sms"),
             ChannelType::SMS,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
         )
+    }
+}
+
+impl Channel for Sms {
+    fn channel_id(&self) -> ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -90,6 +137,14 @@ impl Channel for Sms {
             .unwrap_or_else(PoisonError::into_inner)
             .push((to, text_of(&event.content)));
         ready(Ok(ChannelOutput::default()))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 
@@ -119,14 +174,60 @@ impl Agent {
     }
 }
 
-impl Channel for Agent {
-    fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration::new(
+impl Agent {
+    /// The configuration the kit keeps of the channel.
+    fn config(&self) -> ChannelConfig {
+        ChannelConfig::new(
             self.id.clone(),
             ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         )
+    }
+}
+
+impl Channel for Agent {
+    fn channel_id(&self) -> ChannelId {
+        self.config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = self.config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -157,20 +258,37 @@ impl Channel for Agent {
             ..ChannelOutput::empty()
         }))
     }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
+    }
 }
 
 /// A host channel that counts what it is asked to deliver: a host channel
 /// is never delivered to (RFC §10.5).
 #[derive(Clone)]
 struct CountingHost {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     delivered: Arc<Mutex<usize>>,
 }
 
 impl CountingHost {
     fn new(id: &str) -> Self {
         Self {
-            declaration: ChannelDeclaration::host(channel(id)),
+            declaration: ChannelConfig::host(channel(id)),
             delivered: Arc::default(),
         }
     }
@@ -184,8 +302,47 @@ impl CountingHost {
 }
 
 impl Channel for CountingHost {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -199,6 +356,14 @@ impl Channel for CountingHost {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) += 1;
         ready(Ok(ChannelOutput::default()))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 
@@ -267,7 +432,8 @@ fn participant(id: &str, channel_id: &str) -> Participant {
 /// RFC §10.5: a post reaches the room's correspondent as a party's
 /// message, `INBOUND` from the host channel, asks no agent, keeps the
 /// metadata it came with; the host channel attached on the first post
-/// declares every media type.
+/// declares every media type. A post names no provider, as Python's
+/// `HostChannel` has none (decision 20).
 #[tokio::test]
 async fn a_post_texts_the_correspondent_and_solicits_no_agent() {
     for organization in [None, Some("acme")] {
@@ -297,7 +463,11 @@ async fn a_post_texts_the_correspondent_and_solicits_no_agent() {
             (
                 sms.sent(),
                 agent.asked().len(),
-                (event.source.channel_type, event.source.direction),
+                (
+                    event.source.channel_type,
+                    event.source.direction,
+                    event.source.provider.clone()
+                ),
                 event.metadata.get("job").cloned(),
                 host.capabilities.media_types.len(),
                 host.capabilities
@@ -307,7 +477,7 @@ async fn a_post_texts_the_correspondent_and_solicits_no_agent() {
             (
                 vec![(CUSTOMER.to_owned(), "Your order shipped.".to_owned())],
                 0,
-                (ChannelType::HOST, EventDirection::Inbound),
+                (ChannelType::HOST, EventDirection::Inbound, None),
                 Some("shipping-notice".into()),
                 7,
                 true
@@ -423,7 +593,7 @@ async fn a_host_binding_the_integrator_sets_keeps_its_settings() {
     for concurrently in [false, true] {
         let kit = RoomKit::new(RoomKitOptions::default());
         sms_room(&kit, None, CreateRoomOptions::default()).await;
-        kit.register_channel(HostChannel::new()).unwrap();
+        kit.register_channel(HostChannel::default()).unwrap();
         let mut options = AttachChannelOptions {
             access: Access::WriteOnly,
             ..Default::default()
@@ -893,9 +1063,72 @@ async fn a_message_on_the_host_channel_is_refused_before_anything_is_written() {
 /// A channel `id` of type `channel_type`, as `category` and `direction`.
 struct Claiming(&'static str, ChannelType, ChannelCategory, ChannelDirection);
 
+impl Claiming {
+    /// The configuration the kit keeps of the channel.
+    fn config(&self) -> ChannelConfig {
+        ChannelConfig::new(channel(self.0), self.1.clone(), self.2, self.3)
+    }
+}
+
 impl Channel for Claiming {
-    fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration::new(channel(self.0), self.1.clone(), self.2, self.3)
+    fn channel_id(&self) -> ChannelId {
+        self.config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = self.config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 }
 
@@ -921,7 +1154,9 @@ async fn only_a_channel_claiming_the_system_type_is_refused() {
     assert_eq!(
         (
             registered,
-            kit.register_channel(HostChannel::with_id(channel("desk")))
+            kit.register_channel(HostChannel::new(roomkit::HostChannelOptions {
+                channel_id: channel("desk")
+            }))
         ),
         (
             vec![
@@ -943,7 +1178,7 @@ async fn only_a_channel_claiming_the_system_type_is_refused() {
 async fn a_host_channel_is_never_bound_as_an_intelligence_channel() {
     let kit = RoomKit::new(RoomKitOptions::default());
     sms_room(&kit, None, CreateRoomOptions::default()).await;
-    kit.register_channel(HostChannel::new()).unwrap();
+    kit.register_channel(HostChannel::default()).unwrap();
     let options = AttachChannelOptions {
         category: Some(ChannelCategory::Intelligence),
         ..Default::default()

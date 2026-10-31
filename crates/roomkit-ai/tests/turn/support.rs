@@ -9,15 +9,16 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, HookExecution, HookOptions, HookTrigger, InboundResult, PostOptions,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions, ToolCallEvent,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    HookExecution, HookOptions, HookTrigger, InboundResult, PostOptions, ProcessInboundOptions,
+    RoomKit, RoomKitOptions, SendEventOptions, ToolCallEvent,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, Done, ProviderResponse, ProviderStream, ProviderToolCall,
     ToolDefinition, ToolOutput, Tools,
 };
+use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcript::Role;
 use serde_json::json;
 use tokio::sync::watch;
@@ -152,9 +153,64 @@ struct Counting {
     answers: watch::Sender<usize>,
 }
 
+impl Counting {
+    /// The configuration the kit keeps of the channel.
+    fn config(&self) -> ChannelConfig {
+        let mut config = ChannelConfig::new(
+            Channel::channel_id(&self.sms),
+            Channel::channel_type(&self.sms),
+            Channel::category(&self.sms),
+            Channel::direction(&self.sms),
+        );
+        config.capabilities = Channel::capabilities(&self.sms);
+        config.provider_name = Channel::provider_name(&self.sms);
+        config.recipient_key = Channel::recipient_key(&self.sms);
+        config
+    }
+}
+
 impl Channel for Counting {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.sms.declaration()
+    fn channel_id(&self) -> ChannelId {
+        self.config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.config().channel_type.clone()
+    }
+
+    fn category(&self) -> roomkit::model::ChannelCategory {
+        self.config().category
+    }
+
+    fn direction(&self) -> roomkit::model::ChannelDirection {
+        self.config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = self.config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     async fn deliver(
@@ -170,6 +226,14 @@ impl Channel for Counting {
             self.answers.send_modify(|answers| *answers += 1);
         }
         output
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

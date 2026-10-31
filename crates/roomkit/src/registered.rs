@@ -10,7 +10,7 @@ use std::sync::Arc;
 use roomkit_core::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelType,
 };
-use roomkit_core::ops::ChannelDeclaration;
+use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::addresses::AddressForm;
 
 use crate::channel::{BoxFuture, DynChannel};
@@ -52,9 +52,10 @@ pub trait RegisteredChannel: sealed::Sealed + Debug + Send + Sync {
     fn close(&self) -> BoxFuture<'_, ()>;
 }
 
-/// The kit's own view: a channel's declaration, and the channel.
+/// The kit's own view: the configuration the core keeps of a channel, and
+/// the channel.
 pub(crate) struct Registered {
-    pub(crate) declaration: ChannelDeclaration,
+    pub(crate) declaration: ChannelConfig,
     pub(crate) channel: Arc<dyn DynChannel>,
 }
 
@@ -89,11 +90,11 @@ impl RegisteredChannel for Registered {
     }
 
     fn normalize_address(&self, address: &str) -> String {
-        self.declaration.form().normalize(address)
+        self.channel.normalize_address(address)
     }
 
     fn recipient_address(&self, binding: &ChannelBinding) -> Option<String> {
-        self.declaration.form().recipient(binding)
+        self.channel.recipient_address(binding)
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {

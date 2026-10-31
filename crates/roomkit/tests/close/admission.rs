@@ -14,7 +14,7 @@ use roomkit::model::{
     Access, HookResult, Metadata, RoomContext, RoomEvent, TextContent, Visibility,
 };
 use roomkit::{
-    ArchiveRoomOptions, AttachChannelOptions, Channel, ChannelDeclaration, CheckAllTimersOptions,
+    ArchiveRoomOptions, AttachChannelOptions, Channel, CheckAllTimersOptions,
     CheckRoomTimersOptions, CloseRoomOptions, CommitEventOptions, ConversationStore,
     CreateRoomOptions, DeleteEventOptions, DetachChannelOptions, GetBindingOptions, GetRoomOptions,
     GetTimelineOptions, HookExecution, HookFuture, HookHandler, HookOptions, HookTrigger,
@@ -23,6 +23,7 @@ use roomkit::{
     RoomKitError, SendEventOptions, SetAccessOptions, SetVisibilityOptions, ToolCallEvent,
     UnmuteOptions, UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
+use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
@@ -459,9 +460,55 @@ struct SaysByeAsItCloses {
     answered: Arc<Mutex<Vec<String>>>,
 }
 
-impl Channel for SaysByeAsItCloses {
-    fn declaration(&self) -> ChannelDeclaration {
+impl SaysByeAsItCloses {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
         transport("bye")
+    }
+}
+
+impl Channel for SaysByeAsItCloses {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> roomkit::model::ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> roomkit::model::ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> roomkit::model::ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn close(&self) -> impl Future<Output = ()> + Send {
@@ -489,6 +536,25 @@ impl Channel for SaysByeAsItCloses {
                     .push(format!("{:?}", sent.err()));
             }
         }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: roomkit::model::InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, roomkit::ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: roomkit::model::ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<
+        Output = Result<roomkit::model::ChannelOutput, roomkit::ChannelError>,
+    > + Send {
+        std::future::ready(Ok(roomkit::model::ChannelOutput::empty()))
     }
 }
 
@@ -574,9 +640,55 @@ struct Relaying {
     go: Arc<Notify>,
 }
 
-impl Channel for Relaying {
-    fn declaration(&self) -> ChannelDeclaration {
+impl Relaying {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
         transport("relay")
+    }
+}
+
+impl Channel for Relaying {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> roomkit::model::ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> roomkit::model::ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> roomkit::model::ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -601,6 +713,14 @@ impl Channel for Relaying {
             .await?;
             Ok(roomkit::model::ChannelOutput::default())
         }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: roomkit::model::InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, roomkit::ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

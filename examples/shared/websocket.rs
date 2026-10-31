@@ -9,10 +9,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::text_of;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventContent, RoomContext, RoomEvent, RoomId,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, EventContent, InboundMessage,
+    RoomContext, RoomEvent, RoomId,
 };
-use roomkit::{Channel, ChannelDeclaration, ChannelError, DeliveryStream, StreamItem};
+use roomkit::{Channel, ChannelError, DeliveryStream, StreamItem, default_inbound_event};
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, watch};
 
@@ -59,7 +59,7 @@ pub type ConnectionId = u64;
 /// [`register_connection`]: Self::register_connection
 #[derive(Clone, Debug)]
 pub struct WebSocketChannel {
-    declaration: ChannelDeclaration,
+    channel_id: ChannelId,
     connections: Arc<Mutex<Connections>>,
     /// Counts the connections that left, so that a stream sees one leave.
     left: watch::Sender<u64>,
@@ -84,15 +84,8 @@ struct Connection {
 impl WebSocketChannel {
     /// A WebSocket channel registered as `channel_id`.
     pub fn new(channel_id: ChannelId) -> Self {
-        let mut declaration = ChannelDeclaration::new(
-            channel_id,
-            ChannelType::WEBSOCKET,
-            ChannelCategory::Transport,
-            ChannelDirection::Bidirectional,
-        );
-        declaration.supports_streaming_delivery = true;
         Self {
-            declaration,
+            channel_id,
             connections: Arc::default(),
             left: watch::Sender::new(0),
         }
@@ -100,7 +93,7 @@ impl WebSocketChannel {
 
     /// The channel's id.
     pub fn id(&self) -> &ChannelId {
-        &self.declaration.channel_id
+        &self.channel_id
     }
 
     /// Registers a connection following `room_id`: its registration, which
@@ -203,8 +196,25 @@ impl Drop for Registration {
 }
 
 impl Channel for WebSocketChannel {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::WEBSOCKET
+    }
+
+    /// It shows an answer as it is written.
+    fn supports_streaming_delivery(&self) -> bool {
+        true
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(default_inbound_event(&message, &context)))
     }
 
     fn deliver(
@@ -215,7 +225,7 @@ impl Channel for WebSocketChannel {
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
         // Only the connections of the room delivered to.
         self.send(&binding.room_id, &frame_of(&event), |_| true);
-        ready(Ok(ChannelOutput::default()))
+        ready(Ok(ChannelOutput::empty()))
     }
 
     /// An agent's answer as it is written: each piece of text to the
@@ -224,11 +234,14 @@ impl Channel for WebSocketChannel {
     async fn deliver_stream(
         &self,
         mut stream: DeliveryStream,
+        event: RoomEvent,
         binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         let room_id = binding.room_id;
-        let stream_id = format!("{}:{}", stream.responder(), stream.answers());
+        let responder = event.source.channel_id;
+        let answers = event.responds_to.map(String::from).unwrap_or_default();
+        let stream_id = format!("{responder}:{answers}");
         let watched = self.watched(&room_id);
         let mut left = self.left.subscribe();
         loop {
@@ -247,7 +260,7 @@ impl Channel for WebSocketChannel {
                         "room_id": room_id,
                         "type": "delta",
                         "stream_id": stream_id,
-                        "from": stream.responder(),
+                        "from": responder,
                         "text": text,
                     });
                     self.send(&room_id, &frame.to_string(), |connection| {

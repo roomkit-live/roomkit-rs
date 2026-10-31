@@ -16,9 +16,10 @@ use roomkit::testing::{
     EchoAgent, EchoAgentOptions, RecordingTransport, RecordingTransportOptions,
 };
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    DeliveryHandle, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DeliveryHandle, HookOptions,
+    HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
+use roomkit_core::ops::ChannelConfig;
 use tokio::sync::Notify;
 
 use crate::support::{BOUND, channel, into, message, room_id};
@@ -30,14 +31,60 @@ struct Stuck {
     started: Arc<Notify>,
 }
 
-impl Channel for Stuck {
-    fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration::new(
+impl Stuck {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
+        ChannelConfig::new(
             channel("stuck"),
             ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         )
+    }
+}
+
+impl Channel for Stuck {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -55,6 +102,23 @@ impl Channel for Stuck {
             }
             Ok(ChannelOutput::empty())
         }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: roomkit::model::InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
 }
 

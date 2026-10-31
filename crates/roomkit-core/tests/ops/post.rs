@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use roomkit_core::model::{Post, TextContent};
-use roomkit_core::ops::{ChannelDeclaration, Inbound, InboundError, InboundResult};
+use roomkit_core::ops::{ChannelConfig, Inbound, InboundError, InboundResult};
 
 use crate::support::{Sim, channel, room_id};
 
@@ -15,7 +15,7 @@ use crate::support::{Sim, channel, room_id};
 fn room() -> Sim {
     let mut sim = Sim::new();
     sim.transport("sms");
-    sim.declare(ChannelDeclaration::host(channel("host")));
+    sim.declare(ChannelConfig::host(channel("host")));
     sim
 }
 

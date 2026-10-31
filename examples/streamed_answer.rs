@@ -38,13 +38,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    EventType, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, EventType, InboundMessage, RoomContext,
+    RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    DeliveryStream, ProcessInboundOptions, RoomKit, StreamItem,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, DeliveryStream,
+    ProcessInboundOptions, RoomKit, StreamItem,
 };
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -93,22 +93,15 @@ enum Read {
 /// reading an answer once it showed `stops_after` pieces of it, when told.
 #[derive(Clone)]
 struct Screen {
-    declaration: ChannelDeclaration,
+    channel_id: ChannelId,
     read: Log<Read>,
     stops_after: Arc<AtomicUsize>,
 }
 
 impl Screen {
     fn new(channel_id: ChannelId) -> Self {
-        let mut declaration = ChannelDeclaration::new(
-            channel_id,
-            ChannelType::WEBSOCKET,
-            ChannelCategory::Transport,
-            ChannelDirection::Bidirectional,
-        );
-        declaration.supports_streaming_delivery = true;
         Self {
-            declaration,
+            channel_id,
             read: Log::new(),
             stops_after: Arc::new(AtomicUsize::new(usize::MAX)),
         }
@@ -116,13 +109,22 @@ impl Screen {
 }
 
 impl Channel for Screen {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::WEBSOCKET
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        true
     }
 
     async fn deliver_stream(
         &self,
         mut stream: DeliveryStream,
+        _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
@@ -147,6 +149,23 @@ impl Channel for Screen {
             }
         }
         Ok(ChannelOutput::default())
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
 }
 
@@ -315,8 +334,9 @@ fn check_mia(
                 >= 2,
     );
     checks.expect(
-        "the SMS number receives the two messages once each is stored, never a tool call's row",
-        sms.texts() == [CHECKING, THREE_LEFT],
+        "the SMS number receives the two messages once each is stored, and the call's rows, \
+         which carry no text",
+        sms.texts() == [CHECKING, "", "", THREE_LEFT],
     );
 }
 

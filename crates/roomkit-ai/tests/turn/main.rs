@@ -805,13 +805,12 @@ async fn a_turn_asked_by_a_hook_s_call_runs_on_the_call_s_draw() {
     }
 }
 
-/// A messaging transport is not handed the turn's tool-call rows, so that
-/// its delivery of the event's text never sends `[Tool call: x]`; a
-/// WebSocket channel is, as the reference implementation's WebSocket shows
-/// the turn's activity (review F2, probe
-/// tasks/probes/step4-m5/f2_text_transport_probe.py).
+/// Every transport is handed the turn's tool-call rows, a messaging one as
+/// a WebSocket, as the Python implementation hands them (probe
+/// tasks/probes/step5-lot4/py_transport_tool_rows.out); a recording
+/// transport reads a row as no text, as Python's does.
 #[tokio::test]
-async fn a_messaging_transport_is_handed_no_tool_row_and_a_websocket_is() {
+async fn every_transport_is_handed_the_tool_call_rows() {
     let model = ScriptedProvider::new([
         ScriptedRound::calling(
             "Let me check.",
@@ -841,7 +840,12 @@ async fn a_messaging_transport_is_handed_no_tool_row_and_a_websocket_is() {
     assert_eq!(
         (room.sms.texts(), kinds(&web)),
         (
-            vec!["Let me check.".to_owned(), "Order 1 shipped.".to_owned()],
+            vec![
+                "Let me check.".to_owned(),
+                String::new(),
+                String::new(),
+                "Order 1 shipped.".to_owned()
+            ],
             vec![
                 EventType::Message,
                 EventType::Message,

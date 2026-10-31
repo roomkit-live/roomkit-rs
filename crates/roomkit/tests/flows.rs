@@ -25,12 +25,12 @@ use roomkit::testing::{
     SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CloseRoomOptions,
-    CommitEventOptions, ConversationStore, CreateRoomOptions, EventDraft, HookExecution,
-    HookFuture, HookHandler, HookOptions, HookTrigger, PostOptions, ProcessInboundOptions, RoomKit,
-    RoomKitError, RoomKitOptions, SendEventOptions, UpdateEventOptions, WeakRoomKit,
-    default_inbound_event,
+    AttachChannelOptions, Channel, ChannelError, CloseRoomOptions, CommitEventOptions,
+    ConversationStore, CreateRoomOptions, HookExecution, HookFuture, HookHandler, HookOptions,
+    HookTrigger, PostOptions, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
+    SendEventOptions, UpdateEventOptions, WeakRoomKit, default_inbound_event,
 };
+use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -204,14 +204,60 @@ struct Unregistering {
     kit: Arc<OnceLock<WeakRoomKit>>,
 }
 
-impl Channel for Unregistering {
-    fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration::new(
+impl Unregistering {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
+        ChannelConfig::new(
             channel("gate"),
             ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
         )
+    }
+}
+
+impl Channel for Unregistering {
+    fn channel_id(&self) -> ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -224,6 +270,23 @@ impl Channel for Unregistering {
             kit.unregister_channel(&channel("ai")).unwrap();
         }
         ready(Ok(ChannelOutput::default()))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 }
 
@@ -667,12 +730,51 @@ async fn a_message_on_an_unregistered_channel_is_refused() {
 
 /// A transport whose deliveries panic.
 struct Panicking {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
 }
 
 impl Channel for Panicking {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -688,32 +790,81 @@ impl Channel for Panicking {
         )]
         ready(Ok(ChannelOutput::default()))
     }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(default_inbound_event(&message, &context)))
+    }
 }
 
 /// A transport that parses every message under its provider's id.
 struct ProviderIds {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
 }
 
 impl Channel for ProviderIds {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn handle_inbound(
         &self,
         message: InboundMessage,
-        _context: RoomContext,
-        draft: EventDraft,
+        context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        let event = default_inbound_event(
-            &message,
-            &self.declaration,
-            draft.room_id,
-            EventId::new("SM1").unwrap(),
-            draft.now,
-        );
+        let event = default_inbound_event(&message, &context);
         ready(Ok(event))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 }
 
@@ -721,7 +872,7 @@ impl Channel for ProviderIds {
 async fn an_inbound_event_is_committed_under_an_id_of_the_pipeline() {
     let (kit, _) = sms_and_agent().await;
     kit.register_channel(ProviderIds {
-        declaration: ChannelDeclaration::new(
+        declaration: ChannelConfig::new(
             channel("whatsapp"),
             ChannelType::WHATSAPP,
             ChannelCategory::Transport,
@@ -761,7 +912,7 @@ async fn an_inbound_event_is_committed_under_an_id_of_the_pipeline() {
 async fn a_channel_that_panics_fails_its_delivery_and_the_kit_goes_on() {
     let (kit, sms) = sms_and_agent().await;
     kit.register_channel(Panicking {
-        declaration: ChannelDeclaration::new(
+        declaration: ChannelConfig::new(
             channel("broken"),
             ChannelType::WEBHOOK,
             ChannelCategory::Transport,
@@ -1051,9 +1202,10 @@ async fn a_link_s_scheme_a_struct_literal_holds_enters_in_lower_case() {
 /// link's scheme is in capitals.
 struct ShoutingGate;
 
-impl Channel for ShoutingGate {
-    fn declaration(&self) -> ChannelDeclaration {
-        let mut declaration = ChannelDeclaration::new(
+impl ShoutingGate {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
+        let mut declaration = ChannelConfig::new(
             channel("gate"),
             ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
@@ -1062,24 +1214,71 @@ impl Channel for ShoutingGate {
         declaration.recipient_key = None;
         declaration
     }
+}
+
+impl Channel for ShoutingGate {
+    fn channel_id(&self) -> ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
+    }
 
     fn handle_inbound(
         &self,
         message: InboundMessage,
-        _context: RoomContext,
-        draft: EventDraft,
+        context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        let mut event = default_inbound_event(
-            &message,
-            &self.declaration(),
-            draft.room_id,
-            draft.id,
-            draft.now,
-        );
+        let mut event = default_inbound_event(&message, &context);
         if text_of(&event.content) == "shout" {
             event.content = shouting_media();
         }
         ready(Ok(event))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 }
 
@@ -1087,14 +1286,60 @@ impl Channel for ShoutingGate {
 /// scheme is in capitals.
 struct ShoutingAgent;
 
-impl Channel for ShoutingAgent {
-    fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration::new(
+impl ShoutingAgent {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
+        ChannelConfig::new(
             channel("shouter"),
             ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         )
+    }
+}
+
+impl Channel for ShoutingAgent {
+    fn channel_id(&self) -> ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -1117,6 +1362,23 @@ impl Channel for ShoutingAgent {
             response_events: answers,
             ..ChannelOutput::empty()
         }))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 }
 
@@ -1284,27 +1546,59 @@ async fn raised_by_answering(injecting: bool) -> (String, (bool, Vec<String>)) {
 /// A transport whose parse of a message and whose delivery answer with a
 /// content its model refuses.
 struct AnsweringJavascript {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
 }
 
 impl Channel for AnsweringJavascript {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn handle_inbound(
         &self,
         message: InboundMessage,
-        _context: RoomContext,
-        draft: EventDraft,
+        context: RoomContext,
     ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
-        let mut event = default_inbound_event(
-            &message,
-            &self.declaration,
-            draft.room_id,
-            draft.id,
-            draft.now,
-        );
+        let mut event = default_inbound_event(&message, &context);
         event.content = javascript_media();
         ready(Ok(event))
     }
@@ -1336,7 +1630,7 @@ impl Channel for AnsweringJavascript {
 async fn a_channel_answering_a_content_its_model_refuses_fails_its_call() {
     let (kit, sms) = sms_and_agent().await;
     kit.register_channel(AnsweringJavascript {
-        declaration: ChannelDeclaration::new(
+        declaration: ChannelConfig::new(
             channel("hook"),
             ChannelType::WEBHOOK,
             ChannelCategory::Transport,

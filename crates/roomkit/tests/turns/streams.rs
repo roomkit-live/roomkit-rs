@@ -18,12 +18,13 @@ use roomkit::model::{
 };
 use roomkit::testing::TurnTap;
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, DeliveryStream, ProcessInboundOptions, ResponseItem, RoomKit,
-    RoomKitOptions, StreamItem, current_turn_host,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    DeliveryStream, ProcessInboundOptions, ResponseItem, RoomKit, RoomKitOptions, StreamItem,
+    current_turn_host,
 };
 use roomkit_ai::AiAgent;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
+use roomkit_core::ops::ChannelConfig;
 use serde_json::{Value, json};
 
 use crate::support::{asks, channel, received, room};
@@ -36,17 +37,57 @@ const FORGED: &str = "forged";
 /// writes room metadata: a key of its own, and keys only the framework
 /// writes, of the reserved namespace and of the room's private state.
 struct Tagging {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
 }
 
 impl Channel for Tagging {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     async fn deliver_stream(
         &self,
         mut stream: DeliveryStream,
+        _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
@@ -66,6 +107,23 @@ impl Channel for Tagging {
         }
         Ok(output)
     }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
 }
 
 /// A streaming target's `metadata_updates` are written on the room but the
@@ -81,7 +139,7 @@ async fn a_streaming_target_cannot_write_a_key_only_the_framework_writes() {
         roomkit::testing::RecordingTransportOptions::default(),
     ))
     .unwrap();
-    let mut declaration = ChannelDeclaration::new(
+    let mut declaration = ChannelConfig::new(
         channel("ws"),
         ChannelType::WEBSOCKET,
         ChannelCategory::Transport,
@@ -132,9 +190,10 @@ struct Counting {
     sizes: Arc<Mutex<Vec<usize>>>,
 }
 
-impl Channel for Counting {
-    fn declaration(&self) -> ChannelDeclaration {
-        let mut declaration = ChannelDeclaration::new(
+impl Counting {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
+        let mut declaration = ChannelConfig::new(
             channel("ws"),
             ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
@@ -144,10 +203,56 @@ impl Channel for Counting {
         declaration.recipient_key = None;
         declaration
     }
+}
+
+impl Channel for Counting {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
+    }
 
     async fn deliver_stream(
         &self,
         mut stream: DeliveryStream,
+        _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
@@ -157,6 +262,23 @@ impl Channel for Counting {
             }
         }
         Ok(ChannelOutput::default())
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
 }
 
@@ -245,14 +367,60 @@ impl Stream for Items {
 /// channel write it; the call carries its intent (RFC §6.4).
 struct Writing;
 
-impl Channel for Writing {
-    fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration::new(
+impl Writing {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
+        ChannelConfig::new(
             channel("ai"),
             ChannelType::AI,
             ChannelCategory::Intelligence,
             ChannelDirection::Bidirectional,
         )
+    }
+}
+
+impl Channel for Writing {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn on_event(
@@ -287,6 +455,23 @@ impl Channel for Writing {
                 .respond_with_stream(Box::pin(Items(items))))
         }
     }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
+    }
 }
 
 /// A WebSocket transport that streams and keeps what it read, in order.
@@ -295,9 +480,10 @@ struct Logging {
     read: Arc<Mutex<Vec<String>>>,
 }
 
-impl Channel for Logging {
-    fn declaration(&self) -> ChannelDeclaration {
-        let mut declaration = ChannelDeclaration::new(
+impl Logging {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
+        let mut declaration = ChannelConfig::new(
             channel("ws"),
             ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
@@ -307,10 +493,56 @@ impl Channel for Logging {
         declaration.recipient_key = None;
         declaration
     }
+}
+
+impl Channel for Logging {
+    fn channel_id(&self) -> roomkit::model::ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
+    }
 
     async fn deliver_stream(
         &self,
         mut stream: DeliveryStream,
+        _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
@@ -326,6 +558,23 @@ impl Channel for Logging {
             self.read.lock().unwrap().push(line);
         }
         Ok(ChannelOutput::default())
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
 }
 

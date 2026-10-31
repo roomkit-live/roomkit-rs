@@ -18,10 +18,11 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    GetTimelineOptions, HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit,
-    RoomKitError, RoomKitOptions,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, GetTimelineOptions,
+    HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomKit, RoomKitError,
+    RoomKitOptions,
 };
+use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -85,7 +86,7 @@ impl Gate {
 /// it delivered.
 #[derive(Clone)]
 struct Gated {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     gate: Gate,
     /// Whether the first delivery started.
     started: Arc<AtomicBool>,
@@ -95,7 +96,7 @@ struct Gated {
 impl Gated {
     fn new() -> Self {
         Self {
-            declaration: ChannelDeclaration::new(
+            declaration: ChannelConfig::new(
                 channel("slow"),
                 ChannelType::WEBSOCKET,
                 ChannelCategory::Transport,
@@ -109,8 +110,47 @@ impl Gated {
 }
 
 impl Channel for Gated {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -132,6 +172,14 @@ impl Channel for Gated {
                 .push(text_of(&event.content));
             Ok(ChannelOutput::default())
         }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 
@@ -446,14 +494,14 @@ fn spawn_bonjour(kit: &RoomKit) -> JoinHandle<Result<roomkit::InboundResult, Roo
 
 /// A channel that records each close it is asked for into a shared log.
 struct Closing {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     closed: Arc<Mutex<Vec<String>>>,
 }
 
 impl Closing {
     fn new(id: &str, closed: &Arc<Mutex<Vec<String>>>) -> Self {
         Self {
-            declaration: ChannelDeclaration::new(
+            declaration: ChannelConfig::new(
                 channel(id),
                 ChannelType::WEBSOCKET,
                 ChannelCategory::Transport,
@@ -465,14 +513,70 @@ impl Closing {
 }
 
 impl Channel for Closing {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     async fn close(&self) {
         tokio::time::sleep(BRIEF).await;
         let id = self.declaration.channel_id.as_str().to_owned();
         self.closed.lock().unwrap().push(id);
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        std::future::ready(Ok(ChannelOutput::empty()))
     }
 }
 

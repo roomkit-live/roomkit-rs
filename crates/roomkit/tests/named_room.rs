@@ -22,10 +22,11 @@ use roomkit::testing::{
     SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomFilter,
-    RoomKit, RoomKitError, RoomKitOptions, SessionStartedEvent,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    HookExecution, HookOptions, HookTrigger, ProcessInboundOptions, RoomFilter, RoomKit,
+    RoomKitError, RoomKitOptions, SessionStartedEvent,
 };
+use roomkit_core::ops::ChannelConfig;
 use tokio::sync::{Notify, mpsc};
 
 fn channel(id: &str) -> ChannelId {
@@ -414,14 +415,14 @@ async fn a_room_created_for_a_dropped_call_is_attached_all_the_same() {
 /// for its type (RFC Appendix A.1), and records where it sent.
 #[derive(Clone)]
 struct Sms {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     sent_to: Arc<Mutex<Vec<String>>>,
 }
 
 impl Sms {
     fn new() -> Self {
         Self {
-            declaration: ChannelDeclaration::new(
+            declaration: ChannelConfig::new(
                 channel("sms"),
                 ChannelType::SMS,
                 ChannelCategory::Transport,
@@ -440,8 +441,47 @@ impl Sms {
 }
 
 impl Channel for Sms {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -459,6 +499,14 @@ impl Channel for Sms {
             .unwrap_or_else(PoisonError::into_inner)
             .push(to);
         ready(Ok(ChannelOutput::default()))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

@@ -31,14 +31,13 @@ use std::future::{Future, ready};
 use std::process::ExitCode;
 
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelSet,
-    ChannelType, EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId,
-    TextContent, Visibility,
+    ChannelBinding, ChannelCategory, ChannelId, ChannelOutput, ChannelSet, ChannelType,
+    EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
+    Visibility,
 };
 use roomkit::testing::RecordingTransport;
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    ProcessInboundOptions, RoomKit,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, ProcessInboundOptions, RoomKit,
 };
 
 use shared::text_of;
@@ -47,24 +46,18 @@ use shared::{Checks, recording};
 /// An assistant that answers each question, for everyone: where an answer
 /// goes is the question's to say.
 struct Assistant {
-    declaration: ChannelDeclaration,
+    channel_id: ChannelId,
 }
 
 impl Assistant {
     fn new(channel_id: ChannelId) -> Self {
-        let declaration = ChannelDeclaration::new(
-            channel_id,
-            ChannelType::AI,
-            ChannelCategory::Intelligence,
-            ChannelDirection::Bidirectional,
-        );
-        Self { declaration }
+        Self { channel_id }
     }
 
     fn answer(&self, question: &RoomEvent) -> RoomEvent {
         let source = EventSource {
             direction: EventDirection::Outbound,
-            ..EventSource::new(self.declaration.channel_id.clone(), ChannelType::AI)
+            ..EventSource::new(self.channel_id.clone(), ChannelType::AI)
         };
         let text = format!("Answer to {:?}", text_of(&question.content));
         // The pipeline gives the answer its own id, room and depth, and
@@ -78,8 +71,16 @@ impl Assistant {
 }
 
 impl Channel for Assistant {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
     }
 
     fn on_event(
@@ -98,6 +99,24 @@ impl Channel for Assistant {
             ChannelOutput::default()
         };
         ready(Ok(output))
+    }
+
+    /// An agent takes no message: it answers in its room.
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Err("an agent takes no message".into()))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 }
 

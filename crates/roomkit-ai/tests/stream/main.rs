@@ -21,15 +21,16 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    CreateRoomOptions, DeliveryStream, HookExecution, HookOptions, HookTrigger, InboundResult,
-    ProcessInboundOptions, RoomKit, RoomKitOptions, StreamItem,
+    AttachChannelOptions, Channel, ChannelError, ConversationStore, CreateRoomOptions,
+    DeliveryStream, HookExecution, HookOptions, HookTrigger, InboundResult, ProcessInboundOptions,
+    RoomKit, RoomKitOptions, StreamItem,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, ProviderEvent, ProviderStream, ToolDefinition, ToolOutput,
     Tools,
 };
+use roomkit_core::ops::ChannelConfig;
 use serde_json::json;
 use tokio::sync::Notify;
 
@@ -71,7 +72,7 @@ enum Stop {
 /// what it is delivered.
 #[derive(Clone)]
 struct Streaming {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     read: Arc<Mutex<Vec<Read>>>,
     delivered: Arc<Mutex<Vec<RoomEvent>>>,
     stop: Stop,
@@ -79,7 +80,7 @@ struct Streaming {
 
 impl Streaming {
     fn new(stop: Stop) -> Self {
-        let mut declaration = ChannelDeclaration::new(
+        let mut declaration = ChannelConfig::new(
             channel("ws"),
             ChannelType::WEBSOCKET,
             ChannelCategory::Transport,
@@ -92,11 +93,6 @@ impl Streaming {
             delivered: Arc::default(),
             stop,
         }
-    }
-
-    fn taking_no_tool_row(mut self) -> Self {
-        self.declaration.receives_tool_calls = false;
-        self
     }
 
     fn read(&self) -> Vec<Read> {
@@ -118,8 +114,47 @@ impl Streaming {
 }
 
 impl Channel for Streaming {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -135,6 +170,7 @@ impl Channel for Streaming {
     async fn deliver_stream(
         &self,
         mut stream: DeliveryStream,
+        _event: RoomEvent,
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
@@ -189,6 +225,14 @@ impl Channel for Streaming {
                 }
             }
         }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 
@@ -893,33 +937,6 @@ async fn an_event_a_tool_sends_is_stored_after_the_round_s_text_and_start() {
     room.kit.close().await.unwrap();
 }
 
-/// The streaming path keeps milestone 5's rule (F2): a streaming channel
-/// that takes no tool-call row is handed none in the stream, nor delivered
-/// one; the rows are stored all the same.
-#[tokio::test]
-async fn a_streaming_target_that_takes_no_tool_row_is_handed_none() {
-    let rounds = vec![
-        ScriptedRound::calling("Let me check.", [("call_1", "lookup_order", "{}")]),
-        ScriptedRound::answering("Shipped."),
-    ];
-    let runs = Arc::new(AtomicUsize::new(0));
-    let ws = Streaming::new(Stop::Never).taking_no_tool_row();
-    let (room, _model) = Room::new(rounds, lookup(runs, None), ws).await;
-    room.says("Where is my order?").await;
-    assert_eq!(
-        room.ws.read(),
-        [
-            Read::Text("Let me check.".to_owned()),
-            Read::Row(EventType::Message, "Let me check.".to_owned(), 4),
-            Read::Text("Shipped.".to_owned()),
-            Read::Row(EventType::Message, "Shipped.".to_owned(), 7),
-        ]
-    );
-    assert_eq!(room.ws.delivered(), [3]);
-    assert_eq!(room.rows().await.len(), 4);
-    room.kit.close().await.unwrap();
-}
-
 /// A provider whose one generation hands the events a test sends it, as it
 /// sends them.
 #[derive(Clone, Default)]
@@ -1058,12 +1075,26 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
 }
 
 /// A channel that says it streams and keeps the default `deliver_stream`
-/// is delivered each row once the stream is over, through `deliver()`
-/// (RFC §6.1, step 4 decision 9).
+/// is delivered, once the stream is over, one event holding the response's
+/// text joined, from the agent and answering the message, as Python's
+/// default delivers it (RFC §6.1): not each of the response's rows.
 #[tokio::test]
-async fn the_default_deliver_stream_delivers_each_row_once_the_stream_is_over() {
-    let model = ScriptedProvider::new([ScriptedRound::writing(["Hello ", "there."])]);
-    let agent = AiAgent::new(channel("agent"), model);
+async fn the_default_deliver_stream_delivers_one_buffered_event() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("call_1", "lookup", "{}")]).in_pieces(["Let me ", "check."]),
+        ScriptedRound::writing(["Done."]),
+    ]);
+    let lookup = ToolDefinition::new(
+        "lookup",
+        "Looks up",
+        serde_json::json!({ "type": "object" }),
+    );
+    let tools = Tools::new().tool(lookup, |_call, _context| async {
+        Ok(ToolOutput::Text("found".to_owned()))
+    });
+    let agent = AiAgent::new(channel("agent"), model)
+        .with_tools(tools)
+        .unwrap();
     let kit = RoomKit::new(RoomKitOptions::default());
     let sms = RecordingTransport::new(
         channel("sms"),
@@ -1102,13 +1133,25 @@ async fn the_default_deliver_stream_delivers_each_row_once_the_stream_is_over() 
     .await
     .unwrap();
     roomkit::testing::idle(&kit).await;
-    let delivered: Vec<String> = buffered
+    let delivered: Vec<(String, ChannelId, bool)> = buffered
         .inner
         .deliveries()
         .into_iter()
-        .map(|delivery| roomkit_core::rules::transcoding::text_of(&delivery.event.content))
+        .map(|delivery| {
+            (
+                roomkit_core::rules::transcoding::text_of(&delivery.event.content),
+                delivery.event.source.channel_id,
+                delivery.event.responds_to.is_some(),
+            )
+        })
         .collect();
-    assert_eq!(delivered, ["Hi", "Hello there."]);
+    assert_eq!(
+        delivered,
+        [
+            ("Hi".to_owned(), channel("sms"), false),
+            ("Let me check.Done.".to_owned(), channel("agent"), true)
+        ]
+    );
     kit.close().await.unwrap();
 }
 
@@ -1119,11 +1162,65 @@ struct Buffered {
     inner: RecordingTransport,
 }
 
+impl Buffered {
+    /// The configuration the kit keeps of the channel.
+    fn config(&self) -> ChannelConfig {
+        let mut config = ChannelConfig::new(
+            Channel::channel_id(&self.inner),
+            Channel::channel_type(&self.inner),
+            Channel::category(&self.inner),
+            Channel::direction(&self.inner),
+        );
+        config.capabilities = Channel::capabilities(&self.inner);
+        config.provider_name = Channel::provider_name(&self.inner);
+        config.recipient_key = Channel::recipient_key(&self.inner);
+        config.supports_streaming_delivery = true;
+        config
+    }
+}
+
 impl Channel for Buffered {
-    fn declaration(&self) -> ChannelDeclaration {
-        let mut declaration = self.inner.declaration();
-        declaration.supports_streaming_delivery = true;
-        declaration
+    fn channel_id(&self) -> ChannelId {
+        self.config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = self.config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     async fn deliver(
@@ -1133,6 +1230,14 @@ impl Channel for Buffered {
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
         self.inner.deliver(event, binding, context).await
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

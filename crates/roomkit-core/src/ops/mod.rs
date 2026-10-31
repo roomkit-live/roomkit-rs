@@ -50,7 +50,7 @@ mod protocol;
 mod rooting;
 mod section;
 
-pub use config::{ChannelDeclaration, ConfigError, KitConfig};
+pub use config::{ChannelConfig, ConfigError, KitConfig};
 #[cfg(feature = "system-environment")]
 #[doc(hidden)]
 pub use environment::SystemEnvironment;

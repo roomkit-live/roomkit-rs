@@ -39,15 +39,14 @@ use std::time::Duration;
 use futures_util::stream;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
-    ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
-    DeliveryResultStatus, EventType, HookResult, InboundMessage, RoomContext, RoomEvent, RoomId,
-    TextContent,
+    ChannelBinding, ChannelId, ChannelOutput, ChannelType, DeliveryResultStatus, EventType,
+    HookResult, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    GetTimelineOptions, HookOptions, HookTrigger, InboundResult, ProcessInboundOptions, RoomKit,
-    RoomKitError, SendEventOptions,
+    AttachChannelOptions, Channel, ChannelError, CreateRoomOptions, GetTimelineOptions,
+    HookOptions, HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitError,
+    SendEventOptions,
 };
 use roomkit_ai::{AiAgent, AiProvider, AiRequest, Done, ProviderEvent, ProviderStream};
 use serde_json::json;
@@ -64,15 +63,12 @@ struct StuckSms {
 }
 
 impl Channel for StuckSms {
-    fn declaration(&self) -> ChannelDeclaration {
-        let mut declaration = ChannelDeclaration::new(
-            id("slow-sms"),
-            ChannelType::WEBSOCKET,
-            ChannelCategory::Transport,
-            ChannelDirection::Bidirectional,
-        );
-        declaration.recipient_key = None;
-        declaration
+    fn channel_id(&self) -> ChannelId {
+        id("slow-sms")
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::WEBSOCKET
     }
 
     fn deliver(
@@ -86,6 +82,14 @@ impl Channel for StuckSms {
             sending.notify_one();
             std::future::pending().await
         }
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        std::future::ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

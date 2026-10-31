@@ -21,11 +21,12 @@ use roomkit::model::{
 };
 use roomkit::testing::{EchoAgent, EchoAgentOptions, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ChannelOf, ConversationStore,
-    CreateRoomOptions, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookExecution,
-    HookOptions, HookTrigger, InMemoryStore, InboundRoomRouter, ProcessInboundOptions, RoomKit,
-    RoomKitOptions, RouteOptions, RouterFuture, WeakRoomKit,
+    AttachChannelOptions, Channel, ChannelError, ChannelOf, ConversationStore, CreateRoomOptions,
+    DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookExecution, HookOptions,
+    HookTrigger, InMemoryStore, InboundRoomRouter, ProcessInboundOptions, RoomKit, RoomKitOptions,
+    RouteOptions, RouterFuture, WeakRoomKit,
 };
+use roomkit_core::ops::ChannelConfig;
 use serde_json::{Value, json};
 
 #[path = "support/warnings.rs"]
@@ -81,14 +82,60 @@ impl Sms {
     }
 }
 
-impl Channel for Sms {
-    fn declaration(&self) -> ChannelDeclaration {
-        ChannelDeclaration::new(
+impl Sms {
+    /// The configuration the kit keeps of the channel.
+    fn config() -> ChannelConfig {
+        ChannelConfig::new(
             channel("sms"),
             ChannelType::SMS,
             ChannelCategory::Transport,
             ChannelDirection::Bidirectional,
         )
+    }
+}
+
+impl Channel for Sms {
+    fn channel_id(&self) -> ChannelId {
+        Self::config().channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        Self::config().channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        Self::config().category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        Self::config().direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        Self::config().capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Self::config().provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        Self::config().recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        Self::config().supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = Self::config();
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -107,6 +154,14 @@ impl Channel for Sms {
             .unwrap_or_else(PoisonError::into_inner)
             .push((to, text_of(&event.content)));
         ready(Ok(ChannelOutput::default()))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

@@ -6,9 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use roomkit::model::{
-    ChannelBinding, ChannelId, ChannelOutput, InboundMessage, RoomContext, RoomEvent,
+    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
+    InboundMessage, RoomContext, RoomEvent,
 };
-use roomkit::{Channel, ChannelDeclaration, ChannelError, EventDraft};
+use roomkit::{Channel, ChannelError};
 use roomkit_ai::{
     AiAgent, AiError, AiProvider, AiRequest, ProviderStream, SkillRegistry, ToolPolicy, Toolset,
 };
@@ -180,8 +181,24 @@ impl OpenAiAgent {
 }
 
 impl Channel for OpenAiAgent {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.agent.declaration()
+    fn channel_id(&self) -> ChannelId {
+        self.agent.channel_id()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.agent.channel_type()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.agent.category()
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.agent.capabilities()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.agent.provider_name()
     }
 
     /// Refuses the message, as [`AiAgent`] does: an AI agent takes no
@@ -190,9 +207,17 @@ impl Channel for OpenAiAgent {
         &self,
         message: InboundMessage,
         context: RoomContext,
-        draft: EventDraft,
     ) -> Result<RoomEvent, ChannelError> {
-        self.agent.handle_inbound(message, context, draft).await
+        self.agent.handle_inbound(message, context).await
+    }
+
+    async fn deliver(
+        &self,
+        event: RoomEvent,
+        binding: ChannelBinding,
+        context: RoomContext,
+    ) -> Result<ChannelOutput, ChannelError> {
+        self.agent.deliver(event, binding, context).await
     }
 
     async fn on_event(

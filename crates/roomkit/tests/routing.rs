@@ -20,12 +20,13 @@ use roomkit::model::{
 };
 use roomkit::testing::{EchoAgent, EchoAgentOptions, SequentialEnvironment, kit_with_environment};
 use roomkit::{
-    Addressing, AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ChannelOf,
-    CloseRoomOptions, ConversationStore, CreateRoomOptions, DefaultInboundRoomRouter,
+    Addressing, AttachChannelOptions, Channel, ChannelError, ChannelOf, CloseRoomOptions,
+    ConversationStore, CreateRoomOptions, DefaultInboundRoomRouter,
     DefaultInboundRoomRouterOptions, HookExecution, HookOptions, HookTrigger, InMemoryStore,
     InboundRoomRouter, ProcessInboundOptions, RoomFilter, RoomKit, RoomKitError, RoomKitOptions,
     RouteOptions, RouterError, RouterFuture, WeakRoomKit,
 };
+use roomkit_core::ops::ChannelConfig;
 use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::{Barrier, Notify};
 
@@ -45,14 +46,14 @@ fn room(id: &str) -> RoomId {
 /// what.
 #[derive(Clone)]
 struct Provider {
-    declaration: ChannelDeclaration,
+    declaration: ChannelConfig,
     sent: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl Provider {
     fn new(id: &str, channel_type: ChannelType) -> Self {
         Self {
-            declaration: ChannelDeclaration::new(
+            declaration: ChannelConfig::new(
                 channel(id),
                 channel_type,
                 ChannelCategory::Transport,
@@ -72,8 +73,47 @@ impl Provider {
 }
 
 impl Channel for Provider {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.declaration.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.declaration.channel_type.clone()
+    }
+
+    fn category(&self) -> ChannelCategory {
+        self.declaration.category
+    }
+
+    fn direction(&self) -> ChannelDirection {
+        self.declaration.direction
+    }
+
+    fn capabilities(&self) -> roomkit::model::ChannelCapabilities {
+        self.declaration.capabilities.clone()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        self.declaration.provider_name.clone()
+    }
+
+    fn recipient_key(&self) -> Option<String> {
+        self.declaration.recipient_key.clone()
+    }
+
+    fn supports_streaming_delivery(&self) -> bool {
+        self.declaration.supports_streaming_delivery
+    }
+
+    fn address_config(&self) -> (roomkit::ChannelAddressing, Option<roomkit::CountryCode>) {
+        let config = &self.declaration;
+        let addressing = roomkit::ChannelAddressing {
+            addressing: config.addressing,
+            recipient_key: config.recipient_key.clone(),
+            chat_key: config.chat_key.clone(),
+            replies_to_sender: false,
+        };
+        (addressing, config.country_code.clone())
     }
 
     fn deliver(
@@ -93,6 +133,14 @@ impl Channel for Provider {
             .unwrap_or_else(PoisonError::into_inner)
             .push((to, text_of(&event.content)));
         ready(Ok(ChannelOutput::default()))
+    }
+
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl std::future::Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Ok(roomkit::default_inbound_event(&message, &context)))
     }
 }
 

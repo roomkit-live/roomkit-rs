@@ -25,7 +25,7 @@
 use serde_json::{Number, Value};
 use thiserror::Error;
 
-use crate::model::{ChannelBinding, ChannelType};
+use crate::model::{ChannelBinding, ChannelType, Metadata};
 
 /// The binding metadata key of a recipient's phone number (Appendix A.1,
 /// A.3, A.4).
@@ -94,8 +94,8 @@ impl Addressing {
     /// SMS, MMS, RCS, WhatsApp, WhatsApp Personal and VOICE by phone number,
     /// EMAIL by email address, Telegram and Teams by chat, any other name by
     /// an id as written. A channel's declaration takes it, and may set
-    /// another (`ChannelDeclaration::addressing`).
-    pub fn of(channel_type: &ChannelType) -> Self {
+    /// another (`ChannelConfig::addressing`).
+    pub(crate) fn of(channel_type: &ChannelType) -> Self {
         match channel_type.as_str() {
             "sms" | "mms" | "rcs" | "whatsapp" | "whatsapp_personal" | "voice" => Self::PhoneNumber,
             "email" => Self::EmailAddress,
@@ -107,11 +107,110 @@ impl Addressing {
     /// Whether replies go to the address a sender writes from, so that the
     /// sender's address is a binding's recipient (RFC §5.7). On a chat
     /// channel they go to the chat.
-    pub fn replies_to_sender(self) -> bool {
+    pub(crate) fn replies_to_sender(self) -> bool {
         match self {
             Self::PhoneNumber | Self::EmailAddress | Self::AsWritten => true,
             Self::Chat => false,
         }
+    }
+}
+
+/// A channel's addressing declaration (RFC §5.7, Appendix A), Python's
+/// `ChannelAddressing(addressing, recipient_key=None, chat_key=None,
+/// replies_to_sender=False)`: how its addresses are written, the binding
+/// metadata key its recipient is written under (`None` for a channel that
+/// delivers to a destination of its own), the inbound metadata key a
+/// message carries its chat under, on a channel that answers chats, and
+/// whether replies go to the address the correspondent writes from, the
+/// framework then recording an inbound sender as a binding's recipient.
+///
+/// ```
+/// use roomkit_core::model::ChannelType;
+/// use roomkit_core::rules::addresses::{Addressing, addressing_of};
+///
+/// let sms = addressing_of(&ChannelType::SMS);
+/// assert_eq!(sms.addressing, Addressing::PhoneNumber);
+/// assert_eq!(sms.recipient_key.as_deref(), Some("phone_number"));
+/// assert!(sms.names_conversations());
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelAddressing {
+    /// How its addresses are written.
+    pub addressing: Addressing,
+    /// The binding metadata key its recipient is written under.
+    pub recipient_key: Option<String>,
+    /// The inbound metadata key a message carries its chat under.
+    pub chat_key: Option<String>,
+    /// Whether replies go to the address the correspondent writes from.
+    pub replies_to_sender: bool,
+}
+
+/// What [`ChannelAddressing::new`] takes beside the addressing: Python's
+/// keywords, their defaults `None`, `None` and `false`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChannelAddressingOptions {
+    /// The binding metadata key its recipient is written under.
+    pub recipient_key: Option<String>,
+    /// The inbound metadata key a message carries its chat under.
+    pub chat_key: Option<String>,
+    /// Whether replies go to the address the correspondent writes from.
+    pub replies_to_sender: bool,
+}
+
+/// What [`ChannelAddressing::normalize`] takes beside the address:
+/// Python's `country_code=None`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NormalizeOptions {
+    /// The country code a phone number written without one takes.
+    pub country_code: Option<CountryCode>,
+}
+
+impl ChannelAddressing {
+    /// The declaration of a channel addressed by `addressing`.
+    pub fn new(addressing: Addressing, options: ChannelAddressingOptions) -> Self {
+        Self {
+            addressing,
+            recipient_key: options.recipient_key,
+            chat_key: options.chat_key,
+            replies_to_sender: options.replies_to_sender,
+        }
+    }
+
+    /// Whether a binding's recipient is a conversation's address: the
+    /// sender's, or a chat. A recipient a channel merely forwards (a
+    /// webhook's) names no one.
+    pub fn names_conversations(&self) -> bool {
+        self.recipient_key.is_some() && (self.replies_to_sender || self.chat_key.is_some())
+    }
+
+    /// `address` in the form the channel compares and stores it in: a
+    /// phone number written without its country code takes the one
+    /// `options` names, or is kept as written without one.
+    pub fn normalize(&self, address: &str, options: NormalizeOptions) -> String {
+        let NormalizeOptions { country_code } = options;
+        normalize(address, self.addressing, country_code.as_ref())
+    }
+}
+
+/// The addressing a channel of `channel_type` takes by default (RFC §5.7,
+/// Appendix A), as Python's `addressing_of` gives it: SMS, MMS, RCS,
+/// WhatsApp and WhatsApp Personal by phone number under `phone_number`,
+/// WhatsApp Personal's groups under `group_jid`; VOICE by phone number with
+/// no recipient; EMAIL by email address under `email_address`; Messenger
+/// as written under `facebook_user_id`; Telegram and Teams by chat, under
+/// `telegram_chat_id` and `teams_conversation_id`, their chats under
+/// `chat_id` and `conversation_id`; any other type as written, with no
+/// recipient and no chat key.
+pub fn addressing_of(channel_type: &ChannelType) -> ChannelAddressing {
+    let replies_to_sender = matches!(
+        channel_type.as_str(),
+        "sms" | "mms" | "rcs" | "whatsapp" | "whatsapp_personal" | "email" | "messenger"
+    );
+    ChannelAddressing {
+        addressing: Addressing::of(channel_type),
+        recipient_key: recipient_key(channel_type).map(str::to_owned),
+        chat_key: chat_key(channel_type).map(str::to_owned),
+        replies_to_sender,
     }
 }
 
@@ -359,6 +458,17 @@ pub(crate) fn chat_key(channel_type: &ChannelType) -> Option<&'static str> {
     }
 }
 
+/// The recipient `metadata` holds under `key`, as written (RFC §5.7, §10.2
+/// step 3d), as Python's `written_recipient` reads it: a string that is not
+/// blank, as it is, or an integer, a chat id, in its digits; `None` for no
+/// value and for a value that is not a recipient.
+pub fn written_recipient(metadata: &Metadata, key: &str) -> Option<String> {
+    match metadata.get(key).and_then(written)? {
+        Written::Text(recipient) => Some(recipient.to_owned()),
+        Written::Integer(recipient) => Some(recipient.to_string()),
+    }
+}
+
 /// Whether `binding` has a recipient under `key`, the one
 /// [`AddressForm::recipient`] reads: a string that is not blank, or an
 /// integer (RFC §5.7, §10.2 step 3d, gaps G-075, G-078). A delivery to a
@@ -432,6 +542,166 @@ mod tests {
 
     use super::*;
     use crate::model::{ChannelCategory, ChannelDirection, ChannelId, RoomId, Timestamp};
+
+    /// What Python's `addressing_of` gives each channel type (probe
+    /// `tasks/probes/step5-lot4/py_addressing_of.out`, roomkit 38ef0625):
+    /// addressing, recipient key, chat key, replies to the sender, names
+    /// conversations.
+    type Row = (
+        &'static str,
+        Addressing,
+        Option<&'static str>,
+        Option<&'static str>,
+        bool,
+        bool,
+    );
+
+    const PYTHON_ADDRESSING: [Row; 24] = [
+        (
+            "sms",
+            Addressing::PhoneNumber,
+            Some("phone_number"),
+            None,
+            true,
+            true,
+        ),
+        (
+            "mms",
+            Addressing::PhoneNumber,
+            Some("phone_number"),
+            None,
+            true,
+            true,
+        ),
+        (
+            "rcs",
+            Addressing::PhoneNumber,
+            Some("phone_number"),
+            None,
+            true,
+            true,
+        ),
+        (
+            "email",
+            Addressing::EmailAddress,
+            Some("email_address"),
+            None,
+            true,
+            true,
+        ),
+        (
+            "whatsapp",
+            Addressing::PhoneNumber,
+            Some("phone_number"),
+            None,
+            true,
+            true,
+        ),
+        (
+            "whatsapp_personal",
+            Addressing::PhoneNumber,
+            Some("phone_number"),
+            Some("group_jid"),
+            true,
+            true,
+        ),
+        ("websocket", Addressing::AsWritten, None, None, false, false),
+        ("ai", Addressing::AsWritten, None, None, false, false),
+        ("voice", Addressing::PhoneNumber, None, None, false, false),
+        (
+            "realtime_voice",
+            Addressing::AsWritten,
+            None,
+            None,
+            false,
+            false,
+        ),
+        (
+            "realtime_audio_video",
+            Addressing::AsWritten,
+            None,
+            None,
+            false,
+            false,
+        ),
+        ("push", Addressing::AsWritten, None, None, false, false),
+        (
+            "messenger",
+            Addressing::AsWritten,
+            Some("facebook_user_id"),
+            None,
+            true,
+            true,
+        ),
+        (
+            "telegram",
+            Addressing::Chat,
+            Some("telegram_chat_id"),
+            Some("chat_id"),
+            false,
+            true,
+        ),
+        (
+            "teams",
+            Addressing::Chat,
+            Some("teams_conversation_id"),
+            Some("conversation_id"),
+            false,
+            true,
+        ),
+        ("discord", Addressing::AsWritten, None, None, false, false),
+        ("buzz", Addressing::AsWritten, None, None, false, false),
+        ("webhook", Addressing::AsWritten, None, None, false, false),
+        ("video", Addressing::AsWritten, None, None, false, false),
+        (
+            "audio_video",
+            Addressing::AsWritten,
+            None,
+            None,
+            false,
+            false,
+        ),
+        (
+            "conference",
+            Addressing::AsWritten,
+            None,
+            None,
+            false,
+            false,
+        ),
+        ("cli", Addressing::AsWritten, None, None, false, false),
+        ("host", Addressing::AsWritten, None, None, false, false),
+        ("system", Addressing::AsWritten, None, None, false, false),
+    ];
+
+    /// Python's `addressing_of`, for every channel type it names (probe
+    /// `tasks/probes/step5-lot4/py_addressing_of.out`, roomkit 38ef0625).
+    #[test]
+    fn addressing_of_matches_python() {
+        let python = PYTHON_ADDRESSING;
+        for (name, addressing, recipient_key, chat_key, replies_to_sender, names_conversations) in
+            python
+        {
+            let read = addressing_of(&ChannelType::new(name).unwrap());
+            assert_eq!(
+                (
+                    read.addressing,
+                    read.recipient_key.as_deref(),
+                    read.chat_key.as_deref(),
+                    read.replies_to_sender,
+                    read.names_conversations()
+                ),
+                (
+                    addressing,
+                    recipient_key,
+                    chat_key,
+                    replies_to_sender,
+                    names_conversations
+                ),
+                "{name}"
+            );
+        }
+    }
 
     fn code(code: &str) -> CountryCode {
         CountryCode::new(code).unwrap()

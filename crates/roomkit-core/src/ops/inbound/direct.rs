@@ -34,7 +34,7 @@ use crate::model::{
 };
 use crate::ops::io::Bound;
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
-use crate::ops::{ChannelDeclaration, Cx, KitConfig, Progress};
+use crate::ops::{ChannelConfig, Cx, KitConfig, Progress};
 use crate::rules::permissions::WriteRefusal;
 use crate::rules::{host, idempotency, organizations};
 
@@ -177,7 +177,7 @@ fn admit_from(
     cx: &mut Cx<'_>,
     room_id: RoomId,
     mut event: DirectEvent,
-    channel: &ChannelDeclaration,
+    channel: &ChannelConfig,
 ) -> Result<Admitted, InboundError> {
     event.idempotency_key = idempotency::key(event.idempotency_key);
     if let Admission::Refused(refusal) = instructions::admit(cx.config, (&event).into())? {
@@ -232,12 +232,12 @@ pub(super) fn admit_post(
 /// no channel holds the id, as it is registered on first use (RFC §10.5): a
 /// call that started before the first post registered it adopts one all
 /// the same.
-fn own_host_channel(config: &KitConfig) -> ChannelDeclaration {
+fn own_host_channel(config: &KitConfig) -> ChannelConfig {
     let host = ChannelId::host();
     config
         .channel(&host)
         .cloned()
-        .unwrap_or_else(|| ChannelDeclaration::host(host))
+        .unwrap_or_else(|| ChannelConfig::host(host))
 }
 
 impl Machine {

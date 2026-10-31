@@ -11,11 +11,13 @@ use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
-    ChannelOutput, ChannelType, EventDirection, EventSource, EventType, RoomContext, RoomEvent,
-    TextContent,
+    ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelId, ChannelOutput, ChannelType,
+    EventContent, EventDirection, EventSource, EventType, InboundMessage, ParticipantId,
+    RoomContext, RoomEvent, TextContent,
 };
-use roomkit_core::ops::ChannelDeclaration;
+use roomkit_core::rules::addresses::{
+    ChannelAddressing, ChannelAddressingOptions, CountryCode, NormalizeOptions, addressing_of,
+};
 use roomkit_core::rules::transcoding::text_of;
 
 pub use roomkit_core::ops::{Environment, SequentialEnvironment};
@@ -93,7 +95,9 @@ pub struct RecordingTransportOptions {
 /// recording transport writes them in E.164 (RFC §5.7).
 #[derive(Clone, Debug)]
 pub struct RecordingTransport {
-    declaration: ChannelDeclaration,
+    channel_id: ChannelId,
+    channel_type: ChannelType,
+    capabilities: Option<ChannelCapabilities>,
     deliveries: Arc<Mutex<Vec<Delivery>>>,
 }
 
@@ -105,26 +109,18 @@ impl RecordingTransport {
         channel_type: ChannelType,
         options: RecordingTransportOptions,
     ) -> Self {
-        let mut declaration = ChannelDeclaration::new(
+        Self {
             channel_id,
             channel_type,
-            ChannelCategory::Transport,
-            ChannelDirection::Bidirectional,
-        );
-        declaration.provider_name = Some("RecordingTransport".to_owned());
-        declaration.recipient_key = None;
-        if let Some(capabilities) = options.capabilities {
-            declaration.capabilities = capabilities;
-        }
-        Self {
-            declaration,
+            capabilities: options.capabilities,
             deliveries: Arc::default(),
         }
     }
 
-    /// The channel's id, Python's `channel_id`.
+    /// The channel's id, Python's `channel_id`, without the trait in
+    /// scope.
     pub fn channel_id(&self) -> &ChannelId {
-        &self.declaration.channel_id
+        &self.channel_id
     }
 
     /// What the transport delivered so far, in order.
@@ -145,8 +141,54 @@ impl RecordingTransport {
 }
 
 impl Channel for RecordingTransport {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        self.channel_type.clone()
+    }
+
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.capabilities.clone().unwrap_or_default()
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Some("RecordingTransport".to_owned())
+    }
+
+    /// Its senders written as its type writes them, as Python's:
+    /// an SMS recording transport's in E.164 (RFC §5.7).
+    fn normalize_address(&self, address: &str) -> String {
+        if address.is_empty() {
+            return address.to_owned();
+        }
+        addressing_of(&self.channel_type).normalize(address, NormalizeOptions::default())
+    }
+
+    /// Its type's addressing, with no recipient key: its destination is its
+    /// record, so it needs no recipient (RFC §10.2 step 3d).
+    fn address_config(&self) -> (ChannelAddressing, Option<CountryCode>) {
+        let addressing = ChannelAddressing::new(
+            addressing_of(&self.channel_type).addressing,
+            ChannelAddressingOptions::default(),
+        );
+        (addressing, None)
+    }
+
+    /// The event of `message` in `context`'s room, as Python's builds it:
+    /// its type, its content and its idempotency key, from its sender.
+    fn handle_inbound(
+        &self,
+        message: InboundMessage,
+        context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        let mut source = EventSource::new(self.channel_id.clone(), self.channel_type.clone());
+        source.participant_id = ParticipantId::new(message.sender_id.clone()).ok();
+        let mut event = RoomEvent::new(context.room.id.clone(), source, message.content);
+        event.r#type = message.event_type;
+        event.idempotency_key = message.idempotency_key;
+        ready(Ok(event))
     }
 
     fn deliver(
@@ -155,12 +197,34 @@ impl Channel for RecordingTransport {
         _binding: ChannelBinding,
         _context: RoomContext,
     ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
-        let text = text_of(&event.content);
+        let text = recorded_text(&event.content);
         self.deliveries
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(Delivery { event, text });
         ready(Ok(ChannelOutput::default()))
+    }
+}
+
+/// The text a recording transport keeps of `content`, as Python's
+/// `content_text(content) or ""` reads it: a text's, a rich content's, a
+/// media's label, a composite's parts; none of a location, a notice, a
+/// template, an edit, a delete or a tool call.
+fn recorded_text(content: &EventContent) -> String {
+    match content {
+        EventContent::Text(_)
+        | EventContent::Rich(_)
+        | EventContent::Media(_)
+        | EventContent::Audio(_)
+        | EventContent::Video(_)
+        | EventContent::Composite(_) => text_of(content),
+        EventContent::Location(_)
+        | EventContent::System(_)
+        | EventContent::Template(_)
+        | EventContent::Edit(_)
+        | EventContent::Delete(_)
+        | EventContent::ToolCall(_)
+        | _ => String::new(),
     }
 }
 
@@ -178,7 +242,7 @@ pub struct EchoAgentOptions {
 /// `roomkit.testing.EchoAgent(channel_id, reply, *, quote=False)`.
 #[derive(Clone, Debug)]
 pub struct EchoAgent {
-    declaration: ChannelDeclaration,
+    channel_id: ChannelId,
     reply: String,
     quote: bool,
 }
@@ -187,23 +251,17 @@ impl EchoAgent {
     /// An agent named `channel_id` answering `reply`, quoting the event it
     /// answers after it when `options` says so.
     pub fn new(channel_id: ChannelId, reply: impl Into<String>, options: EchoAgentOptions) -> Self {
-        let mut declaration = ChannelDeclaration::new(
-            channel_id,
-            ChannelType::AI,
-            ChannelCategory::Intelligence,
-            ChannelDirection::Bidirectional,
-        );
-        declaration.provider_name = Some("EchoAgent".to_owned());
         Self {
-            declaration,
+            channel_id,
             reply: reply.into(),
             quote: options.quote,
         }
     }
 
-    /// The channel's id, Python's `channel_id`.
+    /// The channel's id, Python's `channel_id`, without the trait in
+    /// scope.
     pub fn channel_id(&self) -> &ChannelId {
-        &self.declaration.channel_id
+        &self.channel_id
     }
 
     /// The agent's answer to `event`.
@@ -215,7 +273,7 @@ impl EchoAgent {
         };
         let source = EventSource {
             direction: EventDirection::Outbound,
-            ..EventSource::new(self.declaration.channel_id.clone(), ChannelType::AI)
+            ..EventSource::new(self.channel_id.clone(), ChannelType::AI)
         };
         // The pipeline gives every response a fresh id, its room and its
         // depth (gap G-024), and makes it answer the event that asked: the id
@@ -232,8 +290,40 @@ impl EchoAgent {
 }
 
 impl Channel for EchoAgent {
-    fn declaration(&self) -> ChannelDeclaration {
-        self.declaration.clone()
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id.clone()
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::AI
+    }
+
+    fn category(&self) -> ChannelCategory {
+        ChannelCategory::Intelligence
+    }
+
+    fn provider_name(&self) -> Option<String> {
+        Some("EchoAgent".to_owned())
+    }
+
+    /// Nothing sends an echo agent a message: it answers in its room.
+    fn handle_inbound(
+        &self,
+        _message: InboundMessage,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<RoomEvent, ChannelError>> + Send {
+        ready(Err(
+            "An EchoAgent answers in its room; nothing sends it a message".into(),
+        ))
+    }
+
+    fn deliver(
+        &self,
+        _event: RoomEvent,
+        _binding: ChannelBinding,
+        _context: RoomContext,
+    ) -> impl Future<Output = Result<ChannelOutput, ChannelError>> + Send {
+        ready(Ok(ChannelOutput::empty()))
     }
 
     fn on_event(

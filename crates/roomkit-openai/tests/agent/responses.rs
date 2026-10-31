@@ -545,7 +545,8 @@ async fn a_single_tool_namespace_can_be_omitted_by_the_provider_and_is_restored_
         None
     );
     assert_eq!(count.load(Ordering::SeqCst), 1);
-    assert_eq!(room.sms.texts(), ["Ready."]);
+    // The SMS is handed the call's two rows too, which carry no text.
+    assert_eq!(room.sms.texts(), ["", "", "Ready."]);
     assert_eq!(
         room.fake.requests()[1].body["input"][1]["namespace"],
         "functions"

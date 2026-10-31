@@ -9,10 +9,9 @@
 
 use pretty_assertions::assert_eq;
 use roomkit::model::{ChannelId, ChannelType, EventType, InboundMessage, RoomId, TextContent};
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, RoomKit,
-    RoomKitOptions,
+    RoomKitOptions, TransportChannel, TransportChannelOptions,
 };
 use serde_json::{Value, json};
 
@@ -92,16 +91,17 @@ const SENT: [(&str, &str, Option<&str>, Option<Record>); 11] = [
 async fn names_that_read_alike_are_ranked_as_the_python_implementation_ranks_them() {
     let kit = RoomKit::new(RoomKitOptions::default());
     let room = RoomId::new("room_1").unwrap();
-    kit.register_channel(RecordingTransport::new(
+    // Transports that keep a message's metadata, the sender's name among it.
+    kit.register_channel(TransportChannel::new(
         channel("sms"),
         ChannelType::SMS,
-        RecordingTransportOptions::default(),
+        TransportChannelOptions::default(),
     ))
     .unwrap();
-    kit.register_channel(RecordingTransport::new(
+    kit.register_channel(TransportChannel::new(
         channel("ws"),
         ChannelType::WEBSOCKET,
-        RecordingTransportOptions::default(),
+        TransportChannelOptions::default(),
     ))
     .unwrap();
     kit.create_room(CreateRoomOptions {

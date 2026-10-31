@@ -139,49 +139,40 @@ fn changing(kit: &RoomKit, change: Change) -> Tools {
     })
 }
 
-/// A tool makes `change` while the answer streams: the streaming channel,
-/// whether it takes the tool-call rows or not, reads what it read before,
-/// and nothing of the round after, neither its text nor its rows, which
-/// are stored as the room now says, `stored_as`.
+/// A tool makes `change` while the answer streams: the streaming channel
+/// reads what it read before, the round's tool-call rows included, and
+/// nothing of the round after, neither its text nor its rows, which are
+/// stored as the room now says, `stored_as`.
 async fn reads_nothing_once_withdrawn(change: Change, stored_as: EventStatus) {
-    for tool_rows in [true, false] {
-        let rounds = vec![
-            ScriptedRound::calling("", [("call_1", "change", "{}")]).in_pieces(["Public."]),
-            ScriptedRound::writing(["After ", "the ", "change."]),
-        ];
-        let ws = Streaming::new(Stop::Never);
-        let ws = if tool_rows {
-            ws
-        } else {
-            ws.taking_no_tool_row()
-        };
-        let (room, _model) = Room::with(rounds, |kit| changing(kit, change), ws).await;
-        room.says("Go.").await;
-        let mut read = vec![
-            Read::Text("Public.".to_owned()),
-            Read::Row(EventType::Message, "Public.".to_owned(), 4),
-        ];
-        if tool_rows {
-            read.push(Read::Row(
-                EventType::ToolCallStart,
-                "[Tool call: change]".to_owned(),
-                5,
-            ));
-        }
-        let shape = format!("{change:?}, tool rows {tool_rows}");
-        assert_eq!(room.ws.read(), read, "{shape}");
-        assert_eq!(room.ws.delivered(), [3], "{shape}");
-        let last = room.timeline().await.pop().unwrap();
-        assert_eq!(
-            (
-                roomkit_core::rules::transcoding::text_of(&last.content),
-                last.status
-            ),
-            ("After the change.".to_owned(), stored_as),
-            "{shape}"
-        );
-        room.kit.close().await.unwrap();
-    }
+    let rounds = vec![
+        ScriptedRound::calling("", [("call_1", "change", "{}")]).in_pieces(["Public."]),
+        ScriptedRound::writing(["After ", "the ", "change."]),
+    ];
+    let ws = Streaming::new(Stop::Never);
+    let (room, _model) = Room::with(rounds, |kit| changing(kit, change), ws).await;
+    room.says("Go.").await;
+    let read = vec![
+        Read::Text("Public.".to_owned()),
+        Read::Row(EventType::Message, "Public.".to_owned(), 4),
+        Read::Row(
+            EventType::ToolCallStart,
+            "[Tool call: change]".to_owned(),
+            5,
+        ),
+    ];
+    let shape = format!("{change:?}");
+    assert_eq!(room.ws.read(), read, "{shape}");
+    assert_eq!(room.ws.delivered(), [3], "{shape}");
+    let last = room.timeline().await.pop().unwrap();
+    assert_eq!(
+        (
+            roomkit_core::rules::transcoding::text_of(&last.content),
+            last.status
+        ),
+        ("After the change.".to_owned(), stored_as),
+        "{shape}"
+    );
+    room.kit.close().await.unwrap();
 }
 
 /// RFC §7.5: a streaming channel a tool detaches mid-answer reads none of

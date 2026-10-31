@@ -20,7 +20,7 @@ use roomkit_core::rules::routing::RouteQuery;
 use tokio::sync::{oneshot, watch};
 use tokio::task::JoinSet;
 
-use crate::channel::{ChannelError, EventDraft};
+use crate::channel::ChannelError;
 use crate::context::{ExecutionContext, HookBody, RunShared};
 use crate::error::RoomKitError;
 use crate::events::Handled;
@@ -147,14 +147,17 @@ pub(super) async fn channel<S: ConversationStore>(
             let Some(channel) = inner.channel(&channel_id) else {
                 return unknown_channel(&channel_id);
             };
-            let draft = EventDraft {
-                id,
-                room_id: context.room.id.clone(),
-                now: environment.now(),
-            };
-            match channel.handle_inbound(message, *context, draft).await {
+            let room_id = context.room.id.clone();
+            match channel.handle_inbound(message, *context).await {
                 Ok(mut event) => match event.check() {
-                    Ok(()) => ChannelOutcome::Parsed(Box::new(event)).into(),
+                    Ok(()) => {
+                        // The pipeline's own (RFC §8.1, §10.1 step 4): the id
+                        // the core gives, the room, the instant.
+                        event.id = id;
+                        event.room_id = room_id;
+                        event.created_at = environment.now();
+                        ChannelOutcome::Parsed(Box::new(event)).into()
+                    }
                     Err(refusal) => refused_content(&refusal),
                 },
                 Err(error) => Outcome::Failed(ErrorRecord::new("ChannelError", error.to_string())),

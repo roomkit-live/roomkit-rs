@@ -35,8 +35,8 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use roomkit_core::model::{
-    ChannelBinding, ChannelOutput, ErrorRecord, EventDirection, EventId, EventSource, EventType,
-    EventUpdates, Metadata, RoomEvent, RoomId,
+    ChannelBinding, ChannelOutput, ErrorRecord, EventDirection, EventId, EventSource, EventUpdates,
+    Metadata, RoomEvent, RoomId,
 };
 use roomkit_core::ops::{ChannelOutcome, Entry, Outcome, ROW_HIDDEN, ROW_WITHHELD, StreamTarget};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -83,8 +83,9 @@ const KIT_CLOSED: &str = "kit_closed";
 enum Reads {
     /// The driver: no streaming target.
     Nobody,
-    /// The streaming target, the tool-call rows too when `tool_rows`.
-    Target { tool_rows: bool },
+    /// The streaming target, every row of the response, as the Python
+    /// implementation streams them.
+    Target,
     /// The target failed, or may not read a row of the response: it reads
     /// nothing more in the stream, the rows written since reaching every
     /// target their plans name.
@@ -117,7 +118,7 @@ pub(crate) async fn read<S: ConversationStore>(
         return Outcome::Failed(error);
     };
     let (pulls, pulled) = mpsc::unbounded_channel();
-    let delivery = DeliveryStream::new(pulls, responder.channel_id.clone(), answers.id.clone());
+    let delivery = DeliveryStream::new(pulls);
     let channel = target
         .as_ref()
         .and_then(|target| Some((inner.channel(&target.binding.channel_id)?, target.clone())));
@@ -131,22 +132,19 @@ pub(crate) async fn read<S: ConversationStore>(
         stream: Some(kept.turn),
         cut: None,
         unanswered: None,
-        reads: channel
-            .as_ref()
-            .map_or(Reads::Nobody, |(_, target)| Reads::Target {
-                tool_rows: target.tool_rows,
-            }),
+        reads: channel.as_ref().map_or(Reads::Nobody, |_| Reads::Target),
         ready: VecDeque::new(),
         over: None,
         read_through: false,
         in_flight: None,
     };
+    let placeholder = producer.segments.placeholder();
     let (done, reader_done) = oneshot::channel::<()>();
     let reader = async move {
         let read = match channel {
             Some((channel, target)) => {
                 channel
-                    .deliver_stream(delivery, target.binding, *target.context)
+                    .deliver_stream(delivery, placeholder, target.binding, *target.context)
                     .await
             }
             None => drain(delivery).await,
@@ -365,7 +363,7 @@ impl Producer {
             }
             // The target reads the text as it comes; nobody else does.
             Some(Ok(RemoteItem::Item(ResponseItem::Text(delta)))) => match self.reads {
-                Reads::Target { .. } => self.ready.push_back(Ok(StreamItem::Text(delta))),
+                Reads::Target => self.ready.push_back(Ok(StreamItem::Text(delta))),
                 // Nobody is handed the text: the turn began all the same, and
                 // a cut ends it `cancelled` (RFC §6.4).
                 Reads::Nobody | Reads::Lost => {
@@ -555,13 +553,9 @@ impl Producer {
     }
 
     /// Hands `row` to the operation, which commits it; the target reads it
-    /// in the stream when it reads the stream's rows of its kind.
+    /// in the stream, while it reads the stream.
     async fn commit(&mut self, row: RoomEvent) {
-        let tool_row = row.r#type != EventType::Message;
-        let streamed = match self.reads {
-            Reads::Target { tool_rows } => !tool_row || tool_rows,
-            Reads::Nobody | Reads::Lost => false,
-        };
+        let streamed = self.reads == Reads::Target;
         self.commit_as(row, streamed).await;
     }
 

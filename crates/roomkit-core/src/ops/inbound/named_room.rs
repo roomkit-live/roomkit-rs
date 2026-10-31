@@ -53,7 +53,7 @@ use crate::ops::io::Bound;
 use crate::ops::lifecycle::locked::{LockedSection, SectionError, SectionResult};
 use crate::ops::lifecycle::report::{self, Reported};
 use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
-use crate::ops::{ChannelDeclaration, Cx, Progress};
+use crate::ops::{ChannelConfig, Cx, Progress};
 use crate::rules::chain_depth::Draw;
 use crate::rules::routing::{self, Recording, Sender};
 use crate::rules::{attachment, organizations};
@@ -74,7 +74,7 @@ pub(super) enum Mode {
 pub(super) struct NamedRoom {
     room_id: RoomId,
     organization_id: Option<String>,
-    channel: Box<ChannelDeclaration>,
+    channel: Box<ChannelConfig>,
     /// The message's sender, as routing names them (RFC §10.4).
     sender: Sender,
     /// The message's sender id, as the channel wrote it: the participant a
@@ -143,7 +143,7 @@ impl NamedRoom {
         room_id: RoomId,
         mode: Mode,
         organization_id: Option<String>,
-        channel: Box<ChannelDeclaration>,
+        channel: Box<ChannelConfig>,
         sender: Sender,
         bound: Bound,
     ) -> Self {

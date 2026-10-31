@@ -68,6 +68,7 @@ mod stream;
 mod tasks;
 pub mod testing;
 mod tool_calls;
+mod transport;
 mod turn;
 mod turns;
 mod unwind;
@@ -101,9 +102,9 @@ pub mod model {
     #[doc(hidden)]
     pub use roomkit_core::model::{HOST_CHANNEL_ID, MAX_COMPOSITE_DEPTH, ToolCall};
 }
-pub use roomkit_core::ops::{ChannelDeclaration, default_inbound_event};
 pub use roomkit_core::rules::addresses::{
-    AddressForm, Addressing, CountryCode, InvalidCountryCode,
+    Addressing, ChannelAddressing, ChannelAddressingOptions, CountryCode, InvalidCountryCode,
+    NormalizeOptions, addressing_of,
 };
 pub use roomkit_core::rules::hook_registry::{HookExecution, HookTrigger};
 pub use roomkit_core::rules::{visibility_allows, visible_events};
@@ -117,7 +118,7 @@ pub use roomkit_core::rules::tool_intent;
 #[doc(hidden)]
 pub use roomkit_core::rules::instructions::turn_context;
 
-pub use self::channel::{Channel, ChannelError, EventDraft};
+pub use self::channel::{Channel, ChannelDeclaration, ChannelError, default_inbound_event};
 pub use self::context::keep_context;
 pub use self::error::RoomKitError;
 pub use self::events::FrameworkEvent;
@@ -125,7 +126,7 @@ pub use self::hooks::{
     HookError, HookFuture, HookHandler, HookOptions, HookPayload, HookReturn, IntoHookReturn,
     SessionStartedEvent,
 };
-pub use self::host::HostChannel;
+pub use self::host::{HostChannel, HostChannelOptions};
 pub use self::inbound::{DeliveryHandle, InboundResult};
 pub use self::kit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CheckRoomTimersOptions,
@@ -151,6 +152,7 @@ pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem}
 pub use self::tool_calls::ToolCallEvent;
 #[doc(hidden)]
 pub use self::tool_calls::ToolCallReport;
+pub use self::transport::{TransportChannel, TransportChannelOptions};
 pub use self::turn::{ToolGate, TurnHost, current_turn_host};
 pub use self::turns::TurnTimeouts;
 
