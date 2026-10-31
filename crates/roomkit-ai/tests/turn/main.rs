@@ -267,6 +267,72 @@ async fn tool_calls_emit_before_tool_use_and_tool_call() {
     );
 }
 
+/// RFC §9.3: an ASYNC `BEFORE_TOOL_USE` hook observes a call as the SYNC
+/// chain let it through, its `modify` applied, and never a call the chain
+/// refused; `before_tool_use` carries the failure's reason, as the Python
+/// implementation runs and emits them.
+#[tokio::test]
+async fn before_tool_use_observers_see_the_call_the_chain_let_through() {
+    let model = ScriptedProvider::new([
+        ScriptedRound::calling("", [("c1", "lookup_order", r#"{"order": "1"}"#)]),
+        ScriptedRound::calling("", [("c2", "lookup_order", r#"{"order": "2"}"#)]),
+        ScriptedRound::answering("Done."),
+    ]);
+    let room = Room::new(model, served()).await;
+    room.kit
+        .hook(
+            HookTrigger::BeforeToolUse,
+            |mut event: ToolCallEvent, _context| async move {
+                if event.tool_call_id == "c2" {
+                    return Err("the policy is down".into());
+                }
+                event.arguments.insert("order".to_owned(), "7".into());
+                Ok(HookResult::modify(event, ModifyOptions::default()))
+            },
+            HookOptions {
+                name: "gate".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&observed);
+    room.kit
+        .hook(
+            HookTrigger::BeforeToolUse,
+            move |event: ToolCallEvent, _context| {
+                seen.lock()
+                    .unwrap()
+                    .push((event.tool_call_id, Value::Object(event.arguments)));
+                async {}
+            },
+            HookOptions {
+                execution: HookExecution::Async,
+                name: "audit".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let reasons = Arc::new(Mutex::new(Vec::new()));
+    let noted = Arc::clone(&reasons);
+    room.kit.on("before_tool_use", move |event| {
+        noted.lock().unwrap().push(event.data["reason"].clone());
+        std::future::ready(())
+    });
+    room.says("Orders 1 and 2?").await;
+    roomkit::testing::idle(&room.kit).await;
+    assert_eq!(
+        (
+            observed.lock().unwrap().clone(),
+            reasons.lock().unwrap().clone()
+        ),
+        (
+            vec![("c1".to_owned(), json!({ "order": "7" }))],
+            vec![Value::Null, json!("hook gate failed: the policy is down")]
+        )
+    );
+}
+
 /// A `BEFORE_TOOL_USE` hook refusing the call `refused` with `reason`.
 fn refuse_call(kit: &RoomKit, refused: &'static str, reason: &'static str) {
     kit.hook(

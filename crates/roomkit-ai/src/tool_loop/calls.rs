@@ -86,9 +86,7 @@ impl<P: AiProvider> Loop<P> {
         };
         let arguments = match turn.before_tool_use(call).await {
             ToolGate::Allowed(arguments) => arguments,
-            ToolGate::Refused {
-                text, error_detail, ..
-            } => {
+            ToolGate::Refused { text, error_detail } => {
                 let refused = ended(call.clone(), ToolCallOutcome::Refused, text);
                 return Gated::Refused(match error_detail {
                     Some(detail) => refused.with_error_detail(detail),

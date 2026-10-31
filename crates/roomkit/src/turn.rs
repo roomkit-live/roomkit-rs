@@ -129,9 +129,6 @@ pub enum ToolGate {
         text: String,
         /// What failed, for the observers alone.
         error_detail: Option<String>,
-        /// The reason a hook's block gave, for the `before_tool_use`
-        /// framework event.
-        reason: Option<String>,
     },
 }
 
@@ -226,8 +223,9 @@ impl TurnHost {
     /// the call with its reason. The trigger fails closed: a hook that
     /// raises, runs past its timeout or returns nothing refuses the call
     /// with the fixed refusal, its name and error for the observers alone.
-    /// The ASYNC hooks observe the call and decide nothing. Emits the
-    /// `before_tool_use` framework event (RFC §8.2).
+    /// The ASYNC hooks observe the call as the chain left it, once it let
+    /// it through, and decide nothing. Emits the `before_tool_use`
+    /// framework event with the chain's verdict (RFC §8.2).
     ///
     /// For roomkit-ai's tool loop, which calls it once per call: a tool or
     /// a channel that calls it too runs the hooks twice.
@@ -235,96 +233,49 @@ impl TurnHost {
     pub async fn before_tool_use(&self, call: &ToolCall) -> ToolGate {
         let hooks = self.hooks(HookTrigger::BeforeToolUse);
         let original = self.event_of(&ToolCallReport::new(call.clone()));
-        self.observe_with(&hooks, &original, &ExecutionContext::current(), 0);
-        let gate = self.gate(&hooks, original).await;
-        let (allowed, reason) = match &gate {
-            ToolGate::Allowed(_) => (true, None),
-            ToolGate::Refused { reason, .. } => (false, reason.clone()),
-        };
-        self.emit_before_tool_use(call, allowed, reason);
-        match gate {
-            ToolGate::Allowed(arguments) => {
-                self.runs(call, &arguments);
-                ToolGate::Allowed(arguments)
-            }
-            refused @ ToolGate::Refused { .. } => refused,
+        let chain = self.gate(&hooks, original).await;
+        if chain.ended.is_none() {
+            self.observe_with(&hooks, &chain.current, &ExecutionContext::current(), 0);
         }
+        let (allowed, reason) = chain.verdict();
+        self.emit_before_tool_use(call, allowed, reason);
+        let gate = chain.decision(&call.name);
+        if let ToolGate::Allowed(arguments) = &gate {
+            self.runs(call, arguments);
+        }
+        gate
     }
 
-    /// The decision of the SYNC `BEFORE_TOOL_USE` chain of `hooks` on
-    /// `original`, the call as the model made it, as the Python
-    /// implementation's `before_tool_decision` reads it: rewritten
-    /// arguments that are not an object refuse the call before a block's
-    /// reason or a failure is read.
+    /// The SYNC `BEFORE_TOOL_USE` chain of `hooks` on `original`, the call
+    /// as the model made it, run until a hook blocks or fails.
     async fn gate(
         &self,
         hooks: &[(HookSpec, Arc<dyn HookHandler<ToolCallEvent>>)],
         original: ToolCallEvent,
-    ) -> ToolGate {
-        let mut current = original.clone();
-        let mut rewritten: Option<Value> = None;
-        let mut ended = None;
+    ) -> GateChain {
+        let mut chain = GateChain {
+            current: original,
+            rewritten: None,
+            ended: None,
+        };
         for (spec, handler) in hooks
             .iter()
             .filter(|(spec, _)| spec.execution == HookExecution::Sync)
         {
             let ran = hooks::run(
                 Arc::clone(handler),
-                current.clone(),
+                chain.current.clone(),
                 self.shared.context.clone(),
                 spec.timeout,
                 |_| None,
             )
             .await;
-            let result = match ran {
-                HookOutcome::Returned(result) => result,
-                HookOutcome::Raised(error) => {
-                    ended = Some(failed_closed(&original.name, spec, &error.message));
-                    break;
-                }
-                HookOutcome::TimedOut => {
-                    let late = format!("timeout ({}s)", python_seconds(spec.timeout));
-                    ended = Some(failed_closed(&original.name, spec, &late));
-                    break;
-                }
-                HookOutcome::Invalid { what, .. } => {
-                    ended = Some(failed_closed(&original.name, spec, &what));
-                    break;
-                }
-            };
-            if let Some(arguments) = result.metadata.get(ARGUMENTS) {
-                rewritten = Some(arguments.clone());
-            }
-            match (result.action, result.event) {
-                (HookAction::Block, _) => {
-                    ended = Some(blocked(&original.name, result.reason));
-                    break;
-                }
-                (HookAction::Modify, Some(modified)) => current = modified,
-                (HookAction::Modify, None) => {
-                    let unusable = "modify returned nothing, expected ToolCallEvent";
-                    ended = Some(failed_closed(&original.name, spec, unusable));
-                    break;
-                }
-                (HookAction::Allow, _) => {}
+            chain.ended = chain.read(spec, ran);
+            if chain.ended.is_some() {
+                break;
             }
         }
-        match rewritten {
-            Some(Value::Object(_)) | None => {}
-            Some(_) => {
-                tracing::error!(
-                    target: "roomkit::hooks",
-                    tool = %original.name,
-                    "a BEFORE_TOOL_USE hook returned non-object arguments: the call is refused"
-                );
-                return blocked(&original.name, None);
-            }
-        }
-        match (ended, rewritten) {
-            (Some(refused), _) => refused,
-            (None, Some(Value::Object(arguments))) => ToolGate::Allowed(arguments),
-            (None, _) => ToolGate::Allowed(current.arguments),
-        }
+        chain
     }
 
     /// Emits the `before_tool_use` framework event of `call` (RFC §8.2), as
@@ -726,36 +677,133 @@ fn python_seconds(duration: std::time::Duration) -> String {
     }
 }
 
-/// A call refused by a hook's block: its reason as the model reads it, or
-/// the fixed refusal when it gave none (RFC §9.3).
-fn blocked(name: &str, reason: Option<String>) -> ToolGate {
-    let reason = reason.filter(|reason| !reason.is_empty());
-    let text = match &reason {
-        Some(reason) => error_envelope(reason),
-        None => denied(name),
-    };
-    ToolGate::Refused {
-        text,
-        error_detail: None,
-        reason,
+/// The SYNC `BEFORE_TOOL_USE` chain on one call, as the Python
+/// implementation runs it: the call as the last hook left it, the last
+/// rewrite under `metadata["arguments"]`, and how the chain ended.
+struct GateChain {
+    current: ToolCallEvent,
+    rewritten: Option<Value>,
+    ended: Option<GateEnd>,
+}
+
+/// How a `BEFORE_TOOL_USE` chain ended before its last hook.
+enum GateEnd {
+    /// A hook blocked, giving this reason.
+    Blocked(Option<String>),
+    /// A hook failed, and the trigger fails closed: `reason` for the
+    /// framework event, `detail` for the observers.
+    Failed { reason: String, detail: String },
+}
+
+impl GateChain {
+    /// Reads what the hook `spec` produced; how the chain ended when it
+    /// blocked or failed.
+    fn read(&mut self, spec: &HookSpec, ran: HookOutcome<ToolCallEvent>) -> Option<GateEnd> {
+        let result = match ran {
+            HookOutcome::Returned(result) => result,
+            HookOutcome::Raised(error) => {
+                let reason = format!("hook {} failed: {}", spec.name, error.message);
+                return Some(failed(spec, "hook_error", reason, &error.message));
+            }
+            HookOutcome::TimedOut => {
+                let seconds = python_seconds(spec.timeout);
+                let reason = format!("hook {} timed out after {seconds}s", spec.name);
+                let error = format!("timeout ({seconds}s)");
+                return Some(failed(spec, "hook_timeout", reason, &error));
+            }
+            HookOutcome::Invalid { what, .. } => {
+                let got = what
+                    .strip_prefix("expected HookResult, got ")
+                    .unwrap_or(&what);
+                let reason = format!("hook {} returned {got} instead of HookResult", spec.name);
+                return Some(failed(spec, "hook_invalid_result", reason, &what));
+            }
+        };
+        if let Some(arguments) = result.metadata.get(ARGUMENTS) {
+            self.rewritten = Some(arguments.clone());
+        }
+        match (result.action, result.event) {
+            (HookAction::Block, _) => Some(GateEnd::Blocked(result.reason)),
+            (HookAction::Modify, Some(modified)) => {
+                self.current = modified;
+                None
+            }
+            (HookAction::Modify, None) => {
+                let reason = format!("hook {} returned an unusable payload", spec.name);
+                let error = "modify returned nothing, expected ToolCallEvent";
+                Some(failed(spec, "hook_invalid_result", reason, error))
+            }
+            (HookAction::Allow, _) => None,
+        }
+    }
+
+    /// What the `before_tool_use` framework event reports: whether the
+    /// chain let the call through, and the reason a block or a failure
+    /// gave.
+    fn verdict(&self) -> (bool, Option<String>) {
+        match &self.ended {
+            None => (true, None),
+            Some(GateEnd::Blocked(reason)) => (false, reason.clone()),
+            Some(GateEnd::Failed { reason, .. }) => (false, Some(reason.clone())),
+        }
+    }
+
+    /// The gate's decision on the call `name`, as Python's
+    /// `before_tool_decision` reads the chain: rewritten arguments that
+    /// are not an object refuse it before a block or a failure is read.
+    fn decision(self, name: &str) -> ToolGate {
+        if self
+            .rewritten
+            .as_ref()
+            .is_some_and(|arguments| !arguments.is_object())
+        {
+            tracing::error!(
+                target: "roomkit::hooks",
+                tool = %name,
+                "a BEFORE_TOOL_USE hook returned non-object arguments: the call is refused"
+            );
+            return refused(name, None, None);
+        }
+        match (self.ended, self.rewritten) {
+            (Some(GateEnd::Blocked(reason)), _) => refused(name, reason, None),
+            (Some(GateEnd::Failed { detail, .. }), _) => refused(name, None, Some(detail)),
+            (None, Some(Value::Object(arguments))) => ToolGate::Allowed(arguments),
+            (None, _) => ToolGate::Allowed(self.current.arguments),
+        }
     }
 }
 
-/// A call refused because the gate `spec` failed with `error`: the fixed
-/// refusal, the gate's name and error for the observers (RFC §9.3).
-fn failed_closed(name: &str, spec: &HookSpec, error: &str) -> ToolGate {
+/// The hook `spec` failed with `error`, of `outcome`, in a trigger that
+/// fails closed: Python's reason, `<outcome>:<name>` for a hook that fails
+/// closed itself, `trigger_reason` otherwise; the hook's name and error
+/// for the observers alone (RFC §9.3).
+fn failed(spec: &HookSpec, outcome: &str, trigger_reason: String, error: &str) -> GateEnd {
     tracing::warn!(
         target: "roomkit::hooks",
         hook = %spec.name,
-        tool = %name,
         %error,
         "a BEFORE_TOOL_USE hook failed: the call is refused"
     );
-    ToolGate::Refused {
-        text: denied(name),
-        error_detail: Some(format!("{}: {error}", spec.name)),
-        reason: None,
+    let reason = if spec.fail_closed {
+        format!("{outcome}:{}", spec.name)
+    } else {
+        trigger_reason
+    };
+    GateEnd::Failed {
+        reason,
+        detail: format!("{}: {error}", spec.name),
     }
+}
+
+/// A call the gate refused: a block's reason as the model reads it, or
+/// the fixed refusal when it gave none (RFC §9.3); what failed for the
+/// observers alone.
+fn refused(name: &str, reason: Option<String>, error_detail: Option<String>) -> ToolGate {
+    let text = match reason.filter(|reason| !reason.is_empty()) {
+        Some(reason) => error_envelope(&reason),
+        None => denied(name),
+    };
+    ToolGate::Refused { text, error_detail }
 }
 
 /// The fixed refusal of a call the gate stopped (RFC §9.3).
