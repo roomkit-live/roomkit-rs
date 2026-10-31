@@ -162,6 +162,25 @@ class Members(unittest.TestCase):
         self.assertEqual(report.items["roomkit::RoomKit"].status, "matches")
         self.assertEqual(report.items["roomkit::SendEventOptions"].status, "options")
 
+    def test_an_options_struct_is_the_one_its_signature_links_to(self) -> None:
+        # Two `CommitEventOptions`, the kit's and the store's: the link
+        # rustdoc writes on the parameter's type tells them apart.
+        store = struct(
+            "roomkit::store::Store",
+            methods=["pub async fn commit_event(&self, room_id: &RoomId, options: CommitEventOptions)"],
+        )
+        store["methods"][0]["links"] = {"CommitEventOptions": "roomkit::store::CommitEventOptions"}
+        report = run(
+            [
+                struct("roomkit::CommitEventOptions", fields=[("organization_id", "Option<String>")]),
+                store,
+                struct("roomkit::store::CommitEventOptions", fields=[("activity", "bool")]),
+            ],
+            {"roomkit.Store": {"commit_event": ["async def", "room_id", "*", "activity=True"]}},
+        )
+        self.assertEqual(found(report), [("rust", "roomkit::CommitEventOptions")])
+        self.assertEqual(report.items["roomkit::store::CommitEventOptions"].status, "options")
+
     def test_an_options_struct_s_own_members_have_no_python_counterpart(self) -> None:
         report = run(
             [

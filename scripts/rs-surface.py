@@ -321,6 +321,7 @@ def _members(block: str, where: str) -> tuple[list[dict], list[dict], list[dict]
         kind, _, name = anchor.partition(".")
         if kind in ("method", "tymethod"):
             parsed = _parse_member(header, where, anchor)
+            parsed["links"] = linked_types(found.group(1))
             methods.append(parsed)
         elif kind == "associatedconstant":
             const = re.fullmatch(r"(?:pub\s+)?const\s+(\w+)\s*:\s*(.+?)(?:\s*=\s*.*)?", header)
@@ -335,6 +336,18 @@ def _members(block: str, where: str) -> tuple[list[dict], list[dict], list[dict]
     if written != len(entries):
         raise SurfaceError(f"{where}: {written} member entries, of which {len(entries)} read")
     return methods, constants, types
+
+
+def linked_types(header_html: str) -> dict[str, str]:
+    """The path of each type a header links to, by the name it shows:
+    rustdoc's link title (`struct roomkit::store::CommitEventOptions`).
+    Two items of one name in two modules are told apart by it, which the
+    header's text cannot do."""
+    links = re.findall(
+        r'<a class="(?:struct|enum|trait|type|union)" href="[^"]*" title="\w+ ([\w:]+)">(\w+)</a>',
+        header_html,
+    )
+    return {name: path for path, name in links}
 
 
 def _parse_member(header: str, where: str, anchor: str) -> dict:

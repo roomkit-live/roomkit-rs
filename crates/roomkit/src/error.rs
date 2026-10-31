@@ -695,8 +695,10 @@ impl From<StoreError> for RoomKitError {
             },
             StoreError::Value(message) => Self::Value(message),
             StoreError::Unavailable(failure) => Self::Store(failure),
-            // TODO(lot 4 parity): Python's `ParticipantExistsError` and
-            // `ParticipantNotFoundError` of the store's.
+            // No call of the kit writes a participant: these refusals reach a
+            // caller from the store itself, as its `StoreError`, which names
+            // Python's `ParticipantExistsError` and
+            // `ParticipantNotFoundError`.
             other @ (StoreError::ParticipantExists { .. }
             | StoreError::ParticipantNotFound { .. }) => Self::Store(StoreFailure::new(other)),
         }

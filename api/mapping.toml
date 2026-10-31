@@ -30,7 +30,7 @@ duration_suffix = "_seconds"
 # by the variant's path, the variant the builtin's name without `Error`;
 # `ExceptionGroup` the answer of a close whose channels failed (decided
 # 2026-10-29).
-builtin_errors = { "roomkit::RoomKitError::Value" = "ValueError", "roomkit::RoomKitError::Cancelled" = "asyncio.CancelledError", "roomkit::RoomKitError::ExceptionGroup" = "ExceptionGroup" }
+builtin_errors = { "roomkit::RoomKitError::Value" = "ValueError", "roomkit::RoomKitError::Cancelled" = "asyncio.CancelledError", "roomkit::RoomKitError::ExceptionGroup" = "ExceptionGroup", "roomkit::StoreError::Value" = "ValueError" }
 # The variants carrying a builtin that stand for Python's value of it, no
 # member: Python's visibility naming channels is a comma-joined `str`.
 builtin_payloads = ["roomkit::model::Visibility::Channels"]
@@ -73,6 +73,14 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit::model::Longitude" = { python = "float", members = ["new", "degrees"] }
 "roomkit::model::ModelError" = { python = "ValueError" }
 "roomkit::InvalidCountryCode" = { python = "ValueError" }
+# Python's streams (decision 12, the architecture table's "Channels"):
+# `deliver_stream`'s `text_stream`, an `AsyncIterator[str]` whose items are
+# the text and the response's rows, which its annotation does not name, and
+# `ChannelOutput.response_stream`, an `AsyncIterator` of text and markers.
+# Rust names the stream types and their items; `next()` is `__anext__`.
+"roomkit::DeliveryStream" = { python = "AsyncIterator", members = ["next"] }
+"roomkit::ResponseStream" = { python = "AsyncIterator" }
+"roomkit::StreamItem" = { python = "str" }
 
 # The Rust enums a Python `Literal` stands for, by path: the field it types
 # (decision 4; a nameless literal takes its field's name) and the Literal's
@@ -115,6 +123,18 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit.RemoteTurnError" = []
 "roomkit.TurnLinkError" = []
 
+# The store's refusals: the exception classes Python's stores raise, each
+# a `RoomKitError` (lot 4, decision 14).
+[rules.error_families."roomkit::StoreError"]
+"roomkit.RoomAlreadyExistsError" = ["0"]
+"roomkit.RoomNotFoundError" = ["0"]
+"roomkit.ParticipantExistsError" = ["room_id", "participant_id"]
+"roomkit.ParticipantNotFoundError" = ["room_id", "participant_id"]
+"roomkit.IdentityNotFoundError" = ["0"]
+"roomkit.AddressLinkedError" = ["channel_type"]
+"roomkit.EventNotFoundError" = ["0"]
+"roomkit.IdempotencyKeyTakenError" = ["room_id", "channel_id", "key"]
+
 [rules.error_families."roomkit_ai::SkillError"]
 "roomkit.skills.SkillDiscoveryError" = []
 "roomkit.skills.SkillParseError" = []
@@ -123,6 +143,12 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 # The architecture table's mappings that a rule gives no name to.
 
 # `**kwargs` of attach_channel: the binding's fields the keywords reach.
+[[map]]
+rust = "roomkit::StoreError"
+python = "roomkit.RoomKitError"
+py_spec = "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+reason = "Python's stores raise RoomKitError's classes, which Rust's store error names by its variants (lot 2's rule, decision 14)"
+
 [[map]]
 rust = "roomkit::RoomKit::attach_channel"
 python = "roomkit.RoomKit.attach_channel"
@@ -138,6 +164,12 @@ py_spec = "sha256:cda3ae00394890976927968001a8e134439858737b8bf28a59bc11d358f20d
 reason = "Python's **options, which go to RoomKit.send_event's keywords"
 
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
+
+[[exception]]
+rust = "roomkit::StoreError"
+members = ["Unavailable", "unavailable"]
+approved = "2026-10-27"
+reason = "a variant carries a foreign error, the cause kept: what Python propagates as the store driver raised it (the architecture table, Errors)"
 
 [[exception]]
 rust = "roomkit_openai::TokenSource"
@@ -348,6 +380,12 @@ approved = "2026-10-27"
 reason = "decision 5: Python's tests patch the clock and uuid4; the sans-IO core takes them as an input"
 
 # Python names of classes in scope that Rust lacks: not in 0.x (rule 5).
+
+[[exception]]
+rust = "roomkit::Channel"
+members = ["channel_type", "category", "direction"]
+approved = "2026-10-27"
+reason = "decision 12: Python's class attributes channel_type, category and direction (channels/base.py:163-165), which the snapshot does not list, are the trait's methods: a trait holds no data"
 
 [[missing]]
 python = "roomkit.Channel"
@@ -611,312 +649,18 @@ params = [
 ]
 reason = "not in 0.x: retries and response schemas of OpenAIConfig"
 
+[[missing]]
+python = "roomkit.TransportChannel.__init__"
+params = ["provider"]
+reason = "not in 0.x: Rust has no provider contract; without one, deliver returns an empty output, as Python's does, and the recipient check comes with the provider"
+
 # Known differences, by the lot of step 5 that removes them; lot 6 requires
 # none left. "?": the plan names no lot.
 
 [[pending]]
 lot = 4
-python = "roomkit.Channel"
-members = [
-    "capabilities", "conversation_address", "extract_text", "info",
-    "normalize_address", "provider_name", "recent_events_window",
-    "recipient_address", "recipient_key", "recipient_metadata",
-    "reply_metadata", "supports_streaming_delivery",
-    "supports_streaming_delivery_for",
-]
-reason = "decision 12: the Channel trait carries Python's attribute and method names and defaults"
-
-[[pending]]
-lot = 4
-python = "roomkit.Channel.__init__"
-params = ["channel_id"]
-reason = "decision 12: the Channel trait carries Python's attribute and method names and defaults"
-
-[[pending]]
-lot = 4
-python = "roomkit.Channel.deliver_stream"
-params = ["text_stream", "event"]
-reason = "decision 12: the Channel trait carries Python's attribute and method names and defaults"
-
-[[pending]]
-lot = 4
-python = "roomkit.ChannelDeclaration.__init__"
-params = ["recent_events_window"]
-reason = "decision 12: ChannelDeclaration becomes Python's model; the core's declaration is renamed ChannelConfig and leaves roomkit"
-
-[[pending]]
-lot = 4
-python = "roomkit.ConversationStore"
-members = [
-    "add_binding", "add_observation", "add_participant", "add_task",
-    "check_idempotency", "commit_event", "delete_room",
-    "find_room_ids_by_channel", "find_rooms", "get_binding",
-    "get_conversation", "load_room_context", "patch_room_metadata",
-    "remove_binding", "update_binding",
-]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-python = "roomkit.ConversationStore.find_room_id_by_binding"
-params = ["room_filter", "recipient_key"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-python = "roomkit.ConversationStore.find_room_id_by_participant"
-params = ["room_filter"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-python = "roomkit.ConversationStore.get_event_count"
-params = ["event_filter"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-python = "roomkit.ConversationStore.list_events"
-params = [
-    "offset", "limit", "visibility_filter", "after_index", "before_index",
-    "event_filter", "newest_first",
-]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-python = "roomkit.ConversationStore.list_rooms"
-params = ["offset", "limit"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-python = "roomkit.ConversationStore.list_tasks"
-params = ["status"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-python = "roomkit.ConversationStore.update_event"
-params = ["event"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-python = "roomkit.ConversationStore.update_room"
-params = ["room"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-python = "roomkit.HostChannel.__init__"
-params = ["channel_id"]
-reason = "decision 20: HostChannel::new(HostChannelOptions { channel_id }), provider_name None"
-
-[[pending]]
-lot = 4
-python = "roomkit.RoomFilter"
-members = ["admits"]
-reason = "lot 4: RoomFilter becomes Python's (statuses, admits); EventFilter's validate and matches leave the public API"
-
-[[pending]]
-lot = 4
-python = "roomkit.RoomFilter.__init__"
-params = ["statuses"]
-reason = "lot 4: RoomFilter becomes Python's (statuses, admits); EventFilter's validate and matches leave the public API"
-
-[[pending]]
-lot = 4
-rust = "roomkit::AddressForm"
-reason = "decisions 19, 20: Python's ChannelAddressing and addressing_of; AddressForm and Addressing::of / replies_to_sender go"
-
-[[pending]]
-lot = 4
-rust = "roomkit::Addressing"
-members = ["of", "replies_to_sender"]
-reason = "decisions 19, 20: Python's ChannelAddressing and addressing_of; AddressForm and Addressing::of / replies_to_sender go"
-
-[[pending]]
-lot = 4
-rust = "roomkit::Channel::deliver_stream"
-params = ["stream"]
-reason = "decision 12: the Channel trait carries Python's attribute and method names and defaults"
-
-[[pending]]
-lot = 4
-rust = "roomkit::Channel::handle_inbound"
-params = ["draft"]
-reason = "decision 12: the Channel trait carries Python's attribute and method names and defaults"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ChannelDeclaration"
-members = [
-    "direction", "provider_name", "addressing", "recipient_key",
-    "country_code", "chat_key", "receives_tool_calls",
-    "supports_streaming_delivery", "host", "form", "binding",
-]
-reason = "decision 12: ChannelDeclaration becomes Python's model; the core's declaration is renamed ChannelConfig and leaves roomkit"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ChannelDeclaration::new"
-params = ["channel_type", "category", "direction"]
-reason = "decision 12: ChannelDeclaration becomes Python's model; the core's declaration is renamed ChannelConfig and leaves roomkit"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore"
-members = [
-    "store_binding", "delete_binding", "load_context", "create_participant",
-    "commit", "persist_side_effects",
-]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::advance_delivered_index"
-params = ["force"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::delete_event"
-params = ["cascade_replies"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::find_room_id_by_binding"
-params = ["identity_id", "filter"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::find_room_id_by_participant"
-params = ["identity_id", "filter"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::get_event_count"
-params = ["filter"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::link_address"
-params = ["organization_id"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::list_events"
-params = ["query"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::list_rooms"
-params = ["filter"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::resolve_identity"
-params = ["organization_id"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::unlink_address"
-params = ["organization_id"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::update_event"
-params = ["event_id", "updates"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ConversationStore::update_room"
-params = ["room_id", "updates"]
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::EventDraft"
-reason = "lot 4: handle_inbound(message, context); EventDraft goes"
-
-[[pending]]
-lot = 4
-rust = "roomkit::EventFilter"
-members = ["validate", "matches"]
-reason = "lot 4: RoomFilter becomes Python's (statuses, admits); EventFilter's validate and matches leave the public API"
-
-[[pending]]
-lot = 4
-rust = "roomkit::EventQuery"
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::HostChannel"
-members = ["with_id"]
-reason = "decision 20: HostChannel::new(HostChannelOptions { channel_id }), provider_name None"
-
-[[pending]]
-lot = 4
 rust = "roomkit::ResponseItem"
 reason = "lot 4: ResponseItem::{Text, LoopEnd}, the tool markers hidden; End(Metadata) goes"
-
-[[pending]]
-lot = 4
-rust = "roomkit::RoomCounters"
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::RoomFilter"
-members = ["status", "timers_armed", "channel_id", "matches"]
-reason = "lot 4: RoomFilter becomes Python's (statuses, admits); EventFilter's validate and matches leave the public API"
-
-[[pending]]
-lot = 4
-rust = "roomkit::StoreError"
-reason = "lot 4: StoreError names its variants after Python's classes (lot 2's rule)"
-
-[[pending]]
-lot = 4
-rust = "roomkit::TargetUpdate"
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::model::RoomUpdates"
-reason = "decision 13: the store takes Python's method names, shapes, options and returns"
-
-[[pending]]
-lot = 4
-rust = "roomkit::DeliveryStream"
-reason = "Python's delivery and response streams as named Rust stream types, a rule lot 4 adds to the report"
-
-[[pending]]
-lot = 4
-rust = "roomkit::ResponseStream"
-reason = "Python's delivery and response streams as named Rust stream types, a rule lot 4 adds to the report"
-
-[[pending]]
-lot = 4
-rust = "roomkit::StreamItem"
-reason = "Python's delivery and response streams as named Rust stream types, a rule lot 4 adds to the report"
-
-[[pending]]
-lot = 4
-rust = "roomkit::model::EventUpdates"
-reason = "decision 1: the kit's update_event takes lot 1's UpdateEventOptions; the store's update_event takes EventUpdates until lot 4 gives it Python's update_event(event), and EventUpdates leaves roomkit's re-exports then"
 
 [[pending]]
 lot = 5

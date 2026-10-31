@@ -35,8 +35,10 @@ pub struct ChannelConfig {
     /// The provider or backend behind it, for event attribution (RFC §5.2).
     pub provider_name: Option<String>,
     /// How its senders are addressed (RFC §5.7, gap G-051): its type's
-    /// default ([`Addressing::of`]), as written for a name the RFC does not
-    /// list, unless the channel sets another.
+    /// default (as [`addressing_of`] reads it), as written for a name the
+    /// RFC does not list, unless the channel sets another.
+    ///
+    /// [`addressing_of`]: crate::rules::addresses::addressing_of
     pub addressing: Addressing,
     /// The binding metadata key it delivers to (RFC §5.7, Appendix A):
     /// `phone_number`, `email_address`, ... A transport delivery whose
@@ -67,11 +69,13 @@ pub struct ChannelConfig {
 impl ChannelConfig {
     /// A channel of `channel_type` with the RFC's defaults: the default
     /// capabilities, no provider name, no country code, and the addressing,
-    /// recipient key and chat key of its type ([`Addressing::of`],
+    /// recipient key and chat key of its type ([`addressing_of`],
     /// `addresses::recipient_key`, `addresses::chat_key`, gaps G-051 and
     /// G-057), which a name the RFC does not list has none of: its senders
     /// are addressed as written, with no recipient and no chat key, unless
     /// the channel sets them.
+    ///
+    /// [`addressing_of`]: crate::rules::addresses::addressing_of
     pub fn new(
         channel_id: ChannelId,
         channel_type: ChannelType,

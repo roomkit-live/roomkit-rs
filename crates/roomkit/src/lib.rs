@@ -147,6 +147,7 @@ pub use self::store::query::EventFilter;
 pub use self::store::rooms::RoomFilter;
 #[doc(hidden)]
 pub use self::store::written;
+#[doc(inline)]
 pub use self::store::{ConversationStore, InMemoryStore};
 pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem};
 pub use self::tool_calls::ToolCallEvent;

@@ -78,6 +78,7 @@ class ReadsTheFixtureCrate(unittest.TestCase):
             [{"name": "room_id", "type": "&Code"}, {"name": "options", "type": "KitOptions"}],
         )
         self.assertEqual(attach["returns"], "Result<(), Shape>")
+        self.assertEqual(attach["links"].get("KitOptions"), "fixture::KitOptions")
         self.assertIsNone(methods["new"]["receiver"])
         hook = methods["hook"]
         self.assertEqual(_names(hook["params"]), ["name", "handler"])

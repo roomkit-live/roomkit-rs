@@ -537,16 +537,25 @@ class Comparison:
         renamed = renames.get(rust.name)
         return renamed == python if renamed else self._same(python, rust.name, rust.type)
 
+    def _options_struct(self, name: str, links: dict, near: str) -> dict | None:
+        """The options struct `name` a signature takes: the one its link
+        names, two structs of one name in two modules told apart
+        (`roomkit::CommitEventOptions`, `roomkit::store::CommitEventOptions`),
+        else the one of that name in `near`'s crate."""
+        linked = self.surface.items.get(links.get(name, ""))
+        return linked or self.surface.named("struct", name, near)
+
     def _rust_params(self, rust_path: str, method: dict, item: str) -> list[_RustParam]:
         """A method's parameters, an options struct's fields standing for
         the defaulted ones: `<Method>Options`, or `<Type>Options` for `new`."""
         wanted = {f"{_camel(method['name'])}Options"}
         if method["name"] == "new":
             wanted.add(f"{item.rpartition('::')[2]}Options")
+        links = method.get("links", {})
         found: list[_RustParam] = []
         for param in method["params"]:
             base = _base_type(param["type"])
-            options = self.surface.named("struct", base, rust_path) if base in wanted else None
+            options = self._options_struct(base, links, rust_path) if base in wanted else None
             if options is None:
                 found.append(_RustParam(param["name"].lstrip("_"), param["type"], True, f"{rust_path}({param['name']})"))
                 continue
