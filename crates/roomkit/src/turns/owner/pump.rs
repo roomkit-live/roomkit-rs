@@ -7,13 +7,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use roomkit_core::model::{ChannelId, EventId, Metadata, RoomId};
+use roomkit_core::model::{EventId, Metadata};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 use tokio::time::Instant;
 
-use super::{Main, OwnerState, verbs};
+use super::{Facts, Main, OwnerState, verbs};
 use crate::context::ExecutionContext;
 use crate::turn::TurnKit;
 use crate::turns::error::{TurnError, one};
@@ -31,6 +31,32 @@ enum Ending {
     GaveUp,
     /// The link failed, or the executor fell silent.
     Failed(TurnError),
+}
+
+/// The framework events a turn's executor emits (RFC §8.2), Python's
+/// `TURN_FRAMEWORK_EVENTS`: the owner emits no other a `framework_event`
+/// frame names.
+const TURN_FRAMEWORK_EVENTS: [&str; 6] = [
+    "tool_call",
+    "before_tool_use",
+    "user_input_required",
+    "ai_response",
+    "before_ai_generation",
+    "hook_timeout",
+];
+
+/// Whether a turn of `facts` may emit `event_type` naming `room_id` and
+/// `channel_id`: one of [`TURN_FRAMEWORK_EVENTS`], about its own room and
+/// channel or none (Python's `names_its_room`).
+fn emitted_by_its_turn(
+    facts: &Facts,
+    event_type: &str,
+    room_id: Option<&str>,
+    channel_id: Option<&str>,
+) -> bool {
+    TURN_FRAMEWORK_EVENTS.contains(&event_type)
+        && room_id.is_none_or(|named| named == facts.room_id.as_str())
+        && channel_id.is_none_or(|named| named == facts.channel_id.as_str())
 }
 
 /// The owner's reading of one turn's frames.
@@ -153,7 +179,13 @@ impl Pump {
                 channel_id,
                 event_id,
                 data,
-            } => self.publish(event_type, room_id, channel_id, event_id, data),
+            } => self.publish(
+                event_type,
+                room_id.as_deref(),
+                channel_id.as_deref(),
+                event_id,
+                data,
+            ),
             // What the reader settles itself, before it closes (a call's
             // early end), and the ephemerals no owner of 0.1 publishes.
             Frame::Record { record } => self.hand(Main::Record(record)),
@@ -212,19 +244,37 @@ impl Pump {
     }
 
     /// Emits a framework event the turn emitted on its executor (RFC
-    /// §10.6.3), as the frame places it: Python's owner emits it as it
-    /// came.
+    /// §10.6.3), as the turn's channel in the turn's room: one of the types
+    /// a turn emits ([`TURN_FRAMEWORK_EVENTS`]), naming that room and that
+    /// channel or none, as Python's `publish_frame` checks it. Any other is
+    /// dropped, so an executor cannot report a room's lifecycle.
     fn publish(
         &self,
         event_type: String,
-        room_id: Option<String>,
-        channel_id: Option<String>,
+        room_id: Option<&str>,
+        channel_id: Option<&str>,
         event_id: Option<String>,
         data: Metadata,
     ) {
+        let facts = &self.state.facts;
+        if !emitted_by_its_turn(
+            facts,
+            &event_type,
+            room_id.as_deref(),
+            channel_id.as_deref(),
+        ) {
+            tracing::warn!(
+                target: "roomkit::turns",
+                room_id = %facts.room_id,
+                channel_id = %facts.channel_id,
+                %event_type,
+                "a turn emitted a framework event outside its room or kind: dropped"
+            );
+            return;
+        }
         let ids = (
-            room_id.and_then(|id| RoomId::new(id).ok()),
-            channel_id.and_then(|id| ChannelId::new(id).ok()),
+            Some(facts.room_id.clone()),
+            Some(facts.channel_id.clone()),
             event_id.and_then(|id| EventId::new(id).ok()),
         );
         self.kit.emit(event_type, ids, data);
@@ -325,5 +375,38 @@ async fn until(deadline: Option<Instant>) {
     match deadline {
         Some(at) => tokio::time::sleep_until(at).await,
         None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use roomkit_core::model::{ChannelId, RoomId};
+
+    use super::*;
+
+    /// RFC §10.6.3, as Python's `publish_frame`: a turn's executor reports
+    /// its own room's and channel's events of the types a turn emits; a
+    /// room's lifecycle, or another room's or channel's event, is dropped.
+    #[test]
+    fn a_turn_emits_only_its_kinds_about_its_own_room_and_channel() {
+        let facts = Facts {
+            room_id: RoomId::new("r1").unwrap(),
+            channel_id: ChannelId::new("ai").unwrap(),
+            response_depth: 1,
+            organization_id: None,
+        };
+        let cases = [
+            ("tool_call", None, None),
+            ("tool_call", Some("r1"), Some("ai")),
+            ("room_closed", Some("r1"), None),
+            ("tool_call", Some("r2"), None),
+            ("before_tool_use", None, Some("sms")),
+        ];
+        assert_eq!(
+            cases.map(|(event_type, room_id, channel_id)| {
+                emitted_by_its_turn(&facts, event_type, room_id, channel_id)
+            }),
+            [true, true, false, false, false]
+        );
     }
 }
