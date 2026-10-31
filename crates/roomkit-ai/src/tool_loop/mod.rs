@@ -124,6 +124,8 @@ pub(crate) struct Loop<P> {
     pub(crate) context: ToolContext,
     /// Whether the model writes each call's intent (RFC §6.4).
     pub(crate) intents: bool,
+    /// Whether enabled intents are required in the model-facing schemas.
+    pub(crate) intents_required: bool,
 }
 
 impl<P: AiProvider> Loop<P> {

@@ -168,6 +168,15 @@ impl OpenAiAgent {
             agent: self.agent.with_tool_call_intents(on),
         }
     }
+
+    /// Whether enabled intents are required in model-facing tool schemas.
+    /// Optional by default; see [`AiAgent::with_tool_call_intents_required`].
+    #[must_use]
+    pub fn with_tool_call_intents_required(self, required: bool) -> Self {
+        Self {
+            agent: self.agent.with_tool_call_intents_required(required),
+        }
+    }
 }
 
 impl Channel for OpenAiAgent {

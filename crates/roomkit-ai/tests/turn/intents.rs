@@ -88,7 +88,10 @@ async fn off_nothing_is_taken_from_a_call() {
     let call = json!({ "command": "ls", "_roomkit_intent": INTENT });
     let model = ScriptedProvider::new([calling(&call), ScriptedRound::answering("Done.")]);
     let received = Arc::default();
-    let room = Room::new(model.clone(), shell(&received, closed())).await;
+    let room = Room::equipped(model.clone(), shell(&received, closed()), |agent| {
+        agent.with_tool_call_intents_required(true)
+    })
+    .await;
     room.says("Files?").await;
     let intents = intents(&room).await;
     assert_eq!(
@@ -228,7 +231,9 @@ async fn a_tool_that_declares_the_property_keeps_it() {
     let model = ScriptedProvider::new([calling(&call), ScriptedRound::answering("Done.")]);
     let received = Arc::default();
     let room = Room::equipped(model.clone(), shell(&received, owner.clone()), |agent| {
-        agent.with_tool_call_intents(true)
+        agent
+            .with_tool_call_intents(true)
+            .with_tool_call_intents_required(true)
     })
     .await;
     room.says("Label?").await;
@@ -241,6 +246,40 @@ async fn a_tool_that_declares_the_property_keeps_it() {
         ),
         (owner, vec![call], vec![None, None])
     );
+}
+
+/// The requirement changes the model's schemas, never the handler contract or
+/// execution of calls from a provider that ignores that requirement.
+#[tokio::test]
+async fn required_intents_are_presented_and_extracted_without_rejecting_missing_ones() {
+    let model = ScriptedProvider::new([
+        calling(&json!({"command":"ls", "_roomkit_intent": INTENT})),
+        calling(&json!({"command":"pwd"})),
+        ScriptedRound::answering("Done."),
+    ]);
+    let received = Arc::default();
+    let room = Room::equipped(model.clone(), shell(&received, closed()), |agent| {
+        agent
+            .with_tool_call_intents(true)
+            .with_tool_call_intents_required(true)
+            .clone()
+    })
+    .await;
+    room.says("Inspect.").await;
+    assert_eq!(
+        *received.lock().unwrap(),
+        [json!({"command":"ls"}), json!({"command":"pwd"})]
+    );
+    assert_eq!(
+        intents(&room).await,
+        [Some(INTENT.to_owned()), Some(INTENT.to_owned()), None, None]
+    );
+    for request in model.requests() {
+        assert_eq!(
+            request.tools[0].parameters["required"],
+            json!(["command", "_roomkit_intent"])
+        );
+    }
 }
 
 /// An intent that is no text is none, and the call is served all the same;

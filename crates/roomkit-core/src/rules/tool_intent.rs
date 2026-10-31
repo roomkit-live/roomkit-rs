@@ -2,7 +2,7 @@
 //! call to tell the person what the call does.
 //!
 //! An agent with `tool_call_intents` on shows its model each tool's schema
-//! with one optional property more, [`INTENT_PROPERTY`]. The tool loop takes
+//! with one property more, [`INTENT_PROPERTY`], optional by default. The tool loop takes
 //! it out of a call's arguments before anything reads them and carries its
 //! value, normalized, as the call's `intent`: the tool never receives it. A
 //! tool whose own schema declares the property keeps it as its argument. The
@@ -61,6 +61,15 @@ pub fn normalized_intent(value: &Value) -> Option<String> {
 /// model: with the reserved property; `None` when it cannot take it, being
 /// no object schema or declaring the property already.
 pub fn presented_parameters(parameters: &Value) -> Option<Value> {
+    presented_parameters_with_requirement(parameters, false)
+}
+
+/// Presents an intent as [`presented_parameters`] does, optionally adding it
+/// to the schema's `required` array. This is a request to the model, not a
+/// validation of a returned call. Tool-owned properties remain untouched.
+/// Returns `None` for an incompatible schema, including a non-array `required`
+/// when the caller asks to extend it.
+pub fn presented_parameters_with_requirement(parameters: &Value, required: bool) -> Option<Value> {
     let Value::Object(schema) = parameters else {
         return None;
     };
@@ -81,6 +90,17 @@ pub fn presented_parameters(parameters: &Value) -> Option<Value> {
     let mut shown = schema.clone();
     shown.insert("type".to_owned(), Value::from("object"));
     shown.insert("properties".to_owned(), Value::Object(properties));
+    if required {
+        let mut fields = match schema.get("required") {
+            None => Vec::new(),
+            Some(value) => value.as_array()?.clone(),
+        };
+        let intent = Value::from(INTENT_PROPERTY);
+        if !fields.contains(&intent) {
+            fields.push(intent);
+        }
+        shown.insert("required".to_owned(), Value::Array(fields));
+    }
     Some(Value::Object(shown))
 }
 
@@ -184,6 +204,49 @@ mod tests {
             [None, None]
         );
         assert!(declares_intent(&owner) && !declares_intent(&closed));
+    }
+
+    #[test]
+    fn required_presentation_preserves_the_original_schema_and_business_requirements() {
+        for required in [None, Some(json!([])), Some(json!(["command"]))] {
+            let mut original = json!({
+                "type": "object",
+                "properties": { "command": { "type": "string" } },
+                "additionalProperties": false,
+            });
+            if let Some(required) = required {
+                original["required"] = required;
+            }
+            let before = original.clone();
+            let shown = presented_parameters_with_requirement(&original, true).unwrap();
+            assert_eq!(original, before);
+            let mut expected = before.get("required").cloned().unwrap_or(json!([]));
+            expected
+                .as_array_mut()
+                .unwrap()
+                .push(json!(INTENT_PROPERTY));
+            assert_eq!(shown["required"], expected);
+            assert_eq!(shown["additionalProperties"], false);
+            assert_eq!(
+                shown["properties"]["command"],
+                before["properties"]["command"]
+            );
+            assert_eq!(shown["properties"][INTENT_PROPERTY]["type"], "string");
+            assert_eq!(
+                presented_parameters_with_requirement(&original, false),
+                presented_parameters(&original)
+            );
+        }
+        let declared = json!({"properties": {INTENT_PROPERTY: {"type": "number"}}});
+        assert!(presented_parameters_with_requirement(&declared, true).is_none());
+        assert!(
+            presented_parameters_with_requirement(&json!({"required": "command"}), true).is_none()
+        );
+        let undeclared = json!({"required": [INTENT_PROPERTY]});
+        assert_eq!(
+            presented_parameters_with_requirement(&undeclared, true).unwrap()["required"],
+            json!([INTENT_PROPERTY])
+        );
     }
 
     #[test]

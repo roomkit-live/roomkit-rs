@@ -6,6 +6,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Hosts can opt into required intent fields with
+  `with_tool_call_intents(true).with_tool_call_intents_required(true)` on AI
+  and OpenAI agents. The requirement applies to model-facing schemas only;
+  tool arguments, execution and the optional default remain unchanged.
+
 - Integrate the compatibility features on the current main API, preserving
   tool-call intents, shutdown semantics and last-generation usage together.
 

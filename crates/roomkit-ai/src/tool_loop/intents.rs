@@ -5,7 +5,9 @@
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
-use roomkit::tool_intent::{as_written, declares_intent, presented_parameters, take_intent};
+use roomkit::tool_intent::{
+    as_written, declares_intent, presented_parameters_with_requirement, take_intent,
+};
 use roomkit::transcript::Message;
 
 use super::Loop;
@@ -24,7 +26,9 @@ impl<P> Loop<P> {
         declared
             .into_iter()
             .map(|mut tool| {
-                if let Some(shown) = presented_parameters(&tool.parameters) {
+                if let Some(shown) =
+                    presented_parameters_with_requirement(&tool.parameters, self.intents_required)
+                {
                     tool.parameters = shown;
                 } else {
                     log_unpresented(&tool.name);
@@ -81,7 +85,7 @@ fn log_unpresented(name: &str) {
         tracing::warn!(
             target: "roomkit::ai",
             tool = %name,
-            "a tool is shown without the intent property: its schema declares it, or is no object; its calls carry no intent"
+            "a tool is shown without the intent property: its schema declares it or cannot accept it; its calls carry no intent"
         );
     }
 }

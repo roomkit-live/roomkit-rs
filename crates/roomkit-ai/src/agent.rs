@@ -103,6 +103,7 @@ pub struct AiAgent<P> {
     image_resolver: Option<Arc<dyn crate::ImageResolver>>,
     skills: Option<Arc<SkillTools>>,
     tool_call_intents: bool,
+    tool_call_intents_required: bool,
 }
 
 impl<P> Clone for AiAgent<P> {
@@ -119,6 +120,7 @@ impl<P> Clone for AiAgent<P> {
             image_resolver: self.image_resolver.clone(),
             skills: self.skills.clone(),
             tool_call_intents: self.tool_call_intents,
+            tool_call_intents_required: self.tool_call_intents_required,
         }
     }
 }
@@ -157,6 +159,7 @@ impl<P: AiProvider> AiAgent<P> {
             image_resolver: None,
             skills: None,
             tool_call_intents: false,
+            tool_call_intents_required: false,
         }
     }
 
@@ -319,13 +322,24 @@ impl<P: AiProvider> AiAgent<P> {
 
     /// The same agent, its model writing with each call one short sentence
     /// for the person, saying what the call does (RFC §6.4): each tool's
-    /// schema is shown with the optional `_roomkit_intent` property, which
+    /// schema is shown with the `_roomkit_intent` property, optional by default, which
     /// the loop takes out of the call's arguments before its gate and
     /// carries as the call's `intent`, on its hooks' event and its rows. A
     /// tool whose own schema declares the property keeps it. Off by default.
     #[must_use]
     pub fn with_tool_call_intents(mut self, on: bool) -> Self {
         self.tool_call_intents = on;
+        self
+    }
+
+    /// Whether enabled tool-call intents are required in the schemas shown to
+    /// the model. Optional by default. Enable intents separately with
+    /// [`Self::with_tool_call_intents`]; this setting alone changes nothing.
+    /// Tool-owned schemas are unchanged, and calls missing an intent still run:
+    /// this controls schema presentation, not runtime validation or retries.
+    #[must_use]
+    pub fn with_tool_call_intents_required(mut self, required: bool) -> Self {
+        self.tool_call_intents_required = required;
         self
     }
 
@@ -417,6 +431,7 @@ impl<P: AiProvider> Channel for AiAgent<P> {
             turn: turn.clone(),
             context: tools,
             intents: self.tool_call_intents,
+            intents_required: self.tool_call_intents_required,
         };
         let items = looped.run(messages);
         match turn {
@@ -450,6 +465,10 @@ impl<P> fmt::Debug for AiAgent<P> {
             .field("bounds", &self.bounds)
             .field("skills", &self.skills.is_some())
             .field("tool_call_intents", &self.tool_call_intents)
+            .field(
+                "tool_call_intents_required",
+                &self.tool_call_intents_required,
+            )
             .finish_non_exhaustive()
     }
 }
