@@ -8,7 +8,7 @@ use crate::model::{
     EventStatus, EventType, Metadata, RoomContext, RoomEvent, TextContent, Visibility,
 };
 use crate::rules::chain_depth;
-use crate::rules::edits::{self, Mutation};
+use crate::rules::edits;
 
 /// Why a source's event may not be broadcast (RFC §7.5 rule 2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -148,25 +148,18 @@ pub fn visible_events(context: &RoomContext, channel_id: &ChannelId) -> Vec<Room
         .collect()
 }
 
-/// The events `timeline` shows deleted (RFC §10.3): an event it holds is
-/// deleted when it carries the mark an accepted delete leaves, which a host's
-/// direct update may have removed since; an event before the window, when
-/// the window holds an accepted delete of it.
+/// The events `timeline` shows deleted (RFC §10.3), as the Python
+/// implementation's `withheld` reads them: those carrying the mark an
+/// accepted delete's commit leaves on its target and on each edit of it,
+/// which a host's direct update may have removed since. A DELETE row proves
+/// nothing by itself: one committed without step 8a (a host's
+/// `commit_event`) was never checked.
 fn deleted_events(timeline: &[RoomEvent]) -> BTreeSet<&EventId> {
-    let held: BTreeSet<&EventId> = timeline.iter().map(|event| &event.id).collect();
-    let marked = timeline
+    timeline
         .iter()
         .filter(|event| edits::is_deleted(event))
-        .map(|event| &event.id);
-    let before_the_window = timeline
-        .iter()
-        .filter(|event| event.status != EventStatus::Blocked)
-        .filter_map(|event| match edits::mutation(event) {
-            Ok(Some(Mutation::Delete(delete))) => Some(&delete.target_event_id),
-            Ok(Some(Mutation::Edit(_)) | None) | Err(_) => None,
-        })
-        .filter(|target| !held.contains(target));
-    marked.chain(before_the_window).collect()
+        .map(|event| &event.id)
+        .collect()
 }
 
 /// `event` as a reader is handed it: whole, unless it was deleted or is an
@@ -816,11 +809,13 @@ mod tests {
             );
         }
 
-        /// The target lies before the window; the delete in it tells.
+        /// RFC §10.3, Python's `withheld`: the marks decide, never a DELETE
+        /// row, which a host commits unchecked: an edit of an event before
+        /// the window, unmarked, stays whole beside a delete of it.
         #[test]
-        fn an_edit_whose_target_a_delete_in_the_window_removed_is_withheld() {
-            let handed = history(vec![edit("evt_2", "I need 50000$"), delete("evt_3")]).remove(0);
-            assert_eq!(handed.content, edit("evt_2", "").content);
+        fn visible_events_reads_the_marks_only() {
+            let edited = edit("evt_2", "I need 50000$");
+            assert_eq!(history(vec![edited.clone(), delete("evt_3")])[0], edited);
         }
 
         /// The stored mark decides for an event the window holds: a host's
@@ -828,15 +823,6 @@ mod tests {
         #[test]
         fn an_event_whose_mark_was_removed_reaches_a_reader_whole() {
             assert_eq!(history(vec![message(), delete("evt_3")])[0], message());
-        }
-
-        /// A blocked delete changed nothing.
-        #[test]
-        fn a_blocked_delete_withholds_nothing() {
-            let mut blocked = delete("evt_3");
-            blocked.status = EventStatus::Blocked;
-            let edited = edit("evt_2", "I need 50000$");
-            assert_eq!(history(vec![edited.clone(), blocked]), [edited]);
         }
     }
 
