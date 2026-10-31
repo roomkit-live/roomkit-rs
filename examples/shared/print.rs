@@ -1,7 +1,8 @@
 //! The room an example left, as it prints it.
 
+use crate::text_of;
 use roomkit::model::{EventStatus, RoomEvent, RoomId, Visibility};
-use roomkit::{ConversationStore, RoomKit, StoreError, is_deleted, is_edited, text_of};
+use roomkit::{ConversationStore, RoomKit, StoreError};
 
 /// A room's whole timeline, refused events included, as the store holds it.
 ///
@@ -59,4 +60,24 @@ pub fn every_row() -> roomkit::EventQuery {
         }),
         ..roomkit::EventQuery::default()
     }
+}
+
+/// Whether `event` was deleted: an accepted delete marks its metadata
+/// `deleted` (RFC §10.3), as Python's `metadata.get("deleted")` reads it.
+pub fn is_deleted(event: &RoomEvent) -> bool {
+    marked(event, "deleted")
+}
+
+/// Whether `event` was edited: an accepted edit marks its metadata `edited`
+/// (RFC §10.3).
+pub fn is_edited(event: &RoomEvent) -> bool {
+    marked(event, "edited")
+}
+
+fn marked(event: &RoomEvent, mark: &str) -> bool {
+    event
+        .metadata
+        .get(mark)
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
 }

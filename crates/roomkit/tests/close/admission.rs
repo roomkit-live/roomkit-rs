@@ -21,7 +21,7 @@ use roomkit::{
     ListMembersOptions, MuteOptions, PauseRoomOptions, PostOptions, ProcessInboundOptions,
     ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError, SendEventOptions,
     SetAccessOptions, SetVisibilityOptions, ToolCallEvent, ToolUse, ToolVerdict, UnmuteOptions,
-    UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit, text_of,
+    UpdateBindingMetadataOptions, UpdateEventOptions, WeakRoomKit,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -31,6 +31,7 @@ use crate::held::{
     spawn_close, spawn_said, stored,
 };
 use crate::support::{channel, transport};
+use roomkit_core::rules::transcoding::text_of;
 
 /// The kit's reads, each as text: they answer during the close and after
 /// it, the store open.

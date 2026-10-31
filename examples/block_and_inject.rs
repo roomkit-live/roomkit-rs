@@ -15,10 +15,9 @@ use roomkit::model::{
     ChannelId, ChannelType, EventDirection, EventSource, EventStatus, HookResult, InboundMessage,
     InjectedEvent, Observation, RoomEvent, RoomId, TextContent, Timestamp,
 };
-use roomkit::{
-    AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, text_of,
-};
+use roomkit::{AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions};
 
+use shared::text_of;
 use shared::{Checks, Clock, recording};
 
 /// A Canadian social insurance number, as `123-456-789`.

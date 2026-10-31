@@ -47,7 +47,7 @@ use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     GetTimelineOptions, InboundResult, ProcessInboundOptions, RoomKit, RoomKitError,
-    SendEventOptions, text_of,
+    SendEventOptions,
 };
 use roomkit_ai::{AiAgent, AiProvider, AiRequest, Done, ProviderEvent, ProviderStream};
 use serde_json::json;
@@ -55,6 +55,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use shared::Checks;
+use shared::text_of;
 
 /// A transport whose provider never answers: every send hangs.
 #[derive(Clone, Default)]

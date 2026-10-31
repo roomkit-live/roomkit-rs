@@ -22,9 +22,10 @@ use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId,
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult,
-    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, text_of,
+    ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 
+use shared::text_of;
 use shared::{Checks, Log};
 
 /// How long the scanner's round trip takes.

@@ -4,7 +4,7 @@
 //! the whole under a heading saying whose content it is. The texts are the
 //! reference implementation's (`channels/_server_instructions.py`).
 
-use roomkit::transcript::fence;
+use roomkit_core::rules::transcript::fence;
 
 use crate::error::AiError;
 

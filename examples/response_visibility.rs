@@ -38,9 +38,10 @@ use roomkit::model::{
 use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    ProcessInboundOptions, RoomKit, text_of,
+    ProcessInboundOptions, RoomKit,
 };
 
+use shared::text_of;
 use shared::{Checks, recording};
 
 /// An assistant that answers each question, for everyone: where an answer

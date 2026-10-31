@@ -7,7 +7,7 @@ use std::pin::Pin;
 
 use futures_core::Stream;
 use roomkit::model::Metadata;
-use roomkit::transcript::Message;
+use roomkit_core::rules::transcript::Message;
 
 use crate::stream::{Yielder, items};
 use crate::tools::ToolDefinition;

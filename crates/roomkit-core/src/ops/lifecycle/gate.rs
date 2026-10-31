@@ -15,14 +15,14 @@
 //! event takes the index after the records.
 
 use crate::model::{ErrorRecord, Room, RoomContext, RoomUpdates};
+use crate::ops::Cx;
 use crate::ops::protocol::{EffectId, Notice, Outcome, StoreRequest};
-use crate::ops::{Cx, TransitionReason};
 use crate::rules::lifecycle::{self, Transition};
 use crate::rules::records::Record;
 use crate::rules::timers::{self, DueTransition};
 
 use super::record;
-use super::report::{self, Reported};
+use super::report::{self, Reported, TimerDue};
 
 /// What the gate finds on a room read under its lock.
 #[derive(Debug)]
@@ -183,7 +183,7 @@ impl Pending {
         let Some((due, room)) = self.applied.get(index) else {
             return;
         };
-        let Some(reported) = reported(due.transition) else {
+        let Some(reported) = reported(due, &self.context.room) else {
             return;
         };
         let counted = &self.context.room;
@@ -215,12 +215,23 @@ impl Pending {
     }
 }
 
-/// What a timer's transition reports: `room_paused` and `room_closed` with
-/// the reason `timer` (RFC §8.2).
-fn reported(transition: Transition) -> Option<Reported<'static>> {
-    match transition {
-        Transition::Pause => Some(Reported::RoomPaused(Some(TransitionReason::Timer))),
-        Transition::Close => Some(Reported::RoomClosed(Some(TransitionReason::Timer))),
+/// What a timer's transition of `room` reports: `room_paused` and
+/// `room_closed` with the reason `timer` (RFC §8.2), its hooks' payload
+/// naming the timer's threshold and the instant it fell due.
+fn reported(due: &DueTransition, room: &Room) -> Option<Reported<'static>> {
+    let threshold = match due.transition {
+        Transition::Pause => room.timers.inactive_after_seconds,
+        Transition::Resume | Transition::Reopen | Transition::Close | Transition::Archive => {
+            room.timers.closed_after_seconds
+        }
+    };
+    let timer = TimerDue {
+        threshold: threshold.unwrap_or_default(),
+        at: due.at,
+    };
+    match due.transition {
+        Transition::Pause => Some(Reported::RoomPaused(Some(timer))),
+        Transition::Close => Some(Reported::RoomClosed(Some(timer))),
         Transition::Resume | Transition::Reopen | Transition::Archive => None,
     }
 }

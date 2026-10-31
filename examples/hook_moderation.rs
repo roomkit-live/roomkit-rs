@@ -20,9 +20,10 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult,
-    ProcessInboundOptions, RoomKit, text_of,
+    ProcessInboundOptions, RoomKit,
 };
 
+use shared::text_of;
 use shared::{Checks, Log};
 
 /// The words the filter refuses.

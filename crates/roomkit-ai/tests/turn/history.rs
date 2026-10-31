@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use pretty_assertions::assert_eq;
 use roomkit::model::hook::{AllowOptions, ModifyOptions};
 use roomkit::model::{EventContent, EventType, HookResult, Metadata};
-use roomkit::transcript::{Message, Role};
 use roomkit::{HookExecution, HookSpec, HookTrigger, ToolVerdict, UpdateEventOptions};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -18,6 +17,7 @@ use roomkit_ai::{
 use serde_json::json;
 
 use super::support::{Room, channel, room_id, served};
+use roomkit_core::rules::transcript::{Message, Role};
 
 /// A model that does not stream: each generation hands its whole
 /// response at once (RFC §6.4 "One loop, streamed or not").

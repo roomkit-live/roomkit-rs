@@ -25,9 +25,10 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, FrameworkEvent, HookTrigger, MuteOptions,
-    ProcessInboundOptions, RoomKit, SetVisibilityOptions, UnmuteOptions, text_of,
+    ProcessInboundOptions, RoomKit, SetVisibilityOptions, UnmuteOptions,
 };
 
+use shared::text_of;
 use shared::{Checks, Log, Script, ScriptedAgent};
 
 /// What the agent answers, by what it reads. It stays silent on anything

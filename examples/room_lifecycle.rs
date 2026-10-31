@@ -26,9 +26,10 @@ use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     ArchiveRoomOptions, AttachChannelOptions, CheckAllTimersOptions, CloseRoomOptions,
     ConversationStore, CreateRoomOptions, HookTrigger, InboundResult, PauseRoomOptions,
-    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError, text_of,
+    ProcessInboundOptions, ReopenRoomOptions, ResumeRoomOptions, RoomKit, RoomKitError,
 };
 
+use shared::text_of;
 use shared::{Checks, Clock, Log};
 
 /// The helpdesk's kit, with Alice's SMS and the advisor's WebSocket, which

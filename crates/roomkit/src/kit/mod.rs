@@ -72,7 +72,7 @@ use crate::router::{
 };
 use crate::store::{ConversationStore, InMemoryStore};
 use crate::tasks::Tasks;
-use crate::tools::ToolHandler;
+use crate::tool_calls::ToolHandler;
 use crate::turns::Turns;
 use crate::unwind;
 

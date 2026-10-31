@@ -19,7 +19,7 @@ use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
     ConversationStore, GetRoomOptions, HookExecution, HookSpec, HookTrigger, InMemoryStore,
-    PauseRoomOptions, SendEventOptions, text_of,
+    PauseRoomOptions, SendEventOptions,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -31,6 +31,7 @@ use crate::held::{
 use crate::store::StuckStore;
 use crate::support::channel;
 use crate::warnings::Warnings;
+use roomkit_core::rules::transcoding::text_of;
 
 /// The statuses of a call's delivery results, with a failure's code and
 /// whether it is retryable.

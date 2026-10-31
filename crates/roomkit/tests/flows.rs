@@ -30,8 +30,9 @@ use roomkit::{
     CommitEventOptions, ConversationStore, CreateRoomOptions, EventDraft, HookExecution,
     HookHandler, HookReturn, HookSpec, HookTrigger, PostOptions, ProcessInboundOptions, RoomKit,
     RoomKitError, RoomKitOptions, SendEventOptions, UpdateEventOptions, WeakRoomKit,
-    default_inbound_event, text_of,
+    default_inbound_event,
 };
+use roomkit_core::rules::transcoding::text_of;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 

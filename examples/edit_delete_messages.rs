@@ -24,10 +24,11 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookTrigger, ProcessInboundOptions,
-    RoomKit, is_deleted, is_edited, text_of,
+    RoomKit,
 };
 
-use shared::{Checks, Log, ScriptedAgent};
+use shared::text_of;
+use shared::{Checks, Log, ScriptedAgent, is_deleted, is_edited};
 
 /// The customer's number.
 const CUSTOMER: &str = "+15551234567";

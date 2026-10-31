@@ -24,8 +24,9 @@ use roomkit::{
     CloseRoomOptions, ConversationStore, CreateRoomOptions, DefaultInboundRoomRouter,
     DefaultInboundRoomRouterOptions, HookTrigger, InMemoryStore, InboundRoomRouter,
     ProcessInboundOptions, RoomFilter, RoomKit, RoomKitError, RoomKitOptions, RouteOptions,
-    RouterError, RouterFuture, WeakRoomKit, text_of,
+    RouterError, RouterFuture, WeakRoomKit,
 };
+use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::{Barrier, Notify};
 
 const ALICE: &str = "+15550000001";

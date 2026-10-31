@@ -23,7 +23,7 @@ use crate::kit::Inner;
 use crate::store::ConversationStore;
 use crate::stream::ResponseStream;
 use crate::tasks::Kind;
-use crate::tools::{ToolCallEvent, ToolHandler, ToolUse, ToolVerdict, error_envelope};
+use crate::tool_calls::{ToolCallEvent, ToolHandler, ToolUse, ToolVerdict, error_envelope};
 use crate::turns::{HostLink, TurnError, send_event_arguments};
 use crate::{RoomKit, SendEventOptions};
 

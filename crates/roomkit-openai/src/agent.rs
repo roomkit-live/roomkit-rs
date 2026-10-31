@@ -28,7 +28,7 @@ pub(crate) const ANSWER_LIMIT: usize = 4 * 1024 * 1024;
 /// wire.
 ///
 /// Each turn sends the configuration's system prompt, then the conversation
-/// the room hands the agent ([`roomkit::transcript::conversation`]), and
+/// the room hands the agent ([`roomkit_core::rules::transcript::conversation`]), and
 /// declares the tools the agent serves ([`with_tools`](Self::with_tools))
 /// that its policy permits; the instructions of MCP servers
 /// ([`with_server_instructions`](Self::with_server_instructions)), then the

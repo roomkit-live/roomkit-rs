@@ -34,8 +34,8 @@ use roomkit::{
     HookExecution, HookSpec, HookTrigger, InboundRoomRouter, MuteOptions, ProcessInboundOptions,
     RoomFilter, RoomKit, RoomKitError, RoomKitOptions, RouteOptions, RouterFuture,
     SendEventOptions, UpdateEventOptions, WeakRoomKit, default_inbound_event, keep_context,
-    text_of,
 };
+use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
 
 /// How long a call that should not wait may take before the test fails it.

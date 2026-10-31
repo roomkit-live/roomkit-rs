@@ -18,7 +18,7 @@ use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, EventQuery, InboundResult, ProcessInboundOptions, RoomKit, RoomKitError,
-    RoomKitOptions, text_of,
+    RoomKitOptions,
 };
 use roomkit_ai::{AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderStream};
 use tokio::sync::Notify;
@@ -26,6 +26,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Sleep;
 
 use crate::support::{channel, transport};
+use roomkit_core::rules::transcoding::text_of;
 
 /// How long a send held for its duration waits, at most a test's.
 #[derive(Clone, Copy, Debug)]

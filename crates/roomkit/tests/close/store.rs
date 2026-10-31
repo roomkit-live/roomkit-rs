@@ -11,8 +11,9 @@ use roomkit::model::{
 };
 use roomkit::{
     ConversationStore, EventFilter, EventQuery, InMemoryStore, RoomCounters, RoomFilter,
-    StoreError, TargetUpdate, text_of,
+    StoreError, TargetUpdate,
 };
+use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
 
 /// An in-memory store whose commit of a text, or whose writes of a room,

@@ -379,7 +379,7 @@ fn print_rows(timeline: &[RoomEvent]) {
     for event in timeline {
         let EventContent::ToolCall(row) = &event.content else {
             if event.r#type == EventType::Message {
-                let text = roomkit::text_of(&event.content);
+                let text = shared::text_of(&event.content);
                 println!("  #{} {}: {text:?}", event.index, event.source.channel_id);
             }
             continue;

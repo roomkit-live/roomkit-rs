@@ -10,8 +10,8 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventDirection, EventSource, EventType, InboundMessage, RoomContext, RoomEvent,
 };
-use roomkit::transcript::conversation;
 use roomkit::{Channel, ChannelDeclaration, ChannelError, EventDraft, current_turn_host};
+use roomkit_core::rules::transcript::conversation;
 
 use serde_json::Value;
 

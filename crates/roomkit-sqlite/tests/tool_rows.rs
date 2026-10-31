@@ -13,7 +13,6 @@ use roomkit::model::{
     Timestamp, ToolCallContent, ToolCallOutcome, ToolCallStatus,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
-use roomkit::transcript::{Message, Role, conversation};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, EventQuery, ProcessInboundOptions,
     RoomCounters, RoomKit, RoomKitOptions,
@@ -24,6 +23,7 @@ use roomkit_sqlite::SqliteStore;
 use serde_json::json;
 
 use crate::support::TempFile;
+use roomkit_core::rules::transcript::{Message, Role, conversation};
 
 fn id(text: &str) -> ChannelId {
     ChannelId::new(text).unwrap()

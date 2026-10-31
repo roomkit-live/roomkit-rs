@@ -22,10 +22,11 @@ use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
-use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, text_of};
+use roomkit::{AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::Value;
 
+use shared::text_of;
 use shared::{Checks, OpenAiEndpoint};
 
 const SYSTEM_PROMPT: &str = "You answer the customers of a bakery, in one short sentence.";

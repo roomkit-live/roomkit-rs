@@ -7,11 +7,12 @@ use std::collections::HashMap;
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use crate::text_of;
 use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventContent, RoomContext, RoomEvent, RoomId,
 };
-use roomkit::{Channel, ChannelDeclaration, ChannelError, DeliveryStream, StreamItem, text_of};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, DeliveryStream, StreamItem};
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, watch};
 

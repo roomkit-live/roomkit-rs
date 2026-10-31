@@ -10,8 +10,9 @@ use roomkit::model::{ChannelId, ChannelType, HookResult, InboundMessage, RoomId,
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, GetTimelineOptions, ProcessInboundOptions, RoomKit,
-    RoomKitError, RoomKitOptions, text_of,
+    RoomKitError, RoomKitOptions,
 };
+use roomkit_core::rules::transcoding::text_of;
 
 fn room_id() -> RoomId {
     RoomId::new("room_1").unwrap()

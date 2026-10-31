@@ -4,7 +4,7 @@
 use super::wire::{malformed, message_text, validate_reasoning};
 use crate::error::OpenAiError;
 use roomkit::model::ToolCall;
-use roomkit::transcript::{Message, Role};
+use roomkit_core::rules::transcript::{Message, Role};
 use serde_json::{Value, json};
 
 pub(super) const OUTPUT: &str = "openai.responses.output";

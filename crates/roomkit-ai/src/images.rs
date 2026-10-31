@@ -1,7 +1,5 @@
-use roomkit::{
-    model::RoomId,
-    transcript::{Image, Message},
-};
+use roomkit::model::RoomId;
+use roomkit_core::rules::transcript::{Image, Message};
 use std::{future::Future, pin::Pin};
 
 /// Host-owned, room-authorized resolution of an opaque image reference (RFC §6.4).
@@ -51,7 +49,7 @@ pub(crate) async fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use roomkit::transcript::Role;
+    use roomkit_core::rules::transcript::Role;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Resolver(AtomicUsize);

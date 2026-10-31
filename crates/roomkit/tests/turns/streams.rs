@@ -20,13 +20,14 @@ use roomkit::testing::TurnTap;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, DeliveryStream, ProcessInboundOptions, ResponseItem, RoomKit,
-    RoomKitOptions, StreamItem, current_turn_host, text_of,
+    RoomKitOptions, StreamItem, current_turn_host,
 };
 use roomkit_ai::AiAgent;
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use serde_json::{Value, json};
 
 use crate::support::{asks, channel, received, room};
+use roomkit_core::rules::transcoding::text_of;
 
 /// What the target writes under the keys only the framework writes.
 const FORGED: &str = "forged";

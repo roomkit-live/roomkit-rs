@@ -20,9 +20,10 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, HookTrigger, MuteOptions, ProcessInboundOptions,
-    RoomKit, UnmuteOptions, text_of,
+    RoomKit, UnmuteOptions,
 };
 
+use shared::text_of;
 use shared::{Checks, Log, Script, ScriptedAgent};
 
 /// What the assistant answers, muted or not.

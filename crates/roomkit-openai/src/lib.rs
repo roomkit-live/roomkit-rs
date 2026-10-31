@@ -8,7 +8,7 @@
 //! the text reaching a streaming channel of the room as it is written. The
 //! turn sends the agent's system prompt,
 //! then the room's recent messages as the conversation RFC §6.4 requires
-//! ([`roomkit::transcript`]): each in the role of whoever wrote it, labelled
+//! ([`roomkit_core::rules::transcript`]): each in the role of whoever wrote it, labelled
 //! by its speaker once several speak, an instruction marked as the
 //! application's, the agent's earlier rounds of tool calls replayed at
 //! their place as the assistant's calls and their results. It declares the

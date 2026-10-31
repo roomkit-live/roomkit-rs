@@ -76,6 +76,7 @@ pub enum HookTrigger {
 impl HookTrigger {
     /// How the framework runs the trigger (RFC §9.2): its SYNC hooks as a
     /// chain, or every hook as a concurrent observer.
+    #[doc(hidden)]
     pub fn execution(self) -> HookExecution {
         match self {
             Self::BeforeBroadcast
@@ -101,6 +102,7 @@ impl HookTrigger {
 
     /// Whether an unusable outcome of any of its hooks blocks rather than
     /// allows (RFC §9.3).
+    #[doc(hidden)]
     pub fn fails_closed(self) -> bool {
         match self {
             Self::OnTranscription | Self::BeforeTts | Self::BeforeToolUse => true,
@@ -124,6 +126,7 @@ impl HookTrigger {
 
     /// Whether the trigger's payload is a tool call rather than an event
     /// (RFC §9.3): `BEFORE_TOOL_USE` and `ON_TOOL_CALL`.
+    #[doc(hidden)]
     pub fn is_tool_trigger(self) -> bool {
         matches!(self, Self::BeforeToolUse | Self::OnToolCall)
     }

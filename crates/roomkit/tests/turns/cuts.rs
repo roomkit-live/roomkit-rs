@@ -224,7 +224,7 @@ async fn a_streaming_reader_that_leaves_crosses_as_close() {
         .filter(|event| event.source.channel_id == channel("ai"))
         .map(|event| {
             (
-                roomkit::text_of(&event.content),
+                roomkit_core::rules::transcoding::text_of(&event.content),
                 event.metadata.get("cancelled").cloned(),
             )
         })
@@ -299,8 +299,9 @@ async fn cancelling_a_detached_handle_joins_its_tool_and_keeps_the_kit_usable() 
     assert!(next.error.is_none());
     let rows = kit.store().list_events(&room(), &received()).await.unwrap();
     assert!(
-        rows.iter()
-            .any(|row| roomkit::text_of(&row.content).contains("It is 42."))
+        rows.iter().any(
+            |row| roomkit_core::rules::transcoding::text_of(&row.content).contains("It is 42.")
+        )
     );
     kit.close().await.unwrap();
 }

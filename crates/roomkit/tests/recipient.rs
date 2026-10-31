@@ -24,13 +24,14 @@ use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ChannelOf, ConversationStore,
     CreateRoomOptions, DefaultInboundRoomRouter, DefaultInboundRoomRouterOptions, HookTrigger,
     InMemoryStore, InboundRoomRouter, ProcessInboundOptions, RoomKit, RoomKitOptions, RouteOptions,
-    RouterFuture, WeakRoomKit, text_of,
+    RouterFuture, WeakRoomKit,
 };
 use serde_json::{Value, json};
 
 #[path = "support/warnings.rs"]
 mod warnings;
 
+use roomkit_core::rules::transcoding::text_of;
 use warnings::Warnings;
 
 const ALICE: &str = "+15550000001";

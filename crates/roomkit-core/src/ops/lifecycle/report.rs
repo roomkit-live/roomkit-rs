@@ -2,24 +2,33 @@
 //! trigger's hooks (RFC §9.2), as the table of RFC §26.1 pairs them. The
 //! transition's own record is not subject to the status gate (RFC §5.1).
 
-use super::payload::{LifecycleChange, LifecyclePayload};
+use serde_json::{Value, json};
+
 use crate::model::{
-    ChannelBinding, ChannelId, ChannelType, EventContent, EventDirection, EventSource, EventType,
-    RoomContext, RoomEvent, RoomId,
+    ChannelBinding, ChannelId, ChannelType, EventContent, EventSource, EventStatus, EventType,
+    Metadata, RoomContext, RoomEvent, RoomId, SystemContent, Timestamp, Visibility,
 };
 use crate::ops::protocol::{EffectId, HookRequest};
 use crate::ops::{Cx, FrameworkEvent, Notice, TransitionReason};
 use crate::rules::chain_depth::Draw;
 use crate::rules::hook_registry::{HookId, HookTrigger};
 
+/// A timer's transition (RFC §5.1 When): the timer's threshold, in
+/// seconds, and the instant the transition fell due.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TimerDue {
+    pub(crate) threshold: u64,
+    pub(crate) at: Timestamp,
+}
+
 /// A lifecycle change to report.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Reported<'change> {
     RoomCreated,
-    /// The reason is `None` for the integrator's pause.
-    RoomPaused(Option<TransitionReason>),
-    /// The reason is `None` for the integrator's close.
-    RoomClosed(Option<TransitionReason>),
+    /// The timer's, `None` for the integrator's pause.
+    RoomPaused(Option<TimerDue>),
+    /// The timer's, `None` for the integrator's close.
+    RoomClosed(Option<TimerDue>),
     RoomArchived,
     ChannelAttached(&'change ChannelBinding),
     ChannelDetached(&'change ChannelBinding),
@@ -40,10 +49,14 @@ impl Reported<'_> {
         let room_id = room_id.clone();
         match self {
             Self::RoomCreated => Some(FrameworkEvent::RoomCreated { room_id }),
-            Self::RoomPaused(reason) => {
-                reason.map(|reason| FrameworkEvent::RoomPaused { room_id, reason })
-            }
-            Self::RoomClosed(reason) => Some(FrameworkEvent::RoomClosed { room_id, reason }),
+            Self::RoomPaused(timer) => timer.map(|_| FrameworkEvent::RoomPaused {
+                room_id,
+                reason: TransitionReason::Timer,
+            }),
+            Self::RoomClosed(timer) => Some(FrameworkEvent::RoomClosed {
+                room_id,
+                reason: timer.map(|_| TransitionReason::Timer),
+            }),
             Self::RoomArchived => Some(FrameworkEvent::RoomArchived { room_id }),
             Self::ChannelAttached(binding) => Some(FrameworkEvent::RoomChannelAttached {
                 room_id,
@@ -80,64 +93,6 @@ impl Reported<'_> {
             Self::ChannelMuted(_) => Some(HookTrigger::OnChannelMuted),
             Self::ChannelUnmuted(_) => Some(HookTrigger::OnChannelUnmuted),
             Self::SessionStarted { .. } => Some(HookTrigger::OnSessionStarted),
-        }
-    }
-
-    /// The change the hook payload names.
-    fn change(self) -> LifecycleChange {
-        match self {
-            Self::RoomCreated => LifecycleChange::RoomCreated,
-            Self::RoomPaused(_) => LifecycleChange::RoomPaused,
-            Self::RoomClosed(_) => LifecycleChange::RoomClosed,
-            Self::RoomArchived => LifecycleChange::RoomArchived,
-            Self::ChannelAttached(_) => LifecycleChange::ChannelAttached,
-            Self::ChannelDetached(_) => LifecycleChange::ChannelDetached,
-            Self::ChannelMuted(_) => LifecycleChange::ChannelMuted,
-            Self::ChannelUnmuted(_) => LifecycleChange::ChannelUnmuted,
-            Self::SessionStarted { .. } => LifecycleChange::SessionStarted,
-        }
-    }
-
-    /// The channel the change is about, if it is a channel's.
-    fn channel_id(&self) -> Option<&ChannelId> {
-        match self {
-            Self::ChannelAttached(binding)
-            | Self::ChannelDetached(binding)
-            | Self::ChannelMuted(binding)
-            | Self::ChannelUnmuted(binding) => Some(&binding.channel_id),
-            Self::SessionStarted { channel_id, .. } => Some(*channel_id),
-            Self::RoomCreated | Self::RoomPaused(_) | Self::RoomClosed(_) | Self::RoomArchived => {
-                None
-            }
-        }
-    }
-
-    /// The type of the channel a session started on.
-    fn channel_type(self) -> Option<ChannelType> {
-        match self {
-            Self::SessionStarted { channel_type, .. } => Some(channel_type.clone()),
-            Self::RoomCreated
-            | Self::RoomPaused(_)
-            | Self::RoomClosed(_)
-            | Self::RoomArchived
-            | Self::ChannelAttached(_)
-            | Self::ChannelDetached(_)
-            | Self::ChannelMuted(_)
-            | Self::ChannelUnmuted(_) => None,
-        }
-    }
-
-    /// What made the room transition on its own, if anything did.
-    fn reason(self) -> Option<TransitionReason> {
-        match self {
-            Self::RoomPaused(reason) | Self::RoomClosed(reason) => reason,
-            Self::RoomCreated
-            | Self::RoomArchived
-            | Self::ChannelAttached(_)
-            | Self::ChannelDetached(_)
-            | Self::ChannelMuted(_)
-            | Self::ChannelUnmuted(_)
-            | Self::SessionStarted { .. } => None,
         }
     }
 }
@@ -255,30 +210,119 @@ fn observers(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) -> 
     })
 }
 
-/// The payload of a lifecycle hook: a system event from the framework,
-/// whose content's code names the change and whose data names the room, the
-/// channel, and the reason of a transition its timer made, as
-/// [`LifecyclePayload`] writes and reads them.
+/// The payload of a lifecycle hook, as Python's `_fire_lifecycle_hook`
+/// writes it: an event of the change's lifecycle type (`SYSTEM` for a
+/// room's), from the framework's `system` source, inbound, `DELIVERED` and
+/// `INTERNAL`, whose system content's code names the change and whose data
+/// holds what it changed (RFC §5.1 Lifecycle records, §9.2).
 fn payload(cx: &mut Cx<'_>, reported: Reported<'_>, room_id: &RoomId) -> RoomEvent {
-    let source = EventSource {
-        direction: EventDirection::Outbound,
-        ..EventSource::new(ChannelId::system(), ChannelType::SYSTEM)
-    };
-    let lifecycle = LifecyclePayload {
-        change: reported.change(),
-        room_id: room_id.clone(),
-        channel_id: reported.channel_id().cloned(),
-        channel_type: reported.channel_type(),
-        reason: reported.reason(),
-    };
-    let content = EventContent::System(lifecycle.content());
+    let (event_type, content) = described(reported, room_id);
+    let source = EventSource::new(ChannelId::system(), ChannelType::SYSTEM);
     let now = cx.env.now();
-    RoomEvent::at(
+    let mut event = RoomEvent::at(
         cx.env.new_event_id(),
         room_id.clone(),
-        EventType::System,
+        event_type,
         source,
-        content,
+        EventContent::System(content),
         now,
-    )
+    );
+    event.status = EventStatus::Delivered;
+    event.visibility = Visibility::Internal;
+    event
+}
+
+/// The type and the content of a change's payload: Python's code, message
+/// and data for it (`room_lifecycle.py`, `channel_ops.py`,
+/// `_timer_transitions.py`).
+fn described(reported: Reported<'_>, room_id: &RoomId) -> (EventType, SystemContent) {
+    let room = || json!({ "room_id": room_id });
+    let timer = |due: TimerDue| json!({ "threshold": due.threshold, "at": due.at.to_iso_offset() });
+    let channel = |binding: &ChannelBinding| json!({ "channel_id": binding.channel_id });
+    let (event_type, code, body, data) = match reported {
+        Reported::RoomCreated => (
+            EventType::System,
+            "room_created",
+            format!("Room {room_id} created"),
+            room(),
+        ),
+        Reported::RoomPaused(None) => (
+            EventType::System,
+            "room_paused",
+            format!("Room {room_id} paused"),
+            room(),
+        ),
+        Reported::RoomPaused(Some(due)) => (
+            EventType::System,
+            "room_paused_by_timer",
+            format!("Room {room_id} paused by timer"),
+            timer(due),
+        ),
+        Reported::RoomClosed(None) => (
+            EventType::System,
+            "room_closed",
+            format!("Room {room_id} closed"),
+            room(),
+        ),
+        Reported::RoomClosed(Some(due)) => (
+            EventType::System,
+            "room_closed_by_timer",
+            format!("Room {room_id} closed by timer"),
+            timer(due),
+        ),
+        Reported::RoomArchived => (
+            EventType::System,
+            "room_archived",
+            format!("Room {room_id} archived"),
+            room(),
+        ),
+        Reported::ChannelAttached(binding) => (
+            EventType::ChannelAttached,
+            "channel_attached",
+            format!("Channel {} attached", binding.channel_id),
+            json!({
+                "channel_id": binding.channel_id,
+                "access": binding.access,
+                "visibility": binding.visibility,
+            }),
+        ),
+        Reported::ChannelDetached(binding) => (
+            EventType::ChannelDetached,
+            "channel_detached",
+            format!("Channel {} detached", binding.channel_id),
+            channel(binding),
+        ),
+        Reported::ChannelMuted(binding) => (
+            EventType::ChannelMuted,
+            "channel_muted",
+            format!("Channel {} muted", binding.channel_id),
+            channel(binding),
+        ),
+        Reported::ChannelUnmuted(binding) => (
+            EventType::ChannelUnmuted,
+            "channel_unmuted",
+            format!("Channel {} unmuted", binding.channel_id),
+            channel(binding),
+        ),
+        Reported::SessionStarted {
+            channel_id,
+            channel_type,
+        } => (
+            EventType::System,
+            "session_started",
+            format!("Session started on channel {channel_id}"),
+            json!({ "room_id": room_id, "channel_id": channel_id, "channel_type": channel_type }),
+        ),
+    };
+    let data = if let Value::Object(members) = data {
+        members
+    } else {
+        Metadata::new()
+    };
+    let content = SystemContent {
+        body,
+        code: Some(code.to_owned()),
+        data,
+    };
+    (event_type, content)
 }

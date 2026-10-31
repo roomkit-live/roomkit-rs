@@ -15,7 +15,7 @@ use roomkit::model::{
 use roomkit::{
     AttachChannelOptions, CloseRoomOptions, CommitEventOptions, ConversationStore, EventQuery,
     GetRoomOptions, HookExecution, HookSpec, HookTrigger, InMemoryStore, ListBindingsOptions,
-    RoomKit, SendEventOptions, text_of,
+    RoomKit, SendEventOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
@@ -27,6 +27,7 @@ use crate::held::{
     deferred, into, kit_of, record, result_of, room, said, spawn_close, spawn_said, stored,
 };
 use crate::support::channel;
+use roomkit_core::rules::transcoding::text_of;
 
 /// RFC §12.10.4: a delivery queued in a room's lane as the kit closes is
 /// dropped at once, never sent, `kit_closed` with no delivery result

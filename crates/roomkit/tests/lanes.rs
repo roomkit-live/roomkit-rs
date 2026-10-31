@@ -29,8 +29,9 @@ use roomkit::testing::{
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, HookTrigger, MuteOptions, PauseRoomOptions, ProcessInboundOptions,
-    RoomFilter, RoomKit, RoomKitOptions, text_of,
+    RoomFilter, RoomKit, RoomKitOptions,
 };
+use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::{Barrier, Notify};
 
 /// How long a call that should not wait may take before the test fails it.

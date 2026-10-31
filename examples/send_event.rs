@@ -28,9 +28,9 @@ use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     FrameworkEvent, ProcessInboundOptions, RoomKit, RoomKitError, SendEventOptions, WeakRoomKit,
-    text_of,
 };
 
+use shared::text_of;
 use shared::{Checks, Log, recording};
 
 /// The note an agent's turn sent, as `send_event` returned it, and whether

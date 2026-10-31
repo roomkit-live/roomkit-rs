@@ -27,7 +27,6 @@ use tokio::time::Instant;
 
 use roomkit::model::{ChannelId, ChannelType, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
-use roomkit::transcript::Role;
 use roomkit::{
     AttachChannelOptions, CreateRoomOptions, ProcessInboundOptions, RoomKit, RoomKitOptions,
     current_turn_host,
@@ -36,6 +35,7 @@ use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, Done, ProviderError, ProviderEvent, ProviderResponse,
     ProviderStream, ProviderToolCall, ToolDefinition, ToolOutput, Tools,
 };
+use roomkit_core::rules::transcript::Role;
 use serde_json::json;
 
 /// A model that answers at once: with a call to `lookup` when `calls` and

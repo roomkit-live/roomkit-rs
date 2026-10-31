@@ -2,12 +2,12 @@
 //! instructions (RFC §6.4, §6.7).
 
 use roomkit::model::{Metadata, ToolCall};
-use roomkit::transcript::{Message, Role};
 use roomkit_ai::AiRequest;
 use serde_json::{Value, json};
 
 use super::{replay::OUTPUT, wire};
 use crate::OpenAiConfig;
+use roomkit_core::rules::transcript::{Message, Role};
 
 fn request(message: Message) -> Result<Value, crate::OpenAiError> {
     let config = OpenAiConfig::new("https://example.com/v1", "", "fake");

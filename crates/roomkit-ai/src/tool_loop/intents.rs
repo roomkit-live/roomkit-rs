@@ -8,7 +8,7 @@ use std::sync::{Mutex, OnceLock};
 use roomkit::tool_intent::{
     as_written, declares_intent, presented_parameters_with_requirement, take_intent,
 };
-use roomkit::transcript::Message;
+use roomkit_core::rules::transcript::Message;
 
 use super::Loop;
 use super::generation::Called;

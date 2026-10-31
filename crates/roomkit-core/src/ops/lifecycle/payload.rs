@@ -10,19 +10,13 @@
 
 use serde_json::Value;
 
-use crate::model::{
-    ChannelId, ChannelType, EventContent, EventType, Metadata, RoomEvent, RoomId, SystemContent,
-};
+use crate::model::{ChannelId, ChannelType, EventContent, Metadata, RoomEvent, RoomId};
 use crate::ops::TransitionReason;
 
-/// The `data` key naming the room.
-const ROOM_ID: &str = "room_id";
 /// The `data` key naming the channel a channel's change is about.
 const CHANNEL_ID: &str = "channel_id";
 /// The `data` key naming the type of the channel a session started on.
 const CHANNEL_TYPE: &str = "channel_type";
-/// The `data` key naming what made a room transition on its own.
-const REASON: &str = "reason";
 
 /// A change a lifecycle hook's payload reports, which its `code` names (RFC
 /// §9.2, §26.1).
@@ -108,51 +102,34 @@ pub struct LifecyclePayload {
 
 impl LifecyclePayload {
     /// What `event` says of its change, when it is a lifecycle hook's
-    /// payload: a system event from the framework's `system` source, whose
-    /// content's code names a change and whose data names the room. `None`
-    /// for any other event, a system notice a channel or a hook writes
-    /// among them.
+    /// payload: an event from the framework's `system` source whose system
+    /// content's code names a change, `_by_timer` after it for a transition
+    /// the room's timer made, as Python's `_fire_lifecycle_hook` writes it.
+    /// `None` for any other event, a system notice a channel or a hook
+    /// writes among them.
     pub fn of(event: &RoomEvent) -> Option<Self> {
         let EventContent::System(content) = &event.content else {
             return None;
         };
-        let from_the_framework =
-            event.r#type == EventType::System && event.source.channel_id == ChannelId::system();
-        if !from_the_framework {
+        if event.source.channel_id != ChannelId::system() {
             return None;
         }
-        let change = LifecycleChange::from_code(content.code.as_deref()?)?;
+        let code = content.code.as_deref()?;
+        let (change, reason) = match code.strip_suffix("_by_timer") {
+            Some(change) => (
+                LifecycleChange::from_code(change)?,
+                Some(TransitionReason::Timer),
+            ),
+            None => (LifecycleChange::from_code(code)?, None),
+        };
         let data = &content.data;
         Some(Self {
             change,
-            room_id: field(data, ROOM_ID, |id| RoomId::new(id.as_str()?).ok()).ok()??,
+            room_id: event.room_id.clone(),
             channel_id: field(data, CHANNEL_ID, |id| ChannelId::new(id.as_str()?).ok()).ok()?,
             channel_type: field(data, CHANNEL_TYPE, from_value).ok()?,
-            reason: field(data, REASON, from_value).ok()?,
+            reason,
         })
-    }
-
-    /// The payload's content, as the framework writes it: the change's code,
-    /// a body reading it as words, and the data naming the room and, when
-    /// the change has them, its channel, its channel's type and its reason.
-    pub(crate) fn content(&self) -> SystemContent {
-        let mut data = Metadata::new();
-        data.insert(ROOM_ID.to_owned(), self.room_id.as_str().into());
-        if let Some(channel_id) = &self.channel_id {
-            data.insert(CHANNEL_ID.to_owned(), channel_id.as_str().into());
-        }
-        if let Some(channel_type) = &self.channel_type {
-            data.insert(CHANNEL_TYPE.to_owned(), to_value(channel_type));
-        }
-        if let Some(reason) = self.reason {
-            data.insert(REASON.to_owned(), to_value(reason));
-        }
-        let code = self.change.code();
-        SystemContent {
-            body: code.replace('_', " "),
-            code: Some(code.to_owned()),
-            data,
-        }
     }
 }
 
@@ -173,12 +150,6 @@ fn field<T>(
         .transpose()
 }
 
-/// `value` in its JSON form; a unit variant of a serializable enumeration
-/// always has one.
-fn to_value(value: impl serde::Serialize) -> Value {
-    serde_json::to_value(value).unwrap_or_default()
-}
-
 /// The enumeration value `value` writes, if it writes one.
 fn from_value<T: serde::de::DeserializeOwned>(value: &Value) -> Option<T> {
     T::deserialize(value).ok()
@@ -190,75 +161,65 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::model::{EventDirection, EventId, EventSource, Timestamp};
+    use crate::model::{EventId, EventSource, EventType, SystemContent, Timestamp};
 
     fn room_id() -> RoomId {
         RoomId::new("room_1").unwrap()
     }
 
-    /// A system event from `source` carrying `content`.
-    fn event(source: &str, content: SystemContent) -> RoomEvent {
+    /// A system event from `source` carrying `code` and `data`.
+    fn event(source: &str, code: &str, data: Value) -> RoomEvent {
+        let content = SystemContent {
+            code: Some(code.to_owned()),
+            data: if let Value::Object(members) = data {
+                members
+            } else {
+                Metadata::new()
+            },
+            ..SystemContent::new("notice")
+        };
         RoomEvent::at(
             EventId::new("evt_1").unwrap(),
             room_id(),
             EventType::System,
-            EventSource {
-                direction: EventDirection::Outbound,
-                ..EventSource::new(ChannelId::new(source).unwrap(), ChannelType::SYSTEM)
-            },
+            EventSource::new(ChannelId::new(source).unwrap(), ChannelType::SYSTEM),
             EventContent::System(content),
             Timestamp::UNIX_EPOCH,
         )
     }
 
-    fn closed_by_timer() -> LifecyclePayload {
-        LifecyclePayload {
-            change: LifecycleChange::RoomClosed,
-            room_id: room_id(),
-            channel_id: None,
-            channel_type: None,
-            reason: Some(TransitionReason::Timer),
-        }
-    }
-
-    fn session_started() -> LifecyclePayload {
-        LifecyclePayload {
-            change: LifecycleChange::SessionStarted,
-            room_id: room_id(),
-            channel_id: Some(ChannelId::new("sms").unwrap()),
-            channel_type: Some(ChannelType::SMS),
-            reason: None,
-        }
-    }
-
+    /// What the framework writes, read back: a timer's close, a session's
+    /// start.
     #[test]
-    fn its_content_names_the_change_and_its_fields() {
-        let written = [closed_by_timer(), session_started()].map(|payload| {
-            let content = payload.content();
-            (content.body, content.code, Value::Object(content.data))
-        });
+    fn reads_what_the_framework_writes() {
+        let closed = event("system", "room_closed_by_timer", json!({ "threshold": 60 }));
+        let started = event(
+            "system",
+            "session_started",
+            json!({ "room_id": "room_1", "channel_id": "sms", "channel_type": "sms" }),
+        );
         assert_eq!(
-            written,
             [
-                (
-                    "room closed".to_owned(),
-                    Some("room_closed".to_owned()),
-                    json!({ "room_id": "room_1", "reason": "timer" })
-                ),
-                (
-                    "session started".to_owned(),
-                    Some("session_started".to_owned()),
-                    json!({ "room_id": "room_1", "channel_id": "sms", "channel_type": "sms" })
-                ),
+                LifecyclePayload::of(&closed),
+                LifecyclePayload::of(&started)
+            ],
+            [
+                Some(LifecyclePayload {
+                    change: LifecycleChange::RoomClosed,
+                    room_id: room_id(),
+                    channel_id: None,
+                    channel_type: None,
+                    reason: Some(TransitionReason::Timer),
+                }),
+                Some(LifecyclePayload {
+                    change: LifecycleChange::SessionStarted,
+                    room_id: room_id(),
+                    channel_id: Some(ChannelId::new("sms").unwrap()),
+                    channel_type: Some(ChannelType::SMS),
+                    reason: None,
+                }),
             ]
         );
-    }
-
-    #[test]
-    fn reads_back_what_the_framework_writes() {
-        let read = [closed_by_timer(), session_started()]
-            .map(|payload| LifecyclePayload::of(&event("system", payload.content())));
-        assert_eq!(read, [Some(closed_by_timer()), Some(session_started())]);
     }
 
     #[test]
@@ -272,27 +233,14 @@ mod tests {
 
     /// A channel, or a hook under a source of its own, writes no lifecycle
     /// payload, whatever its code says; nor does a notice that names no
-    /// change, or no room.
+    /// change.
     #[test]
     fn is_none_for_any_other_system_event() {
-        let notice = |code: &str, data: Value| SystemContent {
-            code: Some(code.to_owned()),
-            data: data.as_object().cloned().unwrap_or_default(),
-            ..SystemContent::new("notice")
-        };
         let others = [
-            event("sms", closed_by_timer().content()),
-            event("system", notice("welcome", json!({ "room_id": "room_1" }))),
-            event("system", notice("room_closed", json!({}))),
-            event(
-                "system",
-                notice(
-                    "room_closed",
-                    json!({ "room_id": "room_1", "reason": "bored" }),
-                ),
-            ),
+            event("sms", "room_closed", json!({ "room_id": "room_1" })),
+            event("system", "welcome", json!({ "room_id": "room_1" })),
         ];
         let read: Vec<Option<LifecyclePayload>> = others.iter().map(LifecyclePayload::of).collect();
-        assert_eq!(read, [None, None, None, None]);
+        assert_eq!(read, [None, None]);
     }
 }

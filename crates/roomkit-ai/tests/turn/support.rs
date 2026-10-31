@@ -8,7 +8,6 @@ use roomkit::model::{
     RoomContext, RoomEvent, RoomId, TextContent,
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
-use roomkit::transcript::Role;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, HookExecution, HookSpec, HookTrigger, InboundResult, PostOptions,
@@ -19,6 +18,7 @@ use roomkit_ai::{
     AiAgent, AiProvider, AiRequest, Done, ProviderResponse, ProviderStream, ProviderToolCall,
     ToolDefinition, ToolOutput, Tools,
 };
+use roomkit_core::rules::transcript::Role;
 use serde_json::json;
 use tokio::sync::watch;
 
@@ -155,7 +155,8 @@ impl Channel for Counting {
         binding: ChannelBinding,
         context: RoomContext,
     ) -> Result<ChannelOutput, ChannelError> {
-        let answer = roomkit::text_of(&event.content).starts_with("Answer ");
+        let answer =
+            roomkit_core::rules::transcoding::text_of(&event.content).starts_with("Answer ");
         let output = self.sms.deliver(event, binding, context).await;
         if answer {
             self.answers.send_modify(|answers| *answers += 1);

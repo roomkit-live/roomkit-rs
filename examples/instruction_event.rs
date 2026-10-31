@@ -19,10 +19,9 @@ use std::error::Error;
 use std::process::ExitCode;
 
 use roomkit::model::{ChannelId, ChannelType, EventType, InboundMessage, RoomId, TextContent};
-use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, InboundResult, ProcessInboundOptions, text_of,
-};
+use roomkit::{AttachChannelOptions, CreateRoomOptions, InboundResult, ProcessInboundOptions};
 
+use shared::text_of;
 use shared::{Checks, Script, ScriptedAgent, recording};
 
 const INTRODUCE: &str = "You just took over the call. Introduce yourself.";

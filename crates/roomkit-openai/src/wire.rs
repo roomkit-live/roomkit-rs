@@ -3,12 +3,12 @@
 
 use reqwest::StatusCode;
 use roomkit::model::Metadata;
-use roomkit::transcript::{Message, Role};
 use roomkit_ai::{AiRequest, Done, ProviderResponse, ProviderToolCall};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::OpenAiError;
+use roomkit_core::rules::transcript::{Message, Role};
 
 /// The longest provider message an error keeps, in characters.
 const MESSAGE_LIMIT: usize = 500;
@@ -685,7 +685,11 @@ mod image_tests {
     fn author_images_use_native_parts_in_both_protocols() {
         let mut message = Message::new(Role::User, "Describe this image");
         message.images.push(
-            roomkit::transcript::Image::new("data:image/png;base64,AQIDBA==", "image/png").unwrap(),
+            roomkit_core::rules::transcript::Image::new(
+                "data:image/png;base64,AQIDBA==",
+                "image/png",
+            )
+            .unwrap(),
         );
         let request = AiRequest::new(None, vec![message], vec![]);
         let chat =

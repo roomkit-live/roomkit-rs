@@ -19,9 +19,10 @@ use std::process::ExitCode;
 use roomkit::model::{ChannelId, InboundMessage, RoomId, TextContent};
 use roomkit::testing::{EchoAgent, EchoAgentOptions};
 use roomkit::{
-    AttachChannelOptions, ConversationStore, HookTrigger, ProcessInboundOptions, RoomKit, text_of,
+    AttachChannelOptions, ConversationStore, HookTrigger, ProcessInboundOptions, RoomKit,
 };
 
+use shared::text_of;
 use shared::{Checks, SmsNumber};
 
 const JEAN: &str = "+15551234567";

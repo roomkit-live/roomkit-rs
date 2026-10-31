@@ -6,9 +6,10 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     RoomContext, RoomEvent,
 };
-use roomkit::{Channel, ChannelDeclaration, ChannelError, text_of};
+use roomkit::{Channel, ChannelDeclaration, ChannelError};
 
 use crate::Log;
+use crate::text_of;
 
 /// A business's SMS number, as a provider sends from it: each event goes to
 /// the number the room's binding names under `phone_number` (RFC Appendix

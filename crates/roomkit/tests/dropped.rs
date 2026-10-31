@@ -226,7 +226,7 @@ impl ConversationStore for GatedStore {
         target: Option<TargetUpdate>,
     ) -> Result<(), StoreError> {
         let ungated = event.source.channel_type == ChannelType::SYSTEM
-            || roomkit::text_of(&event.content) == "First";
+            || roomkit_core::rules::transcoding::text_of(&event.content) == "First";
         if !ungated && !self.started.swap(true, Ordering::SeqCst) {
             self.committing.notify_one();
             self.go.notified().await;
@@ -366,7 +366,12 @@ async fn delivered_and_processed(
     let all_processed = timeline.iter().all(|event| processed.contains(&event.id));
     let lines = timeline
         .iter()
-        .map(|event| (event.status, roomkit::text_of(&event.content)))
+        .map(|event| {
+            (
+                event.status,
+                roomkit_core::rules::transcoding::text_of(&event.content),
+            )
+        })
         .collect();
     (lines, all_processed)
 }
@@ -465,7 +470,7 @@ async fn stored(kit: &RoomKit<GatedStore>, text: &str) -> bool {
         .await
         .unwrap()
         .iter()
-        .any(|event| roomkit::text_of(&event.content) == text)
+        .any(|event| roomkit_core::rules::transcoding::text_of(&event.content) == text)
 }
 
 /// The time `kit`'s close takes.
@@ -583,7 +588,9 @@ async fn a_call_its_caller_stops_polling_holds_the_close_no_longer() {
     let took = closing(&kit).await;
     drop(guard);
     let at_close = stored(&kit, "Slow").await;
-    let ended = commit.await.map(|event| roomkit::text_of(&event.content));
+    let ended = commit
+        .await
+        .map(|event| roomkit_core::rules::transcoding::text_of(&event.content));
     assert_eq!(
         (took, lines.containing("").len(), at_close, ended.ok()),
         (Duration::from_secs(1), 0, true, Some("Slow".to_owned()))

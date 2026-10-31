@@ -28,10 +28,10 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, InboundResult,
-    ProcessInboundOptions, RoomKit, StoreError, is_deleted,
+    ProcessInboundOptions, RoomKit, StoreError,
 };
 
-use shared::{Checks, Clock, Log};
+use shared::{Checks, Clock, Log, is_deleted};
 
 /// The team's room on its WebSocket, and the roster its hook reads.
 struct Team {

@@ -25,8 +25,9 @@ use roomkit::{
     CommitEventOptions, ConversationStore, CreateRoomOptions, DetachChannelOptions, EventFilter,
     EventQuery, HookExecution, HookSpec, HookTrigger, HostChannel, InMemoryStore, PostOptions,
     ProcessInboundOptions, RoomCounters, RoomFilter, RoomKit, RoomKitError, RoomKitOptions,
-    SendEventOptions, StoreError, TargetUpdate, text_of,
+    SendEventOptions, StoreError, TargetUpdate,
 };
+use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
 
 const CUSTOMER: &str = "+15550100001";

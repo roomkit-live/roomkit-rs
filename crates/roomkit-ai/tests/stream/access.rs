@@ -40,7 +40,7 @@ async fn a_row_the_streaming_target_may_not_read_is_never_handed_to_it() {
         let spec = HookSpec::new("judge", HookTrigger::BeforeBroadcast, HookExecution::Sync);
         room.kit
             .hook(spec, move |mut event, _context| async move {
-                if roomkit::text_of(&event.content) != "Secret part." {
+                if roomkit_core::rules::transcoding::text_of(&event.content) != "Secret part." {
                     return Ok(HookResult::allow(AllowOptions::default()));
                 }
                 if !narrowed {
@@ -167,7 +167,10 @@ async fn reads_nothing_once_withdrawn(change: Change, stored_as: EventStatus) {
         assert_eq!(room.ws.delivered(), [3], "{shape}");
         let last = room.timeline().await.pop().unwrap();
         assert_eq!(
-            (roomkit::text_of(&last.content), last.status),
+            (
+                roomkit_core::rules::transcoding::text_of(&last.content),
+                last.status
+            ),
             ("After the change.".to_owned(), stored_as),
             "{shape}"
         );

@@ -29,8 +29,9 @@ use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, DeleteEventOptions, HookTrigger, InboundResult, InboundRoomRouter,
     PostOptions, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, RouteOptions,
-    RouterFuture, SendEventOptions, UpdateEventOptions, keep_context, text_of,
+    RouterFuture, SendEventOptions, UpdateEventOptions, keep_context,
 };
+use roomkit_core::rules::transcoding::text_of;
 
 /// `max_chain_depth` 1: ten passes and ten hook calls per cascade.
 const BUDGET: usize = 10;

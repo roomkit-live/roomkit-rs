@@ -118,7 +118,7 @@ async fn sends_through_the_turn(sends: usize) -> (usize, Vec<u32>, usize) {
     .await
     .unwrap()
     .into_iter()
-    .filter(|event| roomkit::text_of(&event.content).starts_with("Note "))
+    .filter(|event| roomkit_core::rules::transcoding::text_of(&event.content).starts_with("Note "))
     .collect();
     let capped = notes
         .iter()

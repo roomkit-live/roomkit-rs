@@ -59,7 +59,7 @@ pub struct EventDraft {
 ///         _binding: ChannelBinding,
 ///         _context: RoomContext,
 ///     ) -> Result<ChannelOutput, ChannelError> {
-///         let _shown = roomkit::text_of(&event.content);
+///         let _shown = &event.content;
 ///         Ok(ChannelOutput::default())
 ///     }
 /// }

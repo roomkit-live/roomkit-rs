@@ -10,6 +10,10 @@ publish.workspace = true
 
 [dependencies]
 roomkit.workspace = true
+# The transcript the wire is written from (`transcript::Message`), which
+# roomkit keeps private as Python does (step 5, decision 16) until lot 5
+# turns it into the agent's `AiMessage`.
+roomkit-core.workspace = true
 # The provider-neutral AI channel and its tool loop (step 4, decision 6).
 roomkit-ai.workspace = true
 # The `Stream` a streamed completion is read as (step 4, decision 11).

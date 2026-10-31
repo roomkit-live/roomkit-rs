@@ -174,7 +174,7 @@ impl Channel for Streaming {
                     }
                 }
                 Ok(StreamItem::Row(row)) => {
-                    let text = roomkit::text_of(&row.content);
+                    let text = roomkit_core::rules::transcoding::text_of(&row.content);
                     self.note(Read::Row(row.r#type, text, row.index));
                     if matches!(self.stop, Stop::AtACallsStart)
                         && row.r#type == EventType::ToolCallStart
@@ -404,7 +404,7 @@ impl Room {
                     .map(str::to_owned);
                 (
                     event.r#type,
-                    roomkit::text_of(&event.content),
+                    roomkit_core::rules::transcoding::text_of(&event.content),
                     cancelled,
                     reason,
                 )
@@ -576,7 +576,7 @@ async fn a_reader_that_stops_at_a_call_s_start_runs_no_call() {
                 noting
                     .lock()
                     .unwrap()
-                    .push(roomkit::text_of(&event.content));
+                    .push(roomkit_core::rules::transcoding::text_of(&event.content));
                 async {}
             },
         )
@@ -788,10 +788,10 @@ async fn a_turn_ending_on_no_text_writes_its_record_on_its_last_message() {
             HookTrigger::OnEventUpdated,
             move |event, _context| {
                 let reason = event.metadata.get("loop_end_reason").cloned();
-                noting
-                    .lock()
-                    .unwrap()
-                    .push((roomkit::text_of(&event.content), reason));
+                noting.lock().unwrap().push((
+                    roomkit_core::rules::transcoding::text_of(&event.content),
+                    reason,
+                ));
                 async {}
             },
         )
@@ -848,7 +848,13 @@ async fn an_event_a_tool_sends_is_stored_after_the_round_s_text_and_start() {
         .await
         .into_iter()
         .filter(|event| event.index > 2)
-        .map(|event| format!("{:?} {}", event.r#type, roomkit::text_of(&event.content)))
+        .map(|event| {
+            format!(
+                "{:?} {}",
+                event.r#type,
+                roomkit_core::rules::transcoding::text_of(&event.content)
+            )
+        })
         .collect();
     assert_eq!(
         order,
@@ -1012,7 +1018,7 @@ async fn a_caller_that_leaves_mid_answer_leaves_the_text_read_stored_cancelled()
         .unwrap();
     assert_eq!(
         (
-            roomkit::text_of(&answer.content),
+            roomkit_core::rules::transcoding::text_of(&answer.content),
             answer.metadata.get("cancelled").cloned(),
             answer.metadata.get("loop_end_reason").cloned(),
             dropped.load(Ordering::SeqCst),
@@ -1077,7 +1083,7 @@ async fn the_default_deliver_stream_delivers_each_row_once_the_stream_is_over() 
         .inner
         .deliveries()
         .into_iter()
-        .map(|delivery| roomkit::text_of(&delivery.event.content))
+        .map(|delivery| roomkit_core::rules::transcoding::text_of(&delivery.event.content))
         .collect();
     assert_eq!(delivered, ["Hi", "Hello there."]);
     kit.close().await.unwrap();

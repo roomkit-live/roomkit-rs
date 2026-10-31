@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use roomkit::TurnHost;
 use roomkit::model::{Metadata, ToolCall, ToolCallOutcome};
-use roomkit::transcript::Message;
+use roomkit_core::rules::transcript::Message;
 use serde_json::Value;
 
 use self::generation::Generation;

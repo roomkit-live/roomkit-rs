@@ -12,11 +12,11 @@
 //! calls its stored rows show served (a restart, an agent replaced), so
 //! that the body comes back in the prompt.
 
-use roomkit::is_deleted;
 use roomkit::model::{
     ChannelId, EventContent, EventDirection, EventType, RoomEvent, RoomId, ToolCallContent,
     ToolCallOutcome,
 };
+use roomkit_core::rules::edits::is_deleted;
 use serde_json::Value;
 
 use super::texts::ACTIVATE_SKILL;

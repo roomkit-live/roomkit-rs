@@ -69,7 +69,7 @@ mod store;
 mod stream;
 mod tasks;
 pub mod testing;
-mod tools;
+mod tool_calls;
 mod turn;
 mod turns;
 mod unwind;
@@ -103,26 +103,23 @@ pub mod model {
     #[doc(hidden)]
     pub use roomkit_core::model::{HOST_CHANNEL_ID, MAX_COMPOSITE_DEPTH, ToolCall};
 }
-pub use roomkit_core::ops::{
-    CHANNEL_NOT_REGISTERED, ChainDepthData, ChannelDeclaration, LifecycleChange, LifecyclePayload,
-    RefusedOperation, TransitionReason, default_inbound_event,
-};
+pub use roomkit_core::ops::{ChannelDeclaration, default_inbound_event};
 pub use roomkit_core::rules::addresses::{
     AddressForm, Addressing, CountryCode, InvalidCountryCode,
 };
-pub use roomkit_core::rules::edits::{is_deleted, is_edited};
 pub use roomkit_core::rules::hook_registry::{
     HookExecution, HookFilter, HookId, HookSpec, HookTrigger,
 };
-pub use roomkit_core::rules::instructions::turn_context;
-pub use roomkit_core::rules::lifecycle::Transition;
-pub use roomkit_core::rules::transcoding::text_of;
-pub use roomkit_core::rules::transcript;
 pub use roomkit_core::rules::{visibility_allows, visible_events};
 // Outside the public API: the Python implementation keeps it private, and the
 // agent's crate reads it across crates (RFC §6.4).
 #[doc(hidden)]
 pub use roomkit_core::rules::tool_intent;
+// Outside the public API (step 5, decision 16): the examples' scripted agent
+// reads its turn's history with it until lot 5 makes it an AI channel over a
+// mock provider.
+#[doc(hidden)]
+pub use roomkit_core::rules::instructions::turn_context;
 
 pub use self::channel::{Channel, ChannelError, EventDraft};
 pub use self::context::keep_context;
@@ -152,9 +149,17 @@ pub use self::store::{
     StoreError, StoreFailure, TargetUpdate,
 };
 pub use self::stream::{DeliveryStream, ResponseItem, ResponseStream, StreamItem};
-pub use self::tools::{ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict};
+pub use self::tool_calls::{ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict};
 pub use self::turn::{ToolGate, TurnHost, current_turn_host};
 pub use self::turns::TurnTimeouts;
+
+/// Python's `roomkit.tools` helpers this crate has.
+pub mod tools {
+    /// `text` fenced as untrusted under `tag` (RFC §6.4), Python's
+    /// `roomkit.tools.fence(tag, text)`: what a tool hands the model that
+    /// came from outside it.
+    pub use roomkit_core::rules::transcript::fence;
+}
 
 /// The README's code, compiled and run as doctests, so that the first room
 /// it shows is one the crate runs.

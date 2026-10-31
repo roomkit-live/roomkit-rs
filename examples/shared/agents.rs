@@ -7,9 +7,10 @@ use roomkit::model::{
     ChannelBinding, ChannelCapabilities, ChannelCategory, ChannelDirection, ChannelId,
     ChannelOutput, ChannelType, EventDirection, EventSource, RoomContext, RoomEvent, TextContent,
 };
-use roomkit::{Channel, ChannelDeclaration, ChannelError, text_of, turn_context};
+use roomkit::{Channel, ChannelDeclaration, ChannelError, turn_context};
 
 use crate::Log;
+use crate::text_of;
 
 /// What an agent answers, by the text it reads.
 pub type Script = &'static [(&'static str, &'static str)];

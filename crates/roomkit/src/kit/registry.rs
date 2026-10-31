@@ -14,7 +14,7 @@ use crate::error::RoomKitError;
 use crate::hooks::{HookError, HookHandler, HookReturn, Observer};
 use crate::registered::{Registered, RegisteredChannel};
 use crate::store::ConversationStore;
-use crate::tools::{ToolCallEvent, ToolHandler, ToolHookSpec, ToolUse, ToolVerdict};
+use crate::tool_calls::{ToolCallEvent, ToolHandler, ToolHookSpec, ToolUse, ToolVerdict};
 
 impl<S: ConversationStore> RoomKit<S> {
     /// Registers a channel, then emits `channel_registered`.
@@ -98,13 +98,13 @@ impl<S: ConversationStore> RoomKit<S> {
     ///
     /// ```
     /// # fn register(kit: &roomkit::RoomKit) -> Result<(), roomkit::RoomKitError> {
-    /// use roomkit::model::HookResult;
     /// use roomkit::model::hook::{AllowOptions, BlockOptions};
-    /// use roomkit::{HookExecution, HookSpec, HookTrigger, text_of};
+    /// use roomkit::model::{EventContent, HookResult};
+    /// use roomkit::{HookExecution, HookSpec, HookTrigger};
     ///
     /// let spec = HookSpec::new("spam_filter", HookTrigger::BeforeBroadcast, HookExecution::Sync);
     /// kit.hook(spec, |event, _context| {
-    ///     let spam = text_of(&event.content).contains("spam");
+    ///     let spam = matches!(&event.content, EventContent::Text(text) if text.body.contains("spam"));
     ///     async move {
     ///         Ok(if spam {
     ///             HookResult::block("spam", BlockOptions::default())
@@ -179,9 +179,9 @@ impl<S: ConversationStore> RoomKit<S> {
 
     /// Registers an ASYNC observer on `trigger` (RFC §9.3): it runs after the
     /// fact, and what it raises is logged. An observer of a lifecycle
-    /// trigger reads the change its payload reports, the room, the channel
-    /// and the timer's reason, with
-    /// [`LifecyclePayload::of`](crate::LifecyclePayload::of).
+    /// trigger reads the change its payload reports in its system content:
+    /// `code` names it, `data` holds what it changed, as Python's payload
+    /// does.
     ///
     /// # Errors
     ///

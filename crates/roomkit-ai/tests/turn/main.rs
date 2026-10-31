@@ -428,7 +428,9 @@ async fn a_tool_writes_to_its_room_at_the_turn_s_depth() {
     let timeline = room.timeline().await;
     let notice = timeline
         .iter()
-        .find(|event| roomkit::text_of(&event.content) == "Order on its way")
+        .find(|event| {
+            roomkit_core::rules::transcoding::text_of(&event.content) == "Order on its way"
+        })
         .unwrap();
     assert_eq!(
         (notice.chain_depth, end_row(&timeline, "c1").result.clone()),
@@ -539,7 +541,7 @@ async fn a_hook_on_a_change_a_tool_makes_posts_at_the_turn_s_depth() {
             .await
             .unwrap()
             .into_iter()
-            .find(|event| roomkit::text_of(&event.content) == "Welcome.")
+            .find(|event| roomkit_core::rules::transcoding::text_of(&event.content) == "Welcome.")
             .unwrap();
         assert_eq!(greeting.chain_depth, 1, "{tool}");
         kit.close().await.unwrap();

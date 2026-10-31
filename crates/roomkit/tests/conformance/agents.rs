@@ -12,7 +12,6 @@ use std::time::Duration;
 use futures_core::Stream;
 
 use roomkit::model::{ChannelId, Metadata, RoomContext, ToolCall};
-use roomkit::transcript::Role;
 use roomkit::{
     HookExecution, HookTrigger, RoomKitError, ToolCallEvent, ToolHookSpec, ToolUse, ToolVerdict,
 };
@@ -25,6 +24,7 @@ use serde_json::{Value, json};
 
 use crate::run::{Run, Scope};
 use crate::scripted::{Reactions, perform};
+use roomkit_core::rules::transcript::Role;
 
 /// The members a tool hook of this runner cannot apply, which the tool
 /// registrations do not take.

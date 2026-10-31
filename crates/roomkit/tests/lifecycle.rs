@@ -12,20 +12,20 @@ use std::time::Duration;
 use roomkit::model::hook::AllowOptions;
 use roomkit::model::{
     Access, ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput,
-    ChannelType, InboundMessage, Metadata, Participant, ParticipantId, ParticipantStatus,
-    RoomContext, RoomEvent, RoomId, RoomStatus, RoomTimers, TextContent, Timestamp, Visibility,
+    ChannelType, EventContent, EventDirection, EventStatus, EventType, InboundMessage, Metadata,
+    Participant, ParticipantId, ParticipantStatus, RoomContext, RoomEvent, RoomId, RoomStatus,
+    RoomTimers, TextContent, Timestamp, Visibility,
 };
 use roomkit::testing::{
     EchoAgent, EchoAgentOptions, EventTap, RecordingTransport, RecordingTransportOptions,
     SequentialEnvironment, kit_with_environment,
 };
 use roomkit::{
-    AttachChannelOptions, CHANNEL_NOT_REGISTERED, Channel, ChannelDeclaration, ChannelError,
-    CheckAllTimersOptions, CheckRoomTimersOptions, CloseRoomOptions, ConversationStore,
-    CreateRoomOptions, DetachChannelOptions, FrameworkEvent, GetBindingOptions, HookTrigger,
-    ListMembersOptions, MuteOptions, ProcessInboundOptions, ReopenRoomOptions, RoomKit,
-    RoomKitError, RoomKitOptions, SetAccessOptions, SetVisibilityOptions, UnmuteOptions,
-    UpdateBindingMetadataOptions,
+    AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CheckAllTimersOptions,
+    CheckRoomTimersOptions, CloseRoomOptions, ConversationStore, CreateRoomOptions,
+    DetachChannelOptions, FrameworkEvent, GetBindingOptions, HookTrigger, ListMembersOptions,
+    MuteOptions, ProcessInboundOptions, ReopenRoomOptions, RoomKit, RoomKitError, RoomKitOptions,
+    SetAccessOptions, SetVisibilityOptions, UnmuteOptions, UpdateBindingMetadataOptions,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -33,6 +33,7 @@ use tokio::sync::mpsc;
 #[path = "support/warnings.rs"]
 mod warnings;
 
+use roomkit_core::ops::CHANNEL_NOT_REGISTERED;
 use warnings::Warnings;
 
 const START_MILLIS: i64 = 1_792_677_780_000;
@@ -192,6 +193,46 @@ mod timers {
                 .map(|room| (room.paused_at, room.closed_at))
                 .collect::<Vec<_>>(),
             [(Some(after_start(60)), Some(after_start(180)))]
+        );
+    }
+
+    /// A pause its timer made hands `ON_ROOM_PAUSED` Python's payload
+    /// (`_timer_transitions.py`): the code `room_paused_by_timer`, the
+    /// timer's threshold and the instant it fell due.
+    #[tokio::test]
+    async fn a_timer_pause_reads_room_paused_by_timer() {
+        let clock = Clock::new();
+        let (kit, _sms) = timed_room(&clock).await;
+        let (seen, mut fired) = mpsc::unbounded_channel();
+        kit.observe("on_paused", HookTrigger::OnRoomPaused, move |event, _| {
+            seen.send(event).unwrap();
+            ready(())
+        })
+        .unwrap();
+        clock.advance(90);
+        kit.check_all_timers(CheckAllTimersOptions::default())
+            .await
+            .unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(1), fired.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let EventContent::System(content) = &event.content else {
+            panic!("a system content was expected, not {:?}", event.content);
+        };
+        assert_eq!(
+            (
+                event.r#type,
+                content.code.as_deref(),
+                content.body.as_str(),
+                Value::Object(content.data.clone())
+            ),
+            (
+                EventType::System,
+                Some("room_paused_by_timer"),
+                "Room room_1 paused by timer",
+                json!({ "threshold": 60, "at": "2026-10-22T14:04:00+00:00" })
+            )
         );
     }
 
@@ -704,7 +745,7 @@ mod unregistering {
             .unwrap()
             .iter()
             .filter(|event| event.source.channel_type != ChannelType::SYSTEM)
-            .map(|event| roomkit::text_of(&event.content))
+            .map(|event| roomkit_core::rules::transcoding::text_of(&event.content))
             .collect()
     }
 }
@@ -1214,7 +1255,8 @@ mod bindings {
             kit.observe(name, trigger, move |event, _| {
                 let seen = seen.clone();
                 async move {
-                    seen.send(roomkit::text_of(&event.content)).unwrap();
+                    seen.send(roomkit_core::rules::transcoding::text_of(&event.content))
+                        .unwrap();
                 }
             })
             .unwrap();
@@ -1229,7 +1271,69 @@ mod bindings {
         let unmuted = next(&mut fired).await;
         assert_eq!(
             [muted, unmuted],
-            ["channel muted".to_owned(), "channel unmuted".to_owned()]
+            [
+                "Channel ai muted".to_owned(),
+                "Channel ai unmuted".to_owned()
+            ]
+        );
+    }
+
+    /// The payload of `ON_CHANNEL_ATTACHED` is Python's
+    /// (`_fire_lifecycle_hook`): a `CHANNEL_ATTACHED` event from the
+    /// framework's `system` source, inbound, `DELIVERED` and `INTERNAL`,
+    /// its code `channel_attached`, its data the channel, its access and
+    /// its visibility.
+    #[tokio::test]
+    async fn channel_attached_payload_is_pythons() {
+        let (kit, _sms, _agent) = sms_and_agent().await;
+        let (seen, mut fired) = mpsc::unbounded_channel();
+        kit.observe(
+            "on_attached",
+            HookTrigger::OnChannelAttached,
+            move |event, _| {
+                seen.send(event).unwrap();
+                ready(())
+            },
+        )
+        .unwrap();
+        let ws = RecordingTransport::new(
+            channel("ws"),
+            ChannelType::WEBSOCKET,
+            RecordingTransportOptions::default(),
+        );
+        kit.register_channel(ws).unwrap();
+        kit.attach_channel(&room_id(), &channel("ws"), AttachChannelOptions::default())
+            .await
+            .unwrap();
+        let event = next(&mut fired).await;
+        let EventContent::System(content) = &event.content else {
+            panic!("a system content was expected, not {:?}", event.content);
+        };
+        assert_eq!(
+            (
+                event.r#type,
+                (
+                    event.source.channel_id.as_str(),
+                    &event.source.channel_type,
+                    event.source.direction
+                ),
+                (event.status, &event.visibility),
+                (
+                    content.code.as_deref(),
+                    content.body.as_str(),
+                    Value::Object(content.data.clone())
+                ),
+            ),
+            (
+                EventType::ChannelAttached,
+                ("system", &ChannelType::SYSTEM, EventDirection::Inbound),
+                (EventStatus::Delivered, &Visibility::Internal),
+                (
+                    Some("channel_attached"),
+                    "Channel ws attached",
+                    json!({ "channel_id": "ws", "access": "read_write", "visibility": "all" })
+                ),
+            )
         );
     }
 

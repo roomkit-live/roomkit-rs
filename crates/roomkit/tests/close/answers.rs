@@ -18,11 +18,12 @@ use roomkit::testing::{
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     DeliveryHandle, HookExecution, HookSpec, HookTrigger, ProcessInboundOptions, RoomKit,
-    RoomKitOptions, text_of,
+    RoomKitOptions,
 };
 use tokio::sync::Notify;
 
 use crate::support::{BOUND, channel, into, message, room_id};
+use roomkit_core::rules::transcoding::text_of;
 
 /// An agent whose turn on the echo of `side` never ends, until the close
 /// cuts it, and that answers nothing.

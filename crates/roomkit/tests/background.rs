@@ -20,8 +20,9 @@ use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     GetTimelineOptions, HookExecution, HookSpec, HookTrigger, ProcessInboundOptions, RoomKit,
-    RoomKitError, RoomKitOptions, text_of,
+    RoomKitError, RoomKitOptions,
 };
+use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 

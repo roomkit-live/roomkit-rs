@@ -16,7 +16,7 @@ use pretty_assertions::assert_eq;
 use roomkit::model::{ChannelBinding, ChannelOutput, ChannelType, RoomContext};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
-    DeliveryStream, EventQuery, RoomKit, StreamItem, text_of,
+    DeliveryStream, EventQuery, RoomKit, StreamItem,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{
@@ -30,6 +30,7 @@ use crate::support::{
     Answered, BOUND, Witness, attach_agent, channel, ended, kit_with, ok, room_id, spawn_message,
     transport,
 };
+use roomkit_core::rules::transcoding::text_of;
 
 /// A model that writes `first`, if any, then says nothing for 30 s before
 /// it ends its round.

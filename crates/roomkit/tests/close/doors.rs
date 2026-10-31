@@ -388,7 +388,7 @@ async fn a_spared_run_s_queued_set_is_dropped() {
     let spec = HookSpec::new("keep", HookTrigger::BeforeBroadcast, HookExecution::Sync);
     kit.hook(spec, move |event, _context| {
         let work = work.clone();
-        let is_two = roomkit::text_of(&event.content) == "Two.";
+        let is_two = roomkit_core::rules::transcoding::text_of(&event.content) == "Two.";
         async move {
             if is_two {
                 drop(tokio::spawn(roomkit::keep_context(async move {
@@ -468,7 +468,7 @@ impl Channel for Late {
         self.delivered
             .lock()
             .unwrap()
-            .push(roomkit::text_of(&event.content));
+            .push(roomkit_core::rules::transcoding::text_of(&event.content));
         async { Ok(ChannelOutput::default()) }
     }
 }
@@ -611,7 +611,7 @@ async fn queued_observer_runs(
             HookTrigger::BeforeBroadcast,
             move |event, _context| {
                 let (weak, telling) = (weak.clone(), Arc::clone(&telling));
-                let second = roomkit::text_of(&event.content) == "second";
+                let second = roomkit_core::rules::transcoding::text_of(&event.content) == "second";
                 async move {
                     if !second {
                         return;

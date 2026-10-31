@@ -44,12 +44,13 @@ use roomkit::model::{
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
-    DeliveryStream, ProcessInboundOptions, RoomKit, StreamItem, text_of,
+    DeliveryStream, ProcessInboundOptions, RoomKit, StreamItem,
 };
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
 use serde_json::{Value, json};
 
+use shared::text_of;
 use shared::{Checks, FakeOpenAi, Log, OpenAiEndpoint, Reply};
 
 const SYSTEM_PROMPT: &str = "You answer a bakery's customers, in a few words.";

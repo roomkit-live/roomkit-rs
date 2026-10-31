@@ -312,7 +312,7 @@ async fn sibling_agent(kit: &RoomKit, notes: &Arc<Mutex<Vec<String>>>) {
     );
     kit.hook(spec, move |event, _context| {
         let told = Arc::clone(&told);
-        let ours = roomkit::text_of(&event.content) == "note";
+        let ours = roomkit_core::rules::transcoding::text_of(&event.content) == "note";
         async move {
             if ours {
                 told.notify_one();

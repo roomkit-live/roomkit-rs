@@ -16,10 +16,11 @@ use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, ConversationStore,
     CreateRoomOptions, EventFilter, EventQuery, HookExecution, HookSpec, HookTrigger,
-    InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions, text_of,
+    InboundResult, ProcessInboundOptions, RoomKit, RoomKitError, RoomKitOptions,
 };
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{AiAgent, AiProvider, ToolDefinition, ToolOutput, Tools};
+use roomkit_core::rules::transcoding::text_of;
 use serde_json::json;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;

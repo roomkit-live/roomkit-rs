@@ -25,8 +25,9 @@ use roomkit::testing::{
 };
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
-    HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions, text_of,
+    HookTrigger, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
+use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::Barrier;
 
 const ROOMS: usize = 8;

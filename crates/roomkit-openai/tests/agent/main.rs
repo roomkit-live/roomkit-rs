@@ -25,7 +25,7 @@ use roomkit::testing::{
 };
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, HookExecution, HookSpec,
-    HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions, text_of,
+    HookTrigger, InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions,
 };
 use roomkit_ai::{AiError, ToolDefinition, ToolOutput, Tools};
 use roomkit_openai::{OpenAiAgent, OpenAiConfig};
@@ -33,6 +33,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use self::fake::{FakeOpenAi, Reply};
+use roomkit_core::rules::transcoding::text_of;
 
 const SYSTEM_PROMPT: &str = "You answer a bakery's customers, in a few words.";
 

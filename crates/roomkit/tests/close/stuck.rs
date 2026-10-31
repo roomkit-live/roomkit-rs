@@ -9,7 +9,7 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use roomkit::model::HookResult;
 use roomkit::model::hook::AllowOptions;
-use roomkit::{HookExecution, HookSpec, HookTrigger, RoomKit, text_of};
+use roomkit::{HookExecution, HookSpec, HookTrigger, RoomKit};
 use roomkit_ai::testing::{ScriptedProvider, ScriptedRound};
 use roomkit_ai::{ToolDefinition, ToolOutput, Tools};
 use serde_json::json;
@@ -19,6 +19,7 @@ use crate::support::{
     AT_ONCE, BOUND, Closer, Door, Witness, attach_agent, ended, kit_with, ok, open, room_id,
     spawn_message, stored,
 };
+use roomkit_core::rules::transcoding::text_of;
 
 /// RFC §12.10.4: a delivery closes the kit while the room's next message
 /// waits behind it in the room's lane: the delivery is spared, the queued

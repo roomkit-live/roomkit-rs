@@ -110,7 +110,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use roomkit::model::{EventContent, EventType, RoomEvent, RoomId, TextContent};
-use roomkit::{ConversationStore, HookTrigger, PostOptions, text_of};
+use roomkit::{ConversationStore, HookTrigger, PostOptions};
 use roomkit_sqlite::SqliteStore;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
@@ -122,6 +122,7 @@ use shared::bakery::{ORDER_42, SYSTEM_PROMPT};
 use shared::server::{
     AgentServer, CHECKING, IMAGE_REFUSED, MESSAGE_LIMIT, Patience, SERVING, STOPPED, TURN_FAILED,
 };
+use shared::text_of;
 use shared::{Checks, FakeOpenAi, OpenAiEndpoint, Reply, TempDatabase, every_row};
 
 /// Where `--serve` listens unless told another address, and the file it

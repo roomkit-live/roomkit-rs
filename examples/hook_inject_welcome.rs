@@ -22,8 +22,7 @@ use roomkit::model::{
 };
 use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
-    AttachChannelOptions, CreateRoomOptions, HookTrigger, LifecyclePayload, ProcessInboundOptions,
-    RoomKit,
+    AttachChannelOptions, CreateRoomOptions, HookTrigger, ProcessInboundOptions, RoomKit,
 };
 
 use shared::{Checks, Log};
@@ -68,10 +67,16 @@ fn welcome_newcomers(
         move |event, _| {
             let noted = noted.clone();
             async move {
-                if let Some(channel_id) =
-                    LifecyclePayload::of(&event).and_then(|attached| attached.channel_id)
+                // The payload names the channel attached in its system
+                // content's data, as Python's `_fire_lifecycle_hook` writes it.
+                if let EventContent::System(content) = &event.content
+                    && let Some(channel_id) =
+                        content.data.get("channel_id").and_then(|id| id.as_str())
                 {
-                    noted.push(channel_id);
+                    noted.push(
+                        ChannelId::new(channel_id)
+                            .unwrap_or_else(|_| event.source.channel_id.clone()),
+                    );
                 }
             }
         },

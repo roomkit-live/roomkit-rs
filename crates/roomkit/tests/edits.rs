@@ -26,8 +26,11 @@ use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CommitEventOptions,
     ConversationStore, CreateRoomOptions, DeleteEventOptions, EventFilter, HookTrigger,
     InboundResult, ProcessInboundOptions, RoomKit, RoomKitOptions, SendEventOptions,
-    UpdateEventOptions, is_deleted, is_edited, text_of,
+    UpdateEventOptions,
 };
+use roomkit_core::rules::edits::is_deleted;
+use roomkit_core::rules::edits::is_edited;
+use roomkit_core::rules::transcoding::text_of;
 use tokio::sync::{Barrier, Notify, mpsc};
 
 const CUSTOMER: &str = "+15551234567";
