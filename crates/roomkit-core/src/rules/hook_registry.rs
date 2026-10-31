@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::model::{ChannelId, ChannelType, EventDirection, EventSource};
+use crate::model::{ChannelId, ChannelType, EventDirection, EventSource, EventType, RoomEvent};
 use crate::rules::chain_depth::{CHAIN_DEPTH_LIMIT, REENTRY_LOOP_CAP};
 use crate::rules::permissions::WriteRefusal;
 
@@ -147,33 +147,93 @@ pub enum HookExecution {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HookId(usize);
 
-/// Which events a hook fires for (RFC §9.1). An absent filter lets every
-/// event through.
+/// Which payloads a hook fires for (RFC §9.1). An absent filter lets every
+/// payload through.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct HookFilter {
-    /// Only events from these channel types.
+    /// Only payloads from these channel types.
     pub channel_types: Option<BTreeSet<ChannelType>>,
-    /// Only events from these channels.
+    /// Only payloads from these channels.
     pub channel_ids: Option<BTreeSet<ChannelId>>,
     /// Only events that travelled in these directions (gap G-013).
     pub directions: Option<BTreeSet<EventDirection>>,
+    /// Only events of these types.
+    pub event_types: Option<BTreeSet<EventType>>,
+}
+
+/// What a hook's filter reads of its payload (RFC §9.1), as the Python
+/// implementation's `_hook_matches_event` reads it: an event's channel,
+/// channel type, direction and type; for any other payload (a tool call, a
+/// session's start) its channel and channel type alone, the direction and
+/// the event type letting it through.
+#[derive(Clone, Copy, Debug)]
+pub struct HookSubject<'payload> {
+    channel_id: &'payload ChannelId,
+    channel_type: &'payload ChannelType,
+    direction: Option<EventDirection>,
+    event_type: Option<&'payload EventType>,
+}
+
+impl<'payload> HookSubject<'payload> {
+    /// The subject of a payload that is no event: a tool call of the agent
+    /// `channel_id`, a session started on it.
+    pub fn of_channel(
+        channel_id: &'payload ChannelId,
+        channel_type: &'payload ChannelType,
+    ) -> Self {
+        Self {
+            channel_id,
+            channel_type,
+            direction: None,
+            event_type: None,
+        }
+    }
+}
+
+impl<'payload> From<&'payload RoomEvent> for HookSubject<'payload> {
+    fn from(event: &'payload RoomEvent) -> Self {
+        Self {
+            channel_id: &event.source.channel_id,
+            channel_type: &event.source.channel_type,
+            direction: Some(event.source.direction),
+            event_type: Some(&event.r#type),
+        }
+    }
+}
+
+impl<'payload> From<&'payload EventSource> for HookSubject<'payload> {
+    /// The subject of an event from `source` whose type no filter reads.
+    fn from(source: &'payload EventSource) -> Self {
+        Self {
+            channel_id: &source.channel_id,
+            channel_type: &source.channel_type,
+            direction: Some(source.direction),
+            event_type: None,
+        }
+    }
 }
 
 impl HookFilter {
-    /// Whether an event from `source` passes the filter.
-    pub fn admits(&self, source: &EventSource) -> bool {
+    /// Whether `subject` passes the filter.
+    pub fn admits(&self, subject: HookSubject<'_>) -> bool {
         self.channel_types
             .as_ref()
-            .is_none_or(|types| types.contains(&source.channel_type))
+            .is_none_or(|types| types.contains(subject.channel_type))
             && self
                 .channel_ids
                 .as_ref()
-                .is_none_or(|ids| ids.contains(&source.channel_id))
-            && self
-                .directions
-                .as_ref()
-                .is_none_or(|directions| directions.contains(&source.direction))
+                .is_none_or(|ids| ids.contains(subject.channel_id))
+            && subject.direction.is_none_or(|direction| {
+                self.directions
+                    .as_ref()
+                    .is_none_or(|directions| directions.contains(&direction))
+            })
+            && subject.event_type.is_none_or(|event_type| {
+                self.event_types
+                    .as_ref()
+                    .is_none_or(|types| types.contains(event_type))
+            })
     }
 }
 
@@ -245,6 +305,10 @@ pub enum RegistrationError {
     OffLockOutsideBeforeBroadcast {
         /// The refused hook.
         hook: String,
+        /// How it would run.
+        execution: HookExecution,
+        /// Its trigger.
+        trigger: HookTrigger,
     },
     /// `fail_closed = true` on an ASYNC hook, which cannot block.
     #[error("hook {hook:?}: an ASYNC hook cannot fail closed")]
@@ -273,8 +337,12 @@ pub enum RegistrationError {
     LockOrdering {
         /// The hook that needs the lock.
         locked: String,
+        /// Its priority.
+        locked_priority: i32,
         /// The off-lock hook it would precede.
         off_lock: String,
+        /// Its priority.
+        off_lock_priority: i32,
     },
 }
 
@@ -319,7 +387,10 @@ impl HookRegistry {
         self.add(spec)
     }
 
-    fn add(&mut self, spec: HookSpec) -> Result<HookId, RegistrationError> {
+    fn add(&mut self, mut spec: HookSpec) -> Result<HookId, RegistrationError> {
+        if spec.name.is_empty() {
+            spec.name = self.default_name();
+        }
         check_alone(&spec)?;
         if self.hooks.iter().any(|(_, hook)| hook.name == spec.name) {
             return Err(RegistrationError::DuplicateName { name: spec.name });
@@ -331,6 +402,21 @@ impl HookRegistry {
             return Err(error);
         }
         Ok(id)
+    }
+
+    /// The name a hook registered without one takes, unique in the
+    /// registry: `hook`, then `hook#2`, `hook#3`..., skipping a reserved
+    /// name, as the Python implementation names a hook from the base it
+    /// takes when its function has no name (`_named`, RFC §9.1).
+    fn default_name(&self) -> String {
+        let taken = |name: &str| is_reserved(name) || self.find(name).is_some();
+        let mut name = "hook".to_owned();
+        let mut rank = 2;
+        while taken(&name) {
+            name = format!("hook#{rank}");
+            rank += 1;
+        }
+        name
     }
 
     /// The registration named `name`.
@@ -351,12 +437,16 @@ impl HookRegistry {
 
     /// The SYNC hooks `trigger` runs as a chain for an event from `source`,
     /// in chain order. An ASYNC trigger runs no chain.
-    pub fn chain(&self, trigger: HookTrigger, source: &EventSource) -> Vec<HookId> {
+    pub fn chain<'payload>(
+        &self,
+        trigger: HookTrigger,
+        subject: impl Into<HookSubject<'payload>>,
+    ) -> Vec<HookId> {
         if trigger.execution() == HookExecution::Async {
             return Vec::new();
         }
         let mut chain: Vec<(&HookId, &HookSpec)> = self
-            .matching(trigger, source)
+            .matching(trigger, subject.into())
             .filter(|(_, spec)| spec.execution == HookExecution::Sync)
             .collect();
         // At equal priority an off-lock hook runs first (RFC §9.3).
@@ -369,21 +459,28 @@ impl HookRegistry {
     /// fires, in chain order, which run before the room lock (RFC §9.5.1,
     /// §10.1 step 5a). The ordering rule keeps them ahead of every hook that
     /// needs the lock, so they are the chain's first hooks.
-    pub fn off_lock_checks(&self, source: &EventSource) -> Vec<HookId> {
-        self.chain_where(source, |spec| !spec.needs_lock)
+    pub fn off_lock_checks<'payload>(
+        &self,
+        subject: impl Into<HookSubject<'payload>>,
+    ) -> Vec<HookId> {
+        self.chain_where(subject.into(), |spec| !spec.needs_lock)
     }
 
     /// The hooks step 9 runs under the lock once an off-lock check ran:
     /// the `BEFORE_BROADCAST` chain of an event from `source` without its
     /// off-lock hooks (RFC §10.1 step 9).
-    pub fn locked_chain(&self, source: &EventSource) -> Vec<HookId> {
-        self.chain_where(source, |spec| spec.needs_lock)
+    pub fn locked_chain<'payload>(&self, subject: impl Into<HookSubject<'payload>>) -> Vec<HookId> {
+        self.chain_where(subject.into(), |spec| spec.needs_lock)
     }
 
     /// The `BEFORE_BROADCAST` chain of an event from `source`, kept to the
     /// hooks `keep` admits.
-    fn chain_where(&self, source: &EventSource, keep: impl Fn(&HookSpec) -> bool) -> Vec<HookId> {
-        self.chain(HookTrigger::BeforeBroadcast, source)
+    fn chain_where(
+        &self,
+        subject: HookSubject<'_>,
+        keep: impl Fn(&HookSpec) -> bool,
+    ) -> Vec<HookId> {
+        self.chain(HookTrigger::BeforeBroadcast, subject)
             .into_iter()
             .filter(|id| self.get(*id).is_some_and(&keep))
             .collect()
@@ -392,22 +489,26 @@ impl HookRegistry {
     /// The hooks `trigger` runs as observers for an event from `source`:
     /// the ASYNC hooks of a SYNC trigger, every hook of an ASYNC trigger
     /// (RFC §9.2).
-    pub fn observers(&self, trigger: HookTrigger, source: &EventSource) -> Vec<HookId> {
+    pub fn observers<'payload>(
+        &self,
+        trigger: HookTrigger,
+        subject: impl Into<HookSubject<'payload>>,
+    ) -> Vec<HookId> {
         let observes_all = trigger.execution() == HookExecution::Async;
-        self.matching(trigger, source)
+        self.matching(trigger, subject.into())
             .filter(|(_, spec)| observes_all || spec.execution == HookExecution::Async)
             .map(|(id, _)| *id)
             .collect()
     }
 
-    fn matching(
-        &self,
+    fn matching<'registry>(
+        &'registry self,
         trigger: HookTrigger,
-        source: &EventSource,
-    ) -> impl Iterator<Item = (&HookId, &HookSpec)> {
+        subject: HookSubject<'registry>,
+    ) -> impl Iterator<Item = (&'registry HookId, &'registry HookSpec)> {
         self.hooks
             .iter()
-            .filter(move |(_, spec)| spec.trigger == trigger && spec.filter.admits(source))
+            .filter(move |(_, spec)| spec.trigger == trigger && spec.filter.admits(subject))
             .map(|(id, spec)| (id, spec))
     }
 
@@ -431,7 +532,9 @@ impl HookRegistry {
                 (false, Some(locked)) => {
                     return Err(RegistrationError::LockOrdering {
                         locked: locked.name.clone(),
+                        locked_priority: locked.priority,
                         off_lock: spec.name.clone(),
+                        off_lock_priority: spec.priority,
                     });
                 }
                 (true, Some(_)) | (false, None) => {}
@@ -475,6 +578,8 @@ fn check_alone(spec: &HookSpec) -> Result<(), RegistrationError> {
     if !spec.needs_lock && !sync_before_broadcast {
         return Err(RegistrationError::OffLockOutsideBeforeBroadcast {
             hook: spec.name.clone(),
+            execution: spec.execution,
+            trigger: spec.trigger,
         });
     }
     if spec.fail_closed && spec.execution == HookExecution::Async {
@@ -661,8 +766,68 @@ mod tests {
             registry.register(off_lock_hook("pii_scan", 5)),
             Err(RegistrationError::LockOrdering {
                 locked: "router".to_owned(),
-                off_lock: "pii_scan".to_owned()
+                locked_priority: 0,
+                off_lock: "pii_scan".to_owned(),
+                off_lock_priority: 5,
             })
+        );
+    }
+
+    /// The Python implementation's `_named`: a hook registered without a
+    /// name takes `hook`, then `hook#2`, the next free in the registry.
+    #[test]
+    fn an_unnamed_hook_is_named_hook_then_hook_2() {
+        let mut registry = HookRegistry::new();
+        let ids = [
+            sync_hook("", 0),
+            sync_hook("", 0),
+            sync_hook("hook#3", 0),
+            sync_hook("", 0),
+        ]
+        .map(|spec| registry.register(spec).unwrap());
+        assert_eq!(
+            names(&registry, &ids),
+            ["hook", "hook#2", "hook#3", "hook#4"]
+        );
+    }
+
+    /// RFC §9.1, as Python's `_hook_matches_event`: `event_types` reads an
+    /// event's type; a payload that is no event (a tool call) passes it, and
+    /// its direction too.
+    #[test]
+    fn event_types_filter_events_and_let_other_payloads_through() {
+        let mut registry = HookRegistry::new();
+        let mut spec = sync_hook("messages_only", 0);
+        spec.filter.event_types = Some(BTreeSet::from([EventType::Message]));
+        spec.filter.directions = Some(BTreeSet::from([EventDirection::Outbound]));
+        registry.register(spec).unwrap();
+        let event = |r#type: EventType, direction: EventDirection| {
+            RoomEvent::at(
+                crate::model::EventId::new("e1").unwrap(),
+                crate::model::RoomId::new("r1").unwrap(),
+                r#type,
+                EventSource {
+                    direction,
+                    ..sms_source()
+                },
+                crate::model::TextContent::new("hi"),
+                crate::model::Timestamp::UNIX_EPOCH,
+            )
+        };
+        let chained = |subject: HookSubject<'_>| {
+            !registry
+                .chain(HookTrigger::BeforeBroadcast, subject)
+                .is_empty()
+        };
+        let (sms, kind) = (ChannelId::new("sms").unwrap(), ChannelType::SMS);
+        assert_eq!(
+            [
+                chained((&event(EventType::Message, EventDirection::Outbound)).into()),
+                chained((&event(EventType::System, EventDirection::Outbound)).into()),
+                chained((&event(EventType::Message, EventDirection::Inbound)).into()),
+                chained(HookSubject::of_channel(&sms, &kind)),
+            ],
+            [true, false, false, true]
         );
     }
 

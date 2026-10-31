@@ -199,7 +199,7 @@ impl Machine {
     /// off-lock hook fires for it; otherwise its pass starts at once, with
     /// no ticket (RFC §9.5.1).
     pub(super) fn after_arrival(&mut self, cx: &mut Cx<'_>, arrived: Arrived) {
-        let hooks = cx.config.hooks.off_lock_checks(&arrived.event.source);
+        let hooks = cx.config.hooks.off_lock_checks(&arrived.event);
         if hooks.is_empty() {
             return self.start_trigger(arrived.event, None);
         }

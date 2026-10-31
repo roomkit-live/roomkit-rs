@@ -39,6 +39,8 @@ pub(crate) enum Reported<'change> {
     SessionStarted {
         channel_id: &'change ChannelId,
         channel_type: &'change ChannelType,
+        /// The message's sender.
+        participant_id: &'change str,
     },
 }
 
@@ -72,6 +74,7 @@ impl Reported<'_> {
             Self::SessionStarted {
                 channel_id,
                 channel_type,
+                ..
             } => Some(FrameworkEvent::SessionStarted {
                 room_id,
                 channel_id: channel_id.clone(),
@@ -202,7 +205,7 @@ pub(crate) fn announce(cx: &mut Cx<'_>, reported: Reported<'_>, room_id: &RoomId
 fn observers(cx: &mut Cx<'_>, reported: Reported<'_>, context: &RoomContext) -> Option<Observers> {
     let trigger = reported.trigger()?;
     let payload = payload(cx, reported, &context.room.id);
-    let hooks = cx.config.hooks.observers(trigger, &payload.source);
+    let hooks = cx.config.hooks.observers(trigger, &payload);
     (!hooks.is_empty()).then_some(Observers {
         trigger,
         hooks,
@@ -307,11 +310,17 @@ fn described(reported: Reported<'_>, room_id: &RoomId) -> (EventType, SystemCont
         Reported::SessionStarted {
             channel_id,
             channel_type,
+            participant_id,
         } => (
             EventType::System,
             "session_started",
             format!("Session started on channel {channel_id}"),
-            json!({ "room_id": room_id, "channel_id": channel_id, "channel_type": channel_type }),
+            json!({
+                "room_id": room_id,
+                "channel_id": channel_id,
+                "channel_type": channel_type,
+                "participant_id": participant_id,
+            }),
         ),
     };
     let data = if let Value::Object(members) = data {

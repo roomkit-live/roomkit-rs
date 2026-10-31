@@ -77,6 +77,9 @@ pub(super) struct NamedRoom {
     channel: Box<ChannelDeclaration>,
     /// The message's sender, as routing names them (RFC §10.4).
     sender: Sender,
+    /// The message's sender id, as the channel wrote it: the participant a
+    /// session the creation starts names.
+    sender_id: String,
     mode: Mode,
     /// The call's deadline (RFC §13.6).
     bound: Bound,
@@ -149,6 +152,7 @@ impl NamedRoom {
             organization_id,
             channel,
             sender,
+            sender_id: String::new(),
             mode,
             bound,
             opening: None,
@@ -156,6 +160,12 @@ impl NamedRoom {
             created: false,
             state: State::Start,
         }
+    }
+
+    /// The same step, of a message whose sender id is `sender_id`.
+    pub(super) fn sent_by(mut self, sender_id: String) -> Self {
+        self.sender_id = sender_id;
+        self
     }
 
     /// The same step, charging `opening` one pass before it creates the
@@ -449,6 +459,7 @@ impl NamedRoom {
             let started = Reported::SessionStarted {
                 channel_id: &self.channel.channel_id,
                 channel_type: &self.channel.channel_type,
+                participant_id: &self.sender_id,
             };
             report::report(cx, started, &context);
         }

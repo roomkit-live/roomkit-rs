@@ -93,7 +93,7 @@ impl Cx<'_> {
         payload: &RoomEvent,
         context: &RoomContext,
     ) {
-        let hooks = self.config.hooks.observers(trigger, &payload.source);
+        let hooks = self.config.hooks.observers(trigger, payload);
         if hooks.is_empty() {
             return;
         }
@@ -145,7 +145,7 @@ impl Cx<'_> {
         budget: &ReentryBudget,
         floor: u32,
     ) {
-        let hooks = self.config.hooks.observers(trigger, &payload.source);
+        let hooks = self.config.hooks.observers(trigger, payload);
         if hooks.is_empty() {
             return;
         }

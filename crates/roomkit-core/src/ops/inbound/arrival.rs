@@ -424,6 +424,7 @@ impl Arrival {
                 self.sender.clone(),
                 self.bound,
             )
+            .sent_by(self.message.sender_id.clone())
             .opening_on(opening),
         );
         step.start(cx);

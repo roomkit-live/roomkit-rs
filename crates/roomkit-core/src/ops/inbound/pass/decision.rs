@@ -46,11 +46,12 @@ impl CommitPass {
     /// that need the lock, its outcome applied first (RFC §9.5.1); with no
     /// check, the whole chain runs here.
     pub(super) fn start_hooks(&mut self, cx: &mut Cx<'_>, context: Box<RoomContext>) -> State {
-        let source = &self.event.source;
         let run = match self.checked.take() {
-            Some(chain) => HookRun::new(cx.config.hooks.locked_chain(source), *chain),
+            Some(chain) => HookRun::new(cx.config.hooks.locked_chain(&self.event), *chain),
             None => HookRun::of(
-                cx.config.hooks.chain(HookTrigger::BeforeBroadcast, source),
+                cx.config
+                    .hooks
+                    .chain(HookTrigger::BeforeBroadcast, &self.event),
                 &self.event,
             ),
         };
