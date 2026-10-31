@@ -5,7 +5,10 @@
 use std::sync::{Arc, Mutex};
 
 use roomkit::model::{RoomId, TextContent};
-use roomkit::{CreateRoomOptions, RoomKitError, SendEventOptions, TurnHost, current_turn_host};
+use roomkit::{
+    CreateRoomOptions, GetTimelineOptions, RoomKitError, SendEventOptions, TurnHost,
+    current_turn_host,
+};
 use roomkit_ai::ToolOutput;
 
 use crate::support::{asks, channel, kit};
@@ -47,7 +50,7 @@ async fn a_turn_s_host_refuses_another_room() {
     asks(&kit, "What is it?").await;
 
     let elsewhere = kit
-        .get_timeline(&RoomId::new("r2").unwrap(), Default::default())
+        .get_timeline(&RoomId::new("r2").unwrap(), GetTimelineOptions::default())
         .await
         .unwrap();
     assert_eq!(

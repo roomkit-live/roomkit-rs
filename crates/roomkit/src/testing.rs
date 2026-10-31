@@ -166,7 +166,7 @@ impl Channel for RecordingTransport {
 
 /// What [`EchoAgent::new`] takes beside the channel's id and its reply,
 /// Python's `EchoAgent` keywords.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EchoAgentOptions {
     /// Python `quote=False`: the reply is followed by the text of the event
     /// it answers.

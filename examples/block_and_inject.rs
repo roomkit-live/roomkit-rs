@@ -15,12 +15,11 @@ use roomkit::model::{
     ChannelId, ChannelType, EventDirection, EventSource, EventStatus, HookResult, InboundMessage,
     InjectedEvent, Observation, RoomEvent, RoomId, TextContent, Timestamp,
 };
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
 use roomkit::{
     AttachChannelOptions, ConversationStore, CreateRoomOptions, ProcessInboundOptions, text_of,
 };
 
-use shared::{Checks, Clock};
+use shared::{Checks, Clock, recording};
 
 /// A Canadian social insurance number, as `123-456-789`.
 fn has_sin(text: &str) -> bool {
@@ -73,16 +72,8 @@ async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = clock.kit();
     let now = clock.now();
 
-    let customer = RecordingTransport::new(
-        ChannelId::new("sms_customer")?,
-        ChannelType::SMS,
-        RecordingTransportOptions::default(),
-    );
-    let advisor = RecordingTransport::new(
-        ChannelId::new("ws_advisor")?,
-        ChannelType::WEBSOCKET,
-        RecordingTransportOptions::default(),
-    );
+    let customer = recording("sms_customer", ChannelType::SMS)?;
+    let advisor = recording("ws_advisor", ChannelType::WEBSOCKET)?;
     kit.register_channel(customer.clone())?;
     kit.register_channel(advisor.clone())?;
 

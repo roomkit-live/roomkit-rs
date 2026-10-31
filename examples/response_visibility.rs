@@ -35,13 +35,13 @@ use roomkit::model::{
     ChannelType, EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId,
     TextContent, Visibility,
 };
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     ProcessInboundOptions, RoomKit, text_of,
 };
 
-use shared::Checks;
+use shared::{Checks, recording};
 
 /// An assistant that answers each question, for everyone: where an answer
 /// goes is the question's to say.
@@ -138,21 +138,9 @@ async fn writes(
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let call = RecordingTransport::new(
-        ChannelId::new("call")?,
-        ChannelType::VOICE,
-        RecordingTransportOptions::default(),
-    );
-    let screen = RecordingTransport::new(
-        ChannelId::new("screen")?,
-        ChannelType::WEBSOCKET,
-        RecordingTransportOptions::default(),
-    );
-    let supervisor = RecordingTransport::new(
-        ChannelId::new("supervisor")?,
-        ChannelType::WEBSOCKET,
-        RecordingTransportOptions::default(),
-    );
+    let call = recording("call", ChannelType::VOICE)?;
+    let screen = recording("screen", ChannelType::WEBSOCKET)?;
+    let supervisor = recording("supervisor", ChannelType::WEBSOCKET)?;
     let assistant = ChannelId::new("assistant")?;
     kit.register_channel(call.clone())?;
     kit.register_channel(screen.clone())?;

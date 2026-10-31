@@ -18,6 +18,7 @@
 //! - [`server`] and [`bakery`]: the bakery's agent, its prompt and its
 //!   `lookup_order` tool, served over WebSocket with its rooms in SQLite,
 //!   which the server examples run;
+//! - [`recording`]: a recording transport named by a string;
 //! - [`TempDatabase`]: a database file the example leaves nothing of;
 //! - [`mcp`]: a shop's MCP server over stdio, which the MCP example runs
 //!   as its own process, and what is left of the processes it started;
@@ -35,6 +36,7 @@ pub mod mcp;
 mod observe;
 mod openai;
 mod print;
+mod recording;
 pub mod server;
 mod sms;
 mod websocket;
@@ -46,5 +48,6 @@ pub use self::files::TempDatabase;
 pub use self::observe::{Log, framework_events};
 pub use self::openai::{FakeOpenAi, OpenAiEndpoint, Reply};
 pub use self::print::{every_row, print_timeline, timeline};
+pub use self::recording::recording;
 pub use self::sms::SmsNumber;
 pub use self::websocket::{ConnectionId, Registration, WebSocketChannel, row_fields};

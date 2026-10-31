@@ -666,6 +666,29 @@ pub(crate) fn with_causes(error: &dyn std::error::Error) -> String {
     message
 }
 
+/// What a [`RoomKitError::TurnLink`] says without a message of its own, as
+/// Python's `TurnLinkError` says it.
+fn turn_link_message(reason: &str, message: Option<&str>) -> String {
+    match message {
+        Some(message) => message.to_owned(),
+        None if reason == "backend_closed" => "The turn ended: its turn backend closed".to_owned(),
+        None => format!("The turn ended without its executor: {reason}"),
+    }
+}
+
+/// The class a [`RoomKitError::RemoteTurn`] is reported under, as Python's
+/// `error_type_name` reads it: the last name of the class it had, else
+/// `RemoteTurnError`.
+fn remote_class_name(kind: &str) -> String {
+    let name = kind.rsplit(':').next().unwrap_or(kind);
+    let name = name.rsplit('.').next().unwrap_or(name);
+    if name.is_empty() {
+        "RemoteTurnError".to_owned()
+    } else {
+        name.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -866,28 +889,5 @@ mod tests {
                 "'del\\x7f'"
             ]
         );
-    }
-}
-
-/// What a [`RoomKitError::TurnLink`] says without a message of its own, as
-/// Python's `TurnLinkError` says it.
-fn turn_link_message(reason: &str, message: Option<&str>) -> String {
-    match message {
-        Some(message) => message.to_owned(),
-        None if reason == "backend_closed" => "The turn ended: its turn backend closed".to_owned(),
-        None => format!("The turn ended without its executor: {reason}"),
-    }
-}
-
-/// The class a [`RoomKitError::RemoteTurn`] is reported under, as Python's
-/// `error_type_name` reads it: the last name of the class it had, else
-/// `RemoteTurnError`.
-fn remote_class_name(kind: &str) -> String {
-    let name = kind.rsplit(':').next().unwrap_or(kind);
-    let name = name.rsplit('.').next().unwrap_or(name);
-    if name.is_empty() {
-        "RemoteTurnError".to_owned()
-    } else {
-        name.to_owned()
     }
 }

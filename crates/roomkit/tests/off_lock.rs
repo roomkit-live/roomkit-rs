@@ -470,19 +470,20 @@ struct B2 {
 
 /// RFC Appendix B.2, as the `block_and_inject` example runs it, its
 /// scanner registered off the lock or under it.
+/// A recording transport `id` of `channel_type`.
+fn recording(id: &str, channel_type: ChannelType) -> RecordingTransport {
+    RecordingTransport::new(
+        channel(id),
+        channel_type,
+        RecordingTransportOptions::default(),
+    )
+}
+
 async fn block_and_inject(needs_lock: bool) -> B2 {
     let now = Timestamp::from_unix_millis(1_792_677_780_000).unwrap();
     let kit = kit_with_environment(RoomKitOptions::default(), SequentialEnvironment::new(now));
-    let customer = RecordingTransport::new(
-        channel("sms_customer"),
-        ChannelType::SMS,
-        RecordingTransportOptions::default(),
-    );
-    let advisor = RecordingTransport::new(
-        channel("ws_advisor"),
-        ChannelType::WEBSOCKET,
-        RecordingTransportOptions::default(),
-    );
+    let customer = recording("sms_customer", ChannelType::SMS);
+    let advisor = recording("ws_advisor", ChannelType::WEBSOCKET);
     kit.register_channel(customer.clone()).unwrap();
     kit.register_channel(advisor.clone()).unwrap();
     let to_customer = notice("Message blocked. Do not send your SIN by SMS.", now);

@@ -23,14 +23,14 @@ use roomkit::model::{
     ChannelBinding, ChannelCategory, ChannelDirection, ChannelId, ChannelOutput, ChannelType,
     EventDirection, EventSource, InboundMessage, RoomContext, RoomEvent, RoomId, TextContent,
 };
-use roomkit::testing::{RecordingTransport, RecordingTransportOptions};
+use roomkit::testing::RecordingTransport;
 use roomkit::{
     AttachChannelOptions, Channel, ChannelDeclaration, ChannelError, CreateRoomOptions,
     FrameworkEvent, ProcessInboundOptions, RoomKit, RoomKitError, SendEventOptions, WeakRoomKit,
     text_of,
 };
 
-use shared::{Checks, Log};
+use shared::{Checks, Log, recording};
 
 /// The note an agent's turn sent, as `send_event` returned it, and whether
 /// the customer had received it by then.
@@ -136,21 +136,9 @@ impl Channel for Agent {
 #[tokio::main]
 async fn main() -> Result<ExitCode, Box<dyn Error>> {
     let kit = shared::kit();
-    let customer = RecordingTransport::new(
-        ChannelId::new("sms")?,
-        ChannelType::SMS,
-        RecordingTransportOptions::default(),
-    );
-    let console = RecordingTransport::new(
-        ChannelId::new("console")?,
-        ChannelType::WEBSOCKET,
-        RecordingTransportOptions::default(),
-    );
-    let crm = RecordingTransport::new(
-        ChannelId::new("crm")?,
-        ChannelType::WEBSOCKET,
-        RecordingTransportOptions::default(),
-    );
+    let customer = recording("sms", ChannelType::SMS)?;
+    let console = recording("console", ChannelType::WEBSOCKET)?;
+    let crm = recording("crm", ChannelType::WEBSOCKET)?;
     let notes = Log::new();
     let agent = Agent::new(ChannelId::new("agent")?, &kit, &customer, &notes);
     let agent_id = agent.declaration.channel_id.clone();
