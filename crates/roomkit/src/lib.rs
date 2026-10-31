@@ -27,14 +27,12 @@
 //!   [`InMemoryStore`] by default.
 //! - [`testing`]: a recording transport and an echo agent, and a kit on a
 //!   clock and ids a test sets, for tests and examples.
-//! - [`transcript`]: the conversation an agent's turn hands its model, each
-//!   message in its author's role and labelled by its speaker as RFC §6.4
-//!   requires of an AI channel, and the tool rounds within a turn.
+//! - [`tools`]: Python's `roomkit.tools` helpers, the fence a tool puts
+//!   around what came from outside it (RFC §6.4).
 //! - [`current_turn_host`] and [`TurnHost`]: the intelligence turn the current
 //!   task runs within, which writes to its room and runs the kit's tool
-//!   hooks ([`RoomKit::before_tool_use`], [`RoomKit::on_tool_call`],
-//!   [`RoomKit::observe_tool_calls`], RFC §9.3) on each call its tool loop
-//!   makes.
+//!   hooks, registered with [`RoomKit::hook`] on `BEFORE_TOOL_USE` and
+//!   `ON_TOOL_CALL` (RFC §9.3), on each call its tool loop makes.
 //! - The turn backend (RFC §10.6): every intelligence turn runs through the
 //!   kit's in-memory backend, between the kit, the room's owner, and the
 //!   kit's own turn executor, as serialized messages; its bounds are
@@ -82,11 +80,11 @@ pub mod model {
         Access, AgentResponsePolicy, AudioContent, ChannelBinding, ChannelCapabilities,
         ChannelCategory, ChannelDirection, ChannelId, ChannelMediaType, ChannelOutput, ChannelSet,
         ChannelType, CompositeContent, Confidence, DeleteContent, DeleteType, DeliveryError,
-        DeliveryResult, DeliveryResultStatus, DirectEvent, EditContent, EditSource, ErrorRecord,
-        EventContent, EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates,
-        HookAction, HookResult, IdentificationStatus, Identity, IdentityId, InboundMessage,
-        InjectedEvent, Latitude, LocationContent, Longitude, MediaContent, Metadata, ModelError,
-        Observation, ObservationId, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
+        DeliveryResult, DeliveryResultStatus, EditContent, EditSource, ErrorRecord, EventContent,
+        EventDirection, EventId, EventSource, EventStatus, EventType, EventUpdates, HookAction,
+        HookResult, IdentificationStatus, Identity, IdentityId, InboundMessage, InjectedEvent,
+        Latitude, LocationContent, Longitude, MediaContent, Metadata, ModelError, Observation,
+        ObservationId, Participant, ParticipantId, ParticipantRole, ParticipantStatus,
         ProviderResult, RateLimit, RetryPolicy, RichContent, RichFormat, Room, RoomContext,
         RoomEvent, RoomId, RoomStatus, RoomTimers, RoomUpdates, SystemContent, Task, TaskId,
         TaskStatus, TemplateContent, TextContent, Timestamp, ToolCallContent, ToolCallOutcome,

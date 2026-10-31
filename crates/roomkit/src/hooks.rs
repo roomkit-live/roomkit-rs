@@ -13,6 +13,7 @@ use roomkit_core::model::{
     ChannelId, ChannelType, ErrorRecord, EventContent, EventDirection, EventType, HookAction,
     HookResult, RoomContext, RoomEvent, RoomId, Timestamp,
 };
+use roomkit_core::ops::{Environment, SystemEnvironment};
 use roomkit_core::rules::hook_chain::HookOutcome;
 use roomkit_core::rules::hook_registry::{HookExecution, HookFilter, HookSpec, HookTrigger};
 
@@ -196,6 +197,24 @@ pub struct SessionStartedEvent {
 }
 
 impl SessionStartedEvent {
+    /// The session `participant_id` started on the channel `channel_id` of
+    /// `channel_type` in `room_id`, now by the system clock, as Python's
+    /// constructor defaults its timestamp.
+    pub fn new(
+        room_id: RoomId,
+        channel_id: ChannelId,
+        channel_type: ChannelType,
+        participant_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            room_id,
+            channel_id,
+            channel_type,
+            participant_id: participant_id.into(),
+            timestamp: SystemEnvironment.now(),
+        }
+    }
+
     /// The session the framework's `session_started` payload reports, if it
     /// reports one.
     pub(crate) fn of(payload: &RoomEvent) -> Option<Self> {

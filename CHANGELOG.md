@@ -64,7 +64,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   remain unknown instead of becoming zero. (RMK-1029)
 
 The public API in the Python implementation's terms (step 5, lot 1: the
-kit, its construction and its calls; lot 2: the model and the errors).
+kit, its construction and its calls; lot 2: the model and the errors;
+lot 3: the hooks, the framework events and the turn's host).
 
 ### Changed
 
@@ -444,7 +445,76 @@ kit, its construction and its calls; lot 2: the model and the errors).
   A deleted start row ends its round in a turn run through the kit too,
   whose history hands it with its content withheld.
 
+- **One hook registration, Python's `RoomKit.hook`**: `kit.hook(trigger,
+  handler, HookOptions { execution, priority, name, timeout,
+  channel_types, channel_ids, directions, event_types, fail_closed,
+  needs_lock })`, and `kit.hook_handler` for a handler type of its own.
+  The handler takes the payload its trigger hands, written on its
+  argument (`|event: RoomEvent, context|`): a `RoomEvent`, a
+  `ToolCallEvent` for `BEFORE_TOOL_USE` and `ON_TOOL_CALL`, a
+  `SessionStartedEvent` for `ON_SESSION_STARTED`; another is refused at
+  registration. It returns a `HookResult`, an `Option` of one or `()`:
+  `None` and `()` are Python's `None`, an unusable result, which lets the
+  payload through unless the hook or its trigger fails closed.
+  `before_broadcast`, `observe`, `before_tool_use`, `on_tool_call`,
+  `observe_tool_calls`, `HookSpec`, `HookFilter`, `HookId`,
+  `ToolHookSpec`, `ToolUse` and `ToolVerdict` go. A hook given no name is
+  named `hook`, then `hook#2`, as Python names a `<lambda>`; `event_types`
+  filters an event's type. A refused registration reads as Python's
+  `ValueError`, word for word.
+- **The tool hooks run as Python's.** `ToolCallEvent` is Python's: `name`,
+  `tool_call_id`, `arguments`, `result` (`None` before the call ran and
+  for a call nothing served), `is_error`, `cancelled`, `refused`,
+  `structured_content`, `error_detail`, `intent`. In `BEFORE_TOOL_USE`, a
+  `modify` is read by the next hook and runs the call; a rewrite under
+  `metadata["arguments"]` is read by no later hook and the last one wins;
+  arguments that are not an object refuse the call. In `ON_TOOL_CALL`,
+  `metadata["result"]` and `metadata["structured_content"]` replace the
+  result and its structured copy, a served call emptied reads `null`, a
+  SYNC hook may serve a call nothing served, a block withholds the result
+  with `{"error": "<reason>"}`, and a hook that fails closed withholds it
+  as `hook_error`, `hook_timeout` or `hook_invalid_result:<name>`. A blank
+  reason is kept as written, as Python keeps it. Each call emits the
+  `before_tool_use` and `tool_call` framework events.
+- **Framework events are Python's.** `kit.on(event_type, handler)` for
+  `subscribe`; a `FrameworkEvent` is flat, Python's `type`, `room_id`,
+  `channel_id`, `event_id`, `timestamp` and `data`, and its handlers are
+  awaited before the call that emitted it goes on, as Python awaits them.
+  An inbound event's `event_processed` follows its `AFTER_BROADCAST`
+  hooks, once they are over, where it came before they started
+  (RMK-1020).
+- **A lifecycle hook's payload is Python's**: an event of the change's
+  type from the framework's `system` source, its system content Python's
+  code, message and data (`room_paused`, `room_closed_by_timer` with its
+  threshold and the instant it fell due, `channel_attached` with the
+  access and the visibility). `LifecyclePayload` and `LifecycleChange`
+  go. A session's start reaches its hooks whatever their filters, as
+  Python fires it.
+- **The turn's host is Python's `TurnHost`**: `current_turn_host()`,
+  `send_event(room_id, channel_id, content, SendEventOptions)`, `open()`
+  and `reachable()`; `room_id`, `channel_id` and `context` go. A failure
+  across the turn backend is `RoomKitError::RemoteTurn { message, kind,
+  bases }` or `TurnLink { reason, message }`, Python's `RemoteTurnError`
+  and `TurnLinkError`, for `TurnError`. `TurnTimeouts` keeps its fields,
+  `silent_intervals` public, and its `with_*` builders go.
+- `RecordingTransport::new(channel_id, channel_type,
+  RecordingTransportOptions)` and `EchoAgent::new(channel_id, reply,
+  EchoAgentOptions)` take Python's keywords; `id()` is `channel_id()`.
+- Out of the public API, as Python keeps them private: `text_of`,
+  `is_deleted`, `is_edited`, `turn_context`, `transcript`, `Transition`,
+  `TransitionReason`, `RefusedOperation`, `ChainDepthData`,
+  `CHANNEL_NOT_REGISTERED`, `DirectEvent` and `HookTrigger::execution`,
+  `fails_closed` and `is_tool_trigger`. `fence` is
+  `roomkit::tools::fence`, Python's `roomkit.tools.fence`.
+
 ### Added
+
+- `ToolError::Unserved`, Python's `UnservedToolCallError`: a tool declines a
+  call that is not its to serve, and a SYNC `ON_TOOL_CALL` hook may serve
+  it; the model reads `{"error": "No handler for tool x"}` when none does.
+- `FrameworkEvent::new(type)` and `SessionStartedEvent::new(room_id,
+  channel_id, channel_type, participant_id)`, Python's constructors, the
+  timestamp from the system clock.
 
 - `RoomKitError::code()` and `RoomKitError::retryable()`, Python's
   `KitClosedError.code` and `.retryable` (`kit_closed`, retryable) and

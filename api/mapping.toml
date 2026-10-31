@@ -112,6 +112,8 @@ roomkit_sqlite = ["roomkit", "roomkit.store"]
 "roomkit.ProviderDeliveryError" = []
 "roomkit.KitClosedError" = []
 "roomkit.ShutdownCancelledError" = []
+"roomkit.RemoteTurnError" = []
+"roomkit.TurnLinkError" = []
 
 [rules.error_families."roomkit_ai::SkillError"]
 "roomkit.skills.SkillDiscoveryError" = []
@@ -127,6 +129,13 @@ python = "roomkit.RoomKit.attach_channel"
 params = { direction = "kwargs", muted = "kwargs", output_muted = "kwargs", participant_id = "kwargs", group = "kwargs", last_read_index = "kwargs", attached_at = "kwargs", rate_limit = "kwargs", retry_policy = "kwargs", metadata = "kwargs" }
 py_spec = "sha256:4b2a61decacb668503c8a74d01ebf57c79e35c4517cb681eee19fbae86eadbd6"
 reason = "Python's **kwargs, which go to the binding's fields (the architecture table)"
+
+[[map]]
+rust = "roomkit::TurnHost::send_event"
+python = "roomkit.TurnHost.send_event"
+params = { event_type = "options", chain_depth = "options", participant_id = "options", metadata = "options", visibility = "options", provider = "options", response_visibility = "options", created_at = "options", parent_event_id = "options", idempotency_key = "options", addressed_to = "options", organization_id = "options", standalone = "options" }
+py_spec = "sha256:cda3ae00394890976927968001a8e134439858737b8bf28a59bc11d358f20dc9"
+reason = "Python's **options, which go to RoomKit.send_event's keywords"
 
 # The architecture table's exceptions, approved with the plan on 2026-10-27.
 
@@ -194,6 +203,28 @@ reason = "a handler type of its own, or a boxed future (decision 18)"
 rust = "roomkit::HookReturn"
 approved = "2026-10-27"
 reason = "a handler type of its own, or a boxed future (decision 18)"
+
+[[exception]]
+rust = "roomkit::HookPayload"
+approved = "2026-10-27"
+reason = "any callable, its payload by trigger: static types fix a closure's argument when it is registered (decision 8)"
+
+[[exception]]
+rust = "roomkit::IntoHookReturn"
+approved = "2026-10-27"
+reason = "any callable, its payload by trigger: static types fix what a closure returns when it is registered (decision 8)"
+
+[[exception]]
+rust = "roomkit::RoomKit::hook"
+params = ["handler"]
+approved = "2026-10-31"
+reason = "Rust has no decorator: the function @kit.hook(...) decorates is the call's argument (architecture table, language row)"
+
+[[exception]]
+rust = "roomkit::RoomKit::on"
+params = ["handler"]
+approved = "2026-10-31"
+reason = "Rust has no decorator: the function @kit.on(event_type) decorates is the call's argument (architecture table, language row)"
 
 [[exception]]
 rust = "roomkit::RoomKit"
@@ -389,6 +420,11 @@ params = ["session"]
 reason = "not in 0.x: voice and video"
 
 [[missing]]
+python = "roomkit.SessionStartedEvent.__init__"
+params = ["session"]
+reason = "not in 0.x: voice and video"
+
+[[missing]]
 python = "roomkit.DeliveryHandle"
 members = ["cancel"]
 reason = "Rust exposes request_cancel plus wait for owned detached runs; Python cancel and cancellation of adopted delivery are not yet mapped"
@@ -577,269 +613,6 @@ reason = "not in 0.x: retries and response schemas of OpenAIConfig"
 
 # Known differences, by the lot of step 5 that removes them; lot 6 requires
 # none left. "?": the plan names no lot.
-
-[[pending]]
-lot = 3
-python = "roomkit.FrameworkEvent"
-members = ["__init__"]
-reason = "decision 10: kit.on(event_type, handler) and Python's flat FrameworkEvent; subscribe goes"
-
-[[pending]]
-lot = 3
-python = "roomkit.RoomKit"
-members = ["on"]
-reason = "decision 10: kit.on(event_type, handler) and Python's flat FrameworkEvent; subscribe goes"
-
-[[pending]]
-lot = 3
-python = "roomkit.RoomKit.hook"
-params = [
-    "trigger", "execution", "priority", "name", "timeout", "channel_types",
-    "channel_ids", "directions", "event_types", "fail_closed", "needs_lock",
-]
-reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
-
-[[pending]]
-lot = 3
-python = "roomkit.ToolCallEvent.__init__"
-params = [
-    "channel_type", "tool_call_id", "name", "arguments", "timestamp",
-    "is_error", "cancelled", "structured_content", "refused",
-    "refused_but_ran", "intent",
-]
-reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
-
-[[pending]]
-lot = 3
-python = "roomkit.TurnHost"
-members = ["open", "reachable"]
-reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
-
-[[pending]]
-lot = 3
-python = "roomkit.TurnHost.send_event"
-params = ["room_id", "channel_id", "content", "options"]
-reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
-
-[[pending]]
-lot = 3
-python = "roomkit.TurnTimeouts"
-members = ["silent_intervals"]
-reason = "lot 3: TurnTimeouts keeps its fields and Default; silent_intervals is public; the with_* builders go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::CHANNEL_NOT_REGISTERED"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::ChainDepthData"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::FrameworkEvent"
-members = [
-    "channel_registered", "channel_unregistered", "room_created",
-    "room_paused", "room_closed", "room_archived", "room_refused_event",
-    "room_channel_attached", "room_channel_detached", "session_started",
-    "event_processed", "event_blocked", "delivery_succeeded",
-    "delivery_failed", "broadcast_partial_failure", "chain_depth_exceeded",
-    "hook_error", "process_timeout", "hook_timeout", "ChannelRegistered",
-    "ChannelUnregistered", "RoomCreated", "RoomPaused", "RoomClosed",
-    "RoomArchived", "RoomRefusedEvent", "RoomChannelAttached",
-    "RoomChannelDetached", "SessionStarted", "EventProcessed", "EventBlocked",
-    "DeliverySucceeded", "DeliveryFailed", "BroadcastPartialFailure",
-    "ChainDepthExceeded", "HookError", "ProcessTimeout", "HookTimeout",
-]
-reason = "decision 10: kit.on(event_type, handler) and Python's flat FrameworkEvent; subscribe goes"
-
-[[pending]]
-lot = 3
-rust = "roomkit::HookFilter"
-reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::HookId"
-reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::HookSpec"
-reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::HookTrigger"
-members = ["execution", "fails_closed", "is_tool_trigger"]
-reason = "decision 16: a helper public in Rust and private in Python is hidden"
-
-[[pending]]
-lot = 3
-rust = "roomkit::LifecycleChange"
-reason = "lot 3: lifecycle hook payloads are Python's; LifecyclePayload and LifecycleChange leave the public API"
-
-[[pending]]
-lot = 3
-rust = "roomkit::LifecyclePayload"
-reason = "lot 3: lifecycle hook payloads are Python's; LifecyclePayload and LifecycleChange leave the public API"
-
-[[pending]]
-lot = 3
-rust = "roomkit::RefusedOperation"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::RoomKit"
-members = ["subscribe"]
-reason = "decision 10: kit.on(event_type, handler) and Python's flat FrameworkEvent; subscribe goes"
-
-[[pending]]
-lot = 3
-rust = "roomkit::RoomKit"
-members = ["before_broadcast", "observe"]
-reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::RoomKit"
-members = ["before_tool_use", "on_tool_call", "observe_tool_calls"]
-reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::RoomKit::hook"
-params = ["spec", "handler"]
-reason = "decision 8: one registration, kit.hook(trigger, handler, HookOptions); HookSpec, HookFilter, HookId and the shortcuts go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::ToolCallEvent"
-members = ["call", "outcome", "ended", "with_error_detail"]
-reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::ToolCallEvent::new"
-params = ["room_id", "call"]
-reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::ToolHookSpec"
-reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::ToolUse"
-reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::ToolVerdict"
-reason = "decision 8: tool hooks through kit.hook and Python's ToolCallEvent; ToolHookSpec, ToolUse and ToolVerdict go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::Transition"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::TransitionReason"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::RoomKitError"
-members = ["Turn"]
-reason = "lot 3: TurnError goes; its two cases become RoomKitError::RemoteTurn and TurnLink, Python's RemoteTurnError and TurnLinkError (decision 9)"
-
-[[pending]]
-lot = 3
-rust = "roomkit::TurnError"
-reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
-
-[[pending]]
-lot = 3
-rust = "roomkit::TurnHost"
-members = ["room_id", "channel_id", "context"]
-reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
-
-[[pending]]
-lot = 3
-rust = "roomkit::TurnHost::send_event"
-params = ["event"]
-reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
-
-[[pending]]
-lot = 3
-rust = "roomkit::TurnTimeouts"
-members = ["with_accept", "with_heartbeat_interval", "with_heartbeat_timeout", "with_cancel"]
-reason = "lot 3: TurnTimeouts keeps its fields and Default; silent_intervals is public; the with_* builders go"
-
-[[pending]]
-lot = 3
-rust = "roomkit::current_turn"
-reason = "lot 3: current_turn_host, TurnHost::send_event(room_id, channel_id, content, SendEventOptions), open and reachable; TurnError becomes lot 2's variants"
-
-[[pending]]
-lot = 3
-rust = "roomkit::is_deleted"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::is_edited"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::testing::TappedMessage"
-reason = "decision 17: TurnTap and TappedMessage get #[doc(hidden)]"
-
-[[pending]]
-lot = 3
-rust = "roomkit::testing::TurnTap"
-reason = "decision 17: TurnTap and TappedMessage get #[doc(hidden)]"
-
-[[pending]]
-lot = 3
-rust = "roomkit::text_of"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::transcript::Message"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::transcript::Role"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::transcript::conversation"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::transcript::fence"
-reason = "lot 3: fence moves to roomkit::tools::fence, as Python's roomkit.tools.fence"
-
-[[pending]]
-lot = 3
-rust = "roomkit::turn_context"
-reason = "decision 16: hidden from roomkit's public API, kept in roomkit-core"
-
-[[pending]]
-lot = 3
-rust = "roomkit::model::DirectEvent"
-reason = "decision 1: the kit's send_event takes lot 1's SendEventOptions; TurnHost::send_event takes a DirectEvent until lot 3 gives it the same options, and DirectEvent leaves roomkit's re-exports then"
 
 [[pending]]
 lot = 4
@@ -1411,11 +1184,6 @@ reason = "An explicit None selects all skills; Rust has no optional call argumen
 python = "roomkit.SkillRegistry.copy"
 params = ["marks"]
 reason = "Skill availability marks are not implemented in the Rust registry yet"
-
-[[exception]]
-rust = "roomkit::transcript::Image"
-approved = "2026-10-30"
-reason = "Typed native author image input (architecture: Author images)"
 
 [[exception]]
 rust = "roomkit_ai::ImageResolver"

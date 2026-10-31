@@ -95,9 +95,10 @@ impl<S: ConversationStore> RoomKit<S> {
     /// `RoomKit.hook(trigger, execution, priority, name, timeout,
     /// channel_types, channel_ids, directions, event_types, fail_closed,
     /// needs_lock)`, its keywords in `options`. The closure takes the
-    /// trigger's payload, its type written on its argument: a [`RoomEvent`]
-    /// for an event's or a lifecycle change's trigger, a
-    /// [`ToolCallEvent`] for `BEFORE_TOOL_USE` and `ON_TOOL_CALL`, a
+    /// trigger's payload, its type written on its argument: a
+    /// [`RoomEvent`](crate::model::RoomEvent) for an event's or a lifecycle
+    /// change's trigger, a [`ToolCallEvent`](crate::ToolCallEvent) for
+    /// `BEFORE_TOOL_USE` and `ON_TOOL_CALL`, a
     /// [`SessionStartedEvent`](crate::SessionStartedEvent) for
     /// `ON_SESSION_STARTED`. It returns a `HookResult`, one or what it
     /// raised, or `()`, Python's `None`; what an ASYNC hook returns is

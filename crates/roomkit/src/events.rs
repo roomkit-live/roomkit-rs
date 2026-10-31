@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use roomkit_core::model::{ChannelId, EventId, Metadata, RoomId, Timestamp};
-use roomkit_core::ops::FrameworkEvent as Notice;
+use roomkit_core::ops::{Environment, FrameworkEvent as Notice, SystemEnvironment};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -49,6 +49,20 @@ pub struct FrameworkEvent {
 }
 
 impl FrameworkEvent {
+    /// An event of type `r#type`, about no room, channel or event, emitted
+    /// now by the system clock, its data empty, as Python's constructor
+    /// defaults them.
+    pub fn new(r#type: impl Into<String>) -> Self {
+        Self {
+            r#type: r#type.into(),
+            room_id: None,
+            channel_id: None,
+            event_id: None,
+            timestamp: SystemEnvironment.now(),
+            data: Metadata::new(),
+        }
+    }
+
     /// The event a core notice reports, emitted at `timestamp`: its ids at
     /// the top and its other members in `data`, but where Python's
     /// emission places them otherwise.
