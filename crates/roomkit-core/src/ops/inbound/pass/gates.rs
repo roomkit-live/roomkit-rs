@@ -7,7 +7,7 @@ use super::{CommitPass, PassOrigin, PassResult, State};
 use crate::model::RoomContext;
 use crate::ops::inbound::direct::DirectCall;
 use crate::ops::lifecycle::gate::{self, Gate};
-use crate::ops::protocol::{Outcome, StoreRequest};
+use crate::ops::protocol::{KeyHeld, Outcome, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::{Abort, Cx};
 use crate::rules::permissions;
@@ -101,8 +101,18 @@ impl CommitPass {
         outcome: Outcome,
     ) -> State {
         match outcome.into_idempotent() {
-            Ok(Some(event)) => self.release(cx, Ok(PassResult::Duplicate { event })),
-            Ok(None) => self.root_parent(cx, context),
+            Ok(KeyHeld::Event(event)) => {
+                self.release(cx, Ok(PassResult::Duplicate { event: Some(event) }))
+            }
+            // A key held whose event the store cannot read back: a message
+            // is a blocked duplicate (RFC §13.4); a direct injection gets
+            // back the event it injected, as Python's `send_event` returns
+            // it. Neither is processed again.
+            Ok(KeyHeld::Seen) => {
+                let event = self.direct.is_some().then(|| Box::new(self.event.clone()));
+                self.release(cx, Ok(PassResult::Duplicate { event }))
+            }
+            Ok(KeyHeld::Free) => self.root_parent(cx, context),
             Err(error) => self.release(cx, Err(Abort::Store(error))),
         }
     }

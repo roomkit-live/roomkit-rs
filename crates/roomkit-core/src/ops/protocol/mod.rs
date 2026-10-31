@@ -21,7 +21,7 @@ mod entries;
 mod requests;
 mod results;
 
-pub(crate) use answers::RequestKind;
+pub(crate) use answers::{KeyHeld, RequestKind};
 pub use entries::{Decided, Delivered, Entry, EntryId, Settled};
 pub use requests::{
     ChannelOutcome, ChannelRequest, HoldOutcome, HoldRequest, HookAnswer, HookRequest, Outcome,

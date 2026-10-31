@@ -21,7 +21,7 @@ use super::deadline::Stopped;
 use super::direct::DirectCall;
 use crate::model::{RoomContext, RoomEvent};
 use crate::ops::io::Bound;
-use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
+use crate::ops::protocol::{EffectId, KeyHeld, Outcome, StoreRequest};
 use crate::ops::{Cx, Progress};
 
 /// The reads of a direct injection's room, then of its key, before it
@@ -139,8 +139,12 @@ impl WorkRead {
         let found = outcome
             .into_idempotent()
             .map_err(|error| Stopped::Failed(InboundError::Store(error)))?;
-        let Some(original) = found else {
-            return Ok(Read::Fresh(context));
+        let original = match found {
+            KeyHeld::Free => return Ok(Read::Fresh(context)),
+            KeyHeld::Event(original) => original,
+            // A key held whose event the store cannot read back: the event
+            // itself, as Python's `_replay_of_key` returns it.
+            KeyHeld::Seen => Box::new(self.event.clone()),
         };
         tracing::info!(
             target: "roomkit::core::inbound",

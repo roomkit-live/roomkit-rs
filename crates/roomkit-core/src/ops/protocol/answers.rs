@@ -95,6 +95,19 @@ impl StoreRequest {
     }
 }
 
+/// What a room holds under an idempotency key (RFC §13.4), as the
+/// Python implementation reads it: `check_idempotency`, then
+/// `get_event_by_idempotency_key`.
+#[derive(Debug)]
+pub(crate) enum KeyHeld {
+    /// No event of the room holds it.
+    Free,
+    /// The event the key committed.
+    Event(Box<RoomEvent>),
+    /// The key is held, its event unread.
+    Seen,
+}
+
 impl RequestKind {
     /// The outcomes that answer this kind, for error messages.
     fn expected(self) -> &'static str {
@@ -108,7 +121,7 @@ impl RequestKind {
             Self::AwaitTicket => "Admitted",
             Self::ReleaseTicket => "TicketReleased",
             Self::LoadContext => "Context or RoomNotFound",
-            Self::GetEventByIdempotencyKey => "Idempotent",
+            Self::GetEventByIdempotencyKey => "Idempotent or KeySeen",
             Self::GetEvent => "Event",
             Self::ListEvents => "Events",
             Self::DeleteEvent => "Deleted",
@@ -146,7 +159,10 @@ impl RequestKind {
                 Outcome::Store(StoreOutcome::Context(_) | StoreOutcome::RoomNotFound)
             ),
             Self::GetEventByIdempotencyKey => {
-                matches!(outcome, Outcome::Store(StoreOutcome::Idempotent(_)))
+                matches!(
+                    outcome,
+                    Outcome::Store(StoreOutcome::Idempotent(_) | StoreOutcome::KeySeen)
+                )
             }
             Self::GetEvent => matches!(outcome, Outcome::Store(StoreOutcome::Event(_))),
             Self::ListEvents => matches!(outcome, Outcome::Store(StoreOutcome::Events(_))),
@@ -267,9 +283,12 @@ impl Outcome {
         }
     }
 
-    pub(crate) fn into_idempotent(self) -> Result<Option<Box<RoomEvent>>, ErrorRecord> {
+    /// What the room holds under the key read.
+    pub(crate) fn into_idempotent(self) -> Result<KeyHeld, ErrorRecord> {
         match self {
-            Self::Store(StoreOutcome::Idempotent(event)) => Ok(event),
+            Self::Store(StoreOutcome::Idempotent(None)) => Ok(KeyHeld::Free),
+            Self::Store(StoreOutcome::Idempotent(Some(event))) => Ok(KeyHeld::Event(event)),
+            Self::Store(StoreOutcome::KeySeen) => Ok(KeyHeld::Seen),
             other => Err(other.into_failure()),
         }
     }
@@ -417,6 +436,7 @@ impl Outcome {
                 StoreOutcome::Context(_) => "Context",
                 StoreOutcome::RoomNotFound => "RoomNotFound",
                 StoreOutcome::Idempotent(_) => "Idempotent",
+                StoreOutcome::KeySeen => "KeySeen",
                 StoreOutcome::Event(_) => "Event",
                 StoreOutcome::Deleted(_) => "Deleted",
                 StoreOutcome::Events(_) => "Events",

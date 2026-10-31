@@ -594,7 +594,13 @@ pub(super) fn entry_result(result: &PassResult) -> InboundResult {
             reason: Some(refusal.reason().to_owned()),
             ..InboundResult::default()
         },
-        PassResult::Duplicate { event } => replay_result(event),
+        PassResult::Duplicate { event: Some(event) } => replay_result(event),
+        PassResult::Duplicate { event: None } => InboundResult {
+            duplicate: true,
+            blocked: true,
+            reason: Some("duplicate".to_owned()),
+            ..InboundResult::default()
+        },
     }
 }
 

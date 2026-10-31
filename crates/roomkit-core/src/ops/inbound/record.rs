@@ -20,7 +20,7 @@
 use super::direct::DirectCall;
 use super::{cascade, commit, report};
 use crate::model::{ChannelId, ErrorRecord, EventStatus, Room, RoomContext, RoomEvent, RoomId};
-use crate::ops::protocol::{EffectId, Outcome, StoreRequest};
+use crate::ops::protocol::{EffectId, KeyHeld, Outcome, StoreRequest};
 use crate::ops::rooting::{Rooted, Rooting};
 use crate::ops::section::{Failure, Section, SectionWork};
 use crate::ops::{Abort, Cx, Progress, RefusedOperation};
@@ -288,8 +288,16 @@ impl SectionWork for RecordWork {
     ) -> Progress<Result<RecordResult, Abort>> {
         match std::mem::replace(&mut self.waiting, Waiting::Nothing) {
             Waiting::Key(_) => match outcome.into_idempotent() {
-                Ok(Some(original)) => Progress::Done(Ok(RecordResult::Replayed(original))),
-                Ok(None) => {
+                Ok(KeyHeld::Event(original)) => {
+                    Progress::Done(Ok(RecordResult::Replayed(original)))
+                }
+                // A key held whose event the store cannot read back: the
+                // record itself, as Python's `_replay_of_key` returns it.
+                Ok(KeyHeld::Seen) => {
+                    let replayed = Box::new(self.record.clone());
+                    Progress::Done(Ok(RecordResult::Replayed(replayed)))
+                }
+                Ok(KeyHeld::Free) => {
                     self.root_and_commit(cx);
                     Progress::Waiting
                 }

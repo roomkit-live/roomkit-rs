@@ -153,11 +153,13 @@ pub enum StoreRequest {
         /// How many of the latest events to read.
         recent_events: usize,
     },
-    /// Read the event the room committed with an idempotency key, a
-    /// `BLOCKED` one included (RFC §14.1 `get_event_by_idempotency_key`,
-    /// §13.4): the one `channel_id` committed, or for `None` the one any
-    /// channel of the room committed (§22.1). Answer
-    /// [`StoreOutcome::Idempotent`].
+    /// Read whether the room holds an idempotency key, then the event it
+    /// committed with it, a `BLOCKED` one included (RFC §14.1
+    /// `check_idempotency`, `get_event_by_idempotency_key`, §13.4): the
+    /// one `channel_id` committed, or for `None` the one any channel of
+    /// the room committed (§22.1). Answer [`StoreOutcome::Idempotent`], or
+    /// [`StoreOutcome::KeySeen`] for a key the store holds and whose event
+    /// it cannot read back.
     GetEventByIdempotencyKey {
         /// The room.
         room_id: RoomId,
@@ -482,6 +484,11 @@ pub enum StoreOutcome {
     RoomNotFound,
     /// The event committed with the key, if any.
     Idempotent(Option<Box<RoomEvent>>),
+    /// The store holds the key, and cannot read back the event it
+    /// committed (RFC §13.4: a duplicate "MAY return a blocked result"),
+    /// as Python's store answers `check_idempotency` true and
+    /// `get_event_by_idempotency_key` `None`.
+    KeySeen,
     /// The event read, if any.
     Event(Option<Box<RoomEvent>>),
     /// The events a delete removed, the target first.

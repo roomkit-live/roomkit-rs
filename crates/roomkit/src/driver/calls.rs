@@ -61,10 +61,7 @@ pub(super) async fn store<S: ConversationStore>(store: &S, request: StoreRequest
             room_id,
             channel_id,
             key,
-        } => store
-            .get_event_by_idempotency_key(&room_id, &key, channel_id.as_ref())
-            .await
-            .map(|event| StoreOutcome::Idempotent(event.map(Box::new))),
+        } => key_held(store, &room_id, &key, channel_id.as_ref()).await,
         StoreRequest::GetEvent { event_id } => store
             .get_event(&event_id)
             .await
@@ -162,6 +159,28 @@ async fn load_context<S: ConversationStore>(
         participants,
         recent_events,
         author_register,
+    }))
+}
+
+/// What the room holds under `key`, from `channel_id` when it names one, as
+/// Python's pipeline reads it (RFC §13.4): `check_idempotency`, then the
+/// event the key committed; a key held whose event the store cannot read
+/// back is answered `KeySeen`, which the pipeline reads as a blocked
+/// duplicate, never processed again.
+async fn key_held<S: ConversationStore>(
+    store: &S,
+    room_id: &RoomId,
+    key: &str,
+    channel_id: Option<&ChannelId>,
+) -> Result<StoreOutcome, StoreError> {
+    if !store.check_idempotency(room_id, key, channel_id).await? {
+        return Ok(StoreOutcome::Idempotent(None));
+    }
+    let event = store
+        .get_event_by_idempotency_key(room_id, key, channel_id)
+        .await?;
+    Ok(event.map_or(StoreOutcome::KeySeen, |event| {
+        StoreOutcome::Idempotent(Some(Box::new(event)))
     }))
 }
 

@@ -125,8 +125,10 @@ pub(super) enum PassResult {
     },
     /// Already committed under its idempotency key (RFC §13.4).
     Duplicate {
-        /// The event the first delivery committed.
-        event: Box<RoomEvent>,
+        /// The event the first delivery committed; `None` when the store
+        /// holds the key and cannot read the event back, a blocked
+        /// duplicate (RFC §13.4).
+        event: Option<Box<RoomEvent>>,
     },
     /// An edit or a delete refused at step 8a: nothing was stored (RFC
     /// §10.1 step 8a).
